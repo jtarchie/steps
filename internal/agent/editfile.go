@@ -41,6 +41,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -379,7 +381,7 @@ func isDisproportionateMatch(span, find string) bool {
 }
 
 // maxEditFileBytes bounds the file edit_file will pull into memory to do an
-// exact-string replacement. It matches maxReadFileScanBytes rather than
+// exact-string replacement. It matches tree.MaxScanBytes rather than
 // maxReadFileBytes deliberately: a model can only produce a verbatim
 // old_string from text it has read, and read_file pages arbitrarily far into
 // a large file, so the edit bound has to sit above the read bound, not at it.
@@ -416,7 +418,7 @@ func execEditFile(ctx context.Context, args map[string]any, env toolEnv) map[str
 		return map[string]any{"error": "edit_file: old_string and new_string are identical; nothing to do"}
 	}
 
-	resolved, err := env.files().resolveWrite(ctx, rel)
+	resolved, err := env.files().ResolveWrite(ctx, rel)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -429,8 +431,8 @@ func execEditFile(ctx context.Context, args map[string]any, env toolEnv) map[str
 // readEditTarget stats and reads the file edit_file is about to modify,
 // returning its contents and mode. A non-nil third return is the caller's
 // ready-made error result.
-func readEditTarget(ctx context.Context, files tree, resolved, rel string) (string, map[string]any) {
-	stat, err := files.stat(ctx, resolved)
+func readEditTarget(ctx context.Context, files tree.Tree, resolved, rel string) (string, map[string]any) {
+	stat, err := files.Stat(ctx, resolved)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", map[string]any{"error": fmt.Sprintf("edit_file: %q does not exist — use write_file to create it", rel)}
@@ -439,18 +441,18 @@ func readEditTarget(ctx context.Context, files tree, resolved, rel string) (stri
 		return "", map[string]any{"error": err.Error()}
 	}
 
-	if stat.isDir {
+	if stat.IsDir {
 		return "", map[string]any{"error": fmt.Sprintf("edit_file: %q is a directory, not a file", rel)}
 	}
 
-	if stat.size > maxEditFileBytes {
+	if stat.Size > maxEditFileBytes {
 		return "", map[string]any{"error": fmt.Sprintf(
 			"edit_file: %q is %s, over the %s edit limit",
-			rel, shell.FormatBytes(int(stat.size)), shell.FormatBytes(maxEditFileBytes),
+			rel, shell.FormatBytes(int(stat.Size)), shell.FormatBytes(maxEditFileBytes),
 		)}
 	}
 
-	data, err := files.readBytes(ctx, resolved, maxEditFileBytes)
+	data, err := files.ReadBytes(ctx, resolved, maxEditFileBytes)
 	if err != nil {
 		return "", map[string]any{"error": err.Error()}
 	}
@@ -463,7 +465,7 @@ func readEditTarget(ctx context.Context, files tree, resolved, rel string) (stri
 // script doesn't silently strip its executable bit. The strategy that matched
 // is reported back to the model as match_mode, so an inexact edit is visible
 // rather than silent.
-func applyEdit(ctx context.Context, files tree, resolved, rel, oldString, newString string, replaceAll bool) map[string]any {
+func applyEdit(ctx context.Context, files tree.Tree, resolved, rel, oldString, newString string, replaceAll bool) map[string]any {
 	content, errResult := readEditTarget(ctx, files, resolved, rel)
 	if errResult != nil {
 		return errResult
@@ -474,7 +476,7 @@ func applyEdit(ctx context.Context, files tree, resolved, rel, oldString, newStr
 		return map[string]any{"error": editFailureAdvice(err, rel)}
 	}
 
-	err = files.writeFile(ctx, resolved, []byte(outcome.updated), false)
+	err = files.WriteFile(ctx, resolved, []byte(outcome.updated), false)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}

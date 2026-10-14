@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -19,23 +21,23 @@ func TestARunnerFailureOnALiveStepIsALostTree(t *testing.T) {
 	t.Parallel()
 
 	runner := tooloutputBrokenRunner{}
-	lost := &lostTree{}
-	env := toolEnv{dir: t.TempDir(), runner: runner, tree: containerTree{runner: runner, lost: lost}, lost: lost}
+	lost := &tree.Lost{}
+	env := toolEnv{dir: t.TempDir(), runner: runner, tree: tree.Container{Runner: runner, Lost: lost}, lost: lost}
 
 	result := shellToolResult(context.Background(), "true", env, maxToolOutputBytes)
 	if result["error"] == nil {
 		t.Errorf("result = %v; want the runner's error", result)
 	}
 
-	if !errors.Is(lost.taken(), errNoTreeAccess) {
-		t.Errorf("lost = %v; want the tree marked lost so the attempt ends", lost.taken())
+	if !errors.Is(lost.Taken(), tree.ErrNoAccess) {
+		t.Errorf("lost = %v; want the tree marked lost so the attempt ends", lost.Taken())
 	}
 
-	hostLost := &lostTree{}
+	hostLost := &tree.Lost{}
 	shellToolResult(context.Background(), "true", toolEnv{dir: t.TempDir(), runner: runner, lost: hostLost}, maxToolOutputBytes)
 
-	if hostLost.taken() != nil {
-		t.Errorf("lost = %v; a host runner's failure is not a lost container", hostLost.taken())
+	if hostLost.Taken() != nil {
+		t.Errorf("lost = %v; a host runner's failure is not a lost container", hostLost.Taken())
 	}
 }
 

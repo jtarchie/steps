@@ -10,6 +10,8 @@ import (
 	"io"
 	"strings"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -24,15 +26,6 @@ import (
 // act by the model, unlike a command that floods output unbidden.
 const maxReadFileBytes = 100_000
 
-// maxReadFileScanBytes bounds the largest single line readFileRange will pull
-// into memory before deciding what to keep. It's well above maxReadFileBytes
-// (the return budget) so a spilled file's long line — base64/minified/`jq -c`
-// output, which frequently has no newlines at all — is still readable
-// (byte-truncated to the budget) rather than failing the scan with a cryptic
-// "token too long"; a line even larger than this degrades to truncated=true,
-// still not a hard error. Matches internal/shell's SpillMaxBytes.
-const maxReadFileScanBytes = 10 << 20 // 10 MiB
-
 // execReadFile resolves path and dispatches to readFileFull (read from the
 // top, capped at maxReadFileBytes) or, when either start_line or end_line is
 // supplied, readFileRange — a line-based slice so a large file (or a spilled
@@ -45,7 +38,7 @@ func execReadFile(ctx context.Context, args map[string]any, env toolEnv) map[str
 
 	files := env.readTree(rel)
 
-	resolved, err := files.resolve(ctx, rel)
+	resolved, err := files.Resolve(ctx, rel)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -82,8 +75,8 @@ func execReadFile(ctx context.Context, args map[string]any, env toolEnv) map[str
 // cost the model a turn to ask again without one. The head is read separately
 // rather than peeked off the range, because the container reads a range with
 // sed, and a PNG's first "line" ends inside its own signature.
-func readFileNonTextRange(ctx context.Context, files tree, resolved, rel string, sight imageSight) (map[string]any, bool) {
-	head, err := files.readBytes(ctx, resolved, sniffBytes)
+func readFileNonTextRange(ctx context.Context, files tree.Tree, resolved, rel string, sight imageSight) (map[string]any, bool) {
+	head, err := files.ReadBytes(ctx, resolved, sniffBytes)
 	if err != nil {
 		return map[string]any{"error": err.Error()}, true
 	}
@@ -92,12 +85,12 @@ func readFileNonTextRange(ctx context.Context, files tree, resolved, rel string,
 		return nil, false
 	}
 
-	stat, err := files.stat(ctx, resolved)
+	stat, err := files.Stat(ctx, resolved)
 	if err != nil {
 		return map[string]any{"error": err.Error()}, true
 	}
 
-	answer := nonTextResult(ctx, files, resolved, rel, head, stat.size, sight)
+	answer := nonTextResult(ctx, files, resolved, rel, head, stat.Size, sight)
 	if content, ok := answer["content"].(string); ok {
 		answer["content"] = content + " start_line/end_line do not apply to it and were ignored."
 	}
@@ -110,8 +103,8 @@ func readFileNonTextRange(ctx context.Context, files tree, resolved, rel string,
 // shell.SpillPointerMessage's tag style (a leading block, not a trailing
 // marker) so the two "output was cut" shapes read the same way, and pointing
 // the model at start_line/end_line — the file's own paging mechanism.
-func readFileFull(ctx context.Context, files tree, resolved, rel string, sight imageSight) map[string]any {
-	stat, err := files.stat(ctx, resolved)
+func readFileFull(ctx context.Context, files tree.Tree, resolved, rel string, sight imageSight) map[string]any {
+	stat, err := files.Stat(ctx, resolved)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -121,20 +114,20 @@ func readFileFull(ctx context.Context, files tree, resolved, rel string, sight i
 	// below would have discarded most of it anyway. stat.Size() (not the read
 	// length) drives the message, so the reported byte count matches what it
 	// would have said had it read the whole file.
-	data, err := files.readBytes(ctx, resolved, maxReadFileBytes)
+	data, err := files.ReadBytes(ctx, resolved, maxReadFileBytes)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
 	if isNonText(data) {
-		return nonTextResult(ctx, files, resolved, rel, data, stat.size, sight)
+		return nonTextResult(ctx, files, resolved, rel, data, stat.Size, sight)
 	}
 
 	content := string(data)
-	if stat.size > maxReadFileBytes {
+	if stat.Size > maxReadFileBytes {
 		content = fmt.Sprintf(
 			"<file_truncated>\nThis file is %s, exceeding the %s inline read limit. Showing the first %s below. Use start_line/end_line to read further into the file.\n</file_truncated>\n\n%s",
-			shell.FormatBytes(int(stat.size)), shell.FormatBytes(maxReadFileBytes), shell.FormatBytes(len(data)), content,
+			shell.FormatBytes(int(stat.Size)), shell.FormatBytes(maxReadFileBytes), shell.FormatBytes(len(data)), content,
 		)
 	}
 
@@ -146,13 +139,13 @@ func readFileFull(ctx context.Context, files tree, resolved, rel string, sight i
 // Still capped at maxReadFileBytes — an unreasonably wide range on a huge
 // file degrades to a truncated=true flag (content here is whole lines, not an
 // arbitrary byte prefix) rather than buffering the whole slice unbounded.
-func readFileRange(ctx context.Context, files tree, resolved string, startLine, endLine int, hasEnd bool) map[string]any {
+func readFileRange(ctx context.Context, files tree.Tree, resolved string, startLine, endLine int, hasEnd bool) map[string]any {
 	through := 0
 	if hasEnd {
 		through = endLine
 	}
 
-	f, err := files.openRange(ctx, resolved, through)
+	f, err := files.OpenRange(ctx, resolved, through)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -183,7 +176,7 @@ func readFileRange(ctx context.Context, files tree, resolved string, startLine, 
 // genuine read error is returned.
 func scanLineRange(r io.Reader, startLine, endLine int, hasEnd bool) (content string, lastLine int, truncated bool, err error) {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxReadFileScanBytes)
+	scanner.Buffer(make([]byte, 0, 64*1024), tree.MaxScanBytes)
 
 	content, lastLine, truncated = accumulateLineRange(scanner, startLine, endLine, hasEnd)
 

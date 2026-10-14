@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -105,12 +107,12 @@ func applyStepMemory(ctx context.Context, cfg *config.Config, prepared *prepared
 }
 
 func readMemoryScope(spaceDir, scopeFrom string) (string, error) {
-	resolved, err := resolveAgentPath(spaceDir, scopeFrom)
+	resolved, err := tree.ResolvePath(spaceDir, scopeFrom)
 	if err != nil {
 		return "", fmt.Errorf("memory.scope_from: %w", err)
 	}
 
-	data, err := os.ReadFile(resolved) //nolint:gosec // confined by resolveAgentPath to the step's own materialized workspace
+	data, err := os.ReadFile(resolved) //nolint:gosec // confined by tree.ResolvePath to the step's own materialized workspace
 	if err != nil {
 		return "", fmt.Errorf("memory.scope_from %q: %w", scopeFrom, err)
 	}

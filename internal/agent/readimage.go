@@ -21,6 +21,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -159,7 +161,7 @@ func isNonText(head []byte) bool {
 // image itself, or a description. read is however much of the file the caller
 // already has; the rest is fetched only for an image the model will actually
 // be sent.
-func nonTextResult(ctx context.Context, files tree, resolved, rel string, read []byte, size int64, sight imageSight) map[string]any {
+func nonTextResult(ctx context.Context, files tree.Tree, resolved, rel string, read []byte, size int64, sight imageSight) map[string]any {
 	head := read[:min(len(read), sniffBytes)]
 
 	mime := sniffImage(head)
@@ -188,7 +190,7 @@ func nonTextResult(ctx context.Context, files tree, resolved, rel string, read [
 	if int64(len(read)) < size {
 		var err error
 
-		data, err = files.readBytes(ctx, resolved, sight.maxBytes)
+		data, err = files.ReadBytes(ctx, resolved, sight.maxBytes)
 		if err != nil {
 			return map[string]any{"error": err.Error()}
 		}

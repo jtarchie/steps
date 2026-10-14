@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"github.com/jtarchie/steps/internal/config"
 )
 
@@ -103,7 +105,7 @@ func TestRunFixLeavesNoSpillDirInTheTask(t *testing.T) {
 		t.Fatalf("RunFix: %v", err)
 	}
 
-	_, err = os.Stat(filepath.Join(dir, toolOutputSpillDirName))
+	_, err = os.Stat(filepath.Join(dir, tree.SpillDirName))
 	if !os.IsNotExist(err) {
 		t.Errorf("the fix agent's spill dir is still in the task's directory (stat: %v)", err)
 	}

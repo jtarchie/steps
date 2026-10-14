@@ -357,7 +357,7 @@ func (e assertFilesExpectation) nudge(unmet []string) string {
 // whereToWrite translates the declared paths into the model's own frame.
 //
 // A path that lands outside the working directory has no such translation:
-// write_file confines itself to dir (resolveWritePath), so the model
+// write_file confines itself to dir (tree.ResolveWritePath), so the model
 // genuinely cannot reach it and being told to try would waste its remaining
 // chances. It is told where the paths are rooted instead — a shell command
 // can still get there, and if nothing can, the step is misconfigured and the

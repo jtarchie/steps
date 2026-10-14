@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/agent/tree"
 )
 
 func searchWriteFile(t *testing.T, dir, name, content string) {
@@ -26,8 +28,8 @@ func TestSearchHeadLimitZeroMeansTheDefault(t *testing.T) {
 		t.Fatalf("unexpected error: %v", errResult)
 	}
 
-	if opts.headLimit != defaultSearchPathResults {
-		t.Errorf("headLimit = %d, want the default %d", opts.headLimit, defaultSearchPathResults)
+	if opts.HeadLimit != defaultSearchPathResults {
+		t.Errorf("headLimit = %d, want the default %d", opts.HeadLimit, defaultSearchPathResults)
 	}
 }
 
@@ -35,14 +37,14 @@ func TestSearchStopsAtTheFileScanBudget(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	for i := range maxSearchFilesScanned + 1 {
+	for i := range tree.MaxSearchFilesScanned + 1 {
 		searchWriteFile(t, dir, fmt.Sprintf("f%05d.txt", i), "")
 	}
 
 	result := execSearchFiles(context.Background(), map[string]any{"glob": "*.txt"}, testEnv(dir))
 
-	if result["files_scanned"] != maxSearchFilesScanned {
-		t.Errorf("files_scanned = %v, want it stopped at %d", result["files_scanned"], maxSearchFilesScanned)
+	if result["files_scanned"] != tree.MaxSearchFilesScanned {
+		t.Errorf("files_scanned = %v, want it stopped at %d", result["files_scanned"], tree.MaxSearchFilesScanned)
 	}
 
 	if msg, _ := result["message"].(string); !strings.Contains(msg, "stopped after scanning") {
@@ -54,7 +56,7 @@ func TestSearchScansAFileOfExactlyTheSizeLimit(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	searchWriteFile(t, dir, "big.txt", "needle\n"+strings.Repeat("x", maxSearchFileBytes-len("needle\n")))
+	searchWriteFile(t, dir, "big.txt", "needle\n"+strings.Repeat("x", tree.MaxSearchFileBytes-len("needle\n")))
 
 	result := execSearchFiles(context.Background(), map[string]any{"pattern": "needle"}, testEnv(dir))
 	if files := searchResultFiles(t, result); len(files) != 1 {
@@ -116,41 +118,5 @@ func TestSearchCompleteResultIsNotTruncated(t *testing.T) {
 	result := execSearchFiles(context.Background(), map[string]any{"pattern": "RunJob"}, testEnv(dir))
 	if result["truncated"] != false || result["message"] != nil {
 		t.Errorf("truncated = %v, message = %v; want a complete result reported as such", result["truncated"], result["message"])
-	}
-}
-
-func TestSearchContentBudgetExactlyFilled(t *testing.T) {
-	t.Parallel()
-
-	const path = "a.txt"
-
-	perMatch := maxSearchContentBudgetBytes / 56
-	line := strings.Repeat("x", perMatch-len(path)-searchMatchOverheadBytes)
-
-	matches := make([]searchMatch, 60)
-	for i := range matches {
-		matches[i] = searchMatch{path: path, line: i + 1, text: line}
-	}
-
-	var r searchResult
-
-	r.addMatches(matches, len(matches), maxSearchContentResults)
-
-	if len(r.matches) != 56 || r.contentBytes != maxSearchContentBudgetBytes {
-		t.Errorf("kept %d matches (%d bytes), want 56 filling the %d budget exactly", len(r.matches), r.contentBytes, maxSearchContentBudgetBytes)
-	}
-}
-
-func TestTruncateSearchLineEdges(t *testing.T) {
-	t.Parallel()
-
-	exact := strings.Repeat("x", maxSearchLineBytes)
-	if got := truncateSearchLine(exact); got != exact {
-		t.Errorf("a line of exactly %d bytes came back %d bytes", maxSearchLineBytes, len(got))
-	}
-
-	// No rune start anywhere: the cut must stop at the line's beginning rather than run past it.
-	if got := truncateSearchLine(strings.Repeat("\x80", 600)); got != " …[line truncated]" {
-		t.Errorf("truncateSearchLine(continuation bytes) = %q", got)
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent/llmclient"
+
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
@@ -171,7 +173,7 @@ type agentConversation struct {
 	memory   *contextBlock
 	env      toolEnv
 	tools    agentTools
-	params   agentGenParams
+	params   llmclient.GenParams
 	maxTurns int
 	// toolChoiceStringOnly forces a required tool call via the string
 	// tool_choice: "required" instead of a named function object — see
@@ -249,7 +251,7 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 		SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: conv.system}}},
 		Tools:             []*genai.Tool{conv.tools.decls},
 	}
-	conv.params.applyTo(cfg)
+	conv.params.ApplyTo(cfg)
 
 	if conv.resume != nil && conv.resume.contents != nil {
 		contents := conv.resume.contents
@@ -328,7 +330,7 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 // tool has succeeded.
 //
 // It runs ONCE per step. Nothing restarts it: attempts: retries the failing
-// REQUEST (see requests.go), so a transient fault is absorbed without losing a
+// REQUEST (see llmclient/requests.go), so a transient fault is absorbed without losing a
 // single accumulated turn. A tool failure, required or not, is handed back
 // into this same conversation as data and is never a reason to abort. That
 // also retires a real hazard — a restart used to re-invoke tool calls whose
@@ -605,7 +607,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		conv.env.transcript.results(parts)
 
 		// The lost-tree check goes first, because the next turn is the cost: a tool that could not reach the step's tree at all has nothing the model can do about it, and letting the conversation continue spends its budget arguing with a machine that is gone.
-		turnErr := firstError(conv.env.lost.taken(), func() error { return conv.finishToolTurn(req, calls, parts, detector, &state) })
+		turnErr := firstError(conv.env.lost.Taken(), func() error { return conv.finishToolTurn(req, calls, parts, detector, &state) })
 		if turnErr != nil {
 			return result("", turn+1), turnErr
 		}

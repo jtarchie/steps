@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/agent/tree"
 )
 
 // unreachableTree stands in for a container this process cannot reach, so any call that goes to it is visible as a failure rather than as a quietly correct answer. Its root is spelled like a worker's, which is also what makes a host path fail to resolve against it.
@@ -23,42 +25,42 @@ func (u *unreachableTree) note(op string) error {
 	return errStubUnreachable
 }
 
-func (u *unreachableTree) root() string { return "/worker/steps/01-hand" }
+func (u *unreachableTree) Root() string { return "/worker/steps/01-hand" }
 
-func (u *unreachableTree) resolve(_ context.Context, rel string) (string, error) {
+func (u *unreachableTree) Resolve(_ context.Context, rel string) (string, error) {
 	err := u.note("resolve " + rel)
 
 	return "", err
 }
 
-func (u *unreachableTree) resolveWrite(_ context.Context, rel string) (string, error) {
+func (u *unreachableTree) ResolveWrite(_ context.Context, rel string) (string, error) {
 	err := u.note("resolveWrite " + rel)
 
 	return "", err
 }
 
-func (u *unreachableTree) stat(context.Context, string) (treeStat, error) {
-	return treeStat{}, u.note("stat")
+func (u *unreachableTree) Stat(context.Context, string) (tree.Stat, error) {
+	return tree.Stat{}, u.note("stat")
 }
 
-func (u *unreachableTree) readBytes(context.Context, string, int64) ([]byte, error) {
+func (u *unreachableTree) ReadBytes(context.Context, string, int64) ([]byte, error) {
 	return nil, u.note("readBytes")
 }
 
-func (u *unreachableTree) openRange(context.Context, string, int) (io.ReadCloser, error) {
+func (u *unreachableTree) OpenRange(context.Context, string, int) (io.ReadCloser, error) {
 	return nil, u.note("openRange")
 }
 
-func (u *unreachableTree) writeFile(context.Context, string, []byte, bool) error {
+func (u *unreachableTree) WriteFile(context.Context, string, []byte, bool) error {
 	return u.note("writeFile")
 }
 
-func (u *unreachableTree) listDir(context.Context, string) ([]treeEntry, error) {
+func (u *unreachableTree) ListDir(context.Context, string) ([]tree.Entry, error) {
 	return nil, u.note("listDir")
 }
 
-func (u *unreachableTree) search(context.Context, string, searchOpts) (searchResult, error) {
-	return searchResult{}, u.note("search")
+func (u *unreachableTree) Search(context.Context, string, tree.SearchOpts) (tree.SearchResult, error) {
+	return tree.SearchResult{}, u.note("search")
 }
 
 // spillEnv is a containerized agent whose spill directory holds one file, as it does after an oversized run_shell output was captured here.
@@ -66,7 +68,7 @@ func spillEnv(t *testing.T) (toolEnv, *unreachableTree, string) {
 	t.Helper()
 
 	dir := t.TempDir()
-	spillDir := filepath.Join(dir, toolOutputSpillDirName)
+	spillDir := filepath.Join(dir, tree.SpillDirName)
 
 	err := os.MkdirAll(spillDir, 0o750)
 	if err != nil {

@@ -10,6 +10,8 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/jtarchie/steps/internal/agent/llmclient"
+
 	"google.golang.org/adk/v2/model"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -66,7 +68,7 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 	// semantics that the inner one was inert.
 	//
 	// Classification still reads the JOB's context, not this one (see
-	// classifySource): a canceled job is an abort, while this context
+	// llmclient.ClassifySource): a canceled job is an abort, while this context
 	// expiring is the step spending its own budget.
 	cascadeCtx, cancel := withAgentDeadline(ctx, timeout)
 	defer cancel()
@@ -91,18 +93,18 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 		// environment lookup, no request.
 		next, apiKey, nextIndex, hasNext := nextViableFallback(agent, ri, index)
 
-		verdict := decideCascade(classifySource(ctx, runErr), hasNext, cascadeCtx.Err() != nil, swapped)
+		verdict := llmclient.DecideCascade(llmclient.ClassifySource(ctx, runErr), hasNext, cascadeCtx.Err() != nil, swapped)
 
-		switch verdict.pin {
-		case pinThisSource:
+		switch verdict.Pin {
+		case llmclient.PinThisSource:
 			pinServedSource(prepared.pin, agent, index)
-		case dropPin:
+		case llmclient.DropPin:
 			releaseSource(prepared.pin)
-		case leavePin:
+		case llmclient.LeavePin:
 		}
 
-		if verdict.action == returnResult {
-			// Marked here, after decideCascade: the cascade reasons about the
+		if verdict.Action == llmclient.ReturnResult {
+			// Marked here, after llmclient.DecideCascade: the cascade reasons about the
 			// spent deadline as an Errored source-outcome, but what leaves the
 			// step is a task-level failure — the step outlived its timeout:.
 			return res, servedSource{ri: ri, llm: llm, swapped: swapped}, outcome.FailOnDeadline(ctx, cascadeCtx, runErr) //nolint:wrapcheck // classification wrapper; the step caller adds its own context
@@ -148,7 +150,7 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 		conv.env.sight = sightFor(next)
 
 		// nextHostedFallback never yields a CLI source, so the hosted constructor is the whole of invocationLLM here.
-		ri, llm, index, swapped = next, newAgentLLM(next, apiKey), nextIndex, true
+		ri, llm, index, swapped = next, llmclient.New(next, apiKey), nextIndex, true
 	}
 }
 
@@ -207,7 +209,7 @@ func nextViableFallback(agent *config.Agent, ri config.ResolvedInvocation, index
 			return config.ResolvedInvocation{}, "", 0, false
 		}
 
-		apiKey, err := lookupAPIKey(next.APIKeyEnv, next.RequiresKey)
+		apiKey, err := llmclient.LookupAPIKey(next.APIKeyEnv, next.RequiresKey)
 		if err == nil {
 			return next, apiKey, nextIndex, true
 		}

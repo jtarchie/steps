@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -71,7 +73,7 @@ func TestNewToolOutputSpillDir(t *testing.T) {
 		t.Fatal("newToolOutputSpillDir returned \"\", want a directory path")
 	}
 
-	if want := filepath.Join(workDir, toolOutputSpillDirName); spillDir != want {
+	if want := filepath.Join(workDir, tree.SpillDirName); spillDir != want {
 		t.Errorf("newToolOutputSpillDir = %q, want %q (a subdirectory of the working directory, so read_file/list_dir can reach it)", spillDir, want)
 	}
 
@@ -84,14 +86,14 @@ func TestNewToolOutputSpillDir(t *testing.T) {
 		t.Errorf("newToolOutputSpillDir returned %q, want a directory", spillDir)
 	}
 
-	// resolveAgentPath is exactly what read_file/list_dir use to confine a
+	// tree.ResolvePath is exactly what read_file/list_dir use to confine a
 	// model-supplied relative path to the working directory — the spilled
 	// output must actually be reachable that way, not just physically nested.
-	resolved, err := resolveAgentPath(workDir, toolOutputSpillDirName)
+	resolved, err := tree.ResolvePath(workDir, tree.SpillDirName)
 	if err != nil {
-		t.Errorf("resolveAgentPath(%q, %q) = error: %v, want the spill dir to be reachable via read_file/list_dir", workDir, toolOutputSpillDirName, err)
+		t.Errorf("tree.ResolvePath(%q, %q) = error: %v, want the spill dir to be reachable via read_file/list_dir", workDir, tree.SpillDirName, err)
 	} else if resolved != spillDir {
-		t.Errorf("resolveAgentPath(%q, %q) = %q, want %q", workDir, toolOutputSpillDirName, resolved, spillDir)
+		t.Errorf("tree.ResolvePath(%q, %q) = %q, want %q", workDir, tree.SpillDirName, resolved, spillDir)
 	}
 }
 
@@ -172,7 +174,7 @@ func TestResolveDeferredMessagesRejectsEmptyFile(t *testing.T) {
 }
 
 // TestResolveDeferredMessagesRejectsSymlinkEscape proves resolveDeferredPrompt
-// inherits resolveAgentPath's symlink confinement (already exhaustively
+// inherits tree.ResolvePath's symlink confinement (already exhaustively
 // tested at that level in tools_test.go) rather than re-implementing it — an
 // artifact's contents are untrusted, and a symlink planted inside it (e.g. by
 // a malicious repo) must not be followed outside the step's space.

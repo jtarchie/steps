@@ -709,22 +709,23 @@ linters:
         Agent:
           files:
             - "**/internal/agent/**"
+            # tree and llmclient are leaves below agent with their own tiers;
+            # see AgentTree and AgentLLMClient.
+            - "!**/internal/agent/tree/**"
+            - "!**/internal/agent/llmclient/**"
           allow:
             # testdocker is test-only: whether a daemon is reachable, and a directory it can bind-mount.
             - "github.com/jtarchie/steps/internal/testdocker"
             - "$gostd"
+            - "github.com/jtarchie/steps/internal/agent/llmclient"
+            - "github.com/jtarchie/steps/internal/agent/tree"
+            # The conversation is written in genai's types and runs against
+            # adk's model.LLM; which SDK carries a request to a provider is
+            # llmclient's alone.
             - "google.golang.org/adk/v2"
             - "google.golang.org/genai"
-            - "github.com/achetronic/adk-utils-go"
-            # requests.go classifies a failed request by status code
-            # (isTransientProviderError, for the mid-run fallback: cascade),
-            # which means unwrapping the SDK's own *openai.Error rather than
-            # adk-utils-go's wrapper around it. Already an indirect
-            # dependency via adk-utils-go; this makes the direct use honest.
-            - "github.com/openai/openai-go/v3"
-            # The OpenTelemetry API, never the SDK (internal/telemetry installs that): a model call's GenAI span and token metrics are data the run's events never carry, and the API is a no-op until a provider is installed. otelhttp traces each attempt under its turn.
+            # The OpenTelemetry API, never the SDK (internal/telemetry installs that): a tool call's span is data the run's events never carry, and the API is a no-op until a provider is installed.
             - "go.opentelemetry.io/otel"
-            - "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             # goleak is test-only: goleak_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.
@@ -744,6 +745,49 @@ linters:
             - "github.com/jtarchie/steps/internal/template"
             - "github.com/jtarchie/steps/internal/usage"
             - "github.com/jtarchie/steps/internal/workspace"
+        # agent/llmclient is the provider layer: building a model.LLM for a
+        # resolved agent and the HTTP transports under it (retry, tool-call
+        # repair, OpenRouter's caching levers), plus which source of a
+        # fallback: cascade to try. It is the only package that touches an
+        # OpenAI-compatible SDK; it knows nothing of a conversation or a tool.
+        AgentLLMClient:
+          files:
+            - "**/internal/agent/llmclient/**"
+          allow:
+            - "$gostd"
+            - "google.golang.org/adk/v2"
+            - "google.golang.org/genai"
+            - "github.com/achetronic/adk-utils-go"
+            # requests.go classifies a failed request by status code
+            # (isTransientProviderError, for the mid-run fallback: cascade),
+            # which means unwrapping the SDK's own *openai.Error rather than
+            # adk-utils-go's wrapper around it. Already an indirect
+            # dependency via adk-utils-go; this makes the direct use honest.
+            - "github.com/openai/openai-go/v3"
+            # The OpenTelemetry API, never the SDK: a model call's GenAI span and token metrics, and otelhttp tracing each attempt under its turn.
+            - "go.opentelemetry.io/otel"
+            - "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/events"
+            - "github.com/jtarchie/steps/internal/outcome"
+            # goleak is test-only: TestMain fails the package's tests on a leaked goroutine.
+            - "go.uber.org/goleak"
+        # agent/tree is how the file tools reach the step's directory — this
+        # process's filesystem or the step's container — and keep a model's
+        # paths inside it. It knows nothing of a conversation, so it imports
+        # no agent, no model SDK and no store: a tool's caps and result shapes
+        # stay in agent, and the two trees differ only in how bytes travel.
+        AgentTree:
+          files:
+            - "**/internal/agent/tree/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/shell"
+            # testdocker is test-only: the container half runs against real images.
+            - "github.com/jtarchie/steps/internal/testdocker"
+            # goleak is test-only: TestMain fails the package's tests on a leaked goroutine.
+            - "go.uber.org/goleak"
         # pipeline is the top-level orchestrator: it composes every other
         # internal package to run a job's plan.
         Pipeline:
@@ -763,6 +807,8 @@ linters:
             # goleak is test-only: TestMain fails the package's tests on a leaked goroutine.
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/agent"
+            # llmclient for one call: a job run's provider session (WithNewRun), which is the client layer's and not a conversation's.
+            - "github.com/jtarchie/steps/internal/agent/llmclient"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/runview"

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
@@ -561,12 +563,12 @@ func TestCLIPromptPointsAtReadFileForAnImage(t *testing.T) {
 
 // shrinkingTree is a file that is shorter when read than when it was sized —
 // rewritten in between, the way a screenshot being saved is.
-type shrinkingTree struct{ hostTree }
+type shrinkingTree struct{ tree.Host }
 
-func (s shrinkingTree) readBytes(ctx context.Context, path string, limit int64) ([]byte, error) {
-	data, err := s.hostTree.readBytes(ctx, path, limit)
+func (s shrinkingTree) ReadBytes(ctx context.Context, path string, limit int64) ([]byte, error) {
+	data, err := s.Host.ReadBytes(ctx, path, limit)
 
-	return data[:len(data)/2], err
+	return data[:len(data)/2], err //nolint:wrapcheck // a fake passing the real tree's answer through
 }
 
 func TestReadFileRefusesAnImageThatChangedUnderIt(t *testing.T) {
@@ -576,7 +578,7 @@ func TestReadFileRefusesAnImageThatChangedUnderIt(t *testing.T) {
 	data := encodedImage(t, "png", 64, 64)
 	writeBytes(t, dir, "shot.png", data)
 
-	tree := shrinkingTree{hostTree{dir: dir}}
+	tree := shrinkingTree{tree.Host{Dir: dir}}
 
 	got := nonTextResult(context.Background(), tree, filepath.Join(dir, "shot.png"), "shot.png", data[:16], int64(len(data)), hostedSight)
 	if got[imageKey] != nil || !strings.Contains(fmt.Sprint(got["error"]), "changed while it was being read") {

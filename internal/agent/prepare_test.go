@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -53,7 +55,7 @@ func TestPrepareStepTreeHandsBackTheTreeAndItsContext(t *testing.T) {
 	ri := config.ResolvedInvocation{ContextPaths: []string{"notes.md"}}
 	granted := &genai.Tool{FunctionDeclarations: []*genai.FunctionDeclaration{{Name: "run_shell"}, {Name: "read_file"}}}
 
-	files, modelDir, blocks, err := prepareStepTree(t.Context(), nil, ri, dir, granted, &lostTree{})
+	files, modelDir, blocks, err := prepareStepTree(t.Context(), nil, ri, dir, granted, &tree.Lost{})
 	if err != nil {
 		t.Fatalf("prepareStepTree: %v", err)
 	}
@@ -64,7 +66,7 @@ func TestPrepareStepTreeHandsBackTheTreeAndItsContext(t *testing.T) {
 
 	withoutReadFile := &genai.Tool{FunctionDeclarations: []*genai.FunctionDeclaration{{Name: "run_shell"}}}
 
-	_, _, _, err = prepareStepTree(t.Context(), nil, ri, dir, withoutReadFile, &lostTree{})
+	_, _, _, err = prepareStepTree(t.Context(), nil, ri, dir, withoutReadFile, &tree.Lost{})
 	if err == nil {
 		t.Error("context_paths without read_file was accepted; the model could never read those files back")
 	}

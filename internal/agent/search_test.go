@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/agent/tree"
 )
 
 // searchFixture builds a small tree to search: two Go files (one a test),
@@ -214,8 +216,8 @@ func TestExecSearchFilesCaps(t *testing.T) {
 			t.Fatalf("unexpected error: %v", errResult)
 		}
 
-		if opts.headLimit != maxSearchContentResults {
-			t.Errorf("headLimit = %d, want it clamped to %d", opts.headLimit, maxSearchContentResults)
+		if opts.HeadLimit != maxSearchContentResults {
+			t.Errorf("headLimit = %d, want it clamped to %d", opts.HeadLimit, maxSearchContentResults)
 		}
 	})
 }
@@ -230,7 +232,7 @@ func TestExecSearchFilesTruncatesLongLines(t *testing.T) {
 
 		dir := t.TempDir()
 
-		long := "needle" + strings.Repeat("x", maxSearchLineBytes*2)
+		long := "needle" + strings.Repeat("x", tree.MaxSearchLineBytes*2)
 		err := os.WriteFile(filepath.Join(dir, "long.txt"), []byte(long+"\n"), 0o600)
 		if err != nil {
 			t.Fatal(err)
@@ -246,8 +248,8 @@ func TestExecSearchFilesTruncatesLongLines(t *testing.T) {
 		}
 
 		text, _ := matches[0]["text"].(string)
-		if len(text) > maxSearchLineBytes+len(" …[line truncated]") {
-			t.Errorf("text is %d bytes, want it capped near %d", len(text), maxSearchLineBytes)
+		if len(text) > tree.MaxSearchLineBytes+len(" …[line truncated]") {
+			t.Errorf("text is %d bytes, want it capped near %d", len(text), tree.MaxSearchLineBytes)
 		}
 
 		if !strings.Contains(text, "line truncated") {
@@ -309,64 +311,8 @@ func TestExecSearchFilesErrors(t *testing.T) {
 func TestSearchWorstCaseFitsInlineBudget(t *testing.T) {
 	t.Parallel()
 
-	worst := maxSearchContentBudgetBytes + maxSearchLineBytes + searchMatchOverheadBytes
+	worst := tree.MaxSearchContentBudgetBytes + tree.MaxSearchLineBytes + tree.SearchMatchOverheadBytes
 	if worst >= maxToolOutputBytes {
 		t.Errorf("worst-case content result is ~%d bytes, at or over the %d inline cap; the bound must hold by arithmetic, not by truncation", worst, maxToolOutputBytes)
-	}
-}
-
-// TestSearchContentByteBudgetStopsKeeping drives addMatches past the byte
-// budget and checks it stops keeping matches while total still counts them.
-func TestSearchContentByteBudgetStopsKeeping(t *testing.T) {
-	t.Parallel()
-
-	var r searchResult
-
-	const path = "big.txt"
-
-	line := strings.Repeat("x", maxSearchLineBytes)
-	perMatch := maxSearchLineBytes + len(path) + searchMatchOverheadBytes
-	fits := maxSearchContentBudgetBytes / perMatch
-
-	matches := make([]searchMatch, fits+10)
-	for i := range matches {
-		matches[i] = searchMatch{path: path, line: i + 1, text: line}
-	}
-
-	r.addMatches(matches, len(matches), maxSearchContentResults)
-
-	if len(r.matches) != fits {
-		t.Errorf("kept %d matches, want %d — the byte budget must stop collection", len(r.matches), fits)
-	}
-
-	if r.total != len(matches) {
-		t.Errorf("total = %d, want %d — total reports the true scale even past the budget", r.total, len(matches))
-	}
-
-	if r.contentBytes > maxSearchContentBudgetBytes {
-		t.Errorf("contentBytes = %d, over the %d budget", r.contentBytes, maxSearchContentBudgetBytes)
-	}
-}
-
-func TestMatchGlob(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		rel, glob string
-		want      bool
-	}{
-		{"main.go", "*.go", true},
-		{"internal/agent/tools.go", "*.go", true},    // bare glob matches the base name
-		{"internal/agent/tools.go", "**/*.go", true}, // leading ** is any depth
-		{"internal/agent/tools_test.go", "*_test.go", true},
-		{"internal/agent/tools.go", "*_test.go", false},
-		{"docs/guide.md", "*.go", false},
-		{"internal/agent/tools.go", "internal/*", false}, // * does not cross a separator
-	}
-
-	for _, tc := range cases {
-		if got := matchGlob(tc.rel, tc.glob); got != tc.want {
-			t.Errorf("matchGlob(%q, %q) = %v, want %v", tc.rel, tc.glob, got, tc.want)
-		}
 	}
 }

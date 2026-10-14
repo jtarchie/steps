@@ -403,7 +403,7 @@ func TestAPinSurvivesWithoutPreflightUntilItsLifetimeIsUp(t *testing.T) {
 // mean anything on a pipeline that is actually working.
 //
 // Every step that runs on a pinned fallback and reaches a conclusion re-pins
-// it — decideCascade returns pinThisSource for any source that carried a
+// it — llmclient.DecideCascade returns llmclient.PinThisSource for any source that carried a
 // conversation. If that reset the clock, a busy `steps web` would refresh
 // the pin faster than it could ever expire and the exit condition would be
 // unreachable in precisely the deployment it was written for. Using a

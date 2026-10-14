@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -27,20 +29,20 @@ func TestADeadlineEndingACommandIsNotALostTree(t *testing.T) {
 	t.Parallel()
 
 	runner := stallingRunner{}
-	lost := &lostTree{}
+	lost := &tree.Lost{}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	env := toolEnv{dir: t.TempDir(), runner: runner, tree: containerTree{runner: runner, lost: lost}, lost: lost}
+	env := toolEnv{dir: t.TempDir(), runner: runner, tree: tree.Container{Runner: runner, Lost: lost}, lost: lost}
 	shellToolResult(ctx, "sleep 60", env, maxToolOutputBytes)
 
-	_, _, _, err := containerTree{runner: runner, lost: lost}.execute(ctx, "true")
+	_, _, _, err := tree.Container{Runner: runner, Lost: lost}.Execute(ctx, "true")
 	if err == nil {
 		t.Error("execute returned no error; want the runner's failure passed back to the tool")
 	}
 
-	taken := lost.taken()
+	taken := lost.Taken()
 	if taken != nil {
 		t.Errorf("lost = %v; want nothing recorded when the step's own deadline ended the command", taken)
 	}

@@ -3,7 +3,6 @@ package agent
 import (
 	"bytes"
 	"log/slog"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -26,14 +25,7 @@ func TestAgentLinesCarryTheBuildIdentity(t *testing.T) {
 	logStepUsage(ctx, usage.Step{Step: "a", Total: 3}, 0)
 	logCompactionBudget(ctx, config.ResolvedInvocation{AgentName: "a", CompactAfterTokens: 10})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://x", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	(&requestRetryTransport{}).logRetry(req.Context(), &http.Response{StatusCode: 503}, nil, 1, 2)
-
-	for _, msg := range []string{"agent.usage", "agent.compaction_budget", "agent.request_retry"} {
+	for _, msg := range []string{"agent.usage", "agent.compaction_budget"} {
 		found := false
 
 		for line := range strings.SplitSeq(buf.String(), "\n") {

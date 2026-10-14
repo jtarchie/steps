@@ -45,13 +45,13 @@ const cliWaitDelay = 5 * time.Second
 //
 // attempts: means something different here than it does on the HTTP path,
 // where it retries an individual request beneath a conversation that survives
-// (see requests.go). A CLI's conversation lives in a subprocess, so the
+// (see llmclient/requests.go). A CLI's conversation lives in a subprocess, so the
 // equivalent is to RESUME it: every attempt after the first reconnects to the
 // same session rather than starting the task over.
 //
 // That distinction is the whole point, and it is not a cost optimization.
 // `attempts:` used to restart an agent's conversation on the hosted path too,
-// and was deliberately removed (see requests.go and commit "attempts: meant
+// and was deliberately removed (see llmclient/requests.go and commit "attempts: meant
 // two different things on task vs agent"): the workspace survived a restart
 // but the memory did not, so a retried attempt inherited its own half-finished
 // edits with no recollection of making them. A CLI agent has exactly that

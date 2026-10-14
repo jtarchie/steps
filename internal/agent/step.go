@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent/llmclient"
+
 	"google.golang.org/adk/v2/model"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -378,7 +380,7 @@ func truncateArgs(args map[string]any) map[string]any {
 // reports the provider requests it really spent.
 //
 // It runs the conversation ONCE. attempts: retries the failing request, down
-// in requests.go, which is why nothing here loops: a restart discarded every
+// in llmclient/requests.go, which is why nothing here loops: a restart discarded every
 // accumulated turn and re-billed the whole conversation to re-ask a question
 // the transport had already retried and given up on. Shared by
 // runPreparedWithFailover (failover.go, one call per source it tries) and
@@ -395,9 +397,9 @@ func runOneConversation(
 
 	logCompactionBudget(ctx, ri)
 
-	requests := &requestCounter{}
+	requests := &llmclient.RequestCounter{}
 
-	result, err := runAgentConversation(withRequestCounter(convCtx, requests), llm, conv)
+	result, err := runAgentConversation(llmclient.WithRequestCounter(convCtx, requests), llm, conv)
 	if err != nil {
 		slog.WarnContext(ctx, "agent.conversation_failed",
 			"agent", ri.AgentName,

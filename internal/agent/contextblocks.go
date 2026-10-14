@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"github.com/jtarchie/steps/internal/config"
 )
 
@@ -23,7 +25,7 @@ type contextBlock struct {
 
 // loadContextBlocks reads an agent's declared context_paths out of the
 // step's working directory at preparation time. Every path is confined to
-// the workspace by resolveAgentPath — the same guard the file tools use —
+// the workspace by tree.ResolvePath — the same guard the file tools use —
 // and capped at limit bytes apiece (max_context_bytes:, default
 // config.DefaultMaxContextBytes). A missing or escaping file is a hard
 // preparation error: context_paths is operator-authored config, so a bad one
@@ -87,7 +89,7 @@ func loadContextBlocks(ctx context.Context, dir string, paths []string, limit in
 // big to send included: like a long diff, it is a fact about this run's
 // input, not a mistake in the pipeline.
 func loadContextBlock(ctx context.Context, dir, path string, limit int, sight imageSight) (contextBlock, error) {
-	resolved, err := resolveAgentPath(dir, path)
+	resolved, err := tree.ResolvePath(dir, path)
 	if err != nil {
 		return contextBlock{}, fmt.Errorf("context path %q: %w", path, err)
 	}
@@ -97,7 +99,7 @@ func loadContextBlock(ctx context.Context, dir, path string, limit int, sight im
 		return contextBlock{}, fmt.Errorf("context path %q: %w", path, err)
 	}
 
-	file, err := os.Open(resolved) //nolint:gosec // resolveAgentPath confines to dir
+	file, err := os.Open(resolved) //nolint:gosec // tree.ResolvePath confines to dir
 	if err != nil {
 		return contextBlock{}, fmt.Errorf("context path %q: %w", path, err)
 	}
@@ -117,7 +119,7 @@ func loadContextBlock(ctx context.Context, dir, path string, limit int, sight im
 	}
 
 	if isNonText(data) {
-		answer := nonTextResult(ctx, hostTree{dir: dir}, resolved, path, data, info.Size(), sight)
+		answer := nonTextResult(ctx, tree.Host{Dir: dir}, resolved, path, data, info.Size(), sight)
 
 		return nonTextContextBlock(path, answer), nil
 	}

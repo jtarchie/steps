@@ -50,7 +50,7 @@ type Step struct {
 	Total      int
 	// Cached is the part of Prompt the provider served from its cache.
 	//
-	// This is the number that says whether prompt caching (see openrouter.go)
+	// This is the number that says whether prompt caching (see internal/agent/llmclient/openrouter.go)
 	// is doing anything. Without it the feature is faith-based: the requests
 	// carry the headers either way, and nothing reports whether they landed.
 	Cached int

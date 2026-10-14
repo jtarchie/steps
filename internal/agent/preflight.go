@@ -28,6 +28,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent/llmclient"
+
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
@@ -339,7 +341,7 @@ func failOver(ctx context.Context, scope pinScope, agent *config.Agent, primary 
 // The pinned source is probed too, because releasing on a recovered primary
 // WITHOUT that would trade one blind spot for a worse one — preflight looks
 // only at the primary, so a pinned fallback that dies is otherwise discovered
-// by a step failing. Both facts feed one pure decision (decidePreflightPin).
+// by a step failing. Both facts feed one pure decision (llmclient.DecidePreflightPin).
 //
 // The reported bool is deliberately NARROWER than "the pin survived". It
 // suppresses the caller's failover AND its failure record, so it may only mean
@@ -378,7 +380,7 @@ func reconsiderPin(
 	// fresh positive, never release, and — since keeping renews the lifetime —
 	// never expire either: pinned to a paid fallback permanently, by ordering
 	// alone.
-	primaryProbe := probeFact{healthy: primaryErr == nil, fresh: primaryAt.After(record.since)}
+	primaryProbe := llmclient.ProbeFact{Healthy: primaryErr == nil, Fresh: primaryAt.After(record.since)}
 
 	candidate, err := primary.WithSource(selection.source, agent)
 	if err != nil {
@@ -398,34 +400,34 @@ func reconsiderPin(
 	}
 
 	// Probed only where its answer can still change the verdict:
-	// decidePreflightPin short-circuits on a primary that is FRESHLY healthy,
+	// llmclient.DecidePreflightPin short-circuits on a primary that is FRESHLY healthy,
 	// and this is a real request against a provider the agent is about to
 	// stop using — one that can spend the whole ProbeTimeout if the fallback
 	// is the thing hanging. A merely cached positive no longer short-circuits
 	// it, which is the point: that answer cannot end a pin on its own, so the
 	// other fact is worth having.
-	pinnedProbe := probeFact{}
-	if !primaryProbe.recovered() {
+	pinnedProbe := llmclient.ProbeFact{}
+	if !primaryProbe.Recovered() {
 		at, err := probeModelCached(ctx, candidate, settings)
-		pinnedProbe = probeFact{healthy: err == nil, fresh: at.After(record.since)}
+		pinnedProbe = llmclient.ProbeFact{Healthy: err == nil, Fresh: at.After(record.since)}
 	}
 
 	// A cancelled run learned nothing about either source: both probes fail
-	// for a reason about the operator, not the endpoint. decideCascade calls
+	// for a reason about the operator, not the endpoint. llmclient.DecideCascade calls
 	// that sourceUnproven and leaves the pin alone; so does this. It reports
 	// false rather than true so the caller still records the failure.
 	if ctx.Err() != nil {
 		return false
 	}
 
-	if decidePreflightPin(pinned, primaryProbe, pinnedProbe) != dropPin {
+	if llmclient.DecidePreflightPin(pinned, primaryProbe, pinnedProbe) != llmclient.DropPin {
 		// Both halves have to hold to report a keep. renewPinIf fails when a
 		// concurrent cascade or expiry has already dropped this pin, and
 		// claiming to keep one that is gone left the caller neither failing
 		// over nor recording a failure — a green preflight with a dead primary
 		// and no pin at all. pinnedProbe.healthy is the other half: see the
 		// doc comment on what this bool is allowed to mean.
-		return renewPinIf(scope, selection) && pinnedProbe.healthy
+		return renewPinIf(scope, selection) && pinnedProbe.Healthy
 	}
 
 	return releasePin(scope, agent, selection, primary, candidate, primaryProbe)
@@ -440,7 +442,7 @@ func releasePin(
 	agent *config.Agent,
 	selection sourceSelection,
 	primary, candidate config.ResolvedInvocation,
-	primaryProbe probeFact,
+	primaryProbe llmclient.ProbeFact,
 ) bool {
 	// Compare-and-delete, not delete: this decision spans a network probe, and
 	// a concurrently-running job's mid-run cascade can pin a source that has
@@ -467,7 +469,7 @@ func releasePin(
 	// cannot be the reason this pin ended, so saying so would report a
 	// recovery nobody had probed for — the exact line the stale-positive
 	// defect used to print.
-	if primaryProbe.recovered() {
+	if primaryProbe.Recovered() {
 		slog.Warn("agent.failover.returned",
 			"pipeline", scope.pipeline,
 			"agent", agent.Name,
@@ -624,7 +626,7 @@ func selectSource(scope pinScope, source config.AgentSource, index int) {
 	// decided is the lifetime's clock, and it turns on whether this is the
 	// same pin or a different one. Re-pinning the SAME source says nothing
 	// new — every step that runs on a pinned fallback and serves re-pins it
-	// (decideCascade returns pinThisSource for any source that carried a
+	// (llmclient.DecideCascade returns llmclient.PinThisSource for any source that carried a
 	// conversation), so restarting the lifetime there would mean a busy
 	// pipeline never re-decides at all. A cascade that MOVED is a fresh
 	// decision backed by fresh evidence: the source it just installed carried
@@ -981,9 +983,9 @@ func probeModel(ctx context.Context, ri config.ResolvedInvocation, timeout time.
 		return probeCLI(ctx, ri, timeout)
 	}
 
-	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
+	apiKey, err := llmclient.LookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w", err)
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -1001,7 +1003,7 @@ func probeModel(ctx context.Context, ri config.ResolvedInvocation, timeout time.
 		Config: &genai.GenerateContentConfig{MaxOutputTokens: 1},
 	}
 
-	llm := newAgentLLM(ri, apiKey)
+	llm := llmclient.New(ri, apiKey)
 
 	for _, respErr := range llm.GenerateContent(probeCtx, req, false) {
 		if respErr != nil {

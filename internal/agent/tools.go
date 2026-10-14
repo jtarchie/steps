@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -35,9 +37,9 @@ type toolEnv struct {
 	runner   shell.Runner
 	spillDir string
 	// lost records the first "the container could not be reached" a tool hit, so the loop can end the attempt rather than let the model keep calling into a machine that is gone.
-	lost *lostTree
+	lost *tree.Lost
 	// tree is where the file tools read and write. Nil means this process's own filesystem, which is every agent with no image:; a containerized one carries a tree reaching into its container, so its file tools and its run_shell are on one copy of the step directory instead of two.
-	tree tree
+	tree tree.Tree
 	// ask is what the ask_user builtin needs from the run rather than from
 	// its grant — where to record a question and who is asking. Zero for
 	// every caller with no run to record against, which that tool reports as
@@ -71,9 +73,9 @@ type toolEnv struct {
 }
 
 // files is the tree the file tools work against, defaulting to this process's own filesystem so a zero-value env — every unit test that builds one by hand — behaves as it always did.
-func (env toolEnv) files() tree {
+func (env toolEnv) files() tree.Tree {
 	if env.tree == nil {
-		return hostTree{dir: env.dir}
+		return tree.Host{Dir: env.dir}
 	}
 
 	return env.tree
@@ -96,9 +98,9 @@ func (env toolEnv) readsSpill(rel string) bool {
 }
 
 // readTree is the tree a read_file call should use: the container's, except for the spill directory above.
-func (env toolEnv) readTree(rel string) tree {
+func (env toolEnv) readTree(rel string) tree.Tree {
 	if env.readsSpill(rel) {
-		return hostTree{dir: env.dir}
+		return tree.Host{Dir: env.dir}
 	}
 
 	return env.files()

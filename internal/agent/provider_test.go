@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent/llmclient"
+
 	"github.com/jtarchie/steps/internal/config"
 )
 
@@ -15,7 +17,7 @@ func TestLookupAPIKey(t *testing.T) {
 	t.Run("required and set succeeds", func(t *testing.T) {
 		t.Setenv("STEPS_TEST_KEY_1", "secret")
 
-		got, err := lookupAPIKey("STEPS_TEST_KEY_1", true)
+		got, err := llmclient.LookupAPIKey("STEPS_TEST_KEY_1", true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -26,21 +28,21 @@ func TestLookupAPIKey(t *testing.T) {
 	})
 
 	t.Run("required and unset errors", func(t *testing.T) {
-		_, err := lookupAPIKey("STEPS_TEST_KEY_DOES_NOT_EXIST", true)
+		_, err := llmclient.LookupAPIKey("STEPS_TEST_KEY_DOES_NOT_EXIST", true)
 		if err == nil {
 			t.Error("expected an error for a required but unset env var")
 		}
 	})
 
 	t.Run("required with empty envVar name errors", func(t *testing.T) {
-		_, err := lookupAPIKey("", true)
+		_, err := llmclient.LookupAPIKey("", true)
 		if err == nil {
 			t.Error("expected an error for a required key with no envVar name")
 		}
 	})
 
 	t.Run("not required and unset returns empty, no error", func(t *testing.T) {
-		got, err := lookupAPIKey("", false)
+		got, err := llmclient.LookupAPIKey("", false)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -14,6 +14,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jtarchie/steps/internal/agent/llmclient"
+
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
@@ -70,7 +74,7 @@ type preparedAgentStep struct {
 	// runner is the same one conv.env holds, kept because openTree probes through it before the conversation starts.
 	runner shell.Runner
 	// lost is the conversation's record of an unreachable tree, shared with the tree openTree builds.
-	lost *lostTree
+	lost *tree.Lost
 }
 
 // openTree settles where this step's file tools reach and what the model is told its working directory is.
@@ -79,7 +83,7 @@ type preparedAgentStep struct {
 //
 // Called from runPreparedWithFailover, which is the one place a prepared conversation starts, so no caller can forget it. It answers a SETTLED copy rather than mutating in place, because that is the copy the conversation below actually runs from.
 func (p preparedAgentStep) openTree(ctx context.Context) (preparedAgentStep, error) {
-	files, modelDir, err := resolveStepTree(ctx, p.runner, p.ri.Image, p.dir, p.ri.ToolSpecs, p.lost)
+	files, modelDir, err := tree.ForStep(ctx, p.runner, p.ri.Image, p.dir, p.ri.ToolSpecs, p.lost)
 	if err != nil {
 		return p, fmt.Errorf("agent %q: %w", p.ri.AgentName, err)
 	}
@@ -244,15 +248,15 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	// container down through the same closeAll the success path uses.
 	closers = append(closers, runner)
 
-	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
+	apiKey, err := llmclient.LookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
 
-		return preparedAgentStep{}, err
+		return preparedAgentStep{}, fmt.Errorf("%w", err)
 	}
 
-	lost := &lostTree{}
+	lost := &tree.Lost{}
 
 	contextBlocks, err := prepareContextBlocks(ctx, dir, ri, tools.decls)
 	if err != nil {
@@ -278,11 +282,11 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 			state:     &askState{},
 		}, sight: sightFor(ri)},
 		tools: tools,
-		params: agentGenParams{
-			temperature: ri.Temperature,
-			topP:        ri.TopP,
-			maxTokens:   ri.MaxTokens,
-			reasoning:   ri.ReasoningEffort,
+		params: llmclient.GenParams{
+			Temperature: ri.Temperature,
+			TopP:        ri.TopP,
+			MaxTokens:   ri.MaxTokens,
+			Reasoning:   ri.ReasoningEffort,
 		},
 		maxTurns:             ri.MaxTurns,
 		toolChoiceStringOnly: ri.StringOnlyToolChoice,
@@ -331,7 +335,7 @@ func invocationLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 		return nil
 	}
 
-	return newAgentLLM(ri, apiKey)
+	return llmclient.New(ri, apiKey)
 }
 
 // resolveWithFailover resolves a step's agent twice over: as CONFIGURED, which
@@ -427,7 +431,7 @@ func prepareStepPrompt(spaceDir string, step config.Step) (config.Step, error) {
 //
 // The artifact's contents are untrusted — a fetched repo is whatever a PR
 // author put there — so the path is confined and symlink-checked by
-// resolveAgentPath, the same guard read_file/list_dir use against a
+// tree.ResolvePath, the same guard read_file/list_dir use against a
 // model-supplied path.
 func resolveDeferredMessages(spaceDir string, step config.Step) ([]string, error) {
 	messages := make([]string, 0, len(step.MessageFiles))
@@ -435,13 +439,13 @@ func resolveDeferredMessages(spaceDir string, step config.Step) ([]string, error
 	for _, ref := range step.MessageFiles {
 		rel := filepath.Join(ref.Artifact, ref.Path)
 
-		resolved, err := resolveAgentPath(spaceDir, rel)
+		resolved, err := tree.ResolvePath(spaceDir, rel)
 		if err != nil {
 			return nil, fmt.Errorf("agent %q: message_files {artifact: %q, path: %q}: %w",
 				step.Agent, ref.Artifact, ref.Path, err)
 		}
 
-		data, err := os.ReadFile(resolved) //nolint:gosec // resolved and confined by resolveAgentPath against spaceDir, the step's own materialized working directory
+		data, err := os.ReadFile(resolved) //nolint:gosec // resolved and confined by tree.ResolvePath against spaceDir, the step's own materialized working directory
 		if err != nil {
 			return nil, fmt.Errorf("agent %q: message_files {artifact: %q, path: %q}: %w",
 				step.Agent, ref.Artifact, ref.Path, err)
@@ -458,20 +462,13 @@ func resolveDeferredMessages(spaceDir string, step config.Step) ([]string, error
 	return messages, nil
 }
 
-// toolOutputSpillDirName is the fixed name of the subdirectory a
-// run_shell/custom tool's oversized output is spilled into (see
-// newToolOutputSpillDir). config.artifactNamePattern requires a declared
-// input/output name to start with a letter or digit, so this leading '.'
-// can never collide with a real one.
-const toolOutputSpillDirName = ".steps-agent-out"
-
 // newToolOutputSpillDir creates a fresh subdirectory of dir — the step's
 // working directory — that a run_shell/custom tool's oversized output can be
 // spilled to for this one step (see toolEnv.spillDir), removed by
 // preparedAgentStep.close when the step ends.
 //
 // It must live inside dir, rather than a top-level os.MkdirTemp: read_file
-// and list_dir are confined to dir (resolveAgentPath), so a spill directory
+// and list_dir are confined to dir (tree.ResolvePath), so a spill directory
 // outside it would be reachable only via run_shell (the one tool with no
 // path confinement of its own) — defeating the point of spilling large
 // output to a file the model can then read back in slices.
@@ -482,7 +479,7 @@ const toolOutputSpillDirName = ".steps-agent-out"
 // workspace would otherwise turn an unrelated pipeline failure into an agent
 // step failure).
 func newToolOutputSpillDir(dir, stepLabel string) string {
-	spillDir := filepath.Join(dir, toolOutputSpillDirName)
+	spillDir := filepath.Join(dir, tree.SpillDirName)
 
 	err := os.MkdirAll(spillDir, 0o750)
 	if err != nil {
@@ -497,10 +494,10 @@ func newToolOutputSpillDir(dir, stepLabel string) string {
 // prepareStepTree is openTree and the context blocks in one, for the fix path, which has no cache lookup to get in front of: a repair agent only runs because a task just failed, so there is no reuse for an early probe to waste.
 //
 // The context blocks are read from THIS machine either way: context_paths: is operator-authored configuration resolved at preparation time, against the tree the workspace has just materialized and before any of it has been sent anywhere.
-func prepareStepTree(ctx context.Context, runner shell.Runner, ri config.ResolvedInvocation, dir string, decls *genai.Tool, lost *lostTree) (tree, string, []contextBlock, error) {
-	files, modelDir, err := resolveStepTree(ctx, runner, ri.Image, dir, ri.ToolSpecs, lost)
+func prepareStepTree(ctx context.Context, runner shell.Runner, ri config.ResolvedInvocation, dir string, decls *genai.Tool, lost *tree.Lost) (tree.Tree, string, []contextBlock, error) {
+	files, modelDir, err := tree.ForStep(ctx, runner, ri.Image, dir, ri.ToolSpecs, lost)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("%w", err)
 	}
 
 	blocks, err := prepareContextBlocks(ctx, dir, ri, decls)

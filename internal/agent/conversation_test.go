@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent/llmclient"
+
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
@@ -889,7 +891,7 @@ func TestApplyGenParams(t *testing.T) {
 	temp := 0.2
 	topP := 0.9
 	cfg := &genai.GenerateContentConfig{}
-	agentGenParams{temperature: &temp, topP: &topP, maxTokens: 512, reasoning: "high"}.applyTo(cfg)
+	llmclient.GenParams{Temperature: &temp, TopP: &topP, MaxTokens: 512, Reasoning: "high"}.ApplyTo(cfg)
 
 	if got := floatPtrVal(cfg.Temperature); got != 0.2 {
 		t.Errorf("temperature = %v, want 0.2", got)
@@ -912,7 +914,7 @@ func TestApplyGenParamsUnsetLeavesConfigUntouched(t *testing.T) {
 	t.Parallel()
 
 	cfg := &genai.GenerateContentConfig{}
-	agentGenParams{}.applyTo(cfg)
+	llmclient.GenParams{}.ApplyTo(cfg)
 
 	if cfg.Temperature != nil || cfg.TopP != nil || cfg.MaxOutputTokens != 0 || cfg.ThinkingConfig != nil {
 		t.Errorf("expected an untouched config, got %+v", cfg)

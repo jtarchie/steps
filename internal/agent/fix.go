@@ -6,6 +6,10 @@ import (
 	"os"
 	"slices"
 
+	"github.com/jtarchie/steps/internal/agent/llmclient"
+
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
@@ -115,16 +119,16 @@ func RunFix(
 	defer shell.CloseRunner(runner, fix.Agent)
 
 	// A repair agent follows the same rule a step agent does: with an image:, its file tools go where its shell commands already go. It is the case the ownership mismatch bites hardest, since the task's own command has just written into the tree as the container's user.
-	lost := &lostTree{}
+	lost := &tree.Lost{}
 
 	files, modelDir, contextBlocks, err := prepareStepTree(ctx, runner, ri, dir, tools.decls, lost)
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
 	}
 
-	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
+	apiKey, err := llmclient.LookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w", err)
 	}
 
 	spillDir := newToolOutputSpillDir(dir, fix.Agent)
@@ -145,11 +149,11 @@ func RunFix(
 		contextBlocks: contextBlocks,
 		env:           toolEnv{dir: dir, runner: runner, tree: files, lost: lost, spillDir: spillDir, ask: askContext(st, jobName, fix.Agent), sight: sightFor(ri)},
 		tools:         tools,
-		params: agentGenParams{
-			temperature: ri.Temperature,
-			topP:        ri.TopP,
-			maxTokens:   ri.MaxTokens,
-			reasoning:   ri.ReasoningEffort,
+		params: llmclient.GenParams{
+			Temperature: ri.Temperature,
+			TopP:        ri.TopP,
+			MaxTokens:   ri.MaxTokens,
+			Reasoning:   ri.ReasoningEffort,
 		},
 		maxTurns:             ri.MaxTurns,
 		toolChoiceStringOnly: ri.StringOnlyToolChoice,
@@ -169,7 +173,7 @@ func RunFix(
 	// calls finish() on a caller's behalf.
 	defer conv.usage.finish(ctx)
 
-	llm := newAgentLLM(ri, apiKey)
+	llm := llmclient.New(ri, apiKey)
 
 	// Keep the latest attempt's result either way, same as runPrepared: on
 	// success it's the fix agent's own account of what it did (the

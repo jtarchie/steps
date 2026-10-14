@@ -6,6 +6,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
 )
@@ -37,7 +39,7 @@ func TestPreparingAContainerAgentStartsNothing(t *testing.T) {
 	prepared := preparedAgentStep{
 		dir:    t.TempDir(),
 		runner: runner,
-		lost:   &lostTree{},
+		lost:   &tree.Lost{},
 		ri: config.ResolvedInvocation{
 			AgentName: "hand",
 			Image:     "alpine:3",
@@ -83,7 +85,7 @@ func TestPreparingAHostAgentNeedsNoProbe(t *testing.T) {
 	prepared := preparedAgentStep{
 		dir:    dir,
 		runner: runner,
-		lost:   &lostTree{},
+		lost:   &tree.Lost{},
 		ri: config.ResolvedInvocation{
 			AgentName: "hand",
 			ToolSpecs: []config.ToolSpec{{Builtin: "read_file"}},
@@ -100,7 +102,7 @@ func TestPreparingAHostAgentNeedsNoProbe(t *testing.T) {
 		t.Errorf("an agent with no image: ran %v; there is no container to ask", runner.commands)
 	}
 
-	if host, ok := prepared.conv.env.tree.(hostTree); !ok || host.dir != dir {
+	if host, ok := prepared.conv.env.tree.(tree.Host); !ok || host.Dir != dir {
 		t.Errorf("tree = %#v, want this machine's own rooted at %q", prepared.conv.env.tree, dir)
 	}
 }

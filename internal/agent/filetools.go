@@ -26,12 +26,12 @@ func execListDir(ctx context.Context, args map[string]any, env toolEnv) map[stri
 
 	files := env.files()
 
-	resolved, err := files.resolve(ctx, rel)
+	resolved, err := files.Resolve(ctx, rel)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
-	entries, err := files.listDir(ctx, resolved)
+	entries, err := files.ListDir(ctx, resolved)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -46,7 +46,7 @@ func execListDir(ctx context.Context, args map[string]any, env toolEnv) map[stri
 	items := make([]map[string]any, 0, len(entries))
 
 	for _, e := range entries {
-		items = append(items, map[string]any{"name": e.name, "is_dir": e.isDir, "size": e.size})
+		items = append(items, map[string]any{"name": e.Name, "is_dir": e.IsDir, "size": e.Size})
 	}
 
 	result := map[string]any{"entries": items, "total": total, "truncated": truncated}
@@ -87,14 +87,14 @@ func execWriteFile(ctx context.Context, args map[string]any, env toolEnv) map[st
 		return map[string]any{"error": `write_file: missing required argument "content"`}
 	}
 
-	resolved, err := env.files().resolveWrite(ctx, rel)
+	resolved, err := env.files().ResolveWrite(ctx, rel)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
 	appendArg, _ := args["append"].(bool)
 
-	err = env.files().writeFile(ctx, resolved, []byte(content), appendArg)
+	err = env.files().WriteFile(ctx, resolved, []byte(content), appendArg)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}

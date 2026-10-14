@@ -11,6 +11,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -513,7 +515,7 @@ func TestResolveAgentPath(t *testing.T) {
 	t.Run("relative path within dir resolves", func(t *testing.T) {
 		t.Parallel()
 
-		got, err := resolveAgentPath(dir, "sub/file.txt")
+		got, err := tree.ResolvePath(dir, "sub/file.txt")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -526,7 +528,7 @@ func TestResolveAgentPath(t *testing.T) {
 	t.Run("absolute path escaping dir is rejected", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := resolveAgentPath(dir, "/etc/passwd")
+		_, err := tree.ResolvePath(dir, "/etc/passwd")
 		if err == nil {
 			t.Error("expected an error for an absolute path outside dir")
 		}
@@ -535,7 +537,7 @@ func TestResolveAgentPath(t *testing.T) {
 	t.Run("traversal outside dir rejected", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := resolveAgentPath(dir, "../../etc/passwd")
+		_, err := tree.ResolvePath(dir, "../../etc/passwd")
 		if err == nil {
 			t.Error("expected an error for a path escaping dir")
 		}
@@ -544,7 +546,7 @@ func TestResolveAgentPath(t *testing.T) {
 	t.Run("nonexistent path is not treated as an escape", func(t *testing.T) {
 		t.Parallel()
 
-		got, err := resolveAgentPath(dir, "does/not/exist.txt")
+		got, err := tree.ResolvePath(dir, "does/not/exist.txt")
 		if err != nil {
 			t.Fatalf("unexpected error for a merely-nonexistent path: %v", err)
 		}
@@ -577,7 +579,7 @@ func TestResolveAgentPath(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err = resolveAgentPath(symlinkDir, "leak/secret.txt")
+		_, err = tree.ResolvePath(symlinkDir, "leak/secret.txt")
 		if err == nil {
 			t.Error("expected an error for a path resolving outside dir via a symlink")
 		}
@@ -588,7 +590,7 @@ func TestResolveAgentPath(t *testing.T) {
 // form a model actually receives from a spilled tool output's pointer
 // message (shell.SpillPointerMessage) or from its own system message
 // (agentOperatingNote, which states the absolute working directory).
-// resolveAgentPath used to reject every absolute path outright; it must now
+// tree.ResolvePath used to reject every absolute path outright; it must now
 // resolve one inside dir exactly like its relative spelling would, while
 // still rejecting one outside dir — lexically or via a symlink.
 func TestResolveAgentPathAbsolute(t *testing.T) {
@@ -600,7 +602,7 @@ func TestResolveAgentPathAbsolute(t *testing.T) {
 		dir := t.TempDir()
 		abs := filepath.Join(dir, "sub/file.txt")
 
-		got, err := resolveAgentPath(dir, abs)
+		got, err := tree.ResolvePath(dir, abs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -615,7 +617,7 @@ func TestResolveAgentPathAbsolute(t *testing.T) {
 
 		dir := t.TempDir()
 
-		got, err := resolveAgentPath(dir, dir)
+		got, err := tree.ResolvePath(dir, dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -646,7 +648,7 @@ func TestResolveAgentPathAbsolute(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err = resolveAgentPath(symlinkDir, filepath.Join(symlinkDir, "leak/secret.txt"))
+		_, err = tree.ResolvePath(symlinkDir, filepath.Join(symlinkDir, "leak/secret.txt"))
 		if err == nil {
 			t.Error("expected an error for an absolute path resolving outside dir via a symlink")
 		}
@@ -987,7 +989,7 @@ func TestExecReadFileLineRangeLineOverScanBound(t *testing.T) {
 
 	dir := t.TempDir()
 
-	huge := strings.Repeat("z", maxReadFileScanBytes+1)
+	huge := strings.Repeat("z", tree.MaxScanBytes+1)
 
 	err := os.WriteFile(filepath.Join(dir, "huge.txt"), []byte(huge), 0o600)
 	if err != nil {
@@ -1011,7 +1013,7 @@ func TestExecReadFileLineRangeLineOverScanBound(t *testing.T) {
 // (newToolOutputSpillDir), and the pointer message the model actually
 // receives (shell.SpillPointerMessage) names that file by its ABSOLUTE path
 // — not a path relative to the working directory. read_file used to reject
-// any absolute path outright (resolveAgentPath's old IsAbs check), so the
+// any absolute path outright (tree.ResolvePath's old IsAbs check), so the
 // round-trip the 100_000-byte maxReadFileBytes budget was sized for could
 // never actually complete: the model had no relative spelling to fall back
 // to. This test feeds execReadFile the exact absolute path a model would
@@ -1134,7 +1136,7 @@ func extractSpillPath(t *testing.T, message string) string {
 // TestExecReadFileRejectsSymlinkEscape reproduces the security finding's
 // exact scenario: a model calls run_shell("ln -s /some/secret leak")
 // (run_shell has no path confinement at all), then read_file("leak"). The
-// lexical check in resolveAgentPath alone would pass ("dir/leak" stays
+// lexical check in tree.ResolvePath alone would pass ("dir/leak" stays
 // inside dir as a string), but os.ReadFile dereferences the symlink at the
 // OS level — so this must be caught before execReadFile ever calls
 // os.Open. Split into its own top-level test (rather than a t.Run under
@@ -1373,10 +1375,10 @@ func TestExecWriteFileRejectsBadPaths(t *testing.T) {
 		}
 	})
 
-	// This case guards the gap resolveAgentPath alone leaves open for a
+	// This case guards the gap tree.ResolvePath alone leaves open for a
 	// brand-new file: EvalSymlinks fails with ENOENT on a nonexistent leaf
 	// regardless of whether an ancestor directory is a symlink, so without
-	// resolveWritePath's extra parent-directory check, a write through a
+	// tree.ResolveWritePath's extra parent-directory check, a write through a
 	// symlinked parent (planted, e.g., via run_shell) would silently write
 	// outside dir.
 	t.Run("rejects a write through a symlinked parent directory", func(t *testing.T) {

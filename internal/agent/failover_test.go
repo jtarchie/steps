@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/agent/llmclient"
+
 	"github.com/jtarchie/steps/internal/config"
 )
 
@@ -188,7 +190,7 @@ func TestAMidRunFailureResumesOnTheNextSource(t *testing.T) {
 		ri:            ri,
 		agent:         &cfg.Agents[0],
 		fallbackIndex: -1,
-		llm:           newAgentLLM(ri, "test-key"),
+		llm:           llmclient.New(ri, "test-key"),
 		conv:          agentConversation{system: "system", messages: []string{"prompt"}, maxTurns: testMaxTurns},
 	})
 	if err != nil {

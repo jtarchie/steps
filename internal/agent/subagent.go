@@ -8,6 +8,10 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent/llmclient"
+
+	"github.com/jtarchie/steps/internal/agent/tree"
+
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
@@ -68,7 +72,7 @@ func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.Tool
 		return nil, nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
 	}
 
-	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
+	apiKey, err := llmclient.LookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
 		closeAll(childClosers)
 
@@ -77,7 +81,7 @@ func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.Tool
 
 	child := preparedSubAgent{
 		ri:       ri,
-		llm:      newAgentLLM(ri, apiKey),
+		llm:      llmclient.New(ri, apiKey),
 		tools:    childTools,
 		fraction: cfg.DelegateBudgetFraction(spec.Agent),
 	}
@@ -174,7 +178,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	defer shell.CloseRunner(runner, c.ri.AgentName)
 
 	// The child's own image decides where ITS file tools run, not the parent's: a hosted child of a containerized parent reads this machine, and a containerized child of a host parent reads its container. tags: on an agent granting a sub-agent is refused at load, so these are always the same machine and there is one tree either way.
-	childTree, childDir, err := resolveStepTree(ctx, runner, c.ri.Image, env.dir, c.ri.ToolSpecs, env.lost)
+	childTree, childDir, err := tree.ForStep(ctx, runner, c.ri.Image, env.dir, c.ri.ToolSpecs, env.lost)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -206,11 +210,11 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		// which agent wants to know rather than which one delegated.
 		env:   toolEnv{dir: env.dir, runner: runner, tree: childTree, lost: env.lost, spillDir: env.spillDir, ask: env.ask.forAgent(c.ri.AgentName), sight: sightFor(c.ri)},
 		tools: c.tools,
-		params: agentGenParams{
-			temperature: c.ri.Temperature,
-			topP:        c.ri.TopP,
-			maxTokens:   c.ri.MaxTokens,
-			reasoning:   c.ri.ReasoningEffort,
+		params: llmclient.GenParams{
+			Temperature: c.ri.Temperature,
+			TopP:        c.ri.TopP,
+			MaxTokens:   c.ri.MaxTokens,
+			Reasoning:   c.ri.ReasoningEffort,
 		},
 		maxTurns:             c.ri.MaxTurns,
 		toolChoiceStringOnly: c.ri.StringOnlyToolChoice,
@@ -259,7 +263,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// Its session is stable per (run, agent) with no attempt component, so
 	// repeated calls with the identical prompt keep a warm cache (see
 	// composeSessionID).
-	res, runErr := runAgentConversation(withRequestCounter(ctx, &requestCounter{}), c.llm, conv)
+	res, runErr := runAgentConversation(llmclient.WithRequestCounter(ctx, &llmclient.RequestCounter{}), c.llm, conv)
 	printAgentResponse(ctx, res)
 
 	slog.InfoContext(ctx, "agent.subagent_finish", "run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex,

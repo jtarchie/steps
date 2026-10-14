@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent/llmclient"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -92,7 +94,7 @@ func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env tool
 }
 
 func startToolSpan(ctx context.Context, call *genai.FunctionCall) (context.Context, trace.Span) {
-	return otel.Tracer(telemetryScope).Start(ctx, "execute_tool "+call.Name, trace.WithAttributes(
+	return otel.Tracer(llmclient.TelemetryScope).Start(ctx, "execute_tool "+call.Name, trace.WithAttributes(
 		attribute.String("gen_ai.operation.name", "execute_tool"),
 		attribute.String("gen_ai.tool.name", call.Name),
 		attribute.String("gen_ai.tool.call.id", call.ID),
