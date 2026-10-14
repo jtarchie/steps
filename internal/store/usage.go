@@ -19,10 +19,10 @@ type Usage interface {
 // CLI-backed agent reports a dollar figure at all, and rendering an unreported
 // cost as $0.00 would make an unpriced run look free.
 type AgentUsage struct {
-	RunID        string
-	StepIndex    int
-	StepName     string
-	JobName      string
+	RunID     string
+	StepIndex int
+	StepName  string
+	JobName   string
 	// Kind is UsageStep, UsageHook or UsageFix; empty records as UsageStep.
 	Kind string
 	// NodeHash is empty for a hook or a fix, which are never hashed: their
