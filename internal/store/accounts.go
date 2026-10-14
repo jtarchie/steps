@@ -35,8 +35,10 @@ type Accounts interface {
 	IssueToken(ctx context.Context, token OAuthToken) error
 	// FindToken is the live token with this digest: unexpired, unrevoked.
 	FindToken(ctx context.Context, tokenHash string) (OAuthToken, bool, error)
-	// RevokeToken ends one token, which is what rotating a refresh token does to the old one.
-	RevokeToken(ctx context.Context, tokenHash string) error
+	// RevokeToken ends one token, which is what rotating a refresh token does
+	// to the old one. revoked is false for a token already ended: of two
+	// refreshes racing with one token, only the one that ended it may mint.
+	RevokeToken(ctx context.Context, tokenHash string) (revoked bool, err error)
 	// RevokeGrant ends every token a person gave one client for one export: disconnecting it.
 	RevokeGrant(ctx context.Context, grant Grant) error
 	// Grants are the live connections — a grant with a token still good —

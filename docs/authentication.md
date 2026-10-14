@@ -35,7 +35,7 @@ Each account is a name and a **bcrypt hash** — the daemon never holds the pass
 
 Everyone signs in the same way — the browser prompts, the CLI carries `name:password@` in `--target` — and what each one does is recorded under their own name: a run they trigger says `by alex (local)` ([web.md](web.md#the-transcript)). The `--basic-auth-*` pair still works, and is one more account beside these.
 
-bcrypt is slow on purpose (tens of milliseconds a check) and a browser sends credentials on every request, so a pair that checked out is remembered for a minute. A changed file reaches a running daemon only on restart.
+bcrypt is slow on purpose (tens of milliseconds a check) and a browser sends credentials on every request, so a pair that checked out is remembered for a minute. A changed file reaches a running daemon only on restart, and an account removed from it then ends: its browser sessions and its agents' connections stop working.
 
 **Unset is open access**, which is what every existing local workflow is. `steps web` on a routable address with no credentials prints a warning once at startup naming the two flags; it does not refuse, because an operator who has put the daemon behind a tunnel or a reverse proxy has already answered the question.
 
@@ -63,7 +63,7 @@ Each client id adds a **Continue with …** button to the sign-in page. Register
 
 - **The secret is read from the environment**, never a flag: `$STEPS_GITHUB_CLIENT_SECRET` and `$STEPS_GOOGLE_CLIENT_SECRET` by default, or the variable `--github-client-secret-env`/`--google-client-secret-env` name. An id without its secret, or with no `--external-url` to send the browser back to, stops the daemon before it listens.
 - **Who they are**: `alex (github)` by GitHub login, `sam@acme.dev (google)` by email.
-- **What is read about them**, at every sign-in, replacing what was read last time: from GitHub, their organizations and `org/team` teams (the app asks for `read:org`); from Google, their email and, for a Workspace account, its domain. Google says nothing about groups without its admin API, so a rule about a Google account can match its address or domain and nothing else.
+- **What is read about them**, at every sign-in, replacing what was read last time: from GitHub, their organizations and `org/team` teams (the app asks for `read:org`); from Google, their email (refused unless Google has verified it) and, for a Workspace account, its domain. Google says nothing about groups without its admin API, so a rule about a Google account can match its address or domain and nothing else.
 - **Local accounts and providers mix.** The password form is drawn only when the daemon keeps local accounts. The CLI still needs a local account: a GitHub or Google sign-in is a browser's.
 - A sign-in that comes back with a state this daemon did not hand out, or one already used, is refused.
 

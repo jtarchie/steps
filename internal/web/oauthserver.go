@@ -106,6 +106,10 @@ func (s *Server) exportOfResource(resource string) (*Pipeline, config.MCPExport,
 
 // mayUse is whether a person may connect to an export: the daemon must let them see the pipeline, the pipeline must not hide it from them, and the export's own rule must hold. Read from the daemon's record of them every time it is asked.
 func (s *Server) mayUse(ctx context.Context, who actor.Actor, target *Pipeline, export config.MCPExport) bool {
+	if !s.signsIn(who) {
+		return false
+	}
+
 	id := s.identityOf(ctx, who)
 	if target.narrow(s.roles.highest(id), id) < RoleViewer {
 		return false
@@ -275,12 +279,13 @@ func (p *pendingAuth) put(into *map[string]authRequest, key string, req authRequ
 	(*into)[key] = req
 }
 
-func (p *pendingAuth) take(from map[string]authRequest, key string) (authRequest, bool) {
+// take reads the map through from under the lock, as put assigns it: the field read is the race, not only the map access.
+func (p *pendingAuth) take(from *map[string]authRequest, key string) (authRequest, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	req, found := from[key]
-	delete(from, key)
+	req, found := (*from)[key]
+	delete(*from, key)
 
 	return req, found && time.Now().Before(req.expires)
 }
@@ -384,7 +389,7 @@ func redirectHost(raw string) string {
 
 // handleConsent is the person's answer. Only a consent this daemon showed this person, unanswered and unexpired, is honoured.
 func (s *Server) handleConsent(c *echo.Context) error {
-	req, found := s.auths.take(s.auths.consents, c.FormValue("consent"))
+	req, found := s.auths.take(&s.auths.consents, c.FormValue("consent"))
 	if !found || req.grant.Actor != actor.From(c.Request().Context()).String() {
 		return s.renderConsent(c, http.StatusBadRequest, consentPage{Problem: "That connection request expired or was not shown to you. Start again from the agent."})
 	}
@@ -449,7 +454,7 @@ func (s *Server) handleToken(c *echo.Context) error {
 }
 
 func (s *Server) exchangeCode(c *echo.Context) error {
-	req, found := s.auths.take(s.auths.codes, c.FormValue("code"))
+	req, found := s.auths.take(&s.auths.codes, c.FormValue("code"))
 	if !found || req.client.ID != c.FormValue("client_id") || req.redirectURI != c.FormValue("redirect_uri") {
 		return oauthError(c, http.StatusBadRequest, "invalid_grant", "unknown, used, expired or mismatched code")
 	}
@@ -475,9 +480,13 @@ func (s *Server) refresh(c *echo.Context) error {
 		return oauthError(c, http.StatusBadRequest, "invalid_grant", "unknown, used or expired refresh token")
 	}
 
-	err = s.sessions.RevokeToken(ctx, token.TokenHash)
+	revoked, err := s.sessions.RevokeToken(ctx, token.TokenHash)
 	if err != nil {
 		return echoError(err)
+	}
+
+	if !revoked {
+		return oauthError(c, http.StatusBadRequest, "invalid_grant", "unknown, used or expired refresh token")
 	}
 
 	target, export, exists := s.exportNamed(token.Grant.Pipeline, token.Grant.Export)

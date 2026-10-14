@@ -109,21 +109,27 @@ func (s *Server) exportFor(target *Pipeline, export config.MCPExport) (*schedule
 	key := target.Slug + "/" + export.Name
 	cfg := target.Config()
 
+	if server, built := s.builtExport(key, cfg); built {
+		return server, nil
+	}
+
+	// Built outside the lock: building dials every upstream the export reaches, and every other export's calls take this lock for their rate.
+	server, err := s.exporter.ServeExport(context.WithoutCancel(context.Background()), target.Pipeline, export, s.exportHooks(target, export))
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the export names itself
+	}
+
 	s.exports.mu.Lock()
 	defer s.exports.mu.Unlock()
 
 	if current, built := s.exports.entries[key]; built {
 		if current.cfg == cfg {
+			_ = server.Close()
+
 			return current.server, nil
 		}
 
 		_ = current.server.Close()
-		delete(s.exports.entries, key)
-	}
-
-	server, err := s.exporter.ServeExport(context.WithoutCancel(context.Background()), target.Pipeline, export, s.exportHooks(target, export))
-	if err != nil {
-		return nil, err //nolint:wrapcheck // the export names itself
 	}
 
 	if s.exports.entries == nil {
@@ -133,6 +139,15 @@ func (s *Server) exportFor(target *Pipeline, export config.MCPExport) (*schedule
 	s.exports.entries[key] = servedExport{cfg: cfg, server: server}
 
 	return server, nil
+}
+
+func (s *Server) builtExport(key string, cfg *config.Config) (*scheduler.ExportServer, bool) {
+	s.exports.mu.Lock()
+	defer s.exports.mu.Unlock()
+
+	current, built := s.exports.entries[key]
+
+	return current.server, built && current.cfg == cfg
 }
 
 func (s *Server) exportHooks(target *Pipeline, export config.MCPExport) scheduler.ExportHooks {

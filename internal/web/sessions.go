@@ -58,16 +58,28 @@ func (s *Server) sessionActor(c *echo.Context) (actor.Actor, bool) {
 		return actor.Actor{}, false
 	}
 
-	if !found {
+	who := actor.Parse(session.Actor)
+	if !found || !s.signsIn(who) {
 		return actor.Actor{}, false
 	}
 
-	return actor.Parse(session.Actor), true
+	return who, true
 }
 
-// safeNext is where a sign-in may send the browser on: a path on this server and nothing else. "//" and "/\\" are hosts to a browser, which is how a sign-in page becomes a way off the site.
+// signsIn is whether who is still somebody this daemon lets in: a local account it still holds, or a provider it still offers. A session or a grant outlives the flag that admitted it otherwise, and removing the account and restarting would end nothing.
+func (s *Server) signsIn(who actor.Actor) bool {
+	if who.Kind == "local" {
+		return s.auth.knows(who.ID)
+	}
+
+	_, offered := s.providerNamed(who.Kind)
+
+	return offered
+}
+
+// safeNext is where a sign-in may send the browser on: a path on this server and nothing else. "//" and "/\\" are hosts to a browser, which is how a sign-in page becomes a way off the site — and a browser strips tabs and newlines from a URL before reading it, so "/\t/evil" is "//evil" by the time it is followed.
 func safeNext(next string) string {
-	if strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") && !strings.HasPrefix(next, `/\`) {
+	if strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") && !strings.ContainsAny(next, "\\\t\r\n") {
 		return next
 	}
 

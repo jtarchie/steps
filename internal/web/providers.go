@@ -8,6 +8,7 @@ package web
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -141,6 +142,11 @@ func describeGoogle(_ context.Context, _ *http.Client, user goth.User) (store.Us
 		return store.User{}, errors.New("google gave no email address")
 	}
 
+	// The address is the person's name here and what rules match on, so one Google has not verified is one anybody could have typed.
+	if verified, _ := user.RawData["verified_email"].(bool); !verified {
+		return store.User{}, errors.New("google has not verified this account's email address")
+	}
+
 	described := store.User{Actor: actor.Actor{Kind: "google", ID: user.Email}.String(), Email: user.Email}
 
 	// hd is the Workspace domain, absent for a personal account.
@@ -177,8 +183,12 @@ type pendingSignIn struct {
 	expires  time.Time
 }
 
-// signInWait is how long a trip to a provider may take before its state is forgotten.
-const signInWait = 10 * time.Minute
+const (
+	// signInWait is how long a trip to a provider may take before its state is forgotten.
+	signInWait = 10 * time.Minute
+	// signInCookie carries the state to the browser that started the trip.
+	signInCookie = "steps_signin"
+)
 
 type pendingSignIns struct {
 	mu      sync.Mutex
@@ -237,6 +247,17 @@ func (s *Server) handleSignInStart(c *echo.Context) error {
 
 	s.pending.put(state, pendingSignIn{provider: provider.Name, session: session.Marshal(), next: safeNext(c.QueryParam("next")), expires: time.Now().Add(signInWait)})
 
+	// The state is also this browser's: a callback link somebody else started and sent here would otherwise sign this browser in as them.
+	c.SetCookie(&http.Cookie{ //nolint:gosec // Secure is servedOverTLS, as the session cookie
+		Name:     signInCookie,
+		Value:    state,
+		Path:     "/auth/",
+		MaxAge:   int(signInWait.Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   servedOverTLS(c.Request()),
+	})
+
 	//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
 	return c.Redirect(http.StatusSeeOther, to)
 }
@@ -245,8 +266,12 @@ func (s *Server) handleSignInStart(c *echo.Context) error {
 func (s *Server) handleSignInCallback(c *echo.Context) error {
 	ctx := c.Request().Context()
 
-	pending, found := s.pending.take(c.QueryParam("state"))
-	if !found || pending.provider != c.Param("provider") {
+	state := c.QueryParam("state")
+	started, err := c.Request().Cookie(signInCookie)
+	startedHere := err == nil && started != nil && subtle.ConstantTimeCompare([]byte(started.Value), []byte(state)) == 1
+
+	pending, found := s.pending.take(state)
+	if !found || !startedHere || pending.provider != c.Param("provider") {
 		return s.renderLogin(c, http.StatusBadRequest, "", "that sign-in expired or was not started here — try again")
 	}
 
@@ -263,6 +288,8 @@ func (s *Server) handleSignInCallback(c *echo.Context) error {
 	if err != nil {
 		return echoError(err)
 	}
+
+	c.SetCookie(&http.Cookie{Name: signInCookie, Value: "", Path: "/auth/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: servedOverTLS(c.Request())}) //nolint:gosec // as above
 
 	slog.InfoContext(c.Request().Context(), "web.signed_in", "actor", who.String())
 

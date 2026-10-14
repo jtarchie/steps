@@ -109,6 +109,20 @@ func (a *basicAuth) hasAccounts() bool {
 	return a != nil && (a.plain != nil || len(a.users) > 0)
 }
 
+func (a *basicAuth) knows(name string) bool {
+	if a == nil {
+		return false
+	}
+
+	if a.plain != nil && a.plain.name == name {
+		return true
+	}
+
+	_, known := a.users[name]
+
+	return known
+}
+
 func (s *Server) authFor() *basicAuth {
 	if s.auth == nil {
 		s.auth = &basicAuth{users: map[string][]byte{}}

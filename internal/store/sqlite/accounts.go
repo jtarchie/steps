@@ -281,13 +281,18 @@ func (a *Accounts) FindToken(ctx context.Context, tokenHash string) (store.OAuth
 }
 
 // RevokeToken ends one token.
-func (a *Accounts) RevokeToken(ctx context.Context, tokenHash string) error {
-	_, err := a.held.db.ExecContext(ctx, `UPDATE oauth_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL`, nowNano(), tokenHash)
+func (a *Accounts) RevokeToken(ctx context.Context, tokenHash string) (bool, error) {
+	result, err := a.held.db.ExecContext(ctx, `UPDATE oauth_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL`, nowNano(), tokenHash)
 	if err != nil {
-		return fmt.Errorf("could not revoke a token: %w", err)
+		return false, fmt.Errorf("could not revoke a token: %w", err)
 	}
 
-	return nil
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("could not revoke a token: %w", err)
+	}
+
+	return changed > 0, nil
 }
 
 // RevokeGrant ends every token under one grant.

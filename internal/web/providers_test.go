@@ -81,22 +81,23 @@ func TestSigningInWithGitHub(t *testing.T) {
 		t.Fatalf("the sign-in page should offer GitHub and, with no local accounts, no password form:\n%s", page)
 	}
 
-	callback := "/auth/github/callback?code=good-code&state=" + url.QueryEscape(startGitHub(t, server))
+	state, started := startGitHub(t, server)
+	callback := "/auth/github/callback?code=good-code&state=" + url.QueryEscape(state)
 
-	signsInAsAlex(t, server, callback)
+	signsInAsAlex(t, server, callback, started)
 
 	user, found, err := accounts.FindUser(t.Context(), "github:alex")
 	if err != nil || !found || user.Email != "alex@acme.dev" || strings.Join(user.Groups, ",") != "acme/eng" || strings.Join(user.Organizations, ",") != "acme" {
 		t.Errorf("FindUser = %+v, %v, %v; want alex with acme and acme/eng", user, found, err)
 	}
 
-	refusesForgedReturns(t, server, callback)
+	refusesForgedReturns(t, server, callback, started)
 }
 
-func signsInAsAlex(t *testing.T, server *Server, callback string) {
+func signsInAsAlex(t *testing.T, server *Server, callback string, started []*http.Cookie) {
 	t.Helper()
 
-	rec := browserRequest(t, server, callback, nil)
+	rec := browserRequest(t, server, callback, started)
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/p/demo" || len(rec.Result().Cookies()) == 0 {
 		t.Fatalf("the callback = %d to %q; want a session and sent on to /p/demo", rec.Code, rec.Header().Get("Location"))
 	}
@@ -107,27 +108,36 @@ func signsInAsAlex(t *testing.T, server *Server, callback string) {
 	}
 }
 
-// refusesForgedReturns: a state used twice, one never handed out, and a code GitHub refuses each sign nobody in.
-func refusesForgedReturns(t *testing.T, server *Server, used string) {
+// refusesForgedReturns: a state used twice, one never handed out, one another browser started, and a code GitHub refuses each sign nobody in.
+func refusesForgedReturns(t *testing.T, server *Server, used string, started []*http.Cookie) {
 	t.Helper()
 
-	if again := browserRequest(t, server, used, nil); again.Code != http.StatusBadRequest {
+	if again := browserRequest(t, server, used, started); again.Code != http.StatusBadRequest {
 		t.Errorf("the same state answered twice = %d, want refused", again.Code)
 	}
 
-	refused := browserRequest(t, server, "/auth/github/callback?code=good-code&state="+url.QueryEscape(startGitHub(t, server))+"x", nil)
+	state, started := startGitHub(t, server)
+
+	refused := browserRequest(t, server, "/auth/github/callback?code=good-code&state="+url.QueryEscape(state)+"x", started)
 	if refused.Code != http.StatusBadRequest {
 		t.Errorf("a state this daemon never handed out = %d, want refused", refused.Code)
 	}
 
-	badCode := browserRequest(t, server, "/auth/github/callback?code=stolen&state="+url.QueryEscape(startGitHub(t, server)), nil)
+	theirs, _ := startGitHub(t, server)
+
+	if sent := browserRequest(t, server, "/auth/github/callback?code=good-code&state="+url.QueryEscape(theirs), nil); sent.Code != http.StatusBadRequest {
+		t.Errorf("a callback another browser started = %d, want refused rather than signing this one in as them", sent.Code)
+	}
+
+	state, started = startGitHub(t, server)
+	badCode := browserRequest(t, server, "/auth/github/callback?code=stolen&state="+url.QueryEscape(state), started)
 	if badCode.Code != http.StatusUnauthorized || len(badCode.Result().Cookies()) != 0 {
 		t.Errorf("a code GitHub refused = %d with %d cookies, want no session", badCode.Code, len(badCode.Result().Cookies()))
 	}
 }
 
-// startGitHub presses the button and returns the state the daemon sent to GitHub.
-func startGitHub(t *testing.T, server *Server) string {
+// startGitHub presses the button and returns the state the daemon sent to GitHub, and the cookie that ties it to this browser.
+func startGitHub(t *testing.T, server *Server) (string, []*http.Cookie) {
 	t.Helper()
 
 	rec := browserRequest(t, server, "/auth/github?next=/p/demo", nil)
@@ -137,7 +147,7 @@ func startGitHub(t *testing.T, server *Server) string {
 		t.Fatalf("starting = %d to %q; want sent to github.com with a state", rec.Code, rec.Header().Get("Location"))
 	}
 
-	return to.Query().Get("state")
+	return to.Query().Get("state"), rec.Result().Cookies()
 }
 
 func browserRequest(t *testing.T, server *Server, target string, cookies []*http.Cookie) *httptest.ResponseRecorder {
@@ -166,14 +176,19 @@ func browserGet(t *testing.T, server *Server, target string, cookies []*http.Coo
 func TestAGoogleAccountIsItsEmailAndDomain(t *testing.T) {
 	t.Parallel()
 
-	work, err := describeGoogle(t.Context(), nil, goth.User{Email: "sam@acme.dev", RawData: map[string]any{"hd": "acme.dev"}})
+	work, err := describeGoogle(t.Context(), nil, goth.User{Email: "sam@acme.dev", RawData: map[string]any{"hd": "acme.dev", "verified_email": true}})
 	if err != nil || work.Actor != "google:sam@acme.dev" || len(work.Organizations) != 1 || work.Organizations[0] != "acme.dev" || len(work.Groups) != 0 {
 		t.Errorf("a Workspace account = %+v, %v; want its email as the actor and its domain as the organization", work, err)
 	}
 
-	personal, err := describeGoogle(t.Context(), nil, goth.User{Email: "sam@gmail.com", RawData: map[string]any{}})
+	personal, err := describeGoogle(t.Context(), nil, goth.User{Email: "sam@gmail.com", RawData: map[string]any{"verified_email": true}})
 	if err != nil || len(personal.Organizations) != 0 {
 		t.Errorf("a personal account = %+v, %v; want no organization", personal, err)
+	}
+
+	_, err = describeGoogle(t.Context(), nil, goth.User{Email: "ceo@acme.dev", RawData: map[string]any{"verified_email": false}})
+	if err == nil {
+		t.Error("an address Google has not verified was accepted as the person's name")
 	}
 
 	_, err = describeGoogle(t.Context(), nil, goth.User{})

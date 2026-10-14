@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -11,11 +12,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
@@ -66,7 +69,7 @@ func exportServer(t *testing.T, extra ...Option) (*Server, store.Accounts) {
 
 	t.Cleanup(func() { _ = accounts.Close() })
 
-	opts := append([]Option{WithSessions(accounts), WithLocalUsers([]LocalUser{{Name: "alex", Hash: []byte(mustHash(t, "a"))}}), WithExternalURL("https://steps.example")}, extra...)
+	opts := append([]Option{WithSessions(accounts), WithLocalUsers([]LocalUser{{Name: "alex", Hash: []byte(mustHash(t, "a"))}, {Name: "bob", Hash: []byte(mustHash(t, "b"))}, {Name: "carol", Hash: []byte(mustHash(t, "c"))}}), WithExternalURL("https://steps.example")}, extra...)
 
 	server, err := New([]*Pipeline{NewPipeline("ops", path, cfg, st, events.New(nil))}, nil, opts...)
 	if err != nil {
@@ -355,4 +358,103 @@ func TestARefreshAsksAgain(t *testing.T) {
 // sessionFor is a signed-in local account whose cookie is its own name.
 func sessionFor(who string) store.Session {
 	return store.Session{TokenHash: tokenDigest(who), Actor: "local:" + who, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
+}
+
+// TestPendingAuthIsSafeFromItsFirstUse: the first consent creates the map a concurrent answer reads, so the read has to be under the same lock — which only -race can see.
+func TestPendingAuthIsSafeFromItsFirstUse(t *testing.T) {
+	t.Parallel()
+
+	var (
+		pending pendingAuth
+		wg      sync.WaitGroup
+	)
+
+	wg.Go(func() { pending.put(&pending.consents, "asked", authRequest{expires: time.Now().Add(time.Minute)}) })
+	wg.Go(func() { _, _ = pending.take(&pending.consents, "asked") })
+	wg.Wait()
+}
+
+// racingRefresh is a second refresh with the same token landing between this one's read of it and its revoke.
+type racingRefresh struct{ store.Accounts }
+
+func (r racingRefresh) FindToken(ctx context.Context, hash string) (store.OAuthToken, bool, error) {
+	token, found, err := r.Accounts.FindToken(ctx, hash)
+	if found {
+		_, _ = r.RevokeToken(ctx, hash)
+	}
+
+	return token, found, err //nolint:wrapcheck // a test double passing the store's answer through
+}
+
+// TestARefreshTokenMintsOnce: two refreshes racing with one token both read it live; only the one whose revoke ended it may mint, or a stolen refresh token keeps working beside the real one.
+func TestARefreshTokenMintsOnce(t *testing.T) {
+	t.Parallel()
+
+	server, accounts := exportServer(t)
+	redirect := "https://agent.example/cb"
+	client := register(t, server, redirect)
+	consent := consentShown(t, server, client, redirect)
+	allowed := serve(t, server, http.MethodPost, "/oauth/authorize", "consent="+consent+"&decision=allow", "alex")
+	to, _ := url.Parse(allowed.Header().Get("Location"))
+	pair := exchange(t, server, url.Values{"grant_type": {"authorization_code"}, "code": {to.Query().Get("code")}, "client_id": {client}, "redirect_uri": {redirect}, "code_verifier": {verifier}})
+
+	server.sessions = racingRefresh{accounts}
+
+	rec := serve(t, server, http.MethodPost, "/oauth/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {pair["refresh_token"]}, "client_id": {client}}.Encode(), "")
+	if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), "access_token") {
+		t.Errorf("the losing refresh of a race = %d %s, want refused", rec.Code, rec.Body.String())
+	}
+}
+
+// slowExporter holds a build open until released, as dialing an upstream that is slow to answer does.
+type slowExporter struct{ building, release chan struct{} }
+
+func (e slowExporter) ServeExport(context.Context, *scheduler.Pipeline, config.MCPExport, scheduler.ExportHooks) (*scheduler.ExportServer, error) {
+	close(e.building)
+	<-e.release
+
+	return &scheduler.ExportServer{Handler: http.NotFoundHandler()}, nil
+}
+
+// TestABuildingExportHoldsUpNoCall: one export dialing a slow upstream must not stall every other export's calls, which take the same cache's lock for their rate.
+func TestABuildingExportHoldsUpNoCall(t *testing.T) {
+	t.Parallel()
+
+	slow := slowExporter{building: make(chan struct{}), release: make(chan struct{})}
+	server, _ := exportServer(t, WithExporter(slow))
+	target, export, _ := server.exportNamed("ops", "support")
+
+	built := make(chan error, 1)
+
+	go func() {
+		_, err := server.exportFor(target, export)
+		built <- err
+	}()
+
+	<-slow.building
+
+	checked := make(chan error, 1)
+
+	go func() { checked <- server.allowCall(t.Context(), config.MCPExport{Name: "other", Rate: "5/m"}) }()
+
+	select {
+	case err := <-checked:
+		if err != nil {
+			t.Errorf("allowCall = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("a call's rate check waited on another export's build")
+		close(slow.release)
+		<-checked
+		<-built
+
+		return
+	}
+
+	close(slow.release)
+
+	err := <-built
+	if err != nil {
+		t.Errorf("exportFor = %v", err)
+	}
 }

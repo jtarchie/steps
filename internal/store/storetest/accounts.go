@@ -177,12 +177,24 @@ func (s accountsSuite) TestAGrantCanBeRevokedWhole(t *testing.T) {
 
 	assertTokensLive(t, accounts, map[string]bool{"access": false, "refresh": false, "elsewhere": true})
 
-	err = accounts.RevokeToken(ctxFor(t), "elsewhere")
-	if err != nil {
-		t.Fatalf("RevokeToken: %v", err)
+	revokesOnce(t, accounts, "elsewhere")
+}
+
+// revokesOnce: a token ends once, and the second revoke says it ended nothing, so a second refresh racing the first cannot mint.
+func revokesOnce(t *testing.T, accounts store.Accounts, hash string) {
+	t.Helper()
+
+	revoked, err := accounts.RevokeToken(ctxFor(t), hash)
+	if err != nil || !revoked {
+		t.Fatalf("RevokeToken = %v, %v; want it to end a live token", revoked, err)
 	}
 
-	assertTokensLive(t, accounts, map[string]bool{"elsewhere": false})
+	assertTokensLive(t, accounts, map[string]bool{hash: false})
+
+	again, err := accounts.RevokeToken(ctxFor(t), hash)
+	if err != nil || again {
+		t.Errorf("RevokeToken of an ended token = %v, %v; want false", again, err)
+	}
 }
 
 func assertTokensLive(t *testing.T, accounts store.Accounts, want map[string]bool) {

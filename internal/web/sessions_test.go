@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
@@ -53,6 +54,52 @@ func TestTheScriptSaysWhenTheSessionEnded(t *testing.T) {
 	for _, want := range []string{`'htmx:before:response'`, `ctx.response.status !== 401`, `e.preventDefault()`, `getElementById('attention')`, `'signed out · sign in again'`, `'/login?next='`} {
 		if !strings.Contains(string(js), want) {
 			t.Errorf("app.js does not carry %s", want)
+		}
+	}
+}
+
+// TestASessionEndsWithItsAccount: a session, or an agent's grant, outlives the flag that admitted its person only if nothing asks; removing the account and restarting must end both.
+func TestASessionEndsWithItsAccount(t *testing.T) {
+	t.Parallel()
+
+	server, accounts := exportServer(t)
+
+	err := accounts.CreateSession(t.Context(), sessionFor("gone"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := serve(t, server, http.MethodGet, "/p/ops", "", "gone"); rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), loginPath) {
+		t.Errorf("a session for an account the daemon no longer holds = %d to %q, want sent to sign in", rec.Code, rec.Header().Get("Location"))
+	}
+
+	target, export, found := server.exportNamed("ops", "support")
+	if !found || !server.mayUse(t.Context(), actor.Local("alex"), target, export) {
+		t.Fatal("alex should be allowed the export while her account is held")
+	}
+
+	delete(server.auth.users, "alex")
+
+	if server.mayUse(t.Context(), actor.Local("alex"), target, export) {
+		t.Error("an agent kept its export after its person's account was removed")
+	}
+}
+
+// TestASignInStaysOnThisServer: every way a browser reads a path as another host is sent home instead — including the tab and newline it strips before reading.
+func TestASignInStaysOnThisServer(t *testing.T) {
+	t.Parallel()
+
+	for next, want := range map[string]string{
+		"/p/demo":           "/p/demo",
+		"//evil.example":    "/",
+		"/\\evil.example":   "/",
+		"/\t/evil.example":  "/",
+		"/\n/evil.example":  "/",
+		"/\r/evil.example":  "/",
+		"https://evil.test": "/",
+	} {
+		if got := safeNext(next); got != want {
+			t.Errorf("safeNext(%q) = %q, want %q", next, got, want)
 		}
 	}
 }
