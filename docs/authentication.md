@@ -46,7 +46,7 @@ A browser that is not signed in is sent to **`/login`**, a form asking for an ac
 - A wrong name and a wrong password get the same sentence, `couldn't sign you in`, and the name you typed is kept.
 - After signing in you are sent only to a page on this daemon; anything else goes to `/`.
 - The cookie is `HttpOnly` and `SameSite=Lax`, and `Secure` when the daemon is reached over https (directly, or through a proxy that sets `X-Forwarded-Proto`).
-- A page's own refresh is never redirected to the form: an expired session there answers `401`.
+- A page's own refresh is never redirected to the form, or challenged: a session that ends while a page sits open answers `401`, and the page stops refreshing and says `signed out · sign in again` where it lists what needs you, linking back to itself.
 - The CLI is unchanged: it sends its account on every request and never sees the form.
 
 ## Signing in with GitHub or Google

@@ -39,6 +39,32 @@
     if (btn) btn.focus();
   });
 
+  // A refresh answered 401 is a session that ended while the page sat open:
+  // nothing of the answer is swapped in, the page stops pretending to be
+  // live, and the attention line — read by a screen reader as it changes —
+  // says what to do, linking back to this page after signing in.
+  var signedOut = false;
+
+  document.addEventListener('htmx:before:response', function (e) {
+    var ctx = e.detail && e.detail.ctx;
+    if (!ctx || !ctx.response || ctx.response.status !== 401) return;
+    e.preventDefault();
+    if (signedOut) return;
+    signedOut = true;
+    var holder = document.getElementById('attention');
+    if (!holder) return;
+    var link = document.createElement('a');
+    link.href = '/login?next=' + encodeURIComponent(window.location.pathname + window.location.search);
+    link.textContent = 'signed out · sign in again';
+    var item = document.createElement('li');
+    item.className = 'atitem at-signedout';
+    item.appendChild(link);
+    var list = document.createElement('ul');
+    list.className = 'attention';
+    list.appendChild(item);
+    holder.replaceChildren(list);
+  });
+
   // What the reader has folded or unfolded, and which row they are on, are
   // the two pieces of state the SERVER cannot know — and a swap reconciles
   // the row to what the server drew, so both are lost the moment a step

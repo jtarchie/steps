@@ -225,6 +225,11 @@ func (s *Server) authenticate(next echo.HandlerFunc) echo.HandlerFunc {
 			return c.Redirect(http.StatusSeeOther, loginPath+"?next="+url.QueryEscape(c.Request().URL.RequestURI()))
 		}
 
+		// A page's own refresh, on a daemon browsers sign in to, is a session that ended: say so plainly and let the page tell its reader. A challenge here would have the browser pop its password dialog over the page.
+		if s.sessions != nil && c.Request().Header.Get("HX-Request") != "" {
+			return echo.ErrUnauthorized
+		}
+
 		c.Response().Header().Set(echo.HeaderWWWAuthenticate, `basic realm="`+authRealm+`"`)
 
 		return echo.ErrUnauthorized
