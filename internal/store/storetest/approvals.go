@@ -240,3 +240,79 @@ func (s suite) TestApprovalsAuditHonoursItsLimit(t *testing.T) {
 		t.Fatalf("Approvals with limit 2 returned %d rows", len(two))
 	}
 }
+
+// TestAResumedStepKeepsItsApproval: a step that asks again for the same run, because a restart cut it off while it waited, gets the approval it already made rather than a second one nobody is waiting on.
+func (s suite) TestAResumedStepKeepsItsApproval(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	startRuns(t, st, "RUN1", "RUN2")
+
+	first, err := st.RequestApprovalFor(ctx, "RUN1", "step-a", "deploy", "ship it?")
+	if err != nil {
+		t.Fatalf("RequestApprovalFor: %v", err)
+	}
+
+	again, err := st.RequestApprovalFor(ctx, "RUN1", "step-a", "deploy", "ship it?")
+	if err != nil || again != first {
+		t.Fatalf("the same step asking again got approval %d (%v), want the one it made: %d", again, err, first)
+	}
+
+	for name, ask := range map[string]func() (int64, error){
+		"another step":  func() (int64, error) { return st.RequestApprovalFor(ctx, "RUN1", "step-b", "deploy", "ship it?") },
+		"another run":   func() (int64, error) { return st.RequestApprovalFor(ctx, "RUN2", "step-a", "deploy", "ship it?") },
+		"no run at all": func() (int64, error) { return st.RequestApprovalFor(ctx, "", "step-a", "deploy", "ship it?") },
+	} {
+		id, err := ask()
+		if err != nil || id == first {
+			t.Errorf("%s got approval %d (%v), want one of its own", name, id, err)
+		}
+	}
+
+	pending, err := st.Approvals(ctx, true, 0)
+	if err != nil || len(pending) != 4 {
+		t.Fatalf("pending = %d (%v), want four: the one step asked twice, and three others", len(pending), err)
+	}
+}
+
+// TestAGrantedApprovalStandsForTheResumedStep: somebody may approve while the daemon is down, and the step that resumes must find that approval rather than ask again. A refusal or an expiry is not carried over: a retry asks a person afresh.
+func (s suite) TestAGrantedApprovalStandsForTheResumedStep(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	startRuns(t, st, "RUN1")
+
+	granted, err := st.RequestApprovalFor(ctx, "RUN1", "step-a", "deploy", "ship it?")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = st.DecideApproval(ctx, granted, store.ApprovalApproved, "jt", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resumed, err := st.RequestApprovalFor(ctx, "RUN1", "step-a", "deploy", "ship it?")
+	if err != nil || resumed != granted {
+		t.Fatalf("a resumed step got approval %d (%v), want the granted one: %d", resumed, err, granted)
+	}
+
+	refused, err := st.RequestApprovalFor(ctx, "RUN1", "step-b", "deploy", "ship it?")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = st.DecideApproval(ctx, refused, store.ApprovalRejected, "jt", "no")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	retried, err := st.RequestApprovalFor(ctx, "RUN1", "step-b", "deploy", "ship it?")
+	if err != nil || retried == refused {
+		t.Fatalf("a retry after a refusal got approval %d (%v), want a new one", retried, err)
+	}
+}

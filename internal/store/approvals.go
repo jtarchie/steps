@@ -20,6 +20,8 @@ var ErrApprovalNotPending = errors.New("approval is not pending")
 // authorised.
 type Approvals interface {
 	RequestApproval(ctx context.Context, jobName, message string) (int64, error)
+	// RequestApprovalFor is RequestApproval for one step of one run, and asking twice for the same pair is one request: a daemon that restarts while a run waits resumes it, the step asks again, and it must find the approval it already made — pending, or already granted while nobody was looking — instead of a second row nobody is waiting on. A refused or expired one is not found: a retry asks a person afresh. An empty runID is a request with no run to tie it to, and always new.
+	RequestApprovalFor(ctx context.Context, runID, stepKey, jobName, message string) (int64, error)
 	DecideApproval(ctx context.Context, id int64, status ApprovalStatus, by, reason string) error
 	ApprovalStatus(ctx context.Context, id int64) (Approval, error)
 	// Approvals is the audit trail newest first, capped by limit (zero means

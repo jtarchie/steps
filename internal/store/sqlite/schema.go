@@ -89,7 +89,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 27
+const schemaVersion = 28
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -568,9 +568,21 @@ CREATE TABLE IF NOT EXISTS approvals (
     requested_at TEXT NOT NULL,
     decided_at   TEXT,
     decided_by   TEXT,
-    reason       TEXT
+    reason       TEXT,
+    -- The run and step that asked, so a run resumed after a restart finds the
+    -- approval it already made instead of making a second one nobody waits on.
+    -- NULL for a request with no run to tie it to. SET NULL, not CASCADE: this
+    -- row is the audit trail of a decision, and retention reaping the run must
+    -- not take the record that somebody allowed a deploy.
+    run_id       TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    step_key     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_pipeline ON approvals(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_approvals_run ON approvals(run_id);
+-- One live approval per step of a run: pending, or granted. A refused or
+-- expired one is history, and a retry of that step asks again.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_step
+    ON approvals(run_id, step_key) WHERE run_id IS NOT NULL AND status IN ('pending', 'approved');
 
 -- What an agent step remembers about one scope — a person, usually — from one
 -- run to the next (store.Memories). It outlives run_history: on purpose, so its

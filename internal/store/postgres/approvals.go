@@ -27,6 +27,36 @@ func (s *Store) RequestApproval(ctx context.Context, jobName, message string) (i
 	return id, nil
 }
 
+// RequestApprovalFor finds the live approval this step of this run already made, or makes one; see the sqlite driver.
+func (s *Store) RequestApprovalFor(ctx context.Context, runID, stepKey, jobName, message string) (int64, error) {
+	if runID == "" {
+		return s.RequestApproval(ctx, jobName, message)
+	}
+
+	var id int64
+
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO approvals (pipeline_id, job_name, message, status, requested_at, run_id, step_key)
+			VALUES ($1, $2, $3, 'pending', $4, $5, $6)
+			ON CONFLICT (run_id, step_key) WHERE run_id IS NOT NULL AND status IN ('pending', 'approved') DO NOTHING
+		`, s.pipelineID, jobName, clean(message), now(), runID, clean(stepKey))
+		if err != nil {
+			return err //nolint:wrapcheck // wrapped below
+		}
+
+		return tx.QueryRowContext(ctx, `
+			SELECT id FROM approvals
+			WHERE pipeline_id = $1 AND run_id = $2 AND step_key = $3 AND status IN ('pending', 'approved')
+		`, s.pipelineID, runID, clean(stepKey)).Scan(&id)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("could not request approval for job %q: %w", jobName, err)
+	}
+
+	return id, nil
+}
+
 // DecideApproval records a decision, refusing to overwrite one already made.
 func (s *Store) DecideApproval(ctx context.Context, id int64, status store.ApprovalStatus, by, reason string) error {
 	result, err := s.db.ExecContext(ctx, `
