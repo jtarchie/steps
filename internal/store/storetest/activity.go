@@ -4,6 +4,7 @@ package storetest
 
 import (
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -36,6 +37,9 @@ func (s suite) TestActivityIsNewestFirstAndFilters(t *testing.T) {
 		{store.ActivityFilter{Action: "trigger"}, 2},
 		{store.ActivityFilter{Pipeline: "app", Actor: "local:alex"}, 1},
 		{store.ActivityFilter{Limit: 1}, 1},
+		{store.ActivityFilter{Target: "build"}, 1},
+		{store.ActivityFilter{Since: time.Now().Add(time.Hour)}, 0},
+		{store.ActivityFilter{Since: time.Now().Add(-time.Hour)}, 3},
 		{store.ActivityFilter{Before: all[0].ID}, 2},
 	} {
 		if got := readActivity(t, app, tc.filter); len(got) != tc.want {

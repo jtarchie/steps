@@ -277,3 +277,27 @@ func (a *Accounts) RevokeGrant(ctx context.Context, grant store.Grant) error {
 
 	return nil
 }
+
+// Grants are the live connections, newest first.
+func (a *Accounts) Grants(ctx context.Context, filter store.Grant) ([]store.Connection, error) {
+	return collect(ctx, a.held.db, "connections", `
+		SELECT t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export, MIN(t.created_at)
+		FROM oauth_tokens t JOIN oauth_clients c ON c.id = t.client_id
+		WHERE t.revoked_at IS NULL AND t.expires_at > $1
+		  AND ($2 = '' OR t.client_id = $2) AND ($3 = '' OR t.actor = $3)
+		  AND ($4 = '' OR t.pipeline = $4) AND ($5 = '' OR t.export = $5)
+		GROUP BY t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export
+		ORDER BY MIN(t.created_at) DESC
+	`, []any{now(), filter.ClientID, filter.Actor, filter.Pipeline, filter.Export}, func(rows *sql.Rows) (store.Connection, error) {
+		var (
+			conn      store.Connection
+			redirects string
+		)
+
+		err := rows.Scan(&conn.ClientID, &conn.Client, &redirects, &conn.Actor, &conn.Pipeline, &conn.Export, &conn.AuthorizedAt)
+		_ = json.Unmarshal([]byte(redirects), &conn.RedirectURIs)
+		conn.AuthorizedAt = conn.AuthorizedAt.UTC()
+
+		return conn, err //nolint:wrapcheck // collect names what it was reading
+	})
+}

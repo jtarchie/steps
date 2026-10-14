@@ -39,6 +39,19 @@
     if (btn) btn.focus();
   });
 
+  // A copy button says so where it stands and, for a screen reader, in the
+  // polite region beside it; delegated, since the page it lives on polls.
+  document.addEventListener('click', function (e) {
+    var button = e.target.closest('[data-copy]');
+    if (!button || !navigator.clipboard) return;
+    navigator.clipboard.writeText(button.getAttribute('data-copy')).then(function () {
+      var said = button.parentElement.querySelector('[data-copied]');
+      button.textContent = 'copied';
+      if (said) said.textContent = 'address copied';
+      setTimeout(function () { button.textContent = 'copy'; if (said) said.textContent = ''; }, 2000);
+    });
+  });
+
   // A refresh answered 401 is a session that ended while the page sat open:
   // nothing of the answer is swapped in, the page stops pretending to be
   // live, and the attention line — read by a screen reader as it changes —

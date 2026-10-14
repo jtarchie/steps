@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -45,10 +46,12 @@ func (r *Reader) Activity(ctx context.Context, filter store.ActivityFilter) ([]s
 		WHERE ($1 = '' OR pipeline = $1 OR pipeline_id = (SELECT id FROM pipelines WHERE name = $1))
 		  AND ($2 = '' OR actor = $2)
 		  AND ($3 = '' OR action = $3)
-		  AND ($4 = 0 OR id < $4)
+		  AND ($4 = '' OR target = $4)
+		  AND ($5::timestamptz IS NULL OR at >= $5)
+		  AND ($6 = 0 OR id < $6)
 		ORDER BY id DESC
-		LIMIT $5
-	`, []any{filter.Pipeline, filter.Actor, filter.Action, filter.Before, rowLimit(filter.Limit)}, func(rows *sql.Rows) (store.ActivityEntry, error) {
+		LIMIT $7
+	`, []any{filter.Pipeline, filter.Actor, filter.Action, filter.Target, sinceArg(filter.Since), filter.Before, rowLimit(filter.Limit)}, func(rows *sql.Rows) (store.ActivityEntry, error) {
 		var (
 			entry store.ActivityEntry
 			at    sql.NullTime
@@ -59,4 +62,13 @@ func (r *Reader) Activity(ctx context.Context, filter store.ActivityFilter) ([]s
 
 		return entry, err //nolint:wrapcheck // collect names what it was reading
 	})
+}
+
+// sinceArg is a zero time as NULL, which the query reads as no bound.
+func sinceArg(since time.Time) any {
+	if since.IsZero() {
+		return nil
+	}
+
+	return since.UTC()
 }

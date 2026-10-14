@@ -1308,3 +1308,15 @@ table.activity td:first-child { white-space: nowrap; }
 .consent-tools td { white-space: normal; }
 .consent-note { font-family: var(--sans); font-size: 13px; color: var(--dim); margin: 16px 0; }
 .consent-decide { display: flex; gap: 10px; }
+
+/* ---- exports: what a pipeline shares ---- */
+.export-facts { margin-top: 0; }
+.copybtn { padding: 1px 8px; font-size: 11px; margin-left: 6px; }
+.connect-how { margin: 0 0 22px; }
+.connect-how dd code { overflow-wrap: anywhere; white-space: normal; }
+table.mcp-exports td { white-space: nowrap; }
+@media (max-width: 640px) {
+  .consent-facts, .export-facts { grid-template-columns: 1fr; gap: 2px 0; }
+  .consent-facts dd { margin-bottom: 8px; }
+  table.consent-tools td:nth-child(2), table.consent-tools td:nth-child(3) { white-space: normal; }
+}

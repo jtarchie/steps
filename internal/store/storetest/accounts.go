@@ -3,6 +3,7 @@ package storetest
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -219,5 +220,50 @@ func registerClient(t *testing.T, accounts store.Accounts, id string) {
 	err := accounts.RegisterClient(ctxFor(t), store.OAuthClient{ID: id, Name: id, RedirectURIs: []string{"https://x/cb"}, CreatedAt: time.Now()}, 0)
 	if err != nil {
 		t.Fatalf("RegisterClient(%s): %v", id, err)
+	}
+}
+
+// TestConnectionsAreTheLiveGrants: a grant with a good token is a connection, once, however many tokens it holds; revoked, it is gone.
+func (s accountsSuite) TestConnectionsAreTheLiveGrants(t *testing.T) {
+	t.Parallel()
+
+	accounts := s.open(t)
+	registerClient(t, accounts, "claude")
+
+	alex := store.Grant{ClientID: "claude", Actor: "github:alex", Pipeline: "ops", Export: "support"}
+	sam := store.Grant{ClientID: "claude", Actor: "github:sam", Pipeline: "ops", Export: "support"}
+	later := time.Now().Add(time.Hour)
+
+	for hash, g := range map[string]store.Grant{"a1": alex, "a2": alex, "s1": sam} {
+		err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: hash, Kind: "access", Grant: g, CreatedAt: time.Now(), ExpiresAt: later})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	assertConnections(t, accounts, store.Grant{Pipeline: "ops"}, alex, sam)
+	assertConnections(t, accounts, store.Grant{Actor: "github:alex"}, alex)
+
+	err := accounts.RevokeGrant(ctxFor(t), alex)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertConnections(t, accounts, store.Grant{}, sam)
+}
+
+// assertConnections holds Grants(filter) to exactly want, in any order, each named by its client and dated.
+func assertConnections(t *testing.T, accounts store.Accounts, filter store.Grant, want ...store.Grant) {
+	t.Helper()
+
+	got, err := accounts.Grants(ctxFor(t), filter)
+	if err != nil || len(got) != len(want) {
+		t.Fatalf("Grants(%+v) = %+v, %v; want %d", filter, got, err, len(want))
+	}
+
+	for _, conn := range got {
+		if !slices.Contains(want, conn.Grant) || conn.Client != "claude" || conn.AuthorizedAt.IsZero() {
+			t.Errorf("Grants(%+v) returned %+v, which is not one of %+v", filter, conn, want)
+		}
 	}
 }

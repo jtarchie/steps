@@ -39,6 +39,9 @@ type Accounts interface {
 	RevokeToken(ctx context.Context, tokenHash string) error
 	// RevokeGrant ends every token a person gave one client for one export: disconnecting it.
 	RevokeGrant(ctx context.Context, grant Grant) error
+	// Grants are the live connections — a grant with a token still good —
+	// newest first, narrowed by filter's non-empty fields.
+	Grants(ctx context.Context, filter Grant) ([]Connection, error)
 	Close() error
 }
 
@@ -92,4 +95,14 @@ type OAuthToken struct {
 	Grant     Grant
 	CreatedAt time.Time
 	ExpiresAt time.Time
+}
+
+// Connection is a live grant and the client it was given to.
+type Connection struct {
+	Grant
+	// Client is what the agent called itself, and RedirectURIs where it said to send people back.
+	Client       string
+	RedirectURIs []string
+	// AuthorizedAt is when the person first agreed, the oldest of the grant's live tokens.
+	AuthorizedAt time.Time
 }

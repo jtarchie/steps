@@ -483,6 +483,7 @@ func (s *Server) routes() error {
 	group.GET("/approvals", s.handleApprovals)
 	group.GET("/questions", s.handleQuestions)
 	group.GET("/mcp", s.handleMCP)
+	group.GET("/mcp/exports/:export", s.handleExportPage)
 	group.GET("/resources", s.handleResources)
 	group.GET("/resources/:resource", s.handleResource)
 	group.GET("/search", s.handleSearch)
@@ -757,13 +758,7 @@ func (s *Server) nav(c *echo.Context) navData {
 	ctx := c.Request().Context()
 	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI(), Role: RoleAdmin}
 
-	if s.auth != nil {
-		nav.Who = actor.From(ctx).String()
-		nav.CanSignOut = s.hasSession(c)
-		nav.Role = s.roleOf(c)
-		nav.ViewOnly = s.runner != nil && nav.Role < RoleOperator
-		nav.ReadOnly = nav.ReadOnly || nav.ViewOnly
-	}
+	s.signedInNav(c, &nav)
 
 	// Every served pipeline, not only the request's own: a reader looking at a
 	// clean pipeline has no other way to learn that one of the daemon's others
@@ -830,7 +825,7 @@ func (s *Server) nav(c *echo.Context) navData {
 	nav.Paused = readsOf(c, current).Paused(ctx)
 	nav.Attention = gathered[current.Slug]
 	// The tab appears only for a pipeline that declares servers: most do not, and a dead tab on every one of them is nav space spent on a feature they never use.
-	nav.HasMCP = len(current.Config().MCPServers) > 0
+	nav.HasMCP = len(current.Config().MCPServers) > 0 || len(current.Config().MCPExports) > 0
 
 	return nav
 }
@@ -893,4 +888,17 @@ type pipelineSummary struct {
 	// build the daemon starts is claimed from it. Activity, not attention, so
 	// it is drawn dim and only when nonzero.
 	InFlight int
+}
+
+// signedInNav fills in who is reading and what they may do, on a server people sign in to.
+func (s *Server) signedInNav(c *echo.Context, nav *navData) {
+	if s.auth == nil {
+		return
+	}
+
+	nav.Who = actor.From(c.Request().Context()).String()
+	nav.CanSignOut = s.hasSession(c)
+	nav.Role = s.roleOf(c)
+	nav.ViewOnly = s.runner != nil && nav.Role < RoleOperator
+	nav.ReadOnly = nav.ReadOnly || nav.ViewOnly
 }

@@ -139,6 +139,8 @@ func sectionOf(page string) string {
 		return "jobs"
 	case "resource":
 		return "resources"
+	case "export":
+		return "mcp"
 	case "run", "node", "config":
 		// config is reached from a run page — the configuration THAT run
 		// executed — so it belongs under the same tab rather than unlighting

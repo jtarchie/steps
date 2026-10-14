@@ -47,6 +47,10 @@ type ActivityFilter struct {
 	Pipeline string
 	Actor    string
 	Action   string
+	// Target matches what the verb was done to: a job, a run, an export.
+	Target string
+	// Since keeps only entries at or after it; zero keeps all.
+	Since time.Time
 	// Before pages: only entries older than this id.
 	Before int64
 	Limit  int

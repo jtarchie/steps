@@ -237,6 +237,10 @@ jobs:
 - **A sub-agent export** runs that agent's own conversation for each call, with your model and your tools, and returns its answer — the narrowest thing to share.
 - Never hashed: an export changes nothing a build does.
 
+### Where an export is seen
+
+A pipeline's **mcp** tab lists its exports under its servers — what it shares beside what it connects to — with how many tools each offers, how many people and agents are connected, and how many calls came in today. Each export has a page of its own: its address with a copy button, how to give it to Claude Code, Claude or Cursor, its access rule as written, every tool with its fixed arguments and time limit, and its most recent calls. Nothing on it is editable: the pipeline file is where an export changes.
+
 ### Connecting an agent
 
 An export's address is `<external-url>/mcp/x/<pipeline>/<export>`. Give it to an agent that speaks MCP over HTTP with OAuth — Claude, Claude Code, Cursor — and it does the rest: it finds the daemon's sign-in through the address's [protected-resource metadata](https://www.rfc-editor.org/rfc/rfc9728), registers itself, and sends you to the daemon to sign in and agree.

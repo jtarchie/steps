@@ -302,3 +302,46 @@ func (a *Accounts) RevokeGrant(ctx context.Context, grant store.Grant) error {
 
 	return nil
 }
+
+// Grants are the live connections, newest first.
+func (a *Accounts) Grants(ctx context.Context, filter store.Grant) ([]store.Connection, error) {
+	rows, err := a.held.reads.QueryContext(ctx, `
+		SELECT t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export, MIN(t.created_at)
+		FROM oauth_tokens t JOIN oauth_clients c ON c.id = t.client_id
+		WHERE t.revoked_at IS NULL AND t.expires_at > ?
+		  AND (? = '' OR t.client_id = ?) AND (? = '' OR t.actor = ?)
+		  AND (? = '' OR t.pipeline = ?) AND (? = '' OR t.export = ?)
+		GROUP BY t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export
+		ORDER BY MIN(t.created_at) DESC
+	`, nowNano(), filter.ClientID, filter.ClientID, filter.Actor, filter.Actor, filter.Pipeline, filter.Pipeline, filter.Export, filter.Export)
+	if err != nil {
+		return nil, fmt.Errorf("could not read connections: %w", err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	var connections []store.Connection
+
+	for rows.Next() {
+		var (
+			conn               store.Connection
+			redirects, created string
+		)
+
+		err = rows.Scan(&conn.ClientID, &conn.Client, &redirects, &conn.Actor, &conn.Pipeline, &conn.Export, &created)
+		if err != nil {
+			return nil, fmt.Errorf("could not read connections: %w", err)
+		}
+
+		_ = json.Unmarshal([]byte(redirects), &conn.RedirectURIs)
+		conn.AuthorizedAt = parseTimestamp(created)
+		connections = append(connections, conn)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("could not read connections: %w", err)
+	}
+
+	return connections, nil
+}

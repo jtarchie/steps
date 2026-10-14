@@ -239,6 +239,7 @@ func (s *Server) handleActivity(c *echo.Context) error {
 		Pipeline: query.Get("pipeline"),
 		Actor:    query.Get("actor"),
 		Action:   query.Get("action"),
+		Target:   query.Get("target"),
 		Limit:    activityPage + 1,
 	}
 
@@ -275,6 +276,7 @@ func (s *Server) handleActivity(c *echo.Context) error {
 		{"pipeline", "pipeline", filter.Pipeline},
 		{"actor", "person", actor.Parse(filter.Actor).Label()},
 		{"action", "action", filter.Action},
+		{"target", "what", filter.Target},
 	} {
 		if query.Get(f.key) != "" {
 			filters = append(filters, activityFilter{Label: f.label, Value: f.value, Remove: withQuery(query, f.key, "")})
@@ -309,24 +311,28 @@ func (s *Server) activityRowFor(entry store.ActivityEntry) activityRow {
 		return row
 	}
 
-	base := "/p/" + url.PathEscape(entry.Pipeline)
-
-	switch entry.Action {
-	case "trigger", "release", "abort queued":
-		row.TargetURL = base + "/jobs/" + url.PathEscape(entry.Target)
-	case "rerun", "abort":
-		row.TargetURL = base + "/runs/" + url.PathEscape(entry.Target)
-	case "set":
-		row.TargetURL = base + "/config/" + url.PathEscape(entry.Target)
-	case "approve", "reject":
-		row.TargetURL = base + "/approvals"
-	case "answer":
-		row.TargetURL = base + "/questions"
-	case "mcp connect", "mcp test":
-		row.TargetURL = base + "/mcp"
+	if page, linked := targetPages[entry.Action]; linked {
+		row.TargetURL = "/p/" + url.PathEscape(entry.Pipeline) + page(url.PathEscape(entry.Target))
 	}
 
 	return row
+}
+
+// targetPages is where each verb's target lives, under its pipeline.
+var targetPages = map[string]func(target string) string{
+	"trigger":       func(job string) string { return "/jobs/" + job },
+	"release":       func(job string) string { return "/jobs/" + job },
+	"abort queued":  func(job string) string { return "/jobs/" + job },
+	"rerun":         func(run string) string { return "/runs/" + run },
+	"abort":         func(run string) string { return "/runs/" + run },
+	"set":           func(sha string) string { return "/config/" + sha },
+	"approve":       func(string) string { return "/approvals" },
+	"reject":        func(string) string { return "/approvals" },
+	"answer":        func(string) string { return "/questions" },
+	"mcp connect":   func(string) string { return "/mcp" },
+	"mcp test":      func(string) string { return "/mcp" },
+	"mcp call":      func(export string) string { return "/mcp/exports/" + export },
+	"mcp authorize": func(export string) string { return "/mcp/exports/" + export },
 }
 
 // withQuery is the page's own URL with one parameter set, or removed when empty; paging always restarts, since an older-than cursor belongs to the filter it was read under.

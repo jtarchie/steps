@@ -49,12 +49,19 @@ func (s *Store) RecordActivity(ctx context.Context, entry store.ActivityEntry, l
 
 // Activity reads the log newest first. A pipeline filter matches the name an entry was recorded under or, through the id, the name that pipeline has now.
 func (r *Reader) Activity(ctx context.Context, filter store.ActivityFilter) ([]store.ActivityEntry, error) {
+	since := ""
+	if !filter.Since.IsZero() {
+		since = filter.Since.UTC().Format(sortableNano)
+	}
+
 	query := `
 		SELECT id, pipeline, actor, action, target, detail, at
 		FROM activity
 		WHERE (? = '' OR pipeline = ? OR pipeline_id = (SELECT id FROM pipelines WHERE name = ?))
 		  AND (? = '' OR actor = ?)
 		  AND (? = '' OR action = ?)
+		  AND (? = '' OR target = ?)
+		  AND (? = '' OR at >= ?)
 		  AND (? = 0 OR id < ?)
 		ORDER BY id DESC
 		LIMIT ?
@@ -63,6 +70,8 @@ func (r *Reader) Activity(ctx context.Context, filter store.ActivityFilter) ([]s
 		filter.Pipeline, filter.Pipeline, filter.Pipeline,
 		filter.Actor, filter.Actor,
 		filter.Action, filter.Action,
+		filter.Target, filter.Target,
+		since, since,
 		filter.Before, filter.Before,
 		rowLimit(filter.Limit),
 	}
