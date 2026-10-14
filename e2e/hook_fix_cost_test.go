@@ -22,7 +22,18 @@ func TestRunsCostIncludesAHookAgentsSpend(t *testing.T) {
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("noted").spending(7000))
 
-	path := writePipeline(t, dir, fmt.Sprintf(`
+	path := hookAgentPipeline(t, dir, fake.URL)
+
+	mustRun(t, "run", path, "--job", "build")
+
+	assertRunCostShows(t, path, "notifier (hook)", "7,000", 7000)
+}
+
+// hookAgentPipeline is one task whose on_success: hook is an agent.
+func hookAgentPipeline(t *testing.T, dir, endpoint string) string {
+	t.Helper()
+
+	return writePipeline(t, dir, fmt.Sprintf(`
 defaults:
   preflight:
     disabled: true
@@ -45,11 +56,41 @@ jobs:
       inputs: []
       messages:
         - Say something.
-`, fake.URL))
+`, endpoint))
+}
+
+// TestRunPageDrawsAHookAgentsSpendOnItsRow: the spend the ledger records for a hook's agent is drawn on the hook's own row of the run page, not dropped for want of a node.
+func TestRunPageDrawsAHookAgentsSpendOnItsRow(t *testing.T) {
+	dir := t.TempDir()
+	fake := newRepeatingFakeLLM(t, says("noted").spending(7000))
+	path := hookAgentPipeline(t, dir, fake.URL)
 
 	mustRun(t, "run", path, "--job", "build")
 
-	assertRunCostShows(t, path, "notifier (hook)", "7,000", 7000)
+	body := latestRunPage(t, path)
+
+	if hook := headOf(t, body, "hook"); !strings.Contains(hook, "7,000 tokens") {
+		t.Errorf("the hook's row does not show its agent's 7,000 tokens:\n%s", hook)
+	}
+
+	if task := headOf(t, body, "task"); strings.Contains(task, "7,000 tokens") {
+		t.Errorf("the hook's spend is drawn on the step it guards:\n%s", task)
+	}
+}
+
+// TestRunPageDrawsAFixAgentsSpendOnItsRow: a fix: agent's spend is drawn on the row of the task it repaired.
+func TestRunPageDrawsAFixAgentsSpendOnItsRow(t *testing.T) {
+	dir := t.TempDir()
+	fake := newRepeatingFakeLLM(t, says("done").spending(9000))
+	path := writeFixPipeline(t, dir, fake.URL, failThenPass(filepath.Join(dir, "counter.txt")))
+
+	mustRun(t, "run", path, "--job", "build")
+
+	body := latestRunPage(t, path)
+
+	if task := headOf(t, body, "task"); !strings.Contains(task, "9,000 tokens") {
+		t.Errorf("the repaired task's row does not show its fix agent's 9,000 tokens:\n%s", task)
+	}
 }
 
 // TestRunsCostIncludesAFixAgentsSpend: a fix: agent's tokens are the job's

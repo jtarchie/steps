@@ -10,6 +10,9 @@ package sqlite
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
 //
+// 20 added agent_usage.step_id, which joins a hook's or fix's spend to the
+// row the run page draws it on; neither has a node to join by.
+//
 // 19 made agent_usage.node_hash nullable and added agent_usage.kind, so a
 // hook's agent and a fix: agent — which have no node — record what they
 // spent. An older file refuses the NULL, and the spend went unrecorded.
@@ -84,7 +87,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 19
+const schemaVersion = 20
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -747,6 +750,8 @@ CREATE TABLE IF NOT EXISTS agent_usage (
     -- reference below when a child column is NULL, so such a row hangs off
     -- its run alone, and retention reaps it with the run.
     node_hash         TEXT,
+    -- The run_events step the spend is drawn on, 0 when none. No foreign key: run_events.step_id is not a key (every event of a step carries it), and both rows die with their run.
+    step_id           INTEGER NOT NULL DEFAULT 0,
     model_requested   TEXT NOT NULL,
     model_served      TEXT NOT NULL,
     prompt_tokens     INTEGER NOT NULL,

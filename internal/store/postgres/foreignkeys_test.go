@@ -86,7 +86,7 @@ func TestEveryForeignKeyIsIndexed(t *testing.T) {
 	}
 }
 
-// TestTheDeliberateNonReferencesStayThatWay pins the three columns that name
+// TestTheDeliberateNonReferencesStayThatWay pins the four columns that name
 // a row and must not reference it, for the reasons the schema gives. Adding
 // either of the first two makes every block step fail to record.
 func TestTheDeliberateNonReferencesStayThatWay(t *testing.T) {
@@ -98,7 +98,7 @@ func TestTheDeliberateNonReferencesStayThatWay(t *testing.T) {
 	db := rawDB(t, rawURL)
 
 	for table, column := range map[string]string{
-		"nodes": "parent_hash", "job_runs": "root_hash", "run_events": "parent_step_id",
+		"nodes": "parent_hash", "job_runs": "root_hash", "run_events": "parent_step_id", "agent_usage": "step_id",
 	} {
 		var references int
 

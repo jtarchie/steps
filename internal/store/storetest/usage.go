@@ -329,6 +329,40 @@ func (s suite) TestAgentUsageRecordsNodelessSpend(t *testing.T) {
 	assertTotals(t, totals[0], store.RunTotals{RunID: "r1", Tokens: 190, Steps: 4, Unpriced: 4})
 }
 
+// TestAgentUsageKeepsItsStepID: the step id is what the run page joins a hook's or fix's spend by, so it must read back as written.
+func (s suite) TestAgentUsageKeepsItsStepID(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	st := s.open(t, "test")
+
+	recordSpend(ctx, t, st, "r1", "j", "writer", 100)
+
+	for _, spend := range []store.AgentUsage{
+		{RunID: "r1", StepIndex: -1, StepName: "notifier", JobName: "j", Kind: store.UsageHook, StepID: 7, Total: 20},
+		{RunID: "r1", StepIndex: 0, StepName: "fixer", JobName: "j", Kind: store.UsageFix, StepID: 9, Total: 40},
+	} {
+		err := st.RecordAgentUsage(ctx, spend)
+		if err != nil {
+			t.Fatalf("RecordAgentUsage(%s): %v", spend.Kind, err)
+		}
+	}
+
+	rows, err := st.RunUsage(ctx, "r1")
+	if err != nil {
+		t.Fatalf("RunUsage: %v", err)
+	}
+
+	ids := map[string]int64{}
+	for _, row := range rows {
+		ids[row.UsageKind()] = row.StepID
+	}
+
+	if ids[store.UsageHook] != 7 || ids[store.UsageFix] != 9 || ids[store.UsageStep] != 0 {
+		t.Errorf("step ids by kind = %v, want hook 7, fix 9, step 0", ids)
+	}
+}
+
 // assertUsageKinds checks TestAgentUsageRecordsNodelessSpend's run reads back
 // the step, two hook executions and the fix as rows of their own, the
 // node-less ones with no node.

@@ -489,6 +489,7 @@ func saveAgentUsage(ctx context.Context, st store.Usage, args saveUsageArgs) {
 		JobName:      args.jobName,
 		Kind:         args.kind,
 		NodeHash:     args.nodeHash,
+		StepID:       events.StepID(ctx),
 		ModelReq:     args.modelRequested,
 		ModelServed:  args.usage.ModelServed,
 		Prompt:       args.usage.Prompt,

@@ -9,7 +9,7 @@ package postgres
 //
 // Its own counter, not the sqlite one: the two schemas are written separately
 // and change separately.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -29,9 +29,9 @@ const schemaVersion = 4
 //     the two reference each other, and Postgres resolves a reference when it
 //     is declared.
 //
-// The three columns that deliberately reference nothing — nodes.parent_hash,
-// job_runs.root_hash and run_events.parent_step_id — stay that way, for the
-// reasons sqlite's schema gives.
+// The columns that deliberately reference nothing — nodes.parent_hash,
+// job_runs.root_hash, run_events.parent_step_id and agent_usage.step_id —
+// stay that way, for the reasons sqlite's schema gives.
 //
 // Table names are unqualified: every connection's search_path is this
 // driver's schema and nothing else (see connConfig).
@@ -323,6 +323,7 @@ CREATE TABLE IF NOT EXISTS agent_usage (
     job_name          TEXT NOT NULL,
     kind              TEXT NOT NULL,
     node_hash         TEXT,
+    step_id           BIGINT NOT NULL DEFAULT 0,
     model_requested   TEXT NOT NULL,
     model_served      TEXT NOT NULL,
     prompt_tokens     BIGINT NOT NULL,

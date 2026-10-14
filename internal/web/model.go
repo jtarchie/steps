@@ -221,7 +221,7 @@ func (r runView) StepUsage(step *stepView) []usageView {
 	var rows []usageView
 
 	for _, spent := range r.Usage {
-		if !r.owns(step, spent.StepIndex, spent.StepName, spent.NodeHash) {
+		if !r.ownsUsage(step, spent) {
 			continue
 		}
 
@@ -230,6 +230,15 @@ func (r runView) StepUsage(step *stepView) []usageView {
 	}
 
 	return rows
+}
+
+// ownsUsage is owns, except that a node-less row (a hook's, a fix's) joins by the step id it recorded: a hook's row is named apart from the agent that spent, and a fix has no row of its own but its task's.
+func (r runView) ownsUsage(step *stepView, spent store.AgentUsage) bool {
+	if spent.NodeHash == "" && spent.StepID != 0 {
+		return spent.StepID == step.ID
+	}
+
+	return r.owns(step, spent.StepIndex, spent.StepName, spent.NodeHash)
 }
 
 // StepPlacements is the machine this step ran on, drawn on its own row.
@@ -245,7 +254,7 @@ func (r runView) StepPlacements(step *stepView) []PlacementView {
 	return rows
 }
 
-// owns joins an agent_usage or run_placements row to the step it describes. Neither table records a step id, and (index, name) is not a step: every cell of an across:, member of an ensemble:, branch of an in_parallel: or race:, and the step a try: wraps is handed its block's index, and two may share a name. The node is what tells them apart — a step publishes the hash its rows were recorded under, a failed one included — so a hashed step owns exactly its node's rows, and a step with no hash (a hook, which is never hashed, or a failure that came before any node) owns the rows under its index and name that no hashed step claimed.
+// owns joins an agent_usage or run_placements row to the step it describes when no step id says which (see ownsUsage). (index, name) is not a step: every cell of an across:, member of an ensemble:, branch of an in_parallel: or race:, and the step a try: wraps is handed its block's index, and two may share a name. The node is what tells them apart — a step publishes the hash its rows were recorded under, a failed one included — so a hashed step owns exactly its node's rows, and a step with no hash (a hook, which is never hashed, or a failure that came before any node) owns the rows under its index and name that no hashed step claimed.
 func (r runView) owns(step *stepView, index int, name, nodeHash string) bool {
 	if step.Hash != "" {
 		return nodeHash == step.Hash

@@ -27,7 +27,9 @@ type AgentUsage struct {
 	Kind string
 	// NodeHash is empty for a hook or a fix, which are never hashed: their
 	// rows hang off the run alone.
-	NodeHash     string
+	NodeHash string
+	// StepID is the run_events row the spend is drawn on — a hook's own, a fix's task's — or 0 when it ran outside a published step.
+	StepID       int64
 	ModelReq     string
 	ModelServed  string
 	Prompt       int

@@ -1,6 +1,6 @@
 # internal/store
 
-The state-database contract (`internal/store`, stdlib-only) and its two drivers (`internal/store/sqlite`, `internal/store/postgres`). The foreign-key rule and its three exceptions live in the root [CLAUDE.md](../../CLAUDE.md#working-rules), because they bind every schema change.
+The state-database contract (`internal/store`, stdlib-only) and its two drivers (`internal/store/sqlite`, `internal/store/postgres`). The foreign-key rule and its four exceptions live in the root [CLAUDE.md](../../CLAUDE.md#working-rules), because they bind every schema change.
 
 ## Contract and drivers
 

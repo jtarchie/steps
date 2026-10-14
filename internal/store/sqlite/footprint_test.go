@@ -779,6 +779,11 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 			"event is written after its children's, so the parent row does not exist " +
 			"yet when the child is recorded")
 	}
+
+	// The fourth: run_events.step_id is no key (every event of a step carries it), and both rows die with their run.
+	if declaresForeignKey(ctx, t, st, "agent_usage", "step_id") {
+		t.Error("agent_usage.step_id declares a foreign key; run_events.step_id is not unique, so there is no key to point at")
+	}
 }
 
 func hasForeignKey(ctx context.Context, t *testing.T, st *Store, table, column, target, onDelete string) bool {
