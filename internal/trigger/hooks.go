@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	rsrc "github.com/jtarchie/steps/internal/resource"
@@ -206,7 +207,7 @@ func deliveryDispatch(ctx context.Context, cfg *config.Config, st HookStore, nam
 		return store.Dispatch{Held: paused}, err //nolint:wrapcheck // logged with the resource by the caller
 	}
 
-	var dispatch store.Dispatch
+	dispatch := store.Dispatch{By: actor.Webhook(name).String()}
 
 	for _, job := range AffectedJobs(cfg, name) {
 		ready, err := jobReadyFor(ctx, st, job)

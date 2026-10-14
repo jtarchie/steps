@@ -119,9 +119,10 @@ type mcpCtx struct {
 func (s *Server) handleMCP(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	servers := pipeline.Config().MCPServers
+	exports := s.exportRows(c, pipeline)
 
-	if len(servers) == 0 {
-		return echo.NewHTTPError(http.StatusNotFound, "this pipeline declares no mcp_servers:")
+	if len(servers) == 0 && len(exports) == 0 {
+		return echo.NewHTTPError(http.StatusNotFound, "this pipeline declares no mcp_servers: and no mcp_exports:")
 	}
 
 	// Two groups, each keeping the file's own order inside it: what cannot be used leads, because that is the question somebody opened this page with, and a server declared tenth is no less broken for it.
@@ -144,6 +145,8 @@ func (s *Server) handleMCP(c *echo.Context) error {
 		"Attention": attention,
 		"Rest":      rest,
 		"Total":     len(servers),
+		"Exports":   exports,
+		"Serving":   s.exporter != nil,
 		"Title":     "mcp",
 	})
 }

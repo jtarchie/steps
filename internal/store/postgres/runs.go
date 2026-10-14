@@ -16,8 +16,8 @@ import (
 // runColumns is the one column list every RunRow query selects (runColumnsR
 // is the same list for a query aliasing runs as r); scanRunRow decodes it.
 const (
-	runColumns  = `id, job_name, workspace, status, started_at, finished_at, COALESCE(parent_run_id, ''), ` + configSHA + `, COALESCE(rerun_of, '')`
-	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, r.finished_at, COALESCE(r.parent_run_id, ''), ` + configSHAR + `, COALESCE(r.rerun_of, '')`
+	runColumns  = `id, job_name, workspace, status, started_at, finished_at, COALESCE(parent_run_id, ''), ` + configSHA + `, COALESCE(rerun_of, ''), created_by`
+	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, r.finished_at, COALESCE(r.parent_run_id, ''), ` + configSHAR + `, COALESCE(r.rerun_of, ''), r.created_by`
 	configSHA   = `COALESCE((SELECT sha FROM pipeline_revisions WHERE id = revision_id), '')`
 	configSHAR  = `COALESCE((SELECT sha FROM pipeline_revisions WHERE id = r.revision_id), '')`
 )
@@ -31,7 +31,7 @@ func scanRunRow(sc rowScanner) (store.RunRow, error) {
 		finished sql.NullTime
 	)
 
-	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &started, &finished, &row.ParentRunID, &row.ConfigSHA, &row.RerunOf)
+	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &started, &finished, &row.ParentRunID, &row.ConfigSHA, &row.RerunOf, &row.CreatedBy)
 
 	row.StartedAt = started.UTC()
 	row.FinishedAt = utc(finished)
@@ -48,11 +48,12 @@ func (s *Store) StartRun(ctx context.Context, run store.NewRun) error {
 
 	err := inTx(ctx, s.db, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
-			INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at, revision_id)
+			INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at, revision_id, created_by)
 			VALUES ($1, $2, $3, $4, 'running', $5,
-			        (SELECT id FROM pipeline_revisions WHERE pipeline_id = $2 AND sha = $6))
+			        (SELECT id FROM pipeline_revisions WHERE pipeline_id = $2 AND sha = $6),
+			        COALESCE((SELECT requested_by FROM trigger_queue WHERE id = $7 AND pipeline_id = $2), $8))
 			ON CONFLICT (id) DO NOTHING
-		`, id, s.pipelineID, jobName, clean(workspaceDir), now(), configSHA)
+		`, id, s.pipelineID, jobName, clean(workspaceDir), now(), configSHA, run.QueueID, clean(run.CreatedBy))
 		if err != nil {
 			return err //nolint:wrapcheck // wrapped below, naming the run
 		}

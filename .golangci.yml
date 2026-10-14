@@ -141,6 +141,7 @@ linters:
             - "go.uber.org/goleak"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/pipeline"
             # blobstore is provider setup, like workspace below: the CLI parses
             # --artifact-store, builds the S3 client, and hands it into the
@@ -237,6 +238,8 @@ linters:
             - "github.com/santhosh-tekuri/jsonschema/v6"
             - "gopkg.in/yaml.v3"
             - "go.uber.org/goleak"
+            # bcrypt is test-only here: the local-user fixtures hash their passwords the way an operator's htpasswd does.
+            - "golang.org/x/crypto/bcrypt"
             # a fake OTLP collector decodes what the CLI exports, to check the trace that crossed the wire.
             - "go.opentelemetry.io/proto/otlp"
             - "google.golang.org/protobuf/proto"
@@ -385,6 +388,15 @@ linters:
         Outcome:
           files:
             - "**/internal/outcome/**"
+          allow:
+            - "$gostd"
+        # actor names who or what caused a recorded act. A stdlib-only leaf so
+        # the request that learns the person (web) and every package that
+        # enqueues on its behalf (scheduler, trigger) share one vocabulary
+        # without importing each other; the store keeps its string form.
+        Actor:
+          files:
+            - "**/internal/actor/**"
           allow:
             - "$gostd"
         # store is the CONTRACT: row types, error sentinels, and the Store and
@@ -748,6 +760,7 @@ linters:
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/mcp"
             - "github.com/jtarchie/steps/internal/outcome"
@@ -827,6 +840,7 @@ linters:
             # llmclient for one call: a job run's provider session (WithNewRun), which is the client layer's and not a conversation's.
             - "github.com/jtarchie/steps/internal/agent/llmclient"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/runview"
             - "github.com/jtarchie/steps/internal/merkle"
@@ -857,6 +871,7 @@ linters:
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/store"
@@ -881,6 +896,7 @@ linters:
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             # events carries a line's identity: poll and webhook lines add the
             # revision and resource they concern (events.WithLogAttrs).
             - "github.com/jtarchie/steps/internal/events"
@@ -907,6 +923,15 @@ linters:
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
             - "github.com/labstack/echo/v5"
+            # bcrypt verifies a local user's password against the hash an operator gave, so the daemon never holds the password itself.
+            - "golang.org/x/crypto/bcrypt"
+            # expr compiles the --role rules: an expression about the signed-in person, which can read fields and nothing else.
+            - "github.com/expr-lang/expr"
+            - "github.com/expr-lang/expr/vm"
+            # goth is the OAuth client for signing in with GitHub or Google; the daemon is the client, and only this package talks to the providers.
+            - "github.com/markbates/goth"
+            - "github.com/markbates/goth/providers/github"
+            - "github.com/markbates/goth/providers/google"
             # goldmark (+ its chroma highlighting extension) renders the
             # embedded docs package at /docs, server-side — the terminal twin
             # (steps docs, via glamour) lives in main. docs itself stays a
@@ -936,6 +961,7 @@ linters:
             - "github.com/alecthomas/chroma/v3/formatters/html"
             - "github.com/jtarchie/steps/docs"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/runview"
             # scheduler for its Pipeline handle, which web.Pipeline embeds and

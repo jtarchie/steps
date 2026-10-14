@@ -1,0 +1,30 @@
+{{define "page"}}
+<h1 class="prompt"><b>steps activity</b></h1>
+<div id="activity-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#activity-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph">
+{{/* What narrows the log, each removable, so a filtered view is a URL somebody can be sent. Every name in a row narrows by it. */}}
+<p class="metaline">{{if .Filters}}{{range $i, $f := .Filters}}{{if $i}}<span class="sep">·</span>{{end}}{{$f.Label}}: <b>{{$f.Value}}</b> <a href="{{$f.Remove}}" aria-label="stop narrowing by {{$f.Label}}">×</a>{{end}}<span class="sep">·</span><a href="/activity">clear</a>{{else}}what people did, newest first{{end}}{{if .Paged}}<span class="sep">·</span><a href="{{filterURL .Query "before" ""}}">newest</a>{{end}}</p>
+
+{{if .Rows}}
+<div class="tablewrap">
+  <table class="activity">
+    <thead><tr><th>When</th><th>Who</th><th>Action</th><th>What</th><th>Pipeline</th></tr></thead>
+    <tbody>
+      {{range .Rows}}
+      <tr>
+        <td class="dim">{{agoTag .At}}</td>
+        <td>{{if .Actor}}<a class="plain" href="{{filterURL $.Query "actor" .Actor}}">{{template "actor" .Actor}}</a>{{else}}<span class="faint">—</span>{{end}}</td>
+        <td><a class="plain" href="{{filterURL $.Query "action" .Action}}">{{.Action}}</a></td>
+        {{$what := .Target}}{{if eq .Action "set"}}{{$what = short .Target}}{{end}}
+        <td>{{if .TargetURL}}<a{{if eq .Action "set"}} class="hash"{{end}} href="{{.TargetURL}}">{{$what}}</a>{{else}}{{$what}}{{end}}{{with .Reason}} <span class="dim">“{{.}}”</span>{{end}}</td>
+        <td><a class="plain" href="{{filterURL $.Query "pipeline" .Pipeline}}">{{.Pipeline}}</a>{{if not .Live}} <span class="faint">gone</span>{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{with .Older}}<p class="metaline"><a href="{{.}}">older</a></p>{{end}}
+{{else}}
+<p class="faint">Nothing recorded yet.</p>
+{{end}}
+</div>
+{{end}}

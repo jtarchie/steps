@@ -599,7 +599,7 @@ func TestExistingHandleTransactionsWaitForTheDaemon(t *testing.T) {
 
 	enqueued := make(chan error, 1)
 
-	go func() { enqueued <- daemon.EnqueueJob(ctx, "build", "poll") }()
+	go func() { enqueued <- daemon.EnqueueJob(ctx, "build", "poll", "") }()
 
 	// Long enough for the daemon's write to land if nothing holds it off.
 	select {

@@ -8,12 +8,14 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/scheduler"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/telemetry"
 	"github.com/jtarchie/steps/internal/web"
 )
@@ -48,12 +50,23 @@ type WebCmd struct {
 	// A statement about the BROWSER's surface only; `steps pipeline set` is the deployment path and is deliberately not withheld — see docs/web.md.
 	ReadOnly bool `help:"serve the pages without trigger, approval, answer, resume or abort controls" name:"read-only"`
 	// Both or neither, refused below: half a pair is a daemon somebody believes is protected. Env vars because a password on a command line is in every ps listing and every shell history.
-	BasicAuthUsername string `env:"STEPS_BASIC_AUTH_USERNAME" help:"require this HTTP Basic username on every route but POST /p/<pipeline>/hooks/<resource>" name:"basic-auth-username"`
-	BasicAuthPassword string `env:"STEPS_BASIC_AUTH_PASSWORD" help:"the password that goes with it"                                                          name:"basic-auth-password"`
+	BasicAuthUsername string   `env:"STEPS_BASIC_AUTH_USERNAME"                                                                                                                                                         help:"require this HTTP Basic username on every route but POST /p/<pipeline>/hooks/<resource>" name:"basic-auth-username"`
+	BasicAuthPassword string   `env:"STEPS_BASIC_AUTH_PASSWORD"                                                                                                                                                         help:"the password that goes with it"                                                          name:"basic-auth-password"`
+	LocalUser         []string `help:"a local account as name:bcrypt-hash, the line htpasswd -nbB writes (repeatable)"                                                                                                  name:"local-user"                                                                              placeholder:"NAME:HASH"`
+	ActivityHistory   int      `default:"10000"                                                                                                                                                                         help:"how many entries the activity log keeps, across every pipeline (0 is no limit)"          name:"activity-history"`
+	Role              []string `help:"who may do what, as role=rule: viewer, operator or admin, and an expression over Provider, UserID, ID, Email, Organizations and Groups (repeatable; with any, admin is required)" name:"role"                                                                                    placeholder:"ROLE=RULE"`
+	GitHubClientID    string   `help:"sign people in with GitHub: the OAuth app's client id"                                                                                                                            name:"github-client-id"                                                                        placeholder:"ID"`
+	GitHubSecretEnv   string   `default:"STEPS_GITHUB_CLIENT_SECRET"                                                                                                                                                    help:"the environment variable holding that app's client secret"                               name:"github-client-secret-env" placeholder:"NAME"`
+	GoogleClientID    string   `help:"sign people in with Google: the OAuth client id"                                                                                                                                  name:"google-client-id"                                                                        placeholder:"ID"`
+	GoogleSecretEnv   string   `default:"STEPS_GOOGLE_CLIENT_SECRET"                                                                                                                                                    help:"the environment variable holding that client's secret"                                   name:"google-client-secret-env" placeholder:"NAME"`
+	LocalUsersFile    string   `help:"an htpasswd file of local accounts, bcrypt hashes only"                                                                                                                           name:"local-users-file"                                                                        placeholder:"PATH"              type:"existingfile"`
 	// Opt-in because a reverse proxy forwards the client's Host, so only the operator knows this daemon's names; see docs/web.md#security.
 	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed)" name:"allowed-host" placeholder:"NAME"`
 	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
 	ExternalURL string `help:"the URL steps publish to every step as STEPS_URL (default http://<listen>)" name:"external-url"`
+
+	// published is the external URL Run resolved, which every OAuth address the daemon publishes is built from.
+	published string
 }
 
 // externalURL is the STEPS_URL a daemon publishes: the flag, validated, or http://<listen>. Empty means unset — a wildcard listen address is no address a link could use.
@@ -95,11 +108,152 @@ func (w *WebCmd) authOptions() ([]web.Option, error) {
 		return nil, errors.New("web: --basic-auth-username and --basic-auth-password are both or neither — half a pair serves open access to a daemon somebody believes is protected")
 	}
 
-	if w.BasicAuthUsername == "" {
+	var opts []web.Option
+
+	if w.BasicAuthUsername != "" {
+		opts = append(opts, web.WithBasicAuth(w.BasicAuthUsername, w.BasicAuthPassword))
+	}
+
+	users, err := w.localUsers()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(users) > 0 {
+		opts = append(opts, web.WithLocalUsers(users))
+	}
+
+	return opts, nil
+}
+
+// signedInOptions is what a daemon people sign in to adds: where their sessions are kept and, unless it is read-only, the exports served under their names. A browser on an open daemon has nothing to sign in as, so none of it applies there.
+func (w *WebCmd) signedInOptions(opts []web.Option, state State, local *scheduler.LocalRunner) ([]web.Option, func(), error) {
+	if len(opts) == 0 {
+		return opts, func() {}, nil
+	}
+
+	accounts, err := openAccounts(state)
+	if err != nil {
+		return nil, nil, fmt.Errorf("web: %w", err)
+	}
+
+	opts = append(opts, web.WithSessions(accounts))
+
+	// Not on a read-only daemon, since calling a tool is acting.
+	if !w.ReadOnly {
+		opts = append(opts, web.WithExporter(local))
+	}
+
+	return opts, func() { _ = accounts.Close() }, nil
+}
+
+// accessOptions adds the sign-in providers and the roles to the accounts authOptions read: what lets people in, then what they may do once in.
+func (w *WebCmd) accessOptions(opts []web.Option, published string) ([]web.Option, error) {
+	providers, err := w.signInProviders(published)
+	if err != nil {
+		return nil, err
+	}
+
+	opts = append(opts, providers...)
+
+	roles, err := web.CompileRoles(w.Role)
+	if err != nil {
+		return nil, fmt.Errorf("web: %w", err)
+	}
+
+	// Before anything is opened: a provider with rules too loose for it is refused here, where the operator reads the reason, rather than by the server after a database was touched.
+	if len(providers) > 0 {
+		err = roles.AllowsProviders()
+		if err != nil {
+			return nil, fmt.Errorf("web: %w", err)
+		}
+	}
+
+	if len(w.Role) == 0 {
+		return opts, nil
+	}
+
+	if len(opts) == 0 {
+		return nil, errors.New("web: --role decides what signed-in people may do, and nobody can sign in: add --local-user or a sign-in provider")
+	}
+
+	return append(opts, web.WithRoles(roles)), nil
+}
+
+// signInProviders is the GitHub and Google sign-in a client id asks for. Each needs its secret, read from the environment so it is never on a command line, and the URL a provider sends the browser back to.
+func (w *WebCmd) signInProviders(published string) ([]web.Option, error) {
+	var providers []web.SignInProvider
+
+	for _, want := range []struct {
+		flag, id, secretEnv string
+		make                func(id, secret, base string) web.SignInProvider
+	}{
+		{"--github-client-id", w.GitHubClientID, w.GitHubSecretEnv, func(id, secret, base string) web.SignInProvider { return web.GitHubSignIn(id, secret, base, nil) }},
+		{"--google-client-id", w.GoogleClientID, w.GoogleSecretEnv, func(id, secret, base string) web.SignInProvider { return web.GoogleSignIn(id, secret, base, nil) }},
+	} {
+		if want.id == "" {
+			continue
+		}
+
+		secret := os.Getenv(want.secretEnv)
+		if secret == "" {
+			return nil, fmt.Errorf("web: %s needs its client secret in $%s, which is unset", want.flag, want.secretEnv)
+		}
+
+		if published == "" {
+			return nil, fmt.Errorf("web: %s needs --external-url, the address a provider sends the browser back to", want.flag)
+		}
+
+		providers = append(providers, want.make(want.id, secret, published))
+	}
+
+	if len(providers) == 0 {
 		return nil, nil
 	}
 
-	return []web.Option{web.WithBasicAuth(w.BasicAuthUsername, w.BasicAuthPassword)}, nil
+	return []web.Option{web.WithSignInProviders(providers...)}, nil
+}
+
+// localUsers is every account --local-user and --local-users-file name; a name given twice is refused, since which password won would be an accident of order.
+func (w *WebCmd) localUsers() ([]web.LocalUser, error) {
+	users := make([]web.LocalUser, 0, len(w.LocalUser))
+
+	for _, entry := range w.LocalUser {
+		user, err := web.ParseLocalUser(entry)
+		if err != nil {
+			return nil, fmt.Errorf("web: --local-user: %w", err)
+		}
+
+		users = append(users, user)
+	}
+
+	if w.LocalUsersFile != "" {
+		file, err := os.Open(w.LocalUsersFile)
+		if err != nil {
+			return nil, fmt.Errorf("web: --local-users-file: %w", err)
+		}
+
+		defer func() { _ = file.Close() }()
+
+		fromFile, err := web.ParseLocalUsers(file)
+		if err != nil {
+			return nil, fmt.Errorf("web: --local-users-file %s: %w", w.LocalUsersFile, err)
+		}
+
+		users = append(users, fromFile...)
+	}
+
+	seen := map[string]bool{w.BasicAuthUsername: w.BasicAuthUsername != ""}
+
+	for _, user := range users {
+		if seen[user.Name] {
+			return nil, fmt.Errorf("web: local user %q is given twice", user.Name)
+		}
+
+		seen[user.Name] = true
+	}
+
+	return users, nil
 }
 
 // allowedHosts refuses a value that is not a bare name: a URL would never equal a Host header, so every remote request would be refused and nothing would say why.
@@ -142,6 +296,14 @@ func (w *WebCmd) Run() error {
 		return err
 	}
 
+	opts, err = w.accessOptions(opts, published)
+	if err != nil {
+		return err
+	}
+
+	// Kept beside opts rather than in it: opts says whether anybody signs in, which the address does not.
+	w.published = published
+
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
@@ -173,15 +335,25 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 		runner = local
 	}
 
-	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)))...)
+	state := DaemonStatePath(w.DB)
+	readLog := func() (store.Reader, error) { return openStateReader(state) } //nolint:contextcheck // opening a store takes none
+
+	opts, closeAccounts, err := w.signedInOptions(opts, state, local) //nolint:contextcheck // opening a store takes none
+	if err != nil {
+		return err
+	}
+
+	defer closeAccounts()
+
+	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory), web.WithExternalURL(w.published))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	defer func() { _ = server.Close() }()
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	state := DaemonStatePath(w.DB)
 
 	held := newDaemon(ctx, server, local, state, w.ExecFlags, w.HistoryFlags, w.Interval)
 	defer held.Close()
@@ -207,7 +379,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 	if len(opts) == 0 && !loopbackOnly(w.Listen) {
 		slog.WarnContext(ctx, "web.no_auth", "listen", w.Listen,
 			"risk", "anyone who can reach it can set a pipeline, which is arbitrary command execution",
-			"fix", "set --basic-auth-username and --basic-auth-password, and --allowed-host to refuse names that are not this daemon's (DNS rebinding)")
+			"fix", "set --local-user (or --basic-auth-username and --basic-auth-password), and --allowed-host to refuse names that are not this daemon's (DNS rebinding)")
 	}
 
 	if len(server.Served()) == 0 {

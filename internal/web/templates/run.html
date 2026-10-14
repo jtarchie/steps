@@ -13,6 +13,8 @@
       {{with $run.InnermostFailure}}<span class="sep">·</span>failed at <a href="#{{.Anchor}}">{{.Name}}</a>{{end}}<span class="sep">·</span>
       <span id="run-duration">{{elapsedTag $run.Run}}</span><span class="sep">·</span>
       {{stamp $run.Run.StartedAt}}
+      {{- if $run.Run.Rerun}}<span class="sep">·</span>rerun of <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.Run.RerunOf}}">#{{short $run.Run.RerunOf}}</a>{{end}}
+      {{- with $run.Run.CreatedBy}}{{if not $run.Run.Rerun}}<span class="sep">·</span>{{end}} by {{template "actor" .}}{{end}}
     </p>
     {{/* Every entry is conditional, so each leads with its separator and CSS
          hides the one that lands first. */}}

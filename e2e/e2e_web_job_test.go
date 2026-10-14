@@ -25,7 +25,7 @@ func TestJobLinkLandsOnItsLatestRun(t *testing.T) {
 	expectRedirect(t, server, job, job+"/detail")
 	expectPage(t, server, job+"/detail", "steps job build")
 
-	err := pipeline.Store.EnqueueJob(t.Context(), "build", "test")
+	err := pipeline.Store.EnqueueJob(t.Context(), "build", "test", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

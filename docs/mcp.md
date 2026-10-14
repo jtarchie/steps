@@ -191,6 +191,88 @@ jobs:
 - **Aliases are invisible.** A server that accepts the same parameter under two names (`project_id` and `projectId`) will take the unpinned one; pin or withhold both.
 - **Not for secrets.** Pinned values fold into the step's hash and land in the state database, exactly as a custom tool's `args:` do, and a changed pin re-runs the step. Credentials belong in the server's `auth:`.
 
+## Sharing tools with other agents: `mcp_exports:`
+
+A daemon can serve some of a pipeline's tools to agents somewhere else — a teammate's Claude or Cursor — as an MCP server of its own. The calls go out with the pipeline's credentials, which the caller never sees, and every one is recorded under the name of the person who connected.
+
+```yaml noexec=credentials
+mcp_servers:
+- name: github
+  endpoint: https://api.githubcopilot.com/mcp/
+  auth: { type: bearer, api_key_env: GITHUB_PAT }
+
+agents:
+- name: oncall
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools:
+  - mcp: github
+    tool: search_issues
+    args: { owner: acme, repo: app }
+
+mcp_exports:
+- name: support
+  access: '"acme/support" in Groups'
+  rate: 60/m
+  tools:
+  - mcp: github
+    tool: search_issues
+    description: Search issues in the app repository
+    args: { owner: acme, repo: app }   # hidden from the caller, sent whatever it asks
+    timeout: 20s
+  - mcp: github
+    tools: [get_issue]
+  - agent: oncall                       # the caller gets an answer, not the tools
+    description: Ask what is failing right now
+
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi
+```
+
+- **`access:` is required**, a [role rule](authentication.md#who-may-do-what-roles) about the person connecting. Separate levels of access are separate exports (`support`, `support-write`), so who may do what stays in the file, where it is reviewed.
+- **Only MCP grants and sub-agents.** A built-in has no workspace outside a step, and a custom `run:` tool would put a caller's arguments into a shell on the daemon's machine; both are load errors. `max_calls:`, `max_output_bytes:` and `required:` are about a step's conversation, which an export does not have; `rate:` bounds calls per person instead.
+- **Narrowing works as it does for an agent**: `args:` pins (single-tool form), `description:`, `timeout:`.
+- **A sub-agent export** runs that agent's own conversation for each call, with your model and your tools, and returns its answer — the narrowest thing to share.
+- Never hashed: an export changes nothing a build does.
+
+### Where an export is seen
+
+A pipeline's **mcp** tab lists its exports under its servers — what it shares beside what it connects to — with how many tools each offers, how many people and agents are connected, and how many calls came in today. Each export has a page of its own: its address with a copy button, how to give it to Claude Code, Claude or Cursor, its access rule as written, every tool with its fixed arguments and time limit, and its most recent calls. Nothing on it is editable: the pipeline file is where an export changes.
+
+### Connecting an agent
+
+An export's address is `<external-url>/mcp/x/<pipeline>/<export>`. Give it to an agent that speaks MCP over HTTP with OAuth — Claude, Claude Code, Cursor — and it does the rest: it finds the daemon's sign-in through the address's [protected-resource metadata](https://www.rfc-editor.org/rfc/rfc9728), registers itself, and sends you to the daemon to sign in and agree.
+
+The daemon asks every time, on a page that says plainly what is being agreed to:
+
+- **the client's name, marked unverified** — it is whatever the agent called itself when it registered, and anybody can register;
+- **where your browser will be sent** with the result, the most prominent line on the page;
+- **which export, and every tool in it**, with the arguments fixed for you;
+- that calls are made with the pipeline's credentials and recorded under your name.
+
+**Deny** has the focus. Nothing is issued until you press **Allow**: a site that registered itself cannot collect a token by sending your signed-in browser to the daemon, because all that browser gets is this page.
+
+- You must be allowed the export: its `access:` rule, the pipeline's own [`access:`](authentication.md#one-pipelines-own-rules-access), and a role on the daemon at all. Anybody else is told so, with nothing to press.
+- **PKCE (S256) is required**, and the agent must name the export it wants (the `resource` parameter); the daemon refuses anything else back to the agent.
+- **Tokens are short and checked again.** An access token lasts an hour. Refreshing it asks again whether you may use the export — leave the team that let you in and your agent loses it at its next refresh — and hands out a new refresh token, ending the old one. Tokens are kept on the daemon only as digests.
+- **Registration is open and bounded**: an agent may register return addresses that are `https`, `http` to the same machine, or an app's own scheme, never one that runs something in the browser; the daemon keeps at most 1,000 registered agents.
+- Agreeing is recorded in the [activity log](web.md#activity) as `mcp authorize`.
+
+### What a connected agent can do
+
+- **See and call the export's tools, and nothing else**, under the names an agent's grant would use (`github__search_issues`). A pinned argument is not in the schema it sees, and is sent as written whatever it asks for.
+- **Every call is recorded** in the activity log as `mcp call`, under the name of the person who agreed: which tool, the *names* of the arguments it sent, and whether it worked. Never the values — a caller can paste anything into a query.
+- **Access is checked on every request**, not only when a token is refreshed: an export a later `steps pipeline set` narrows, or a team the person left, stops their agent at its next call.
+- **`rate:`** counts each person's calls to the export; a call past it comes back to the agent as the tool's error, which it can read and wait on.
+- A token is for one export: it opens nothing at another, even in the same pipeline.
+- Exports are served only by a daemon people sign in to, and not by a `--read-only` one, since calling a tool is acting.
+
+### Disconnecting an agent
+
+**connections**, in the menu under your name, lists every agent you have let connect: the name it gave itself (unverified), where it sends people back, which export, when you agreed, when it last called and how many times. **Revoke** asks once more, then ends every token the agent holds for that export — its next call fails, and it cannot refresh its way back. An admin can switch the page to **everyone** and disconnect anybody's agent. Both are recorded in the activity log as `mcp disconnect`.
+
 ## Backing a resource type with MCP
 
 ```yaml mcp=mcp-linear-issues

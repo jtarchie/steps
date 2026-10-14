@@ -26,6 +26,7 @@ require (
 	github.com/klauspost/compress v1.20.3
 	github.com/labstack/echo/v5 v5.4.0
 	github.com/lmittmann/tint v1.2.1
+	github.com/markbates/goth v1.82.0
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.2
 	github.com/modelcontextprotocol/go-sdk v1.8.0

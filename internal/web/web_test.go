@@ -1079,7 +1079,7 @@ func TestFollowCountsOnlyTheLimitsAJobHas(t *testing.T) {
 	enqueueAndClaim(t, st, "deploy-staging")
 
 	for _, job := range []string{"deploy-staging", "lint"} {
-		err := st.EnqueueJob(t.Context(), job, "test")
+		err := st.EnqueueJob(t.Context(), job, "test", "")
 		if err != nil {
 			t.Fatalf("EnqueueJob %s: %v", job, err)
 		}
@@ -1171,7 +1171,7 @@ jobs:
 func enqueueAndClaim(t *testing.T, st store.Store, job string) (int64, string, bool) {
 	t.Helper()
 
-	err := st.EnqueueJob(t.Context(), job, "test")
+	err := st.EnqueueJob(t.Context(), job, "test", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob %s: %v", job, err)
 	}

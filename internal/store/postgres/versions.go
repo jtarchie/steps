@@ -338,7 +338,7 @@ func (s *Store) VersionRuns(ctx context.Context, resourceName string, versions [
 			finished sql.NullTime
 		)
 
-		err := rows.Scan(&one.Version, &one.Run.ID, &one.Run.JobName, &one.Run.Workspace, &one.Run.Status, &started, &finished, &one.Run.ParentRunID, &one.Run.ConfigSHA, &one.Run.RerunOf)
+		err := rows.Scan(&one.Version, &one.Run.ID, &one.Run.JobName, &one.Run.Workspace, &one.Run.Status, &started, &finished, &one.Run.ParentRunID, &one.Run.ConfigSHA, &one.Run.RerunOf, &one.Run.CreatedBy)
 
 		one.Run.StartedAt = started.UTC()
 		one.Run.FinishedAt = utc(finished)

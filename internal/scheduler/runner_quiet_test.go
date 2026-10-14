@@ -68,7 +68,7 @@ jobs:
 		t.Fatalf("RecordJobOutcome: %v", err)
 	}
 
-	err = st.EnqueueJob(ctx, "build", "poll")
+	err = st.EnqueueJob(ctx, "build", "poll", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

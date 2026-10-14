@@ -29,7 +29,7 @@ func TestSerialGroupsBlockConcurrentClaims(t *testing.T) {
 	}
 
 	for _, name := range []string{"deploy-staging", "deploy-prod", "unrelated"} {
-		enqueueErr := st.EnqueueJob(ctx, name, "a new version")
+		enqueueErr := st.EnqueueJob(ctx, name, "a new version", "")
 		if enqueueErr != nil {
 			t.Fatalf("EnqueueJob(%s): %v", name, enqueueErr)
 		}
@@ -93,7 +93,7 @@ func TestSerialGroupHolderNamesWhoHasIt(t *testing.T) {
 		t.Fatalf("holder = %q, %v; want nothing holding the lock yet", holder, err)
 	}
 
-	err = st.EnqueueJob(ctx, "deploy-staging", "a new version")
+	err = st.EnqueueJob(ctx, "deploy-staging", "a new version", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestSyncJobLimitsReplacesStaleMembership(t *testing.T) {
 	}
 
 	for _, name := range []string{"a", "b"} {
-		enqueueErr := st.EnqueueJob(ctx, name, "a new version")
+		enqueueErr := st.EnqueueJob(ctx, name, "a new version", "")
 		if enqueueErr != nil {
 			t.Fatalf("EnqueueJob(%s): %v", name, enqueueErr)
 		}

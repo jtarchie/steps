@@ -62,11 +62,21 @@
   </nav>{{end}}{{end}}
   <div class="right">
     {{template "markcarrier" .Nav}}
-    {{if .Nav.ReadOnly}}<span class="ro">read-only</span>{{end}}
+    {{if and .Nav.ReadOnly (not .Nav.ViewOnly)}}<span class="ro">read-only</span>{{end}}
     {{/* A button, not only a key: on a phone "/" is nowhere to be pressed,
          and the palette was unreachable there. The kbd is the hint for a
          reader with a keyboard and is hidden where there is none. */}}
     {{if .Nav.Current}}<button class="jumpbtn" id="jumpbtn" type="button" title="jump to a job, run or pipeline"><span aria-hidden="true">⌕</span> jump <kbd>/</kbd></button>{{end}}
+    {{/* The signed-in person, last on the line, and the daemon-wide pages that are about people rather than pipelines. Not drawn where nobody signs in. */}}
+    {{with .Nav.Who}}<div class="usermenu">
+      <button class="pipebtn userbtn" id="userbtn" type="button" aria-haspopup="menu" aria-expanded="false" title="{{(actorOf .).Label}}"><span class="visually-hidden">signed in as </span><span class="who">{{(actorOf .).ID}}</span> <span class="caret" aria-hidden="true">▾</span></button>
+      <div class="pipemenu" id="usermenu" role="menu" aria-label="Account">
+        <span class="menuhead">{{template "actor" .}}</span>
+        {{if ge $.Nav.Role 3}}<a role="menuitem" href="/activity">activity</a>{{end}}
+        {{if $.Nav.CanSignOut}}<a role="menuitem" href="/connections">connections</a>{{end}}
+        {{if $.Nav.CanSignOut}}<form method="post" action="/logout"><button class="menubtn" role="menuitem" type="submit">sign out</button></form>{{end}}
+      </div>
+    </div>{{end}}
   </div>
   {{template "actionbar" .}}
 </div>
@@ -118,6 +128,12 @@
 </html>
 {{end}}
 
+{{/* Who or what did something, from its stored form. A person reads in the
+     foreground and anything automatic in the dim tone around it; a name
+     nothing verified says so in words, never in color alone. The stored form
+     rides in the title for a reader who needs the exact id. */}}
+{{define "actor"}}{{if .}}{{$a := actorOf .}}<span class="actor{{if or $a.Automatic $a.Unverified}} quiet{{end}}" title="{{.}}">{{$a.Label}}</span>{{end}}{{end}}
+
 {{/* The way back up from a detail page. A crumb with a URL links; the last
      one — the page the reader is on — is plain text. Collection pages pass
      no Crumbs and render nothing. */}}
@@ -141,7 +157,7 @@
      live. A paused pipeline turns the bar blue and says nothing more, as
      Concourse's top bar does; a disabled button says why in its tooltip.
      The groups close back to back: a test finds the bar's end that way. */}}
-{{define "actionbar"}}{{if .Nav.Anchored}}<div class="actionbar{{if .Nav.Paused}} paused{{end}}" role="toolbar" aria-label="Actions"><div class="group">{{if .Nav.ReadOnly}}{{if .Nav.Paused}}<span class="st st-paused">paused</span> <span class="dim">unpause with <code>steps pipeline unpause -p {{.Nav.Current}}</code></span>{{end}}{{else}}<form method="post" action="/p/{{.Nav.Current}}/{{if .Nav.Paused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="{{if .Nav.Paused}}resume polling and starting runs{{else}}stop polling and starting runs until unpaused{{end}}" aria-pressed="{{.Nav.Paused}}">{{if .Nav.Paused}}▶ Unpause{{else}}⏸ Pause{{end}}</button></form>{{end}}</div>{{with .Bar}}{{if not $.Nav.ReadOnly}}<div class="group">
+{{define "actionbar"}}{{if .Nav.Anchored}}<div class="actionbar{{if .Nav.Paused}} paused{{end}}" role="toolbar" aria-label="Actions"><div class="group">{{if .Nav.ViewOnly}}<span class="rohint viewonly">you can view<span class="sep">·</span>triggering, approving and aborting need the operator role</span>{{else if .Nav.ReadOnly}}{{if .Nav.Paused}}<span class="st st-paused">paused</span> <span class="dim">unpause with <code>steps pipeline unpause -p {{.Nav.Current}}</code></span>{{end}}{{else}}<form method="post" action="/p/{{.Nav.Current}}/{{if .Nav.Paused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="{{if .Nav.Paused}}resume polling and starting runs{{else}}stop polling and starting runs until unpaused{{end}}" aria-pressed="{{.Nav.Paused}}">{{if .Nav.Paused}}▶ Unpause{{else}}⏸ Pause{{end}}</button></form>{{end}}</div>{{with .Bar}}{{if not $.Nav.ReadOnly}}<div class="group">
     {{if .Held}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/release"><button class="btn" type="submit" title="let new versions trigger {{.Job}} again">Release</button></form>{{end}}
     {{if .Job}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/trigger"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="a new run of {{.Job}}, with the newest versions"{{end}}>↻ Trigger</button></form>
     {{end}}

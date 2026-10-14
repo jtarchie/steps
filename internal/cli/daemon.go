@@ -383,6 +383,12 @@ func (d *daemon) accept(name, source string, includes map[string]string) (*confi
 		return nil, fmt.Errorf("%w: %w", web.ErrRefused, err)
 	}
 
+	// A rule that cannot compile would hide the pipeline from everyone but admins, so it is refused where somebody reads the reason.
+	err = web.CheckAccess(cfg.Access)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %w", web.ErrRefused, name, err)
+	}
+
 	problems := cfg.CheckEnvironment()
 	if len(problems) > 0 {
 		return nil, fmt.Errorf("%w: %s %w:\n%s", web.ErrRefused, name, errCannotRunHere, renderProblems(problems))

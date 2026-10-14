@@ -22,8 +22,10 @@ type Config struct {
 	Resources     []Resource     `yaml:"resources"`
 	Agents        []Agent        `yaml:"agents"`
 	MCPServers    []MCPServer    `yaml:"mcp_servers,omitempty"`
-	Tasks         []Task         `yaml:"tasks"`
-	Jobs          []Job          `yaml:"jobs"`
+	// MCPExports are bundles of this pipeline's tools other people's agents may connect to through the daemon. See MCPExport.
+	MCPExports []MCPExport `yaml:"mcp_exports,omitempty"`
+	Tasks      []Task      `yaml:"tasks"`
+	Jobs       []Job       `yaml:"jobs"`
 	// Defaults supplies pipeline-wide fallbacks and bounds: the model an
 	// agent uses when it names none, preflight tuning, the delegation budget,
 	// and the version/run/memory caps. See Defaults.
@@ -37,6 +39,9 @@ type Config struct {
 	// `steps test` must have run (see Assert). It's a self-verification
 	// meta-check, never hashed.
 	Assert *Assert `yaml:"assert,omitempty"`
+	// Access narrows who may see and operate this pipeline on a daemon people
+	// sign in to. See Access.
+	Access *Access `yaml:"access,omitempty"`
 	// Name is WHICH pipeline this is, stamped by the loader. Not YAML, never
 	// hashed: it is identity, not content.
 	//
@@ -228,6 +233,8 @@ func parseSource(source []byte, name string, label string, fsys Files) (*Config,
 func (c *Config) validate() error {
 	checks := []func() error{
 		c.validateStepKinds,
+		c.validateAccess,
+		c.validateMCPExports,
 		c.validateStepReferences,
 		c.validateTaskInputsAll,
 		c.validateStepFieldPlacement,

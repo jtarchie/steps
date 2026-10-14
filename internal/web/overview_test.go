@@ -1672,7 +1672,7 @@ func pausedWithHistory(t *testing.T, pipeline *Pipeline) {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	err = pipeline.Store.EnqueueJob(ctx, "app-job", "new version")
+	err = pipeline.Store.EnqueueJob(ctx, "app-job", "new version", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

@@ -4,8 +4,10 @@
 {{/* Inside the region: a login finishing and a probe landing both move these
      counts, and a metaline left outside would go on describing the table the
      poll had already replaced. */}}
-<p class="metaline">{{.Total}} servers{{if .Attention}}<span class="sep">·</span>{{len .Attention}} need attention{{end}}</p>
+<p class="metaline">{{.Total}} servers{{if .Attention}}<span class="sep">·</span>{{len .Attention}} need attention{{end}}{{with .Exports}}<span class="sep">·</span>{{len .}} exports{{end}}</p>
 
+{{if .Total}}
+{{if .Exports}}<h2 class="eyebrow">servers <span class="unbold">what this pipeline connects to</span></h2>{{end}}
 <div class="tablewrap">
   <table class="mcp">
     <thead><tr><th>Status</th><th>Server</th><th>Used by</th><th class="acts">Action</th></tr></thead>
@@ -28,6 +30,27 @@
 </div>
 
 <p class="faint mcp-note">Status is read from configuration, this machine and saved tokens — nothing is connected to until you ask. A token is saved per pipeline, on this daemon, so another pipeline naming the same server needs its own login.</p>
+{{end}}
+
+{{with .Exports}}
+<h2 class="eyebrow">exports <span class="unbold">what this pipeline shares</span></h2>
+<div class="tablewrap">
+  <table class="mcp-exports">
+    <thead><tr><th>Export</th><th class="num">Tools</th><th class="num">Connected</th><th class="num">Calls today</th></tr></thead>
+    <tbody>
+    {{range .}}
+      <tr>
+        <td><a href="/p/{{$.Nav.Current}}/mcp/exports/{{.Name}}">{{.Name}}</a></td>
+        <td class="num dim">{{len .Tools}}</td>
+        <td class="num">{{if .People}}{{.People}} {{if eq .People 1}}person{{else}}people{{end}}<span class="dim"> · {{.Agents}} {{if eq .Agents 1}}agent{{else}}agents{{end}}</span>{{else}}<span class="faint">nobody</span>{{end}}</td>
+        <td class="num">{{if .CallsToday}}{{.CallsToday}}{{else}}<span class="faint">0</span>{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{if not $.Serving}}<p class="faint mcp-note">Not served here: exports are served only by a daemon people sign in to, and not by a read-only one.</p>{{end}}
+{{end}}
 </div>
 {{end}}
 

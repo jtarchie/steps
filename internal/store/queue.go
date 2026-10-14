@@ -13,11 +13,12 @@ import (
 // may hand out: a held job is a row that will not be claimed, so splitting
 // them would give a consumer the queue without the rule that governs it.
 type Queue interface {
-	EnqueueJob(ctx context.Context, jobName, reason string) error
-	// EnqueueManualJob is EnqueueJob for a person's trigger: the row is marked manual, and a pending row it merges into becomes manual too, because the breaker holds back only what was triggered automatically.
-	EnqueueManualJob(ctx context.Context, jobName, reason string) error
+	// EnqueueJob and its two siblings take by, the stored form of who or what asked (actor.Actor.String), which the run the row starts inherits.
+	EnqueueJob(ctx context.Context, jobName, reason, by string) error
+	// EnqueueManualJob is EnqueueJob for a person's trigger: the row is marked manual, and a pending row it merges into becomes manual too, because the breaker holds back only what was triggered automatically. The merged row takes this person as its requester, since they are why it is manual.
+	EnqueueManualJob(ctx context.Context, jobName, reason, by string) error
 	// EnqueueRerunJob queues a retry of a recorded run. It is a person's request, so it is manual; it is not merged into the job's ordinary pending row, since it builds different versions.
-	EnqueueRerunJob(ctx context.Context, jobName, reason, runID string) error
+	EnqueueRerunJob(ctx context.Context, jobName, reason, runID, by string) error
 	// ClaimNextJob takes the oldest pending row admitted by serial: and
 	// max_in_flight, atomically, and reports false when nothing is ready. The
 	// row comes back from the statement that claimed it, so nothing can be

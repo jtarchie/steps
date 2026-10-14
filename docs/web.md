@@ -285,6 +285,15 @@ what it spent and where it ran on its own row.
   have), and the line under the header counts them. A step that broke
   because its content moved carries `changed`; one that failed with the same
   content as before does not; hooks are never compared.
+- **Every run says who or what started it**, after when it started: a
+  person by name and where the name came from (`by ops (local)`), or what
+  stood in for one (`by new version of repo`, `by webhook: push`,
+  `by upstream jobs passed`). A retry says what it repeated first
+  (`rerun of #a1b2c3 by ops (local)`), and a restart keeps the run's original
+  starter. A run started from a terminal with `steps run` names whoever ran
+  the command, marked `(this machine, unverified)`: nothing checked that
+  name, and the page says so in words. A run recorded before steps kept this
+  names nobody rather than guessing.
 - **Every run names the configuration it executed**, linking the pipeline as
   it was when that run started — which the file on disk no longer holds once
   anyone edits it. When a failed run's configuration differs from the last
@@ -376,6 +385,33 @@ what it spent and where it ran on its own row.
 - **Every hash is a link** to the node page, and **every step has one too** —
   the `#` beside its name is a URL you can paste at someone, and it opens the
   step it names.
+
+## Activity
+
+`/activity` — reached from your name at the right end of the header, on a
+server you sign in to — is the log of what people did to the daemon's pipelines, newest
+first, across every pipeline: who set one, triggered or retried a job,
+approved or rejected, answered a question, aborted, paused, released,
+renamed, destroyed, or connected an MCP server. Each line says when, who,
+what, and to which pipeline, and the job, run, revision or page it touched
+is a link.
+
+- **Every name narrows it.** Click a person, an action or a pipeline and the
+  log shows only those; what it is narrowed by is said above the table, each
+  with an `×` to drop it, and the URL is the filter — send it to someone.
+- **People, not machinery.** A run a new version started is not here: it says
+  `by new version of repo` on the run itself. Keeping the log to what people
+  did is what stops a busy poll pushing their actions out of a log bounded by
+  count.
+- **Destroying a pipeline does not erase its history.** Its lines stay, under
+  the name it had, marked `gone`, and the destroy is one of them. A rename
+  keeps its history too, and answers to the new name.
+- **Only what happened is recorded.** A refused action — a read-only server,
+  a pipeline that would not load — leaves no line.
+- **Bounded by count**, `--activity-history` (default 10,000), the oldest
+  dropped first, whichever pipeline they belong to. Names in it are personal
+  data; that bound is how long they are kept.
+- On a server nobody signs in to, the who is `—`.
 
 ## Live runs
 
@@ -480,7 +516,8 @@ Nine controls, each doing what a CLI verb does:
   which on an unchanged pipeline correctly does almost nothing; Retry, or `steps run --force` from a terminal, is how to run unchanged steps again. A job the breaker holds is still triggered, since the breaker stops only automatic triggers.
 - **Retry** is `fly rerun-build`: a new run, the whole plan from the top, against exactly the versions the run was created with — what `steps run --rerun <run>` does. A `version: every` job builds each version as a run of its own, so Retry rebuilds that one version. Nothing that arrived since joins it, `passed:` is not asked again, and it takes no version, so it disturbs no other build. It skips the step cache, since a retry of a run that passed would otherwise do nothing. The new run links the run it retried, and a retry of an old run does not become its job's status — only a retry of the job's latest run does, as in Concourse. See [conformance.md](conformance.md).
 - **Approve / Reject** on an `approval:` step, with the reason recorded — the
-  same row `steps approvals approve` writes.
+  same row `steps approvals approve` writes, under the name of whoever signed
+  in (a decision on a server nobody signs in to reads `by web`).
 - **Answer** an `ask_user` question a step is parked on — one click for an
   offered option, or your own words — the same row `steps questions answer` writes. See
   [agents.md](agents.md).
@@ -846,6 +883,18 @@ on this side is everything that changes what a pipeline IS.
                  require HTTP Basic on every route but the webhook one; both or
                  neither, env STEPS_BASIC_AUTH_USERNAME / _PASSWORD
                  (see authentication.md)
+--local-user / --local-users-file
+                 local accounts as name:bcrypt-hash, or an htpasswd file of them
+                 (see authentication.md)
+--github-client-id / --google-client-id
+                 sign people in with GitHub or Google; the secret is read from
+                 $STEPS_GITHUB_CLIENT_SECRET / $STEPS_GOOGLE_CLIENT_SECRET (or
+                 --*-client-secret-env), and needs --external-url
+--role           who may do what: viewer, operator or admin, each a rule about
+                 the signed-in person (repeatable; see authentication.md)
+--activity-history
+                 how many entries the activity log keeps across every pipeline
+                 (default 10000, 0 is no limit; see Activity)
 --allowed-host   refuse any request whose Host is not this name (repeatable;
                  loopback names always pass; env STEPS_ALLOWED_HOSTS,
                  comma-separated; see Security)

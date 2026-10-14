@@ -33,6 +33,7 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/scheduler"
@@ -74,6 +75,8 @@ type Pipeline struct {
 	*scheduler.Pipeline
 	// path names a file on the SENDER's machine, recorded for a reader who finds a configuration nobody remembers sending, and never opened here. Behind an atomic because a later set moves it while handlers read it.
 	path atomic.Pointer[string]
+	// access is the configuration's access: rules, compiled for the configuration they came from: see roles.go.
+	access atomic.Pointer[compiledAccess]
 	// Hooks answers POST /p/<slug>/hooks/<resource>, a delivery to a webhook resource. Built by the caller (trigger.HookHandler): this package serves the surface and does not own the queue — internal/scheduler drains it, reached only through Runner. Nil only in a test.
 	Hooks func(w http.ResponseWriter, r *http.Request, resource string)
 }
@@ -127,6 +130,21 @@ type Server struct {
 	manager Manager
 	// nil is open access, which is what the loopback default is: see auth.go.
 	auth *basicAuth
+	// activity is where the activity log is read and how much of it is kept: see activity.go.
+	activity activityLog
+	// sessions is where signed-in browsers are kept, nil where browsers use the Basic prompt: see sessions.go.
+	sessions store.Accounts
+	// providers are the ways to sign in with somebody else's account, and pending the trips to them not yet back: see providers.go.
+	providers []SignInProvider
+	pending   pendingSignIns
+	// roles are who may do what, the zero value letting anyone signed in do anything: see roles.go.
+	roles Roles
+	// external is the address the daemon is reached on, which every OAuth URL it publishes is built from; auths are consents and codes in flight: see oauthserver.go.
+	external string
+	auths    pendingAuth
+	// exporter builds exports and exports holds the built ones: see exports.go.
+	exporter Exporter
+	exports  exportCache
 	// nil answers any Host, which is the default: see hosts.go.
 	allowedHosts map[string]bool
 	// version is what the footer prints, so a bug report can name the build.
@@ -218,6 +236,13 @@ func New(pipelines []*Pipeline, runner Runner, opts ...Option) (*Server, error) 
 	// Before routes(), which is where the middleware table is fixed.
 	for _, opt := range opts {
 		opt(srv)
+	}
+
+	if len(srv.providers) > 0 {
+		err := srv.roles.AllowsProviders()
+		if err != nil {
+			return nil, fmt.Errorf("web: %w", err)
+		}
 	}
 
 	for _, pipeline := range pipelines {
@@ -410,11 +435,15 @@ func (s *Server) routes() error {
 
 	// Above the origin check, so an unauthenticated cross-origin request is told the one thing it can act on.
 	if s.auth != nil {
-		e.Use(s.auth.middleware())
+		e.Use(s.authenticate)
+		e.Use(s.authorize)
 	}
 
 	// With no authentication there is no session for a cross-site request to ride, but a page on another origin can still aim a form at localhost — and this is the check that costs nothing and closes it.
 	e.Use(sameOriginMutations)
+
+	// After auth, so an entry names who; around every route, so a mutating one cannot go unrecorded by being added without remembering to.
+	e.Use(s.recordActivity)
 
 	e.GET("/", s.handleIndex)
 	e.GET("/static/app.css", s.handleCSS)
@@ -424,6 +453,29 @@ func (s *Server) routes() error {
 	e.GET("/mark", s.handleMark)
 	e.GET("/docs", s.handleDocsIndex)
 	e.GET("/docs/:page", s.handleDocs)
+	e.GET("/activity", s.handleActivity)
+
+	if s.sessions != nil {
+		e.GET(loginPath, s.handleLoginPage)
+		e.POST(loginPath, s.handleLogin)
+		e.POST(logoutPath, s.handleLogout)
+		e.GET(signInStartPath, s.handleSignInStart)
+		e.GET(signInCallbackPath, s.handleSignInCallback)
+
+		// Agents connecting to exports: metadata, registration and tokens answer the agent itself; authorize is a signed-in person's page.
+		e.GET(authServerMetadataPath, s.handleAuthServerMetadata)
+		e.GET(resourceMetadataPath, s.handleResourceMetadata)
+		e.POST(registerPath, s.handleRegister)
+		e.GET(authorizePath, s.handleAuthorize)
+		e.POST(authorizePath, s.handleConsent)
+		e.POST(tokenPath, s.handleToken)
+		e.GET(connectionsPath, s.handleConnections)
+		e.POST(revokePath, s.handleRevoke)
+		// The methods MCP's streamable HTTP transport uses: POST a message, GET a stream, DELETE a session.
+		e.POST(exportPath, s.handleExport)
+		e.GET(exportPath, s.handleExport)
+		e.DELETE(exportPath, s.handleExport)
+	}
 
 	group := e.Group("/p/:pipeline", s.resolvePipeline)
 	group.GET("", s.handleJobs)
@@ -440,6 +492,7 @@ func (s *Server) routes() error {
 	group.GET("/approvals", s.handleApprovals)
 	group.GET("/questions", s.handleQuestions)
 	group.GET("/mcp", s.handleMCP)
+	group.GET("/mcp/exports/:export", s.handleExportPage)
 	group.GET("/resources", s.handleResources)
 	group.GET("/resources/:resource", s.handleResource)
 	group.GET("/search", s.handleSearch)
@@ -712,7 +765,9 @@ func (s *Server) unscopedNav(c *echo.Context) navData {
 // one is current, and the counts the top bar reports.
 func (s *Server) nav(c *echo.Context) navData {
 	ctx := c.Request().Context()
-	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI()}
+	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI(), Role: RoleAdmin}
+
+	s.signedInNav(c, &nav)
 
 	// Every served pipeline, not only the request's own: a reader looking at a
 	// clean pipeline has no other way to learn that one of the daemon's others
@@ -724,7 +779,7 @@ func (s *Server) nav(c *echo.Context) navData {
 	// saved oauth token is worth, which is a file — is cached against that
 	// file by whoever holds it (internal/cli's credentials). Give this a
 	// short TTL if it ever shows up in a profile.
-	served := s.Served()
+	served := s.servedTo(c)
 	gathered := make(map[string][]attentionItem, len(served))
 
 	for _, pipeline := range served {
@@ -742,7 +797,7 @@ func (s *Server) nav(c *echo.Context) navData {
 		})
 	}
 
-	for _, broken := range s.Broken() {
+	for _, broken := range s.brokenTo(c) {
 		nav.Pipelines = append(nav.Pipelines, pipelineSummary{Slug: broken.Name, Path: broken.From, Broken: true, Mark: mark{Disc: discErrored}})
 	}
 
@@ -779,7 +834,7 @@ func (s *Server) nav(c *echo.Context) navData {
 	nav.Paused = readsOf(c, current).Paused(ctx)
 	nav.Attention = gathered[current.Slug]
 	// The tab appears only for a pipeline that declares servers: most do not, and a dead tab on every one of them is nav space spent on a feature they never use.
-	nav.HasMCP = len(current.Config().MCPServers) > 0
+	nav.HasMCP = len(current.Config().MCPServers) > 0 || len(current.Config().MCPExports) > 0
 
 	return nav
 }
@@ -820,6 +875,13 @@ type navData struct {
 	// mark even on a run page, and every pipeline's above one — the switcher
 	// is about pipelines whatever page it sits on.
 	SwitchMark mark
+	// Who is the signed-in person's stored actor, which draws the user menu; empty on a server nobody signs in to, where there is nobody to name.
+	Who string
+	// CanSignOut is a browser that signed in through the form; one the Basic prompt let in has nothing the daemon can end.
+	CanSignOut bool
+	// Role is what the person reading may do. ViewOnly is a server with controls whose reader may not use them, which ReadOnly then also says, so every page that hides controls for one hides them for the other; the two differ only in the sentence explaining why.
+	Role     Role
+	ViewOnly bool
 }
 
 type pipelineSummary struct {
@@ -835,4 +897,17 @@ type pipelineSummary struct {
 	// build the daemon starts is claimed from it. Activity, not attention, so
 	// it is drawn dim and only when nonzero.
 	InFlight int
+}
+
+// signedInNav fills in who is reading and what they may do, on a server people sign in to.
+func (s *Server) signedInNav(c *echo.Context, nav *navData) {
+	if s.auth == nil {
+		return
+	}
+
+	nav.Who = actor.From(c.Request().Context()).String()
+	nav.CanSignOut = s.hasSession(c)
+	nav.Role = s.roleOf(c)
+	nav.ViewOnly = s.runner != nil && nav.Role < RoleOperator
+	nav.ReadOnly = nav.ReadOnly || nav.ViewOnly
 }

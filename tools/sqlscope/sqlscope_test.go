@@ -10,15 +10,17 @@ import (
 // unscopedByDesign is every statement in each driver allowed to touch a pipeline-scoped table without naming pipeline_id, keyed by a fragment of it, with the reason that is safe. An entry that excuses nothing fails the test, so the list cannot outlive the code it describes. One list per driver, because each writes its own SQL.
 var unscopedByDesign = map[string]map[string]string{
 	"../../internal/store/sqlite": {
-		"(SELECT COUNT(*) FROM runs) + (SELECT COUNT(*) FROM nodes)":     "freshlyCreated asks whether the FILE is empty, which is a question about every pipeline at once",
-		"LEFT JOIN pipeline_revisions v ON v.id = p.current_revision_id": "Reader.Pipelines lists every pipeline in the file; the join is one row per pipeline through its own RESTRICTed revision id",
-		"JOIN pipeline_revisions r ON r.id = p.current_revision_id":      "CurrentRevision is scoped by WHERE p.id = ?, the pipelines row itself, and reaches the revision through that row's own foreign key",
-		"WHERE content_hash NOT IN (SELECT content_hash FROM nodes)":     "node_content is global, keyed by a hash of the content, and its sweep must stay pipeline-blind or the RESTRICT fires (see pruneNodeContent)",
+		"(SELECT COUNT(*) FROM runs) + (SELECT COUNT(*) FROM nodes)":                                   "freshlyCreated asks whether the FILE is empty, which is a question about every pipeline at once",
+		"LEFT JOIN pipeline_revisions v ON v.id = p.current_revision_id":                               "Reader.Pipelines lists every pipeline in the file; the join is one row per pipeline through its own RESTRICTed revision id",
+		"JOIN pipeline_revisions r ON r.id = p.current_revision_id":                                    "CurrentRevision is scoped by WHERE p.id = ?, the pipelines row itself, and reaches the revision through that row's own foreign key",
+		"WHERE content_hash NOT IN (SELECT content_hash FROM nodes)":                                   "node_content is global, keyed by a hash of the content, and its sweep must stay pipeline-blind or the RESTRICT fires (see pruneNodeContent)",
+		"DELETE FROM activity WHERE id <= (SELECT id FROM activity ORDER BY id DESC LIMIT 1 OFFSET ?)": "the activity log is one per database, capped by count across every pipeline, so its trim is daemon-wide by design and deletes only the oldest entries",
 	},
 	"../../internal/store/postgres": {
-		"LEFT JOIN pipeline_revisions v ON v.id = p.current_revision_id":                 "Reader.Pipelines lists every pipeline in the schema; the join is one row per pipeline through its own RESTRICTed revision id",
-		"JOIN pipeline_revisions r ON r.id = p.current_revision_id":                      "CurrentRevision is scoped by WHERE p.id = $1, the pipelines row itself, and reaches the revision through that row's own foreign key",
-		"WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.content_hash = c.content_hash)": "node_content is global, keyed by a hash of the content, and its sweep must stay pipeline-blind or the RESTRICT fires (see pruneNodeContent)",
+		"LEFT JOIN pipeline_revisions v ON v.id = p.current_revision_id":                                "Reader.Pipelines lists every pipeline in the schema; the join is one row per pipeline through its own RESTRICTed revision id",
+		"JOIN pipeline_revisions r ON r.id = p.current_revision_id":                                     "CurrentRevision is scoped by WHERE p.id = $1, the pipelines row itself, and reaches the revision through that row's own foreign key",
+		"WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.content_hash = c.content_hash)":                "node_content is global, keyed by a hash of the content, and its sweep must stay pipeline-blind or the RESTRICT fires (see pruneNodeContent)",
+		"DELETE FROM activity WHERE id <= (SELECT id FROM activity ORDER BY id DESC LIMIT 1 OFFSET $1)": "the activity log is one per database, capped by count across every pipeline, so its trim is daemon-wide by design and deletes only the oldest entries",
 	},
 }
 

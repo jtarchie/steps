@@ -32,8 +32,8 @@ const revisionBySHA = `(SELECT id FROM pipeline_revisions WHERE pipeline_id = ? 
 // is the same list for a query that aliases runs as r). scanRunRow decodes
 // exactly this order.
 const (
-	runColumns  = `id, job_name, workspace, status, started_at, COALESCE(finished_at, ''), COALESCE(parent_run_id, ''), ` + configSHA + `, COALESCE(rerun_of, '')`
-	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, ''), COALESCE(r.parent_run_id, ''), ` + configSHAR + `, COALESCE(r.rerun_of, '')`
+	runColumns  = `id, job_name, workspace, status, started_at, COALESCE(finished_at, ''), COALESCE(parent_run_id, ''), ` + configSHA + `, COALESCE(rerun_of, ''), created_by`
+	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, ''), COALESCE(r.parent_run_id, ''), ` + configSHAR + `, COALESCE(r.rerun_of, ''), r.created_by`
 	// A subselect rather than a join, so adding the column changed no query's
 	// shape: several of the reads above already join, group and alias, and a
 	// second join would have had to be threaded correctly through each one
@@ -52,7 +52,7 @@ func scanRunRow(sc rowScanner) (store.RunRow, error) {
 		startedAt, finishedAt string
 	)
 
-	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID, &row.ConfigSHA, &row.RerunOf)
+	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID, &row.ConfigSHA, &row.RerunOf, &row.CreatedBy)
 
 	row.StartedAt = parseTimestamp(startedAt)
 	row.FinishedAt = parseTimestamp(finishedAt)
@@ -80,10 +80,11 @@ func (s *Store) StartRun(ctx context.Context, run store.NewRun) error {
 	defer func() { _ = tx.Rollback() }()
 
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at, revision_id)
-		VALUES (?, ?, ?, ?, 'running', ?, `+revisionBySHA+`)
+		INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at, revision_id, created_by)
+		VALUES (?, ?, ?, ?, 'running', ?, `+revisionBySHA+`,
+		        COALESCE((SELECT requested_by FROM trigger_queue WHERE id = ? AND pipeline_id = ?), ?))
 		ON CONFLICT (id) DO NOTHING
-	`, id, s.pipelineID, jobName, workspaceDir, nowNano(), s.pipelineID, configSHA)
+	`, id, s.pipelineID, jobName, workspaceDir, nowNano(), s.pipelineID, configSHA, run.QueueID, s.pipelineID, run.CreatedBy)
 	if err != nil {
 		return fmt.Errorf("could not record run %q: %w", id, err)
 	}

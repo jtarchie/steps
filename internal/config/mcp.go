@@ -194,12 +194,24 @@ func (c *Config) MCPServerUsers(name string) []string {
 	seen := map[string]bool{}
 
 	for _, user := range slices.Concat(
-		c.agentMCPUsers(name), c.fixMCPUsers(name), c.resourceTypeMCPUsers(name),
+		c.agentMCPUsers(name), c.fixMCPUsers(name), c.resourceTypeMCPUsers(name), c.exportMCPUsers(name),
 	) {
 		if !seen[user] {
 			seen[user] = true
 
 			users = append(users, user)
+		}
+	}
+
+	return users
+}
+
+func (c *Config) exportMCPUsers(name string) []string {
+	var users []string
+
+	for _, export := range c.MCPExports {
+		if grantsMCPServer(export.Tools, name) {
+			users = append(users, "export "+export.Name)
 		}
 	}
 

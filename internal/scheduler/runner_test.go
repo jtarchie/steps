@@ -60,7 +60,7 @@ jobs:
 	// Claim two builds of the job without completing either: the second claim
 	// is the one a missing job_concurrency row denies.
 	for attempt := 1; attempt <= 2; attempt++ {
-		err = st.EnqueueJob(ctx, "build", "test")
+		err = st.EnqueueJob(ctx, "build", "test", "")
 		if err != nil {
 			t.Fatalf("EnqueueJob %d: %v", attempt, err)
 		}
@@ -149,7 +149,7 @@ jobs:
 	PrepareQueue(ctx, target)
 
 	for _, job := range []string{"first", "second"} {
-		err = st.EnqueueJob(ctx, job, "test")
+		err = st.EnqueueJob(ctx, job, "test", "")
 		if err != nil {
 			t.Fatalf("EnqueueJob %s: %v", job, err)
 		}
@@ -271,7 +271,7 @@ jobs:
 	// Two failures is the ceiling; the third row proves a paused job is not
 	// run again.
 	for range 3 {
-		err = st.EnqueueJob(ctx, "build", "test")
+		err = st.EnqueueJob(ctx, "build", "test", "")
 		if err != nil {
 			t.Fatalf("EnqueueJob: %v", err)
 		}
@@ -447,7 +447,7 @@ jobs:
 
 	PrepareQueue(t.Context(), target)
 
-	err = st.EnqueueJob(t.Context(), "build", "test")
+	err = st.EnqueueJob(t.Context(), "build", "test", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
@@ -538,7 +538,7 @@ jobs:
 	drain := func(t *testing.T, runner *LocalRunner) {
 		t.Helper()
 
-		enqueueErr := st.EnqueueJob(ctx, "build", "test")
+		enqueueErr := st.EnqueueJob(ctx, "build", "test", "")
 		if enqueueErr != nil {
 			t.Fatalf("EnqueueJob: %v", enqueueErr)
 		}
@@ -627,7 +627,7 @@ jobs:
 
 		runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, pipeline.Run{Force: force}, 1)
 
-		enqueueErr := st.EnqueueJob(ctx, "build", "test")
+		enqueueErr := st.EnqueueJob(ctx, "build", "test", "")
 		if enqueueErr != nil {
 			t.Fatalf("EnqueueJob: %v", enqueueErr)
 		}
@@ -686,7 +686,7 @@ jobs:
 
 	runner.DrainOne(ctx, target)
 
-	err := st.EnqueueJob(ctx, "build", "next")
+	err := st.EnqueueJob(ctx, "build", "next", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
@@ -903,7 +903,7 @@ jobs:
 
 	runner.DrainOne(ctx, target)
 
-	err = st.EnqueueJob(ctx, "build", "poll")
+	err = st.EnqueueJob(ctx, "build", "poll", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
@@ -950,7 +950,7 @@ func drainable(t *testing.T, dir, yaml string) (*LocalRunner, *Pipeline, store.S
 	PrepareQueue(t.Context(), target)
 	SyncQueueLimits(t.Context(), target)
 
-	err = st.EnqueueJob(t.Context(), "build", "test")
+	err = st.EnqueueJob(t.Context(), "build", "test", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
@@ -1011,7 +1011,7 @@ jobs:
 		t.Fatalf("queue = %+v, want the panicking run failed with the panic named", rows)
 	}
 
-	err = st.EnqueueJob(t.Context(), "build", "test")
+	err = st.EnqueueJob(t.Context(), "build", "test", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

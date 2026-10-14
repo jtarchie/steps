@@ -42,3 +42,20 @@ func TestStoreConformance(t *testing.T) {
 		return st
 	})
 }
+
+// TestAccountsConformance runs the accounts conformance suite against a real Postgres.
+func TestAccountsConformance(t *testing.T) {
+	t.Parallel()
+	requirePostgres(t)
+
+	storetest.RunAccounts(t, func(t *testing.T) store.Accounts {
+		t.Helper()
+
+		accounts, err := OpenAccounts(newDatabase(t))
+		if err != nil {
+			t.Fatalf("OpenAccounts: %v", err)
+		}
+
+		return accounts
+	})
+}

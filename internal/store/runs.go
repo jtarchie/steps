@@ -63,6 +63,8 @@ type NewRun struct {
 	ConfigSHA string
 	// QueueID is the trigger_queue row that started this run, zero for a run no queue started; recorded on that row, so a restart knows which run to resume.
 	QueueID int64
+	// CreatedBy is who started a run no queue row did. A queued run takes its row's requester instead, read in the same statement that records the run, so nothing between the claim and the start can lose it.
+	CreatedBy string
 }
 
 // RunStep is one step a run finished. Index is relative to the walk it ran
@@ -99,6 +101,8 @@ type RunRow struct {
 	ConfigSHA string
 	// RerunOf is the run this one re-ran against the versions it was created with, empty for any other run. Selected by every RunRow query for the same reason ParentRunID is.
 	RerunOf string
+	// CreatedBy is the stored form of who or what started the run (actor.Parse reads it), empty for a run recorded before anyone was. Selected by every RunRow query for the same reason ParentRunID is.
+	CreatedBy string
 }
 
 // Rerun reports a run made by retrying another.

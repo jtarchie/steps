@@ -1,0 +1,20 @@
+# An export with no access: rule would be usable by anybody who can sign in
+# to the daemon, which is never what sharing one thing with one team means.
+# expect: access: is required
+
+mcp_servers:
+- name: github
+  endpoint: https://api.githubcopilot.com/mcp/
+  auth: { type: bearer, api_key_env: GITHUB_PAT }
+
+mcp_exports:
+- name: support
+  tools:
+  - mcp: github
+    tool: search_issues
+
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi

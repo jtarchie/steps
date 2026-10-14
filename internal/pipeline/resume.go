@@ -11,6 +11,7 @@ import (
 	"os"
 	"sync/atomic"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -380,7 +381,7 @@ func recordRunIdentity(
 		return nil
 	}
 
-	err := st.StartRun(ctx, store.NewRun{ID: resume.id, JobName: jobName, Workspace: workspaceRoot, ConfigSHA: revision.SHA, QueueID: queueID})
+	err := st.StartRun(ctx, store.NewRun{ID: resume.id, JobName: jobName, Workspace: workspaceRoot, ConfigSHA: revision.SHA, QueueID: queueID, CreatedBy: actor.From(ctx).String()})
 	if err != nil {
 		return fmt.Errorf("job %q: %w", jobName, err)
 	}

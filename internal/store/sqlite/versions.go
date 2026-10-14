@@ -404,7 +404,7 @@ func scanVersionRun(rows *sql.Rows) (store.VersionRun, error) {
 		startedAt, finishedAt string
 	)
 
-	err := rows.Scan(&one.Version, &one.Run.ID, &one.Run.JobName, &one.Run.Workspace, &one.Run.Status, &startedAt, &finishedAt, &one.Run.ParentRunID, &one.Run.ConfigSHA, &one.Run.RerunOf)
+	err := rows.Scan(&one.Version, &one.Run.ID, &one.Run.JobName, &one.Run.Workspace, &one.Run.Status, &startedAt, &finishedAt, &one.Run.ParentRunID, &one.Run.ConfigSHA, &one.Run.RerunOf, &one.Run.CreatedBy)
 
 	one.Run.StartedAt = parseTimestamp(startedAt)
 	one.Run.FinishedAt = parseTimestamp(finishedAt)

@@ -8,19 +8,74 @@
   // Delegated rather than bound, for the same reason the step toggles are:
   // the morph replaces these elements, and a listener bound to the copy that
   // was on the page at load is a listener on a node nothing can click.
-  var switcherOpen = false;
+  //
+  // The user menu is the same control at the other end of the line, so the
+  // two share one record: at most one is open, and Escape closes it and
+  // hands focus back to its button.
+  var menus = { pipebtn: 'pipemenu', userbtn: 'usermenu' };
+  var openMenu = '';
 
   function paintSwitcher() {
-    var pipebtn = document.getElementById('pipebtn');
-    var pipemenu = document.getElementById('pipemenu');
-    if (!pipebtn || !pipemenu) return;
-    pipemenu.classList.toggle('open', switcherOpen);
-    pipebtn.setAttribute('aria-expanded', String(switcherOpen));
+    Object.keys(menus).forEach(function (btnId) {
+      var btn = document.getElementById(btnId);
+      var menu = document.getElementById(menus[btnId]);
+      if (!btn || !menu) return;
+      menu.classList.toggle('open', openMenu === btnId);
+      btn.setAttribute('aria-expanded', String(openMenu === btnId));
+    });
   }
 
   document.addEventListener('click', function (e) {
-    switcherOpen = e.target.closest('#pipebtn') ? !switcherOpen : false;
+    var btn = e.target.closest('#pipebtn, #userbtn');
+    openMenu = btn && openMenu !== btn.id ? btn.id : '';
     paintSwitcher();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' || !openMenu) return;
+    var btn = document.getElementById(openMenu);
+    openMenu = '';
+    paintSwitcher();
+    if (btn) btn.focus();
+  });
+
+  // A copy button says so where it stands and, for a screen reader, in the
+  // polite region beside it; delegated, since the page it lives on polls.
+  document.addEventListener('click', function (e) {
+    var button = e.target.closest('[data-copy]');
+    if (!button || !navigator.clipboard) return;
+    navigator.clipboard.writeText(button.getAttribute('data-copy')).then(function () {
+      var said = button.parentElement.querySelector('[data-copied]');
+      button.textContent = 'copied';
+      if (said) said.textContent = 'address copied';
+      setTimeout(function () { button.textContent = 'copy'; if (said) said.textContent = ''; }, 2000);
+    });
+  });
+
+  // A refresh answered 401 is a session that ended while the page sat open:
+  // nothing of the answer is swapped in, the page stops pretending to be
+  // live, and the attention line — read by a screen reader as it changes —
+  // says what to do, linking back to this page after signing in.
+  var signedOut = false;
+
+  document.addEventListener('htmx:before:response', function (e) {
+    var ctx = e.detail && e.detail.ctx;
+    if (!ctx || !ctx.response || ctx.response.status !== 401) return;
+    e.preventDefault();
+    if (signedOut) return;
+    signedOut = true;
+    var holder = document.getElementById('attention');
+    if (!holder) return;
+    var link = document.createElement('a');
+    link.href = '/login?next=' + encodeURIComponent(window.location.pathname + window.location.search);
+    link.textContent = 'signed out · sign in again';
+    var item = document.createElement('li');
+    item.className = 'atitem at-signedout';
+    item.appendChild(link);
+    var list = document.createElement('ul');
+    list.className = 'attention';
+    list.appendChild(item);
+    holder.replaceChildren(list);
   });
 
   // What the reader has folded or unfolded, and which row they are on, are

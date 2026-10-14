@@ -1,0 +1,36 @@
+{{define "page"}}
+<h1 class="prompt"><b>steps connections</b></h1>
+<div id="connections-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#connections-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph">
+<p class="metaline">{{if .Everyone}}every agent anybody has connected{{else}}agents you have let connect to an export{{end}}{{if .CanAll}}<span class="sep">·</span>{{if .Everyone}}<a href="/connections">mine</a> | <b>everyone</b>{{else}}<b>mine</b> | <a href="/connections?everyone=1">everyone</a>{{end}}{{end}}</p>
+{{if .Rows}}
+<ul class="connections" role="list">
+{{range .Rows}}
+  <li class="connection">
+    <div class="conn-head">
+      <span class="conn-client">“{{.Client}}”</span> <span class="faint">unverified name</span>
+      {{if $.Everyone}}<span class="sep">·</span>{{template "actor" .Actor}}{{end}}
+    </div>
+    <div class="conn-meta metaline">
+      {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}<span class="sep">·</span>{{if .Live}}<a href="/p/{{.Pipeline}}/mcp/exports/{{.Export}}">{{.Pipeline}} / {{.Export}}</a>{{else}}{{.Pipeline}} / {{.Export}} <span class="faint">gone</span>{{end}}<span class="sep">·</span>authorized {{agoTag .AuthorizedAt}}<span class="sep">·</span>{{if .LastCall.ID}}last call {{agoTag .LastCall.At}}{{else}}never called{{end}}<span class="sep">·</span>{{.Calls}} calls
+    </div>
+    {{/* A fold rather than a dialog, so it works with nothing but HTML: Revoke opens the question, the button inside answers it, and the summary — now reading Cancel — closes it. */}}
+    <details class="conn-revoke">
+      <summary class="btn danger"><span class="when-closed">Revoke</span><span class="when-open">Cancel</span></summary>
+      <form method="post" action="/connections/revoke">
+        <input type="hidden" name="client" value="{{.ClientID}}">
+        <input type="hidden" name="actor" value="{{.Actor}}">
+        <input type="hidden" name="pipeline" value="{{.Pipeline}}">
+        <input type="hidden" name="export" value="{{.Export}}">
+        {{if $.Everyone}}<input type="hidden" name="everyone" value="1">{{end}}
+        <span>Revoke “{{.Client}}”'s access to {{.Pipeline}} / {{.Export}}? Its next call fails.</span>
+        <button class="btn danger" type="submit">Revoke</button>
+      </form>
+    </details>
+  </li>
+{{end}}
+</ul>
+{{else}}
+<p class="faint">No agents connected. Add an export's address to your agent — the export's page says how — and it will send you here to agree.</p>
+{{end}}
+</div>
+{{end}}

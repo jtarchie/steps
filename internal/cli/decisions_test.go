@@ -30,7 +30,7 @@ func TestADecisionAndAnAnswerAreRecordedUnderWhoMadeThem(t *testing.T) {
 		}
 	}
 
-	assertDecidedBy(t, state, approval, question, "release-captain")
+	assertDecidedBy(t, state, approval, question, "os:release-captain")
 }
 
 // A second decision on a row is refused with who got there first, not as a

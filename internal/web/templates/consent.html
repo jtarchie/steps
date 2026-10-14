@@ -1,0 +1,41 @@
+{{define "page"}}
+{{$p := .Ask}}
+<div class="consent">
+{{if $p.Problem}}
+<h1 class="prompt"><b>steps authorize</b></h1>
+<p class="metaline signin-problem" role="alert">{{$p.Problem}}</p>
+{{else}}
+{{/* The heading is the request in one sentence, so a screen reader hears what is being asked before anything else. */}}
+<h1 class="prompt"><b>steps authorize</b> <span class="consent-ask">“{{$p.Client.Name}}” for {{$p.Pipeline}} / {{$p.Export.Name}}</span></h1>
+<dl class="consent-facts">
+  <dt>client</dt><dd>“{{$p.Client.Name}}” <span class="dim">— unverified: the name it gave itself</span></dd>
+  <dt>will be sent to</dt><dd class="consent-host">{{$p.Host}}</dd>
+  <dt>wants</dt><dd>{{$p.Pipeline}} / {{$p.Export.Name}}</dd>
+</dl>
+<div class="tablewrap">
+  <table class="consent-tools">
+    <thead><tr><th>Tool</th><th>Fixed</th><th>Kind</th></tr></thead>
+    <tbody>
+    {{range $p.Export.Tools}}
+      <tr>
+        <td><code>{{if and .MCP (not .MCPTool)}}{{if .MCPTools}}{{$server := .MCP}}{{range $i, $t := .MCPTools}}{{if $i}}, {{end}}{{$server}}__{{$t}}{{end}}{{else}}every tool {{.MCP}} offers{{end}}{{else}}{{toolName .}}{{end}}</code>{{with .Description}}<div class="dim">{{.}}</div>{{end}}</td>
+        <td>{{range $k, $v := .Args}}<code>{{$k}}={{$v}}</code> {{end}}{{with .Timeout}}<span class="dim">{{.}} limit</span>{{end}}</td>
+        <td class="dim">{{if .Agent}}an agent that answers in prose{{else}}mcp · {{.MCP}}{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{if $p.Refused}}
+<p class="metaline signin-problem" role="alert">You may not connect to this export: its access rule, or this pipeline's, does not include {{template "actor" $p.Who}}.</p>
+{{else}}
+<p class="consent-note">Calls are made with this pipeline's credentials, which the client never sees, and recorded under your name: {{template "actor" $p.Who}}. Disconnect it any time from the menu under your name.</p>
+<form class="consent-decide" method="post" action="/oauth/authorize">
+  <input type="hidden" name="consent" value="{{$p.Consent}}">
+  <button class="btn" type="submit" name="decision" value="deny" autofocus>Deny</button>
+  <button class="btn primary" type="submit" name="decision" value="allow">Allow</button>
+</form>
+{{end}}
+{{end}}
+</div>
+{{end}}

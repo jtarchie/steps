@@ -22,6 +22,8 @@ import (
 
 	"github.com/labstack/echo/v5"
 
+	"github.com/jtarchie/steps/internal/actor"
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -137,6 +139,8 @@ func sectionOf(page string) string {
 		return "jobs"
 	case "resource":
 		return "resources"
+	case "export":
+		return "mcp"
 	case "run", "node", "config":
 		// config is reached from a run page — the configuration THAT run
 		// executed — so it belongs under the same tab rather than unlighting
@@ -213,6 +217,9 @@ func templateFuncs() template.FuncMap {
 		"stamp":      formatStamp,
 		"short":      shortID,
 		"statusWord": templateStatusWord,
+		// A stored actor read back for the "actor" template, which is the one
+		// place a who is drawn.
+		"actorOf": actor.Parse,
 		// The footer's copyright year, read at render so a daemon left running
 		// over new year's eve does not print last year.
 		"year": func() int { return time.Now().Year() },
@@ -251,7 +258,11 @@ func templateFuncs() template.FuncMap {
 		// The tab badges: one lookup into the list nav() already gathered,
 		// rather than six count fields that could each be stale differently.
 		"attentionOn": attentionOn,
-		"rfc3339":     func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
+		// The activity page narrowed by one more field: every name in a row is a link that filters by it.
+		"filterURL": withQuery,
+		// The name a tool is offered under, the same one an agent's grant uses.
+		"toolName": config.ToolSpecName,
+		"rfc3339":  func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
 		// The recursive step template needs both the page (for
 		// pipeline-scoped links) and the step it is drawing; a Go template
 		// passes exactly one argument, so they are paired here.

@@ -1,0 +1,66 @@
+{{define "page"}}
+{{$e := .Export}}
+<h1 class="prompt"><b>steps mcp {{$e.Name}}</b></h1>
+<div id="export-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#export-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph">
+<dl class="consent-facts export-facts">
+  <dt>address</dt>
+  <dd><code id="export-address">{{.Address}}</code> <button class="btn copybtn" type="button" data-copy="{{.Address}}" aria-describedby="export-address">copy</button><span class="visually-hidden" aria-live="polite" data-copied></span></dd>
+  <dt>access</dt>
+  <dd><code>{{$e.Access}}</code></dd>
+  {{with $e.Rate}}<dt>rate</dt><dd>{{.}} per person</dd>{{end}}
+  <dt>connected</dt>
+  <dd>{{if $e.People}}{{$e.People}} {{if eq $e.People 1}}person{{else}}people{{end}} · {{$e.Agents}} {{if eq $e.Agents 1}}agent{{else}}agents{{end}}{{else}}<span class="faint">nobody yet</span>{{end}}{{with $.Nav.Who}} · <a href="/connections">your connections</a>{{end}}</dd>
+</dl>
+{{if not .Serving}}<p class="faint mcp-note">Not served here: exports are served only by a daemon people sign in to, and not by a read-only one.</p>{{end}}
+
+<details class="jsonbox connect-how">
+  <summary>how to connect</summary>
+  <dl class="consent-facts">
+    <dt>Claude Code</dt><dd><code>claude mcp add --transport http {{$e.Name}} {{.Address}}</code></dd>
+    <dt>Claude</dt><dd>Settings → Connectors → Add custom connector, with the address above</dd>
+    <dt>Cursor</dt><dd><code>{"mcpServers": {"{{$e.Name}}": {"url": "{{.Address}}"}}}</code> in <code>.cursor/mcp.json</code></dd>
+  </dl>
+  <p class="faint mcp-note">The agent sends you here to sign in and agree; nothing is shared until you do.</p>
+</details>
+
+<h2 class="eyebrow">tools <span class="unbold">{{len $e.Tools}}</span></h2>
+<div class="tablewrap">
+  <table class="consent-tools">
+    <thead><tr><th>Tool</th><th>Fixed</th><th>Kind</th></tr></thead>
+    <tbody>
+    {{range $e.Tools}}
+      <tr>
+        <td><code>{{if and .MCP (not .MCPTool)}}{{if .MCPTools}}{{$server := .MCP}}{{range $i, $t := .MCPTools}}{{if $i}}, {{end}}{{$server}}__{{$t}}{{end}}{{else}}every tool {{.MCP}} offers{{end}}{{else}}{{toolName .}}{{end}}</code>{{with .Description}}<div class="dim">{{.}}</div>{{end}}</td>
+        <td>{{range $k, $v := .Args}}<code>{{$k}}={{$v}}</code> {{end}}{{with .Timeout}}<span class="dim">{{.}} limit</span>{{end}}</td>
+        <td class="dim">{{if .Agent}}an agent that answers in prose{{else}}mcp · {{.MCP}}{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+
+<h2 class="eyebrow">recent calls</h2>
+{{if .Recent}}
+<div class="tablewrap">
+  <table class="activity">
+    <thead><tr><th>When</th><th>Who</th><th>Action</th><th>What</th><th>Pipeline</th></tr></thead>
+    <tbody>
+    {{range .Recent}}
+      <tr>
+        <td class="dim">{{agoTag .At}}</td>
+        <td>{{if .Actor}}{{template "actor" .Actor}}{{else}}<span class="faint">—</span>{{end}}</td>
+        <td>{{.Action}}</td>
+        <td>{{.Target}}{{with .Reason}} <span class="dim">“{{.}}”</span>{{end}}</td>
+        <td>{{.Pipeline}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{if ge $.Nav.Role 3}}<p class="metaline"><a href="{{.LogURL}}">the whole log for {{$e.Name}}</a></p>{{end}}
+{{else}}
+<p class="faint">Nothing called yet.</p>
+{{end}}
+<p class="faint mcp-note">Defined in the pipeline file; change it with <code>steps pipeline set</code>.</p>
+</div>
+{{end}}

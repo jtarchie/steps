@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
@@ -142,6 +143,9 @@ func (r *RunCmd) Run() error {
 	if err != nil {
 		return err
 	}
+
+	// A terminal's run is started by whoever ran the command, which nothing here can verify — the run page says so.
+	ctx = actor.With(ctx, actor.OS(currentUser()))
 
 	ctx, err = r.applyReplay(ctx, st, provider, cfg, job)
 	if err != nil {

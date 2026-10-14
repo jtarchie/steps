@@ -138,7 +138,7 @@ jobs:
 		t.Fatalf("queued abort = %d, want 204", status)
 	}
 
-	err = st.EnqueueJob(t.Context(), "build", "poll")
+	err = st.EnqueueJob(t.Context(), "build", "poll", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

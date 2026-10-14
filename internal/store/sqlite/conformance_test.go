@@ -36,3 +36,23 @@ func TestStoreConformance(t *testing.T) {
 		return st
 	})
 }
+
+// TestAccountsConformance runs the accounts conformance suite against this driver.
+func TestAccountsConformance(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	storetest.RunAccounts(t, func(t *testing.T) store.Accounts {
+		t.Helper()
+
+		path := filepath.Join(root, strings.ReplaceAll(t.Name(), "/", "-"), "state.db")
+
+		accounts, err := OpenAccounts(path)
+		if err != nil {
+			t.Fatalf("OpenAccounts(%q): %v", path, err)
+		}
+
+		return accounts
+	})
+}

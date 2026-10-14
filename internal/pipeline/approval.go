@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -78,7 +79,7 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 		return failedAt(hash), err
 	}
 
-	notef(ctx, "approval %d: approved by %s", id, decision.DecidedBy)
+	notef(ctx, "approval %d: approved by %s", id, actor.Parse(decision.DecidedBy).Label())
 
 	return ran(hash), nil
 }
@@ -133,7 +134,7 @@ func personDecided(approval store.Approval) (bool, error) {
 		// FAILURE — on_failure fires, and a to: route can act on it.
 		//nolint:wrapcheck // Fail only marks the classification; the error is this package's own
 		return true, outcome.Fail(fmt.Errorf("approval %d rejected by %s: %s",
-			approval.ID, approval.DecidedBy, reasonOrNone(approval.Reason)))
+			approval.ID, actor.Parse(approval.DecidedBy).Label(), reasonOrNone(approval.Reason)))
 	case store.ApprovalPending, store.ApprovalExpired:
 	}
 

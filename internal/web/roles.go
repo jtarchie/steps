@@ -1,0 +1,383 @@
+package web
+
+// Who may do what. Concourse's vocabulary — viewer, operator, admin — with
+// each role granted by an expression about the signed-in person rather than a
+// list of names, so "everyone at acme" and "the oncall team" are one line
+// each. The daemon's rules are the only ones; nothing a pipeline says can
+// grant a role here.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"slices"
+	"strings"
+
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/vm"
+	"github.com/labstack/echo/v5"
+
+	"github.com/jtarchie/steps/internal/actor"
+	"github.com/jtarchie/steps/internal/config"
+)
+
+// Role is what a person may do. Each includes the ones below it.
+type Role int
+
+const (
+	// RoleViewer reads every page.
+	RoleViewer Role = iota + 1
+	// RoleOperator acts on runs: trigger, retry, approve, answer, abort, release, pause.
+	RoleOperator
+	// RoleAdmin changes what the daemon serves: set, destroy, rename, connect an MCP server, and reads the activity log.
+	RoleAdmin
+)
+
+var roleNames = map[string]Role{"viewer": RoleViewer, "operator": RoleOperator, "admin": RoleAdmin}
+
+func (r Role) String() string {
+	for name, role := range roleNames {
+		if role == r {
+			return name
+		}
+	}
+
+	return "none"
+}
+
+// Identity is what a role's rule is written against.
+type Identity struct {
+	// Provider is where the name came from: local, github, google.
+	Provider string
+	// UserID is the name within it: a local account, a GitHub login, a Google address.
+	UserID string
+	// ID is the provider's own id for the account, which a rename does not change: GitHub's numeric user id, Google's subject, and for a local account its name. A rule that must not follow a renamed GitHub login onto whoever registers it next names this rather than UserID.
+	ID            string
+	Email         string
+	Organizations []string
+	Groups        []string
+}
+
+// Roles are compiled rules; the zero value grants everything to anyone signed in, which is a daemon that has not been told otherwise.
+type Roles struct {
+	rules map[Role]*vm.Program
+}
+
+// CompileRoles reads "role=expression" rules. Compiled here, once, so a rule that cannot work stops the daemon before it serves anyone. Rules are expected about who is allowed, so an admin rule is required: without one nobody could set a pipeline, and the daemon would be stuck as it stands.
+func CompileRoles(specs []string) (Roles, error) {
+	if len(specs) == 0 {
+		return Roles{}, nil
+	}
+
+	roles := Roles{rules: map[Role]*vm.Program{}}
+
+	for _, spec := range specs {
+		name, rule, found := strings.Cut(spec, "=")
+		role, known := roleNames[strings.TrimSpace(name)]
+
+		if !found || !known {
+			return Roles{}, fmt.Errorf("--role %q is role=rule, with role one of viewer, operator, admin", spec)
+		}
+
+		if _, twice := roles.rules[role]; twice {
+			return Roles{}, fmt.Errorf("--role %s is given twice", name)
+		}
+
+		program, err := expr.Compile(rule, expr.Env(Identity{}), expr.AsBool())
+		if err != nil {
+			return Roles{}, fmt.Errorf("--role %s: %w", name, err)
+		}
+
+		roles.rules[role] = program
+	}
+
+	if roles.rules[RoleAdmin] == nil {
+		return Roles{}, errors.New("--role needs an admin rule as well: without one nobody could set, rename or destroy a pipeline")
+	}
+
+	return roles, nil
+}
+
+// AllowsProviders refuses rules too loose for a daemon that signs people in with GitHub or Google. Those let in anybody with an account there, so the default every other daemon gets — everyone signed in may do everything — would make the whole internet an admin, and a missing viewer rule would let all of it read. Checked where the CLI starts and again where the server is built, so neither path can serve a provider without saying who of its accounts may do what.
+func (r Roles) AllowsProviders() error {
+	if r.rules == nil {
+		return errors.New("signing in with GitHub or Google lets in anybody with an account there: add --role rules saying which of them may do what, at least an admin rule and a viewer rule")
+	}
+
+	if r.rules[RoleViewer] == nil {
+		return errors.New("signing in with GitHub or Google lets in anybody with an account there, and with no viewer rule every one of them could read every pipeline: add --role viewer=<rule>")
+	}
+
+	return nil
+}
+
+// WithRoles limits who may do what to these rules.
+func WithRoles(roles Roles) Option {
+	return func(s *Server) { s.roles = roles }
+}
+
+// highest is the most a person may do: the highest role whose rule holds, each role including the ones below. A viewer rule left out admits anyone signed in to read.
+func (r Roles) highest(id Identity) Role {
+	if r.rules == nil {
+		return RoleAdmin
+	}
+
+	for _, role := range []Role{RoleAdmin, RoleOperator, RoleViewer} {
+		program, written := r.rules[role]
+		if !written {
+			if role == RoleViewer {
+				return RoleViewer
+			}
+
+			continue
+		}
+
+		granted, err := expr.Run(program, id)
+		if err != nil {
+			continue
+		}
+
+		if allowed, _ := granted.(bool); allowed {
+			return role
+		}
+	}
+
+	return 0
+}
+
+// identityOf is what the rules see of a person: for a provider's account, what it said at their last sign-in, read from the daemon's own record and never from anything the browser carries.
+func (s *Server) identityOf(ctx context.Context, who actor.Actor) Identity {
+	id := Identity{Provider: who.Kind, UserID: who.ID, ID: who.ID}
+
+	if s.sessions == nil || who.Kind == "local" {
+		return id
+	}
+
+	user, found, err := s.sessions.FindUser(ctx, who.String())
+	if err != nil {
+		slog.ErrorContext(ctx, "web.user_unreadable", "actor", who.String(), "error", err)
+
+		return id
+	}
+
+	if found {
+		id.Email, id.Organizations, id.Groups = user.Email, user.Organizations, user.Groups
+		if user.AccountID != "" {
+			id.ID = user.AccountID
+		}
+	}
+
+	return id
+}
+
+const roleKey = "steps.role"
+
+// roleOf is what this request's person may do; everything on a server nobody signs in to.
+func (s *Server) roleOf(c *echo.Context) Role {
+	if role, ok := c.Get(roleKey).(Role); ok {
+		return role
+	}
+
+	return RoleAdmin
+}
+
+// neededRole is what a route asks of the person calling it.
+func neededRole(c *echo.Context) Role {
+	if route, recorded := activityRoutes[c.Request().Method+" "+c.Path()]; recorded {
+		return route.role
+	}
+
+	if c.Path() == "/activity" {
+		return RoleAdmin
+	}
+
+	return RoleViewer
+}
+
+// authorize refuses a request its person's role does not cover, on the server, whatever the page drew: a hidden button is a courtesy and this is the check.
+func (s *Server) authorize(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		if s.skipsAuth(c) || c.Path() == logoutPath {
+			return next(c)
+		}
+
+		who := actor.From(c.Request().Context())
+		id := s.identityOf(c.Request().Context(), who)
+		role := s.roles.highest(id)
+		c.Set(identityKey, id)
+
+		// A pipeline's own rules narrow what the daemon's allow, on that pipeline's routes; somebody it hides is told it does not exist, as they would be for a name nobody set.
+		if name := c.Param("pipeline"); name != "" {
+			if target := s.Lookup(name); target != nil {
+				role = target.narrow(role, id)
+				if role == 0 {
+					return s.notServed(name)
+				}
+			}
+		}
+
+		c.Set(roleKey, role)
+
+		needed := neededRole(c)
+		if role >= needed {
+			return next(c)
+		}
+
+		if role == 0 {
+			return echo.NewHTTPError(http.StatusForbidden, who.Label()+" is signed in but has no role on this daemon")
+		}
+
+		return echo.NewHTTPError(http.StatusForbidden, "this needs the "+needed.String()+" role, and "+who.Label()+" is "+aOrAn(role.String()))
+	}
+}
+
+func aOrAn(word string) string {
+	if slices.Contains([]byte("aeiou"), word[0]) {
+		return "an " + word
+	}
+
+	return "a " + word
+}
+
+// pipelineAccess is a pipeline's access: rules, compiled. A nil rule narrows nothing.
+type pipelineAccess struct {
+	viewer, operator *vm.Program
+}
+
+// CheckAccess is whether a pipeline's access: rules compile, which is what a set is refused over when one cannot work.
+func CheckAccess(access *config.Access) error {
+	_, err := compileAccess(access)
+
+	return err
+}
+
+func compileAccess(access *config.Access) (pipelineAccess, error) {
+	var compiled pipelineAccess
+
+	if access == nil {
+		return compiled, nil
+	}
+
+	for _, rule := range []struct {
+		name   string
+		source string
+		into   **vm.Program
+	}{{"viewer", access.Viewer, &compiled.viewer}, {"operator", access.Operator, &compiled.operator}} {
+		if strings.TrimSpace(rule.source) == "" {
+			continue
+		}
+
+		program, err := expr.Compile(rule.source, expr.Env(Identity{}), expr.AsBool())
+		if err != nil {
+			return pipelineAccess{}, fmt.Errorf("access.%s: %w", rule.name, err)
+		}
+
+		*rule.into = program
+	}
+
+	return compiled, nil
+}
+
+func holds(program *vm.Program, id Identity) bool {
+	granted, err := expr.Run(program, id)
+	if err != nil {
+		return false
+	}
+
+	allowed, _ := granted.(bool)
+
+	return allowed
+}
+
+// accessFor is the pipeline's rules as its current configuration states them, compiled once per configuration. One that cannot compile — a set refuses that, so only a configuration held from before could — lets nobody but admins see it.
+func (p *Pipeline) accessFor() (pipelineAccess, bool) {
+	cfg := p.Config()
+
+	if cached := p.access.Load(); cached != nil && cached.cfg == cfg {
+		return cached.compiled, cached.ok
+	}
+
+	compiled, err := compileAccess(cfg.Access)
+	p.access.Store(&compiledAccess{cfg: cfg, compiled: compiled, ok: err == nil})
+
+	return compiled, err == nil
+}
+
+type compiledAccess struct {
+	cfg      *config.Config
+	compiled pipelineAccess
+	ok       bool
+}
+
+// narrow is what role leaves on p: the pipeline can take away, never add, and does not reach admins.
+func (p *Pipeline) narrow(role Role, id Identity) Role {
+	if role >= RoleAdmin || role == 0 {
+		return role
+	}
+
+	access, ok := p.accessFor()
+	if !ok || (access.viewer != nil && !holds(access.viewer, id)) {
+		return 0
+	}
+
+	if access.operator != nil && role > RoleViewer && !holds(access.operator, id) {
+		return RoleViewer
+	}
+
+	return role
+}
+
+const identityKey = "steps.identity"
+
+// visibleTo is the pipelines this request's person may see: every one on a server nobody signs in to.
+func (s *Server) visibleTo(c *echo.Context, pipelines []*Pipeline) []*Pipeline {
+	id, signedIn := c.Get(identityKey).(Identity)
+	if !signedIn {
+		return pipelines
+	}
+
+	role := s.roles.highest(id)
+	visible := make([]*Pipeline, 0, len(pipelines))
+
+	for _, p := range pipelines {
+		if p.narrow(role, id) >= RoleViewer {
+			visible = append(visible, p)
+		}
+	}
+
+	return visible
+}
+
+// servedTo is what this daemon serves that this request's person may see.
+func (s *Server) servedTo(c *echo.Context) []*Pipeline { return s.visibleTo(c, s.Served()) }
+
+// brokenTo is the pipelines held but not served, for a reader who may administer them: one that will not load has no rules to say who may see it, so it is shown to nobody who could not fix it.
+func (s *Server) brokenTo(c *echo.Context) []BrokenPipeline {
+	if s.roleOfPerson(c) < RoleAdmin {
+		return nil
+	}
+
+	return s.Broken()
+}
+
+// roleOfPerson is the daemon-wide role, before any pipeline narrows it; everything on a server nobody signs in to.
+func (s *Server) roleOfPerson(c *echo.Context) Role {
+	id, signedIn := c.Get(identityKey).(Identity)
+	if !signedIn {
+		return RoleAdmin
+	}
+
+	return s.roles.highest(id)
+}
+
+// compileRule compiles one rule about the signed-in person.
+func compileRule(source string) (*vm.Program, error) {
+	program, err := expr.Compile(source, expr.Env(Identity{}), expr.AsBool())
+	if err != nil {
+		return nil, fmt.Errorf("rule %q: %w", source, err)
+	}
+
+	return program, nil
+}

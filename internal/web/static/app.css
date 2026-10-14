@@ -346,6 +346,8 @@ main { width: 100%; max-width: 1000px; margin: 0 auto; padding: 26px 20px 48px; 
    width and drags the whole document sideways on a phone. */
 .metaline { color: var(--dim); font-size: 12px; margin-bottom: 22px; overflow-wrap: anywhere; }
 .metaline .sep { margin: 0 8px; color: var(--line); }
+.actor { color: var(--fg); }
+.actor.quiet { color: var(--dim); }
 /* The run head's second line is scanned, not read: one size down, same ink. */
 .metaline.provenance { font-size: 11px; }
 .metaline.provenance > .sep:first-child { display: none; }
@@ -1240,3 +1242,112 @@ table.versions td .when { color: var(--dim); font-family: var(--sans); font-size
   table.versions td .when { display: none; }
   table.versions tbody th { white-space: normal; overflow-wrap: anywhere; min-width: 10em; }
 }
+
+/* ---- activity ---- */
+a.plain { color: inherit; }
+a.plain:hover { color: var(--blue); }
+table.activity td:first-child { white-space: nowrap; }
+
+/* ---- user menu: the switcher's control at the line's other end ---- */
+.usermenu { position: relative; display: flex; align-self: stretch; margin: -4px -10px -4px 0; border-left: 1px solid var(--line); }
+.usermenu .pipemenu { left: auto; right: 0; min-width: 200px; }
+.userbtn .who { color: var(--fg); max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
+/* The switcher's rows reserve a marker column for the current pipeline; nothing here is current. */
+.usermenu .pipemenu a::before { content: none; }
+.usermenu .menuhead { display: block; padding: 8px 12px; font-size: 11px; color: var(--dim); border-bottom: 1px solid var(--line-soft); }
+@media (max-width: 640px) {
+  .userbtn .who { max-width: 10ch; }
+  .usermenu { position: static; }
+  .usermenu .pipemenu { left: 0; right: 0; min-width: 0; }
+}
+
+/* ---- sign in: one narrow column, the prompt above the form ---- */
+.signin { max-width: 360px; margin: 8vh auto 0; }
+.signin-form { display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; align-items: center; }
+.signin-form label { font-family: var(--sans); font-size: 12px; color: var(--dim); }
+.signin-form input[type="text"], .signin-form input[type="password"] {
+  font: inherit; color: var(--fg); background: var(--code-bg);
+  border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; min-width: 0;
+}
+.signin-form input:focus { border-color: var(--yellow); outline: none; }
+.signin-form .btn { grid-column: 2; justify-self: start; }
+.signin-problem { color: var(--red); margin-bottom: 14px; }
+.usermenu form { margin: 0; }
+.menubtn { font: inherit; font-size: 12px; color: var(--fg); background: none; border: 0; width: 100%; text-align: left; padding: 8px 12px; cursor: pointer; }
+.menubtn:hover { background: var(--panel2); }
+@media (max-width: 640px) {
+  .signin { margin-top: 4vh; }
+  .signin-form input[type="text"], .signin-form input[type="password"] { font-size: 16px; }
+}
+/* A phone reads each entry as two lines — when and who, then what was done
+   to what, where — rather than a table that scrolls sideways. */
+@media (max-width: 640px) {
+  table.activity thead { display: none; }
+  table.activity, table.activity tbody { display: block; }
+  table.activity tr { display: grid; grid-template-columns: auto 1fr auto; column-gap: 10px; row-gap: 2px; padding: 8px 12px; border-top: 1px solid var(--line-soft); }
+  table.activity tr:first-child { border-top: 0; }
+  table.activity td { padding: 0; border: 0; }
+  table.activity td:nth-child(2) { grid-column: 2 / -1; }
+  table.activity td:nth-child(4) { min-width: 0; overflow-wrap: anywhere; }
+  .tablewrap:has(> table.activity) { overflow-x: visible; }
+}
+.signin-providers { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.signin-providers .btn { text-align: center; padding: 8px 12px; }
+.signin-or { display: flex; align-items: center; gap: 10px; font-family: var(--sans); font-size: 12px; color: var(--dim); margin: 0 0 14px; }
+.signin-or::before, .signin-or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.rohint.viewonly { max-width: none; text-align: left; }
+.at-signedout a { color: var(--yellow); }
+
+/* ---- consent: the one page that hands out a credential, so it states facts plainly ---- */
+.consent { max-width: 640px; margin: 4vh auto 0; }
+.consent-ask { display: block; margin-top: 6px; font-weight: 400; color: var(--fg); overflow-wrap: anywhere; }
+.consent-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 18px 0; }
+.consent-facts dt { font-family: var(--sans); font-size: 12px; color: var(--dim); }
+.consent-facts dd { margin: 0; overflow-wrap: anywhere; }
+.consent-host { color: var(--fg); font-weight: 700; font-size: 15px; }
+.consent-tools td { white-space: normal; }
+.consent-tools td:last-child { white-space: nowrap; }
+.consent-note { font-family: var(--sans); font-size: 13px; color: var(--dim); margin: 16px 0; }
+.consent-decide { display: flex; gap: 10px; }
+
+/* ---- exports: what a pipeline shares ---- */
+.export-facts { margin-top: 0; }
+.copybtn { padding: 1px 8px; font-size: 11px; margin-left: 6px; }
+.connect-how { margin: 0 0 22px; }
+.connect-how dd code { overflow-wrap: anywhere; white-space: normal; }
+table.mcp-exports td { white-space: nowrap; }
+@media (max-width: 640px) {
+  .consent-facts, .export-facts { grid-template-columns: 1fr; gap: 2px 0; }
+  .consent-facts dd { margin-bottom: 8px; }
+  /* Each tool as a block: its name, then what is fixed, then what kind it is. */
+  table.consent-tools thead { display: none; }
+  table.consent-tools, table.consent-tools tbody, table.consent-tools tr, table.consent-tools td { display: block; }
+  table.consent-tools tr { padding: 8px 12px; border-top: 1px solid var(--line-soft); }
+  table.consent-tools tr:first-child { border-top: 0; }
+  table.consent-tools td { padding: 0; border: 0; white-space: normal; }
+  table.consent-tools td:empty { display: none; }
+  .tablewrap:has(> table.consent-tools) { overflow-x: visible; }
+}
+
+/* ---- connections ---- */
+.connections { list-style: none; padding: 0; margin: 0; border: 1px solid var(--line); background: var(--panel); }
+.connection { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 14px; border-top: 1px solid var(--line-soft); }
+.connection:first-child { border-top: 0; }
+.conn-client { color: var(--fg); font-weight: 600; }
+.conn-meta { grid-column: 1; margin: 0; }
+.conn-revoke { grid-column: 2; grid-row: 1 / span 2; align-self: start; text-align: right; }
+/* Open, the question, its Revoke and the Cancel read as one line, Cancel last. */
+.conn-revoke[open] { grid-column: 1 / -1; grid-row: 3; display: flex; flex-direction: row-reverse; justify-content: flex-start; align-items: center; gap: 10px; flex-wrap: wrap; }
+.conn-revoke[open] form { margin-top: 0; }
+.conn-revoke summary { list-style: none; cursor: pointer; display: inline-block; }
+.conn-revoke summary::-webkit-details-marker { display: none; }
+.conn-revoke .when-open, .conn-revoke[open] .when-closed { display: none; }
+.conn-revoke[open] .when-open { display: inline; }
+.conn-revoke[open] summary { color: var(--dim); border-color: var(--line); }
+.conn-revoke form { display: flex; gap: 10px; align-items: center; justify-content: flex-end; margin-top: 8px; font-family: var(--sans); font-size: 12px; text-align: left; }
+@media (max-width: 640px) {
+  .connection { grid-template-columns: 1fr; }
+  .conn-revoke, .conn-revoke[open] { grid-column: 1; grid-row: auto; }
+  .conn-revoke form { flex-wrap: wrap; }
+}
+.rohint .sep { margin: 0 8px; color: var(--line); }

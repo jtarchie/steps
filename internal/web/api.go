@@ -39,7 +39,7 @@ type PipelineConfig struct {
 
 // handleAPIList answers what this daemon holds.
 func (s *Server) handleAPIList(c *echo.Context) error {
-	served := s.Served()
+	served := s.servedTo(c)
 	rows := make([]PipelineSummary, 0, len(served))
 
 	for _, target := range served {
@@ -58,7 +58,7 @@ func (s *Server) handleAPIList(c *echo.Context) error {
 		rows = append(rows, row)
 	}
 
-	for _, broken := range s.Broken() {
+	for _, broken := range s.brokenTo(c) {
 		rows = append(rows, PipelineSummary{Name: broken.Name, SHA: broken.SHA, From: broken.From, Broken: broken.Reason})
 	}
 

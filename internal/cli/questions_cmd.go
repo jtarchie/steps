@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/jtarchie/steps/internal/actor"
 )
 
 // QuestionsCmd is the "what is waiting on me?" command for questions, the way
@@ -98,7 +100,7 @@ func (a *AnswerCmd) Run() error {
 		return errors.New("an answer is required: steps questions answer -p <pipeline> <id> <answer>")
 	}
 
-	err = st.AnswerQuestion(context.Background(), a.ID, answer, currentUser())
+	err = st.AnswerQuestion(context.Background(), a.ID, answer, actor.OS(currentUser()).String())
 	if err != nil {
 		return fmt.Errorf("could not record the answer: %w", err)
 	}

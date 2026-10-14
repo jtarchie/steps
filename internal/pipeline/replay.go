@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -86,7 +87,7 @@ func PrepareReplay(
 		return ctx, "", err
 	}
 
-	err = st.StartRun(ctx, store.NewRun{ID: replayID, JobName: job.Name, Workspace: dir, ConfigSHA: cfg.Revision.SHA})
+	err = st.StartRun(ctx, store.NewRun{ID: replayID, JobName: job.Name, Workspace: dir, ConfigSHA: cfg.Revision.SHA, CreatedBy: actor.From(ctx).String()})
 	if err != nil {
 		return ctx, "", err //nolint:wrapcheck // StartRun already names the run
 	}

@@ -73,7 +73,7 @@ func (s *Store) dispatchDelivery(ctx context.Context, tx *sql.Tx, resourceName s
 	}
 
 	for _, job := range dispatch.Jobs {
-		err = enqueueJob(ctx, tx, s.pipelineID, job, resourceName)
+		err = enqueueJob(ctx, tx, s.pipelineID, job, resourceName, dispatch.By)
 		if err != nil {
 			return err
 		}

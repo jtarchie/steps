@@ -89,7 +89,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 21
+const schemaVersion = 27
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -300,6 +300,8 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     rerun_of    TEXT REFERENCES runs(id) ON DELETE CASCADE,
     -- The run this row started, written when the run is minted; a restart resumes it while it still reads running. SET NULL: a reaped run leaves nothing to resume, and the row still says the job was built.
     run_id      TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    -- Who or what asked (actor.Actor's stored form), copied onto the run this row starts; '' for nobody recorded.
+    requested_by TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL,
     enqueued_at TEXT NOT NULL,
     started_at  TEXT,
@@ -526,7 +528,12 @@ CREATE TABLE IF NOT EXISTS runs (
     -- revision may only go once no run needs it. SET NULL would quietly turn
     -- a reaped revision into "this run ran no configuration", which is the
     -- one thing this column exists to deny.
-    revision_id INTEGER REFERENCES pipeline_revisions(id) ON DELETE RESTRICT
+    revision_id INTEGER REFERENCES pipeline_revisions(id) ON DELETE RESTRICT,
+    -- Who or what started the run (actor.Actor's stored form). A queued run's
+    -- is its queue row's requester, copied when the run is recorded rather
+    -- than joined later: retention trims the queue on its own schedule, and a
+    -- run must keep saying who started it after its row is gone.
+    created_by  TEXT NOT NULL DEFAULT ''
 );
 -- Retention orders a job's runs by recency to find the ones past the cap.
 CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(pipeline_id, job_name, started_at);
@@ -893,6 +900,78 @@ CREATE INDEX IF NOT EXISTS idx_run_placements_node ON run_placements(pipeline_id
 -- The largest single value the schema stores, and the one whose bound was
 -- missing: internal/agent caps a single tool RESULT, but a conversation has
 -- unboundedly many turns, so the row itself needs store.MaxTranscriptBytes.
+-- A browser signed in to the daemon (store.Accounts). Daemon-level, so no
+-- pipeline: a session is somebody's standing with the daemon. The token is
+-- never stored, only its digest, so a copy of this file signs nobody in.
+-- Revocation is a timestamp rather than a DELETE so a sign-out is still
+-- readable as one.
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    actor      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+
+-- People a sign-in provider vouched for, as it last described them
+-- (store.Accounts). Replaced at each sign-in, so a team someone left stops
+-- matching at their next. Permission rules read this, never a token's
+-- copy, which is what keeps a rule written as an exclusion honest.
+CREATE TABLE IF NOT EXISTS users (
+    actor         TEXT PRIMARY KEY,
+    account_id    TEXT NOT NULL,
+    email         TEXT NOT NULL,
+    organizations TEXT NOT NULL,
+    groups_json   TEXT NOT NULL,
+    refreshed_at  TEXT NOT NULL
+);
+
+-- Agents that registered themselves to connect to exports (RFC 7591), and
+-- the tokens issued to them under a person's grant. Daemon-level, like
+-- sessions; a token is kept only as a digest. Registration answers anybody,
+-- so the clients table is bounded by count at insert (store.Accounts).
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+-- client_id names a registered client, and deleting the client takes its
+-- tokens: a client nobody can find again must not keep working.
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    client_id  TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+    actor      TEXT NOT NULL,
+    pipeline   TEXT NOT NULL,
+    export     TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(client_id, actor, pipeline, export);
+
+-- What people did: set, trigger, approve, abort, pause and the rest
+-- (store.Activity). One log per database, trimmed by count across every
+-- pipeline, because who did what is a question about the daemon.
+--
+-- pipeline_id is SET NULL, not CASCADE, and that is the point of the table:
+-- destroying a pipeline must not erase the record that it was destroyed, or
+-- that anything was ever done to it. The name rides beside the id for the
+-- same reason — once the id is gone it is all that is left to read.
+CREATE TABLE IF NOT EXISTS activity (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_id INTEGER REFERENCES pipelines(id) ON DELETE SET NULL,
+    pipeline    TEXT NOT NULL,
+    actor       TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    target      TEXT NOT NULL,
+    detail      TEXT NOT NULL,
+    at          TEXT NOT NULL
+);
+-- The SET NULL child key: without it every pipeline destroyed scans the log.
+CREATE INDEX IF NOT EXISTS idx_activity_pipeline ON activity(pipeline_id);
+
 CREATE TABLE IF NOT EXISTS node_transcripts (
     pipeline_id INTEGER NOT NULL,
     hash       TEXT NOT NULL,
