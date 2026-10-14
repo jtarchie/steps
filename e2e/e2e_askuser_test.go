@@ -377,7 +377,7 @@ jobs:
 // TestEndToEndFixAgentAsks: a task's fix: agent is a conversation like any
 // other, and a grant of ask_user on one has to mean what it says.
 //
-// It did not. The store handle reaches an agent STEP through RunStep and was
+// It did not. The store handle reaches an agent STEP through PreparedStep.Run and was
 // dropped three frames earlier on the fix path, so a pipeline could grant
 // ask_user to a fix agent, validate clean, and have the capability silently
 // not exist — the same shape as a sub-agent whose env dropped the ask context.

@@ -97,7 +97,7 @@ type askGrant struct {
 // a caller with genuinely no run to record against (a test, a direct call) —
 // which the tool reports as data rather than pretending to park.
 //
-// Every conversation inside a run has one: a plan step gets it from RunStep, a
+// Every conversation inside a run has one: a plan step gets it from PreparedStep.Run, a
 // sub-agent inherits its parent's (renamed, see forAgent), and a task fix: or
 // a hook agent gets it from askContext. Being outside the merkle chain, as a
 // hook is, says nothing about whether there is somebody to ask.

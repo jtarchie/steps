@@ -13,7 +13,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
-	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -84,22 +83,6 @@ func withAgentDeadline(ctx context.Context, timeout time.Duration) (context.Cont
 	return context.WithTimeout(ctx, timeout)
 }
 
-// nodeRecord converts a plan merkle.Node into the shape store.RecordNode
-// persists, keeping the store package free of a dependency on merkle's Node
-// type. Mirrors internal/pipeline's own nodeRecord — both are small enough
-// that duplicating the conversion is simpler than adding a cross-package
-// edge between merkle and store just for this shuffle.
-func nodeRecord(n merkle.Node) store.NodeRecord {
-	return store.NodeRecord{
-		Hash:       n.Hash,
-		ParentHash: n.ParentHash,
-		Kind:       string(n.Kind),
-		StepIndex:  n.StepIndex,
-		Resource:   n.Resource,
-		Content:    n.Content,
-	}
-}
-
 // resolveAgentDir joins and validates a step's working directory.
 func resolveAgentDir(workspaceDir, stepDir string) (string, error) {
 	dir := workspaceDir
@@ -115,57 +98,153 @@ func resolveAgentDir(workspaceDir, stepDir string) (string, error) {
 	return dir, nil
 }
 
-// StepStore is the part of the state database an agent step touches: its node
-// in the merkle cache, its spend in the usage ledger, the questions it parks
-// for a person, and what its memory: scope keeps. It is not the run history, the trigger queue or the
-// resource versions — an agent step has no business in any of those, and this
-// is where the type says so.
+// StepStore is the part of the state database an agent step's conversation
+// touches: its spend in the usage ledger, the questions it parks for a person,
+// what its memory: scope keeps, and its transcript. Not the node it is recorded
+// under, nor the skip index — internal/pipeline owns both for every step kind,
+// and this type having no way to write either is what keeps it so.
 type StepStore interface {
-	store.Cache
 	store.Usage
 	store.Questions
 	store.Memories
+	TranscriptStore
 }
 
-// recordAgentFailure records a failed agent step the same way the
-// pipeline's task/put steps do — best-effort, errors ignored, since a
-// failure to record must not mask the original error being returned to the
-// caller. The recorded status reflects the classified outcome (failed vs
-// errored vs aborted), the chain leaves the skip index, and the write uses a
-// detached context so an aborted step's outcome still persists rather than
-// being dropped by the canceled ctx.
-//
-// res is whatever the conversation produced before it failed. Recording it
-// (rather than the nil this used to store) is the whole point: a failed agent
-// step is exactly the one you need to reconstruct afterwards, and its response
-// and tool calls were being thrown away.
-func recordAgentFailure(ctx context.Context, st store.Cache, node merkle.Node, jobName string, res conversationResult, runErr error) {
-	status := string(outcome.Classify(ctx, runErr))
-	recCtx := context.WithoutCancel(ctx)
-	_ = st.RecordNode(recCtx, nodeRecord(node), jobName, status, agentResultRecord(res), runErr)
-	_ = st.ForgetChain(recCtx, jobName, node.Hash)
+// TranscriptStore files a conversation's transcript under the node
+// internal/pipeline recorded for it. The one store.Cache method an agent step
+// needs, declared alone because the rest of that facet is pipeline's.
+type TranscriptStore interface {
+	SaveNodeTranscript(ctx context.Context, hash, transcript string) error
 }
 
-// StepOutcome is what RunStep reports about a completed agent step, beyond
-// any error: the merkle hash to use as the next step's parentHash (on an
-// error, the node the failure was recorded under — the caller must not chain
-// on it, and it stays "" when the failure preceded any node), the
-// verdict (if any) internal/pipeline routes on, that verdict's note, and the
-// model's final response text — recorded under this step's own name for a
-// later step that declared context: { from: { <this step>: full } } to read
-// (see upstream.go). Response is populated whenever the conversation
-// produced a result at all — including on a failure/assert-failure path — and
-// stays "" only when the step never got as far as running a conversation
-// (e.g. workspace materialization failed).
-type StepOutcome struct {
-	Hash     string
+// PreparedStep is an agent step resolved and materialized, with its memory:
+// loaded — everything internal/pipeline needs to key it — but whose
+// conversation has not started. Pipeline hashes it, asks the step cache, and
+// records its node; Run is the conversation and nothing around it.
+type PreparedStep struct {
+	prepared preparedAgentStep
+	st       StepStore
+	digest   string
+}
+
+// PrepareStep resolves, materializes and loads the memory of an agent step.
+// The caller must Close what it returns.
+func PrepareStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace, st StepStore, newRunner RunnerFactory) (*PreparedStep, error) {
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw, newRunner)
+	if err != nil {
+		return nil, err
+	}
+
+	digest, err := applyStepMemory(ctx, cfg, &prepared, st)
+	if err != nil {
+		prepared.close(step.Agent)
+
+		return nil, err
+	}
+
+	return &PreparedStep{prepared: prepared, st: st, digest: digest}, nil
+}
+
+// Step is the resolved step — the copy to key on. When message_files: named a
+// run-time artifact, its loaded text is in Messages here (see
+// prepareStepPrompt) while the step the caller holds still has none;
+// keying on the caller's copy would collide every such pipeline onto one
+// node regardless of what the file said.
+func (s *PreparedStep) Step() config.Step {
+	return s.prepared.step
+}
+
+// Primary is the invocation as CONFIGURED, before any preflight failover —
+// the one to key on, so which source serves a run is availability rather than
+// content and a fallback firing cannot invalidate a cache entry.
+func (s *PreparedStep) Primary() config.ResolvedInvocation {
+	return s.prepared.primary
+}
+
+// MemoryDigest covers what the step's memory: scope holds as it starts, or ""
+// when it declares no memory:. Part of the key: the same message with
+// different memory is a different step (see applyStepMemory).
+func (s *PreparedStep) MemoryDigest() string {
+	return s.digest
+}
+
+// Close releases everything PrepareStep opened, the step's directory last.
+func (s *PreparedStep) Close() {
+	s.prepared.close(s.prepared.step.Agent)
+}
+
+// Capture files the step's declared outputs. After a successful Run only: the
+// spill directory is removed first when it would otherwise ride into an
+// artifact (see removeSpillDirIfCaptured).
+func (s *PreparedStep) Capture(ctx context.Context) error {
+	s.prepared.removeSpillDirIfCaptured()
+
+	return s.prepared.space.Capture(ctx) //nolint:wrapcheck // the caller adds the step's own context
+}
+
+// StepRun is where a conversation belongs: the job and plan position it runs
+// at, the name it is known by, and the node internal/pipeline recorded for it
+// — which its usage and transcript rows reference.
+type StepRun struct {
+	JobName  string
+	Index    int
+	Name     string
+	NodeHash string
+}
+
+// StepResult is what a conversation produced. Record is what its node records
+// whatever the outcome, and Response is set whenever the conversation ran at
+// all. Verdict and Note are set only on success: a failed run emitted no clean
+// verdict, and internal/pipeline routes it via to["failure"] instead.
+type StepResult struct {
+	Record   map[string]any
+	Response string
 	Verdict  string
 	Note     string
-	Response string
-	// Cached reports that this step's declared outputs were restored from an
-	// earlier run rather than produced by a conversation — so the caller
-	// publishes a skip, and no model was paid.
-	Cached bool
+}
+
+// Run runs the conversation and checks its assert:. Its usage and transcript
+// are saved on every outcome, before the error is returned, so a step that
+// FAILED still records what it spent and said — a failed agent step is often
+// the expensive one, and its transcript is the one that gets read. Both writes
+// are best-effort and detached (see saveAgentUsage, saveAgentTranscript), and
+// both reference run.NodeHash, which is why the caller records that node
+// before calling this.
+func (s *PreparedStep) Run(ctx context.Context, run StepRun) (StepResult, error) {
+	prepared := &s.prepared
+
+	noteFallback(ctx, run.Name, *prepared)
+
+	bindRun(ctx, prepared, s.st, run.JobName, run.Index, run.Name)
+
+	stepStarted := time.Now()
+
+	res, err := runAndAnnounceFailover(ctx, run.Name, prepared)
+
+	printAgentResponse(ctx, res)
+
+	saveAgentUsage(ctx, s.st, saveUsageArgs{
+		jobName: run.JobName, stepIndex: run.Index, stepName: run.Name, nodeHash: run.NodeHash,
+		modelRequested: prepared.primary.ModelName,
+		usage:          prepared.conv.usage.persistedSnapshot(),
+		duration:       time.Since(stepStarted),
+	})
+
+	saveAgentTranscript(ctx, s.st, run.NodeHash, run.JobName, res)
+
+	out := StepResult{Record: agentResultRecord(res), Response: res.text}
+	if err != nil {
+		return out, err
+	}
+
+	err = assertAgentResponse(prepared.step.Assert, res, prepared.space.Dir())
+	if err != nil {
+		return out, err
+	}
+
+	out.Verdict, out.Note = res.verdict, res.note
+
+	return out, nil
 }
 
 // printAgentResponse echoes an agent step's conversation result to the
@@ -193,235 +272,9 @@ func printAgentResponse(ctx context.Context, res conversationResult) {
 	}
 }
 
-// RunStep hashes step against parentHash (agent steps are never
-// skippable) and runs it, retrying the whole conversation up to the
-// resolved attempt count. internal/pipeline routes the plan on the returned
-// StepOutcome.Verdict.
-func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st StepStore, parentHash string, newRunner RunnerFactory) (StepOutcome, error) {
-	prepared, err := prepareAgentStep(ctx, cfg, step, bw, newRunner)
-	if err != nil {
-		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
-	}
-	defer prepared.close(step.Agent)
-
-	// Hash prepared.step, not step: when step.PromptFile named a run-time
-	// artifact file, prepared.step.Prompt is the file's loaded text (see
-	// resolveDeferredPrompt) while step.Prompt is still empty — hashing step
-	// here would hash an empty prompt for every such pipeline, colliding all
-	// of them onto the same node regardless of what the file actually said.
-	content, err := agentStepContent(ctx, cfg, &prepared, st)
-	if err != nil {
-		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
-	}
-
-	hash, err := merkle.HashNode(merkle.NodeKindAgent, content, parentHash)
-	if err != nil {
-		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
-	}
-
-	slog.DebugContext(ctx, "job.step", "job", jobName, "index", i, "kind", "agent", "agent", step.Agent)
-
-	// The name this step is KNOWN by: an across: cell reports and records under
-	// its labelled identity rather than the agent it resolves through, so two
-	// cells of one matrix are finally tellable apart in a run.
-	name := step.DisplayName()
-
-	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAgent, StepIndex: i, Resource: name, Content: content}
-
-	// Before the "agent:" line, so a reused step announces itself as reused
-	// rather than appearing to start a conversation it never has.
-	cached, out, err := reuseAgentStep(ctx, cfg, prepared, content, bw, st, node, jobName, name)
-	if err != nil {
-		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
-	}
-
-	if cached.Hit {
-		return out, nil
-	}
-
-	noteFallback(ctx, name, prepared)
-
-	bindRun(ctx, &prepared, st, jobName, i, name)
-
-	// The node is recorded BEFORE the conversation, as running, because the
-	// usage and transcript rows written below reference it: agent_usage.node_hash
-	// and node_transcripts.hash are foreign keys into nodes, which is what lets
-	// retention delete a node and have its spend record and its transcript go
-	// with it rather than survive as rows nothing can reach.
-	//
-	// Every path below re-records the node with its real status, since
-	// RecordNode upserts. What a placeholder therefore leaves behind is a node
-	// still marked running only when the PROCESS died mid-conversation — which
-	// is true, and more than the nothing-at-all that was recorded before.
-	//
-	// It cannot be a cache hit in that state: HasNodeSucceeded asks for
-	// succeeded, and job_runs — the chain-level index — is not written here.
-	//
-	// Best-effort, like the usage and transcript writes it exists to enable: a
-	// bookkeeping row must never be what fails a step that would otherwise run.
-	// A failure here is not silent — those two writes log their own warning when
-	// the reference they need is missing — and the success path below records the
-	// node again with a returned error.
-	//
-	// On a DETACHED context, matching the two writes it enables (saveAgentUsage
-	// and saveAgentTranscript both use context.WithoutCancel). Written on the
-	// ambient ctx it was useless in the one case that matters: a step killed by
-	// timeout: or Ctrl-C has a cancelled ctx, so the placeholder never landed,
-	// and both later writes then failed the foreign keys they had just gained —
-	// losing the tokens an aborted agent step spent and its transcript, on
-	// precisely the runs worth investigating.
-	_ = st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), jobName, "running", nil, nil)
-
-	stepStarted := time.Now()
-
-	res, err := runAndAnnounceFailover(ctx, name, &prepared)
-
-	printAgentResponse(ctx, res)
-
-	// Before the error branches below, so a step that FAILED still records
-	// what it spent. A failed agent step is often the expensive one, and
-	// leaving it out would under-report exactly the runs worth investigating —
-	// the same reason stepUsage.finish rolls a failed step into the job total.
-	saveAgentUsage(ctx, st, saveUsageArgs{
-		jobName: jobName, stepIndex: i, stepName: name, nodeHash: hash,
-		modelRequested: prepared.primary.ModelName,
-		usage:          prepared.conv.usage.persistedSnapshot(),
-		duration:       time.Since(stepStarted),
-	})
-
-	// One call site covers every outcome — success, run failure, assert
-	// failure, capture failure — because a failed step's transcript is the one
-	// that gets read. Best-effort by design (see saveAgentTranscript).
-	saveAgentTranscript(ctx, st, hash, jobName, res)
-
-	if err != nil {
-		recordAgentFailure(ctx, st, node, jobName, res, err)
-
-		// A failed run emitted no clean verdict; the pipeline routes it via
-		// to["failure"] (or fails the job).
-		return StepOutcome{Hash: hash, Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
-	}
-
-	err = assertAgentResponse(step.Assert, res, prepared.space.Dir())
-	if err != nil {
-		recordAgentFailure(ctx, st, node, jobName, res, err)
-
-		return StepOutcome{Hash: hash, Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
-	}
-
-	prepared.removeSpillDirIfCaptured()
-
-	err = prepared.space.Capture(ctx)
-	if err != nil {
-		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
-		recordAgentFailure(ctx, st, node, jobName, res, wrapped)
-
-		return StepOutcome{Hash: hash, Response: res.text}, wrapped
-	}
-
-	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", agentResultRecord(res), nil)
-	if err != nil {
-		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
-		// Detached, so the node the row is published under does not stay
-		// "running" when a cancelled ctx is why the success write failed.
-		recordAgentFailure(ctx, st, node, jobName, res, wrapped)
-
-		return StepOutcome{Hash: hash, Response: res.text}, wrapped
-	}
-
-	// After the node is recorded, so a run that could not record its own
-	// outcome does not leave an entry behind claiming the work is done.
-	workspace.SaveStepCache(ctx, bw, cached.Key, cached.request)
-
-	return StepOutcome{Hash: hash, Verdict: res.verdict, Note: res.note, Response: res.text}, nil
-}
-
-// stepCacheLookup is what the cache decided about this step, carrying the
-// request alongside so the store call after a successful run files exactly the
-// outputs the lookup asked about.
-type stepCacheLookup struct {
-	workspace.StepCacheResult
-
-	request workspace.StepCacheRequest
-}
-
-// reuseAgentStep performs the lookup and, on a hit, records the step's node as
-// succeeded — everything RunStep would otherwise do inline, lifted out to keep
-// it inside the complexity budget. The returned StepOutcome is meaningful only
-// when the lookup hit.
-func reuseAgentStep(
-	ctx context.Context, cfg *config.Config, prepared preparedAgentStep, content map[string]any,
-	bw workspace.BuildWorkspace, st store.Cache, node merkle.Node, jobName, name string,
-) (stepCacheLookup, StepOutcome, error) {
-	cached, err := lookupStepCache(ctx, cfg, prepared, content, bw, jobName, name)
-	if err != nil || !cached.Hit {
-		return cached, StepOutcome{}, err
-	}
-
-	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", cached.NodeResult(), nil)
-	if err != nil {
-		return cached, StepOutcome{}, fmt.Errorf("%w", err)
-	}
-
-	return cached, StepOutcome{Hash: node.Hash, Cached: true}, nil
-}
-
-// agentStepContent is what the step is keyed on: its configuration, and what
-// its memory: scope holds as it starts (see applyStepMemory).
-func agentStepContent(ctx context.Context, cfg *config.Config, prepared *preparedAgentStep, st store.Memories) (map[string]any, error) {
-	content, err := merkle.AgentContentMap(cfg, prepared.step, prepared.primary)
-	if err != nil {
-		return nil, fmt.Errorf("%w", err)
-	}
-
-	return content, applyStepMemory(ctx, cfg, prepared, content, st)
-}
-
-// lookupStepCache reports whether this agent step's declared outputs were
-// already produced by an earlier run over the same input bytes, restoring them
-// when they were.
-//
-// It runs AFTER prepareAgentStep rather than before, because the step's own
-// content — and so its key — is not knowable until then: a message_files: naming
-// a run-time artifact is only loaded once the step's workspace exists. The cost
-// of a hit is therefore one materialized workspace and whatever tool servers
-// the grant starts, which is real, but is not what an agent step costs.
-func lookupStepCache(
-	ctx context.Context, cfg *config.Config, prepared preparedAgentStep,
-	content map[string]any, bw workspace.BuildWorkspace, jobName, name string,
-) (stepCacheLookup, error) {
-	if !merkle.StepCacheable(cfg, prepared.step) {
-		return stepCacheLookup{}, nil
-	}
-
-	// Hashed with NO parent: what identifies the work is this step's content
-	// and the bytes it reads, not the chain that led to it. See
-	// internal/pipeline's stepCacheRequest.
-	contentHash, err := merkle.HashNode(merkle.NodeKindAgent, content, "")
-	if err != nil {
-		return stepCacheLookup{}, fmt.Errorf("step cache key: %w", err)
-	}
-
-	step := prepared.step
-	req := workspace.StepCacheRequest{
-		ContentHash:   contentHash,
-		Inputs:        step.InputNames(),
-		Outputs:       step.Outputs,
-		OutputMapping: config.CollectedOutputMapping(step.Outputs, nil, step.OutputSubdir),
-	}
-
-	res := workspace.LookupStepCache(ctx, bw, req)
-	if res.Hit {
-		slog.InfoContext(ctx, "job.skip", "job", jobName, "step", name, "reason", "reused", "key", res.Key)
-	}
-
-	return stepCacheLookup{StepCacheResult: res, request: req}, nil
-}
-
-// agentResultRecord builds the result map RunStep records for a succeeded
-// agent step: always the response and turn count, plus whichever optional
-// outcomes the run actually produced. Extracted from RunStep to keep its
-// cyclomatic complexity under the linter budget.
+// agentResultRecord builds the result map an agent step's node records:
+// always the response and turn count, plus whichever optional outcomes the run
+// actually produced.
 func agentResultRecord(res conversationResult) map[string]any {
 	result := map[string]any{"response": res.text, "turns": res.turns}
 
@@ -560,7 +413,7 @@ func runOneConversation(
 
 // RunHook runs an agent step as a hook: it resolves, materializes, runs the
 // conversation, evaluates its assert, and captures declared outputs exactly
-// like RunStep, but records no merkle node or job_run — the enclosing
+// like a plan step, but records no merkle node or job_run — the enclosing
 // step/job records the aggregate outcome (the same no-record contract as
 // RunFix). A returned error is already outcome-marked where appropriate (see
 // runAgentConversation), so the caller's hook classification works unchanged.
@@ -594,7 +447,7 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	// Before Capture, matching RunStep's order: assert.files reads the step's
+	// Before Capture, matching a plan step's order: assert.files reads the step's
 	// own working directory, which is what the conversation just wrote into.
 	err = assertAgentResponse(step.Assert, res, prepared.space.Dir())
 	if err != nil {
@@ -614,7 +467,7 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 // bindRun says where a question the conversation asks is recorded, and under
 // which job, then gives the conversation its live identity, so every turn it
 // takes is publishable as belonging to this run, job, and step. Not done in
-// prepareAgentStep because only RunStep and RunHook hold the store handle,
+// prepareAgentStep because only PreparedStep.Run and RunHook hold the store handle,
 // the job's name and the step's position; a fix conversation has none of
 // them, and publishes nothing.
 func bindRun(ctx context.Context, p *preparedAgentStep, st StepStore, jobName string, stepIndex int, stepName string) {
@@ -670,7 +523,7 @@ func fallbackModel(prepared preparedAgentStep) string {
 // caller's later fallbackModel/agentResultRecord calls see it), and prints
 // the step's own visible note if the source that served it is a mid-run swap
 // the pre-run fallbackBanner couldn't have already announced. Shared by
-// RunStep and RunHook so both report a served-by source the same way.
+// PreparedStep.Run and RunHook so both report a served-by source the same way.
 //
 // Preflight's own failover is already covered by that pre-run banner, since
 // prepared.ri reflects preflight's pick before either caller ever prints it

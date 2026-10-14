@@ -49,6 +49,16 @@ func taskCacheRequest(content map[string]any, step config.Step, rt config.Resolv
 	)
 }
 
+// agentCacheRequest is stepCacheRequest for a prepared agent step, which
+// declares no input mapping.
+func agentCacheRequest(content map[string]any, step config.Step) (workspace.StepCacheRequest, error) {
+	return stepCacheRequest(
+		merkle.NodeKindAgent, content,
+		step.InputNames(), step.Outputs,
+		nil, config.CollectedOutputMapping(step.Outputs, nil, step.OutputSubdir),
+	)
+}
+
 // lookupStepCache reports the cache entry a step's work is filed under, and
 // whether its outputs were already there and have been restored.
 //
@@ -68,4 +78,24 @@ func lookupStepCache(
 	}
 
 	return res
+}
+
+// reuseStep looks a step up and, on a hit, records its node as succeeded: the
+// work was done, by an earlier run. On a miss it records nothing — the step is
+// about to run, and a node recorded succeeded first would show it green for
+// its whole run, and leave it green if the process died mid-step.
+func reuseStep(
+	ctx context.Context, r stepRunner, step config.Step, req workspace.StepCacheRequest, node merkle.Node,
+) (workspace.StepCacheResult, error) {
+	cached := lookupStepCache(ctx, r, step, req, node.Resource)
+	if !cached.Hit {
+		return cached, nil
+	}
+
+	err := r.st.RecordNode(ctx, nodeRecord(node), r.jobName, "succeeded", cached.NodeResult(), nil)
+	if err != nil {
+		return cached, fmt.Errorf("%w", err)
+	}
+
+	return cached, nil
 }

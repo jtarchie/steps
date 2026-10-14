@@ -199,6 +199,32 @@ func TestStepCacheRerunsWhenAnInputChanges(t *testing.T) {
 	}
 }
 
+// TestStepCacheRerunsWhenThePromptChanges is the key half the input-bytes test
+// cannot reach: same inputs, same endpoint, a different message is different
+// work. The unchanged rerun is proven cached first, so the request that
+// follows can only be the edited prompt.
+func TestStepCacheRerunsWhenThePromptChanges(t *testing.T) {
+	dir, root := t.TempDir(), t.TempDir()
+	fake := newFakeLLM(t, stepCacheScriptTimes(2)...)
+
+	path := stepCachePipeline(t, dir, fake.URL, root,
+		filepath.Join(dir, "publish.log"), filepath.Join(dir, "fetch.log"), filepath.Join(dir, "notify.log"), stepCacheNotes)
+
+	mustRun(t, "test", path)
+	mustRun(t, "test", path)
+
+	if got := fake.requestCount(); got != len(stepCacheScript()) {
+		t.Fatalf("provider requests after an unchanged rerun = %d, want %d — the step was not cached, so nothing below proves anything", got, len(stepCacheScript()))
+	}
+
+	rewritePipeline(t, path, "Review the notes and summarize them.", "Review the notes and list every file they name.")
+	mustRun(t, "test", path)
+
+	if got := fake.requestCount(); got != 2*len(stepCacheScript()) {
+		t.Errorf("provider requests after the prompt changed = %d, want %d — the cached step was served for a prompt it never ran", got, 2*len(stepCacheScript()))
+	}
+}
+
 // TestStepCacheVolatileAgentAlwaysRuns pins volatile: on the kind of step it
 // exists for — one whose answer must never be replayed.
 func TestStepCacheVolatileAgentAlwaysRuns(t *testing.T) {
@@ -227,13 +253,13 @@ func TestStepCacheVolatileAgentAlwaysRuns(t *testing.T) {
 	}
 }
 
-// rewriteGrant swaps one spelling of the reviewer's grant for another in a pipeline already on disk. Same file, same path, same state database — so the only thing that differs between two runs is the grant.
-func rewriteGrant(t *testing.T, path, from, to string) {
+// rewritePipeline swaps one spelling for another in a pipeline already on disk. Same file, same path, same state database — so the only thing that differs between two runs is the swapped text.
+func rewritePipeline(t *testing.T, path, from, to string) {
 	t.Helper()
 
 	source := readFileString(t, path)
 	if !strings.Contains(source, from) {
-		t.Fatalf("%s does not contain the grant %q", path, from)
+		t.Fatalf("%s does not contain %q", path, from)
 	}
 
 	err := os.WriteFile(path, []byte(strings.Replace(source, from, to, 1)), 0o600)
@@ -270,7 +296,7 @@ func TestStepCacheRerunsWhenAGrantsTermsChange(t *testing.T) {
 			path := stepCachePipeline(t, dir, fake.URL, root,
 				filepath.Join(dir, "publish.log"), filepath.Join(dir, "fetch.log"), filepath.Join(dir, "notify.log"), stepCacheNotes)
 
-			rewriteGrant(t, path, "  tools: [read_file, write_file]\n", grants[0])
+			rewritePipeline(t, path, "  tools: [read_file, write_file]\n", grants[0])
 			mustRun(t, "test", path)
 			mustRun(t, "test", path)
 
@@ -278,7 +304,7 @@ func TestStepCacheRerunsWhenAGrantsTermsChange(t *testing.T) {
 				t.Fatalf("provider requests after an unchanged rerun = %d, want %d — the step was not cached, so nothing below proves anything", got, len(script))
 			}
 
-			rewriteGrant(t, path, grants[0], grants[1])
+			rewritePipeline(t, path, grants[0], grants[1])
 			mustRun(t, "test", path)
 
 			if got := fake.requestCount(); got != 2*len(script) {

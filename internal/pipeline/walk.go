@@ -270,12 +270,12 @@ func (w *planWalk) reportChainSkipped(ctx context.Context, skipped string, first
 
 // recordStepOutcome registers an agent step's decision under the name it is
 // known by, so a later step that declared context: from: can be handed it.
-func recordStepOutcome(ctx context.Context, step config.Step, out agent.StepOutcome) {
-	if out.Verdict == "" {
+func recordStepOutcome(ctx context.Context, step config.Step, out agentOutcome) {
+	if out.verdict == "" {
 		return
 	}
 
-	agent.RecordOutcome(ctx, executedStepName(step), agent.Upstream{Verdict: out.Verdict, Note: out.Note, Response: out.Response})
+	agent.RecordOutcome(ctx, executedStepName(step), agent.Upstream{Verdict: out.verdict, Note: out.note, Response: out.response})
 }
 
 // recordCompletedStep marks a plan step as one a resume will not repeat.
@@ -451,18 +451,18 @@ func dispatchByKind(
 // recorded even when the run failed: a later visit of a revise loop reads the
 // verdict that sent it back, and a failed step simply has no verdict.
 func runAgentStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
-	out, err := agent.RunStep(ctx, r.cfg, r.jobName, i, step, r.bw, r.st, parentHash, placedAgentRunner(step))
+	out, err := executeAgentStep(ctx, r, i, step, parentHash)
 
 	recordStepOutcome(ctx, step, out)
 
-	res := stepResult{hash: out.Hash, nodeHash: out.Hash, verdict: out.Verdict, note: out.Note}
+	res := stepResult{hash: out.hash, nodeHash: out.hash, verdict: out.verdict, note: out.note}
 	if err != nil {
 		res.hash = ""
 
 		return res, fmt.Errorf("agent step: %w", err)
 	}
 
-	if out.Cached {
+	if out.cached {
 		res.disposition = stepCacheHit
 	}
 

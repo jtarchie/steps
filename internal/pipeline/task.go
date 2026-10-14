@@ -59,13 +59,12 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 		return stepResult{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 	}
 
-	cached := lookupStepCache(ctx, r, step, req, name)
-	if cached.Hit {
-		err = r.st.RecordNode(ctx, nodeRecord(node), r.jobName, "succeeded", cached.NodeResult(), nil)
-		if err != nil {
-			return stepResult{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
-		}
+	cached, err := reuseStep(ctx, r, step, req, node)
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
+	}
 
+	if cached.Hit {
 		return stepResult{hash: hash, nodeHash: hash, disposition: stepCacheHit}, nil
 	}
 

@@ -155,7 +155,7 @@ func RunFix(
 		toolChoiceStringOnly: ri.StringOnlyToolChoice,
 		compactAfterTokens:   ri.CompactAfterTokens,
 		usage:                &stepUsage{name: ri.AgentName, budget: ri.BudgetTokens, delegateFraction: cfg.DelegateBudgetFraction(ri.AgentName)},
-		// Give the conversation its live identity, matching RunStep/RunHook:
+		// Give the conversation its live identity, matching PreparedStep.Run/RunHook:
 		// a fix agent is nested inside the task step that failed, so its
 		// tool calls are attributable the same way instead of publishing (and
 		// logging) nowhere.

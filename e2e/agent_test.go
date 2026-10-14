@@ -112,6 +112,41 @@ jobs:
 	if got := fake.request(1).Messages; len(got) != 2 || !strings.Contains(got[1].Content, "Review this repo carefully.") {
 		t.Errorf("the message_files's loaded text did not reach the model as the user message; got %+v", got)
 	}
+
+	// Keyed on the loaded text, not the file reference: two pipelines whose
+	// PROMPT.md differ would otherwise hash to one agent node.
+	if got := agentNodeContent(t, path, "build"); !strings.Contains(got, "Review this repo carefully.") {
+		t.Errorf("the agent node's hashed content = %s, want the message_files's loaded text in it", got)
+	}
+}
+
+// agentNodeContent is the hashed content of the one agent node job recorded.
+func agentNodeContent(t *testing.T, path, job string) string {
+	t.Helper()
+
+	st := openStoreFor(t, path)
+
+	nodes, err := st.ListNodes(t.Context(), job, 0)
+	if err != nil {
+		t.Fatalf("ListNodes: %v", err)
+	}
+
+	for _, node := range nodes {
+		if node.Kind != "agent" {
+			continue
+		}
+
+		byHash, err := st.NodesByHash(t.Context(), []string{node.Hash})
+		if err != nil {
+			t.Fatalf("NodesByHash: %v", err)
+		}
+
+		return byHash[node.Hash].Content
+	}
+
+	t.Fatalf("job %q recorded no agent node", job)
+
+	return ""
 }
 
 // TestAgentAnswersWhenTurnsRunOut is the feature the PR-review pipeline needed

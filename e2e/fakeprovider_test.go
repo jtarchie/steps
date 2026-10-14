@@ -21,7 +21,7 @@ import (
 // OpenAI-compatible endpoint an agent step talks to, plus assertion helpers
 // for the layers a run passes through on the way there and back.
 //
-// It exists because agent.RunStep builds its LLM client internally (there is
+// It exists because agent.PreparedStep.Run builds its LLM client internally (there is
 // no injectable model.LLM at the CLI boundary — a deliberate credential
 // boundary, see docs/agents.md), so the only seam for a full-stack test is
 // the HTTP endpoint itself. Pointing an agent's source.endpoint: at an
@@ -636,7 +636,7 @@ func openStateDB(t *testing.T, pipelinePath string) *sql.DB {
 
 // storeTranscript returns the persisted conversation transcript JSON for the
 // node with this resource name, "" when none was recorded — the on-demand
-// record RunStep saves alongside nodes.result (see docs/agents-internals.md,
+// record PreparedStep.Run saves alongside nodes.result (see docs/agents-internals.md,
 // "Transcript persistence").
 func storeTranscript(t *testing.T, pipelinePath, resource string) string {
 	t.Helper()

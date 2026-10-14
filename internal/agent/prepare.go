@@ -22,16 +22,15 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// preparedAgentStep is RunStep's resolved-and-materialized preamble:
-// everything needed to run the conversation, split out so RunStep itself
-// only sequences hash/run/capture/record and stays within the linter's
-// complexity budget.
+// preparedAgentStep is an agent step resolved and materialized: everything
+// needed to run the conversation. PreparedStep carries it across to
+// internal/pipeline, which keys and records the step around the conversation.
 type preparedAgentStep struct {
-	// step is the resolved step: identical to RunStep's own step parameter,
+	// step is the resolved step: identical to the step it was prepared from,
 	// except a run-time message_files: {artifact, path} (see FileRef.Deferred)
 	// has been read and folded into Prompt (with PromptFile cleared) by the
-	// time this is returned. RunStep must hash THIS copy, not its own step
-	// param, so merkle.AgentContentMap sees the loaded prompt text rather than
+	// time this is returned. The step must be keyed on THIS copy, not the
+	// caller's, so merkle.AgentContentMap sees the loaded prompt text rather than
 	// the file reference.
 	step config.Step
 	// ri is the invocation as it will RUN, after any preflight failover.
@@ -76,7 +75,7 @@ type preparedAgentStep struct {
 
 // openTree settles where this step's file tools reach and what the model is told its working directory is.
 //
-// Deliberately NOT done in prepareAgentStep, and the reason is the step cache: probing runs a real command in the step's container, so for a placed agent it dials the worker and uploads the tree. RunStep decides a cache hit AFTER preparing, so probing there made every reuse of a containerized agent pay for a container it was about to throw away — and a placed one pay for a session and a tree transfer.
+// Deliberately NOT done in prepareAgentStep, and the reason is the step cache: probing runs a real command in the step's container, so for a placed agent it dials the worker and uploads the tree. internal/pipeline decides a cache hit AFTER preparing, so probing there made every reuse of a containerized agent pay for a container it was about to throw away — and a placed one pay for a session and a tree transfer.
 //
 // Called from runPreparedWithFailover, which is the one place a prepared conversation starts, so no caller can forget it. It answers a SETTLED copy rather than mutating in place, because that is the copy the conversation below actually runs from.
 func (p preparedAgentStep) openTree(ctx context.Context) (preparedAgentStep, error) {

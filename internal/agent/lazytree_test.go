@@ -28,7 +28,7 @@ func (c *countingRunner) Close() error { return nil }
 
 // TestPreparingAContainerAgentStartsNothing is the step cache's promise stated where it can be checked.
 //
-// RunStep decides a cache hit AFTER preparing, so a probe run during preparation is paid by every reuse of a containerized agent — a container started and thrown away, and for a placed one a worker dialled and a tree uploaded, for a conversation that never happens. lookupStepCache's own doc puts the cost of a hit at one materialized workspace and whatever tool servers the grant starts; this keeps that true.
+// internal/pipeline decides a cache hit AFTER preparing, so a probe run during preparation is paid by every reuse of a containerized agent — a container started and thrown away, and for a placed one a worker dialled and a tree uploaded, for a conversation that never happens. executeAgentStep's own comment puts the cost of a hit at one materialized workspace and whatever tool servers the grant starts; this keeps that true.
 func TestPreparingAContainerAgentStartsNothing(t *testing.T) {
 	t.Parallel()
 

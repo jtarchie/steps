@@ -10,7 +10,6 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/events"
-	"github.com/jtarchie/steps/internal/store"
 )
 
 // maxRecordedResultBytes caps how much of a single tool result is persisted in
@@ -419,11 +418,11 @@ func renderResultContent(response map[string]any) string {
 
 // saveAgentTranscript persists a conversation's transcript under the step's
 // node hash — for every outcome, success or failure, since a failed step's
-// transcript is the one a human reconstructs from. Best-effort like
-// recordAgentFailure, and on a detached context for the same reason: an
-// auxiliary record must neither mask the step's own outcome nor be dropped
-// because the step was aborted.
-func saveAgentTranscript(ctx context.Context, st store.Cache, hash, jobName string, res conversationResult) {
+// transcript is the one a human reconstructs from. Best-effort like a failed
+// step's node record (internal/pipeline's recordStepFailure), and on a
+// detached context for the same reason: an auxiliary record must neither mask
+// the step's own outcome nor be dropped because the step was aborted.
+func saveAgentTranscript(ctx context.Context, st TranscriptStore, hash, jobName string, res conversationResult) {
 	if len(res.transcript) == 0 {
 		return
 	}

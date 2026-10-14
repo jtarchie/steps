@@ -24,7 +24,7 @@ import (
 // It is automatic: declaring fallback: already means "steps may run this
 // agent on any of these sources", so no separate opt-in gates the mid-run
 // trigger beyond the list being non-empty. It replaces the direct
-// runPrepared call RunStep/RunHook used to make; the CLI-primary path and
+// runPrepared call PreparedStep.Run/RunHook used to make; the CLI-primary path and
 // the plain single-source path both still happen exactly as before, since
 // this only adds a cascade on top of what runPrepared already did.
 //
@@ -112,7 +112,7 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 		// model can produce meaningfully different output, and a quality dip
 		// caused by an outage must not look identical to a normal run.
 		//
-		// live is read from the recorder RunStep/RunHook/RunFix already set
+		// live is read from the recorder PreparedStep.Run/RunHook/RunFix already set
 		// up (see step.go's own doc comment on prepared.conv.recorder) rather
 		// than threaded as parameters here — the same reason
 		// executeBudgetedTool reads it: this line otherwise names the two

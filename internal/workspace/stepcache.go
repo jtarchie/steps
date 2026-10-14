@@ -72,8 +72,8 @@ func (r StepCacheResult) NodeResult() map[string]any {
 	return map[string]any{"reused": true, "cache_key": r.Key}
 }
 
-// StepCaching is the optional BuildWorkspace capability the pipeline and agent
-// packages use to reuse a step's outputs across runs.
+// StepCaching is the optional BuildWorkspace capability the pipeline package
+// uses to reuse a step's outputs across runs.
 //
 // Optional rather than on BuildWorkspace itself, and absent unless the
 // pipeline configured a durable workspace.root: with no root there is nowhere

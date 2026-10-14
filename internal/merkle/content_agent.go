@@ -273,7 +273,7 @@ func withAskUserContent(spec config.ToolSpec, content map[string]any) {
 }
 
 // withMemoryContent keys the file naming the scope, not the scope or what it
-// holds: both are read when the step runs, and internal/agent folds a digest
+// holds: both are read when the step runs, and internal/pipeline folds a digest
 // of them in under memory_preload before the node is hashed.
 func withMemoryContent(step config.Step, content map[string]any) {
 	if step.Memory != nil {

@@ -81,28 +81,27 @@ func loadStepMemory(ctx context.Context, cfg *config.Config, step config.Step, s
 	return loaded, nil
 }
 
-// applyStepMemory hands the step its memory and keys the step on it. Called
-// before the node is hashed, because what the scope holds is part of what the
+// applyStepMemory hands the step its memory and returns the digest the step
+// is keyed on. Called before the node is hashed, because what the scope holds is part of what the
 // model is handed: the same message with different memory is a different
 // step, and a cache blind to it would replay an answer written while the step
 // knew something it no longer does.
-func applyStepMemory(ctx context.Context, cfg *config.Config, prepared *preparedAgentStep, content map[string]any, st store.Memories) error {
+func applyStepMemory(ctx context.Context, cfg *config.Config, prepared *preparedAgentStep, st store.Memories) (string, error) {
 	if prepared.step.Memory == nil {
-		return nil
+		return "", nil
 	}
 
 	forgets := prepared.conv.tools.registry[config.ForgetBuiltinName] != nil
 
 	memory, err := loadStepMemory(ctx, cfg, prepared.step, prepared.space.Dir(), st, forgets)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	content["memory_preload"] = memory.digest
 	prepared.conv.memory = memory.preload
 	prepared.conv.env.memory = memory.env
 
-	return nil
+	return memory.digest, nil
 }
 
 func readMemoryScope(spaceDir, scopeFrom string) (string, error) {

@@ -19,7 +19,7 @@ import (
 // any is a task-level failure so the step fails and its on_failure hook
 // fires. A nil assert, or one with no field set, is a no-op. dir is the
 // step's own working directory (prepared.space.Dir()), checked for
-// assert.files: before RunStep captures it into the artifact store.
+// assert.files: before it is captured into the artifact store.
 func assertAgentResponse(assert *config.Assert, res conversationResult, dir string) error {
 	if assert == nil {
 		return nil

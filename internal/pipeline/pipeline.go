@@ -127,9 +127,17 @@ func nodeRecord(n merkle.Node) store.NodeRecord {
 // than being dropped by the canceled context. Best-effort: recording errors are ignored so they can't
 // mask the original error returned to the caller.
 func recordStepFailure(ctx context.Context, r stepRunner, node merkle.Node, err error) {
+	recordStepFailureWith(ctx, r, node, nil, err)
+}
+
+// recordStepFailureWith is recordStepFailure for a step whose failure still
+// produced something worth keeping: a failed agent step is exactly the one
+// somebody reconstructs afterwards, so its response and tool calls are
+// recorded rather than dropped.
+func recordStepFailureWith(ctx context.Context, r stepRunner, node merkle.Node, result map[string]any, err error) {
 	status := string(outcome.Classify(ctx, err))
 	recCtx := context.WithoutCancel(ctx)
-	_ = r.st.RecordNode(recCtx, nodeRecord(node), r.jobName, status, nil, err)
+	_ = r.st.RecordNode(recCtx, nodeRecord(node), r.jobName, status, result, err)
 	_ = r.st.ForgetChain(recCtx, r.jobName, node.Hash)
 }
 

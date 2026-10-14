@@ -703,8 +703,9 @@ linters:
             - pkg: "github.com/jtarchie/steps/internal/resource"
               desc: "test-only in merkle: resolve gets through merkle.VersionResolver"
         # agent runs an agent step's LLM tool-calling conversation. It needs
-        # store/workspace/merkle for step-level hash/materialize/record
-        # sequencing (RunStep), but not resource or pipeline.
+        # workspace to materialize the step and store for what the conversation
+        # writes (spend, questions, memory, transcript) — but not merkle: the
+        # step's key, cache and node are pipeline's, as for every step kind.
         Agent:
           files:
             - "**/internal/agent/**"
@@ -731,7 +732,6 @@ linters:
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/mcp"
-            - "github.com/jtarchie/steps/internal/merkle"
             - "github.com/jtarchie/steps/internal/outcome"
             - "github.com/jtarchie/steps/internal/retry"
             - "github.com/jtarchie/steps/internal/shell"

@@ -83,7 +83,7 @@ func execCLI(
 	// mid-conversation still has the trajectory of what it managed to do.
 	// The step's own recorder, so every turn the child takes is published as
 	// it happens under the step that spawned it. It is set for every agent
-	// step in RunStep, whichever path runs — this one just never used it.
+	// step in PreparedStep.Run, whichever path runs — this one just never used it.
 	run, parseErr := parseCLIStream(stdout, prepared.conv.recorder, expected)
 
 	// An attestation failure kills the child right here, before Wait: the

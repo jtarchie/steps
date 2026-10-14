@@ -37,7 +37,7 @@ import (
 //
 // It takes the whole ResolvedInvocation rather than loose strings so the
 // mapping from invocation fields to client settings lives in exactly one
-// place — the three call sites (RunStep, RunFix, buildSubAgentTool) can't
+// place — the three call sites (PreparedStep.Run, RunFix, buildSubAgentTool) can't
 // individually mix up which field feeds which parameter.
 func newAgentLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 	cfg := genaiopenai.Config{
