@@ -30,6 +30,8 @@ type Registry struct {
 	owner   string
 	mu      sync.Mutex
 	current map[string]*entry
+	// pools are the exclusive mappings' machines, by registryKey (#205).
+	pools map[string]*pool
 	// live is every entry a scope still counts toward or that is still being given back, retired or not: what Close waits for.
 	live map[*entry]struct{}
 	// drained is closed once a closed registry has nothing live.
@@ -56,6 +58,13 @@ type entry struct {
 	gen int
 	// gone is made when the entry is taken out of service and closed once its machine is given back.
 	gone chan struct{}
+	// pool is the exclusive mapping this machine is one of, nil for a shared one.
+	pool *pool
+	// jobs counts the holds of the one job holding this pool machine, holder; a check riding along counts in refs only.
+	jobs   int
+	holder *Leases
+	// used is when a job last let go of this pool machine, in its pool's order.
+	used int
 }
 
 // parked is an instance that outlives its users: every mapping of it, and every life of it after an eviction, is this one entry.
@@ -121,12 +130,20 @@ func (r *Registry) Sweep(ctx context.Context, workers map[string]Worker) error {
 
 // NewRegistryWith exists for a borrowable venue that is not a cloud — the only way to prove sharing without an account.
 func NewRegistryWith(acquirer Acquirer) *Registry {
-	return &Registry{acquire: acquirer, current: map[string]*entry{}, live: map[*entry]struct{}{}}
+	return &Registry{acquire: acquirer, current: map[string]*entry{}, pools: map[string]*pool{}, live: map[*entry]struct{}{}}
 }
 
-// Leases opens one scope over the registry.
+// Leases opens one job's scope over the registry: on an exclusive mapping it holds a machine of its own.
 func (r *Registry) Leases(workers map[string]Worker) *Leases {
-	return &Leases{registry: r, held: map[string]*entry{}, source: maps.Clone(workers), warm: map[string]*entry{}}
+	return &Leases{registry: r, held: map[string]*entry{}, source: maps.Clone(workers), warm: map[string]*entry{}, claiming: map[string]chan struct{}{}}
+}
+
+// CheckLeases opens a poll's scope, which rides along on any live machine of an exclusive pool, busy or not, as Concourse exempts check, get and put from limit-active-tasks.
+func (r *Registry) CheckLeases(workers map[string]Worker) *Leases {
+	leases := r.Leases(workers)
+	leases.rides = true
+
+	return leases
 }
 
 // hold counts one more user of the machine a worker names, or answers what to wait on while that machine's last park is still landing. warm is a machine only an idle timer was holding: nobody has used it since its last user left, so nothing says it is still alive.
@@ -149,12 +166,7 @@ func (r *Registry) hold(worker Worker) (*entry, <-chan struct{}, bool) {
 		r.live[held] = struct{}{}
 	}
 
-	held.refs++
-
-	if worker.Idle > held.window {
-		held.window, held.windowBy = worker.Idle, worker.URL
-	}
-	r.stopIdle(held)
+	r.count(held, worker, nil)
 
 	return held, nil, warm
 }
@@ -169,10 +181,16 @@ func (r *Registry) stopIdle(held *entry) {
 }
 
 // drop holds the idle window on the registry's own timer so no job, poll or request waits it out; asking the lease whether it holds a machine never waits on a cloud call, because an acquirer holds a count and so cannot be mid-acquisition at zero.
-func (r *Registry) drop(ctx context.Context, held *entry, immediate bool) error {
+func (r *Registry) drop(ctx context.Context, held *entry, scope *Leases) error {
+	immediate := scope.own
+
 	r.mu.Lock()
 
 	held.refs--
+	if held.pool != nil && !scope.rides {
+		r.letGo(held, immediate)
+	}
+
 	// Gone already: Close gave it back as the process stopped.
 	if held.refs > 0 || held.gone != nil {
 		r.mu.Unlock()
@@ -254,6 +272,12 @@ func (r *Registry) giveBack(ctx context.Context, held *entry) error {
 
 // forget stops handing this entry out, so the next user acquires fresh.
 func (r *Registry) forget(held *entry) {
+	if held.pool != nil {
+		r.leavePool(held)
+
+		return
+	}
+
 	if r.current[held.key] == held {
 		delete(r.current, held.key)
 	}
@@ -263,6 +287,7 @@ func (r *Registry) retire(held *entry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.reserveFor(held)
 	held.retired = true
 	r.forget(held)
 }
@@ -284,7 +309,7 @@ func (r *Registry) Close(ctx context.Context) error {
 
 	idle := []*entry{}
 
-	for _, held := range r.current {
+	for _, held := range r.inService() {
 		if held.refs == 0 && held.gone == nil {
 			r.stopIdle(held)
 			r.takeOut(held)
@@ -378,6 +403,10 @@ type Leases struct {
 	source  map[string]Worker
 	// warm are the machines this scope took from an idle window, by tag, until one answers or is abandoned: see ReusedWarm.
 	warm map[string]*entry
+	// rides is a check's scope: see CheckLeases.
+	rides bool
+	// claiming is closed when this scope's claim on a pool, by registryKey, settles, so its parallel steps join the one machine rather than queueing for a second.
+	claiming map[string]chan struct{}
 }
 
 // lease is a mutex rather than a sync.Once because a release has to WAIT for an acquisition in flight: a Once orders completion only against callers of Do, so a release reading its fields would race, and a live instance's release closure could be dropped while it bills.
@@ -461,30 +490,56 @@ func (l *Leases) Resolve(ctx context.Context, tag string) (Worker, error) {
 		return worker, nil
 	}
 
+	held, err := l.hold(ctx, tag, worker)
+	if err != nil {
+		return Worker{}, err
+	}
+
+	machine, err := held.resolve(ctx, worker, l.registry.acquire)
+	if err != nil {
+		return Worker{}, err
+	}
+
+	return dialOf(worker, machine), nil
+}
+
+// Claim takes this scope's place on a tag's machine without acquiring it, so a job waiting its turn on a capped pool waits before a step's timeout: starts rather than inside it.
+func (l *Leases) Claim(ctx context.Context, tag string) error {
+	worker, ok := l.source[tag]
+	if !ok || !worker.needsAcquisition() {
+		return nil
+	}
+
+	_, err := l.hold(ctx, tag, worker)
+
+	return err
+}
+
+// hold counts this scope toward the tag's machine, waiting out a park still landing or, on a capped pool, its turn.
+func (l *Leases) hold(ctx context.Context, tag string, worker Worker) (*entry, error) {
 	for {
-		held, landing, joined := l.claim(tag, worker)
+		held, next, joined := l.claim(tag, worker)
 		if joined != "" {
 			events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: sharing %s's machine", worker.URL, joined))
 		}
 
 		if held != nil {
-			machine, err := held.resolve(ctx, worker, l.registry.acquire)
-			if err != nil {
-				return Worker{}, err
-			}
-
-			return dialOf(worker, machine), nil
+			return held, nil
 		}
 
-		err := awaitLanded(ctx, landing, worker)
+		if next.queued != nil {
+			return l.queue(ctx, tag, worker, next.queued)
+		}
+
+		err := next.await(ctx, worker)
 		if err != nil {
-			return Worker{}, err
+			return nil, err
 		}
 	}
 }
 
-// claim is this scope's entry for a tag, counted toward the registry's if it has none yet — or, while that machine's last park is landing, what to wait on first, outside every lock. joined names the spelling the entry belongs to when this claim counted toward one written differently, since the operator otherwise has no sign two mappings now share one box; that spelling's acquisition may still be in flight, or have failed, so the note does not say the machine exists.
-func (l *Leases) claim(tag string, worker Worker) (*entry, <-chan struct{}, string) {
+// claim is this scope's entry for a tag, counted toward the registry's if it has none yet — or what to wait on first, outside every lock. joined names the spelling the entry belongs to when this claim counted toward one written differently, since the operator otherwise has no sign two mappings now share one box; that spelling's acquisition may still be in flight, or have failed, so the note does not say the machine exists.
+func (l *Leases) claim(tag string, worker Worker) (*entry, pending, string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -499,12 +554,18 @@ func (l *Leases) claim(tag string, worker Worker) (*entry, <-chan struct{}, stri
 	}
 
 	if held != nil {
-		return held, nil, ""
+		return held, pending{}, ""
+	}
+
+	if worker.Exclusive {
+		held, next := l.claimPool(tag, worker)
+
+		return held, next, ""
 	}
 
 	held, landing, warm := l.registry.hold(worker)
 	if held == nil {
-		return nil, landing, ""
+		return nil, pending{landing: landing}, ""
 	}
 
 	l.held[tag] = held
@@ -515,10 +576,10 @@ func (l *Leases) claim(tag string, worker Worker) (*entry, <-chan struct{}, stri
 
 	// source is written once, under r.mu, before the hold that just returned it.
 	if held.source.URL != worker.URL {
-		return held, nil, held.source.URL
+		return held, pending{}, held.source.URL
 	}
 
-	return held, nil, ""
+	return held, pending{}, ""
 }
 
 func awaitLanded(ctx context.Context, landing <-chan struct{}, worker Worker) error {
@@ -643,10 +704,13 @@ func (l *Leases) ReleaseAll(ctx context.Context) error {
 	var wg sync.WaitGroup
 
 	for i, one := range held {
-		wg.Go(func() { failures[i] = l.registry.drop(ctx, one, l.own) })
+		wg.Go(func() { failures[i] = l.registry.drop(ctx, one, l) })
 	}
 
 	wg.Wait()
+
+	// After the drops, so a place kept for a machine retired under this scope never outlives it.
+	l.registry.unreserve(l)
 
 	return errors.Join(failures...)
 }

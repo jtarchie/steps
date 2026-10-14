@@ -62,7 +62,7 @@ func TestPlaceAgentSpecLeavesAnUntaggedStepAlone(t *testing.T) {
 // A conversation is never re-placed, so reading its dead warm machine as reclaimed would only relabel the failure.
 func TestPlaceAgentSpecDoesNotPresumeAWarmMachineReclaimed(t *testing.T) {
 	fake := &sequenced{machines: []string{"local:"}}
-	ctx, _ := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))
+	ctx, _ := jobLeases(warmRegistry(t, warmRungs["launch"], fake, true))
 	t.Cleanup(func() { _ = leasesFrom(ctx).ReleaseAll(context.WithoutCancel(ctx)) })
 
 	step := config.Step{Agent: "hand", Tags: []string{"box"}}

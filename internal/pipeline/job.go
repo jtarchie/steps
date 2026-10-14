@@ -22,6 +22,7 @@ import (
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/usage"
+	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -424,14 +425,7 @@ func validateJob(ctx context.Context, cfg *config.Config, job *config.Job) error
 // context of its own, because a cancelled job is exactly when a machine left
 // running would be worst.
 func withJobLeases(ctx context.Context) (context.Context, func(context.Context)) {
-	ctx, release := WithLeases(ctx)
-
-	return WithResourcePlacement(ctx), func(ctx context.Context) {
-		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerReleaseTimeout)
-		defer cancel()
-
-		release(releaseCtx)
-	}
+	return placedScope(ctx, (*venue.Registry).Leases)
 }
 
 // jobInputs is what planning a job and running it both start from. Read ONCE

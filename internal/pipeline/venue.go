@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -120,12 +121,35 @@ func withRegistry(ctx context.Context, registry *venue.Registry) (context.Contex
 	}
 }
 
-// WithLeases is per scope (a job, a poll, a webhook), never per step, because acquisition costs 20-90 seconds and real money; with no registry installed, the scope's own end gives everything back.
-func WithLeases(ctx context.Context) (context.Context, func(context.Context)) {
+// jobLeases is per job, never per step, because acquisition costs 20-90 seconds and real money; with no registry installed, the scope's own end gives everything back.
+func jobLeases(ctx context.Context) (context.Context, func(context.Context)) {
+	return withLeases(ctx, (*venue.Registry).Leases)
+}
+
+// CheckScope scopes one round of a poll's checks the way RunJob scopes a job, so a placed check resolves its worker through the same registry a job's steps do — which is what lets a poll end without stopping a machine a job is on — except that on an exclusive pool it rides along on a machine a job holds rather than waiting for one of its own.
+func CheckScope(ctx context.Context) (context.Context, func()) {
+	ctx, release := placedScope(ctx, (*venue.Registry).CheckLeases)
+
+	return ctx, func() { release(ctx) }
+}
+
+// placedScope installs a scope's leases with resource placement under them, and a release bounded under a context of its own, because a cancelled scope is exactly when a machine left running would be worst.
+func placedScope(ctx context.Context, open func(*venue.Registry, map[string]venue.Worker) *venue.Leases) (context.Context, func(context.Context)) {
+	ctx, release := withLeases(ctx, open)
+
+	return WithResourcePlacement(ctx), func(ctx context.Context) {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerReleaseTimeout)
+		defer cancel()
+
+		release(releaseCtx)
+	}
+}
+
+func withLeases(ctx context.Context, open func(*venue.Registry, map[string]venue.Worker) *venue.Leases) (context.Context, func(context.Context)) {
 	var leases *venue.Leases
 
 	if registry, shared := ctx.Value(registryKey{}).(*venue.Registry); shared {
-		leases = registry.Leases(workersFrom(ctx))
+		leases = open(registry, workersFrom(ctx))
 	} else {
 		leases = venue.NewLeases(workersFrom(ctx))
 	}
@@ -177,6 +201,21 @@ func workerFor(ctx context.Context, step config.Step) (string, error) {
 	return worker.URL, nil
 }
 
+// claimWorker takes the job's place on a tag's machine, waiting its turn on a capped exclusive pool, without acquiring it: called before a step's timeout: starts, because the wait has no bound of its own and is not the step's.
+func claimWorker(ctx context.Context, tag string) error {
+	leases := leasesFrom(ctx)
+	if tag == "" || leases == nil {
+		return nil
+	}
+
+	err := leases.Claim(ctx, tag)
+	if err != nil {
+		return fmt.Errorf("worker for tag %q: %w", tag, err)
+	}
+
+	return nil
+}
+
 // reusedWarm is a step whose machine this job took from an idle window, which the venue treats as reclaimed when it will not answer — see shell.RunnerSpec.ReusedWarm.
 func reusedWarm(ctx context.Context, step config.Step) bool {
 	leases := leasesFrom(ctx)
@@ -217,6 +256,12 @@ const venueRetries = 2
 // to hold by then — a parallel sibling may have re-acquired already.
 func withVenueRetry(ctx context.Context, step config.Step, budget time.Duration, work func(context.Context) (string, error)) error {
 	tag := placementTag(step)
+
+	// Before the clock starts: a turn waited on a capped pool is not the step's to pay for.
+	err := claimWorker(ctx, tag)
+	if err != nil {
+		return err
+	}
 
 	// Enforced by refusing to START a late attempt rather than by bounding
 	// the context: a deadline on the parent would expire at the same instant
@@ -401,6 +446,45 @@ func ValidateWorkerPlacement(ctx context.Context, cfg *config.Config, job *confi
 
 	return fmt.Errorf("job %q: no worker is registered for %s (%s) — map it with --worker %s=ssh://user@host, or remove the tag",
 		job.Name, pluralTag(len(tags)), describeMissing(missing, tags), tags[0])
+}
+
+// ValidateExclusivePools refuses every job that touches two or more capped exclusive pools: one job holding a and waiting for b while another holds b and waits for a never ends, and nothing would ever say why.
+func ValidateExclusivePools(ctx context.Context, cfg *config.Config) error {
+	workers := workersFrom(ctx)
+
+	var refusals []error
+
+	for i := range cfg.Jobs {
+		job := &cfg.Jobs[i]
+		pools := map[string][]string{}
+
+		_ = job.VisitSteps(func(_ string, step *config.Step) error {
+			for _, tag := range stepPlacementTags(cfg, *step) {
+				pool := workers[tag].CappedPool()
+				if pool != "" && !slices.Contains(pools[pool], tag) {
+					pools[pool] = append(pools[pool], tag)
+				}
+			}
+
+			return nil
+		})
+
+		if len(pools) < 2 {
+			continue
+		}
+
+		tags := []string{}
+		for _, named := range pools {
+			tags = append(tags, named...)
+		}
+
+		sort.Strings(tags)
+
+		refusals = append(refusals, fmt.Errorf("job %q takes a machine from %d capped exclusive pools (tags %s): two such jobs can each hold one pool and wait forever for the other's — put the job's steps on one pool, or drop max= from all but one",
+			job.Name, len(pools), strings.Join(tags, ", ")))
+	}
+
+	return errors.Join(refusals...)
 }
 
 func describeMissing(missing map[string][]string, tags []string) string {

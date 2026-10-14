@@ -201,7 +201,7 @@ steps run \
 The invocation names the **machines**. Two parts of those worker URLs matter:
 
 - **`?region=`** — where the instance lives. It need not match your default region, and on a profile with no default it is the only thing that says.
-- **`aws://launch/…?version=1`** — acquires a machine from that template version for the job and terminates it at the end. The path is the template **id** (`lt-…`, captured as `$LT` in step 3); a name is refused before the run starts. Acquisition is **per job, not per step**: the first placed step pays for the machine and the rest reuse it.
+- **`aws://launch/…?version=1`** — acquires a machine from that template version for the job and terminates it at the end. The path is the template **id** (`lt-…`, captured as `$LT` in step 3); a name is refused before the run starts. Acquisition is **per job, not per step**: the first placed step pays for the machine and the rest reuse it. Add `&exclusive` to give each concurrent job a machine of its own instead of sharing one, and `&max=3` to cap how many — see [exclusive pools](infra.md).
 
 ## 7. Tear it down
 

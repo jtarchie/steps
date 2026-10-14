@@ -267,7 +267,7 @@ func (a *admission) decide(ctx context.Context, cfg *config.Config) bool {
 }
 
 func pollAndLog(ctx context.Context, cfg *config.Config, st PollStore) {
-	ctx, release := leasedChecks(ctx)
+	ctx, release := pipeline.CheckScope(ctx)
 	defer release()
 
 	enqueued, err := pollOnce(ctx, cfg, st)
@@ -971,16 +971,4 @@ func coldStartMark(orders map[store.VersionKey]int64, latest store.VersionKey) i
 	}
 
 	return second
-}
-
-// leasedChecks scopes one round of checks the way RunJob scopes a job, so a placed check resolves its worker through the same registry a job's steps do — which is what lets a poll end without stopping a machine a job is on.
-func leasedChecks(ctx context.Context) (context.Context, func()) {
-	ctx, releaseWorkers := pipeline.WithLeases(ctx)
-
-	return pipeline.WithResourcePlacement(ctx), func() {
-		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pipeline.WorkerReleaseTimeout)
-		defer cancel()
-
-		releaseWorkers(releaseCtx)
-	}
 }

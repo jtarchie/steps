@@ -102,6 +102,10 @@ type Worker struct {
 	Version string
 	// Idle is how long an acquired machine is kept after its last user, so the next job, poll or webhook finds it warm.
 	Idle time.Duration
+	// Exclusive gives each job a launched machine of its own rather than one machine every job shares (#205).
+	Exclusive bool
+	// Max caps how many machines an exclusive mapping keeps at once; zero is no cap.
+	Max int
 	// Region overrides the ambient AWS region for an aws:// worker.
 	Region string
 	// Project is the GCP project a gcp:// worker lives in. Empty falls back
@@ -133,6 +137,15 @@ type Worker struct {
 // has nowhere else to go.
 func (w Worker) Acquirable() bool { return w.needsAcquisition() }
 
+// CappedPool names the exclusive pool, capped by ?max=, this worker's jobs wait their turn on; empty for every other worker. Two spellings of one pool name it alike.
+func (w Worker) CappedPool() string {
+	if !w.Exclusive || w.Max == 0 {
+		return ""
+	}
+
+	return w.registryKey()
+}
+
 // registryKey keys a machine on what decides it — a parked instance by where it lives, a launched one by the template, version, capacity and location it is born from — so every mapping of it, a root, an ?idle= or a parameter order apart, is one machine rather than one each.
 //
 // ponytail: an ambient region, project or zone and the same one spelled out are two keys, so two machines again; resolve the ambient location here, and carry it into each spelling's dial, if mappings ever mix the two.
@@ -146,7 +159,12 @@ func (w Worker) registryKey() string {
 		// An absent capacity is on-demand, the same fleet request fleetRequest builds for od.
 		capacity := cmp.Or(w.Capacity, CapacityOnDemand)
 
-		return location + w.Template + "?version=" + w.Version + "&capacity=" + string(capacity)
+		key := location + w.Template + "?version=" + w.Version + "&capacity=" + string(capacity)
+		if w.Exclusive {
+			key += "&exclusive&max=" + strconv.Itoa(w.Max)
+		}
+
+		return key
 	case RungStatic:
 		return w.URL
 	default:
@@ -316,7 +334,43 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 		return Worker{}, err
 	}
 
+	worker.Exclusive, worker.Max, err = parsePool(worker, query)
+	if err != nil {
+		return Worker{}, err
+	}
+
 	return worker, nil
+}
+
+// parsePool is scheme-agnostic so every launch rung reads ?exclusive and ?max= the same way. A named machine is refused both because one machine can only become a lock, which serial: and max_in_flight already are; ?max= alone is refused because a shared mapping is always one machine.
+func parsePool(worker Worker, query url.Values) (bool, int, error) {
+	if !query.Has("exclusive") && !query.Has("max") {
+		return false, 0, nil
+	}
+
+	if worker.Rung != RungLaunch {
+		return false, 0, fmt.Errorf("%w %q: exclusive and max= give each job a launched machine of its own, and this worker names one that already exists — serial: or max_in_flight: limit a named machine",
+			ErrWorker, worker.URL)
+	}
+
+	if raw := query.Get("exclusive"); raw != "" && raw != "true" {
+		return false, 0, fmt.Errorf("%w %q: exclusive takes no value — write ?exclusive, or leave it out for one shared machine: %q", ErrWorker, worker.URL, raw)
+	}
+
+	if !query.Has("exclusive") {
+		return false, 0, fmt.Errorf("%w %q: max= caps an exclusive pool, and without ?exclusive every job shares one machine — add ?exclusive", ErrWorker, worker.URL)
+	}
+
+	if !query.Has("max") {
+		return true, 0, nil
+	}
+
+	limit, err := strconv.Atoi(query.Get("max"))
+	if err != nil || limit < 1 {
+		return false, 0, fmt.Errorf("%w %q: max= must be a whole number of machines from 1: %q", ErrWorker, worker.URL, query.Get("max"))
+	}
+
+	return true, limit, nil
 }
 
 // queryKeys is every option a worker URL can carry, and which schemes each
@@ -334,6 +388,8 @@ var queryKeys = map[string][]Scheme{
 	"region":      {SchemeAWS},
 	"capacity":    {SchemeAWS},
 	"idle":        {SchemeAWS, SchemeGCP},
+	"exclusive":   {SchemeAWS, SchemeGCP},
+	"max":         {SchemeAWS, SchemeGCP},
 	"version":     {SchemeAWS},
 	"project":     {SchemeGCP},
 	"zone":        {SchemeGCP},
@@ -357,7 +413,7 @@ var removedKeys = map[string]string{
 // resulting URL launched a billed instance and then failed to re-parse.
 //
 //nolint:gochecknoglobals // as queryKeys: a fact about the grammar, not state
-var acquisitionKeys = []string{"capacity", "idle", "version"}
+var acquisitionKeys = []string{"capacity", "idle", "version", "exclusive", "max"}
 
 // checkQueryKeys refuses an option the grammar does not know, or one that
 // describes a different scheme than the mapping uses.

@@ -426,7 +426,7 @@ func TestAWorkerThatCannotBeGivenBackIsReported(t *testing.T) {
 
 			fake := &borrowed{failStops: failing}
 			ctx, closeRegistry := withRegistry(ctx, venue.NewRegistryWith(fake.acquire))
-			ctx, release := WithLeases(ctx)
+			ctx, release := jobLeases(ctx)
 
 			_, err = leasesFrom(ctx).Resolve(ctx, "box")
 			if err != nil {
@@ -620,7 +620,7 @@ jobs:
     run: "true"
 `)
 
-	ctx, release := WithLeases(ctx)
+	ctx, release := jobLeases(ctx)
 	defer release(context.Background())
 
 	ctx, sink := withPlacementSink(ctx)
@@ -712,7 +712,7 @@ func warmRegistry(t *testing.T, worker string, fake *sequenced, warm bool) conte
 	t.Cleanup(closeRegistry)
 
 	if warm {
-		earlier, release := WithLeases(ctx)
+		earlier, release := jobLeases(ctx)
 
 		_, err = leasesFrom(earlier).Resolve(earlier, "box")
 		if err != nil {
@@ -822,7 +822,7 @@ func TestAWarmMachineThatAnsweredIsNoLongerPresumedDead(t *testing.T) {
 	testdocker.Require(t)
 
 	fake := &sequenced{machines: []string{"local:"}}
-	ctx, release := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))
+	ctx, release := jobLeases(warmRegistry(t, warmRungs["launch"], fake, true))
 	t.Cleanup(func() { release(context.WithoutCancel(ctx)) })
 
 	step := config.Step{Task: "work", Tags: []string{"box"}}
@@ -859,7 +859,7 @@ func TestARePlacedCheckAbandonsTheMachineItActuallyDialled(t *testing.T) {
 	testdocker.Require(t)
 
 	fake := &sequenced{machines: []string{deadWorker, "local:"}}
-	ctx, release := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))
+	ctx, release := jobLeases(warmRegistry(t, warmRungs["launch"], fake, true))
 	t.Cleanup(func() { release(context.WithoutCancel(ctx)) })
 
 	ctx, _ = withPlacementSink(ctx)

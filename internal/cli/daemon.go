@@ -398,6 +398,12 @@ func (d *daemon) accept(name, source string, includes map[string]string) (*confi
 		return nil, fmt.Errorf("%w: %s cannot run here: %w", web.ErrRefused, name, err)
 	}
 
+	// A refusal about this daemon's --worker flags, so a restart under new ones leaves the pipeline shown broken rather than deadlocking it.
+	err = pipeline.ValidateExclusivePools(d.base, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s %w:\n%w", web.ErrRefused, name, errCannotRunHere, err)
+	}
+
 	d.history.Apply(cfg)
 
 	return cfg, nil

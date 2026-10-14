@@ -130,7 +130,7 @@ steps run \
 The invocation names the **machines**. The parts of that worker URL that matter:
 
 - **`?project=` / `?zone=`** — where the instance lives. Omittable when `GOOGLE_CLOUD_PROJECT`/`CLOUDSDK_COMPUTE_ZONE` (or the ADC credentials' own project) already say.
-- **`gcp://launch/…`** — acquires an instance from that template for the job and deletes it at the end. Acquisition is **per job, not per step**; a job whose placed steps are all cache hits acquires nothing. `gcp://stopped/$NAME` is the middle rung: start a parked instance, use it, stop it again (`?idle=` holds it warm between back-to-back jobs).
+- **`gcp://launch/…`** — acquires an instance from that template for the job and deletes it at the end. Acquisition is **per job, not per step**; a job whose placed steps are all cache hits acquires nothing. `gcp://stopped/$NAME` is the middle rung: start a parked instance, use it, stop it again (`?idle=` holds it warm between back-to-back jobs). `?exclusive` (`&exclusive` after another option) gives each concurrent job an instance of its own, and `&max=3` caps how many — see [exclusive pools](infra.md).
 
 There is deliberately **no `?capacity=`**: the template decides its own provisioning model, so a spot job names a spot template.
 
