@@ -11,7 +11,7 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-const usageColumns = `run_id, step_index, step_name, job_name, node_hash,
+const usageColumns = `run_id, step_index, step_name, job_name, kind, node_hash,
 	model_requested, model_served,
 	prompt_tokens, completion_tokens, total_tokens,
 	cached_tokens, reasoning_tokens, cost_usd,
@@ -23,7 +23,7 @@ const usageColumns = `run_id, step_index, step_name, job_name, node_hash,
 func (s *Store) RecordAgentUsage(ctx context.Context, usage store.AgentUsage) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO agent_usage (pipeline_id, `+usageColumns+`, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		ON CONFLICT (pipeline_id, run_id, node_hash) DO UPDATE SET
 			step_index = excluded.step_index,
 			step_name = excluded.step_name,
@@ -43,7 +43,7 @@ func (s *Store) RecordAgentUsage(ctx context.Context, usage store.AgentUsage) er
 			created_at = excluded.created_at
 	`,
 		s.pipelineID,
-		usage.RunID, usage.StepIndex, clean(usage.StepName), usage.JobName, usage.NodeHash,
+		usage.RunID, usage.StepIndex, clean(usage.StepName), usage.JobName, usage.UsageKind(), nullable(usage.NodeHash),
 		clean(usage.ModelReq), clean(usage.ModelServed),
 		usage.Prompt, usage.Completion, usage.Total,
 		usage.Cached, usage.Reasoning, usage.CostUSD,
@@ -76,13 +76,19 @@ func (s *Store) RunUsage(ctx context.Context, runID string) ([]store.AgentUsage,
 		`SELECT `+usageColumns+` FROM agent_usage
 		 WHERE pipeline_id = $1 AND run_id = $2 ORDER BY step_index, seq`,
 		[]any{s.pipelineID, runID}, func(rows *sql.Rows) (store.AgentUsage, error) {
-			var usage store.AgentUsage
+			var (
+				usage store.AgentUsage
+				node  sql.NullString
+			)
 
-			return usage, rows.Scan(&usage.RunID, &usage.StepIndex, &usage.StepName, &usage.JobName, &usage.NodeHash,
+			err := rows.Scan(&usage.RunID, &usage.StepIndex, &usage.StepName, &usage.JobName, &usage.Kind, &node,
 				&usage.ModelReq, &usage.ModelServed,
 				&usage.Prompt, &usage.Completion, &usage.Total,
 				&usage.Cached, &usage.Reasoning, &usage.CostUSD,
 				&usage.FinishReason, &usage.DurationMS, &usage.RawMeta)
+			usage.NodeHash = node.String
+
+			return usage, err //nolint:wrapcheck // collect wraps with the thing being read
 		})
 }
 

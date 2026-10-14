@@ -10,6 +10,10 @@ package sqlite
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
 //
+// 19 made agent_usage.node_hash nullable and added agent_usage.kind, so a
+// hook's agent and a fix: agent — which have no node — record what they
+// spent. An older file refuses the NULL, and the spend went unrecorded.
+//
 // 18 added memories, what an agent step keeps about a scope between runs.
 //
 // 17 dropped run_inputs.build_id, runs.rerun_of_build and trigger_queue.rerun_build: a run is one build, so there is no build of a run to name.
@@ -80,7 +84,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 18
+const schemaVersion = 19
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -736,7 +740,13 @@ CREATE TABLE IF NOT EXISTS agent_usage (
     step_index        INTEGER NOT NULL,
     step_name         TEXT NOT NULL,
     job_name          TEXT NOT NULL,
-    node_hash         TEXT NOT NULL,
+    -- 'step', 'hook' or 'fix'. A hook's agent and a task's fix: agent spend
+    -- inside the job, against its budget, and are never hashed.
+    kind              TEXT NOT NULL,
+    -- NULL for a hook or a fix. SQLite exempts a row from the composite
+    -- reference below when a child column is NULL, so such a row hangs off
+    -- its run alone, and retention reaps it with the run.
+    node_hash         TEXT,
     model_requested   TEXT NOT NULL,
     model_served      TEXT NOT NULL,
     prompt_tokens     INTEGER NOT NULL,
@@ -749,7 +759,10 @@ CREATE TABLE IF NOT EXISTS agent_usage (
     duration_ms       INTEGER NOT NULL,
     raw_meta          TEXT NOT NULL,
     created_at        TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, run_id, node_hash),
+    -- UNIQUE rather than the primary key, because NULLs are distinct here:
+    -- every hook or fix execution is a row of its own, while a step's
+    -- attempts against one node still accumulate onto one.
+    UNIQUE (pipeline_id, run_id, node_hash),
     FOREIGN KEY (pipeline_id, node_hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id, step_index);

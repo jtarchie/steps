@@ -632,7 +632,7 @@ func (r *RunsCostCmd) printRunCost(ctx context.Context, st store.Usage) error {
 
 	for _, step := range usage {
 		fmt.Printf("%-28s  %12s  %6s%%  %9s  %s\n",
-			truncateName(step.StepName, 28), humanTokens(step.Total),
+			truncateName(usageLabel(step), 28), humanTokens(step.Total),
 			cachePercent(step.Total, step.Cached),
 			(time.Duration(step.DurationMS) * time.Millisecond).Round(time.Second),
 			finishNote(step))
@@ -807,6 +807,16 @@ func renderCost(cost *float64, unpriced int) string {
 	}
 
 	return rendered
+}
+
+// usageLabel names a row's step, saying when it was a hook's agent or a fix:
+// agent rather than a plan step: either may share a name with one.
+func usageLabel(step store.AgentUsage) string {
+	if kind := step.UsageKind(); kind != store.UsageStep {
+		return step.StepName + " (" + kind + ")"
+	}
+
+	return step.StepName
 }
 
 // finishNote says how a step's last response ended, calling out the one value

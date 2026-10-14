@@ -23,6 +23,10 @@ type AgentUsage struct {
 	StepIndex    int
 	StepName     string
 	JobName      string
+	// Kind is UsageStep, UsageHook or UsageFix; empty records as UsageStep.
+	Kind string
+	// NodeHash is empty for a hook or a fix, which are never hashed: their
+	// rows hang off the run alone.
 	NodeHash     string
 	ModelReq     string
 	ModelServed  string
@@ -35,6 +39,23 @@ type AgentUsage struct {
 	FinishReason string
 	DurationMS   int64
 	RawMeta      string
+}
+
+// What spent an agent_usage row's tokens. A hook's agent and a task's fix:
+// agent run inside the job and spend against its budget, but have no node.
+const (
+	UsageStep = "step"
+	UsageHook = "hook"
+	UsageFix  = "fix"
+)
+
+// UsageKind is the kind a row records: Kind, or UsageStep when unset.
+func (u AgentUsage) UsageKind() string {
+	if u.Kind == "" {
+		return UsageStep
+	}
+
+	return u.Kind
 }
 
 // RunTotals is the per-run rollup `steps runs cost` lists.

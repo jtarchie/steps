@@ -451,6 +451,7 @@ type saveUsageArgs struct {
 	jobName        string
 	stepIndex      int
 	stepName       string
+	kind           string
 	nodeHash       string
 	modelRequested string
 	usage          usage.Step
@@ -463,10 +464,10 @@ type saveUsageArgs struct {
 // step that did its work into a failed one. A dropped row costs a line in a
 // cost report; a failed step costs the run.
 //
-// Only real agent STEPS reach here. Sub-agents and fix agents record no node,
-// no job_run and no transcript, and their spend already rolls into the parent
-// step's total through the shared accumulator — giving them rows of their own
-// would double-count every job report.
+// Agent steps, hooks and fix: agents reach here; a hook or fix has no node,
+// and its row hangs off the run. Sub-agents never do: their spend is already
+// in the delegating step's row (persistedSnapshot), and a row of their own
+// would count it twice.
 func saveAgentUsage(ctx context.Context, st store.Usage, args saveUsageArgs) {
 	if st == nil {
 		return
@@ -486,6 +487,7 @@ func saveAgentUsage(ctx context.Context, st store.Usage, args saveUsageArgs) {
 		StepIndex:    args.stepIndex,
 		StepName:     args.stepName,
 		JobName:      args.jobName,
+		Kind:         args.kind,
 		NodeHash:     args.nodeHash,
 		ModelReq:     args.modelRequested,
 		ModelServed:  args.usage.ModelServed,

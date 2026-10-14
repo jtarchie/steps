@@ -226,7 +226,7 @@ func (s *PreparedStep) Run(ctx context.Context, run StepRun) (StepResult, error)
 	printAgentResponse(ctx, res)
 
 	saveAgentUsage(ctx, s.st, saveUsageArgs{
-		jobName: run.JobName, stepIndex: run.Index, stepName: run.Name, nodeHash: run.NodeHash,
+		jobName: run.JobName, stepIndex: run.Index, stepName: run.Name, kind: store.UsageStep, nodeHash: run.NodeHash,
 		modelRequested: prepared.primary.ModelName,
 		usage:          prepared.conv.usage.persistedSnapshot(),
 		duration:       time.Since(stepStarted),
@@ -441,9 +441,18 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 	// logging) nowhere. stepIndex is -1: a hook is not a plan position.
 	bindRun(ctx, &prepared, st, jobName, -1, step.DisplayName())
 
+	started := time.Now()
+
 	res, err := runAndAnnounceFailover(ctx, step.Agent, &prepared)
 
 	printAgentResponse(ctx, res)
+
+	saveAgentUsage(ctx, st, saveUsageArgs{
+		jobName: jobName, stepIndex: -1, stepName: step.DisplayName(), kind: store.UsageHook,
+		modelRequested: prepared.primary.ModelName,
+		usage:          prepared.conv.usage.persistedSnapshot(),
+		duration:       time.Since(started),
+	})
 
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)

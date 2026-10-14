@@ -9,7 +9,7 @@ package postgres
 //
 // Its own counter, not the sqlite one: the two schemas are written separately
 // and change separately.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -321,7 +321,8 @@ CREATE TABLE IF NOT EXISTS agent_usage (
     step_index        INTEGER NOT NULL,
     step_name         TEXT NOT NULL,
     job_name          TEXT NOT NULL,
-    node_hash         TEXT NOT NULL,
+    kind              TEXT NOT NULL,
+    node_hash         TEXT,
     model_requested   TEXT NOT NULL,
     model_served      TEXT NOT NULL,
     prompt_tokens     BIGINT NOT NULL,
@@ -334,7 +335,10 @@ CREATE TABLE IF NOT EXISTS agent_usage (
     duration_ms       BIGINT NOT NULL,
     raw_meta          TEXT NOT NULL,
     created_at        TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (pipeline_id, run_id, node_hash),
+    -- Not the primary key, whose columns are NOT NULL: a hook's or fix's NULL
+    -- node_hash makes each execution its own row (NULLS DISTINCT), and MATCH
+    -- SIMPLE exempts it from the reference below, so it hangs off its run.
+    UNIQUE (pipeline_id, run_id, node_hash),
     FOREIGN KEY (pipeline_id, node_hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id, step_index);

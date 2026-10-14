@@ -13,7 +13,7 @@ import (
 
 // usageColumns is the column list RecordAgentUsage writes and RunUsage reads
 // back, in the field order of AgentUsage.
-const usageColumns = `run_id, step_index, step_name, job_name, node_hash,
+const usageColumns = `run_id, step_index, step_name, job_name, kind, node_hash,
 	model_requested, model_served,
 	prompt_tokens, completion_tokens, total_tokens,
 	cached_tokens, reasoning_tokens, cost_usd,
@@ -37,10 +37,12 @@ const usageColumns = `run_id, step_index, step_name, job_name, node_hash,
 //
 // The conflict is on the node hash, so two DIFFERENT steps sharing a plan
 // index — the cells of a matrix, the members of an ensemble — never collide.
+// A hook or fix has no node, and a NULL never conflicts, so each execution of
+// one is a row of its own.
 func (s *Store) RecordAgentUsage(ctx context.Context, usage store.AgentUsage) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO agent_usage (pipeline_id, `+usageColumns+`, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (pipeline_id, run_id, node_hash) DO UPDATE SET
 			step_index = excluded.step_index,
 			step_name = excluded.step_name,
@@ -66,7 +68,7 @@ func (s *Store) RecordAgentUsage(ctx context.Context, usage store.AgentUsage) er
 			created_at = excluded.created_at
 	`,
 		s.pipelineID,
-		usage.RunID, usage.StepIndex, usage.StepName, usage.JobName, usage.NodeHash,
+		usage.RunID, usage.StepIndex, usage.StepName, usage.JobName, usage.UsageKind(), nullable(usage.NodeHash),
 		usage.ModelReq, usage.ModelServed,
 		usage.Prompt, usage.Completion, usage.Total,
 		usage.Cached, usage.Reasoning, usage.CostUSD,
@@ -107,13 +109,19 @@ func (s *Store) RunUsage(ctx context.Context, runID string) ([]store.AgentUsage,
 		`SELECT `+usageColumns+` FROM agent_usage
 		 WHERE pipeline_id = ? AND run_id = ? ORDER BY step_index, rowid`,
 		[]any{s.pipelineID, runID}, func(rows *sql.Rows) (store.AgentUsage, error) {
-			var usage store.AgentUsage
+			var (
+				usage store.AgentUsage
+				node  sql.NullString
+			)
 
-			return usage, rows.Scan(&usage.RunID, &usage.StepIndex, &usage.StepName, &usage.JobName, &usage.NodeHash,
+			err := rows.Scan(&usage.RunID, &usage.StepIndex, &usage.StepName, &usage.JobName, &usage.Kind, &node,
 				&usage.ModelReq, &usage.ModelServed,
 				&usage.Prompt, &usage.Completion, &usage.Total,
 				&usage.Cached, &usage.Reasoning, &usage.CostUSD,
 				&usage.FinishReason, &usage.DurationMS, &usage.RawMeta)
+			usage.NodeHash = node.String
+
+			return usage, err //nolint:wrapcheck // collect wraps with the thing being read
 		})
 }
 

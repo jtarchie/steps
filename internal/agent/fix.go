@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/jtarchie/steps/internal/agent/llmclient"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // defaultFixPrompt is used when a task's fix: supplies no prompt of its own.
@@ -182,8 +184,17 @@ func RunFix(
 	// answer available. The caller (runFixTask, internal/pipeline/pipeline.go)
 	// already printed "task %q failed ...; invoking fix agent %q" before this
 	// call, so this only needs the response body, not another "agent:" banner.
+	started := time.Now()
+
 	result, err := runOneConversation(ctx, ri, llm, conv, timeout)
 	printAgentResponse(ctx, result)
+
+	saveAgentUsage(ctx, st, saveUsageArgs{
+		jobName: jobName, stepIndex: stepIndex, stepName: fix.Agent, kind: store.UsageFix,
+		modelRequested: ri.ModelName,
+		usage:          conv.usage.persistedSnapshot(),
+		duration:       time.Since(started),
+	})
 
 	if err != nil {
 		return fmt.Errorf("fix agent conversation: %w", err)

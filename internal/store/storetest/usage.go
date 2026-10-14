@@ -289,3 +289,100 @@ func onlyUsage(ctx context.Context, t *testing.T, st store.Store, runID string) 
 
 	return rows[0]
 }
+
+// TestAgentUsageRecordsNodelessSpend: a hook's agent and a task's fix: agent
+// spend inside a job and have no node. Each execution is its own row — there
+// is no node to say two of them were one invocation — and every read counts
+// them: the per-run rollup, the breakdown, and the ledger a resumed run seeds
+// its job budget from.
+func (s suite) TestAgentUsageRecordsNodelessSpend(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	st := s.open(t, "test")
+
+	recordSpend(ctx, t, st, "r1", "j", "writer", 100)
+
+	for _, spend := range []store.AgentUsage{
+		{RunID: "r1", StepIndex: -1, StepName: "notifier", JobName: "j", Kind: store.UsageHook, Total: 20},
+		{RunID: "r1", StepIndex: -1, StepName: "notifier", JobName: "j", Kind: store.UsageHook, Total: 30},
+		{RunID: "r1", StepIndex: 0, StepName: "fixer", JobName: "j", Kind: store.UsageFix, Total: 40},
+	} {
+		err := st.RecordAgentUsage(ctx, spend)
+		if err != nil {
+			t.Fatalf("RecordAgentUsage(%s %s): %v", spend.Kind, spend.StepName, err)
+		}
+	}
+
+	spent, err := st.RunTokensSpent(ctx, "r1")
+	if err != nil || spent != 190 {
+		t.Errorf("RunTokensSpent = %d, %v; want 190 — a resume would restore the hook and fix spend", spent, err)
+	}
+
+	assertUsageKinds(ctx, t, st, "r1")
+
+	totals, err := st.RunCostTotals(ctx, 0)
+	if err != nil || len(totals) != 1 {
+		t.Fatalf("RunCostTotals = %+v, %v; want one run", totals, err)
+	}
+
+	assertTotals(t, totals[0], store.RunTotals{RunID: "r1", Tokens: 190, Steps: 4, Unpriced: 4})
+}
+
+// assertUsageKinds checks TestAgentUsageRecordsNodelessSpend's run reads back
+// the step, two hook executions and the fix as rows of their own, the
+// node-less ones with no node.
+func assertUsageKinds(ctx context.Context, t *testing.T, st store.Store, runID string) {
+	t.Helper()
+
+	rows, err := st.RunUsage(ctx, runID)
+	if err != nil {
+		t.Fatalf("RunUsage: %v", err)
+	}
+
+	kinds := map[string]int{}
+
+	for _, row := range rows {
+		kinds[row.Kind] += row.Total
+
+		if row.Kind != store.UsageStep && row.NodeHash != "" {
+			t.Errorf("%s row %q reads back node %q, want none", row.Kind, row.StepName, row.NodeHash)
+		}
+	}
+
+	if len(rows) != 4 || kinds[store.UsageStep] != 100 || kinds[store.UsageHook] != 50 || kinds[store.UsageFix] != 40 {
+		t.Errorf("RunUsage = %+v; want the step, two hook executions and the fix as their own rows", rows)
+	}
+}
+
+// TestNodelessUsageIsReapedWithItsRun: with no node to cascade off, a hook's
+// row has only its run — and retention must still take it.
+func (s suite) TestNodelessUsageIsReapedWithItsRun(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	st := s.open(t, "test")
+
+	for n, runID := range []string{"OLDRUN01", "NEWRUN01"} {
+		build(ctx, t, st, "job", runID, n)
+
+		err := st.RecordAgentUsage(ctx, store.AgentUsage{
+			RunID: runID, StepIndex: -1, StepName: "notifier", JobName: "job", Kind: store.UsageHook, Total: 10,
+		})
+		if err != nil {
+			t.Fatalf("RecordAgentUsage: %v", err)
+		}
+	}
+
+	err := st.Prune(ctx, store.Retention{JobName: "job", Runs: 1}, "")
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	for runID, want := range map[string]int{"OLDRUN01": 0, "NEWRUN01": 1} {
+		rows, err := st.RunUsage(ctx, runID)
+		if err != nil || len(rows) != want {
+			t.Errorf("run %s keeps %d usage rows (%v), want %d", runID, len(rows), err, want)
+		}
+	}
+}

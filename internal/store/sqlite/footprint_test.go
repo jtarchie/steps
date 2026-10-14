@@ -527,7 +527,7 @@ func TestFootprintNoOrphansSurviveAPrune(t *testing.T) {
 		{"agent_usage rows whose run is gone",
 			`SELECT COUNT(*) FROM agent_usage a WHERE NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = a.run_id)`},
 		{"agent_usage rows whose node is gone",
-			`SELECT COUNT(*) FROM agent_usage a WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.hash = a.node_hash)`},
+			`SELECT COUNT(*) FROM agent_usage a WHERE a.node_hash IS NOT NULL AND NOT EXISTS (SELECT 1 FROM nodes n WHERE n.hash = a.node_hash)`},
 		{"questions rows whose run is gone",
 			`SELECT COUNT(*) FROM questions q WHERE NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = q.run_id)`},
 		{"run_placements rows whose run is gone",

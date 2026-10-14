@@ -1119,6 +1119,7 @@ reviewer [dim=api]               1,204,551      22%      14m30s  length  <-- tru
 - **CACHED** is the only place prompt caching reports whether it worked — without it the feature is faith-based.
 - **FINISH** distinguishes a model that had little to say from one **cut off** by its output limit; a truncated verdict wastes every step downstream and otherwise reads as an ordinary short answer.
 - **COST** says `unpriced` rather than `$0.00` — a zero would say the run was free instead of that nobody priced it.
+- **A hook's agent and a task's `fix:` agent are spend too**: they count toward the job's `budget:` (and what a resume continues from), and the breakdown lists them as `notifier (hook)` / `fixer (fix)`, one row per execution.
 
 Things worth knowing:
 
