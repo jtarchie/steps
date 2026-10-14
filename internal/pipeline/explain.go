@@ -131,7 +131,7 @@ func explainRows(cfg *config.Config, job *config.Job, chains []merkle.Chain, ski
 }
 
 // explainReason says why a node would run or skip, reusing the same
-// vocabulary the run itself prints (see unskippableReason).
+// vocabulary the run itself prints (see merkle.UncacheableReason).
 func explainReason(cfg *config.Config, job *config.Job, index int, wouldSkip, chainUnskippable bool) string {
 	if wouldSkip {
 		return "cached"
@@ -151,7 +151,7 @@ func explainReason(cfg *config.Config, job *config.Job, index int, wouldSkip, ch
 
 	step := job.Plan[index]
 
-	reason, err := uncacheableReason(cfg, step)
+	reason, err := merkle.UncacheableReason(cfg, step)
 	if err == nil && reason != "" {
 		return reason
 	}

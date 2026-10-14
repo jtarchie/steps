@@ -6,7 +6,7 @@ package pipeline
 // Why this is not the merkle cache's job, since that is the first place anyone
 // looks: the version IS part of a get node's hashed content, so a chain re-run
 // against a version it already ran hashes identically and is skipped. But
-// route.go's unskippableReason deliberately never skips an `agent:` or a
+// merkle.UncacheableReason deliberately never skips an `agent:` or a
 // `put:` — one is non-deterministic, the other's whole worth is an effect on
 // the outside world — so a plan containing either re-executes for every
 // version the check still returns. The cache avoids recomputing a VALUE; it

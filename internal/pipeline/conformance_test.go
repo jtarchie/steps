@@ -492,7 +492,7 @@ jobs:
 // (atc/db/versions_db.go's NextEveryVersion, github.com/concourse/concourse
 // @ v8.2.4 — read from source, not a spec page); steps re-ran everything the
 // check still returned. Harmless while the plan is cacheable, and NOT harmless
-// with a put: or an agent: in it, which route.go's unskippableReason never
+// with a put: or an agent: in it, which merkle.UncacheableReason never
 // skips: found in the wild as a Slack bot re-answering every mention still in
 // its check's window, once per new mention.
 //

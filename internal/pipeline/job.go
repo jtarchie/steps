@@ -469,7 +469,7 @@ func pruneHistory(ctx context.Context, st store.Pruning, cfg *config.Config, job
 }
 
 // recordChainSucceeded records the leaf of a fully-executed chain as
-// succeeded, unless the chain is unskippable (see uncacheableReason): it is
+// succeeded, unless the chain is unskippable (see merkle.UncacheableReason): it is
 // never skipped, so a job_runs row for it would be unused.
 func recordChainSucceeded(ctx context.Context, r stepRunner, rootHash string, chainUnskippable bool) error {
 	if chainUnskippable {

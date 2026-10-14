@@ -225,92 +225,75 @@ func (p imagePlan) planNonGetNode(cfg *config.Config, step config.Step, i int, p
 }
 
 // planNonGetNode builds the plan node for any step but a get and reports
-// whether that step makes its chain unskippable: put/agent always do (side
-// effects, non-determinism), and a task does when it has a fix: (its success
-// may depend on non-deterministic agent work) — including one inherited from
-// a referenced tasks: entry.
+// whether that step makes its chain unskippable — UncacheableReason's call,
+// the same one the run prints. Unskippable is not hashed, so it only ever
+// makes the cache more conservative.
 func planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, bool, error) {
-	// A load_var: captures a value that does not exist until the run produces
-	// it, so the planner cannot know what it will be — and every step after it
-	// depends on that value. Unskippable, always.
-	if step.LoadVar != "" {
-		return Node{ParentHash: parentHash, Kind: NodeKindLoadVar, StepIndex: i, Resource: step.LoadVar}, true, nil
+	node, err := planNodeOf(cfg, step, i, parentHash)
+	if err != nil {
+		return node, true, err
 	}
 
-	// An approval: is a person, not a computation. Nothing about it is
-	// knowable at plan time, and a cached "they said yes once" must never
-	// stand in for asking again.
+	reason, err := UncacheableReason(cfg, step)
+
+	return node, reason != "", err
+}
+
+func planNodeOf(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
+	// A load_var: captures a value that does not exist until the run produces
+	// it, and an approval: is a person, not a computation: neither has content
+	// to hash, and neither is ever skipped.
+	if step.LoadVar != "" {
+		return Node{ParentHash: parentHash, Kind: NodeKindLoadVar, StepIndex: i, Resource: step.LoadVar}, nil
+	}
+
 	if step.Approval != nil {
-		return Node{ParentHash: parentHash, Kind: NodeKindApproval, StepIndex: i, Resource: "approval"}, true, nil
+		return Node{ParentHash: parentHash, Kind: NodeKindApproval, StepIndex: i, Resource: "approval"}, nil
 	}
 
 	// across: is a modifier rather than a kind (see internal/pipeline's
 	// dispatch): the block is one plan node whose cells are hashed inside it.
 	if len(step.Across) > 0 {
-		node, err := newNode(NodeKindAcross, "across", i, parentHash, "", func() (map[string]any, error) {
+		return newNode(NodeKindAcross, "across", i, parentHash, "", func() (map[string]any, error) {
 			return AcrossPlanContent(cfg, step, i)
 		})
-
-		return node, true, err
 	}
 
 	return planKindNode(cfg, step, i, parentHash)
 }
 
 // planKindNode builds the plan node for an ordinary (non-across) step.
-func planKindNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, bool, error) {
+func planKindNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
 	kind, ok := step.Kind()
 	if !ok {
-		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must set exactly one step kind)", i)
+		return Node{}, fmt.Errorf("step %d: unrecognized step (must set exactly one step kind)", i)
 	}
 
-	switch kind { //nolint:exhaustive // default covers the kinds planNonGetNode never sends here
+	switch kind { //nolint:exhaustive // default covers the kinds planNodeOf never sends here
 	case config.StepKindTask:
 		return planTaskNode(cfg, step, i, parentHash)
 	case config.StepKindPut:
-		node, err := newNode(NodeKindPut, fmt.Sprintf("put %q", step.Put), i, parentHash, step.DisplayName(), func() (map[string]any, error) {
+		return newNode(NodeKindPut, fmt.Sprintf("put %q", step.Put), i, parentHash, step.DisplayName(), func() (map[string]any, error) {
 			return stepContentMap(cfg, step)
 		})
-
-		return node, true, err
 	case config.StepKindAgent:
-		node, err := agentNode(cfg, step, i, parentHash)
-
-		return node, true, err
+		return agentNode(cfg, step, i, parentHash)
 	case config.StepKindTry, config.StepKindRace, config.StepKindInParallel, config.StepKindEnsemble, config.StepKindDo:
-		node, err := planContainerNode(cfg, step, kind, i, parentHash)
-		if err != nil {
-			return node, true, err
-		}
-
-		unskippable, err := containerUnskippable(cfg, step, kind)
-
-		return node, unskippable, err
+		return planContainerNode(cfg, step, kind, i, parentHash)
 	default: // get, load_var:, approval: — planned before this dispatch
-		return Node{}, false, fmt.Errorf("step %d: unexpected %s step (planned before this dispatch)", i, kind)
+		return Node{}, fmt.Errorf("step %d: unexpected %s step (planned before this dispatch)", i, kind)
 	}
 }
 
-// planTaskNode builds a task step's plan node and decides whether a chain
-// through it may be skipped.
-//
-// A task is unskippable if it has a fix:, or carries a when: guard or to:
-// routing — the latter two have run-time-only outcomes the planner can't know,
-// so a chain through them must never be recorded as a reusable success. This
-// mirrors internal/pipeline's runtime chainUnskippable and makes the plan-time
-// flag accurate rather than relying on that runtime flag alone (Unskippable is
-// not hashed, so this only ever makes the cache more conservative).
-func planTaskNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, bool, error) {
+func planTaskNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
 	rt, err := cfg.ResolveTask(step)
 	if err != nil {
-		return Node{}, false, fmt.Errorf("step %d: %w", i, err)
+		return Node{}, fmt.Errorf("step %d: %w", i, err)
 	}
 
-	node, err := newNode(NodeKindTask, fmt.Sprintf("task %q", rt.Name), i, parentHash, rt.Name, func() (map[string]any, error) {
+	return newNode(NodeKindTask, fmt.Sprintf("task %q", rt.Name), i, parentHash, rt.Name, func() (map[string]any, error) {
 		return TaskNodeContent(cfg, step, rt)
 	})
-
-	return node, rt.Fix != nil || step.When != nil || step.Routes() || step.ReadsFrom(), err
 }
 
 // ContainerNode is the node a block hashes to, which the executor asks the

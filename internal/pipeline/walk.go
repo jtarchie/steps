@@ -67,7 +67,7 @@ type planWalk struct {
 // terminates this loop, since it delegates the rest of the plan to it.
 // Every other step is handled by runNonGetStep. Only a task or a block is
 // looked up in skippable; whether its chain could be skipped at all is
-// uncacheableReason's call.
+// merkle.UncacheableReason's call.
 func runSteps(ctx context.Context, w planWalk, steps []config.Step) error {
 	w.index, w.visits = 0, map[int]int{}
 
@@ -373,7 +373,7 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 // remainder of the plan. It first evaluates the step's when: guard (see
 // evaluateStepGuard): a false guard skips only this step. stepChainSkipped is
 // only ever returned for a cache-matched task or block; which steps can never
-// be chain-skipped is uncacheableReason's call.
+// be chain-skipped is merkle.UncacheableReason's call.
 func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, skippable map[string]bool, parentHash string) (stepResult, error) {
 	step, err := resolveStepImage(ctx, r.cfg, r.jobName, step)
 	if err != nil {

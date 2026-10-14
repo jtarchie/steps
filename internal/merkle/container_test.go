@@ -6,9 +6,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 )
 
-// A block is as cacheable as its branches. The executor refuses to record a
-// chain with an uncacheable branch on its own, so an end-to-end run cannot
-// tell whether the planner agrees; this is the planner's half alone.
+// A block is as cacheable as its branches, at any depth.
 func TestABlockIsAsCacheableAsItsBranches(t *testing.T) {
 	t.Parallel()
 
@@ -29,16 +27,12 @@ func TestABlockIsAsCacheableAsItsBranches(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			kind, _ := test.block.Kind()
-
-			// The probes name no resources or agents, so the leaf kinds fail to
-			// hash; that a failure reads as unskippable is the safe direction.
-			got, err := containerUnskippable(&config.Config{}, test.block, kind)
-			if err != nil && !test.unskippable {
+			reason, err := UncacheableReason(&config.Config{}, test.block)
+			if err != nil {
 				t.Fatal(err)
 			}
 
-			if got != test.unskippable {
+			if got := reason != ""; got != test.unskippable {
 				t.Errorf("unskippable = %v, want %v", got, test.unskippable)
 			}
 		})

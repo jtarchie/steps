@@ -140,107 +140,17 @@ func reportRoute(ctx context.Context, steps []config.Step, i int, step config.St
 	slog.InfoContext(ctx, "job.route", "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits)
 }
 
-// uncacheableReason names why a step makes its chain uncacheable, or "" when
-// it doesn't: unskippableReason's own kinds, a task whose fix: — including one
-// inherited from a referenced tasks: entry — makes its success depend on what
-// a model did, and a block holding any of those. It mirrors
-// merkle.planNonGetNode, so the run and the planner cannot disagree about a
-// chain the skip index is asked about.
-//
-// It exists so the run can SAY so. That a when: guard or a to: route silently
-// disables caching for everything downstream is real, documented behavior that
-// produced no output at all: the user saw steps re-running and had to infer
-// the rule.
-func uncacheableReason(cfg *config.Config, step config.Step) (string, error) {
-	reason := unskippableReason(step)
-	if reason != "" {
-		return reason, nil
-	}
-
-	if step.Task != "" {
-		rt, err := cfg.ResolveTask(step)
-		if err != nil {
-			return "", fmt.Errorf("resolve task: %w", err)
-		}
-
-		if rt.Fix != nil {
-			return "fix: agent", nil
-		}
-
-		return "", nil
-	}
-
-	kind, _ := step.Kind()
-
-	for _, branch := range merkle.ContainerBranches(step) {
-		if branch.Get != "" {
-			return fmt.Sprintf("%s block: get %s inside it", kind, branch.Get), nil
-		}
-
-		inner, err := uncacheableReason(cfg, branch)
-		if err != nil || inner != "" {
-			return fmt.Sprintf("%s block: %s", kind, inner), err
-		}
-	}
-
-	return "", nil
-}
-
-// unskippableReason names the kinds of step that are uncacheable whatever they
-// hold — see uncacheableReason for the rest.
-func unskippableReason(step config.Step) string {
-	switch kind, _ := step.Kind(); kind {
-	case config.StepKindPut:
-		return "put step"
-	case config.StepKindAgent:
-		return "agent step"
-	case config.StepKindTry:
-		return "try step"
-	case config.StepKindGet, config.StepKindTask, config.StepKindInParallel, config.StepKindRace,
-		config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
-		// Uncacheable only for what they carry, checked below.
-	}
-
-	switch {
-	case step.When != nil:
-		return "when: guard"
-	case step.Routes():
-		return "to: routing"
-	case step.ReadsFrom():
-		return "context: from"
-	default:
-		return runTimeReason(step)
-	}
-}
-
-// runTimeReason names the steps whose result does not exist until the run
-// produces it: nothing the planner can hash stands in for them.
-func runTimeReason(step config.Step) string {
-	switch kind, _ := step.Kind(); kind {
-	case config.StepKindLoadVar:
-		return "load_var step"
-	case config.StepKindApproval:
-		return "approval step"
-	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent,
-		config.StepKindTry, config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindDo:
-		// Known at plan time, unless across: below fans them out.
-	}
-
-	if len(step.Across) > 0 {
-		return "across block"
-	}
-
-	return ""
-}
-
 // foldStepUnskippable ORs step's own unskippability into chainUnskippable in
 // one call, keeping runSteps's own branch count down. On the false->true
 // transition it prints why, once — the point at which the rest of this chain
-// stopped being cacheable.
+// stopped being cacheable. Whether it is is merkle.UncacheableReason's call,
+// the same one the planner makes; this only says so. That a when: guard or a
+// to: route silently disables caching downstream used to produce no output at
+// all: the user saw steps re-running and had to infer the rule.
 func foldStepUnskippable(ctx context.Context, cfg *config.Config, step config.Step, chainUnskippable bool) (bool, error) {
-	reason, err := uncacheableReason(cfg, step)
+	reason, err := merkle.UncacheableReason(cfg, step)
 	if err != nil {
-		return chainUnskippable, err
+		return chainUnskippable, err //nolint:wrapcheck // merkle's "resolve task: …" is the text the run has always reported
 	}
 
 	unskippable := reason != ""

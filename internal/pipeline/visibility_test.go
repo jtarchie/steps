@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -36,9 +37,13 @@ func TestUnskippableReason(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := unskippableReason(test.step)
+			got, err := merkle.UncacheableReason(&config.Config{}, test.step)
+			if err != nil {
+				t.Fatal(err)
+			}
+
 			if got != test.want {
-				t.Errorf("unskippableReason() = %q, want %q", got, test.want)
+				t.Errorf("UncacheableReason() = %q, want %q", got, test.want)
 			}
 		})
 	}

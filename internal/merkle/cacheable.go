@@ -122,30 +122,101 @@ func taskCellProducesOutputs(cfg *config.Config, cell config.Step) bool {
 	return len(rt.Outputs) > 0
 }
 
-// containerUnskippable reports whether a block keeps its chain from being
-// cached. Its branches run inside it rather than as chain nodes, but the block's
-// hash folds in every branch's content, so a cached success of the block is a
-// success of exactly those branches — as long as each one would itself be
-// cacheable. A get inside a block is not: the version it fetches is not part of
-// the block's content. A try: is never cacheable (a tolerated failure is not a
-// success to replay), and a guard or route on the block is a run-time outcome.
-func containerUnskippable(cfg *config.Config, step config.Step, kind config.StepKind) (bool, error) {
-	if kind == config.StepKindTry || step.When != nil || step.Routes() {
-		return true, nil
+// UncacheableReason names why a step keeps its chain from being skipped, or ""
+// when it doesn't. It is the one rule: the planner marks a chain Unskippable
+// exactly when this names a reason for one of its steps, and the run's note
+// and `steps plan` print the reason itself — two copies of it once drifted.
+//
+//   - put: and agent: are side effects and non-determinism; a try: tolerates
+//     a failure, which is not a success to replay.
+//   - when:, to: and context: from: are outcomes only the run knows.
+//   - load_var:, approval: and across: produce what they mean at run time.
+//   - A task's fix: — including one inherited from its tasks: entry — makes
+//     its success depend on what a model did.
+//   - A block is as cacheable as its branches: its hash folds in every
+//     branch's content, so a cached success of the block is a success of
+//     exactly those branches. A get inside one is not, because the version it
+//     fetches is not part of the block's content.
+func UncacheableReason(cfg *config.Config, step config.Step) (string, error) {
+	reason := unskippableReason(step)
+	if reason != "" {
+		return reason, nil
 	}
+
+	if step.Task != "" {
+		rt, err := cfg.ResolveTask(step)
+		if err != nil {
+			return "", fmt.Errorf("resolve task: %w", err)
+		}
+
+		if rt.Fix != nil {
+			return "fix: agent", nil
+		}
+
+		return "", nil
+	}
+
+	kind, _ := step.Kind()
 
 	for _, branch := range ContainerBranches(step) {
 		if branch.Get != "" {
-			return true, nil
+			return fmt.Sprintf("%s block: get %s inside it", kind, branch.Get), nil
 		}
 
-		_, unskippable, err := planNonGetNode(cfg, branch, 0, "")
-		if err != nil || unskippable {
-			return true, err
+		inner, err := UncacheableReason(cfg, branch)
+		if err != nil || inner != "" {
+			return fmt.Sprintf("%s block: %s", kind, inner), err
 		}
 	}
 
-	return false, nil
+	return "", nil
+}
+
+// unskippableReason names the kinds of step that are uncacheable whatever they
+// hold — see UncacheableReason for the rest.
+func unskippableReason(step config.Step) string {
+	switch kind, _ := step.Kind(); kind {
+	case config.StepKindPut:
+		return "put step"
+	case config.StepKindAgent:
+		return "agent step"
+	case config.StepKindTry:
+		return "try step"
+	case config.StepKindGet, config.StepKindTask, config.StepKindInParallel, config.StepKindRace,
+		config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+		// Uncacheable only for what they carry, checked below.
+	}
+
+	switch {
+	case step.When != nil:
+		return "when: guard"
+	case step.Routes():
+		return "to: routing"
+	case step.ReadsFrom():
+		return "context: from"
+	default:
+		return runTimeReason(step)
+	}
+}
+
+// runTimeReason names the steps whose result does not exist until the run
+// produces it: nothing the planner can hash stands in for them.
+func runTimeReason(step config.Step) string {
+	switch kind, _ := step.Kind(); kind {
+	case config.StepKindLoadVar:
+		return "load_var step"
+	case config.StepKindApproval:
+		return "approval step"
+	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent,
+		config.StepKindTry, config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindDo:
+		// Known at plan time, unless across: below fans them out.
+	}
+
+	if len(step.Across) > 0 {
+		return "across block"
+	}
+
+	return ""
 }
 
 // ContainerBranches is the steps a do:, in_parallel:, race: or ensemble: block
