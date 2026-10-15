@@ -40,6 +40,7 @@ import (
 
 	"github.com/jtarchie/steps/docs"
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // mutantMarker is the text an operator splices in where a match must fail.
@@ -99,6 +100,11 @@ func checkMutantIsCaught(t *testing.T, block docs.Block, mut mutant) {
 	err := cli.Run(append([]string{"validate", "--syntax-only", path}, scenarioVarFlags(scenario)...))
 	if err != nil {
 		t.Fatalf("the mutant does not load, so a failing run would prove nothing about the assertion: %v", err)
+	}
+
+	// The doc harness skips a placed example without a daemon, and a mutant has to as well: with no worker the original fails on its own, so the mutated outcome: failed would "pass" and read as an assertion that cannot fail.
+	if len(scenario.workers) > 0 {
+		testdocker.Require(t)
 	}
 
 	// scenarioFlags, not just the vars: a mutant has to be invoked exactly as
