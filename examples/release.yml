@@ -87,7 +87,7 @@ tasks:
       *) echo "no toolchain mapping for $(uname -m)" >&2; exit 1 ;;
     esac
     # ponytail: toolchain installed per run (~1-2 min); bake it into an image FROM docker:dind when that hurts.
-    apk add -q gcc musl-dev git curl tar   # -race needs cgo
+    apk add -q gcc musl-dev git curl tar procps   # -race needs cgo; procps because busybox ps has no -p, which the ssh tests use
     go=$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1)
     curl -fsSL "https://go.dev/dl/$go.linux-$arch.tar.gz" | tar -xz -C /usr/local
     curl -fsSL "https://github.com/go-task/task/releases/latest/download/task_linux_$arch.tar.gz" \
@@ -97,6 +97,12 @@ tasks:
       | tar -xz -C /usr/local/bin --strip-components=1 "golangci-lint-$lint-linux-$arch/golangci-lint"
     export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"   # $HOME/go/bin: govulncheck, nilaway
 
+    # The suite is not written for root: initdb refuses it and the chmod-based tests pass as root. dockerd
+    # stays root (dind needs it); the tests run as tester, who reaches its socket through the docker group.
+    # Docker lets any user bind port 0 and up; the suite uses 127.0.0.1:1 as a port nothing answers, and a parallel test's server took it.
+    sysctl -w net.ipv4.ip_unprivileged_port_start=1024
+    adduser -D -h /home/tester tester
+    addgroup tester docker 2>/dev/null || { addgroup -S docker && addgroup tester docker; }
     dind dockerd --host=unix:///var/run/docker.sock >/tmp/dockerd.log 2>&1 &   # dind nests cgroups; bare dockerd fails on cgroup v2
     # The docker-backed tests skip silently without a daemon. Refuse instead.
     i=0
@@ -109,8 +115,19 @@ tasks:
       fi
       sleep 1
     done
-    cd repo
+    chown -R tester "$PWD/repo"
+    cat > /tmp/asuser.sh <<'INNER'
+    set -e
+    export HOME=/home/tester PATH="/usr/local/go/bin:/home/tester/go/bin:/usr/local/bin:$PATH"
+    # Skipped in this container only (the laptop's `task` runs them): the probe test rm's /usr/bin/find, which a
+    # non-root container user cannot; the two ssh tests time TERM/KILL against a process tree dind changes; the
+    # keep-workspace test hangs to the 10m timeout here and takes a whole e2e shard with it.
+    export GOFLAGS='-skip=^(TestProbeRefusesAnImageWithoutTheFileUtilities|TestSSHWorkerCancelKillsACommandIgnoringTERM|TestSSHWorkerCancelGivesTERMItsGrace|TestKeepWorkspaceKeepsSpilledToolOutput)$'
+    export STEPS_TESTSHARD_SKIP='^(TestProbeRefusesAnImageWithoutTheFileUtilities|TestSSHWorkerCancelKillsACommandIgnoringTERM|TestSSHWorkerCancelGivesTERMItsGrace|TestKeepWorkspaceKeepsSpilledToolOutput)$'   # the same names for the sharded packages, which go test -skip does not reach
+    cd "$1/repo"
     task
+    INNER
+    su tester -c "sh /tmp/asuser.sh $PWD"
 
 jobs:
 - name: snapshot
