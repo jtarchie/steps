@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1079,4 +1081,70 @@ func waitForFile(t *testing.T, path string) {
 	}
 
 	t.Fatalf("%s never appeared", path)
+}
+
+// claimWatcher records how many ClaimNextJob calls are in flight at once.
+type claimWatcher struct {
+	store.Store
+
+	inflight, peak atomic.Int32
+}
+
+func (c *claimWatcher) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error) {
+	now := c.inflight.Add(1)
+	defer c.inflight.Add(-1)
+
+	for {
+		seen := c.peak.Load()
+		if now <= seen || c.peak.CompareAndSwap(seen, now) {
+			break
+		}
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	return c.Store.ClaimNextJob(ctx) //nolint:wrapcheck // a test double passing the call through
+}
+
+// TestWorkersClaimOneAtATime: ClaimNextJob passes its read-pool check for every worker while any row is pending, so workers claiming in parallel each queue a claim on the one writer — and most of those find nothing. The claims of one pipeline go one at a time, and a worker behind the winner re-asks the read pool.
+func TestWorkersClaimOneAtATime(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo.yml")
+	writeFile(t, path, "jobs:\n  - name: build\n    plan:\n      - task: noop\n        inputs: []\n        run: \"true\"\n")
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	watched := &claimWatcher{Store: st}
+	target := NewPipeline("demo", cfg, watched, events.New(nil))
+	runner := NewLocalRunner(nil, pipeline.Run{}, 8)
+
+	var wg sync.WaitGroup
+
+	for range 8 {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			runner.DrainOne(t.Context(), target)
+		}()
+	}
+
+	wg.Wait()
+
+	if peak := watched.peak.Load(); peak != 1 {
+		t.Errorf("%d claims were in flight at once, want 1", peak)
+	}
 }

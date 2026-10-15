@@ -397,7 +397,10 @@ func (r *LocalRunner) DrainOne(ctx context.Context, target *Pipeline) bool {
 
 	defer release()
 
+	target.claimMu.Lock()
 	claim, claimed, err := target.Store.ClaimNextJob(ctx)
+	target.claimMu.Unlock()
+
 	if err != nil {
 		slog.ErrorContext(ctx, "web.claim", "pipeline", target.Slug, "error", err)
 

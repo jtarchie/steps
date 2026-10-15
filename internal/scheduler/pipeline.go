@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"sync"
 	"sync/atomic"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -20,6 +21,8 @@ type Pipeline struct {
 	// this bus, which is why every live view falls back to replaying the
 	// stored events rather than assuming the bus saw everything.
 	Bus *events.Bus
+	// claimMu lets one worker at a time ask the queue for a row. ClaimNextJob checks for pending rows on the read pool and only then goes to the file's one writer, so without this every worker passes that check while any row is pending and queues a claim that finds nothing — ahead of the winners' own writes.
+	claimMu sync.Mutex
 }
 
 // NewPipeline is a constructor rather than a struct literal because a literal would leave cfg nil for whatever reads it before the caller filled it in.
