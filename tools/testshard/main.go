@@ -184,8 +184,19 @@ func listTests(ctx context.Context, binary, dir string) ([]string, error) {
 
 	var names []string
 
+	// STEPS_TESTSHARD_SKIP is the sharded counterpart of go test -skip, which -test.list ignores: a name matching it is never listed, so never run.
+	skip := regexp.MustCompile(`^$`)
+	if expr := os.Getenv("STEPS_TESTSHARD_SKIP"); expr != "" {
+		compiled, compileErr := regexp.Compile(expr)
+		if compileErr != nil {
+			return nil, fmt.Errorf("STEPS_TESTSHARD_SKIP: %w", compileErr)
+		}
+
+		skip = compiled
+	}
+
 	for name := range strings.FieldsSeq(string(listed)) {
-		if testName.MatchString(name) {
+		if testName.MatchString(name) && !skip.MatchString(name) {
 			names = append(names, name)
 		}
 	}
