@@ -165,6 +165,11 @@ tasks:
     cmds:
       - go test ./e2e -run 'Mutation' -count=1
 
+  loadtest:
+    desc: "Advisory: ramp N held no-op jobs against one daemon with every cap lifted (N pipelines of one job, then one pipeline of N jobs) and print start latency, failures, peak concurrency, goroutines, FDs and heap per level. Not part of `task`. STEPS_LOADTEST_LEVELS=10,25,50,100 and STEPS_LOADTEST_HOLD=2 (seconds) tune it; -v output is the table."
+    cmds:
+      - STEPS_LOADTEST=1 go test ./e2e -run TestLoadtestConcurrentJobs -count=1 -v -timeout 30m
+
   cover-diff:
     desc: "Advisory: which changed lines (vs BASE, default HEAD) did no test execute. Born from a measured failure: a whole eviction layer landed uncovered and its deletion shipped green. Run before committing; triage every line it names — add the test, or know exactly why not."
     cmds:
