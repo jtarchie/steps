@@ -33,10 +33,57 @@ func UnquotedRefs(tmpl string, roots ...string) []string {
 	return scan.found
 }
 
+// QuotedRefs reports each root-derived action that IS piped through shellquote but sits inside a quoted string of the surrounding command: shellquote makes a word, and a word written inside "…" or '…' is no longer one — "$(id)" still substitutes, and '{{ x }}' closes the quote around a value holding one. Each is returned once, as text/template prints the action.
+//
+// Quoting is followed through the template's text in document order, as sh reads it. ponytail: it does not know which branch of an if ran, so a template that opens a quote in one branch and closes it in another can be over- or under-reported.
+func QuotedRefs(tmpl string, roots ...string) []string {
+	parsed, err := template.New("scan").Funcs(funcMap).Parse(tmpl)
+	if err != nil {
+		return nil
+	}
+
+	scan := &refScan{roots: roots, tainted: map[string]bool{}, trackQuotes: true}
+
+	for _, t := range parsed.Templates() {
+		if t.Tree != nil {
+			scan.quote = 0
+			scan.walk(t.Root, false)
+		}
+	}
+
+	return scan.found
+}
+
 type refScan struct {
 	roots   []string
 	tainted map[string]bool
 	found   []string
+	// trackQuotes switches the scan to QuotedRefs: it reports quoted shellquote'd values instead of unquoted ones.
+	trackQuotes bool
+	// quote is the quote sh is inside as text is read: 0 none, ' or ".
+	quote byte
+}
+
+// feed advances the quote state over literal command text.
+func (s *refScan) feed(text string) {
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+
+		switch {
+		case s.quote == '\'':
+			if c == '\'' {
+				s.quote = 0
+			}
+		case c == '\\':
+			i++
+		case s.quote == '"':
+			if c == '"' {
+				s.quote = 0
+			}
+		case c == '\'' || c == '"':
+			s.quote = c
+		}
+	}
 }
 
 // walk visits node; dotTainted says whether "." is currently a root-derived
@@ -50,6 +97,10 @@ func (s *refScan) walk(node parse.Node, dotTainted bool) {
 
 		for _, child := range n.Nodes {
 			s.walk(child, dotTainted)
+		}
+	case *parse.TextNode:
+		if s.trackQuotes {
+			s.feed(string(n.Text))
 		}
 	case *parse.ActionNode:
 		s.action(n, dotTainted)
@@ -70,6 +121,14 @@ func (s *refScan) walk(node parse.Node, dotTainted bool) {
 func (s *refScan) action(n *parse.ActionNode, dotTainted bool) {
 	if len(n.Pipe.Decl) > 0 {
 		s.declare(n.Pipe, dotTainted)
+
+		return
+	}
+
+	if s.trackQuotes {
+		if endsInShellquote(n.Pipe) && s.quote != 0 && s.pipeTainted(n.Pipe, dotTainted) && !slices.Contains(s.found, n.String()) {
+			s.found = append(s.found, n.String())
+		}
 
 		return
 	}

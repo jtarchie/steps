@@ -101,7 +101,7 @@ func publishParam(tool, name string, limits config.ParamSpec, prop map[string]an
 
 // newParamLimit reads the argument's type from its schema property and refuses limits that type cannot have.
 func newParamLimit(tool, name string, limits config.ParamSpec, prop map[string]any) (paramLimit, error) {
-	kind, _ := prop["type"].(string)
+	kind := pinType(prop)
 	if kind == "" {
 		kind = "string"
 	}

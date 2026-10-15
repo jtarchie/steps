@@ -83,7 +83,66 @@ func (c *Config) validateRule(rule Rule) error {
 		return fmt.Errorf("judged_by: %q is a cli source (%s...), which runs its own tool loop and cannot answer inside a call; name a hosted agent", judge.Name, CLISourcePrefix)
 	}
 
-	return c.checkJudgeIsNotJudged(judge)
+	err = c.checkJudgeIsNotJudged(judge)
+	if err != nil {
+		return err
+	}
+
+	return c.checkNoJudgeCycle(rule)
+}
+
+// checkNoJudgeCycle refuses a judge that could end up waiting on itself. An agent reaches the agents it grants as sub-agents and the judges of the rules on its tools; a judge that reaches itself would build a judge that builds a judge, without end.
+func (c *Config) checkNoJudgeCycle(rule Rule) error {
+	if c.judgeReaches(rule.JudgedBy, rule.JudgedBy, map[string]bool{}, true) {
+		return fmt.Errorf("judged_by: %q can reach itself through the agents it grants or the judges of its tools' rules, so building it would never finish", rule.JudgedBy)
+	}
+
+	return nil
+}
+
+// judgeReaches is whether target is reachable from the agent name, not counting the start itself.
+func (c *Config) judgeReaches(name, target string, visited map[string]bool, start bool) bool {
+	if !start && name == target {
+		return true
+	}
+
+	if visited[name] {
+		return false
+	}
+
+	visited[name] = true
+
+	agent, err := c.FindAgent(name)
+	if err != nil {
+		return false
+	}
+
+	for _, spec := range agent.Tools {
+		for _, next := range c.reachedBy(spec) {
+			if c.judgeReaches(next, target, visited, false) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// reachedBy is the agents one tool grant leads to: its sub-agent, and the judges of its rules.
+func (c *Config) reachedBy(spec ToolSpec) []string {
+	var next []string
+	if spec.Agent != "" {
+		next = append(next, spec.Agent)
+	}
+
+	for _, name := range spec.Rules {
+		rule, err := c.FindRule(name)
+		if err == nil && rule.JudgedBy != "" {
+			next = append(next, rule.JudgedBy)
+		}
+	}
+
+	return next
 }
 
 // checkJudgeIsNotJudged refuses a judge whose own tools are held to a judge. Every call the judge made would wait on another judge, and a cycle of them would wait forever.

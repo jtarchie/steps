@@ -95,6 +95,8 @@ func TestAJudgeThatDoesNotSayAllowRefuses(t *testing.T) {
 	}{
 		{"allow", map[string]any{"result": "allow"}, ""},
 		{"allow, shouting and punctuated", map[string]any{"result": "**Allow.** looks fine"}, ""},
+		{"verdict on its own line", map[string]any{"result": "allow\nthe table is a scratch one"}, ""},
+		{"deny on its own line", map[string]any{"result": "deny\n\nit drops a table"}, "refused by rule sanity: it drops a table"},
 		{"deny with reason", map[string]any{"result": "deny: it drops a table"}, "refused by rule sanity: it drops a table"},
 		{"deny, bare", map[string]any{"result": "DENY"}, "refused by rule sanity"},
 		{"rambling", map[string]any{"result": "it depends"}, "neither allow nor deny"},

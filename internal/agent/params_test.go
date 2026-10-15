@@ -173,3 +173,21 @@ func numericLimitsFitTheirKind(t *testing.T) {
 		t.Errorf("a non-numeric default on an integer = %v", err)
 	}
 }
+
+func TestNullableNumericParamsAreStillNumbers(t *testing.T) {
+	t.Parallel()
+
+	for name, prop := range map[string]map[string]any{
+		"type array": {"type": []any{"integer", "null"}},
+		"anyOf":      {"anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "null"}}},
+	} {
+		limit, err := publishParam("t", "limit", config.ParamSpec{Max: floatp(50)}, prop)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+
+		if !limit.integer || checkParam(limit, 7.0) != "" || !strings.Contains(checkParam(limit, 51.0), "at most 50") {
+			t.Errorf("%s: limit = %+v, want an integer bounded at 50", name, limit)
+		}
+	}
+}

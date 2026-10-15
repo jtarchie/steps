@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/exprlang"
@@ -269,7 +270,13 @@ func (c ruleCheck) checkJudge(ctx context.Context, tool string, args map[string]
 // parseJudgement reads "allow" or "deny" from the start of a reply, with whatever follows as its reason.
 func parseJudgement(reply string) (verdict, reason string) {
 	reply = strings.TrimSpace(reply)
-	word, rest, _ := strings.Cut(reply, " ")
+	// A model puts its verdict on a line of its own as often as it follows it with a space.
+	split := strings.IndexFunc(reply, unicode.IsSpace)
+	if split < 0 {
+		split = len(reply)
+	}
+
+	word, rest := reply[:split], reply[split:]
 	word = strings.ToLower(strings.Trim(word, ".,:;!*`\"'\n"))
 
 	if word != "allow" && word != "deny" {

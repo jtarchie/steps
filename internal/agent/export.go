@@ -24,6 +24,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/template"
 )
 
 // ExportHooks are what the server that mounts an export decides about each call.
@@ -108,6 +109,10 @@ func CheckExportedCommands(export config.MCPExport) error {
 
 		for _, hit := range UnquotedToolRefs(spec.Run) {
 			return fmt.Errorf("tool %q: %s prints a caller's value into the shell unquoted; pipe it through shellquote", spec.Name, hit)
+		}
+
+		for _, hit := range template.QuotedRefs(spec.Run, "args") {
+			return fmt.Errorf("tool %q: %s sits inside quotes of its own, where shellquote's quoting no longer holds (\"$(id)\" still runs); write it as a bare word, with no quote around it", spec.Name, hit)
 		}
 	}
 
@@ -198,8 +203,20 @@ func exportHandler(name string, impl toolImpl, calls callSpace, hooks ExportHook
 			}
 		}
 
+		names := make([]string, 0, len(args))
+		for key := range args {
+			names = append(names, key)
+		}
+
+		slices.Sort(names)
+
 		env, done, err := calls.open(name)
 		if err != nil {
+			// A call that could not even start is still a call: the caller was told no, and the log and the page should say so.
+			if hooks.After != nil {
+				hooks.After(ctx, name, names, false, "")
+			}
+
 			return exportError(err), nil
 		}
 
@@ -209,13 +226,6 @@ func exportHandler(name string, impl toolImpl, calls callSpace, hooks ExportHook
 		ok := requiredCallSucceeded(result)
 
 		if hooks.After != nil {
-			names := make([]string, 0, len(args))
-			for key := range args {
-				names = append(names, key)
-			}
-
-			slices.Sort(names)
-
 			rule, _ := result[RuleKey].(string)
 			hooks.After(ctx, name, names, ok, rule)
 		}

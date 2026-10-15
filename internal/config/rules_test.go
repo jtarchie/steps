@@ -93,3 +93,26 @@ rules:
 		t.Errorf("a judge held to its own rule = %v, want refused", err)
 	}
 }
+
+func TestAJudgeThatCanReachItselfIsRefused(t *testing.T) {
+	t.Parallel()
+
+	// x grants y as a sub-agent; y's tool is held to a rule judged by x.
+	pipeline := rulesBase + `- name: x
+  description: d
+  source: { model: openrouter/x, api_key_env: K }
+  tools:
+  - {agent: y}
+- name: y
+  description: d
+  source: { model: openrouter/x, api_key_env: K }
+  tools:
+  - {mcp: github, tool: t, rules: [by-x]}
+rules:
+- {name: by-x, judged_by: x}
+`
+	_, err := Parse([]byte(pipeline), "test", nil)
+	if err == nil || !strings.Contains(err.Error(), "can reach itself") {
+		t.Errorf("a judge reaching itself through a sub-agent = %v, want refused", err)
+	}
+}
