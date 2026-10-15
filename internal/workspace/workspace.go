@@ -1199,5 +1199,3 @@ func newIsolatingRoot(configuredRoot string) (root string, ownsRoot bool, err er
 
 	return root, true, nil
 }
-
-var errUnsupportedPlatform = errors.New("unsupported platform")

@@ -92,7 +92,7 @@ func isBtrfs(path string) (bool, error) {
 		return false, fmt.Errorf("statfs %q: %w", path, err)
 	}
 
-	return int64(st.Type) == btrfsSuperMagic, nil
+	return int64(st.Type) == btrfsSuperMagic, nil //nolint:unconvert // Type is int32 on 32-bit linux; the constant needs the wider type there
 }
 
 // btrfsBackend implements treeBackend over the btrfs CLI: subvolume
@@ -224,7 +224,7 @@ func findSubvolumes(root string) []string {
 
 		info, infoErr := d.Info()
 		if infoErr != nil {
-			return infoErr
+			return fmt.Errorf("stat %q: %w", path, infoErr)
 		}
 
 		st, ok := info.Sys().(*syscall.Stat_t)

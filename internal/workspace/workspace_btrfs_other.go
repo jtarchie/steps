@@ -4,11 +4,14 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 
 	"github.com/jtarchie/steps/internal/config"
 )
+
+var errUnsupportedPlatform = errors.New("unsupported platform")
 
 // newBtrfsProvider on non-Linux platforms always fails validation: btrfs
 // subvolumes are a Linux kernel filesystem feature with no macOS/BSD

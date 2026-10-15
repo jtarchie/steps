@@ -162,12 +162,12 @@ func TestBtrfsProviderCreatesRealSubvolumes(t *testing.T) {
 		t.Fatalf("ResourceDir: %v", err)
 	}
 
-	out, err := exec.Command("btrfs", "subvolume", "show", repoDir).CombinedOutput() //nolint:gosec // repoDir is a workspace-internal path this test just created
+	out, err := exec.CommandContext(ctxT(), "btrfs", "subvolume", "show", repoDir).CombinedOutput() //nolint:gosec // repoDir is a workspace-internal path this test just created
 	if err != nil {
 		t.Fatalf("btrfs subvolume show %q: %v: %s", repoDir, err, out)
 	}
 
-	prop, err := exec.Command("btrfs", "property", "get", repoDir, "compression").CombinedOutput() //nolint:gosec // repoDir is a workspace-internal path this test just created
+	prop, err := exec.CommandContext(ctxT(), "btrfs", "property", "get", repoDir, "compression").CombinedOutput() //nolint:gosec // repoDir is a workspace-internal path this test just created
 	if err != nil {
 		t.Fatalf("btrfs property get %q compression: %v: %s", repoDir, err, prop)
 	}
