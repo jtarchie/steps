@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 type loadtarget struct{ pipeline, job string }
@@ -55,18 +54,23 @@ func TestLoadtestConcurrentJobs(t *testing.T) {
 	hold := loadtestEnv("STEPS_LOADTEST_HOLD", "2")
 	levels := loadtestLevels(t)
 
+	var pgURL func(string) string
+	if os.Getenv("STEPS_LOADTEST_DB") == "postgres" {
+		pgURL = loadtestPostgres(t)
+	}
+
 	t.Logf("hold=%ss; start = enqueue->start; over = run time beyond the hold", hold)
 	t.Logf("%-9s %5s %4s %7s %9s %9s %9s %8s %5s %5s %7s", "shape", "n", "fail", "peak", "start_p50", "start_p95", "over_p95", "wall", "gor", "fds", "heapMB")
 
 	for _, shape := range strings.Split(loadtestEnv("STEPS_LOADTEST_SHAPES", "pipelines,jobs"), ",") {
 		for _, n := range levels {
-			loadtestLevel(t, shape, n, hold)
+			loadtestLevel(t, shape, n, hold, pgURL)
 		}
 	}
 }
 
 // loadtestServe starts a daemon holding the shape's pipelines and returns what to trigger.
-func loadtestServe(t *testing.T, shape string, n int, hold string) (*webProcess, []loadtarget) {
+func loadtestServe(t *testing.T, shape string, n int, hold string, pgURL func(string) string) (*webProcess, []loadtarget) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -94,7 +98,7 @@ func loadtestServe(t *testing.T, shape string, n int, hold string) (*webProcess,
 		path := filepath.Join(dir, "one.yml")
 		writePipelineFile(t, path, plan.String())
 
-		return startWebFor(t, path, append(flags, "--max-concurrent", strconv.Itoa(n))...), targets
+		return loadtestStart(t, shape, n, path, "one", pgURL, append(flags, "--max-concurrent", strconv.Itoa(n))), targets
 	}
 
 	var served *webProcess
@@ -107,7 +111,7 @@ func loadtestServe(t *testing.T, shape string, n int, hold string) (*webProcess,
 		targets = append(targets, loadtarget{name, name})
 
 		if served == nil {
-			served = startWebFor(t, path, flags...)
+			served = loadtestStart(t, shape, n, path, name, pgURL, flags)
 
 			continue
 		}
@@ -167,10 +171,10 @@ func (f *footprint) watch() (stop func()) {
 	}
 }
 
-func loadtestLevel(t *testing.T, shape string, n int, hold string) {
+func loadtestLevel(t *testing.T, shape string, n int, hold string, pgURL func(string) string) {
 	t.Helper()
 
-	served, targets := loadtestServe(t, shape, n, hold)
+	served, targets := loadtestServe(t, shape, n, hold, pgURL)
 	defer served.stopIfRunning(t)
 
 	var seen footprint
@@ -238,7 +242,7 @@ func loadtestPhases(t *testing.T, state string, targets []loadtarget, rows []sto
 func loadtestRunTimes(t *testing.T, state string, tg loadtarget) (store.RunRow, time.Time, time.Time, bool) {
 	t.Helper()
 
-	st, err := sqlite.OpenStore(state, tg.pipeline)
+	st, err := loadtestOpen(state, tg.pipeline)
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}
@@ -398,7 +402,7 @@ func loadtestRows(t *testing.T, state string, pipelines map[string]bool) ([]stor
 	settled := true
 
 	for name := range pipelines {
-		st, err := sqlite.OpenStore(state, name)
+		st, err := loadtestOpen(state, name)
 		if err != nil {
 			t.Fatalf("open state store: %v", err)
 		}
@@ -420,4 +424,20 @@ func loadtestRows(t *testing.T, state string, pipelines map[string]bool) ([]stor
 	}
 
 	return rows, settled
+}
+
+// loadtestStart serves the level's first pipeline on a sqlite file beside it, or on a fresh Postgres schema.
+func loadtestStart(t *testing.T, shape string, n int, path, name string, pgURL func(string) string, flags []string) *webProcess {
+	t.Helper()
+
+	if pgURL == nil {
+		return startWebFor(t, path, flags...)
+	}
+
+	state := pgURL(fmt.Sprintf("lt_%s_%d", shape, n))
+	served := startWeb(t, append([]string{"--db", state}, flags...)...)
+	served.state = state
+	served.set(t, name, path)
+
+	return served
 }
