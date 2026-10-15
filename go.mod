@@ -25,6 +25,7 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/kevinburke/ssh_config v1.6.0
 	github.com/klauspost/compress v1.20.3
+	github.com/labstack/echo-otel/v5 v5.0.0
 	github.com/labstack/echo/v5 v5.4.0
 	github.com/lmittmann/tint v1.2.1
 	github.com/markbates/goth v1.82.0

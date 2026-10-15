@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/labstack/echo-otel/v5"
+	"github.com/labstack/echo/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -206,13 +208,11 @@ func ObserveQueue(pending func(context.Context) map[string]int64) func() {
 	return func() { _ = registration.Unregister() }
 }
 
-// Handler traces every request a server answers but those to untraced paths, which a platform polls every few seconds. echo stamps the matched route onto the request, which otelhttp reads back to name the span by route rather than by URL.
-func Handler(untraced ...string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return otelhttp.NewHandler(next, "steps", otelhttp.WithFilter(func(r *http.Request) bool {
-			return !slices.Contains(untraced, r.URL.Path)
-		}))
-	}
+// Middleware traces every request an echo server answers but those to untraced paths, which a platform polls every few seconds. It is echo's own OpenTelemetry middleware, which names the span by the matched route rather than by URL.
+func Middleware(untraced ...string) echo.MiddlewareFunc {
+	return echootel.NewMiddlewareWithConfig(echootel.Config{
+		Skipper: func(c *echo.Context) bool { return slices.Contains(untraced, c.Request().URL.Path) },
+	})
 }
 
 // Transport traces every request a client makes and carries the trace context to the server.

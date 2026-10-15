@@ -193,6 +193,9 @@ linters:
             - "$gostd"
             - "go.opentelemetry.io/otel"
             - "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+            # echo's own OpenTelemetry middleware, which is how the daemon's routes are traced: the span is named by the matched route.
+            - "github.com/labstack/echo-otel/v5"
+            - "github.com/labstack/echo/v5"
             # events is the leaf whose Tracer hook this package implements, which is how a step's span reaches the work it does without pipeline importing the SDK.
             - "github.com/jtarchie/steps/internal/events"
             # goleak is test-only: a provider's batch processor is a goroutine until Shutdown.

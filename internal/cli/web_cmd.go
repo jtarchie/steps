@@ -345,7 +345,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 
 	defer closeAccounts()
 
-	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory), web.WithExternalURL(w.published))...)
+	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithTracing(telemetry.Middleware(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory), web.WithExternalURL(w.published))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

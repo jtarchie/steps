@@ -149,8 +149,8 @@ type Server struct {
 	allowedHosts map[string]bool
 	// version is what the footer prints, so a bug report can name the build.
 	version string
-	// wrap is applied to the router when it is served and never in Handler(), so page tests keep talking to echo itself.
-	wrap func(http.Handler) http.Handler
+	// tracing is the outermost middleware when set, so a request any later one refuses is still traced. Nil in page tests, which keep talking to a bare echo.
+	tracing echo.MiddlewareFunc
 }
 
 // WithVersion is the build version the footer prints; "dev" when unset, the
@@ -164,9 +164,9 @@ func WithCapacity(capacity Capacity) Option {
 	return func(s *Server) { s.capacity = capacity }
 }
 
-// WithMiddleware wraps the served router; it is how internal/cli traces requests without this package importing a telemetry SDK.
-func WithMiddleware(wrap func(http.Handler) http.Handler) Option {
-	return func(s *Server) { s.wrap = wrap }
+// WithTracing installs m ahead of every other middleware; it is how internal/cli traces requests without this package importing a telemetry SDK.
+func WithTracing(m echo.MiddlewareFunc) Option {
+	return func(s *Server) { s.tracing = m }
 }
 
 // Capacity is the daemon-wide run limit (0 when unlimited) and how many builds hold it.
@@ -420,6 +420,10 @@ func (s *Server) routes() error {
 	e.Renderer = renderer
 	e.HTTPErrorHandler = s.handleError
 
+	if s.tracing != nil {
+		e.Use(s.tracing)
+	}
+
 	e.Use(refuseFraming)
 	e.Use(middleware.Recover())
 
@@ -547,13 +551,8 @@ func (s *Server) Handler() http.Handler { return s.echo }
 
 // Start serves until ctx is canceled, then shuts down gracefully.
 func (s *Server) Start(ctx context.Context, addr string) error {
-	var handler http.Handler = s.echo
-	if s.wrap != nil {
-		handler = s.wrap(handler)
-	}
-
 	//nolint:wrapcheck // start and shutdown errors are reported verbatim by the caller
-	return startConfig(addr).Start(ctx, handler)
+	return startConfig(addr).Start(ctx, s.echo)
 }
 
 // startConfig is the server this daemon runs, separate from Start so a test can read the timeouts back off it.
