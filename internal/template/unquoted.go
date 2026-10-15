@@ -1,6 +1,7 @@
 package template
 
 import (
+	"regexp"
 	"slices"
 	"text/template"
 	"text/template/parse"
@@ -42,17 +43,30 @@ func QuotedRefs(tmpl string, roots ...string) []string {
 		return nil
 	}
 
+	// Two passes: the first only learns whether the command's text uses anything that expands a value a second time, which condemns every value in it, before or after.
 	scan := &refScan{roots: roots, tainted: map[string]bool{}, trackQuotes: true}
+	scan.walkAll(parsed)
 
-	for _, t := range parsed.Templates() {
-		if t.Tree != nil {
-			scan.quote = 0
-			scan.walk(t.Root, false)
-		}
-	}
+	scan.hazard = scan.sawHazard
+	scan.found, scan.tainted = nil, map[string]bool{}
+	scan.walkAll(parsed)
 
 	return scan.found
 }
+
+func (s *refScan) walkAll(parsed *template.Template) {
+	for _, t := range parsed.Templates() {
+		if t.Tree != nil {
+			s.quote = 0
+			s.walk(t.Root, false)
+		}
+	}
+}
+
+// expandsTwice matches command text in which sh reads a value again after shellquote has quoted it: a heredoc body (where $(…) runs inside '…'), a backtick or $'…' string, eval, and a nested sh -c.
+//
+//nolint:gochecknoglobals // compiled once, read-only
+var expandsTwice = regexp.MustCompile("<<|`|\\$'|\\beval\\b|\\b(?:ba|z|da|k)?sh\\s+-[a-z]*c\\b")
 
 type refScan struct {
 	roots   []string
@@ -62,10 +76,16 @@ type refScan struct {
 	trackQuotes bool
 	// quote is the quote sh is inside as text is read: 0 none, ' or ".
 	quote byte
+	// sawHazard is whether any text matched expandsTwice; hazard is that answer, known in advance on the second pass.
+	sawHazard, hazard bool
 }
 
 // feed advances the quote state over literal command text.
 func (s *refScan) feed(text string) {
+	if expandsTwice.MatchString(text) {
+		s.sawHazard = true
+	}
+
 	for i := 0; i < len(text); i++ {
 		c := text[i]
 
@@ -126,9 +146,7 @@ func (s *refScan) action(n *parse.ActionNode, dotTainted bool) {
 	}
 
 	if s.trackQuotes {
-		if endsInShellquote(n.Pipe) && s.quote != 0 && s.pipeTainted(n.Pipe, dotTainted) && !slices.Contains(s.found, n.String()) {
-			s.found = append(s.found, n.String())
-		}
+		s.quotedAction(n, dotTainted)
 
 		return
 	}
@@ -140,6 +158,17 @@ func (s *refScan) action(n *parse.ActionNode, dotTainted bool) {
 	expr := n.String()
 	if !slices.Contains(s.found, expr) {
 		s.found = append(s.found, expr)
+	}
+}
+
+// quotedAction records a shellquote'd root-derived value the shell would read as more than one word, or expand a second time.
+func (s *refScan) quotedAction(n *parse.ActionNode, dotTainted bool) {
+	if !endsInShellquote(n.Pipe) || (s.quote == 0 && !s.hazard) || !s.pipeTainted(n.Pipe, dotTainted) {
+		return
+	}
+
+	if !slices.Contains(s.found, n.String()) {
+		s.found = append(s.found, n.String())
 	}
 }
 

@@ -66,6 +66,13 @@ func TestQuotedRefs(t *testing.T) {
 		{"a single quote inside double quotes is text", `echo "it's" {{ .args.x | shellquote }}`, nil},
 		{"unwatched root", `echo "{{ .other.x | shellquote }}"`, nil},
 		{"unquoted is the other scanner's", `echo "{{ .args.x }}"`, nil},
+		{"heredoc body", "cat <<EOF > n\n{{ .args.x | shellquote }}\nEOF", []string{"{{.args.x | shellquote}}"}},
+		{"heredoc after the value", "echo {{ .args.x | shellquote }}; cat <<EOF\nhi\nEOF", []string{"{{.args.x | shellquote}}"}},
+		{"backticks", "echo `date` {{ .args.x | shellquote }}", []string{"{{.args.x | shellquote}}"}},
+		{"ansi-c string", "echo $'a' {{ .args.x | shellquote }}", []string{"{{.args.x | shellquote}}"}},
+		{"eval", "eval echo {{ .args.x | shellquote }}", []string{"{{.args.x | shellquote}}"}},
+		{"nested sh -c", "bash -c {{ .args.x | shellquote }}", []string{"{{.args.x | shellquote}}"}},
+		{"a word that merely contains eval", "retrieval {{ .args.x | shellquote }}", nil},
 		{"inside an if", `{{ if .args.y }}echo "{{ .args.x | shellquote }}"{{ end }}`, []string{"{{.args.x | shellquote}}"}},
 	} {
 		got := QuotedRefs(tc.tmpl, "args")

@@ -73,3 +73,14 @@ func TestACallThatCannotStartIsStillReportedToTheHook(t *testing.T) {
 		t.Errorf("hook saw %v, want the failed call reported once", reported)
 	}
 }
+
+func TestAnExportRefusesAHeredocBecauseTheShellExpandsInsideIt(t *testing.T) {
+	t.Parallel()
+
+	export := config.MCPExport{Name: "shell", Tools: []config.ToolSpec{{Name: "note", Description: "d", Run: "cat <<EOF > note.txt\n{{ .args.note | shellquote }}\nEOF"}}}
+
+	err := CheckExportedCommands(export)
+	if err == nil || !strings.Contains(err.Error(), "heredoc") {
+		t.Errorf("CheckExportedCommands = %v, want the heredoc refused", err)
+	}
+}

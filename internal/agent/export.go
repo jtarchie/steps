@@ -112,7 +112,7 @@ func CheckExportedCommands(export config.MCPExport) error {
 		}
 
 		for _, hit := range template.QuotedRefs(spec.Run, "args") {
-			return fmt.Errorf("tool %q: %s sits inside quotes of its own, where shellquote's quoting no longer holds (\"$(id)\" still runs); write it as a bare word, with no quote around it", spec.Name, hit)
+			return fmt.Errorf("tool %q: %s is not a bare word the shell reads once: it sits inside quotes of its own, or the command uses a heredoc, backticks, $'…', eval or sh -c, where shellquote's quoting no longer holds (\"$(id)\" still runs); write it as a bare word and keep those out of the command", spec.Name, hit)
 		}
 	}
 
