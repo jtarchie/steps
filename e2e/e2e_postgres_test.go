@@ -1,44 +1,31 @@
 package e2e
 
 // --db postgres://… end to end: the CLI's scheme switch, the driver behind
-// it, and what a person sees printed — against a real server started through
-// internal/dockerapi whenever a daemon is reachable, never opt-in.
+// it, and what a person sees printed — against a real server started from
+// embedded-postgres' binaries whenever they can be had, never opt-in.
 
 import (
-	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/jtarchie/steps/internal/cli"
-	"github.com/jtarchie/steps/internal/dockerapi"
-	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/postgres"
+	"github.com/jtarchie/steps/internal/testpostgres"
 )
 
-const postgresImage = "postgres:17-alpine"
-
-// postgresServer is this shard process's one test server, started by the
-// first test that asks and removed by TestMain.
+// postgresServer is this shard process's one test server, started by the first test that asks and removed by TestMain.
 var postgresServer struct {
-	once     sync.Once
-	id       string
-	host     string
-	password string
-	skip     string
-	err      error
-	schemas  atomic.Int64
+	once    sync.Once
+	server  *testpostgres.Server
+	skip    string
+	err     error
+	schemas atomic.Int64
 }
 
 // requirePostgresE2E returns a URL — with no password in it — on an empty
@@ -57,146 +44,34 @@ func requirePostgresE2E(t *testing.T) string {
 		t.Fatal(postgresServer.err)
 	}
 
-	t.Setenv("PGPASSWORD", postgresServer.password)
+	t.Setenv("PGPASSWORD", postgresServer.server.Password)
 
 	schema := fmt.Sprintf("e2e_%d", postgresServer.schemas.Add(1))
 
 	return (&url.URL{
 		Scheme:   "postgres",
 		User:     url.User("postgres"),
-		Host:     postgresServer.host,
+		Host:     postgresServer.server.Host,
 		Path:     "/postgres",
 		RawQuery: "sslmode=disable&search_path=" + schema,
 	}).String()
 }
 
 func startPostgresE2E() {
-	ctx := context.Background()
+	server, err := testpostgres.Start(testpostgres.Fast)
 
-	docker, err := dockerapi.New("")
-	if err == nil {
-		pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err = docker.Ping(pingCtx)
-
-		cancel()
-	}
-
-	if err != nil {
-		postgresServer.skip = fmt.Sprintf("no docker daemon to start postgres on: %v", err)
-
-		if docker != nil {
-			_ = docker.Close()
-		}
-
-		return
-	}
-
-	defer func() { _ = docker.Close() }()
-
-	postgresServer.err = runPostgresE2E(ctx, docker)
-}
-
-func runPostgresE2E(ctx context.Context, docker *dockerapi.Client) error {
-	// A shard killed outright never reached TestMain's removal.
-	stale, err := docker.ListContainers(ctx, map[string]string{"steps.test": "postgres"})
-	if err == nil {
-		for _, container := range stale {
-			pid, err := strconv.Atoi(container.Labels["steps.pid"])
-			if err != nil || !processAlive(pid) {
-				_ = docker.RemoveContainer(ctx, container.ID)
-			}
-		}
-	}
-
-	if !docker.ImagePresent(ctx, postgresImage) {
-		err = docker.Pull(ctx, postgresImage, io.Discard)
-		if err != nil {
-			return fmt.Errorf("pulling %s: %w", postgresImage, err)
-		}
-	}
-
-	postgresServer.password = rand.Text()
-
-	// Loopback only, with a password nothing else knows.
-	postgresServer.id, err = docker.CreateContainer(ctx, dockerapi.ContainerSpec{
-		Image:   postgresImage,
-		Cmd:     []string{"postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"},
-		Env:     []string{"POSTGRES_PASSWORD=" + postgresServer.password},
-		Labels:  map[string]string{"steps.test": "postgres", "steps.pid": strconv.Itoa(os.Getpid())},
-		Publish: []string{"5432/tcp"},
-	})
-	if err != nil {
-		return fmt.Errorf("creating the test postgres: %w", err)
-	}
-
-	err = docker.StartContainer(ctx, postgresServer.id)
-	if err != nil {
-		return fmt.Errorf("starting the test postgres: %w", err)
-	}
-
-	port, err := docker.PublishedPort(ctx, postgresServer.id, "5432/tcp")
-	if err != nil {
-		return fmt.Errorf("starting the test postgres: %w", err)
-	}
-
-	postgresServer.host = "127.0.0.1:" + port
-
-	return waitForPostgresE2E() //nolint:contextcheck // opening a database takes no context in either driver
-}
-
-// waitForPostgresE2E asks until the server answers "nothing recorded", which
-// is the answer an up server gives about a schema nobody wrote.
-func waitForPostgresE2E() error {
-	probe := (&url.URL{
-		Scheme: "postgres", User: url.UserPassword("postgres", postgresServer.password),
-		Host: postgresServer.host, Path: "/postgres", RawQuery: "sslmode=disable&search_path=probe",
-	}).String()
-
-	deadline := time.Now().Add(60 * time.Second)
-
-	for {
-		reader, err := postgres.OpenReader(probe)
-		if reader != nil {
-			_ = reader.Close()
-		}
-
-		if errors.Is(err, store.ErrNoState) {
-			return nil
-		}
-
-		if time.Now().After(deadline) {
-			return fmt.Errorf("the test postgres never answered: %w", err)
-		}
-
-		time.Sleep(250 * time.Millisecond)
+	switch {
+	case errors.Is(err, testpostgres.ErrUnavailable):
+		postgresServer.skip = err.Error()
+	case err != nil:
+		postgresServer.err = err
+	default:
+		postgresServer.server = server
 	}
 }
 
-// stopPostgresE2E removes this shard's server, if it started one, under its
-// own context and bound.
-func stopPostgresE2E() {
-	if postgresServer.id == "" {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	docker, err := dockerapi.New("")
-	if err != nil {
-		return
-	}
-
-	defer func() { _ = docker.Close() }()
-
-	_ = docker.RemoveContainer(ctx, postgresServer.id)
-}
-
-func processAlive(pid int) bool {
-	err := syscall.Kill(pid, 0)
-
-	return err == nil || errors.Is(err, syscall.EPERM)
-}
+// stopPostgresE2E removes this shard's server, if it started one.
+func stopPostgresE2E() { postgresServer.server.Stop() }
 
 func postgresPipeline(t *testing.T) (string, string) {
 	t.Helper()
@@ -292,7 +167,7 @@ func postgresPasswordIsNeverPrinted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	parsed.User = url.UserPassword("postgres", postgresServer.password)
+	parsed.User = url.UserPassword("postgres", postgresServer.server.Password)
 	withPassword := parsed.String()
 
 	t.Setenv("PGPASSWORD", "")
@@ -305,7 +180,7 @@ func postgresPasswordIsNeverPrinted(t *testing.T) {
 		_ = cli.Run([]string{"run", path, "--job", "publish", "--db", withPassword})
 	})
 
-	if strings.Contains(out, postgresServer.password) || strings.Contains(stderr(), postgresServer.password) {
+	if strings.Contains(out, postgresServer.server.Password) || strings.Contains(stderr(), postgresServer.server.Password) {
 		t.Fatalf("the password was printed:\nstdout:\n%s\nstderr:\n%s", out, stderr())
 	}
 

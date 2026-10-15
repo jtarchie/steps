@@ -220,9 +220,9 @@ linters:
             # recorded, so it opens the driver the CLI it drives would have.
             - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/store/postgres"
-            # dockerapi is test-only: e2e_postgres_test.go starts the server
-            # a --db postgres:// run is pointed at, the way the driver's own
-            # tests do.
+            # testpostgres is test-only: e2e_postgres_test.go starts the server a --db postgres:// run is pointed at, the way the driver's own tests do.
+            - "github.com/jtarchie/steps/internal/testpostgres"
+            # dockerapi is test-only: the docker+ssh:// worker test finds the daemon's socket.
             - "github.com/jtarchie/steps/internal/dockerapi"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/web"
@@ -451,9 +451,8 @@ linters:
             # storetest is test-only: conformance_test.go runs the shared suite
             # against this driver.
             - "github.com/jtarchie/steps/internal/store/storetest"
-            # dockerapi is test-only: TestMain starts the server the suite runs
-            # against, published on loopback.
-            - "github.com/jtarchie/steps/internal/dockerapi"
+            # testpostgres is test-only: TestMain starts the server the suite runs against.
+            - "github.com/jtarchie/steps/internal/testpostgres"
             # goleak is test-only: TestMain fails the package's tests if any
             # leaves a pool's goroutine running.
             - "go.uber.org/goleak"
@@ -477,7 +476,7 @@ linters:
               desc: "test-only outside internal/cli: production code takes the store.Store it was handed"
             - pkg: "github.com/jtarchie/steps/internal/store/postgres"
               desc: "test-only outside internal/cli: production code takes the store.Store it was handed"
-        # Allow lists admit testsshd and testdocker for their packages' tests; this is what keeps them out of production files.
+        # Allow lists admit testsshd, testdocker and testpostgres for their packages' tests; this is what keeps them out of production files.
         TestSSHDTestOnly:
           files:
             - "$all"
@@ -487,6 +486,8 @@ linters:
               desc: "test fixture: an in-process sshd that runs whatever it is sent"
             - pkg: "github.com/jtarchie/steps/internal/testdocker"
               desc: "test fixture: skips a test when no docker daemon is reachable"
+            - pkg: "github.com/jtarchie/steps/internal/testpostgres"
+              desc: "test fixture: a real postgres from downloaded binaries"
         # config is the shared data-model root: it must not depend on any
         # other internal package (see CLAUDE.md's package-seam plan).
         Config:
@@ -605,6 +606,13 @@ linters:
           allow:
             - "$gostd"
             - "github.com/jtarchie/steps/internal/dockerapi"
+        # testpostgres is a test fixture other packages' tests import, so it is a package rather than a _test.go file.
+        TestPostgres:
+          files:
+            - "**/internal/testpostgres/**"
+          allow:
+            - "$gostd"
+            - "github.com/fergusstrange/embedded-postgres"
         # treedigest must stay stdlib-only: its twin is a busybox script with nothing else to lean on (steps#206).
         TreeDigest:
           files:

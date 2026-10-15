@@ -2,32 +2,25 @@ package postgres
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
-	"strconv"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/stdlib"
 	"go.uber.org/goleak"
 
-	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/testpostgres"
 )
-
-// testImage is the server every test here runs against.
-const testImage = "postgres:17-alpine"
 
 var (
 	// server is the running test database's superuser URL, on its
-	// "postgres" database; empty when there is no docker daemon to start one
-	// on, which skips every test here rather than failing them.
+	// "postgres" database; empty when its binaries could not be had, which
+	// skips every test here rather than failing them.
 	server string
 	// admin is a pool on server, for creating and dropping databases.
 	admin *sql.DB
@@ -35,15 +28,9 @@ var (
 	skipped string
 )
 
-// TestMain starts one Postgres for the package, through internal/dockerapi,
-// and removes it after — whenever a daemon is reachable, never opt-in, as
-// with every docker-backed test here. It also enforces that nothing leaks a
-// goroutine: every handle owns a database/sql pool, and a pool runs one until
-// Close.
+// TestMain starts one Postgres for the package and removes it after, whenever its binaries can be had and never opt-in. It also enforces that nothing leaks a goroutine: every handle owns a database/sql pool, and a pool runs one until Close.
 //
-// Hand-rolled rather than goleak.VerifyTestMain, which checks for leaks
-// before any cleanup it runs — and the admin pool and the docker client are
-// both goroutines until they are closed.
+// Hand-rolled rather than goleak.VerifyTestMain, which checks for leaks before any cleanup it runs, and the admin pool is a goroutine until it is closed.
 func TestMain(m *testing.M) {
 	stop, err := startServer()
 	if err != nil {
@@ -66,151 +53,36 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// startServer runs the container and waits for it to answer. A daemon that
-// cannot be reached is a skip; anything after that is a failure.
+// startServer runs the package's one Postgres. Binaries that cannot be had are a skip; anything after that is a failure.
 func startServer() (func(), error) {
-	ctx := context.Background()
-
-	docker, err := dockerapi.New("")
-	if err == nil {
-		pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err = docker.Ping(pingCtx)
-
-		cancel()
-
-		if err != nil {
-			_ = docker.Close()
-		}
-	}
-
-	if err != nil {
-		skipped = fmt.Sprintf("no docker daemon to start postgres on: %v", err)
+	pg, err := testpostgres.Start(testpostgres.Fast)
+	if errors.Is(err, testpostgres.ErrUnavailable) {
+		skipped = err.Error()
 
 		return func() {}, nil
 	}
 
-	defer func() { _ = docker.Close() }()
-
-	id, port, password, err := runContainer(ctx, docker)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("starting the test postgres: %w", err)
 	}
 
-	stop := func() {
-		if admin != nil {
-			_ = admin.Close()
-		}
+	server = pg.URL()
 
-		removeContainer(id)
-	}
-
-	server = (&url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword("postgres", password),
-		Host:     "127.0.0.1:" + port,
-		Path:     "/postgres",
-		RawQuery: "sslmode=disable",
-	}).String()
-
-	admin, err = waitForServer(ctx, server)
+	admin, err = waitForServer(context.Background(), server)
 	if err != nil {
-		stop()
+		pg.Stop()
 
 		return nil, err
 	}
 
-	return stop, nil
+	return func() {
+		_ = admin.Close()
+
+		pg.Stop()
+	}, nil
 }
 
-// runContainer starts the server published on loopback only, with a
-// password nobody else knows: a test database reachable from another host
-// with a guessable superuser is not something a test run gets to open.
-//
-// The -c flags trade durability for speed — nothing here outlives the run.
-func runContainer(ctx context.Context, docker *dockerapi.Client) (string, string, string, error) {
-	sweepStaleContainers(ctx, docker)
-
-	if !docker.ImagePresent(ctx, testImage) {
-		err := docker.Pull(ctx, testImage, io.Discard)
-		if err != nil {
-			return "", "", "", fmt.Errorf("pulling %s: %w", testImage, err)
-		}
-	}
-
-	password := rand.Text()
-
-	id, err := docker.CreateContainer(ctx, dockerapi.ContainerSpec{
-		Image: testImage,
-		Cmd: []string{
-			"postgres", "-c", "max_connections=500", "-c", "fsync=off",
-			"-c", "synchronous_commit=off", "-c", "full_page_writes=off",
-		},
-		Env:     []string{"POSTGRES_PASSWORD=" + password},
-		Labels:  map[string]string{"steps.test": "postgres", "steps.pid": strconv.Itoa(os.Getpid())},
-		Publish: []string{"5432/tcp"},
-	})
-	if err != nil {
-		return "", "", "", fmt.Errorf("creating the test postgres: %w", err)
-	}
-
-	err = docker.StartContainer(ctx, id)
-	if err == nil {
-		var port string
-
-		port, err = docker.PublishedPort(ctx, id, "5432/tcp")
-		if err == nil {
-			return id, port, password, nil
-		}
-	}
-
-	removeContainer(id) //nolint:contextcheck // cleanup runs on its own context, since the caller's may be why it runs
-
-	return "", "", "", fmt.Errorf("starting the test postgres: %w", err)
-}
-
-// sweepStaleContainers removes test servers whose process is gone — a run
-// killed outright never reached its own cleanup. A live pid's container is
-// another test process's, running now, and is left alone.
-func sweepStaleContainers(ctx context.Context, docker *dockerapi.Client) {
-	containers, err := docker.ListContainers(ctx, map[string]string{"steps.test": "postgres"})
-	if err != nil {
-		return
-	}
-
-	for _, container := range containers {
-		pid, err := strconv.Atoi(container.Labels["steps.pid"])
-		if err == nil && alive(pid) {
-			continue
-		}
-
-		_ = docker.RemoveContainer(ctx, container.ID)
-	}
-}
-
-func alive(pid int) bool {
-	err := syscall.Kill(pid, 0)
-
-	return err == nil || errors.Is(err, syscall.EPERM)
-}
-
-// removeContainer runs under its own context and bound, because the likeliest
-// reason it runs early is that something already went wrong.
-func removeContainer(id string) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 30*time.Second)
-	defer cancel()
-
-	docker, err := dockerapi.New("")
-	if err != nil {
-		return
-	}
-
-	defer func() { _ = docker.Close() }()
-
-	_ = docker.RemoveContainer(ctx, id)
-}
-
-// waitForServer pings until the server answers, bounded: the image's first
-// start initializes a cluster and restarts before it listens on TCP.
+// waitForServer pings until the server answers, bounded.
 func waitForServer(ctx context.Context, rawURL string) (*sql.DB, error) {
 	config, _, err := connConfig(rawURL)
 	if err != nil {
