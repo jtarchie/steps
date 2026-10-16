@@ -3,9 +3,12 @@ package postgres
 // schemaVersion is stamped into the schema_version table and checked on open.
 //
 // BUMP IT whenever the DDL below changes in a way an existing schema cannot
-// satisfy — a new column, a new NOT NULL, a changed key. It is a detector, not
-// a migration counter, with the sqlite driver's policy: a mismatch is refused,
-// and the answer is DROP SCHEMA, which loses steps' data and nothing else.
+// satisfy — a new column, a new NOT NULL, a changed key — and append the step
+// that takes a schema there to migrations (migrate.go). From 14, the version
+// steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
+// answer was DROP SCHEMA.
+//
+// 15 dropped run_placements.fstype and fs_free, as sqlite's 29 did.
 //
 // Its own counter, not the sqlite one: the two schemas are written separately
 // and change separately.
@@ -13,7 +16,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 14
+const schemaVersion = 15
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -388,8 +391,6 @@ CREATE TABLE IF NOT EXISTS run_placements (
     goos          TEXT NOT NULL,
     goarch        TEXT NOT NULL,
     workdir       TEXT NOT NULL,
-    fstype        TEXT NOT NULL,
-    fs_free       BIGINT NOT NULL,
     uid           INTEGER,
     gid           INTEGER,
     image         TEXT NOT NULL,

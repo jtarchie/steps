@@ -339,18 +339,6 @@ type PlacementView struct {
 // Platform is what the worker reported itself to be.
 func (p PlacementView) Platform() string { return p.GOOS + "/" + p.GOARCH }
 
-// Filesystem is what the tree landed on, or a stated silence.
-//
-// Empty is never drawn as an ordinary disk: a docker+ worker's tree is in volumes and does not say, and tmpfs — the answer this column exists to
-// surface — would otherwise hide behind a plausible blank.
-func (p PlacementView) Filesystem() string {
-	if p.FSType == "" {
-		return "not reported"
-	}
-
-	return p.FSType + " (" + FormatBinaryBytes(p.FSFree) + " free)"
-}
-
 // Sent is what actually crossed to reach this machine. A worker keeps what it
 // receives, so a step whose inputs were already there honestly reads 0 B.
 func (p PlacementView) Sent() string { return FormatBinaryBytes(p.BytesSent) }

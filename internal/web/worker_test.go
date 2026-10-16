@@ -81,8 +81,8 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 		RunID: "placed", StepIndex: 0, StepName: "compile", JobName: "build",
 		NodeHash: hash, Slot: hash, Tag: "gpu", Address: "aws://" + instance, InstanceID: &instance,
 		GOOS: "linux", GOARCH: "arm64",
-		Workdir: "/var/tmp/steps/work", FSType: "btrfs", FSFree: 41_083_355_136,
-		UID: &root, GID: &root, Image: "golang:1.25", BytesSent: 67_108_864, BytesReceived: 1_048_576,
+		Workdir: "/var/tmp/steps/work",
+		UID:     &root, GID: &root, Image: "golang:1.25", BytesSent: 67_108_864, BytesReceived: 1_048_576,
 	})
 	if err != nil {
 		t.Fatalf("RecordPlacement: %v", err)
@@ -103,7 +103,7 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 	// contain one — so the loose form passed with the cell deleted, and the
 	// uid-0-is-root-not-silence contract went unproven on those days.
 	for _, want := range []string{
-		"gpu", "linux/arm64", "btrfs (38.3 GiB free)", "64.0 MiB", "1.0 MiB",
+		"gpu", "linux/arm64", "64.0 MiB", "1.0 MiB",
 		">0:0<", "aws://" + instance + " in golang:1.25",
 	} {
 		if !strings.Contains(body, want) {
@@ -112,15 +112,11 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 	}
 }
 
-// TestPlacementStatesWhatTheWorkerCouldNotSay: an empty fstype is a worker
-// that has no answer — a docker+ worker's volumes — and never an ordinary disk. A blank cell hides exactly the case the column exists for.
+// TestPlacementStatesWhatTheWorkerCouldNotSay: a worker that named no identity is shown none, never an invented one.
 func TestPlacementStatesWhatTheWorkerCouldNotSay(t *testing.T) {
 	t.Parallel()
 
 	silent := PlacementView{}
-	if got := silent.Filesystem(); got != "not reported" {
-		t.Errorf("Filesystem with no answer = %q, want a stated silence", got)
-	}
 
 	if got := silent.Identity(); got != "" {
 		t.Errorf("Identity with no answer = %q, want nothing — an invented 0:0 reads as root", got)

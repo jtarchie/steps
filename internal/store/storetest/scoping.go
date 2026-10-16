@@ -223,12 +223,12 @@ func (s suite) TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
 	placeAt(ctx, t, web, store.Placement{
 		RunID: "SHARED01", StepName: "web-step", JobName: "build", NodeHash: hashOf(1),
 		Tag: "web", Address: "ssh://web", GOOS: "linux", GOARCH: "amd64",
-		Workdir: "/tmp/w", FSType: "ext4",
+		Workdir: "/tmp/w",
 	})
 	placeAt(ctx, t, infra, store.Placement{
 		RunID: "SHARED01", StepName: "infra-step", JobName: "build", NodeHash: hashOf(2),
 		Tag: "infra", Address: "ssh://infra", GOOS: "linux", GOARCH: "amd64",
-		Workdir: "/tmp/i", FSType: "ext4",
+		Workdir: "/tmp/i",
 	})
 
 	if got := onlyPlacement(ctx, t, web, "SHARED01").StepName; got != "web-step" {
@@ -272,12 +272,12 @@ func (s suite) TestPlacementKeyIsScopedToItsPipeline(t *testing.T) {
 	placeAt(ctx, t, web, store.Placement{
 		RunID: runID, StepName: "unit", JobName: jobName, NodeHash: hashOf(7),
 		Tag: "web", Address: "ssh://web", GOOS: "linux", GOARCH: "amd64",
-		Workdir: "/tmp/web", FSType: "ext4",
+		Workdir: "/tmp/web",
 	})
 	placeAt(ctx, t, infra, store.Placement{
 		RunID: runID, StepName: "unit", JobName: jobName, NodeHash: hashOf(7),
 		Tag: "infra", Address: "ssh://infra", GOOS: "linux", GOARCH: "amd64",
-		Workdir: "/tmp/infra", FSType: "ext4",
+		Workdir: "/tmp/infra",
 	})
 
 	if got := onlyPlacement(ctx, t, web, runID).Address; got != "ssh://web" {

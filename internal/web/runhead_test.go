@@ -43,7 +43,7 @@ func startAuditedRun(t *testing.T, pipeline *Pipeline, runID string) {
 	err = pipeline.Store.RecordPlacement(ctx, store.Placement{
 		RunID: runID, StepIndex: 0, StepName: "review", JobName: "build",
 		NodeHash: hash, Slot: hash, Tag: "gpu", Address: "ssh://jt@box", GOOS: "linux", GOARCH: "arm64",
-		Workdir: "/var/tmp/steps/work", FSType: "ext4",
+		Workdir: "/var/tmp/steps/work",
 	})
 	if err != nil {
 		t.Fatalf("RecordPlacement: %v", err)
@@ -82,7 +82,7 @@ func TestAStepCarriesWhatItSpentAndWhereItRan(t *testing.T) {
 		t.Fatalf("no transcript:\n%s", body)
 	}
 
-	for _, said := range []string{"opus", "412,000 tokens", "60% cached", FormatUSD(1.2), "end_turn", "ssh://jt@box", "linux/arm64", "ext4"} {
+	for _, said := range []string{"opus", "412,000 tokens", "60% cached", FormatUSD(1.2), "end_turn", "ssh://jt@box", "linux/arm64"} {
 		if !strings.Contains(transcript, said) {
 			t.Errorf("the step row does not say %q:\n%s", said, transcript)
 		}

@@ -227,8 +227,7 @@ func syntheticBuild(ctx context.Context, t *testing.T, st *Store, jobName string
 		Address: "aws://" + instance, InstanceID: &instance,
 		GOOS: "linux", GOARCH: "arm64",
 		Workdir: "/var/tmp/steps/001-90319-83c7c0781e2ab799/work",
-		FSType:  "btrfs", FSFree: 41_083_355_136,
-		UID: &uid, GID: &gid,
+		UID:     &uid, GID: &gid,
 		Image: "public.ecr.aws/docker/library/golang:1.25", BytesSent: 67_108_864,
 	})
 	if err != nil {

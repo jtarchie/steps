@@ -132,6 +132,11 @@ func createPrivate(path string) error {
 // takes the write lock at BEGIN, so under WAL a concurrent reader sees either
 // nothing or all of it.
 func initDB(ctx context.Context, db *sql.DB, path, pipelineName string) (int64, error) {
+	err := upgrade(ctx, db, path)
+	if err != nil {
+		return 0, err
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("could not open state db %q: %w", path, err)
@@ -373,11 +378,9 @@ func (s *Store) Pipeline() string { return s.pipeline }
 func (s *Store) Description() string { return s.path }
 
 // checkSchemaVersion refuses a database this build cannot write to, and stamps
-// one it just created.
-//
-// This is NOT migration machinery, and deliberately not the first step of any:
-// there is no upgrade path here, by design, and the answer to a stale database
-// is still to delete it. What it adds is that somebody is TOLD.
+// one it just created. By the time it runs, upgrade has already brought any
+// file from v0.1.0 on to schemaVersion, so what it refuses is a file older
+// than that or newer than this build. What it adds is that somebody is TOLD.
 //
 // Without it the failure was silent and looked like success. The schema is
 // CREATE TABLE IF NOT EXISTS, so an older database opens fine and simply lacks
@@ -433,8 +436,17 @@ func readSchemaVersion(ctx context.Context, db executor, path string) (int, erro
 // because a read that silently returned nothing is the failure mode this
 // whole check exists for.
 func schemaVersionError(path string, found int) error {
-	return fmt.Errorf("%w: %s is at schema %d and this steps writes %d — there is no upgrade path (see the schema's own comment); delete the file and run again, which loses that pipeline's run history and cache but nothing else",
-		store.ErrSchemaVersion, path, found, schemaVersion)
+	switch {
+	case found > schemaVersion:
+		return fmt.Errorf("%w: %s is at schema %d, written by a newer steps than this one (%d); use that steps or a later one",
+			store.ErrSchemaVersion, path, found, schemaVersion)
+	case found >= oldestUpgradable:
+		return fmt.Errorf("%w: %s is at schema %d and this steps writes %d; the next steps command that writes to it (steps web, steps run) upgrades it, keeping a copy beside it",
+			store.ErrSchemaVersion, path, found, schemaVersion)
+	}
+
+	return fmt.Errorf("%w: %s is at schema %d, older than steps v0.1.0 (%d), and has no upgrade path; delete the file and run again, which loses that pipeline's run history and cache but nothing else",
+		store.ErrSchemaVersion, path, found, oldestUpgradable)
 }
 
 // freshlyCreated reports that this open made the database, rather than

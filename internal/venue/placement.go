@@ -23,8 +23,6 @@ type Placement struct {
 	GOOS     string
 	GOARCH   string
 	Workdir  string
-	FSType   string
-	FSFree   uint64
 	UID, GID *int
 	Image    string
 	// BytesSent is what this session put on the wire for step trees. It is

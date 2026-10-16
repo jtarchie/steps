@@ -41,8 +41,6 @@ type Placement struct {
 	GOOS       string
 	GOARCH     string
 	Workdir    string
-	FSType     string
-	FSFree     int64
 	UID        *int
 	GID        *int
 	Image      string

@@ -269,8 +269,8 @@ func describe(err error) error {
 	return err
 }
 
-// initDB creates the schema on first sight, refuses one another build wrote,
-// and registers the pipeline — all in one transaction, so a refused or failed
+// initDB creates the schema on first sight, upgrades one steps v0.1.0 or later
+// wrote, refuses any other, and registers the pipeline — all in one transaction, so a refused or failed
 // open leaves nothing behind (Postgres DDL is transactional).
 //
 // The DDL runs only when the schema is ABSENT. A matching schema costs one
@@ -312,6 +312,8 @@ func inSchema(ctx context.Context, conn connection, fn func(tx *sql.Tx) error) e
 		switch {
 		case !present:
 			err = createSchema(ctx, tx, conn.schema)
+		case found >= oldestUpgradable && found < schemaVersion:
+			err = migrate(ctx, tx, found)
 		case found != schemaVersion:
 			err = schemaVersionError(conn, found)
 		}
@@ -399,8 +401,17 @@ func readSchemaVersion(ctx context.Context, db executor, schemaName string) (int
 }
 
 func schemaVersionError(conn connection, found int) error {
-	return fmt.Errorf("%w: %s is at schema %d and this steps writes %d — there is no upgrade path; `DROP SCHEMA %s CASCADE` and run again, which loses steps' run history and cache in that schema and nothing else",
-		store.ErrSchemaVersion, conn.description, found, schemaVersion, quote(conn.schema))
+	switch {
+	case found > schemaVersion:
+		return fmt.Errorf("%w: %s is at schema %d, written by a newer steps than this one (%d); use that steps or a later one",
+			store.ErrSchemaVersion, conn.description, found, schemaVersion)
+	case found >= oldestUpgradable:
+		return fmt.Errorf("%w: %s is at schema %d and this steps writes %d; the next steps command that writes to it (steps web, steps run) upgrades it",
+			store.ErrSchemaVersion, conn.description, found, schemaVersion)
+	}
+
+	return fmt.Errorf("%w: %s is at schema %d, older than steps v0.1.0 (%d), and has no upgrade path; `DROP SCHEMA %s CASCADE` and run again, which loses steps' run history and cache in that schema and nothing else",
+		store.ErrSchemaVersion, conn.description, found, oldestUpgradable, quote(conn.schema))
 }
 
 func registerPipeline(ctx context.Context, db executor, name string) (int64, error) {

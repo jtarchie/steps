@@ -58,8 +58,8 @@ func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 		RunID: "AAAA1111", StepIndex: 0, StepName: "on-ec2", JobName: "build",
 		NodeHash: hashOf(1), Tag: "aws", Address: "aws://" + instance,
 		InstanceID: &instance, GOOS: "linux", GOARCH: "arm64",
-		Workdir: "/var/tmp/steps/work", FSType: "btrfs", FSFree: 1 << 35,
-		UID: &root, GID: &root, Image: "golang:1.25", BytesSent: 4096, BytesReceived: 8192,
+		Workdir: "/var/tmp/steps/work",
+		UID:     &root, GID: &root, Image: "golang:1.25", BytesSent: 4096, BytesReceived: 8192,
 	})
 
 	// A machine steps did not acquire, run by a user the worker did not name.
@@ -67,7 +67,7 @@ func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 		RunID: "BBBB2222", StepIndex: 0, StepName: "on-ssh", JobName: "build",
 		NodeHash: hashOf(2), Tag: "box", Address: "ssh://box",
 		GOOS: "linux", GOARCH: "amd64", Workdir: "/tmp/steps/work",
-		FSType: "ext4", FSFree: 1 << 30, BytesSent: 512,
+		BytesSent: 512,
 	})
 
 	onEC2 := onlyPlacement(ctx, t, st, "AAAA1111")
@@ -123,16 +123,16 @@ func (s suite) TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T)
 	placeAt(ctx, t, st, store.Placement{
 		RunID: "EVICTED1", StepIndex: 0, StepName: "unit", JobName: "build", NodeHash: hashOf(1),
 		Tag: "spot", Address: "aws://" + reclaimed, InstanceID: &reclaimed,
-		GOOS: "linux", GOARCH: "arm64", Workdir: "/var/tmp/a", FSType: "btrfs",
-		FSFree: 1 << 30, Image: "golang:1.25", BytesSent: 1_000,
+		GOOS: "linux", GOARCH: "arm64", Workdir: "/var/tmp/a",
+		Image: "golang:1.25", BytesSent: 1_000,
 	})
 
 	err := st.RecordPlacement(ctx, store.Placement{
 		RunID: "EVICTED1", StepIndex: 0, StepName: "unit", JobName: "build",
 		NodeHash: hashOf(1), Slot: hashOf(1),
 		Tag: "spot", Address: "aws://" + replaced, InstanceID: &replaced,
-		GOOS: "linux", GOARCH: "arm64", Workdir: "/var/tmp/b", FSType: "ext4",
-		FSFree: 2 << 30, Image: "golang:1.25", BytesSent: 2_000, BytesReceived: 3_000,
+		GOOS: "linux", GOARCH: "arm64", Workdir: "/var/tmp/b",
+		Image: "golang:1.25", BytesSent: 2_000, BytesReceived: 3_000,
 	})
 	if err != nil {
 		t.Fatalf("RecordPlacement of the re-placement: %v", err)
@@ -150,10 +150,10 @@ func (s suite) TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T)
 	}
 
 	// The whole description has to move together, or the row reports a machine
-	// that never existed: B's address with A's filesystem.
-	if got.Workdir != "/var/tmp/b" || got.FSType != "ext4" || got.FSFree != 2<<30 || got.BytesSent != 2_000 || got.BytesReceived != 3_000 {
-		t.Errorf("workdir/fstype/fs_free/bytes_sent/bytes_received = %q/%q/%d/%d/%d, want /var/tmp/b/ext4/%d/2000/3000",
-			got.Workdir, got.FSType, got.FSFree, got.BytesSent, got.BytesReceived, 2<<30)
+	// that never existed: B's address with A's workdir.
+	if got.Workdir != "/var/tmp/b" || got.BytesSent != 2_000 || got.BytesReceived != 3_000 {
+		t.Errorf("workdir/bytes_sent/bytes_received = %q/%d/%d, want /var/tmp/b/2000/3000",
+			got.Workdir, got.BytesSent, got.BytesReceived)
 	}
 }
 
@@ -179,7 +179,7 @@ func (s suite) TestPlacementsReadBackInPlanOrder(t *testing.T) {
 		placeAt(ctx, t, st, store.Placement{
 			RunID: "ORDER001", StepIndex: step.index, StepName: fmt.Sprintf("step-%d", step.index),
 			JobName: "build", NodeHash: step.hash, Tag: "box", Address: "ssh://box",
-			GOOS: "linux", GOARCH: "amd64", Workdir: "/tmp/w", FSType: "ext4",
+			GOOS: "linux", GOARCH: "amd64", Workdir: "/tmp/w",
 		})
 	}
 
@@ -235,7 +235,7 @@ func (s suite) TestPlacementWithoutANodeIsStillKeyed(t *testing.T) {
 		RunID: "HOOKRUN1", StepIndex: 0, StepName: "tell-someone", JobName: "build",
 		Slot: `step 0 (task "work") (on_failure hook)`,
 		Tag:  "gpu", Address: "ssh://first", GOOS: "linux", GOARCH: "arm64",
-		Workdir: "/tmp/w", FSType: "ext4",
+		Workdir: "/tmp/w",
 	}
 
 	err := st.RecordPlacement(ctx, hook)

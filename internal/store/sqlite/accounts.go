@@ -41,6 +41,11 @@ func OpenAccounts(path string) (*Accounts, error) {
 	ctx := context.Background()
 
 	err = func() error {
+		err := upgrade(ctx, held.db, path)
+		if err != nil {
+			return err
+		}
+
 		tx, err := held.db.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("could not open state db %q: %w", path, err)

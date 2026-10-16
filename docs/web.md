@@ -374,9 +374,7 @@ what it spent and where it ran on its own row.
   placed: the tag, the platform the worker reported,
   how many bytes had to be pushed to it and how many came back, the identity
   it ran as, and the machine — plus the image if the step ran in a container
-  on it. No worker reports the filesystem its tree landed on — a docker+
-  step's tree is in volumes, and `ssh://` does not measure — so that reads
-  `not reported` rather than a blank that looks like an ordinary disk. A worker that named no identity — every
+  on it. A worker that named no identity — every
   docker+ worker, whose step runs as its image's user — leaves it out rather
   than inventing `0:0`, which would read as root.
 
@@ -752,9 +750,14 @@ belonging to a different pipeline in the same file: continuing another
 pipeline's run would reuse its workspace and step indexes against this
 pipeline's plan.
 
-There is no migration path. A database written by a different schema is refused
-on open with a message saying so; the answer is to delete the file, which costs
-run history and cache and nothing else.
+**A database an older steps wrote is upgraded when it is opened**, by any
+command that writes to it (`steps web`, `steps run`, `steps test`). Before upgrading a file, steps copies it beside
+itself as `<file>.v<old schema>.bak`, keeping only the newest copy; if the
+upgrade fails, the file is left as it was and the error names the copy. A
+read command (`steps runs` and the like) does not upgrade, and says which
+command will. Two cases are still refused: a file older than v0.1.0,
+whose answer is deleting it (losing run history and cache, nothing else), and
+a file a NEWER steps wrote, whose answer is that steps.
 
 ### Postgres
 
@@ -798,9 +801,13 @@ steps runs --db 'postgres://steps@db.internal:5432/ci?sslmode=verify-full'
   privilege — `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the schema's tables
   (and `USAGE` on its sequences) are enough, and a role with only `SELECT` can
   run the read commands.
-- **A schema another version of steps wrote is refused, not migrated.** The
-  message says so; `DROP SCHEMA steps CASCADE` and run again, which loses
-  steps' run history and cache and nothing else in the database.
+- **A schema an older steps wrote is upgraded on open, in one transaction**,
+  so a failed upgrade leaves it as it was (Postgres DDL is transactional; take
+  your own backup if you want one). Upgrading needs the role to own the
+  tables, which a role with only `SELECT`/`INSERT`/`UPDATE`/`DELETE` does not —
+  open it once as the owner. A schema older than v0.1.0, or one a newer steps
+  wrote, is refused; for the first, `DROP SCHEMA steps CASCADE` and run again,
+  which loses steps' run history and cache and nothing else in the database.
 
 ## Security
 

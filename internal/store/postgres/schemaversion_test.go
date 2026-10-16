@@ -72,9 +72,9 @@ func TestAFreshDatabaseIsStamped(t *testing.T) {
 	}
 }
 
-// TestAMismatchedSchemaIsRefusedAndLeftAlone: refused rather than migrated,
-// with advice that loses only steps' data — and the refused open adds nothing
-// to a schema some other build wrote.
+// TestAMismatchedSchemaIsRefusedAndLeftAlone: a schema older than v0.1.0 is
+// refused rather than migrated, with advice that loses only steps' data — and
+// the refused open adds nothing to a schema some other build wrote.
 func TestAMismatchedSchemaIsRefusedAndLeftAlone(t *testing.T) {
 	t.Parallel()
 
@@ -82,7 +82,7 @@ func TestAMismatchedSchemaIsRefusedAndLeftAlone(t *testing.T) {
 	execAs(t, rawURL,
 		`CREATE SCHEMA steps`,
 		`CREATE TABLE steps.schema_version (version INTEGER NOT NULL)`,
-		`INSERT INTO steps.schema_version VALUES (999)`)
+		fmt.Sprintf(`INSERT INTO steps.schema_version VALUES (%d)`, oldestUpgradable-1))
 
 	_, err := OpenStore(rawURL, "p")
 	if !errors.Is(err, store.ErrSchemaVersion) {

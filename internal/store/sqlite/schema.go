@@ -3,12 +3,13 @@ package sqlite
 // schemaVersion is stamped into PRAGMA user_version and checked on open.
 //
 // BUMP IT whenever the DDL below changes in a way an existing file cannot
-// satisfy — a new column, a new NOT NULL, a changed key. That is what turns
-// "this database is from an older steps" into a message instead of a build
-// that silently records nothing (see checkSchemaVersion).
+// satisfy — a new column, a new NOT NULL, a changed key — and append the step
+// that takes a file there to migrations (migrate.go). From 28, the version
+// steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
+// answer was deleting the file.
 //
-// It is a detector, not a migration counter. There is still no upgrade path
-// and deliberately so; the answer to a mismatch remains deleting the file.
+// 29 dropped run_placements.fstype and fs_free: nothing has measured the
+// workdir's filesystem since the shim went, so every row said "not reported".
 //
 // 21 added trigger_queue.run_id, the run a claimed row started, which is what a restart resumes; the pending indexes now leave such a row out, so an older file would refuse the second pending row a resume needs.
 //
@@ -89,7 +90,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 28
+const schemaVersion = 29
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -844,7 +845,7 @@ CREATE TABLE IF NOT EXISTS run_inputs (
 -- process can know honestly: list prices ignore Savings Plans and Reserved
 -- Instances, a spot instance's paid price is reported by no API, and real
 -- billing arrives up to a day later. What IS knowable at run time is which
--- machine, of what shape, running what, holding which filesystem, and how
+-- machine, of what shape, running what, and how
 -- many bytes it had to be sent — which is also what a person debugging a
 -- placed step actually needs. Anyone who knows their own rate card can price
 -- these rows; steps does not guess on their behalf.
@@ -886,8 +887,6 @@ CREATE TABLE IF NOT EXISTS run_placements (
     goos          TEXT NOT NULL,
     goarch        TEXT NOT NULL,
     workdir       TEXT NOT NULL,
-    fstype        TEXT NOT NULL,
-    fs_free       INTEGER NOT NULL,
     uid           INTEGER,
     gid           INTEGER,
     image         TEXT NOT NULL,

@@ -15,11 +15,11 @@ import (
 )
 
 // TestOpenStoreRefusesAnOlderSchema is the alternative to losing a run's whole
-// record in silence.
+// record in silence, for a file older than steps v0.1.0 — which no migration
+// reaches.
 //
-// The schema is CREATE TABLE IF NOT EXISTS and nothing rewrites an older
-// database — deliberately, pre-release. But "nothing rewrites it" was being
-// read as "nothing notices it": a database missing a column simply failed
+// The schema is CREATE TABLE IF NOT EXISTS, and before migrations "nothing
+// rewrites it" was being read as "nothing notices it": a database missing a column simply failed
 // every INSERT that named it, and AppendRunEvent only warns, so the build went
 // GREEN with an empty record and one WRN line to explain it. Whoever ran it
 // learns their history is gone when they open the web UI.
@@ -49,7 +49,7 @@ func TestOpenStoreRefusesAnOlderSchema(t *testing.T) {
 		t.Fatalf("closing: %v", err)
 	}
 
-	stampVersion(t, path, schemaVersion-1)
+	stampVersion(t, path, oldestUpgradable-1)
 
 	_, err = OpenStore(path, "test")
 	if err == nil {
@@ -60,8 +60,8 @@ func TestOpenStoreRefusesAnOlderSchema(t *testing.T) {
 		t.Fatalf("error = %v, want a schema-version refusal", err)
 	}
 
-	if !strings.Contains(err.Error(), path) {
-		t.Errorf("error = %v, want it to name the file to delete", err)
+	if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "older than steps v0.1.0") {
+		t.Errorf("error = %v, want it to name the file to delete and why", err)
 	}
 }
 
@@ -129,7 +129,7 @@ func TestOpenStoreRefusesANewerSchema(t *testing.T) {
 	stampVersion(t, path, schemaVersion+1)
 
 	_, err = OpenStore(path, "test")
-	if !errors.Is(err, store.ErrSchemaVersion) {
+	if !errors.Is(err, store.ErrSchemaVersion) || !strings.Contains(err.Error(), "newer steps") {
 		t.Fatalf("error = %v, want a schema-version refusal", err)
 	}
 }
