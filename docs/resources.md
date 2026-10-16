@@ -21,7 +21,7 @@ jobs:
     run: cd repo && go build ./...
 ```
 
-`git` ships with steps, so that pipeline needs no `resource_types:` block, as do [the GitHub types](#the-built-in-github-types), Slack's and `cron`. For anything else, you write the type yourself.
+`git` ships with steps, so that pipeline needs no `resource_types:` block; neither do [the GitHub types](#the-built-in-github-types), Slack's, `cron` and [`webhook`](webhooks.md). For anything else, you write the type yourself.
 
 ## The built-in `git` type
 
@@ -37,7 +37,7 @@ It fetches the exact commit the plan pinned, shallowly, so a branch that moves m
 
 ## The built-in `slack-mentions`, `slack-reply` and `slack-reaction` types
 
-Three more built-ins, all [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot in a channel, plus every message in a 1:1 DM (no `@mention` required there — nobody types one in a 1:1 chat), oldest first, as a `{channel, ts, thread_ts}` version — `ts` is the message that named the bot, `thread_ts` the thread it lives in (the same value, for a top-level message). `slack-reply` is put-only: posts a message, threaded or top-level. `slack-reaction` is put-only too: puts an emoji on a message, takes one off, or swaps one for another in a single publish.
+Three more built-ins, all [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot in a channel, plus every message in a 1:1 DM (no `@mention` required there — nobody types one in a 1:1 chat), oldest first, as a `{channel, ts, thread_ts, user}` version — `ts` is the message that named the bot, `thread_ts` the thread it lives in (the same value, for a top-level message), `user` who wrote it. `slack-reply` is put-only: posts a message, threaded or top-level. `slack-reaction` is put-only too: puts an emoji on a message, takes one off, or swaps one for another in a single publish.
 
 Cold start does not mean a backlog: like every resource, the first-ever check of a freshly-deployed `slack-mentions` records everything it finds and answers only the newest of it — see [Version history](#version-history) below. That rule is a `steps web` behavior; `steps run` has no persisted cursor, so every `steps run` check is a first check.
 
@@ -107,7 +107,7 @@ All three need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for 
 | `base_url` (any) | no | overrides `https://slack.com` — for pointing a test at a fake server |
 | `token_env` (any) | no | overrides `SLACK_BOT_TOKEN` as the env var name to read the token from |
 
-`token_env` alone isn't enough to widen what a resource can read — `env()` only sees names its resource TYPE already declares (all three declare `SLACK_BOT_TOKEN`, shared by every resource of that type), which is what makes it safe for a shared, possibly-external type to hand-in-hand with any expr type at all. A resource naming a different token also needs `env:` *on the resource itself* to add that name to its own allow-list — `env:` and `source:` together, as in `reply-as-support-bot` above. Naming `token_env` without the matching `env:` entry is a run-time error (`env(...): not in this resource type's env:`), not a silent fall-back to `SLACK_BOT_TOKEN`. (`env:` on a resource only means something for an expr- or shell-backed type — an mcp-backed type authenticates via its `mcp_servers:` entry and rejects `env:` at load time.)
+`token_env` alone isn't enough to widen what a resource can read — `env()` only sees names its resource TYPE already declares (all three declare `SLACK_BOT_TOKEN`, shared by every resource of that type), which is what keeps a shared, possibly-external expr type from reading whatever variable a `source:` names. A resource naming a different token also needs `env:` *on the resource itself* to add that name to its own allow-list — `env:` and `source:` together, as in `reply-as-support-bot` above. Naming `token_env` without the matching `env:` entry is a run-time error (`env(...): not in this resource type's env:`), not a silent fall-back to `SLACK_BOT_TOKEN`. (`env:` on a resource only means something for an expr- or shell-backed type — an mcp-backed type authenticates via its `mcp_servers:` entry and rejects `env:` at load time.)
 
 **A mention inside a thread arrives with its thread.** `mentions/thread.json` is the whole conversation the mention was written in (Slack's `conversations.replies` payload: parent first, then replies), fetched by `thread_ts` — asking Slack for a *reply's* `ts` answers with that one message and nothing around it, which is an agent being handed a question with no context. `slack-reply` posts the answer back with `thread_ts` too: a reply's `ts` is not a thread id.
 
@@ -119,7 +119,7 @@ All three need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for 
 
 **A mention inside a thread counts**, and `limit:` is what decides whether it can be found. Slack's `conversations.history` returns top-level messages only, and a reply does not change its parent's `ts` — so the window the check reads channel history over is `limit` messages, deliberately *wider* than the cursor, and the cursor decides only what inside that window is new. A thread whose parent carries a `latest_reply` newer than the cursor is read; every other thread costs nothing.
 
-**Two known gaps** remain, both bounded by `limit:` and both needing Slack pagination to close:
+**Three known gaps** remain, all bounded by a limit and all needing Slack pagination to close:
 
 - A thread whose parent has scrolled past `limit` messages of its channel's history is invisible, however active the thread still is. How long that takes is how chatty the channel is; raising `limit:` buys more room, but only as much as Slack allows: since 2025-05-29 a bot **distributed** outside the Marketplace is capped at 15 messages per request and one request a minute, whatever `limit:` says. An internal app built for a single workspace — the usual case for a self-hosted pipeline — is excluded from that cap and honors `limit:` as written.
 - `mentions/thread.json` is truncated at its *newest* end for a thread longer than 1000 messages — Slack returns a thread oldest-first — so the mention itself can be missing from a very long thread.
@@ -627,10 +627,10 @@ re-deriving its own versions would ask "what is new since the versions I was
 just handed" and correctly get nothing. A lookup is repeatable, so plan time
 and run time agree without anything being passed between them.
 
-History is also what makes a version *recoverable*. Before it, whatever
-`check` returned right now was the whole universe — a version that scrolled
-out of the window while nothing was watching was gone, and no amount of
-cursor bookkeeping could bring it back.
+History is also what makes a version *recoverable*. Without it, whatever
+`check` returned right now would be the whole universe — a version that
+scrolled out of the window while nothing was watching would be gone, and no
+amount of cursor bookkeeping could bring it back.
 
 Three things follow:
 
@@ -641,8 +641,8 @@ Three things follow:
   taken, and triggers once on the newest — so a watcher pointed at twenty
   existing items builds the twentieth and answers none of the nineteen. One
   build, not twenty (which is what the marking is for) and not zero (which
-  left a slowly-changing resource unbuilt indefinitely, and made deleting the
-  state database re-arm that silence). `version: every` does not change this:
+  would leave a slowly-changing resource unbuilt indefinitely, and make
+  deleting the state database re-arm that silence). `version: every` does not change this:
   the fan-out is over UNCONSUMED versions, and a cold start leaves exactly one
   unconsumed. (A job *added* to the pipeline later has no such marking, and
   its first trigger will see whatever history holds.)
@@ -782,7 +782,7 @@ assert:
 
 **Optional params take the same shape as an optional `source:` field** (see [Shell safety](#shell-safety) below). Templates render with `missingkey=error`, so a bare `{{ .params.lines }}` makes `lines` *mandatory* on every get of that type; `{{ index .params "lines" | default "100" }}` works on an absent key and on a get with no `params:` block at all.
 
-**Params change the fetch, so they change the hash.** Two gets of one version differing in `params:` are two different fetches: they get distinct cache entries and neither is reused for the other. A get with no `params:` hashes exactly as it did before the field existed, so adding this to a pipeline invalidates nothing that does not use it.
+**Params change the fetch, so they change the hash.** Two gets of one version differing in `params:` are two different fetches: they get distinct cache entries and neither is reused for the other. A get with no `params:` hashes as if the field did not exist, so adding `params:` to one get invalidates nothing that does not use it.
 
 The fetched directory is named after the `get:`, so `get: log` puts it in `log/`, and later steps read `log/...`. See [workspace.md](workspace.md) for what a step can and can't see.
 
@@ -915,7 +915,7 @@ Under `every`, **each version is a run of its own**, as each is a build of its o
 
 ### `every` takes each version once
 
-A check reports what *exists*, not what is new — the same twenty Slack messages, the same page of builds, on every poll. So `every` remembers: once a version's run has **started**, that version is not taken again, and a later run takes only what is left. Without that, a plan ending in a `put:` or an `agent:` — the two steps the cache deliberately never skips, because their worth is an effect rather than an artifact — repeats every effect it has ever performed each time anything new shows up.
+A check reports what *exists*, not what is new — the same twenty Slack messages, the same page of builds, on every poll. So `every` remembers: once a version's run has **started**, that version is not taken again, and a later run takes only what is left. Without that, a plan ending in a `put:` — which the step cache never skips, because its worth is an effect rather than an artifact — repeats every effect it has ever performed each time anything new shows up.
 
 - **Recorded per (job, resource)**, so another job reading the same resource keeps its own place.
 - **A version is taken when its build STARTS**, not when it succeeds — so a version whose build failed is not retried on the next run. This is Concourse's rule (`NextEveryVersion` reads the versions a build was *created* with and never looks at build status), and it is what stops one bad input failing forever, on every trigger, with an agent's bill attached. Re-running it is a deliberate act: `--resume` (the run that took it) or `--pin` (the version), or a new version.

@@ -168,7 +168,7 @@ An instance is a leftover only if no process with that pid is running on that ho
 
 **`ssh: unable to authenticate`** — the project enforces OS Login, which ignores metadata SSH keys. Set `enable-oslogin=FALSE` in the instance (or template) metadata, as step 2 does.
 
-**`guest attributes are disabled … set enable-guest-attributes=TRUE … or pin the key with ?hostkey=`** — the template did not set the metadata key. Either fix the template or pin: `ssh-keyscan` the machine once from somewhere that can reach it, or read the key out of the serial console log, and put its `SHA256:…` fingerprint in the URL (URL-encode it — the base64 can contain `+`).
+**`… could not be asked for its host keys … either guest attributes are disabled … or this credential lacks compute.instances.getGuestAttributes; pin the key with ?hostkey=`** — the template did not set `enable-guest-attributes=TRUE`, or your credential cannot read guest attributes (`roles/compute.instanceAdmin.v1` can). Either fix the template or pin: `ssh-keyscan` the machine once from somewhere that can reach it, or read the key out of the serial console log, and put its `SHA256:…` fingerprint in the URL (URL-encode it — the base64 can contain `+`).
 
 **The startup script never installs docker** — a `--no-address` instance has no route to the internet without Cloud NAT. Add NAT to the subnet's region, or bake an image with docker preinstalled. steps waits four minutes for docker on a new machine and then fails the step at the daemon: `the docker daemon at /var/run/docker.sock did not answer`.
 

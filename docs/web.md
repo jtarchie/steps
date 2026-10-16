@@ -10,11 +10,10 @@ steps pipeline set -c pipeline.yml               # upload one into it
 their `trigger: true` resources, and runs the jobs both of those enqueue.
 
 **It takes no pipeline arguments.** A pipeline arrives by `steps pipeline set`
-and by nothing else, which is what makes three things true that were not
-before: vars belong to the pipeline you set rather than to the process,
-a pipeline's identity is a name you chose rather than whatever its file was
-called, and a change happens when somebody asks for it rather than when a file
-moves. Nothing here watches a file.
+and by nothing else, so vars belong to the pipeline you set rather than to the
+process, a pipeline's identity is a name you chose rather than whatever its
+file was called, and a change happens when somebody asks for it rather than
+when a file moves. Nothing here watches a file.
 
 Each served pipeline is routed under `/p/<name>/`, where the name is the one
 `set` was given. All of them share one state database — `.steps/steps.db`
@@ -86,8 +85,9 @@ steps pipeline destroy -p app            # forgets it, everything under it, and 
 ```
 
 Every verb takes `--target` (or `STEPS_TARGET`), defaulting to
-`http://127.0.0.1:8088`. There is no `login` and no saved targets, because
-there is nothing to log in to — see [Security](#security).
+`http://127.0.0.1:8088`. There is no `login` and no saved targets: on a daemon
+with accounts, the credentials ride in the target URL's userinfo
+(`http://user:password@host`) — see [authentication.md](authentication.md#from-the-cli).
 
 - **`get` is the only full copy** of a configuration once you have edited the
   file it came from. It prints the served source and every file it carried.
@@ -97,9 +97,7 @@ there is nothing to log in to — see [Security](#security).
   page of that pipeline says so, and offers to release it. It is a bigger
   switch than the per-job breaker `steps jobs` reports, and unrelated to it.
 - **`rename` keeps history**, because every recorded row reaches its pipeline
-  by row id rather than by name. That is new: while a pipeline's identity came
-  from its filename, renaming was a different pipeline with empty state. It
-  is **refused while a build of the pipeline is running**, naming the builds
+  by row id rather than by name. It is **refused while a build of the pipeline is running**, naming the builds
   — the served pipeline is rebuilt under the new name, which would cancel
   them — so wait for them, or stop them with `steps runs abort`. Queued
   builds are not a reason to refuse: they are kept, and run under the new
@@ -109,10 +107,13 @@ there is nothing to log in to — see [Security](#security).
 
 ## What a restart does
 
-Nothing. The daemon loads every pipeline's current configuration from its state
-database at startup and serves it, so a restart picks up where the last process
-left off — including on a machine where the YAML never existed. A daemon that
-holds nothing serves an index saying how to set one.
+Nothing you have to redo. The daemon loads every pipeline's current
+configuration from its state database at startup and serves it, so a restart
+picks up where the last process left off — including on a machine where the
+YAML never existed. Queued runs are kept, and a build the restart interrupted
+is [resumed](workspace.md#a-daemon-restart-resumes-the-build-it-interrupted),
+skipping the steps it finished. A daemon that holds nothing serves an index
+saying how to set one.
 
 A pipeline the restart **cannot** serve — its `workspace.root:` is gone or
 read-only, a variable it needs is unset in the daemon's environment — does not
@@ -132,11 +133,12 @@ Only a state file the daemon cannot read at all stops it from starting.
 
 | Route | Answers |
 |---|---|
-| `/` | With several pipelines served, or any held [broken](#what-a-restart-does): what this process holds, one quiet row each — its mark, its jobs colored by their latest run (a red one is one click from its transcript), and its last run. A row says more only when something is not normal: what waits on you, what its queue still owes, paused, or how many jobs the breaker holds. Its pause button and file sit at the end of the row, shown when you hover or tab into it. Below is one run feed across every pipeline, newest first: the latest ten, or fifty with `?runs=50` (the **show 50 runs** link). A broken pipeline is a row with its reason and no links. With one served and none broken, it redirects straight through |
+| `/` | With several pipelines served, or any held [broken](#what-a-restart-does): what this process holds, one quiet row each — its mark, its jobs colored by their latest run (a red one is one click from its transcript), and its last run. A row says more only when something is not normal: what waits on you, what its queue still owes, paused, or how many jobs the breaker holds. Its pause button sits at the end of the row, shown when you hover or tab into it. Below is one run feed across every pipeline, newest first: the latest ten, or fifty with `?runs=50` (the **show 50 runs** link). A broken pipeline is a row with its reason and no links. With one served and none broken, it redirects straight through |
 | `/p/:pipeline` | [The pipeline graph](#the-pipeline-graph): which jobs exist, how each last run went and how long ago, and what feeds each one. Hover a job for how long its run took, why the breaker holds it, or what a queued run waits on |
 | `…/runs` | One run history across every job of the pipeline, newest first — the cross-job view the per-job history can't give |
 | `…/jobs/:job` | Where the job stands, without another click: it forwards to the job's **latest run**, running included; with no run but a trigger queued, to the [follow page](#following-a-run-you-started) for that trigger; with neither, to the detail page. Every link that names a job goes here, so a job is one click from its transcript from anywhere. It is a temporary redirect on purpose — a bookmark to it re-resolves on every visit |
 | `…/jobs/:job/detail` | This job's dependencies in both directions, its run history with a duration trend, the resource versions it has passed against, and the resolved limits each agent step runs under. The one job link that leads here rather than to a run is the breadcrumb on a run, a node or the follow page — from inside a run, "latest" is already on the page |
+| `…/jobs/:job/follow` | The [waiting page](#following-a-run-you-started) a trigger lands on, until the queued run starts |
 | `…/runs/:run` | **The transcript**: every step in plan order, what it did, and — for agent steps — what the model said and which tools it called. A run that died on an mcp server links the server it blames |
 | `…/nodes/:hash` | What a merkle hash is made of, and every run that reused it: the cache's receipt |
 | `…/config/:sha` | The pipeline as the runs pinned to that hash executed it — readable after the file on disk has moved on |
@@ -145,6 +147,11 @@ Only a state file the daemon cannot read at all stops it from starting.
 | `…/resources` | Latest checked version per resource, and why any of them is failing its check |
 | `…/resources/:resource` | Every recorded version, newest first, with a column per job that gets the resource: the latest run of that version and how many there were, or why there is none — **queued** (the job has a queue row and will build it), **waiting** (it would, but nothing has queued the job), **superseded** (a latest-mode job only builds the newest version), **not pinned** (the job only builds its `version:` pin), or **reaped** (a `version: every` job took it, and [`run_history:`](infra.md#how-much-history-to-keep-run_history) has since removed the run) |
 | `…/mcp` | Every `mcp_servers:` entry, who depends on it, and whether it is wired up — with **Connect** to finish an oauth login in this browser and **Test** to probe one server. Present only for a pipeline that declares servers; see [mcp.md](mcp.md#authorizing-from-the-browser-the-mcp-tab) |
+| `…/mcp/exports/:export` | One `mcp_exports:` entry: its address, its tools, its recent calls — see [mcp.md](mcp.md#where-an-export-is-seen) |
+| `/activity` | [What people did](#activity), across every pipeline. Admins only |
+| `/connections` | The agents you have let connect to an export, with **Revoke**; on a daemon people sign in to — see [mcp.md](mcp.md) |
+| `/login` | The sign-in form, on a daemon with accounts — see [authentication.md](authentication.md#signing-in-from-a-browser) |
+| `/healthz` | `ok` and nothing else, for a platform's health check; needs no credentials |
 | `/docs` | These docs, rendered with syntax-highlighted examples — the same pages `steps docs` shows in a terminal |
 | `/mark`, `…/mark`, `…/runs/:run/mark` | Not a page: the tab mark alone, for every pipeline, one pipeline, or one run. A tab in the background stops refreshing its page and asks this every 30 seconds instead, so a pinned tab's icon and title stay current — within about a minute, since browsers slow a background tab's timers |
 
@@ -288,7 +295,7 @@ what it spent and where it ran on its own row.
 - **Every run says who or what started it**, after when it started: a
   person by name and where the name came from (`by ops (local)`), or what
   stood in for one (`by new version of repo`, `by webhook: push`,
-  `by upstream jobs passed`). A retry says what it repeated first
+  `by upstream jobs passed`, `by more versions to build`). A retry says what it repeated first
   (`rerun of #a1b2c3 by ops (local)`), and a restart keeps the run's original
   starter. A run started from a terminal with `steps run` names whoever ran
   the command, marked `(this machine, unverified)`: nothing checked that
@@ -304,8 +311,8 @@ what it spent and where it ran on its own row.
   as a get's row opens on the version it fetched — or says `(no version)`
   when its `out:` printed none. The note that the put made the rest of the
   chain uncacheable sits on the same row.
-- **A task step expands into what it printed.** Output is captured while it
-  still streams to the terminal and bounded at 16KB per step. Recorded
+- **A task step expands into what it printed.** Output is captured as it
+  prints and bounded at 32KB per step (see [Live runs](#live-runs)). Recorded
   whichever way the step ended, and especially when it failed: the error a
   task returns names the exit status, and an assert mismatch names the
   expectation — neither carries the output that explains either. A step that
@@ -388,11 +395,12 @@ what it spent and where it ran on its own row.
 
 ## Activity
 
-`/activity` — reached from your name at the right end of the header, on a
-server you sign in to — is the log of what people did to the daemon's pipelines, newest
-first, across every pipeline: who set one, triggered or retried a job,
-approved or rejected, answered a question, aborted, paused, released,
-renamed, destroyed, or connected an MCP server. Each line says when, who,
+`/activity` — an admin's page, reached from the menu under your name on a
+server you sign in to — is the log of what people did to the daemon's
+pipelines, newest first, across every pipeline: who set one, triggered or
+retried a job, approved or rejected, answered a question, aborted, paused,
+released, renamed, destroyed, or connected, tested or disconnected an MCP
+server. Each line says when, who,
 what, and to which pipeline, and the job, run, revision or page it touched
 is a link.
 
@@ -433,7 +441,8 @@ A task's output arrives the same way — a task with `assert:` or `fix:` too —
 and so does what a get's `in:` or a put's `out:` prints to stderr; their
 stdout is not recorded, because `out:`'s is the version the resource protocol
 reads, not something to show. A `check` records nothing. While the command
-runs, what it prints is recorded a line at a time (a line nobody finishes waits at most a second) and
+runs, what it prints is recorded a line at a time (a partial line is
+published anyway once it has waited a second and the command writes again) and
 appended to the step's row as it lands, so a six-hour build is readable while
 it builds. When the command exits, those pieces are replaced by one record of
 its output, bounded at 32KB: the first 8KB and the last 24KB, with a line
@@ -535,19 +544,20 @@ Nine controls, each doing what a CLI verb does:
 - **Test** any declared `mcp_servers:` entry from the same tab — the only
   thing on that page that connects to anything.
 
-`--read-only` withholds all eight: the controls disappear from the pages and
+`--read-only` withholds all nine: the controls disappear from the pages and
 the routes refuse. The mcp tab keeps its status column — that a server needs a
 login is a diagnostic a build box should still show, and the row names the CLI
 command instead. The queue is still drained, polling still runs, and
 `steps pipeline set` still works — that flag is a statement about the
 browser's surface, not about what the process does on its own or about how it
-is deployed. `--listen 0.0.0.0:8088 --read-only` is a build box that still has
+is deployed. It also serves no [`mcp_exports:`](mcp.md#sharing-tools-with-other-agents-mcp_exports),
+since calling a tool is acting. `--listen 0.0.0.0:8088 --read-only` is a build box that still has
 to notice new versions; read [Security](#security) before you expose one.
 
 **The webhook route is the one exception, deliberately.**
 `POST /p/<slug>/hooks/<resource>` still works under `--read-only`, and the job
 it enqueues still runs. It is not a UI control: it carries the sender's own
-signature, which is a stronger check than the five above have, and withholding
+signature, which is a stronger check than any control above has, and withholding
 it would mean a read-only box could not be the thing GitHub notifies — which is
 most of why a build box is exposed at all. `--read-only` says a *browser*
 cannot start work here; it does not say nothing can. If that is what you
@@ -607,13 +617,12 @@ steps web --max-runs 6         # and at most six runs at once across all of them
 triggered run that a limit holds back — either flag, a job's `serial:` or
 `max_in_flight:`, a paused pipeline — stays **pending**: a row in the queue,
 not a run yet, and the follow page names which limit is holding it. A pending
-run has not started, so a restart keeps it and runs it — unlike a build that
-was going, which the restart closes as aborted and queues again.
+run has not started, so a restart keeps it and runs it; a build that was
+going is resumed instead (see [What a restart does](#what-a-restart-does)).
 
-**There is no `--once`.** It was the cron form of a runner: load a file, poll
-once, exit, never bind. A process that never binds has nothing to be set into,
-and a server is its own scheduler — run it under systemd as a service rather
-than a timer, and let `--interval` be the schedule. A job that should run at a
+**There is no one-shot mode.** A process that never binds has nothing to be
+set into, and a server is its own scheduler — run it under systemd as a
+service rather than a timer, and let `--interval` be the schedule. A job that should run at a
 time of day gets a [`cron` resource](resources.md#the-built-in-cron-type); the
 interval is only how often that clock is read.
 
@@ -631,12 +640,12 @@ interval is only how often that clock is read.
 - **A pipeline with no `trigger: true` get is not an error.** It is noted in
   the log and served anyway, because plenty of pipelines are run by hand and
   the UI is where you would run them from.
-- **Preflight runs before the first poll**, the same check `steps web` does
-  and with the same asymmetry: a problem *waiting cannot fix* — an `mcp:` tool
-  the server does not expose — stops that pipeline's polling and says so,
-  while a problem waiting might fix — a server that did not answer, a token a
-  refresh would renew — is printed once as `(transient — polling anyway)` and
-  left to the loop, which retries by its nature. `--no-preflight` skips the
+- **Preflight runs before the first poll**, the same check `steps run` does,
+  with one asymmetry: a problem *waiting cannot fix* — an `mcp:` tool the
+  server does not expose — stops that pipeline's polling and says so, while a
+  problem waiting might fix — a server that did not answer, a token a refresh
+  would renew — is logged once as `trigger.preflight_transient` and left to
+  the loop, which retries by its nature. `--no-preflight` skips the
   check entirely. It runs inside the poller, so it never delays serving.
 
 ## Applying a change
@@ -649,11 +658,9 @@ steps pipeline set -c pipeline.yml       # edit, set, and it is serving
 
 **A save-to-apply loop is a one-line wrapper** around this — `watchexec -w
 pipeline.yml -- steps pipeline set -c pipeline.yml -n` — and that is where it
-belongs. A watcher inside the daemon is an implicit set that fires with nobody
-attached, which is exactly why it needed a held-configuration banner nobody was
-looking at: deleting it deletes the banner, the hold state, and the question of
-what a daemon does with a configuration it will not accept. It refuses it, to
-your face.
+belongs. A watcher inside the daemon would be a set that fires with nobody
+attached; a configuration the daemon will not accept is refused to the
+terminal that set it instead.
 
 **A run in flight finishes against the configuration it started under.** The
 swap is immediate for everything after it: the pages, the trigger poller, the
@@ -712,9 +719,11 @@ PIPELINE  PATH
 app       /src/app/app.yml
 infra     /src/infra/pipeline.yml
 
-WHEN                 PIPELINE  JOB      STATUS     RUN
-2026-08-30 09:14:02  infra     deploy   succeeded  UNVFHMCHVWY6GV6N
-2026-08-30 09:12:40  app       build    failed     46UMHVPYRA6YHB7M
+WHEN                 PIPELINE  JOB      STATUS     RUN               CONFIG
+2026-08-30 09:14:02  infra     deploy   succeeded  UNVFHMCHVWY6GV6N  9b1e04c7d2aa
+2026-08-30 09:12:40  app       build    failed     46UMHVPYRA6YHB7M  3f6a91d0be52
+
+break one down with: steps runs cost -p <pipeline> <run> --db /var/lib/steps/state.db
 ```
 
 `PATH` is where the configuration was last set FROM — a file on whoever's
@@ -799,16 +808,19 @@ steps runs --db 'postgres://steps@db.internal:5432/ci?sslmode=verify-full'
 
 On the loopback address it binds by default there is nothing to authenticate
 against: this is the local runner's own front end, in the same trust domain as
-the shell that started it. A daemon reachable from anywhere else turns on HTTP
-Basic — one username, one password, every route but the webhook one. See
-[authentication.md](authentication.md).
+the shell that started it. A daemon reachable from anywhere else turns on
+accounts — local ones, or GitHub or Google sign-in — and roles that say who may
+do what, on every route but a few that carry their own credential (the webhook
+one among them). See [authentication.md](authentication.md).
 
 **Two browser-reachable routes make the daemon act on the outside world**, and they are the only ones that do: the mcp tab's **Connect** starts an oauth login and **Test** connects to a declared server. Both need the daemon's credentials, both are refused cross-origin, neither can name a server the pipeline does not already declare, and `--read-only` withholds both while keeping the page. The reasoning is in [authentication.md](authentication.md#what-a-browser-may-start).
 
 **`steps pipeline set` is a remote-shell endpoint. Say that plainly: a
 pipeline is arbitrary commands, so anyone who can reach this port can run
-anything they like as the user running the daemon.** No token, no password, no
-allow-list. `--read-only` does not close it either — that flag has always been
+anything they like as the user running the daemon.** With no accounts
+configured there is no token, no password, no allow-list; with them, it takes
+the `admin` [role](authentication.md#who-may-do-what-roles). `--read-only` does
+not close it either — that flag has always been
 a statement about the *browser's* surface, and the set endpoint is the
 deployment path, not a button on a page.
 
@@ -834,8 +846,8 @@ sends neither, and no page in the UI calls `/api/`. `Host` is not checked by
 default, because a reverse proxy in front of the daemon forwards the name the
 client used — only you know which names are this daemon's.
 
-The browser's own controls — trigger, approve, answer, resume, pause, abort —
-are `POST`s refused when their `Origin` names another host, which stops another
+The browser's own controls — trigger, retry, approve, answer, release, pause,
+abort, connect, test — are `POST`s refused when their `Origin` names another host, which stops another
 site aiming a form at your port. A rebinding page is not another host: it can
 read every page, configurations included, and press those controls, unless
 `--allowed-host` refuses its name or `--read-only` has withheld them. It cannot set, destroy or rename a pipeline:
@@ -876,20 +888,20 @@ on this side is everything that changes what a pipeline IS.
 --max-runs       maximum runs at once across every pipeline (default 0, no limit)
 --pin / --force  pin a version field; ignore the step cache (not the every-cursor)
 --no-preflight   skip the pre-poll health check of models and MCP servers
---read-only      serve without trigger, approval, answer, resume, pause, abort,
-                 connect or test controls
+--read-only      serve without trigger, retry, approve/reject, answer, release,
+                 pause, abort, connect or test controls, and serve no mcp_exports
                  (steps pipeline set is NOT withheld — see Security)
 --basic-auth-username / --basic-auth-password
-                 require HTTP Basic on every route but the webhook one; both or
-                 neither, env STEPS_BASIC_AUTH_USERNAME / _PASSWORD
-                 (see authentication.md)
+                 one account, as a plain pair; both or neither,
+                 env STEPS_BASIC_AUTH_USERNAME / _PASSWORD (see authentication.md)
 --local-user / --local-users-file
                  local accounts as name:bcrypt-hash, or an htpasswd file of them
                  (see authentication.md)
 --github-client-id / --google-client-id
                  sign people in with GitHub or Google; the secret is read from
-                 $STEPS_GITHUB_CLIENT_SECRET / $STEPS_GOOGLE_CLIENT_SECRET (or
-                 --*-client-secret-env), and needs --external-url
+                 $STEPS_GITHUB_CLIENT_SECRET / $STEPS_GOOGLE_CLIENT_SECRET (or the
+                 variable --github-client-secret-env / --google-client-secret-env
+                 names), and needs --external-url and --role
 --role           who may do what: viewer, operator or admin, each a rule about
                  the signed-in person (repeatable; see authentication.md)
 --activity-history
@@ -898,20 +910,32 @@ on this side is everything that changes what a pipeline IS.
 --allowed-host   refuse any request whose Host is not this name (repeatable;
                  loopback names always pass; env STEPS_ALLOWED_HOSTS,
                  comma-separated; see Security)
---keep-workspace leave build workspaces on disk
+--run-history / --version-history
+                 how many runs of each job / versions of each resource to keep;
+                 a pipeline's defaults: wins (see infra.md)
+--artifact-store mirror cached step outputs to a content-addressed store,
+                 e.g. s3://bucket/prefix
+--keep-workspace leave build workspaces on disk ($STEPS_KEEP_WORKSPACE)
 --answer         answer an ask_user question in advance (repeatable)
 --worker         map a step tag to a machine, e.g. --worker gpu=ssh://jt@box
 --db             state database: a sqlite path, sqlite:// or postgres:// url
                  (default .steps/steps.db; see Postgres above)
+--log-level      debug, info, warn or error (default info, $STEPS_LOG_LEVEL)
 ```
+
+`--deliver` is listed by `--help` but refused: a daemon receives deliveries at
+`POST /p/<pipeline>/hooks/<resource>`, and the flag is for `steps run` and
+`steps test`.
 
 `steps pipeline <verb>` — facts about one pipeline:
 
 ```
---target         the daemon to talk to (default http://127.0.0.1:8088, $STEPS_TARGET)
+--target         the daemon to talk to (default http://127.0.0.1:8088, $STEPS_TARGET),
+                 optionally http://user:password@host
 -p / --pipeline  its name on the daemon (set defaults to the YAML's base name)
 -c / --config    the YAML to upload (set only)
 -v / --var, --vars-file   pipeline vars, substituted before the upload (set only)
--n               do not diff or ask; apply it (set, destroy)
+--pause          set it paused (set only)
+-n / --non-interactive    do not diff or ask; apply it (set, destroy)
 --to             the new name (rename only)
 ```

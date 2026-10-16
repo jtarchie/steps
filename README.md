@@ -4,6 +4,8 @@
 
 steps runs Concourse-style YAML pipelines — `get`, `task`, `put` — from one Go binary, and adds `agent`: an LLM with tool calls, sub-agents, and MCP servers, sitting in the plan beside everything else. Every step is content-addressed and cached in SQLite, checked by `assert:`, and shown in a run transcript with what it cost.
 
+Status: v0.1.0, the first tagged release. macOS and Linux, amd64 and arm64. The pipeline format and state database may still change between releases. There are no schema migrations: a newer `steps` refuses an older state database, and the fix is deleting it (`.steps/<pipeline>.db`), which drops that pipeline's run history and cache.
+
 ![A run transcript: an across block of six concurrent reviewer agents folded under a rail, each with its timing, hash and system prompt](docs/images/transcript.png)
 
 ## Why
@@ -14,12 +16,26 @@ steps runs Concourse-style YAML pipelines — `get`, `task`, `put` — from one 
 
 ## Install
 
+Homebrew (macOS). The cask lives in this repo's `Casks/`, so the repo is the tap:
+
 ```bash
-brew tap jtarchie/steps https://github.com/jtarchie/steps && brew install steps   # macOS
-go install github.com/jtarchie/steps@latest                                       # any platform with Go 1.26+
+brew tap jtarchie/steps https://github.com/jtarchie/steps
+brew install --cask steps
 ```
 
-Linux tarballs for each arch are on the [releases page](https://github.com/jtarchie/steps/releases); the tap ships a cask, which Homebrew on Linux does not install.
+Release archives: `steps_<version>_<os>_<arch>.tar.gz` for `darwin`/`linux` x `amd64`/`arm64`, plus `checksums.txt`, on the [releases page](https://github.com/jtarchie/steps/releases). The macOS binary is unsigned; the cask strips the quarantine attribute, a hand-extracted one needs `xattr -d com.apple.quarantine steps`.
+
+```bash
+curl -fsSL https://github.com/jtarchie/steps/releases/download/v0.1.0/steps_0.1.0_linux_amd64.tar.gz | tar -xz steps
+```
+
+From source, Go 1.27+:
+
+```bash
+go install github.com/jtarchie/steps@latest   # steps --version prints "dev"; release builds stamp the tag
+```
+
+Runtime needs: `git` for the built-in `git` resource, Docker only for steps that name an `image:`, and an API key (or a local model server) only for `agent` steps. Everything else runs on the host shell.
 
 ## Sixty seconds
 
@@ -153,6 +169,6 @@ Exit codes: `0` success, `1` a step failed, `2` the pipeline could not be run (c
 ## Build from source
 
 ```bash
-go build -v     # Go 1.26+
+go build -v     # Go 1.27+
 task            # the whole validation sequence: fmt, lint, test (-race), build, vuln
 ```

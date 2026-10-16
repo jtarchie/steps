@@ -1,6 +1,6 @@
 # Documentation
 
-Read the page for what you're doing. Nothing here needs to be read in order, except that [resources.md](resources.md) is the one most people need second, right after the quick start.
+Read the page for what you're doing. Nothing here needs to be read in order. New to steps: the [quick start](../README.md) (install, a task, a `get:`, an agent step), then [resources.md](resources.md), [agents.md](agents.md), and [web.md](web.md) for the daemon and its UI.
 
 **Every YAML example in these docs is a complete pipeline, extracted and executed by the test suite** (`e2e/docs_test.go`). An example that needs docker, btrfs, the network, a CLI, or real credentials says which one; everything else runs exactly as shown, and a doc example that stops working fails the build. Read them via `steps docs` in a terminal, `/docs` in the [web UI](web.md), or the files themselves.
 
@@ -16,8 +16,8 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 | [control-flow.md](control-flow.md) | `when:` guards, hooks, `to:`/`verdicts:` routing, `do:`/`in_parallel:`/`race:`/`across:`, `assert:`, approvals | long |
 | [agents.md](agents.md) | Agent steps: tools, prompts, verdicts, sub-agents, `fix:`, budgets, failover, CLI agents, ensembles | long |
 | [attempts-timeout.md](attempts-timeout.md) | `attempts:` and `timeout:`, and how they interact | short |
-| [workspace.md](workspace.md) | `inputs:`/`outputs:`, per-step isolation (always on), read-modify-write artifacts | short |
-| [infra.md](infra.md) | Containerized execution (`image:`) and cross-job triggers (`steps web`) | medium |
+| [workspace.md](workspace.md) | `inputs:`/`outputs:`, per-step isolation (always on), read-modify-write artifacts, the resource and step caches (`volatile:`), `--resume` | short |
+| [infra.md](infra.md) | Containers (`image:`, `network:`, `user:`, `env:`, limits), remote workers (`tags:`), the artifact store, build metadata, and job scheduling: `trigger:`, `passed:`, `serial:`, `max_in_flight:`, `interruptible:`, the circuit breaker, `run_history:` | long |
 | [templating.md](templating.md) | `{{ }}` in resource commands and custom tools, `shellquote`, `((var))`, `load_var:` | short |
 | [mcp.md](mcp.md) | MCP servers as tool sources and as resource-type backends | medium |
 | [complete.md](complete.md) | A full pipeline putting the pieces together | short |
@@ -27,8 +27,8 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 | Page | What it covers |
 |---|---|
 | [web.md](web.md) | The daemon: `steps pipeline set`, the browser UI, run transcripts, the dependency graph, live runs, triggering, and one state database for every pipeline it holds |
-| [observability.md](observability.md) | OpenTelemetry tracing from the `OTEL_*` environment: what turns it on, and what is traced |
-| [authentication.md](authentication.md) | HTTP Basic on `steps web`: the two flags, what they cover, the one exempt route, and how the CLI carries credentials |
+| [observability.md](observability.md) | OpenTelemetry traces and metrics from the `OTEL_*` environment: what turns them on, what is traced, what is measured |
+| [authentication.md](authentication.md) | Accounts on `steps web` (Basic, local users, GitHub/Google sign-in), roles and a pipeline's `access:`, the exempt routes, and how the CLI carries credentials |
 | [agents-internals.md](agents-internals.md) | How agent steps work underneath: transport, tool-call repair, compaction, caching |
 | [aws-workers.md](aws-workers.md) | Standing up an `aws://` worker by hand with the AWS CLI: IAM, security group, launch template, instance, bucket — and running a pipeline on it |
 | [gcp-workers.md](gcp-workers.md) | Standing up a `gcp://` worker by hand with gcloud: the IAP firewall rule, instance template, instance — and running a pipeline on it |
@@ -63,6 +63,9 @@ steps runs                  with no -p: every pipeline in the state file
 steps runs follow -p <name> [run]
                             watch a run to its end (live on a terminal;
                             Ctrl-C detaches, never aborts)
+steps runs abort -p <name> <run>
+                            stop a run on a daemon (--queued <job> drops
+                            a queued one instead)
 steps jobs -p <name>        list jobs the circuit breaker is holding
                             (steps jobs release <job> -p <name> clears one)
 steps approvals -p <name>   list approval: steps waiting for a decision
@@ -72,7 +75,7 @@ steps questions -p <name>   list ask_user questions waiting for an answer
 steps memory -p <name>      list what agent steps remember, by scope
                             (--scope <s> for its entries; steps memory rm
                             --scope <s> <id>...|--all -p <name> deletes)
-steps mcp tools|login       inspect or authorize mcp_servers: entries
+steps mcp list|tools|login  inspect or authorize mcp_servers: entries
                             (login <server> -c f.yml authorizes this machine;
                             -p <name> --target <url> authorizes a daemon)
 steps docs [page]           read these docs in the terminal
@@ -86,7 +89,7 @@ Two of these answer most "why is it doing that?" questions: `steps plan` explain
 
 A third answers "did the pipeline change?" — `steps runs` carries a `CONFIG` column, the hash of the configuration each run was started from. Two runs of one file agree; an edit between them does not, and a run whose rows disagree with the last green one is a run that executed something else. The hash covers everything the configuration is made of: the pipeline file after `((var))` substitution — so one file under two `--vars-file`s is two configurations — and every file it includes, so editing a `run_file:` script is editing the pipeline. A run started by something that loaded no file at all shows `-`.
 
-`steps validate` answers a third: *will this run at all?* It checks the file — syntax, references, field placement — and then the things the file depends on that live outside it:
+`steps validate` answers a fourth: *will this run at all?* It checks the file — syntax, references, field placement — and then the things the file depends on that live outside it:
 
 - every model name resolves to a known provider (a typo like `opencoder/` for `opencode/` is a load error, not a failed run)
 - every `api_key_env:` the pipeline names is actually set
@@ -104,7 +107,7 @@ steps: error: pipeline.yml cannot run here:
 
 `steps validate --live` answers the run-time version of the same question: not "is this pipeline runnable" but "is it runnable *right now*". It sends a minimal request to every model the pipeline reaches and starts every MCP server it grants; `--job <name>` narrows that to one job.
 
-**`steps run` does this automatically, before any step executes.** A plan like `plan -> code -> check -> review -> publish` used to discover a dead model half an hour in, with everything before it paid for and thrown away. Now it fails in seconds, saying explicitly that nothing ran:
+**`steps run` does this automatically, before any step executes.** Without it, a plan like `plan -> code -> check -> review -> publish` discovers a dead model half an hour in, with everything before it paid for and thrown away. With it, the run fails in seconds, saying explicitly that nothing ran:
 
 ```
 $ steps run pipeline.yml --job self-build
@@ -143,7 +146,7 @@ That gives completion and inline errors while you type. `steps validate` remains
 
 ## Re-running one step: `--replay`
 
-Agent steps are never content-cached, and unskippable propagates forward — so editing the *last* agent step's prompt re-runs every step before it, at full price. That is the single most expensive thing about authoring an agent pipeline.
+An agent step makes its chain unskippable, and unskippable propagates forward — so editing the *last* agent step's prompt re-runs every step before it, at full price, except those the [step cache](workspace.md#step-output-cache-volatile) can answer (a durable `workspace.root:`, declared `outputs:`, and none of the exclusions it lists, such as `verdicts:` or hooks). That is the single most expensive thing about authoring an agent pipeline.
 
 ```bash
 steps run pipeline.yml --replay r-8f2a1c --from synthesizer

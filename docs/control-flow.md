@@ -1,6 +1,6 @@
 # Control Flow
 
-Four distinct, easy-to-conflate mechanisms for shaping how a job's plan executes, plus the self-verification (`assert:`) that makes fixtures out of them. All are opt-in; a pipeline that uses none of this hashes and behaves exactly as if the feature didn't exist.
+Five distinct, easy-to-conflate mechanisms for shaping how a job's plan executes, plus the self-verification (`assert:`) that makes fixtures out of them. All are opt-in; a pipeline that uses none of this hashes and behaves exactly as if the feature didn't exist.
 
 - **`do:`** (group) runs several steps as one, so a single hook covers the whole group.
 - **`try:`** (tolerate) wraps a step so its failure or error does not stop the plan — best-effort notifications, cleanup, or metrics pushes.
@@ -12,7 +12,7 @@ On a failing step with both a hook and a route: the hook fires first (react), th
 
 ## Hooks (`on_success`/`on_failure`/`on_error`/`on_abort`/`ensure`)
 
-Any plan step, or the whole job, can carry hooks. A hook is itself a full step (task/put/agent — never `get`), so it can `run:` a command, `put:` a resource, or invoke an `agent:`, and may recursively carry its own hooks.
+Any plan step, or the whole job, can carry hooks. A hook is itself a full step (task/put/agent, or a `try:` around one — never `get`), so it can `run:` a command, `put:` a resource, or invoke an `agent:`, and may recursively carry its own hooks.
 
 ```yaml
 jobs:
@@ -56,7 +56,7 @@ jobs:
 
 ## Conditional steps (`when:`)
 
-A `task`/`put`/`agent` step (including a hook step) can carry `when:` — a shell command whose **exit code** decides whether the step runs: 0 runs it, nonzero skips it.
+Any step but a `get` — a hook step or a block (`do:`, `in_parallel:`, `approval:`, …) included — can carry `when:` — a shell command whose **exit code** decides whether the step runs: 0 runs it, nonzero skips it.
 
 ```yaml
 jobs:
@@ -100,7 +100,7 @@ jobs:
 
 ## Tolerated failure (`try:`)
 
-A `try:` wraps a single inner step (task, put, agent, or another try) so a **failure or infrastructure error** of that step doesn't stop the plan:
+A `try:` wraps a single inner step (any kind but `get`: a task, put, agent, block, `approval:`, or another try) so a **failure or infrastructure error** of that step doesn't stop the plan:
 
 ```yaml
 jobs:
@@ -126,7 +126,7 @@ The wrapper is **transparent**: the only thing it changes is whether the plan wa
 - **Everything but an abort is tolerated** — Concourse's line exactly (its TryStep masks failures, errors and timeouts, and propagates only cancellation). A task-level failure, an infrastructure error (docker, transport, workspace), and an expired `timeout:` are all shrugged off; an abort (Ctrl-C) still stops the run and exits non-zero — tolerating it would report a green job for a canceled build and march the plan into steps whose context is already dead. See [conformance.md](conformance.md).
 - **`to:` routing sees the real outcome**, because toleration happens *after* routing. `to: {failure: cleanup}` on the wrapper is reachable. The target name is the wrapped step's own name (task/put/agent).
 - **Hooks on the wrapper** also observe the real outcome, so `on_failure` on a `try:` fires when the wrapped step failed.
-- **The wrapper is the plan-positioned step**, so `to:` and `max_visits:` belong on it and are rejected on the step it wraps (where they used to load fine and silently never fire). `verdicts:` (targets and all) stays on the `agent:` step being wrapped, since that is what the agent runtime reads — a tolerated agent still routes on its verdict.
+- **The wrapper is the plan-positioned step**, so `to:` and `max_visits:` belong on it and are rejected on the step it wraps (where they would load and never fire). `verdicts:` (targets and all) stays on the `agent:` step being wrapped, since that is what the agent runtime reads — a tolerated agent still routes on its verdict.
 - **`assert:` is rejected anywhere inside a `try:`**, on the wrapper and on the step it wraps alike. `assert:` is what makes a step a `steps test` fixture and `try:` swallows exactly the failure it reports, so such an assert could never fail a run.
 - **Composability:** `try:` nests and composes with `attempts:`/`timeout:` on the wrapped step — retry a few times, then shrug. Also works with `fix:` on a task — attempt repair, then tolerate if the fix doesn't stick.
 - **Artifacts flow through unchanged**: a wrapped task's `outputs:` are available to later steps exactly as if it were unwrapped (note that a *tolerated* step may not have produced them — a later `inputs:` on that artifact is a static contract, not a runtime guarantee).
@@ -293,7 +293,7 @@ jobs:
     outcome: succeeded       # the matching assert is what makes exit 3 a success
 ```
 
-- **`assert.verdict`**, on an agent step that declares `verdicts:`: the name the model must have emitted, matched exactly. A classifier's product *is* the choice, so a fixture used to pass on whatever the model decided:
+- **`assert.verdict`**, on an agent step that declares `verdicts:`: the name the model must have emitted, matched exactly. A classifier's product *is* the choice, so without this a fixture passes on whatever the model decided:
 
 ```yaml test=control-classifier
 agents:
@@ -587,7 +587,7 @@ This is "the step plans, the pipeline executes": one step produces a work list, 
 
 ### Collected outputs: `outputs:` on the matrix
 
-A matrix's cells are clones of one step, so they declare the same output names — which used to mean the last capture silently erased the others'. `outputs:` on an `across:` step means the block **collects**: each cell writes its declared output exactly as any step does, and the capture lands under the cell's own coordinates. Downstream consumes the lot as ONE artifact:
+A matrix's cells are clones of one step, so they declare the same output names — and without collection the last capture would silently erase the others'. `outputs:` on an `across:` step means the block **collects**: each cell writes its declared output exactly as any step does, and the capture lands under the cell's own coordinates. Downstream consumes the lot as ONE artifact:
 
 ```yaml
 jobs:
@@ -690,7 +690,7 @@ Four cells are admitted against reservations alone; the fifth waits. As each fin
 
 - **Where the number comes from**, first match winning: the block's `reserve_per_cell:`, then the cell agent's own `budget.tokens` (you already declared what one invocation may cost, so a block often needs no new config at all), then nothing — and with nothing, the block admits exactly as it did before reservations existed, warning included.
 - **A too-large reservation costs concurrency, not cells.** The matrix simply runs narrower while it waits for finished cells to report.
-- **Across-only.** The same field on an agent's or a job's `budget:` is a load error: neither admits anything, so a reservation there would read like configuration and bind nothing.
+- **Across-only, and only with `max_in_flight:` above 1.** The same field on an agent's or a job's `budget:` is a load error: neither admits anything, so a reservation there would read like configuration and bind nothing. On a serial matrix each cell's real spend is known before the next is admitted, so a reservation would decide nothing — also a load error.
 - **A CLI agent supplies no reservation.** Its ceiling is `budget.usd`, metered in dollars inside its own subprocess, which cannot be compared against a token allowance — such a block needs an explicit `reserve_per_cell:` to bind.
 - **The run warns when nothing is reserved at all** and the width covers every cell — the one case that still admits every cell blind, since no reservation means nothing for admission to pause on.
 
@@ -722,7 +722,6 @@ jobs:
 - **`assert.execution` stays deterministic**: each cell records into its own log, merged back in declaration order at the join.
 - **There is no `fail_fast:`.** A matrix asks which combinations work; every cell runs and every failure is reported, exactly as in the serial walk.
 - **Not hashed**, unlike `in_parallel:`'s `limit:`/`fail_fast:`. Those change which steps run at all; this changes only how many run at once — so widening a matrix whose cells are all cached re-runs nothing.
-- **Above 1 requires `strategy: copy`** (the default).
 
 ### Sharding: `parallelism:`
 

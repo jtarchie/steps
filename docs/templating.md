@@ -1,8 +1,8 @@
 # Template Rendering
 
-Resource `check`/`in`/`out` commands and agent custom tools are [Go templates](https://pkg.go.dev/text/template) rendered before they run: `{{ .source.* }}` and `{{ .version.* }}` for resources, plus `{{ .args.* }}` in a custom tool's `run:` (where the tool's parameter schema is inferred from exactly those references — see [agents.md](agents.md)).
+Resource `check`/`in`/`out` commands and agent custom tools are [Go templates](https://pkg.go.dev/text/template) rendered before they run: `{{ .source.* }}`, `{{ .version.* }}` and a step's `{{ .params.* }}` for resources, plus `{{ .args.* }}` in a custom tool's `run:` (where the tool's parameter schema is inferred from exactly those references — see [agents.md](agents.md)).
 
-Templates have the full [slim-sprig](https://github.com/go-task/slim-sprig) function library available (string/list/default/date helpers) plus our own `shellquote`:
+Templates have the [slim-sprig](https://github.com/go-task/slim-sprig) function library (string/list/default/date helpers) plus our own `shellquote`. Its three host-reaching functions are removed — `env`, `expandenv` and `getHostByName` — because a template renders on the machine running the pipeline, which may be a daemon that anyone with API access can upload a pipeline to:
 
 ```yaml
 resource_types:
@@ -42,7 +42,7 @@ run: gh pr comment --body {{ .args.body | shellquote }}
 
 Don't add surrounding `"..."` — `shellquote` already quotes only when needed. This matters most for LLM- or PR-authored values (e.g. a review body): without it, a body containing `` `replace` `` gets command-substituted by the shell and posted with those words silently missing.
 
-`steps validate` warns — and still exits 0 — on every `{{ }}` in a resource `check`/`in`/`out` or a custom tool's `run:` that reads `.source`, `.version`, `.params` or `.args` without ending in `shellquote`.
+`steps validate` warns — and still exits 0 — on every `{{ }}` that reaches the shell without ending in `shellquote`: in a resource `check`/`in`/`out`, one reading `.source`, `.version` or `.params`; in a custom tool's `run:`, one reading `.args`.
 
 ## Pipeline vars: `((var))` and `load_var:`
 

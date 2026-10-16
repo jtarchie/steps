@@ -91,11 +91,11 @@ jobs:
     outcome: succeeded
 ```
 
-**Where the file tools run.** With no `image:`, in this process, against the step's directory here. With an `image:`, **inside that container** — the same one `run_shell` execs into — so the two always address one copy of the tree. That is what lets an agent be placed on a worker at all (see [infra.md](infra.md#remote-workers-tags)): `tags:` on an agent requires `image:`, because without a container the file tools would stay here while the shell moved, and the model would read one machine while writing to another with no way to tell.
+**Where the file tools run.** With no `image:`, in this process, against the step's directory here. With an `image:`, **inside that container** — the same one `run_shell` execs into — so the two always address one copy of the tree. That is what lets an agent be placed on a worker at all (see [infra.md](infra.md#remote-workers-tags)): `tags:` on an agent step requires `image:`, because without a container the file tools would stay here while the shell moved, and the model would read one machine while writing to another with no way to tell.
 
 The one exception is `read_file` on the step's spill directory: an oversized `run_shell` output is captured by this process (even when the command ran on a worker) and written to a file there, so the absolute path the model is handed to read it back names something that exists here and nowhere else. Nothing else is excepted — anything the model can write has to land where `run_shell` can see it.
 
-The container path uses the image's own `find`, `grep`, `sed`, `cat`, `head`, `wc`, `tr`, `mkdir` and `readlink`, so nothing is mounted in and no binary is pushed; an image lacking them fails the step at preparation rather than at the model's first call. Every cap and filter stays here — `search_files` uses `find` to list candidates and `grep` to match lines, and applies the prune list, the glob, `head_limit`, the byte budget, `files_scanned` and the binary-file skip itself. Its pattern is re-rendered as a POSIX ERE first, because `\d` means a digit to busybox grep and the letter *d* to GNU grep; a pattern with no POSIX form (non-greedy `*?`, `\p{...}`) is refused as a tool error naming the construct instead of quietly matching something else.
+The container path uses the image's own `find`, `grep`, `sed`, `cat`, `head`, `wc`, `tr`, `mkdir`, `readlink`, `chmod` and `rm`, so nothing is mounted in and no binary is pushed; an image lacking them fails the step at preparation rather than at the model's first call. Every cap and filter stays here — `search_files` uses `find` to list candidates and `grep` to match lines, and applies the prune list, the glob, `head_limit`, the byte budget, `files_scanned` and the binary-file skip itself. Its pattern is re-rendered as a POSIX ERE first, because `\d` means a digit to busybox grep and the letter *d* to GNU grep; a pattern with no POSIX form (non-greedy `*?`, `\p{...}`) is refused as a tool error naming the construct instead of quietly matching something else.
 
 The built-ins that mutate state or reach beyond the workspace are deliberately not in the default; each is a capability the pipeline must grant explicitly:
 
@@ -179,7 +179,7 @@ Whether a model is shown the image depends on the path its conversation takes:
 | agent | what `read_file` returns for an image |
 |---|---|
 | a CLI agent (`@claude/...`) | the image, as MCP image content beside the usual JSON result — the CLI scales it down itself before its model sees it |
-| a hosted model known to take images: `claude-*`, `gpt-4o`, `gpt-4.1`, `gpt-5`, `o3`, `o4-mini`, `gemini-*`, under any provider prefix | the image, in a user message right after the tool results: Chat Completions — the protocol every hosted provider here speaks, Anthropic's included — has no image in a tool message |
+| a hosted model known to take images: `claude-*`, `gpt-4o`, `gpt-4.1`, `gpt-5` (not `gpt-5.3-codex-spark`), `o3` (not `o3-mini`), `o4-mini`, `gemini-*`, under any provider prefix | the image, in a user message right after the tool results: Chat Completions — the protocol every hosted provider here speaks, Anthropic's included — has no image in a tool message |
 | any other hosted model | a description: name, format, dimensions and size, and that this model can't be shown images |
 
 Unlisted means a description, deliberately: a model wrongly believed blind loses the picture, while one wrongly believed sighted makes its endpoint refuse the request and fails the step. A `fallback:` that resumes a conversation on a blind model gets the images already in it replaced by a note, for the same reason.
@@ -249,7 +249,7 @@ jobs:
 
 The refusal happens before any connection is attempted, so the example above runs without network — and the model, told about the fence in the tool's own description, records the refusal instead of retrying it.
 
-Two rules keep a written fence honest, both enforced at load:
+Three rules keep a written fence honest:
 
 - **Caching**: the `allow:` list is part of the step's hash (sorted, since a host list is a set, and value-gated, so a bare grant hashes as it always did). Widening or narrowing the fence re-runs a cached step — a result produced while the agent could reach anywhere is not the result of a step that may only reach one host.
 - **`allow:` belongs on the `agents:` entry that grants the tool.** A step's `tools:` *selects* from the grant, and a selection is resolved by substituting the agent's own spec — so an `allow:` written on a step would read as a fence and bind nothing. Select by bare name (`tools: [web_fetch]`) and the agent's fence comes with it.
@@ -306,7 +306,7 @@ jobs:
 
 A question goes to the first channel that can serve it:
 
-1. **An answer given in advance.** `steps run --answer 'which bump=minor'` (repeatable, also on `test`, `watch` and `web`) answers every question whose text contains that substring, case-insensitively. It is a supported way to run unattended, not only a test seam.
+1. **An answer given in advance.** `steps run --answer 'which bump=minor'` (repeatable, also on `test` and `web`) answers every question whose text contains that substring, case-insensitively. It is a supported way to run unattended, not only a test seam.
 2. **`answered_by: <agent>`** — a declared `agents:` entry answers, with its own model, dials and tool grant. This is deliberately *not* the same as granting that agent as a sub-agent tool: a sub-agent is delegation the asking model chose, while a responder is an **escalation** a person can still intercept. The recorded row says which one answered. A responder that fails, or answers with nothing, hands the question on rather than resolving it.
 3. **A person, inline.** When `steps run` has a terminal, the question is asked right there.
 4. **A person, parked.** With no terminal — CI, a supervised `steps web` — the run parks, prints the command that answers it, and waits:
@@ -363,7 +363,7 @@ Caching diverges from `approval:` deliberately. An approval is never cached — 
 
 #### On a CLI-backed agent
 
-`ask_user` works unchanged on `@claude/...` sources, and it is the one builtin a CLI never runs itself: the call is bridged back to steps, so the answer lands here — where the row, the memo and the responder ladder live — rather than in the child's own transcript. Two consequences worth knowing: the call is recorded in the trajectory under its bridged name, `mcp__steps__ask_user`, and `timeout:` on this builtin IS accepted for a CLI agent, unlike every other builtin, because the deadline really does bind.
+`ask_user` works unchanged on `@claude/...` sources, and it is the one builtin a CLI never runs itself: the call is bridged back to steps, so the answer lands here — where the row, the memo and the responder ladder live — rather than in the child's own transcript. Its trajectory entry is de-namespaced like every bridged call's, so it records as `ask_user`, and its `timeout:` binds exactly as on a hosted agent.
 
 ## Working directory, inputs, and dir:
 
@@ -440,7 +440,7 @@ jobs:
 - **The safety bound is `max_turns`**: if a provider ignores `tool_choice`, or the model just can't get it right, the loop still terminates and the step fails, naming the tool(s) that never succeeded.
 - **`args:` pinning**: a pinned key is excluded entirely from the schema the model sees. At execution, the pinned value is merged in *over* whatever the model supplied, before rendering and before the missing-argument check. The model chooses *when*, the pipeline chooses *where*. `args:` is also valid on a single-tool MCP grant, where each key must be a property the server declares — see [mcp.md](mcp.md#pinning-arguments-args).
 - **`max_calls:` budget**: once exhausted, the next call is rejected before it reaches the tool's implementation (no side effect runs) and comes back as `{"error": "... call budget exhausted ..."}`. A budget-rejected call never counts toward `required:`.
-- **Only custom tools can be `required:`**, and `max_calls:`/`args:` are rejected at load on builtin and sub-agent tools. A builtin can be written as a mapping (`{builtin: read_file}`) purely so those fields have somewhere to attach.
+- **A sub-agent tool can never be `required:`**; a custom tool, a builtin and a single-tool MCP grant can. `max_calls:`/`args:` are rejected at load on builtin and sub-agent tools. A builtin written as a mapping (`{builtin: read_file}`) is how those fields get somewhere to attach.
 - **Quote everything that reaches the shell.** `{{ .args.body | shellquote }}` — an LLM-authored value with backticks in it is otherwise command-substituted. See [templating.md](templating.md).
 
 ### `params:` — limits on what an argument may be
@@ -692,7 +692,7 @@ Its `messages:` is a list of user turns, exactly as an agent step's is: the fixe
 
 **What a fix agent needs.** It must be able to edit, and the default tool grant deliberately excludes the write tools — grant them explicitly.
 
-**Restrictions.** A fix agent may not grant sub-agents, may not use MCP tool grants, and may not set `image:` (it runs in the parent task's image). Its conversation records no cache node or `job_run` of its own.
+**Restrictions.** A fix agent may not grant sub-agents, may not be a CLI agent, and may not set `image:` (it runs in the parent task's image). MCP tool grants are allowed. Its conversation records no cache node or `job_run` of its own.
 
 **Caching.** A task with a `fix:` makes its chain uncacheable, since whether it succeeds may depend on what a model did. The run prints `note: <step> makes this chain uncacheable (fix: agent)` at the point that happens.
 
@@ -1348,21 +1348,21 @@ This is **delegation, not a different transport**. The CLI owns the conversation
 
 ### The tool grant becomes the CLI's permissions
 
-The CLI is passed `--tools ""` **unconditionally** — no built-in of its own, ever — and every granted tool, built-in or custom alike, reaches it over the same loopback MCP bridge that already served custom `run:` tools, `mcp:` grants, and the synthesized `verdict` tool. A hosted agent is a brain whose hands are steps' own tool implementations, executing wherever steps decides; a CLI agent is now the same shape — a brain that happens to live in a subprocess. The bridged tools are the *same* implementations a hosted agent runs: path confinement, output caps, `allow:` enforcement, all apply unchanged, including for a tool (`read_file`, `run_shell`, ...) that used to run as the CLI's own native `Read`/`Bash`.
+The CLI is passed `--tools ""` **unconditionally** — no built-in of its own, ever — and every granted tool, built-in or custom alike, reaches it over one loopback MCP bridge, the synthesized `verdict` tool included. A hosted agent is a brain whose hands are steps' own tool implementations, executing wherever steps decides; a CLI agent is the same shape — a brain that happens to live in a subprocess. The bridged tools are the *same* implementations a hosted agent runs: path confinement, output caps, `allow:` enforcement, all apply unchanged.
 
 Anything not granted is **absent**, not merely unapproved: `--tools ""` gives the CLI no built-in surface to fall back on, and `--allowedTools` names only what the bridge exports. That is deny-by-default — a capability this build of steps has never heard of is withheld because it was never granted, rather than surviving because nobody remembered to forbid it. The CLI's own configured MCP servers are excluded too (`--strict-mcp-config`).
 
-**Attestation: the fence is enforced, not merely asked for.** `--tools ""` is policy inside an upstream binary steps does not pin, so each attempt checks the CLI's own stream-json `init` event — which lists the session's tools — against exactly the bridged grant, and kills the child the instant they disagree. This is *detection*, not prevention: the check runs after `init` is parsed, so it cannot stop a single surplus call made in the same breath as `init` itself, but every call after that is refused. A mismatch is an infrastructure condition (it fires `on_error`, not a step failure `to:` can route on) — retrying would just re-trigger the same fence.
+**Attestation: the fence is enforced, not merely asked for.** `--tools ""` is policy inside an upstream binary steps does not pin, so each attempt checks the CLI's own stream-json `init` event — which lists the session's tools — against exactly the bridged grant, and kills the child the instant they disagree. This is *detection*, not prevention: the check runs after `init` is parsed, so it cannot stop a single surplus call made in the same breath as `init` itself, but every call after that is refused. A mismatch is an infrastructure condition (it fires `on_error`, not a step failure a `failure:` route can catch) — retrying would just re-trigger the same fence.
 
 A bridged call's trajectory entry is recorded **de-namespaced**: `mcp__steps__read_file` records as `read_file`, identical to what a hosted step's own trajectory shows for the same call, so one `assert.tool_calls: [{name: read_file}]` reads the same on either agent kind. A name this build does not recognize as bridged (`Bash`, `Task`, anything the CLI's own natives could in principle still report despite `--tools ""`) is kept **verbatim** — a second, human-readable signal of the same fence failure the attestation check exists to catch.
 
-**An image `read_file` opens reaches the CLI's model as an image** — MCP image content, which the CLI resizes and hands its model the way its own `Read` would have — rather than as the mangled text a raw read of a PNG used to be. See [`read_file` on images](#read_file-on-images-and-binary-files) for limits and what a hosted agent gets instead.
+**An image `read_file` opens reaches the CLI's model as an image** — MCP image content, which the CLI resizes and hands its model the way its own `Read` would have — rather than as text. See [`read_file` on images](#read_file-on-images-and-binary-files) for limits and what a hosted agent gets instead.
 
 ### A step is not your session
 
 A CLI agent step runs with **no configuration scopes by default**. Your personal `~/.claude` never applies — no user settings, hooks, plugins, skills — and the repo's own `.claude/` scope loads only when the agent opts in with `settings: project` (as above). A pipeline whose behavior depends on who ran it is not a pipeline. The opt-in is hashed, so granting or revoking it invalidates the step's cache. It is also markedly cheaper: dropping user-level config cut a trivial one-step pipeline from ~76K prompt tokens to ~25K in a measured run.
 
-`--setting-sources`, `--strict-mcp-config` and `--tools ""` are now the **entire** fence a `settings: project` step runs inside — three flags, all load-bearing. That matters most for `settings: project` **together with `image:`**: the CLI process itself is always host-side (see "Containerizing a CLI agent" below), so a fetched PR's own `.claude/settings.json` hooks execute on the orchestrator, not inside whatever container the step's tools run in. `image:` narrows what the *tools* can reach; it does not, and cannot, contain a `settings: project` agent's own config loading. Grant `settings:` only to a repo whose `.claude/` you trust the same way you trust its `run:` scripts.
+`--setting-sources`, `--strict-mcp-config` and `--tools ""` are the **entire** fence a `settings: project` step runs inside — three flags, all load-bearing. That matters most for `settings: project` **together with `image:`**: the CLI process itself is always host-side (see "Containerizing a CLI agent" below), so a fetched PR's own `.claude/settings.json` hooks execute on the orchestrator, not inside whatever container the step's tools run in. `image:` narrows what the *tools* can reach; it does not, and cannot, contain a `settings: project` agent's own config loading. Grant `settings:` only to a repo whose `.claude/` you trust the same way you trust its `run:` scripts.
 
 ### Verdicts are enforced at exit
 
@@ -1390,14 +1390,15 @@ These are load errors, not silent no-ops, because a setting that reads as config
 | `budget.tokens:` | nothing counts tokens until the subprocess exits (use `budget.usd:`) |
 | a CLI agent as another agent's sub-agent | the child of a delegation is driven by steps' own turn loop, which a CLI source replaces wholesale |
 | a CLI agent as a task's `fix:` agent | same reason |
+| `tags:` on a step running a CLI agent | the CLI runs here, in this machine's copy of the step; placing its tools on a worker would split the tree |
 
-**Granting a sub-agent is accepted**, and it is the same tool grant a hosted agent gets. It was refused in both directions once, on the reasoning that a delegation nests inside a turn loop a CLI agent does not run — but a sub-agent tool is an ordinary tool implementation, and since `--tools ""` every tool a CLI agent calls reaches it over the bridge. The child's conversation runs in *this* process, under steps' own model, persona, tools and `image:`, and its answer comes back as the tool result. So a CLI parent can delegate to a cheap hosted model on another provider, which the CLI's own subagents cannot do. Two things follow from the child being ours rather than the CLI's: its spend folds into the step's total (so a job `budget:` still bounds the subtree, even though the CLI parent itself meters in dollars), and preflight probes it before the parent process starts, so an unreachable child costs seconds rather than a whole conversation. Only the reverse remains refused, above: the *child* of a delegation cannot itself be a CLI agent.
+**Granting a sub-agent is accepted**, and it is the same tool grant a hosted agent gets: a sub-agent tool is an ordinary tool implementation, and every tool a CLI agent calls reaches it over the bridge. The child's conversation runs in *this* process, under steps' own model, persona, tools and `image:`, and its answer comes back as the tool result. So a CLI parent can delegate to a cheap hosted model on another provider, which the CLI's own subagents cannot do. Two things follow from the child being ours rather than the CLI's: its spend folds into the step's total (so a job `budget:` still bounds the subtree, even though the CLI parent itself meters in dollars), and preflight probes it before the parent process starts, so an unreachable child costs seconds rather than a whole conversation. Only the reverse remains refused, above: the *child* of a delegation cannot itself be a CLI agent.
 
-`required:`, `max_calls:` and `args:` on a tool are accepted, same as a hosted agent's: every call now reaches the bridge (or, for `required:`, is checked at exit against what the bridge observed — see "Verdicts are enforced at exit" above), so there is no longer a turn loop these would promise a constraint nothing applies. `timeout:` on a tool is accepted regardless of whether it names a built-in or a custom/MCP tool, for the same reason: every call now reaches the bridge, so there is no longer a native path a per-call deadline would silently miss. `network: none` together with `image:` is accepted too — see below.
+`required:`, `max_calls:`, `args:` and `timeout:` on a tool are accepted, same as a hosted agent's, built-in or custom/MCP alike: every call reaches the bridge, where each binds (`required:` is checked at exit against what the bridge observed — see "Verdicts are enforced at exit" above). `network: none` together with `image:` is accepted too — see below.
 
 ### Containerizing a CLI agent
 
-`image:` places the step's **tools**, never the CLI process itself — the CLI is always a host subprocess of this one, exactly as a hosted agent's conversation always runs here while its tools may run in a container. That single move is what makes containerizing a CLI agent unremarkable: credentials never approach the container (the subscription login / `api_key_env:` stays in this process, forwarded to the CLI's own host-side environment exactly as an uncontainerized step's would), there is no macOS-vs-Linux asymmetry to reason about, and `network: none` is now a coherent, useful way to sandbox a CLI agent's shell commands — cutting the *tools'* egress no longer touches the bridge the verdict comes back on, because the bridge was never inside the container to begin with. See [infra.md](infra.md#cli-agents).
+`image:` places the step's **tools**, never the CLI process itself — the CLI is always a host subprocess of this one, exactly as a hosted agent's conversation always runs here while its tools may run in a container. That single move is what makes containerizing a CLI agent unremarkable: credentials never approach the container (the subscription login / `api_key_env:` stays in this process, forwarded to the CLI's own host-side environment exactly as an uncontainerized step's would), there is no macOS-vs-Linux asymmetry to reason about, and `network: none` is a coherent way to sandbox a CLI agent's shell commands — cutting the *tools'* egress does not touch the bridge the verdict comes back on, because the bridge is never inside the container. See [infra.md](infra.md#cli-agents).
 
 ### Budgets are in dollars
 
@@ -1405,7 +1406,7 @@ A CLI agent takes `budget: {usd: 0.50}` rather than `budget: {tokens:}`. The two
 
 **The ceiling bounds the STEP, not the attempt.** Each attempt is handed what is left of `usd:` rather than the whole figure, so an agent with `attempts: 3` and `budget: {usd: 0.50}` spends at most about fifty cents in total, not a dollar fifty. When the remainder reaches zero the attempts stop and the step fails naming the spend — the same thing an exhausted `max_turns:` does, and for the same reason: paying a provider to discover there is nothing left to spend is the outcome the ceiling exists to prevent.
 
-*About:* a subprocess that CRASHES never reports what it spent — the dollar figure rides the terminal event a dead child never emits — so its share is priced from the token usage it streamed before dying, using a rate card covering the models the CLI runtimes run. A model outside that card is debited nothing, which is how every model behaved before the ceiling carried across attempts at all. The estimate is only ever used to decide how much budget is left; recorded cost stays exactly what the provider reported, so a run whose cost nobody reported still records none.
+*About:* a subprocess that CRASHES never reports what it spent — the dollar figure rides the terminal event a dead child never emits — so its share is priced from the token usage it streamed before dying, using a rate card covering the models the CLI runtimes run. A model outside that card is debited nothing. The estimate is only ever used to decide how much budget is left; recorded cost stays exactly what the provider reported, so a run whose cost nobody reported still records none.
 
 `fallback:` works in both directions — a CLI agent can fall back to a hosted provider, and a hosted agent to a CLI. Preflight checks a CLI target by looking for its binary on `PATH` — the same check whether or not the step names an `image:`, since the CLI is always a host subprocess.
 

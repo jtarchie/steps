@@ -174,7 +174,7 @@ credentials-file: /home/me/.cloudflared/<tunnel-id>.json
 ingress:
   - hostname: hooks.example.com
     path: ^/p/[^/]+/hooks/[^/]+$
-    service: http://localhost:8080
+    service: http://localhost:8088          # steps web's default --listen
   - service: http_status:404
 ```
 

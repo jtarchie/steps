@@ -172,7 +172,7 @@ http([{url: "…", method: "POST", query: {…}, headers: {…}, json: {…}}, �
 
 A check against a chat API is `1 + N` round trips, and in shell every one is serial. Expr cannot express concurrency at any price, and shell can only get it with background jobs and `wait` — which is exactly the construct that loses exit status. Batching is what makes concurrency safe to offer: steps owns the fan-out, so steps owns the error handling, the rate limiting, and the attribution.
 
-**Request keys**: `url` (required), `method` (default `GET`), `query`, `headers`, `json` (marshaled, implies `POST` and sets the content type), `body` (raw string). An unknown key is an error rather than ignored — a misspelled `header:` that silently sends no authorization surfaces as a 401 somewhere else entirely.
+**Request keys**: `url` (required), `method` (default `GET`), `query`, `headers`, `json` (marshaled, implies `POST` and sets the content type), `body` (raw string, also implies `POST`); `json` and `body` together are an error. An unknown key is an error rather than ignored — a misspelled `header:` that silently sends no authorization surfaces as a 401 somewhere else entirely.
 
 **Settings**: `headers` (merged into every request; a request's own header wins), `concurrency` (default 4), `timeout` (default `"30s"`, per request), `max_response_bytes` (default 8 MiB), `retry`, `tolerate_errors`. A setting spelled wrong is an error, and so is one **typed** wrong — `retry: {on: ["429"]}` would otherwise read as configured and retry nothing.
 
@@ -206,7 +206,7 @@ These are the ones that will bite you first. They are properties of expr itself,
 - **`not in` is not a thing.** Write `!("subtype" in #)`.
 - **`toJSON` indents.** Valid JSON, just not compact.
 - **There is no `try`/`catch`, and no way to add one.** Deferring an expression means compiling it separately, and a separately compiled program cannot see `let` bindings or `#` — both live on the VM's stack. So tolerance lives where the errors are born instead: `tolerate_errors` on `http()`, and the optional second argument to `env()` and `file()`.
-- **`now()`, `date()` and `duration()` are unavailable in `check` and `in`.** A check calling `now()` returns a different "version" on every poll, and a version has to be a stable identity — that is a pipeline that re-runs forever with whatever an agent step costs attached. `in` is barred for the neighbouring reason: its output is cached across builds, so it must be a pure function of the version it fetches. `out` may still use them.
+- **`now()`, `date()`, `duration()` and `timezone()` are unavailable in `check` and `in`.** A check calling `now()` returns a different "version" on every poll, and a version has to be a stable identity — that is a pipeline that re-runs forever with whatever an agent step costs attached. `in` is barred for the neighbouring reason: its output is cached across builds, so it must be a pure function of the version it fetches. `out` may still use them.
 
 `??`, `in`, `contains`, `matches`, `..`, `?.`, `#index` and `#acc` are all real and all useful.
 
@@ -316,4 +316,4 @@ Stated plainly rather than discovered:
 - **No containers.** `image:`, `network:`, `privileged:` and `container_limits:` alongside `expr:` are load errors. An expression evaluates in this process; there is nothing to isolate. Per-call `timeout` and `max_response_bytes` on `http()` are what replace them.
 - **Text only.** Binary artifacts are shell's job.
 - **No shell, ever.** There is no builtin that runs a command, and expr has no way to reach one. That is the safety property, not an omission.
-- **Syntax errors are not load errors.** `steps validate` and `steps validate --live` catch them — both before anything polls — but `steps` will parse a pipeline containing a broken expression. The config layer deliberately has no expression engine in it.
+- **Syntax errors are not load errors.** A pipeline with a broken expression parses; `steps validate`, `steps pipeline set`, and a run's preflight (for the resources its job touches) are what refuse it, all before anything polls or runs. The config layer deliberately has no expression engine in it.

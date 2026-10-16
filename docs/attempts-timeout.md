@@ -170,7 +170,7 @@ jobs:
     outcome: succeeded            # a green first try would record [check] alone
 ```
 
-With both `attempts:` and `fix:`, the fix agent runs **once per exhausted attempt**: attempt fails → fix agent → re-run, repeated until an attempt passes or all are spent, and the job fails with the error from the last attempt. Each fix invocation gets its own `attempts:` budget (default 1; overridable with `fix: {attempts: ...}`).
+With both `attempts:` and `fix:`, the fix agent runs **once per exhausted attempt**: attempt fails → fix agent → re-run, repeated until an attempt passes or all are spent, and the job fails with the error from the last attempt. Each fix invocation retries its own failing model requests under an `attempts:` resolved as for any agent step — `fix: {attempts: ...}`, then the fix agent's `agents:` entry, then 3.
 
 ## Interaction with `assert:`
 
@@ -210,11 +210,7 @@ WRN agent.conversation_failed agent=coder provider_requests=3 error="... 500 ...
 
 Retryable failures are connection errors and HTTP 408, 409, 429, and 5xx. A 400 or a 401 is taken at its word — retrying a request the server rejected on its merits just pays to be told the same thing again.
 
-> ### ⚠️ Breaking change: `attempts:` on an agent used to restart the conversation
->
-> It previously threw away every accumulated turn and started over from nothing — closer to *amnesia* than retry, and the restart was incoherent: the agent's **workspace survived but its memory did not**, so a restarted attempt inherited its own half-finished edits with no recollection of having made them. There is also no longer a hidden multiplier (the LLM client used to retry every request twice on its own, so `attempts: 6` meant up to **18** requests); `steps` now owns the retry outright.
->
-> **What to change:** nothing, in most pipelines — the new behavior is strictly cheaper and safer. The retry that actually works for a bad *answer* is unchanged: `to:` routing with `max_visits:`, which re-enters the agent with the reviewer's critique in context — a fresh conversation *with feedback*, strictly better than a blind restart.
+**There is no hidden multiplier**: steps switches the provider SDK's own retries off, so `attempts: 6` means at most six requests for a failing turn. **And a retry never restarts the conversation** — a restart would keep the agent's workspace but drop its memory, handing it its own half-finished edits with no recollection of making them. The retry that works for a bad *answer* is routing back with `max_visits:` — a `verdicts:` entry like `revise: <step>`, or `to:` on a verdict-less agent ([control-flow.md](control-flow.md#step-transitions-tomax_visitsverdicts)) — which re-enters the agent in a fresh conversation, with the critique carried in as an artifact or through `context: { from: }`.
 
 ## Timeout classification
 

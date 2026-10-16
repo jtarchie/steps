@@ -75,7 +75,7 @@ A `command:` server is a local subprocess `steps` spawns and speaks newline-deli
 
   A relative `cwd:` is rejected at load time for a server backing a **resource type's** `mcp:` config: a `check`/`in`/`out` has no agent step to resolve against. Those need an absolute `cwd:`.
 - **Auth is `none` only.** A stdio server has no HTTP request to attach a bearer token to; `auth:` set to anything else alongside `command:` is a load-time error, and `steps mcp login` never applies.
-- **Environment is filtered, not inherited.** The subprocess sees only the same host-command allowlist every other host-executed command gets (`PATH`, `HOME`, locale, `TMPDIR`/`USER`/`SHELL`, proxy vars) — **not** the operator's full environment, and specifically not any configured agent's `api_key_env` secret, nor `SSH_AUTH_SOCK`. Steps' build metadata (`STEPS_RUN_ID` …) is not set either: a server has no run and outlives commands. There is currently no pass-through mechanism for stdio servers, so **a stdio server that needs a credential or any other ambient variable (e.g. `GOFLAGS`, `GOPRIVATE`) is not supported yet**.
+- **Environment is filtered, not inherited.** The subprocess sees only the same host-command allowlist every other host-executed command gets (`PATH`, `HOME`, locale, `TMPDIR`/`USER`/`SHELL`, proxy vars) — **not** the operator's full environment, and specifically not any configured agent's `api_key_env` secret, nor `SSH_AUTH_SOCK`. Steps' build metadata (`STEPS_RUN_ID` …) is not set either: a server has no run and outlives commands. There is no pass-through mechanism for stdio servers, so **a stdio server that needs a credential or any other ambient variable (e.g. `GOFLAGS`, `GOPRIVATE`) is not supported**.
 - **Lifecycle**: for an agent tool grant, one subprocess is spawned per agent step per grant and reaped when the step ends. For a resource-type `mcp:` backend, a fresh subprocess is spawned **per** `check`/`in`/`out` call — including every `steps web` poll — fine for a fast-starting binary, a poor fit for one that's slow to start.
 - **Diagnostics**: the subprocess's stderr is logged at debug level (`--log-level=debug`), under `mcp.stdio.stderr` with the server's name attached — the only way to see why a stdio server failed to start.
 
@@ -114,7 +114,7 @@ This connects (per the server's configured auth) and prints each tool's name, de
 
 ## Granting MCP tools to an agent
 
-A `tools:` entry can reference an MCP server in three progressively broader forms, all sharing one connection to the server:
+A `tools:` entry can reference an MCP server in three progressively broader forms. Each grant opens one connection to the server for the step, shared by every tool it selects:
 
 ```yaml noexec=credentials
 mcp_servers:
@@ -450,27 +450,8 @@ jobs:
 - **A template naming a field that isn't there fails the step**, exactly as a shell command's template does — a typo'd `{{ .version.chanel }}` is not quietly nothing. In `check.args:` that bites on the very first poll, where the cursor is an empty map: write `{{ index .version "ts" | default "0" }}`, never a bare `{{ .version.ts }}`.
 - **A templated value is always a string.** `limit: 20` stays the number 20, but `limit: "{{ .source.limit }}"` sends `"20"`. Numbers lifted out of a version keep their exact digits — an issue id of `123456789` renders as `123456789`, not in exponent form.
 - **`{file: ...}` markers in a `put`'s `params:` are resolved first**, so `{{ .params.text }}` renders the file's contents.
-
-#### Upgrading a resource type written before `args:`
-
-steps used to wrap every call in an envelope of its own: `check` was called with `{"source": source}`, `in` with `{"source": source, "version": version}`, and `out` with `{"source": source, "params": params}`. No third-party server has ever declared parameters by those names, which is why an off-the-shelf tool could not be called at all — but a server written *for* steps could read them, and those are the ones this changes:
-
-| stage | was called with | now called with (no `args:`) |
-|---|---|---|
-| `check` | `{source}` | the source itself |
-| `in` | `{source, version}` | the source itself — **the version is gone** |
-| `out` | `{source, params}` | the params themselves — **the source is gone** |
-
-An `in:` reading `arguments.version.id` now receives the source and no version, and a tool whose parameters are all optional will accept that and quietly do the wrong thing. Name what the tool takes instead:
-
-```yaml fragment
-in:
-  tool: get_issue
-  args:
-    issue_id: "{{ .version.id }}"
-```
-
-The old envelope cannot be restored verbatim — a template renders a string, so there is no `{{ .source }}` that emits the whole object; enumerate the fields the tool needs (`args: { source: { team: "{{ .source.team }}" } }`) or, better, give the tool real parameters. `args:` is part of a step's hash, so adding a mapping re-runs the affected `get`/`put` rather than reusing what the old envelope fetched.
+- **A template renders a string, so no `{{ .source }}` emits a whole object.** A tool that wants a nested object gets it enumerated: `args: { filter: { team: "{{ .source.team }}" } }`.
+- **`args:` is part of the get's or put's hash**, so changing a mapping re-runs it rather than reusing what the old one fetched.
 
 ### When a tool returns prose: detect over HTTP, act over MCP
 
@@ -532,17 +513,17 @@ The rule of thumb: **a tool whose output a model was meant to read is an agent's
 
 ### Preflight checks this before anything runs
 
-Both ways an MCP call is wrong — a tool the server doesn't expose, and required arguments the call will never send — are answerable from the server's published tool list, without calling anything. So they are: `steps run` checks the resources its job touches before the first step, `steps validate --live` asks the same question on demand, and **`steps web` checks every `trigger:` resource before its first poll and exits if one can't work**. That last one is the point: a poll loop's reaction to a permanent misconfiguration is to log it and try again on the next interval, forever, with nothing enqueued and nothing red.
+Both ways an MCP call is wrong — a tool the server doesn't expose, and required arguments the call will never send — are answerable from the server's published tool list, without calling anything. So they are: `steps run` checks the resources its job touches before the first step, `steps validate --live` asks the same question on demand, and **`steps web` checks every `trigger:` resource of a pipeline before polling it, and leaves the pipeline unpolled if one can't work** — logged as `trigger.unpollable`, until a `steps pipeline set` changes the configuration. That last one is the point: a poll loop's reaction to a permanent misconfiguration is to log it and try again on the next interval, forever, with nothing enqueued and nothing red. A problem that waiting can fix — a server that did not answer, a token a refresh would renew — is logged once as a warning and left to the poll loop.
 
 ```
-watch: preflight failed, nothing was polled:
+trigger preflight failed, nothing was polled:
   resource "mentions": check tool "slack_search_public_and_private" requires [query], which this call does not send (it sends: [to])
     (the resource's source: IS the argument object when mcp.check.args: is unset — name it there, or map it in mcp.check.args:)
 ```
 
 `--no-preflight` skips it, as it does for models.
 
-A shallower check runs earlier still, needs no network at all, and cannot be skipped: an `mcp_servers:` entry whose stdio `command:` is not on this machine's `PATH`, or whose `auth.api_key_env` names a variable that is unset or empty, is a **[preflight problem](../internal/config/preflight.go)** — the same treatment an agent's `api_key_env` gets. `steps validate` reports it, and `steps pipeline set` REFUSES a pipeline that has one, so a daemon never serves a pipeline whose tooling is already known to be broken. An `auth: {type: oauth}` server is deliberately not checked this way: its credential is a token file, and refusing the set would leave nothing to log in against.
+A shallower check runs earlier still, needs no network at all, and cannot be skipped: an `mcp_servers:` entry whose stdio `command:` is not on this machine's `PATH`, or whose `auth.api_key_env` names a variable that is unset or empty, is a **preflight problem** — the same treatment an agent's `api_key_env` gets. `steps validate` reports it, and `steps pipeline set` REFUSES a pipeline that has one, so a daemon never serves a pipeline whose tooling is already known to be broken. An `auth: {type: oauth}` server is deliberately not checked this way: its credential is a token file, and refusing the set would leave nothing to log in against.
 
 
 ### Sending a file's contents: `{file: ...}` in `params:`
@@ -654,7 +635,7 @@ steps mcp login linear -p app --target https://ops:PASSWORD@steps.example.com
 4. The CLI reports the outcome in the flow's own words — including "authorized, but this token cannot be renewed" — and the daemon's next poll or run uses the token. Nothing restarts.
 
 - **The redirect URI is the address you reached the daemon on**, with the credentials taken off first: it is sent to the authorization server and kept there, so a password on it would have been handed to a third party. It is also a *stable* URI, which the loopback flow's ephemeral port never is — a server demanding exact pre-registered redirect URIs gets `https://steps.example.com/mcp/callback`, registered once.
-- **`GET /mcp/callback` asks for no password**, the one route besides a [webhook delivery](authentication.md#what-it-covers) that does not. It cannot: the request is a bare navigation a third party caused. It is authenticated by its `state` — a single-use nonce minted for that one login and seen only by whoever was handed its authorization URL, which takes the daemon's credentials to get. A state nobody is waiting on is a `404`.
+- **`GET /mcp/callback` asks for no password**, one of the few routes (with a [webhook delivery](authentication.md#what-it-covers)) that does not. It cannot: the request is a bare navigation a third party caused. It is authenticated by its `state` — a single-use nonce minted for that one login and seen only by whoever was handed its authorization URL, which takes the daemon's credentials to get. A state nobody is waiting on is a `404`.
 - **Starting a login and reading its URL do need credentials**, like everything else under `/api`.
 - **One login per pipeline and server at a time.** A token file is keyed by both, so a second login for the same pair replaces the first rather than racing it; logins for the same server in two pipelines run side by side. An unfinished one lets go after ten minutes; a daemon restarted mid-login forgets it, and you run the command again.
 - **`auth.client_secret_env:` is read from the daemon's environment**, not yours — the daemon is the client.

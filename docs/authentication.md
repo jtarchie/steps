@@ -37,7 +37,7 @@ Everyone signs in the same way — the browser prompts, the CLI carries `name:pa
 
 bcrypt is slow on purpose (tens of milliseconds a check) and a browser sends credentials on every request, so a pair that checked out is remembered for a minute. A changed file reaches a running daemon only on restart, and an account removed from it then ends: its browser sessions and its agents' connections stop working.
 
-**Unset is open access**, which is what every existing local workflow is. `steps web` on a routable address with no credentials prints a warning once at startup naming the two flags; it does not refuse, because an operator who has put the daemon behind a tunnel or a reverse proxy has already answered the question.
+**Unset is open access**, which is what every local workflow is. `steps web` on a routable address with no credentials logs a warning once at startup (`web.no_auth`) naming `--local-user` (or the `--basic-auth-*` pair) and `--allowed-host`; it does not refuse, because an operator who has put the daemon behind a tunnel or a reverse proxy has already answered the question.
 
 ## Signing in from a browser
 
@@ -65,7 +65,7 @@ Each client id adds a **Continue with …** button to the sign-in page. Register
 
 **GitHub and Google let in anybody with an account there**, so a daemon offering either refuses to start without [roles](#who-may-do-what-roles) that say which of those accounts may do what: an `admin` rule, and a `viewer` rule. Without them every GitHub or Google account would be an admin, or could read every pipeline.
 
-- **The secret is read from the environment**, never a flag: `$STEPS_GITHUB_CLIENT_SECRET` and `$STEPS_GOOGLE_CLIENT_SECRET` by default, or the variable `--github-client-secret-env`/`--google-client-secret-env` name. An id without its secret, or with no `--external-url` to send the browser back to, stops the daemon before it listens.
+- **The secret is read from the environment**, never a flag: `$STEPS_GITHUB_CLIENT_SECRET` and `$STEPS_GOOGLE_CLIENT_SECRET` by default, or the variable `--github-client-secret-env`/`--google-client-secret-env` name. An id without its secret, or with no external URL to send the browser back to — `--external-url`, or `http://<listen>` when `--listen` names a specific address rather than `0.0.0.0` — stops the daemon before it listens.
 - **Who they are**: `alex (github)` by GitHub login, `sam@acme.dev (google)` by email.
 - **What is read about them**, at every sign-in, replacing what was read last time: from GitHub, their organizations and `org/team` teams (the app asks for `read:org`); from Google, their email (refused unless Google has verified it) and, for a Workspace account, its domain. Google says nothing about groups without its admin API, so a rule about a Google account can match its address or domain and nothing else.
 - **Local accounts and providers mix.** The password form is drawn only when the daemon keeps local accounts. The CLI still needs a local account: a GitHub or Google sign-in is a browser's.
@@ -92,9 +92,9 @@ Each `--role` is a rule about the signed-in person, an [expr](https://expr-lang.
 
 `UserID` and `ID` differ only for GitHub, where a login can be renamed and then registered by somebody else. A rule naming `UserID == "alice"` follows the login; one naming `ID == "583231"` follows the account, whatever it is called. Use whichever you mean. A person has the highest role whose rule holds.
 
-- **No `--role` at all** keeps today's behaviour for a daemon with only local accounts: everyone signed in may do everything, because everyone signed in holds a password you gave them. A daemon offering GitHub or Google sign-in refuses to start this way.
+- **No `--role` at all** is the default for a daemon with only local accounts: everyone signed in may do everything, because everyone signed in holds a password you gave them. A daemon offering GitHub or Google sign-in refuses to start this way.
 - **With any `--role`, an `admin` rule is required**, or nobody could set a pipeline and the daemon would be stuck as it stands. `operator` left out means only admins act. A `viewer` rule left out lets anyone signed in read — allowed with local accounts only; with GitHub or Google sign-in a `viewer` rule is required too.
-- **A rule that does not compile stops the daemon** before it listens, naming the role.
+- **A rule that does not compile stops the daemon** before it listens, naming the role, and so does a role given twice, or `--role` on a daemon nobody can sign in to.
 - **It is enforced by the daemon, on every request**, not by hiding buttons. A viewer's pages leave the controls out and say once, in the action bar, what the operator role would add; a request for something their role does not cover is refused with `403`, from a browser or from the CLI alike.
 - **Rules read the daemon's own record of the person**, written at their last sign-in — never anything the browser carries. That is what keeps an exclusion honest: `operator=!("acme/contractors" in Groups)` reads the groups GitHub reported, so a contractor cannot pass by arriving with none. Leaving a team takes effect at the next sign-in, within a week.
 - `--read-only` still withholds the controls from everyone, whatever their role.
@@ -126,7 +126,9 @@ jobs:
 
 ## What it covers
 
-Every route: the pages, `/docs`, the live-run SSE streams, and the `/api` endpoints `steps pipeline`, `steps runs abort` and `steps mcp login -p` talk to. A request that is not a browser asking for a page gets a `WWW-Authenticate: basic realm="steps"` challenge. `/login` and the stylesheet and scripts it is drawn with answer anyone: nobody can sign in through a page that needs them signed in first.
+Every route: the pages, `/docs`, the live-run SSE streams, and the `/api` endpoints `steps pipeline`, `steps runs abort` and `steps mcp login -p` talk to. A browser navigating to a page is sent to `/login`; a page's own refresh gets a bare `401`; anything else gets a `WWW-Authenticate: basic realm="steps"` challenge. `/login`, the GitHub and Google sign-in redirects (`/auth/<provider>` and its `/callback`), and the stylesheet and scripts the form is drawn with answer anyone: nobody can sign in through a page that needs them signed in first.
+
+**The endpoints an agent uses to reach an [`mcp_exports:`](mcp.md#sharing-tools-with-other-agents-mcp_exports) entry** — the OAuth metadata under `/.well-known/`, `/oauth/register`, `/oauth/token`, and the export itself at `/mcp/x/<pipeline>/<export>` — skip this check too, because the agent authenticates with the token a person granted it, not with a session. `/oauth/authorize`, where that person signs in and agrees, does not.
 
 **One route is exempt: `POST /p/<pipeline>/hooks/<resource>`**, a [webhook](webhooks.md) delivery. A sender has no credentials to give and authenticates with its own signature instead — the same reason that route is exempt from the same-origin check and is not withheld by `--read-only`. A delivery with a bad signature is still refused by the hook, with a 401 of its own.
 
