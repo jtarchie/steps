@@ -7,7 +7,7 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 )
 
-// TestPlainPrintsOneLinePerThingThatHappened pins the plain terminal's shape: a start names the kind and the step, a skip says why, a note is its own text with a warning saying so in words, and the rest (a finish, output, a conversation) prints nothing, because the output already streamed and the job's error is the CLI's to print.
+// TestPlainPrintsOneLinePerThingThatHappened pins the plain terminal's shape: a start names the kind and the step, a skip says why (an unnamed block by its kind, as its start is), a note is its own text with a warning saying so in words, and the rest (a finish, output, a conversation) prints nothing, because the output already streamed and the job's error is the CLI's to print.
 func TestPlainPrintsOneLinePerThingThatHappened(t *testing.T) {
 	t.Parallel()
 
@@ -23,6 +23,7 @@ func TestPlainPrintsOneLinePerThingThatHappened(t *testing.T) {
 		{Type: events.TypeStepStarted, StepKind: "do"},
 		{Type: events.TypeStepSkipped, StepName: "test", Text: "when: guard was false"},
 		{Type: events.TypeStepSkipped, StepName: "lint"},
+		{Type: events.TypeStepSkipped, StepKind: "in_parallel", Text: "when: guard was false"},
 		{Type: events.TypeStepNote, Status: events.NoteInfo, Text: "get: repo (version: map[ref:abc])"},
 		{Type: events.TypeStepNote, Status: events.NoteWarn, Text: "could not refresh repo"},
 		{Type: events.TypeAgentText, Text: "thinking"},
@@ -36,6 +37,7 @@ func TestPlainPrintsOneLinePerThingThatHappened(t *testing.T) {
 		"do",
 		"skip: test (when: guard was false)",
 		"skip: lint",
+		"skip: in_parallel (when: guard was false)",
 		"get: repo (version: map[ref:abc])",
 		"warning: could not refresh repo",
 	}, "\n") + "\n"

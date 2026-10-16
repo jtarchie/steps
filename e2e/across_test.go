@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -164,4 +165,41 @@ jobs:
 	}
 
 	assertLineCount(t, log, 4)
+}
+
+// TestValidateCountsTheAgentsThePipelineDeclares: the built-in @builtin/ agents every pipeline gets were counted too, so a pipeline with one agent reported five.
+func TestValidateCountsTheAgentsThePipelineDeclares(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+
+	path := filepath.Join(t.TempDir(), "pipeline.yml")
+
+	err := os.WriteFile(path, []byte(`
+agents:
+- name: reviewer
+  source:
+    endpoint: http://127.0.0.1:1/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    messages:
+    - Review it.
+`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		err = cli.Run([]string{"validate", path})
+	})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	if !strings.Contains(out, "1 agent(s)") {
+		t.Errorf("validate printed %q, want the one agent the pipeline declares", out)
+	}
 }

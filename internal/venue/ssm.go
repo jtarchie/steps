@@ -135,9 +135,9 @@ var (
 
 // applyAWS reads the three aws:// forms.
 //
-//	aws://i-0abc123[/root]          a running instance
-//	aws://stopped/i-0abc123[/root]  a parked instance
-//	aws://launch/lt-0def456[/root]  a launch template to be born from
+//	aws://i-0abc123          a running instance
+//	aws://stopped/i-0abc123  a parked instance
+//	aws://launch/lt-0def456  a launch template to be born from
 //
 // The rung is the authority rather than a query parameter, because it changes
 // what the URL NAMES — an instance in two cases, a template in the third —
@@ -172,8 +172,10 @@ func applyRungs(worker Worker, parsed *url.URL, examples string) (Worker, error)
 		worker.Instance = target
 	}
 
-	// Absolute, for the same reason ssh:// keeps it absolute.
-	worker.Root = root
+	// Refused as docker+ssh:// refuses it: a step's trees live in the machine's docker volumes, so a path would name a disk nothing uses.
+	if root != "" && root != "/" {
+		return Worker{}, fmt.Errorf("%w %q: %s:// takes no path — a step's trees live in the machine's docker volumes", ErrWorker, worker.URL, parsed.Scheme)
+	}
 
 	return worker, nil
 }

@@ -634,7 +634,7 @@ func TestGCPLaunchRungDialsTheMachineItAcquired(t *testing.T) {
 	fake := &fakeGCE{}
 	dialed := seamGCP(t, fake, sshd)
 
-	worker, err := ParseWorker("gcp://launch/steps-workers" + sshd.Root + "?project=test-project&zone=us-central1-a")
+	worker, err := ParseWorker("gcp://launch/steps-workers?project=test-project&zone=us-central1-a")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -670,7 +670,7 @@ func TestGCPLaunchRungAcquiresAndDeletes(t *testing.T) {
 	fake := &fakeGCE{}
 	seamGCP(t, fake, nil)
 
-	worker, err := ParseWorker("gcp://launch/steps-workers/var/tmp?project=test-project&zone=us-central1-a")
+	worker, err := ParseWorker("gcp://launch/steps-workers?project=test-project&zone=us-central1-a")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -722,8 +722,8 @@ func assertResolvedGCPWorker(t *testing.T, resolved Worker) {
 	}
 
 	if reparsed.Instance != resolved.Instance || reparsed.Project != "test-project" ||
-		reparsed.Zone != "us-central1-a" || reparsed.Root != "/var/tmp" {
-		t.Errorf("re-parsed worker = %+v, want the launched instance in test-project/us-central1-a under /var/tmp", reparsed)
+		reparsed.Zone != "us-central1-a" {
+		t.Errorf("re-parsed worker = %+v, want the launched instance in test-project/us-central1-a", reparsed)
 	}
 }
 
@@ -923,22 +923,22 @@ func TestGCPLaunchToleratesReplicaLag(t *testing.T) {
 	}
 }
 
-// TestParseGCPWorker pins the static form: an instance with its root,
-// project and zone, and the address the run record keeps.
+// TestParseGCPWorker pins the static form: an instance with its project and
+// zone, and the address the run record keeps.
 func TestParseGCPWorker(t *testing.T) {
 	t.Parallel()
 
-	worker, err := ParseWorker("gcp://worker-1/var/tmp/steps?project=my-proj&zone=us-central1-a")
+	worker, err := ParseWorker("gcp://worker-1?project=my-proj&zone=us-central1-a")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
 	if worker.Scheme != SchemeGCP || worker.Instance != "worker-1" ||
-		worker.Root != "/var/tmp/steps" || worker.Project != "my-proj" || worker.Zone != "us-central1-a" {
-		t.Errorf("worker = %+v, want the instance with its root, project and zone", worker)
+		worker.Project != "my-proj" || worker.Zone != "us-central1-a" {
+		t.Errorf("worker = %+v, want the instance with its project and zone", worker)
 	}
 
-	if got := worker.Address(); got != "gcp://worker-1/var/tmp/steps" {
+	if got := worker.Address(); got != "gcp://worker-1" {
 		t.Errorf("Address = %q, want the machine without its options", got)
 	}
 }
@@ -999,6 +999,8 @@ func TestParseGCPWorkerRefusals(t *testing.T) {
 		"gcp://worker-1?zone=z&ssh_config=none":         "ssh_config= does not describe a gcp worker",
 		"gcp://worker-1?zone=z&idle=5m":                 "names one that already exists",
 		"gcp://worker-1?zone=z&hostkey=SHA256:tooshort": "must be an OpenSSH SHA256 fingerprint",
+		"gcp://worker-1/var/tmp?zone=z":                 "takes no path",
+		"gcp://launch/tmpl/var/tmp?zone=z":              "takes no path",
 	}
 
 	for mapping, want := range refusals {
@@ -1262,7 +1264,7 @@ func TestGCPAuthFailureInvalidatesTheInstallCache(t *testing.T) {
 	fake := &fakeGCE{}
 	seamGCP(t, fake, sshd)
 
-	worker, err := ParseWorker("gcp://worker-1" + sshd.Root + "?project=test-project&zone=us-central1-a")
+	worker, err := ParseWorker("gcp://worker-1?project=test-project&zone=us-central1-a")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -1327,7 +1329,7 @@ func TestGCPNonAuthFailureAfterARefusalInvalidatesTheInstallCache(t *testing.T) 
 		return (&net.Dialer{}).DialContext(ctx, "tcp", dead.Addr().String())
 	}
 
-	worker, err := ParseWorker("gcp://worker-1" + sshd.Root + "?project=test-project&zone=us-central1-a")
+	worker, err := ParseWorker("gcp://worker-1?project=test-project&zone=us-central1-a")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}

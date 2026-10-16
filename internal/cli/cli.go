@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"sync"
 	"syscall"
 
@@ -57,6 +58,22 @@ type CLI struct {
 // build time via -ldflags "-X github.com/jtarchie/steps/internal/cli.BuildVersion=...";
 // "dev" covers `go run`/unversioned `go build` invocations.
 var BuildVersion = "dev"
+
+// version is BuildVersion, or what the go command recorded for an unstamped build: `go install github.com/jtarchie/steps@v0.1.0` passes no ldflags, and printed "dev".
+func version() string { return moduleVersion(BuildVersion, debug.ReadBuildInfo) }
+
+func moduleVersion(stamped string, read func() (*debug.BuildInfo, bool)) string {
+	if stamped != "dev" {
+		return stamped
+	}
+
+	info, ok := read()
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return stamped
+	}
+
+	return info.Main.Version
+}
 
 // RecordRevision writes down WHICH configuration the runs opened against this
 // handle will have executed.
@@ -177,7 +194,7 @@ func wantNoColor() bool {
 func Run(args []string) error {
 	var cli CLI
 
-	parser, err := kong.New(&cli, kong.Name("steps"), kong.Description("run pipeline jobs, or serve and poll them with steps web"), kong.Vars{"version": BuildVersion})
+	parser, err := kong.New(&cli, kong.Name("steps"), kong.Description("run pipeline jobs, or serve and poll them with steps web"), kong.Vars{"version": version()})
 	if err != nil {
 		return fmt.Errorf("could not build CLI parser: %w", err)
 	}
@@ -197,7 +214,7 @@ func Run(args []string) error {
 
 	slog.Debug("cli.parse", "args", args)
 
-	flush, err := telemetry.Start(context.Background(), BuildVersion)
+	flush, err := telemetry.Start(context.Background(), version())
 	if err != nil {
 		return err //nolint:wrapcheck // telemetry already says it is telemetry
 	}

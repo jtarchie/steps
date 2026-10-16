@@ -376,9 +376,7 @@ what it spent and where it ran on its own row.
   it ran as, and the machine — plus the image if the step ran in a container
   on it. No worker reports the filesystem its tree landed on — a docker+
   step's tree is in volumes, and `ssh://` does not measure — so that reads
-  `not reported` rather than a blank that looks like an ordinary disk (a
-  `tmpfs` workdir, from a run recorded when workers still reported one, is
-  still marked in warning colour). A worker that named no identity — every
+  `not reported` rather than a blank that looks like an ordinary disk. A worker that named no identity — every
   docker+ worker, whose step runs as its image's user — leaves it out rather
   than inventing `0:0`, which would read as root.
 

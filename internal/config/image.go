@@ -15,7 +15,7 @@ import (
 // validateImageRules groups the three image:-related load-time checks
 // (grouped into one call so config.validate's own branch count doesn't grow
 // with every image: rule added — see cyclop): image: is invalid on get/put
-// steps, an image: value must not look like a docker flag, and a fix: agent
+// steps, an image: value must not start with '-', and a fix: agent
 // may not set its own image:.
 func (c *Config) validateImageRules() error {
 	err := c.validateImages()
@@ -137,11 +137,11 @@ func (c *Config) validateExportImageValues() error {
 	return nil
 }
 
-// checkImageValue rejects an image value beginning with '-', which docker's
-// argument parser would read as a flag rather than an image reference.
+// checkImageValue rejects an image value beginning with '-', which no image
+// reference does.
 func checkImageValue(context, image string) error {
 	if strings.HasPrefix(image, "-") {
-		return fmt.Errorf("%s: image %q must not start with '-' (docker would parse it as a flag, not an image reference)", context, image)
+		return fmt.Errorf("%s: image %q must not start with '-' (no image reference does)", context, image)
 	}
 
 	return nil

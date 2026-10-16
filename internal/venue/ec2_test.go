@@ -655,17 +655,17 @@ func TestParseAcquisitionRungs(t *testing.T) {
 func assertRungForms(t *testing.T) {
 	t.Helper()
 
-	parked, err := ParseWorker("aws://stopped/i-0abc123def456789/mnt/fast?idle=90s")
+	parked, err := ParseWorker("aws://stopped/i-0abc123def456789?idle=90s")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
 	if parked.Rung != RungStopped || parked.Instance != "i-0abc123def456789" ||
-		parked.Root != "/mnt/fast" || parked.Idle.String() != "1m30s" {
-		t.Errorf("parsed = %+v, want the parked instance, its root and its idle window", parked)
+		parked.Idle.String() != "1m30s" {
+		t.Errorf("parsed = %+v, want the parked instance and its idle window", parked)
 	}
 
-	if got := parked.Address(); got != "aws://stopped/i-0abc123def456789/mnt/fast" {
+	if got := parked.Address(); got != "aws://stopped/i-0abc123def456789" {
 		t.Errorf("Address() = %q, want the rung to be part of where the step ran", got)
 	}
 
@@ -700,7 +700,7 @@ func TestLeaseResolvedWorkerDialsTheAcquiredInstance(t *testing.T) {
 	// added to the grammar as launch-rung-only without being added to what
 	// the rebuild strips, so the URL a paid-for instance was named by no
 	// longer parsed. Every acquisition-only option belongs in this mapping.
-	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde/mnt/fast?capacity=spot&version=7&region=us-west-2")
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde?capacity=spot&version=7&region=us-west-2")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -724,8 +724,8 @@ func TestLeaseResolvedWorkerDialsTheAcquiredInstance(t *testing.T) {
 		t.Errorf("re-parsed = %+v, want the launched instance as a static worker", reparsed)
 	}
 
-	if reparsed.Root != "/mnt/fast" || reparsed.Region != "us-west-2" {
-		t.Errorf("re-parsed = %+v, want the root and connection options carried over", reparsed)
+	if reparsed.Region != "us-west-2" {
+		t.Errorf("re-parsed = %+v, want the connection options carried over", reparsed)
 	}
 }
 

@@ -47,7 +47,8 @@
 # add AND remove in one put because a state CHANGE is one event: ✅ arriving
 # while 👀 still sits there reads as two bots disagreeing. Either may be
 # omitted — {add: eyes} alone is the acknowledgement, {remove: eyes} alone the
-# retraction — and a put with neither is a no-op that publishes nothing.
+# retraction — but a put with neither is refused at load, as a github-reaction
+# one is (validateSlackReactionPuts).
 #
 # Needs SLACK_BOT_TOKEN (a bot token, xoxb-) in the environment, for an app
 # with reactions:write, installed to the workspace and INVITED to every

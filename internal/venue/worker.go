@@ -192,8 +192,8 @@ const (
 
 // launchLabels are what a launched machine is stamped with at create, so one a
 // crash leaves behind can be found: which machine it is, and which process made
-// it. The machine is a HASH of registryKey because a worker URL can carry
-// ?hostkey= and ?binary= paths, and nothing of the URL leaves this process.
+// it. The machine is a HASH of registryKey because nothing of the URL leaves
+// this process.
 //
 // ponytail: host+pid repeat across restarts of a pid-1 daemon with a stable hostname — fine for listing leftovers, not for an automatic sweep; add a random per-process id label before one exists.
 func (w Worker) launchLabels() map[string]string {

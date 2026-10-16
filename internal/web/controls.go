@@ -16,13 +16,11 @@ import (
 // "Re-run", and a tab left open through the deploy must not keep forcing.
 const forceAll = "all"
 
-// handleTrigger queues a person's trigger of a job. force ignores the merkle
-// cache — without it an unchanged pipeline correctly does almost nothing, which
-// is not always what the person pressing it wanted. It does not re-take
-// versions a `version: every` get already built (#145): those are effects, and
-// replaying a resource's history is not what anyone asked for. Only the job page
-// offers it, as "Trigger new run without cache"; "re-run" is kept for #146,
-// re-running a run with its own inputs.
+// handleTrigger queues a person's trigger of a job. force=all ignores the
+// merkle cache, but no page sends it any more: Retry is how a page runs
+// unchanged steps again. It does not re-take versions a `version: every` get
+// already built (#145): those are effects, and replaying a resource's history
+// is not what anyone asked for.
 func (s *Server) handleTrigger(c *echo.Context) error {
 	err := s.requireControls()
 	if err != nil {

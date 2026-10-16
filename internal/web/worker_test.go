@@ -125,16 +125,6 @@ func TestPlacementStatesWhatTheWorkerCouldNotSay(t *testing.T) {
 	if got := silent.Identity(); got != "" {
 		t.Errorf("Identity with no answer = %q, want nothing — an invented 0:0 reads as root", got)
 	}
-
-	// tmpfs is marked, because it is memory: the pushed binary and the step's
-	// tree spend the machine's RAM and a reboot loses both.
-	if !(PlacementView{Placement: store.Placement{FSType: "tmpfs"}}).Volatile() {
-		t.Error("a tmpfs workdir is not marked volatile")
-	}
-
-	if (PlacementView{Placement: store.Placement{FSType: "btrfs"}}).Volatile() {
-		t.Error("an ordinary disk is marked volatile")
-	}
 }
 
 // TestPlacementRendersTheBareCases: an ssh:// worker running a step on the

@@ -232,7 +232,7 @@ func TestLaunchLabelNamesTheMachineNotTheSpelling(t *testing.T) {
 
 	awsBase := label("aws://launch/lt-0def4567890abcde?version=1&capacity=spot&region=us-east-1")
 	for _, same := range []string{
-		"aws://launch/lt-0def4567890abcde/var/tmp?capacity=spot&version=1&region=us-east-1",
+		"aws://launch/lt-0def4567890abcde?capacity=spot&version=1&region=us-east-1",
 		"aws://launch/lt-0def4567890abcde?version=1&capacity=spot&region=us-east-1&idle=5m",
 	} {
 		if got := label(same); got != awsBase {

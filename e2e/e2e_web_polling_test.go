@@ -580,7 +580,7 @@ func TestWebRejectsANonPositiveInterval(t *testing.T) {
 	}
 }
 
-// TestWebRejectsDeliver: web embeds the run flags, and a --deliver it parsed and never recorded would read as a delivery made.
+// TestWebRejectsDeliver: a daemon receives deliveries over HTTP, and a --deliver it parsed and never recorded would read as a delivery made.
 func TestWebRejectsDeliver(t *testing.T) {
 	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--deliver", "push=push.http"})
 	if err == nil || !strings.Contains(err.Error(), "--deliver") {

@@ -552,14 +552,10 @@ func TestRegistryCountsEverySpellingOfAParkedMachine(t *testing.T) {
 	fake := &parkedFake{}
 	registry := NewRegistryWith(fake.acquire)
 	plain := registry.Leases(boxWorker(t, "aws://stopped/i-0abc123def456789"))
-	rooted := registry.Leases(boxWorker(t, "aws://stopped/i-0abc123def456789/var/tmp/steps?idle=1h"))
+	rooted := registry.Leases(boxWorker(t, "aws://stopped/i-0abc123def456789?idle=1h"))
 
 	mustResolve(t, plain)
-
-	onRooted := mustResolve(t, rooted)
-	if onRooted.Root != "/var/tmp/steps" {
-		t.Errorf("the second spelling resolved to %q, want its own root on the shared machine", onRooted.URL)
-	}
+	mustResolve(t, rooted)
 
 	mustRelease(t, plain)
 
@@ -944,7 +940,7 @@ func TestRegistryLaunchesOneMachineForEverySpellingOfATemplate(t *testing.T) {
 	fake := &countingAcquirer{}
 	registry := NewRegistryWith(fake.acquire)
 	first := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?version=1&idle=5m"))
-	second := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde/var/tmp/steps?idle=10m&version=1"))
+	second := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?idle=10m&version=1"))
 	third := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?version=1&idle=1m&capacity=od"))
 
 	var notes bytes.Buffer
@@ -961,12 +957,11 @@ func TestRegistryLaunchesOneMachineForEverySpellingOfATemplate(t *testing.T) {
 		t.Fatalf("%d acquisitions, want every spelling on one machine", acquired)
 	}
 
-	// The URL is what a runner re-parses, so it carries both the shared instance and this spelling's root.
-	if onSecond.URL != onFirst.URL+"/var/tmp/steps" {
-		t.Errorf("the second spelling dials %q, want the shared machine reached its own way", onSecond.URL)
+	if onSecond.URL != onFirst.URL {
+		t.Errorf("the second spelling dials %q, want the shared machine %q", onSecond.URL, onFirst.URL)
 	}
 
-	joined := "worker aws://launch/lt-0def4567890abcde/var/tmp/steps?idle=10m&version=1: sharing aws://launch/lt-0def4567890abcde?version=1&idle=5m's machine"
+	joined := "worker aws://launch/lt-0def4567890abcde?idle=10m&version=1: sharing aws://launch/lt-0def4567890abcde?version=1&idle=5m's machine"
 	if !strings.Contains(notes.String(), joined) {
 		t.Errorf("notes = %q, want the join named", notes.String())
 	}
@@ -981,7 +976,7 @@ func TestRegistryLaunchesOneMachineForEverySpellingOfATemplate(t *testing.T) {
 		t.Fatalf("given back %v inside the idle window", released)
 	}
 
-	kept := "worker aws://launch/lt-0def4567890abcde/var/tmp/steps?idle=10m&version=1: nothing is using it; keeping it for 10m0s"
+	kept := "worker aws://launch/lt-0def4567890abcde?idle=10m&version=1: nothing is using it; keeping it for 10m0s"
 	if !strings.Contains(notes.String(), kept) {
 		t.Errorf("notes = %q, want the spelling whose ?idle= is honored named with its window", notes.String())
 	}
@@ -1044,37 +1039,30 @@ func TestRegistryRetiresASharedLaunchForEverySpelling(t *testing.T) {
 	fake := &countingAcquirer{}
 	registry := NewRegistryWith(fake.acquire)
 	plain := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?version=1"))
-	rooted := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde/var/tmp/steps?version=1"))
+	other := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?version=1&idle=0s"))
 
 	mustResolve(t, plain)
 
-	dead := mustResolve(t, rooted)
+	dead := mustResolve(t, other)
 
-	// Not the machine as plain dials it, so not plain's notice to act on.
-	plain.Abandon("box", dead.URL)
+	// plain acquired it, other watched it die.
+	other.Abandon("box", dead.URL)
 
-	if again := mustResolve(t, rooted); again.Instance != "i-1" {
-		t.Fatalf("a notice in another spelling retired the machine: rooted resolved %q", again.URL)
+	if fresh := mustResolve(t, plain); fresh.Instance != "i-2" {
+		t.Fatalf("plain resolved to %q, want a fresh machine", fresh.URL)
 	}
 
-	rooted.Abandon("box", dead.URL)
-
-	fresh := mustResolve(t, plain)
-	if fresh.Instance != "i-2" || fresh.Root != "" {
-		t.Fatalf("plain resolved to %q, want a fresh machine reached its own way", fresh.URL)
-	}
-
-	if onRooted := mustResolve(t, rooted); onRooted.Instance != "i-2" || onRooted.Root != "/var/tmp/steps" {
-		t.Fatalf("rooted resolved to %q, want the replacement reached its own way", onRooted.URL)
+	if onOther := mustResolve(t, other); onOther.Instance != "i-2" {
+		t.Fatalf("other resolved to %q, want the replacement", onOther.URL)
 	}
 
 	mustRelease(t, plain)
 
 	if _, released := fake.counts(); len(released) != 0 {
-		t.Fatalf("given back %v while rooted still counted toward both machines", released)
+		t.Fatalf("given back %v while other still counted toward both machines", released)
 	}
 
-	mustRelease(t, rooted)
+	mustRelease(t, other)
 
 	if acquired, released := fake.counts(); acquired != 2 || released["i-1"] != 1 || released["i-2"] != 1 {
 		t.Errorf("%d acquisitions, given back %v — want each of two machines given back once", acquired, released)
@@ -1083,8 +1071,8 @@ func TestRegistryRetiresASharedLaunchForEverySpelling(t *testing.T) {
 
 // One scope mapping two tags to one template holds the entry twice, and has to let go of it exactly that often.
 func TestRegistryCountsOneMachineUnderTwoTagsOfOneScope(t *testing.T) {
-	a := mustParse(t, "aws://launch/lt-0def4567890abcde/mnt/a")
-	b := mustParse(t, "aws://launch/lt-0def4567890abcde/mnt/b")
+	a := mustParse(t, "aws://launch/lt-0def4567890abcde?version=1&region=us-east-1")
+	b := mustParse(t, "aws://launch/lt-0def4567890abcde?region=us-east-1&version=1")
 	ctx := context.Background()
 
 	fake := &countingAcquirer{}
@@ -1095,8 +1083,8 @@ func TestRegistryCountsOneMachineUnderTwoTagsOfOneScope(t *testing.T) {
 	onA := mustResolveTag(ctx, t, job, "a")
 	onB := mustResolveTag(ctx, t, job, "b")
 
-	if acquired, _ := fake.counts(); acquired != 1 || onA.Root != "/mnt/a" || onB.Root != "/mnt/b" {
-		t.Fatalf("%d acquisitions, roots %q and %q — want one machine, each tag on its own root", acquired, onA.Root, onB.Root)
+	if acquired, _ := fake.counts(); acquired != 1 || onA.Instance != onB.Instance {
+		t.Fatalf("%d acquisitions, tags on %q and %q — want one machine", acquired, onA.URL, onB.URL)
 	}
 
 	mustResolveTag(ctx, t, other, "a")

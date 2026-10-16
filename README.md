@@ -32,7 +32,7 @@ curl -fsSL https://github.com/jtarchie/steps/releases/download/v0.1.0/steps_0.1.
 From source, Go 1.27+:
 
 ```bash
-go install github.com/jtarchie/steps@latest   # steps --version prints "dev"; release builds stamp the tag
+go install github.com/jtarchie/steps@latest   # steps --version prints the module version it installed
 ```
 
 Runtime needs: `git` for the built-in `git` resource, Docker only for steps that name an `image:`, and an API key (or a local model server) only for `agent` steps. Everything else runs on the host shell.

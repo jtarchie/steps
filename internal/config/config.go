@@ -288,6 +288,7 @@ func (c *Config) validate() error {
 		c.validateWebhookResources,
 		c.validateCronResources,
 		c.validateGitHubResources,
+		c.validateSlackReactionPuts,
 		c.validateGitResources,
 		c.validateApprovals,
 		c.validateCredentialHandling,

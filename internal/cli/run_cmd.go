@@ -21,6 +21,7 @@ type RunCmd struct {
 	StateFlags    `embed:""`
 	VarFlags      `embed:""`
 	ExecFlags     `embed:""`
+	DeliverFlags  `embed:""`
 	HistoryFlags  `embed:""`
 	ProgressFlags `embed:""`
 	Pipeline      string            `arg:""                                                                                                                         help:"path to the pipeline YAML file"`
@@ -124,7 +125,7 @@ func (r *RunCmd) Run() error {
 
 	r.HistoryFlags.Apply(cfg)
 
-	ctx, opts, err := r.prepare(ctx, cfg, st)
+	ctx, opts, err := r.prepare(ctx, r.ExecFlags, cfg, st)
 	if err != nil {
 		return err
 	}
@@ -214,6 +215,7 @@ type TestCmd struct {
 	StateFlags    `embed:""`
 	VarFlags      `embed:""`
 	ExecFlags     `embed:""`
+	DeliverFlags  `embed:""`
 	ProgressFlags `embed:""`
 	Pipeline      string `arg:""   help:"path to the pipeline YAML file"`
 }
@@ -237,7 +239,7 @@ func (t *TestCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	ctx, opts, err := t.prepare(ctx, cfg, st)
+	ctx, opts, err := t.prepare(ctx, t.ExecFlags, cfg, st)
 	if err != nil {
 		return err
 	}

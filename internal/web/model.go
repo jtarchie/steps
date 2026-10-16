@@ -351,11 +351,6 @@ func (p PlacementView) Filesystem() string {
 	return p.FSType + " (" + FormatBinaryBytes(p.FSFree) + " free)"
 }
 
-// Volatile marks a workdir that is MEMORY, so the row can say so in the
-// colour every other warning on this page uses. It is the single most
-// expensive thing a worker URL can get wrong and the least visible.
-func (p PlacementView) Volatile() bool { return p.FSType == "tmpfs" || p.FSType == "ramfs" }
-
 // Sent is what actually crossed to reach this machine. A worker keeps what it
 // receives, so a step whose inputs were already there honestly reads 0 B.
 func (p PlacementView) Sent() string { return FormatBinaryBytes(p.BytesSent) }

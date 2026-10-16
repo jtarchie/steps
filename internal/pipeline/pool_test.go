@@ -405,7 +405,7 @@ jobs:
 
 	ctx, err := WithWorkers(context.Background(), map[string]string{
 		"a":      "aws://launch/lt-0aaa4567890abcde?exclusive&max=2",
-		"a2":     "aws://launch/lt-0aaa4567890abcde/var/tmp?max=2&exclusive",
+		"a2":     "aws://launch/lt-0aaa4567890abcde?max=2&exclusive",
 		"b":      "aws://launch/lt-0bbb4567890abcde?exclusive&max=1",
 		"c":      "gcp://launch/tmpl?zone=us-central1-a&exclusive&max=3",
 		"open":   "aws://launch/lt-0bbb4567890abcde?exclusive",

@@ -48,7 +48,7 @@ type WebCmd struct {
 	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                                        name:"pin"`
 	Force         bool              `help:"ignore the step cache and re-run every step, even if unchanged (version: every still takes only versions not yet built)"`
 	// A statement about the BROWSER's surface only; `steps pipeline set` is the deployment path and is deliberately not withheld — see docs/web.md.
-	ReadOnly bool `help:"serve the pages without trigger, approval, answer, resume or abort controls" name:"read-only"`
+	ReadOnly bool `help:"serve the pages without their controls (trigger, retry, approve/reject, answer, release, pause, abort, mcp connect and test) and serve no mcp_exports" name:"read-only"`
 	// Both or neither, refused below: half a pair is a daemon somebody believes is protected. Env vars because a password on a command line is in every ps listing and every shell history.
 	BasicAuthUsername string   `env:"STEPS_BASIC_AUTH_USERNAME"                                                                                                                                                         help:"require this HTTP Basic username on every route but POST /p/<pipeline>/hooks/<resource>" name:"basic-auth-username"`
 	BasicAuthPassword string   `env:"STEPS_BASIC_AUTH_PASSWORD"                                                                                                                                                         help:"the password that goes with it"                                                          name:"basic-auth-password"`
@@ -276,10 +276,6 @@ func (w *WebCmd) Run() error {
 		return fmt.Errorf("web: --interval must be positive, got %s", w.Interval)
 	}
 
-	if len(w.Deliver) > 0 {
-		return errors.New("web: --deliver is for steps run and steps test; a daemon receives deliveries at POST /p/<pipeline>/hooks/<resource>")
-	}
-
 	// Before anything is opened or bound, so a half-configured credential pair costs nothing.
 	opts, err := w.authOptions()
 	if err != nil {
@@ -345,7 +341,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 
 	defer closeAccounts()
 
-	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithTracing(telemetry.Middleware(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory), web.WithExternalURL(w.published))...)
+	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(version()), web.WithCapacity(local), web.WithTracing(telemetry.Middleware(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory), web.WithExternalURL(w.published))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

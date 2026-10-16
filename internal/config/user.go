@@ -18,13 +18,9 @@ func (c *Config) validateUserRules() error {
 	return c.rejectOnGetAndPut("user", func(s *Step) bool { return s.User != "" })
 }
 
-// validateUserValues rejects a user: value docker's parser would read as a
-// flag rather than a user spec. Exactly the reasoning behind
-// validateImageValues, but load-bearing in a way that one is not: user: is
-// passed as `--user <value>` BEFORE the "--" that makes the rest of the argv
-// positional, so unlike image: there is no separator behind it. This check is
-// the only thing standing between a mistyped or tainted user: and docker
-// granting whatever that flag means.
+// validateUserValues rejects a user: value starting with '-', which no user
+// name or uid does, so it can only be a mistake — refused at load rather than
+// when the container is created.
 func (c *Config) validateUserValues() error {
 	return c.visitContainerSettings(func(context string, settings containerSettings) error {
 		return checkUserValue(context, settings.User)
@@ -34,7 +30,7 @@ func (c *Config) validateUserValues() error {
 // checkUserValue rejects a user: value beginning with '-'.
 func checkUserValue(context, user string) error {
 	if strings.HasPrefix(user, "-") {
-		return fmt.Errorf("%s: user %q must not start with '-' (docker would parse it as a flag, not a user)", context, user)
+		return fmt.Errorf("%s: user %q must not start with '-' (no user name or uid does)", context, user)
 	}
 
 	return nil

@@ -691,24 +691,12 @@ func (r *RunsWhereCmd) printPlacements(ctx context.Context, st placementReader) 
 	fmt.Printf("%-24s  %-12s  %-13s  %-28s  %9s  %9s  %s\n",
 		"STEP", "TAG", "PLATFORM", "FILESYSTEM", "SENT", "RECEIVED", "MACHINE")
 
-	memory := false
-
 	for _, placed := range placements {
 		view := web.PlacementView{Placement: placed}
 
-		filesystem := view.Filesystem()
-		if view.Volatile() {
-			filesystem += " [RAM]"
-			memory = true
-		}
-
 		fmt.Printf("%-24s  %-12s  %-13s  %-28s  %9s  %9s  %s\n",
 			truncateName(placed.StepName, 24), truncateName(placed.Tag, 12),
-			view.Platform(), filesystem, view.Sent(), view.Received(), view.Machine())
-	}
-
-	if memory {
-		fmt.Println("\n[RAM] that workdir is memory, not disk: the pushed binary and the step's tree spend it, and a reboot loses both. Name a path on a real disk in the worker URL.")
+			view.Platform(), view.Filesystem(), view.Sent(), view.Received(), view.Machine())
 	}
 
 	return nil

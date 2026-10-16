@@ -1,10 +1,62 @@
 package cli
 
 import (
+	"bytes"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/alecthomas/kong"
 )
+
+// helpOf is what `steps <command> --help` prints.
+func helpOf(t *testing.T, command string) string {
+	t.Helper()
+
+	var out bytes.Buffer
+
+	parser, err := kong.New(&CLI{}, kong.Name("steps"), kong.Vars{"version": "test"}, kong.Writers(&out, &out), kong.Exit(func(int) {}))
+	if err != nil {
+		t.Fatalf("kong.New: %v", err)
+	}
+
+	_, _ = parser.Parse([]string{command, "--help"})
+
+	return out.String()
+}
+
+// TestOnlyTheLocalCommandsOfferDeliver: web refused --deliver while its help listed it, inherited from the flags run and test share with it.
+func TestOnlyTheLocalCommandsOfferDeliver(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{"run", "test"} {
+		if !strings.Contains(helpOf(t, command), "--deliver") {
+			t.Errorf("steps %s --help does not offer --deliver", command)
+		}
+	}
+
+	if help := helpOf(t, "web"); strings.Contains(help, "--deliver") {
+		t.Errorf("steps web --help offers --deliver, which a daemon has no use for:\n%s", help)
+	}
+}
+
+// TestReadOnlyHelpNamesWhatItWithholds: it once named a resume control no page has and left out four that it withholds.
+func TestReadOnlyHelpNamesWhatItWithholds(t *testing.T) {
+	t.Parallel()
+
+	help := strings.Join(strings.Fields(helpOf(t, "web")), " ")
+
+	for _, want := range []string{"trigger", "retry", "approve", "answer", "release", "pause", "abort", "mcp connect and test", "mcp_exports"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("--read-only help does not name %q:\n%s", want, help)
+		}
+	}
+
+	if strings.Contains(help, "resume") {
+		t.Errorf("--read-only help names a resume control the web UI does not have:\n%s", help)
+	}
+}
 
 func TestDBAcceptsWhatADriverCanOpen(t *testing.T) {
 	t.Parallel()
@@ -95,5 +147,34 @@ func TestShellArgQuotesOnlyWhatAShellWouldSplit(t *testing.T) {
 		if got := shellArg(value); got != want {
 			t.Errorf("shellArg(%q) = %s, want %s", value, got, want)
 		}
+	}
+}
+
+// TestVersionFallsBackToTheModuleVersion: `go install …@v0.1.0` stamps no ldflags, and printed "dev" while the go command had recorded which version it built.
+func TestVersionFallsBackToTheModuleVersion(t *testing.T) {
+	t.Parallel()
+
+	installed := func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "v0.1.0"}}, true
+	}
+
+	if got := moduleVersion("dev", installed); got != "v0.1.0" {
+		t.Errorf("unstamped go install build = %q, want the module version", got)
+	}
+
+	if got := moduleVersion("v0.2.0", installed); got != "v0.2.0" {
+		t.Errorf("stamped build = %q, want the stamp to win", got)
+	}
+
+	devel := func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true
+	}
+
+	if got := moduleVersion("dev", devel); got != "dev" {
+		t.Errorf("go run build = %q, want dev", got)
+	}
+
+	if got := moduleVersion("dev", func() (*debug.BuildInfo, bool) { return nil, false }); got != "dev" {
+		t.Errorf("no build info = %q, want dev", got)
 	}
 }

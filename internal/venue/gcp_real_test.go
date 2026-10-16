@@ -93,7 +93,7 @@ func TestRealGCPRunsAStepOnAnInstance(t *testing.T) {
 	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
 	mustMkdir(t, filepath.Join(cwd, "out"))
 
-	runner := newLocalRunner(t, fixture.spec(cwd, "gcp://"+fixture.instance+"/var/tmp/steps", "out"))
+	runner := newLocalRunner(t, fixture.spec(cwd, "gcp://"+fixture.instance, "out"))
 
 	err := shell.Run(ctx, runner, "cat data/seed.txt > out/report.txt; uname -m >> out/report.txt")
 	if err != nil {
@@ -119,7 +119,7 @@ func TestRealGCPNonzeroExitIsAStepFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
-	runner := newLocalRunner(t, fixture.spec(t.TempDir(), "gcp://"+fixture.instance+"/var/tmp/steps"))
+	runner := newLocalRunner(t, fixture.spec(t.TempDir(), "gcp://"+fixture.instance))
 
 	err := shell.Run(ctx, runner, "exit 7")
 	if err == nil {
@@ -149,7 +149,7 @@ func TestRealGCPLaunchRungAcquiresAndDeletes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 
-	worker, err := ParseWorker("gcp://launch/" + fixture.template + "/var/tmp/steps?" + fixture.options())
+	worker, err := ParseWorker("gcp://launch/" + fixture.template + "?" + fixture.options())
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestRealGCPParkedRungStartsAndStops(t *testing.T) {
 
 	gcloudCLI(ctx, t, fixture, "compute", "instances", "stop", fixture.instance)
 
-	worker, err := ParseWorker("gcp://stopped/" + fixture.instance + "/var/tmp/steps?idle=0&" + fixture.options())
+	worker, err := ParseWorker("gcp://stopped/" + fixture.instance + "?idle=0&" + fixture.options())
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestRealGCPPreemption(t *testing.T) {
 	// The fixture template is spot with DELETE — the shape a preemption test
 	// needs, and the reason release tolerates an instance that removed
 	// itself.
-	worker, err := ParseWorker("gcp://launch/" + fixture.template + "/var/tmp/steps?" + fixture.options())
+	worker, err := ParseWorker("gcp://launch/" + fixture.template + "?" + fixture.options())
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}

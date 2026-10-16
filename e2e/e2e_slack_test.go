@@ -865,6 +865,32 @@ jobs:
 	}
 }
 
+// TestSlackReactionWithNothingToDoIsRefusedAtLoad: a put with neither add nor remove published nothing and went green, where github-reaction refuses the same put when the pipeline loads.
+func TestSlackReactionWithNothingToDoIsRefusedAtLoad(t *testing.T) {
+	path := pipelinePath(t, t.TempDir())
+
+	err := os.WriteFile(path, []byte(`
+resources:
+- name: reaction
+  type: slack-reaction
+  source: {}
+
+jobs:
+- name: mark
+  plan:
+  - put: reaction
+    params: {ad: eyes}
+`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = cli.Run([]string{"validate", path})
+	if err == nil || !strings.Contains(err.Error(), "params.add or params.remove is required") {
+		t.Fatalf("validate = %v, want the empty reaction refused", err)
+	}
+}
+
 // TestEndToEndBuiltinSlackReactionToleratesSettledState pins the two refusals
 // that are not failures. already_reacted and no_reaction both mean the world
 // is already in the state the put asked for, which is what a put is for —

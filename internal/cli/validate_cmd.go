@@ -72,8 +72,17 @@ func (v *ValidateCmd) Run() error {
 		return fmt.Errorf("%s cannot run here:\n%s", v.Pipeline, renderProblems(problems))
 	}
 
+	// The @builtin/ agents every pipeline is given are not the pipeline's to count.
+	declared := 0
+
+	for _, agent := range cfg.Agents {
+		if !strings.HasPrefix(agent.Name, "@builtin/") {
+			declared++
+		}
+	}
+
 	fmt.Printf("ok: %s (%d job(s), %d resource(s), %d agent(s))%s\n",
-		v.Pipeline, len(cfg.Jobs), len(cfg.Resources), len(cfg.Agents), liveNote(v.Live))
+		v.Pipeline, len(cfg.Jobs), len(cfg.Resources), declared, liveNote(v.Live))
 
 	return nil
 }

@@ -355,23 +355,25 @@ func TestVenueReportsAnInstanceSSMCannotReach(t *testing.T) {
 func TestParseAWSWorker(t *testing.T) {
 	t.Parallel()
 
-	worker, err := ParseWorker("aws://i-0abc123def456789/mnt/fast?region=us-west-2")
+	worker, err := ParseWorker("aws://i-0abc123def456789?region=us-west-2")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
-	if worker.Instance != "i-0abc123def456789" || worker.Root != "/mnt/fast" ||
-		worker.Region != "us-west-2" {
-		t.Errorf("parsed = %+v, want the instance, root and region", worker)
+	if worker.Instance != "i-0abc123def456789" || worker.Region != "us-west-2" {
+		t.Errorf("parsed = %+v, want the instance and region", worker)
 	}
 
-	if got := worker.Address(); got != "aws://i-0abc123def456789/mnt/fast" {
-		t.Errorf("Address() = %q, want the instance and its root without the options", got)
+	if got := worker.Address(); got != "aws://i-0abc123def456789" {
+		t.Errorf("Address() = %q, want the instance without the options", got)
 	}
 
 	for _, raw := range []string{
 		"aws://not-an-instance",
 		"aws://",
+		"aws://i-0abc123def456789/mnt/fast",
+		"aws://stopped/i-0abc123def456789/mnt/fast",
+		"aws://launch/lt-0def4567890abcde/mnt/fast",
 		"aws://i-0abc123def456789?shim=/usr/local/bin/steps",
 	} {
 		_, err = ParseWorker(raw)

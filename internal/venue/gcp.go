@@ -60,9 +60,9 @@ var gcpName = regexp.MustCompile(`^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // applyGCP reads the three gcp:// forms.
 //
-//	gcp://worker-1[/root]           a running instance
-//	gcp://stopped/worker-1[/root]   a parked instance
-//	gcp://launch/template-1[/root]  an instance template to be born from
+//	gcp://worker-1           a running instance
+//	gcp://stopped/worker-1   a parked instance
+//	gcp://launch/template-1  an instance template to be born from
 //
 // The rung is the authority for the same reason it is on aws://. One
 // consequence of GCP naming machines rather than numbering them: an instance

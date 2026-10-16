@@ -1,6 +1,7 @@
 package runview
 
 import (
+	"cmp"
 	"io"
 
 	"github.com/jtarchie/steps/internal/events"
@@ -24,11 +25,12 @@ func plainLine(event events.Event) string {
 
 		return event.StepKind + ": " + event.StepName
 	case events.TypeStepSkipped:
+		name := cmp.Or(event.StepName, event.StepKind)
 		if event.Text == "" {
-			return "skip: " + event.StepName
+			return "skip: " + name
 		}
 
-		return "skip: " + event.StepName + " (" + event.Text + ")"
+		return "skip: " + name + " (" + event.Text + ")"
 	case events.TypeStepNote:
 		if event.Status == events.NoteWarn {
 			return "warning: " + event.Text

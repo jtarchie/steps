@@ -76,7 +76,7 @@ func TestRegistryKeysAPoolApartFromTheSharedMachine(t *testing.T) {
 	}
 
 	same := mustParse(t, poolTemplate+"?exclusive&max=2&idle=5m").registryKey()
-	if other := mustParse(t, poolTemplate+"/var/tmp?max=2&exclusive=true").registryKey(); other != same {
+	if other := mustParse(t, poolTemplate+"?max=2&exclusive=true").registryKey(); other != same {
 		t.Errorf("two spellings of one pool keyed %q and %q", same, other)
 	}
 
@@ -453,7 +453,7 @@ func TestPoolCountsOneMachinePerJobHoweverManyStepsAsk(t *testing.T) {
 	fake := &countingAcquirer{}
 	registry := NewRegistryWith(fake.acquire)
 	worker := mustParse(t, poolTemplate+"?exclusive&max=1")
-	job := registry.Leases(map[string]Worker{"a": worker, "b": mustParse(t, poolTemplate+"/var/tmp?exclusive&max=1")})
+	job := registry.Leases(map[string]Worker{"a": worker, "b": mustParse(t, poolTemplate+"?max=1&exclusive")})
 
 	var wg sync.WaitGroup
 

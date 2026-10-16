@@ -15,8 +15,8 @@ func TestValidateNetworkValuesRejectsFlagLikeValues(t *testing.T) {
 		t.Fatal("expected a flag-like network: value to be rejected")
 	}
 
-	if !strings.Contains(err.Error(), "must not start with '-'") {
-		t.Errorf("error = %v, want it to name the flag-parsing hazard", err)
+	if !strings.Contains(err.Error(), "must not start with '-' (no docker network name does)") {
+		t.Errorf("error = %v, want it to say why", err)
 	}
 }
 

@@ -28,9 +28,9 @@ func (c *Config) validateNetworkRules() error {
 	return c.validateNetworkNeedsImage()
 }
 
-// validateNetworkValues rejects a network: value docker's parser would read as
-// a flag. Same reasoning as checkUserValue: `--network <value>` sits before
-// the "--", so nothing else protects it.
+// validateNetworkValues rejects a network: value starting with '-', which no
+// docker network name does, so it can only be a mistake — refused at load
+// rather than when the container is created.
 //
 // The value is otherwise passed through rather than checked against a fixed
 // set. "none" and "host" are the ones that matter, but docker also takes a
@@ -40,7 +40,7 @@ func (c *Config) validateNetworkRules() error {
 func (c *Config) validateNetworkValues() error {
 	return c.visitContainerSettings(func(context string, settings containerSettings) error {
 		if strings.HasPrefix(settings.Network, "-") {
-			return fmt.Errorf("%s: network %q must not start with '-' (docker would parse it as a flag, not a network)", context, settings.Network)
+			return fmt.Errorf("%s: network %q must not start with '-' (no docker network name does)", context, settings.Network)
 		}
 
 		return nil

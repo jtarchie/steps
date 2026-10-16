@@ -196,28 +196,32 @@ func (v VarFlags) Load(path string, name string) (*config.Config, error) {
 // asked for about this execution — and because Apply is then the single place
 // that threads them, which no embedder can forget without failing to compile.
 type ExecFlags struct {
-	Worker        map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                                   name:"worker"`
-	ArtifactStore string            `help:"mirror cached step outputs to a content-addressed store, e.g. --artifact-store s3://bucket/prefix"         name:"artifact-store"`
-	Answer        []string          `help:"answer an ask_user question in advance, e.g. --answer 'which bump=minor' (repeatable)"                     name:"answer"`
-	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                                                       help:"leave the build workspace on disk instead of deleting it"`
-	NoPreflight   bool              `help:"skip the pre-run health check of the models and MCP servers a job needs"                                   name:"no-preflight"`
-	Deliver       map[string]string `help:"record a captured request as a delivery to a webhook resource, e.g. --deliver push=push.http (repeatable)" name:"deliver"`
+	Worker        map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                           name:"worker"`
+	ArtifactStore string            `help:"mirror cached step outputs to a content-addressed store, e.g. --artifact-store s3://bucket/prefix" name:"artifact-store"`
+	Answer        []string          `help:"answer an ask_user question in advance, e.g. --answer 'which bump=minor' (repeatable)"             name:"answer"`
+	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                                               help:"leave the build workspace on disk instead of deleting it"`
+	NoPreflight   bool              `help:"skip the pre-run health check of the models and MCP servers a job needs"                           name:"no-preflight"`
 }
 
-// prepare is Apply plus what needs the loaded pipeline and its store: the --deliver files, recorded before anything runs so the job resolves each as its resource's newest version.
-func (e ExecFlags) prepare(ctx context.Context, cfg *config.Config, st store.Store) (context.Context, pipeline.Run, error) {
-	ctx, opts, err := e.Apply(ctx)
+// DeliverFlags is --deliver, apart from ExecFlags because only the local commands take it: a daemon receives deliveries at POST /p/<pipeline>/hooks/<resource>.
+type DeliverFlags struct {
+	Deliver map[string]string `help:"record a captured request as a delivery to a webhook resource, e.g. --deliver push=push.http (repeatable)" name:"deliver"`
+}
+
+// prepare is exec.Apply plus what needs the loaded pipeline and its store: the --deliver files, recorded before anything runs so the job resolves each as its resource's newest version.
+func (d DeliverFlags) prepare(ctx context.Context, exec ExecFlags, cfg *config.Config, st store.Store) (context.Context, pipeline.Run, error) {
+	ctx, opts, err := exec.Apply(ctx)
 	if err != nil {
 		return ctx, opts, err
 	}
 
-	return ctx, opts, e.deliver(ctx, cfg, st)
+	return ctx, opts, d.deliver(ctx, cfg, st)
 }
 
 // deliver records each --deliver file.
-func (e ExecFlags) deliver(ctx context.Context, cfg *config.Config, st store.Store) error {
-	for _, name := range slices.Sorted(maps.Keys(e.Deliver)) {
-		raw, err := os.ReadFile(e.Deliver[name])
+func (d DeliverFlags) deliver(ctx context.Context, cfg *config.Config, st store.Store) error {
+	for _, name := range slices.Sorted(maps.Keys(d.Deliver)) {
+		raw, err := os.ReadFile(d.Deliver[name])
 		if err != nil {
 			return fmt.Errorf("--deliver %s: %w", name, err)
 		}
