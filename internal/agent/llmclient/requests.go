@@ -244,7 +244,7 @@ func retryAfter(value string, unit time.Duration) (time.Duration, bool, bool) {
 
 // replayable reports whether a request's body can be sent again. A body with
 // no GetBody has already been consumed, so retrying would send an empty one —
-// the same rule the SDK applies to its own retries.
+// the same rule net/http applies to its own retries.
 func replayable(req *http.Request) bool {
 	return req.Body == nil || req.GetBody != nil
 }
@@ -276,10 +276,10 @@ func rewind(req *http.Request) (*http.Request, error) {
 // It classifies post-hoc rather than tagging the error where
 // requestRetryTransport gives up, because a persistent 5xx never becomes a Go
 // error at the transport layer at all — RoundTrip returns (resp, nil) for
-// any completed HTTP exchange, and it is the SDK, one layer up, that turns a
-// non-2xx status into *openai.Error after inspecting it. Classifying by
+// any completed HTTP exchange, and it is chatModel, one layer up, that turns a
+// non-2xx status into *APIError after inspecting it. Classifying by
 // status code on the way back out sees both shapes (a connection error that
-// never got a response, and a response the SDK turned into an error)
+// never got a response, and a response chatModel turned into an error)
 // uniformly, without needing to plumb anything through the transport.
 //
 // The error reaching here is not necessarily a provider error at all: unlike
@@ -318,8 +318,8 @@ func isTransientProviderError(err error) bool {
 	}
 
 	// A connection that dies partway through a response body: the exchange
-	// began, so nothing produced an *openai.Error or a net.Error, and the
-	// SDK surfaces whatever the truncated bytes decoded to. Reading a
+	// began, so nothing produced an *APIError or a net.Error, and the
+	// decoder surfaces whatever the truncated bytes decoded to. Reading a
 	// half-delivered answer is a transport failure wearing a parser's
 	// clothes.
 	//
