@@ -1,6 +1,6 @@
 package venue
 
-// do:// against a fake DigitalOcean API — godo itself, aimed at httptest — and the repo's test sshd, which boots with whatever host key the create request's user_data handed it, the way cloud-init does.
+// do:// against a fake DigitalOcean API — serving godo's own types, so steps' hand-written ones are held to an independent reading of the wire — and the repo's test sshd, which boots with whatever host key the create request's user_data handed it, the way cloud-init does.
 
 import (
 	"context"
@@ -472,5 +472,32 @@ func assertDOTags(t *testing.T, tags []string) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("tags %v carry no %s", tags, want)
 		}
+	}
+}
+
+// TestDODropletListFollowsPages: an account past 200 droplets answers in pages, and a sweep that read only the first would leave the rest billing.
+func TestDODropletListFollowsPages(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		next := ""
+
+		if page == 1 {
+			next = "https://api.digitalocean.com/v2/droplets?page=2&per_page=200"
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"droplets": []godo.Droplet{{ID: page, Name: "steps-" + strconv.Itoa(page)}},
+			"links":    godo.Links{Pages: &godo.Pages{Next: next}},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	client := &doClient{http: server.Client(), base: server.URL}
+
+	var seen []int
+
+	err := client.eachDroplet(context.Background(), map[string][]string{}, func(droplet doDroplet) { seen = append(seen, droplet.ID) })
+	if err != nil || !slices.Equal(seen, []int{1, 2}) {
+		t.Fatalf("listed %v, %v; want both pages, [1 2]", seen, err)
 	}
 }

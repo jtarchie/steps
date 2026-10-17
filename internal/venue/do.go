@@ -3,6 +3,7 @@ package venue
 // The do:// venue, launch only: a droplet created for a job and deleted with it, a docker+ worker over plain ssh, trusted through the host key steps mints into its cloud-init user_data; its resolved URL do://<id> names a droplet this process launched, whose address and key live in this process's memory.
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/ed25519"
@@ -11,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net"
@@ -25,7 +27,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/digitalocean/godo"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/oauth2"
 
@@ -47,8 +48,7 @@ var doSlug = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 //nolint:gochecknoglobals // test seams: the API's address, the transport's dial, and boot waits measured in minutes
 var (
-	// doBaseURL is empty for godo's own default.
-	doBaseURL = ""
+	doBaseURL = "https://api.digitalocean.com/"
 	doDial    = func(ctx context.Context, address string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", address)
 	}
@@ -138,8 +138,71 @@ func checkDO(worker Worker) error {
 	return nil
 }
 
-// doClient is godo, authenticated.
-type doClient struct{ *godo.Client }
+// doClient is DigitalOcean's v2 API, authenticated: four droplet calls over net/http, which godo spent ~1MB of the binary on.
+type doClient struct {
+	http *http.Client
+	base string
+}
+
+// doDroplet is the slice of the API's droplet object steps reads. The tests' fake serves godo's own type, which is what holds these tags to the real wire shape.
+type doDroplet struct {
+	ID       int      `json:"id"`
+	Name     string   `json:"name"`
+	Status   string   `json:"status"`
+	SizeSlug string   `json:"size_slug"`
+	Created  string   `json:"created_at"`
+	Tags     []string `json:"tags"`
+	Region   *struct {
+		Slug string `json:"slug"`
+	} `json:"region"`
+	Image *struct {
+		ID   int    `json:"id"`
+		Slug string `json:"slug"`
+	} `json:"image"`
+	Networks *struct {
+		V4 []struct {
+			IPAddress string `json:"ip_address"`
+			Type      string `json:"type"`
+		} `json:"v4"`
+	} `json:"networks"`
+}
+
+func (d *doDroplet) publicIPv4() string {
+	if d.Networks == nil {
+		return ""
+	}
+
+	for _, network := range d.Networks.V4 {
+		if network.Type == "public" {
+			return network.IPAddress
+		}
+	}
+
+	return ""
+}
+
+type doCreateRequest struct {
+	Name     string        `json:"name"`
+	Region   string        `json:"region"`
+	Size     string        `json:"size"`
+	Image    doCreateImage `json:"image"`
+	UserData string        `json:"user_data,omitempty"`
+	Tags     []string      `json:"tags"`
+}
+
+// doCreateImage is an image by slug or by id; the API takes either bare.
+type doCreateImage struct {
+	ID   int
+	Slug string
+}
+
+func (i doCreateImage) MarshalJSON() ([]byte, error) {
+	if i.Slug != "" {
+		return json.Marshal(i.Slug) //nolint:wrapcheck // a string cannot fail to marshal
+	}
+
+	return json.Marshal(i.ID) //nolint:wrapcheck // nor an int
+}
 
 // doFor builds the API client from the token doctl and terraform also read. Cheap, so built per call rather than cached.
 func doFor(worker Worker) (*doClient, error) {
@@ -148,35 +211,107 @@ func doFor(worker Worker) (*doClient, error) {
 		return nil, fmt.Errorf("%w %q: no DigitalOcean token — set DIGITALOCEAN_ACCESS_TOKEN (or DIGITALOCEAN_TOKEN) to an API token with droplet create, read and delete, and tag create", ErrWorker, worker.URL)
 	}
 
-	// Its own bound, since godo's default client has none and a daemon's step may have no deadline either.
+	// Its own bound, since a daemon's step may have no deadline.
 	httpClient := &http.Client{
 		Timeout:   dialTimeout,
 		Transport: &oauth2.Transport{Source: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})},
 	}
 
-	options := []godo.ClientOpt{godo.SetUserAgent("steps")}
-	if doBaseURL != "" {
-		options = append(options, godo.SetBaseURL(doBaseURL))
-	}
-
-	client, err := godo.New(httpClient, options...)
-	if err != nil {
-		return nil, fmt.Errorf("%w %q: building the DigitalOcean client: %w", ErrWorker, worker.URL, err)
-	}
-
-	return &doClient{client}, nil
+	return &doClient{http: httpClient, base: strings.TrimSuffix(doBaseURL, "/")}, nil
 }
 
 var errDONotFound = errors.New("the droplet does not exist")
 
-func doStatus(err error, status int) bool {
-	var apiErr *godo.ErrorResponse
-
-	return errors.As(err, &apiErr) && apiErr.Response != nil && apiErr.Response.StatusCode == status
+// doAPIError is a non-2xx answer, with the message DigitalOcean put in its body.
+type doAPIError struct {
+	method, path string
+	status       int
+	message      string
 }
 
-func (c *doClient) get(ctx context.Context, id int) (*godo.Droplet, error) {
-	droplet, _, err := c.Droplets.Get(ctx, id)
+func (e *doAPIError) Error() string {
+	return fmt.Sprintf("%s %s: %d %s", e.method, e.path, e.status, e.message)
+}
+
+func doStatus(err error, status int) bool {
+	var apiErr *doAPIError
+
+	return errors.As(err, &apiErr) && apiErr.status == status
+}
+
+// call sends one request and decodes a 2xx body into out, when out is not nil.
+func (c *doClient) call(ctx context.Context, method, path string, in, out any) error {
+	var body io.Reader
+
+	if in != nil {
+		encoded, err := json.Marshal(in)
+		if err != nil {
+			return fmt.Errorf("encoding %s %s: %w", method, path, err)
+		}
+
+		body = bytes.NewReader(encoded)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+	if err != nil {
+		return fmt.Errorf("building %s %s: %w", method, path, err)
+	}
+
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", "steps")
+
+	if in != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", method, path, err)
+	}
+
+	defer func() { _ = response.Body.Close() }()
+
+	if response.StatusCode/100 != 2 {
+		var refusal struct {
+			Message string `json:"message"`
+		}
+
+		_ = json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&refusal)
+
+		return &doAPIError{method: method, path: path, status: response.StatusCode, message: cmp.Or(refusal.Message, http.StatusText(response.StatusCode))}
+	}
+
+	if out == nil {
+		return nil
+	}
+
+	err = json.NewDecoder(response.Body).Decode(out)
+	if err != nil {
+		return fmt.Errorf("reading %s %s: %w", method, path, err)
+	}
+
+	return nil
+}
+
+func (c *doClient) create(ctx context.Context, request *doCreateRequest) (*doDroplet, error) {
+	var answer struct {
+		Droplet *doDroplet `json:"droplet"`
+	}
+
+	err := c.call(ctx, http.MethodPost, "/v2/droplets", request, &answer)
+	if err != nil {
+		return nil, err
+	}
+
+	return answer.Droplet, nil
+}
+
+func (c *doClient) get(ctx context.Context, id int) (*doDroplet, error) {
+	var answer struct {
+		Droplet *doDroplet `json:"droplet"`
+	}
+
+	err := c.call(ctx, http.MethodGet, "/v2/droplets/"+strconv.Itoa(id), nil, &answer)
 	if err != nil {
 		if doStatus(err, http.StatusNotFound) {
 			return nil, fmt.Errorf("%w: %d", errDONotFound, id)
@@ -185,13 +320,17 @@ func (c *doClient) get(ctx context.Context, id int) (*godo.Droplet, error) {
 		return nil, fmt.Errorf("asking about droplet %d: %w", id, err)
 	}
 
-	return droplet, nil
+	if answer.Droplet == nil {
+		return nil, fmt.Errorf("asking about droplet %d: the API answered with no droplet", id)
+	}
+
+	return answer.Droplet, nil
 }
 
 // A 404 is the outcome delete wanted.
 func (c *doClient) remove(id int) func(context.Context) error {
 	return func(ctx context.Context) error {
-		_, err := c.Droplets.Delete(ctx, id)
+		err := c.call(ctx, http.MethodDelete, "/v2/droplets/"+strconv.Itoa(id), nil, nil)
 		if err != nil && !doStatus(err, http.StatusNotFound) {
 			return fmt.Errorf("deleting droplet %d: %w", id, err)
 		}
@@ -205,9 +344,7 @@ func (c *doClient) removeNamed(name string) func(context.Context) error {
 	return func(ctx context.Context) error {
 		var failures []error
 
-		err := eachDroplet(func(opt *godo.ListOptions) ([]godo.Droplet, *godo.Response, error) {
-			return c.Droplets.ListByName(ctx, name, opt)
-		}, func(droplet godo.Droplet) {
+		err := c.eachDroplet(ctx, url.Values{"name": {name}}, func(droplet doDroplet) {
 			failures = append(failures, c.remove(droplet.ID)(ctx))
 		})
 
@@ -215,24 +352,34 @@ func (c *doClient) removeNamed(name string) func(context.Context) error {
 	}
 }
 
-func eachDroplet(list func(*godo.ListOptions) ([]godo.Droplet, *godo.Response, error), visit func(godo.Droplet)) error {
-	opt := &godo.ListOptions{Page: 1, PerPage: 200}
+// eachDroplet pages through GET /v2/droplets, filtered by query, until links.pages.next runs out.
+func (c *doClient) eachDroplet(ctx context.Context, query url.Values, visit func(doDroplet)) error {
+	query.Set("per_page", "200")
 
-	for {
-		droplets, response, err := list(opt)
+	for page := 1; ; page++ {
+		query.Set("page", strconv.Itoa(page))
+
+		var answer struct {
+			Droplets []doDroplet `json:"droplets"`
+			Links    struct {
+				Pages struct {
+					Next string `json:"next"`
+				} `json:"pages"`
+			} `json:"links"`
+		}
+
+		err := c.call(ctx, http.MethodGet, "/v2/droplets?"+query.Encode(), nil, &answer)
 		if err != nil {
 			return fmt.Errorf("listing droplets: %w", err)
 		}
 
-		for _, droplet := range droplets {
+		for _, droplet := range answer.Droplets {
 			visit(droplet)
 		}
 
-		if response == nil || response.Links == nil || response.Links.IsLastPage() || len(droplets) == 0 {
+		if answer.Links.Pages.Next == "" || len(answer.Droplets) == 0 {
 			return nil
 		}
-
-		opt.Page++
 	}
 }
 
@@ -326,7 +473,7 @@ func acquireDO(ctx context.Context, worker Worker) (Worker, func(context.Context
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: creating droplet %s (%s, %s in %s)", worker.URL, name, worker.Template, worker.Size, worker.Region))
 	slog.InfoContext(ctx, "worker.launching", "worker", worker.URL, "droplet", name, "image", worker.Template, "size", worker.Size, "region", worker.Region)
 
-	droplet, _, err := api.Droplets.Create(ctx, &godo.DropletCreateRequest{
+	droplet, err := api.create(ctx, &doCreateRequest{
 		Name: name, Region: worker.Region, Size: worker.Size,
 		Image: doImage(worker.Template), UserData: userData, Tags: tags,
 	})
@@ -365,13 +512,13 @@ func acquireDO(ctx context.Context, worker Worker) (Worker, func(context.Context
 }
 
 // doImage reads an all-digit image as a snapshot or custom image id, anything else as a slug.
-func doImage(image string) godo.DropletCreateImage {
+func doImage(image string) doCreateImage {
 	id, err := strconv.Atoi(image)
 	if err == nil {
-		return godo.DropletCreateImage{ID: id}
+		return doCreateImage{ID: id}
 	}
 
-	return godo.DropletCreateImage{Slug: image}
+	return doCreateImage{Slug: image}
 }
 
 // doWaitForAddress waits for active AND a public IPv4: the address is assigned after the create answers, and reading it at once can read nothing.
@@ -401,7 +548,7 @@ func doWaitForAddress(ctx context.Context, api *doClient, worker Worker, id int)
 		case "new":
 			return false, nil
 		case "active":
-			address, _ = droplet.PublicIPv4()
+			address = droplet.publicIPv4()
 
 			return address != "", nil
 		default:
@@ -561,9 +708,7 @@ func sweepDO(ctx context.Context, owner string, worker Worker, workers []Worker)
 		list: func(ctx context.Context) ([]ownedInstance, error) {
 			var owned []ownedInstance
 
-			err := eachDroplet(func(opt *godo.ListOptions) ([]godo.Droplet, *godo.Response, error) {
-				return api.Droplets.List(ctx, opt)
-			}, func(droplet godo.Droplet) {
+			err := api.eachDroplet(ctx, url.Values{}, func(droplet doDroplet) {
 				if one, ok := doOwned(droplet, worker.Region); ok {
 					owned = append(owned, one)
 				}
@@ -577,7 +722,7 @@ func sweepDO(ctx context.Context, owner string, worker Worker, workers []Worker)
 }
 
 // doOwned reads a droplet's stamp, creation and shape, for one that bills in region and carries a stamp at all. Created is its start: a droplet is never stopped by steps.
-func doOwned(droplet godo.Droplet, region string) (ownedInstance, bool) {
+func doOwned(droplet doDroplet, region string) (ownedInstance, bool) {
 	if !doSweepable[droplet.Status] || droplet.Region == nil || droplet.Region.Slug != region {
 		return ownedInstance{}, false
 	}

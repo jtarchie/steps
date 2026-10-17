@@ -570,7 +570,7 @@ linters:
             - "github.com/jtarchie/steps/internal/venue/iapdial"
             - "google.golang.org/api"
             - "golang.org/x/oauth2"
-            # godo is the do:// control plane: create, poll, list and delete droplets. Pure Go; it signs with the oauth2 static token source above.
+            # godo is TEST-only: the do:// fake serves its types, an independent reading of the wire that do.go's hand-written ones are held to. Production speaks the four droplet calls over net/http with the oauth2 static token source above.
             - "github.com/digitalocean/godo"
             # smithy is the SDK's error interface, not a second SDK: EC2 answers
             # a just-created instance with InvalidInstanceID.NotFound until its
