@@ -129,10 +129,7 @@ linters:
             - "$gostd"
             - "github.com/alecthomas/kong"
             - "github.com/lmittmann/tint"
-            # glamour renders the embedded docs (steps docs) for a terminal;
-            # the docs package itself stays render-free — see the Docs rule.
-            # x/sys reads the terminal width so the wrap follows the pane.
-            - "charm.land/glamour/v2"
+            # x/sys reads the terminal size for the live progress display.
             - "golang.org/x/sys/unix"
             - "github.com/jtarchie/steps/docs"
             - "gopkg.in/yaml.v3"
@@ -947,26 +944,22 @@ linters:
             - "github.com/markbates/goth"
             - "github.com/markbates/goth/providers/github"
             - "github.com/markbates/goth/providers/google"
-            # goldmark (+ its chroma highlighting extension) renders the
-            # embedded docs package at /docs, server-side — the terminal twin
-            # (steps docs, via glamour) lives in main. docs itself stays a
-            # render-free leaf.
+            # goldmark renders the embedded docs package at /docs,
+            # server-side. docs itself stays a render-free leaf.
             - "github.com/yuin/goldmark/v2/ast"
             - "github.com/yuin/goldmark/v2/extension"
             - "github.com/yuin/goldmark/v2/parser"
             - "github.com/yuin/goldmark/v2/renderer/html"
-            - "github.com/yuin/goldmark-highlighting/v3"
             # renderer/text/util are goldmark's own extension points, needed
             # by the SECOND converter (prose.go) that renders model-authored
             # prose: an AST transformer that makes images inert, and node
-            # renderers for links and fenced code. The docs converter needs
-            # none of them because it renders text this repo wrote.
+            # renderers for links and fenced code. The docs converter uses
+            # renderer only, for its fence highlighter.
             - "github.com/yuin/goldmark/v2/renderer"
             - "github.com/yuin/goldmark/v2/text"
             - "github.com/yuin/goldmark/v2/util"
-            # chroma is goldmark-highlighting's engine; imported directly to
-            # define the "steps" code style from the UI's own palette, and —
-            # lexers/formatters — to reuse that same style for the fenced
+            # chroma highlights fenced code in the "steps" style, built from
+            # the UI's own palette, on the docs pages and in the fenced
             # blocks inside an agent's recorded response (prose.go). JSON is
             # NOT chroma's there: internal/web renders that itself, because
             # unescaping a document nested in a string needs a parser, not a

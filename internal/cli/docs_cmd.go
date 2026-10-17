@@ -6,11 +6,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"charm.land/glamour/v2"
-	"charm.land/glamour/v2/ansi"
-	"charm.land/glamour/v2/styles"
-	"golang.org/x/sys/unix"
-
 	"github.com/jtarchie/steps/docs"
 )
 
@@ -22,10 +17,10 @@ type DocsCmd struct {
 	NoPager bool   `help:"print to stdout instead of paging long output" name:"no-pager"`
 }
 
-// Run renders the requested page through glamour when stdout is a terminal
-// (paged when it is long — see pageOutput), and passes the raw markdown
-// through when piped — so `steps docs agents | grep` and scripting both stay
-// useful.
+// Run prints the requested page's markdown, paged when stdout is a terminal
+// (see pageOutput). Raw rather than styled: a terminal markdown renderer
+// linked a second chroma and goldmark beside the web UI's, and their lexer
+// and style registries were half of every invocation's startup heap.
 func (d *DocsCmd) Run() error {
 	name := d.Page
 	if name == "" {
@@ -41,27 +36,10 @@ func (d *DocsCmd) Run() error {
 		return fmt.Errorf("steps docs: %w (available: %s)", err, strings.Join(pageNames(), ", "))
 	}
 
-	if !stdoutIsTerminal() {
-		fmt.Print(string(body))
+	page := string(body)
 
-		return nil
-	}
-
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStyles(docsTermStyle()),
-		glamour.WithWordWrap(docsWrapWidth()),
-	)
-	if err != nil {
-		return fmt.Errorf("steps docs: could not build renderer: %w", err)
-	}
-
-	rendered, err := renderer.Render(string(body))
-	if err != nil {
-		return fmt.Errorf("steps docs: could not render %s: %w", name, err)
-	}
-
-	if !d.NoPager {
-		err = pageOutput(rendered)
+	if stdoutIsTerminal() && !d.NoPager {
+		err = pageOutput(page)
 		if err == nil {
 			return nil
 		}
@@ -69,83 +47,12 @@ func (d *DocsCmd) Run() error {
 		// lost page.
 	}
 
-	fmt.Print(rendered)
+	fmt.Print(page)
 
 	return nil
 }
 
-// docsTermStyle is glamour's dark config re-dressed in the product's own
-// palette (app.css's :root) — the same substitution the web UI makes for its
-// code blocks. The stock dark style's yellow-on-purple H1 pill and mauve
-// code belong to another product; here headings are green like every other
-// heading this tool prints, and YAML keys are blue.
-func docsTermStyle() ansi.StyleConfig {
-	const (
-		fg      = "#d8d5c9"
-		dim     = "#83887b"
-		green   = "#84c06d"
-		yellow  = "#d9a94a"
-		blue    = "#7aa4d9"
-		magenta = "#b98fcc"
-		cyan    = "#6fbcb4"
-	)
-
-	style := styles.DarkStyleConfig
-
-	style.Document.Color = strPtr(fg)
-
-	style.H1.Color = strPtr(green)
-	style.H1.BackgroundColor = nil
-	style.H1.Prefix = "# "
-	style.H1.Suffix = ""
-	style.H2.Color = strPtr(green)
-	style.H3.Color = strPtr(green)
-	style.H4.Color = strPtr(green)
-
-	style.Link.Color = strPtr(blue)
-	style.LinkText.Color = strPtr(cyan)
-
-	style.Code.Color = strPtr(yellow)
-	style.Code.BackgroundColor = nil
-
-	style.CodeBlock.Chroma = &ansi.Chroma{
-		Text:          ansi.StylePrimitive{Color: strPtr(fg)},
-		Comment:       ansi.StylePrimitive{Color: strPtr(dim)},
-		Keyword:       ansi.StylePrimitive{Color: strPtr(magenta)},
-		KeywordType:   ansi.StylePrimitive{Color: strPtr(cyan)},
-		Name:          ansi.StylePrimitive{Color: strPtr(fg)},
-		NameTag:       ansi.StylePrimitive{Color: strPtr(blue)},
-		NameAttribute: ansi.StylePrimitive{Color: strPtr(blue)},
-		NameFunction:  ansi.StylePrimitive{Color: strPtr(cyan)},
-		NameConstant:  ansi.StylePrimitive{Color: strPtr(yellow)},
-		Literal:       ansi.StylePrimitive{Color: strPtr(green)},
-		LiteralString: ansi.StylePrimitive{Color: strPtr(green)},
-		LiteralNumber: ansi.StylePrimitive{Color: strPtr(yellow)},
-		Operator:      ansi.StylePrimitive{Color: strPtr(dim)},
-		Punctuation:   ansi.StylePrimitive{Color: strPtr(dim)},
-		Error:         ansi.StylePrimitive{Color: strPtr(fg)},
-	}
-
-	return style
-}
-
-func strPtr(s string) *string { return &s }
-
-// docsWrapWidth is the render width: the terminal's own, capped at 100 so a
-// full-screen terminal still gets a readable measure. The previous hardcoded
-// 100 sheared every line in an 80-column pane.
-func docsWrapWidth() int {
-	const maxWidth = 100
-
-	size, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
-	if err != nil || size.Col == 0 {
-		return maxWidth
-	}
-
-	return min(int(size.Col), maxWidth)
-}
-
-// pageOutput hands rendered text to the user's pager, the way git does. The
+// pageOutput hands text to the user's pager, the way git does. The
 // default is less with -F (quit immediately when it fits one screen, so
 // short pages behave exactly as if unpaged), -R (pass ANSI colors), and -X
 // (no screen clear on exit, so the page stays in scrollback).
@@ -181,8 +88,8 @@ func pageNames() []string {
 	return names
 }
 
-// stdoutIsTerminal mirrors wantNoColor's stderr check for stdout: styled
-// output belongs on a live terminal, raw markdown everywhere else.
+// stdoutIsTerminal mirrors wantNoColor's stderr check for stdout: a pager and
+// live progress belong on a live terminal, plain output everywhere else.
 func stdoutIsTerminal() bool {
 	info, err := os.Stdout.Stat()
 	if err != nil {

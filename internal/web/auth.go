@@ -131,8 +131,8 @@ func (s *Server) authFor() *basicAuth {
 	return s.auth
 }
 
-// timingHash is compared against when a name is unknown, so a miss costs what a wrong password does and the time taken does not say which names exist.
-var timingHash, _ = bcrypt.GenerateFromPassword([]byte("steps-timing"), bcrypt.DefaultCost)
+// timingHash is compared against when a name is unknown, so a miss costs what a wrong password does and the time taken does not say which names exist. A literal, not generated: hashing at package init cost every steps invocation, `--help` included, ~90ms.
+var timingHash = []byte("$2a$10$ah46yEBqIh8ksDNb5jc/W.JaYOmgjrYFiDTz.mD4VOyD8ek7tHUEe")
 
 // matches checks a pair. bcrypt is deliberately slow — 50-100ms a check — and the browser and the CLI send credentials on every request, so a success is remembered briefly (verifiedCache).
 func (a *basicAuth) matches(username, password string) bool {

@@ -70,6 +70,15 @@ func TestAnUnknownNameIsRefused(t *testing.T) {
 	}
 }
 
+func TestAnUnknownNameCostsWhatAWrongPasswordDoes(t *testing.T) {
+	t.Parallel()
+
+	cost, err := bcrypt.Cost(timingHash)
+	if err != nil || cost != bcrypt.DefaultCost {
+		t.Fatalf("bcrypt.Cost(timingHash) = %d, %v; want %d, or a miss is faster than a wrong password and names which users exist", cost, err, bcrypt.DefaultCost)
+	}
+}
+
 func mustHash(t *testing.T, password string) string {
 	t.Helper()
 

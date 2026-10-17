@@ -9,15 +9,18 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"strings"
 
 	"github.com/alecthomas/chroma/v3"
+	chromahtml "github.com/alecthomas/chroma/v3/formatters/html"
+	"github.com/alecthomas/chroma/v3/lexers"
 	"github.com/labstack/echo/v5"
-	highlighting "github.com/yuin/goldmark-highlighting/v3"
 	"github.com/yuin/goldmark/v2/ast"
 	"github.com/yuin/goldmark/v2/extension"
 	"github.com/yuin/goldmark/v2/parser"
+	gmrender "github.com/yuin/goldmark/v2/renderer"
 	"github.com/yuin/goldmark/v2/renderer/html"
 
 	"github.com/jtarchie/steps/docs"
@@ -57,19 +60,47 @@ var docsCodeStyle = chroma.MustNewStyle("steps", chroma.StyleEntries{
 // docsParser and docsRenderer are the shared converter: GFM for the docs' tables, heading ids so the pages' #anchor cross-links resolve, and server-side chroma highlighting in the UI's own style.
 //
 // Two values rather than one, because goldmark has no combined Markdown type any more — an extension declares its parser half and its renderer half separately.
-//
-// The highlighter has a parser half too and it is deliberately NOT here: all it does is read `{...}` attributes off a fence info line, which no page in the corpus writes, so it would be a walk of every page AST per render that no test could break.
 var docsParser = parser.New(
 	parser.WithExtensions(extension.GFMParser),
 	parser.WithAutoHeadingID(),
 )
 
 var docsRenderer = html.New(
-	html.WithExtensions(
-		extension.GFMHTMLRenderer,
-		highlighting.NewHTMLRenderer(highlighting.WithCustomStyle(docsCodeStyle)),
-	),
+	html.WithExtensions(extension.GFMHTMLRenderer),
+	html.WithNodeRendererDecorator(ast.KindCodeBlock, highlightDocsFence),
 )
+
+// docsFormatter is chroma's default HTML formatter: its own <pre> with the style inline, unlike prose.go's codeFormatter.
+var docsFormatter = chromahtml.New()
+
+// highlightDocsFence is the slice of goldmark-highlighting the docs used — a fence whose language chroma knows, in docsCodeStyle — and nothing else: that extension linked chroma's styles package, whose registry of stock themes was a fifth of every invocation's startup heap and which no page here draws in.
+func highlightDocsFence(next html.NodeRenderer) html.NodeRenderer {
+	return html.NodeRendererFunc(func(w io.Writer, source []byte, node ast.Node, entering bool, rc gmrender.Context) (ast.WalkStatus, error) {
+		block, ok := node.(*ast.CodeBlock)
+		if !ok || block.CodeBlockKind != ast.CodeBlockKindFenced {
+			return next.Render(w, source, node, entering, rc)
+		}
+
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+
+		if language, found := block.Language(source); found {
+			if lexer := lexers.Get(language); lexer != nil {
+				iterator, err := chroma.Coalesce(lexer).Tokenise(nil, block.Value.Str(source))
+				if err == nil {
+					_ = docsFormatter.Format(w, docsCodeStyle, iterator)
+
+					return ast.WalkContinue, nil
+				}
+			}
+		}
+
+		_, _ = next.Render(w, source, node, true, rc)
+
+		return next.Render(w, source, node, false, rc)
+	})
+}
 
 // githubIDs generates heading ids with docs.Slug — GitHub's algorithm —
 // instead of goldmark's default, which folds "_" into "-" and strands every
