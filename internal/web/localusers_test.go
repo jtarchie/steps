@@ -77,6 +77,12 @@ func TestAnUnknownNameCostsWhatAWrongPasswordDoes(t *testing.T) {
 	if err != nil || cost != bcrypt.DefaultCost {
 		t.Fatalf("bcrypt.Cost(timingHash) = %d, %v; want %d, or a miss is faster than a wrong password and names which users exist", cost, err, bcrypt.DefaultCost)
 	}
+
+	// Cost reads only the prefix: a literal with a corrupt salt passes it, and then every compare fails at decoding, before any hashing.
+	err = bcrypt.CompareHashAndPassword(timingHash, []byte("not-it"))
+	if !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+		t.Fatalf("comparing against timingHash = %v, want a mismatch reached by hashing", err)
+	}
 }
 
 func mustHash(t *testing.T, password string) string {

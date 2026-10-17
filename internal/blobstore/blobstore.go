@@ -37,6 +37,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/smithy-go/encoding/httpbinding"
 
 	"github.com/jtarchie/steps/internal/compress"
 	"github.com/jtarchie/steps/internal/wire"
@@ -165,12 +166,8 @@ func (s *Store) objectURL(key string) (*url.URL, error) {
 		return nil, fmt.Errorf("%w %q: no region — set ?region= or AWS_REGION", ErrStore, s.opts.URL)
 	}
 
-	segments := strings.Split(key, "/")
-	for i, segment := range segments {
-		segments[i] = url.PathEscape(segment)
-	}
-
-	escaped := strings.Join(segments, "/")
+	// SigV4's encoding, not url.PathEscape's: S3 re-encodes the path this way before checking the signature, so a + = : @ $ & sent bare is a 403.
+	escaped := httpbinding.EscapePath(key, false)
 
 	base := "https://" + s.opts.Bucket + ".s3." + s.region + ".amazonaws.com"
 	prefix := ""
@@ -195,7 +192,7 @@ func (s *Store) objectURL(key string) (*url.URL, error) {
 // retryAttempts matches the SDK's standard retryer, which this replaced: S3 answers 503 SlowDown under load and expects the client to come back.
 const retryAttempts = 3
 
-// do sends a signed request for key and returns the response when S3 answered 2xx; anything else is an *s3Error carrying S3's error code. A 5xx or a transport failure is retried — every verb here is idempotent, a PUT included, because keys are content-addressed.
+// do sends a signed request for key and returns the response when S3 answered 2xx; anything else is an *s3Error carrying S3's error code. A transient answer (see s3Error.transient) or a transport failure is retried — every verb here is idempotent, a PUT included, because keys are content-addressed.
 func (s *Store) do(ctx context.Context, method, key string, body *os.File) (*http.Response, error) {
 	var err error
 
@@ -216,7 +213,7 @@ func (s *Store) do(ctx context.Context, method, key string, body *os.File) (*htt
 		}
 
 		var s3Err *s3Error
-		if errors.As(err, &s3Err) && s3Err.status < http.StatusInternalServerError {
+		if errors.As(err, &s3Err) && !s3Err.transient() {
 			return nil, err
 		}
 
@@ -243,19 +240,10 @@ func (s *Store) send(ctx context.Context, method, key string, body *os.File) (*h
 	}
 
 	if body != nil {
-		info, statErr := body.Stat()
-		if statErr != nil {
-			return nil, fmt.Errorf("%w: sizing %s: %w", errUnsendable, key, statErr)
+		err = attach(request, body)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s: %w", errUnsendable, key, err)
 		}
-
-		_, statErr = body.Seek(0, io.SeekStart)
-		if statErr != nil {
-			return nil, fmt.Errorf("%w: rewinding %s: %w", errUnsendable, key, statErr)
-		}
-
-		// NopCloser: the caller owns the file, and a retry reads it again.
-		request.Body = io.NopCloser(body)
-		request.ContentLength = info.Size()
 	}
 
 	creds, err := s.credentials.Retrieve(ctx)
@@ -282,6 +270,29 @@ func (s *Store) send(ctx context.Context, method, key string, body *os.File) (*h
 	defer func() { _ = response.Body.Close() }()
 
 	return nil, readS3Error(response)
+}
+
+// attach puts the file on request from its start, which is what lets a retry send it again.
+func attach(request *http.Request, body *os.File) error {
+	info, err := body.Stat()
+	if err != nil {
+		return fmt.Errorf("sizing: %w", err)
+	}
+
+	_, err = body.Seek(0, io.SeekStart)
+	if err != nil {
+		return fmt.Errorf("rewinding: %w", err)
+	}
+
+	request.ContentLength = info.Size()
+
+	// NoBody when empty: net/http sends a non-nil body of length 0 chunked, which S3 refuses with 411. NopCloser otherwise: the caller owns the file.
+	request.Body = http.NoBody
+	if info.Size() > 0 {
+		request.Body = io.NopCloser(body)
+	}
+
+	return nil
 }
 
 // presign mints a URL for method on key that signs Host and nothing else — see TestPresignedURLsSignOnlyHost for why that is load-bearing.
@@ -318,6 +329,12 @@ type s3Error struct {
 	status  int
 	code    string
 	message string
+}
+
+// transient is the SDK standard retryer's reading of an answer: a 5xx but 501, a 429, and a 400 RequestTimeout — an upload socket S3 found idle.
+func (e *s3Error) transient() bool {
+	return e.status >= http.StatusInternalServerError && e.status != http.StatusNotImplemented ||
+		e.status == http.StatusTooManyRequests || e.code == "RequestTimeout"
 }
 
 func (e *s3Error) Error() string {

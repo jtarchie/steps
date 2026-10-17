@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -388,15 +389,19 @@ func TestTransportTimeoutsAreBounded(t *testing.T) {
 	}
 }
 
-// TestA5xxIsRetriedAndA4xxIsNot: S3 sheds load with 503 SlowDown and expects the client back; a refusal is final, and retrying one only delays the error.
+// TestA5xxIsRetriedAndA4xxIsNot: S3 sheds load with 503 SlowDown and expects the client back; a refusal is final, and retrying one only delays the error. The exceptions are the SDK standard retryer's, which this replaced: a 400 RequestTimeout (an idle upload socket) and a 429 are transient, a 501 is not.
 func TestA5xxIsRetriedAndA4xxIsNot(t *testing.T) {
-	var calls, status atomic.Int32
-
-	status.Store(http.StatusServiceUnavailable)
+	var (
+		calls  atomic.Int32
+		answer atomic.Value
+	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if calls.Add(1) == 1 {
-			w.WriteHeader(int(status.Load()))
+			first, _ := answer.Load().([2]string)
+			status, _ := strconv.Atoi(first[0])
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, first[1])
 
 			return
 		}
@@ -418,16 +423,77 @@ func TestA5xxIsRetriedAndA4xxIsNot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	has, err := store.Has(context.Background(), "k")
-	if err != nil || !has || calls.Load() != 2 {
-		t.Fatalf("after one 503: has=%v err=%v calls=%d, want the retry to succeed on call 2", has, err, calls.Load())
+	for _, tc := range []struct {
+		status, code string
+		retried      bool
+	}{
+		{"503", "SlowDown", true},
+		{"500", "InternalError", true},
+		{"429", "SlowDown", true},
+		{"400", "RequestTimeout", true},
+		{"403", "AccessDenied", false},
+		{"400", "InvalidRequest", false},
+		{"501", "NotImplemented", false},
+	} {
+		calls.Store(0)
+		answer.Store([2]string{tc.status, "<Error><Code>" + tc.code + "</Code></Error>"})
+
+		err = store.Delete(context.Background(), "k")
+
+		// Retried: the second call's 200 is the answer. Not: the first call's refusal is.
+		want := map[bool]int32{true: 2, false: 1}[tc.retried]
+		if (err == nil) != tc.retried || calls.Load() != want {
+			t.Errorf("after one %s %s: err=%v calls=%d, want %d calls", tc.status, tc.code, err, calls.Load(), want)
+		}
+	}
+}
+
+// TestRequestsAreSentAsS3VerifiesThem is minioAwkwardUploads without minio: the path S3 re-encodes before checking the signature must already be in that encoding, and an empty body must still say its length.
+func TestRequestsAreSentAsS3VerifiesThem(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		paths   []string
+		chunked bool
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		paths = append(paths, r.RequestURI)
+		chunked = chunked || len(r.TransferEncoding) > 0
+	}))
+	t.Cleanup(server.Close)
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+
+	opts, err := Parse("s3://cas/team?endpoint=" + server.URL + "&region=us-east-1")
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	calls.Store(0)
-	status.Store(http.StatusForbidden)
+	store, err := New(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err = store.Has(context.Background(), "k")
-	if err == nil || calls.Load() != 1 {
-		t.Fatalf("after a 403: err=%v calls=%d, want the refusal returned without a retry", err, calls.Load())
+	empty := filepath.Join(t.TempDir(), "empty")
+
+	err = os.WriteFile(empty, nil, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.PutFile(context.Background(), "wire/a+b=c", empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(paths) != 1 || paths[0] != "/cas/team/wire/a%2Bb%3Dc" || chunked {
+		t.Fatalf("sent %v (chunked=%v), want /cas/team/wire/a%%2Bb%%3Dc with a Content-Length", paths, chunked)
 	}
 }

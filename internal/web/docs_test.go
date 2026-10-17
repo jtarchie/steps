@@ -98,7 +98,7 @@ func TestTheDocsMapIsTheSectionsOfALongPage(t *testing.T) {
 	}
 }
 
-// TestDocFencedCodeIsHighlightedInTheUIsOwnStyle: the highlighter is an extension of both halves of the converter now, and a page whose fences render as plain text is what a half-wired one looks like — the inline color is the assertion, because docsCodeStyle exists precisely so the stock themes are not used.
+// TestDocFencedCodeIsHighlightedInTheUIsOwnStyle: the highlighter is a decorator on the renderer (highlightDocsFence), and a page whose fences render as plain text is what an unwired one looks like — the inline color is the assertion, because docsCodeStyle exists precisely so the stock themes are not used.
 func TestDocFencedCodeIsHighlightedInTheUIsOwnStyle(t *testing.T) {
 	t.Parallel()
 

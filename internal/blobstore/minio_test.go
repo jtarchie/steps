@@ -113,6 +113,7 @@ func TestAgainstARealS3(t *testing.T) {
 
 	minioTreeRoundTrip(t, store)
 	minioPresignedRoundTrip(t, store)
+	minioAwkwardUploads(t, store)
 
 	http.DefaultClient.CloseIdleConnections()
 
@@ -236,5 +237,32 @@ func minioRawReadAndDelete(t *testing.T, store *Store, key string) {
 	has, err := store.Has(ctx, key)
 	if err != nil || has {
 		t.Fatalf("Has after Delete = %v, %v", has, err)
+	}
+}
+
+// minioAwkwardUploads: keys holding characters url.PathEscape leaves bare and SigV4 encodes (signed one way, checked the other: 403), each an empty file, which net/http sends chunked unless told its length (411).
+func minioAwkwardUploads(t *testing.T, store *Store) {
+	t.Helper()
+
+	ctx := context.Background()
+	empty := filepath.Join(t.TempDir(), "empty")
+
+	err := os.WriteFile(empty, nil, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, key := range []string{"wire/plain", "wire/a+b", "wire/a=b:c@d$e&f"} {
+		err = store.PutFile(ctx, key, empty)
+		if err != nil {
+			t.Errorf("PutFile(%q) of an empty file: %v", key, err)
+
+			continue
+		}
+
+		has, err := store.Has(ctx, key)
+		if err != nil || !has {
+			t.Errorf("Has(%q) after PutFile = %v, %v", key, has, err)
+		}
 	}
 }
