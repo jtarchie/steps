@@ -4,7 +4,7 @@
 
 steps runs Concourse-style YAML pipelines — `get`, `task`, `put` — from one Go binary, and adds `agent`: an LLM with tool calls, sub-agents, and MCP servers, sitting in the plan beside everything else. Every step is content-addressed and cached in SQLite, checked by `assert:`, and shown in a run transcript with what it cost.
 
-Status: v0.1.0, the first tagged release. macOS and Linux, amd64 and arm64. The pipeline format and state database may still change between releases. There are no schema migrations: a newer `steps` refuses an older state database, and the fix is deleting it (`.steps/<pipeline>.db`), which drops that pipeline's run history and cache.
+Status: v0.1.0, the first tagged release. macOS and Linux, amd64 and arm64. The pipeline format may still change between releases. A state database written by v0.1.0 or later is upgraded in place by the next `steps run` or `steps web` (SQLite keeps a backup copy beside the file).
 
 ![A run transcript: an across block of six concurrent reviewer agents folded under a rail, each with its timing, hash and system prompt](docs/images/transcript.png)
 
