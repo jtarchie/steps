@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -297,15 +298,15 @@ func TestPresignedURLsWorkWithPlainHTTP(t *testing.T) {
 // TestPresignedURLsSignOnlyHost is the hermetic guard for a bug that reached
 // real AWS and nothing before it.
 //
-// The SDK's default checksum behavior adds x-amz-checksum-mode to a GetObject
-// and folds it into SignedHeaders, which makes the URL valid ONLY for a
+// The S3 SDK's default checksum behavior (it was this package's client) added x-amz-checksum-mode to a GetObject
+// and folded it into SignedHeaders, which made the URL valid ONLY for a
 // client that sends that header. Everything that ever fetches one of ours
 // sends nothing but Host — a plain GET from net/http or curl —
 // so real S3 answered 403 SignatureDoesNotMatch every time, while the fake
 // above answered 200 to anything request-shaped.
 //
 // Signing is offline, so this needs no network and no fixture: it reads the
-// signature the SDK actually produced. Any future option that pulls another
+// signature actually produced. Any future change that pulls another
 // header into the signature fails here rather than in production.
 func TestPresignedURLsSignOnlyHost(t *testing.T) {
 	store, _ := newTestStore(t)
@@ -371,14 +372,9 @@ func TestRegionQueryOverridesTheAmbientRegion(t *testing.T) {
 func TestTransportTimeoutsAreBounded(t *testing.T) {
 	store, _ := newTestStore(t)
 
-	client, ok := store.client.Options().HTTPClient.(*http.Client)
+	transport, ok := store.http.Transport.(*http.Transport)
 	if !ok {
-		t.Fatalf("HTTPClient is %T, want the *http.Client New installs", store.client.Options().HTTPClient)
-	}
-
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("Transport is %T, want *http.Transport", client.Transport)
+		t.Fatalf("Transport is %T, want *http.Transport", store.http.Transport)
 	}
 
 	for name, timeout := range map[string]time.Duration{
@@ -389,5 +385,49 @@ func TestTransportTimeoutsAreBounded(t *testing.T) {
 		if timeout <= 0 {
 			t.Errorf("%s = %v, want a positive bound", name, timeout)
 		}
+	}
+}
+
+// TestA5xxIsRetriedAndA4xxIsNot: S3 sheds load with 503 SlowDown and expects the client back; a refusal is final, and retrying one only delays the error.
+func TestA5xxIsRetriedAndA4xxIsNot(t *testing.T) {
+	var calls, status atomic.Int32
+
+	status.Store(http.StatusServiceUnavailable)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(int(status.Load()))
+
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+
+	opts, err := Parse("s3://cas/team?endpoint=" + server.URL + "&region=us-east-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := New(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	has, err := store.Has(context.Background(), "k")
+	if err != nil || !has || calls.Load() != 2 {
+		t.Fatalf("after one 503: has=%v err=%v calls=%d, want the retry to succeed on call 2", has, err, calls.Load())
+	}
+
+	calls.Store(0)
+	status.Store(http.StatusForbidden)
+
+	_, err = store.Has(context.Background(), "k")
+	if err == nil || calls.Load() != 1 {
+		t.Fatalf("after a 403: err=%v calls=%d, want the refusal returned without a retry", err, calls.Load())
 	}
 }

@@ -623,7 +623,7 @@ linters:
             - "$gostd"
             - "github.com/jtarchie/steps/internal/treedigest"
         # blobstore is the content-addressed artifact store on S3: trees by
-        # digest, packed as compress over wire's tar, reaching S3 through the pure-Go SDK — GET/PUT by key,
+        # digest, packed as compress over wire's tar, reaching S3 as SigV4-signed HTTP — GET/PUT by key,
         # never a mounted filesystem. It holds bytes only; which digest means
         # what stays in internal/store's SQLite, which is what makes bucket
         # lifecycle expiry safe. Wired in by main and consumed through
