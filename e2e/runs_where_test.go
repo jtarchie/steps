@@ -9,6 +9,7 @@ package e2e
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -88,5 +89,74 @@ func TestWhereWillNotVouchForARunItDoesNotHave(t *testing.T) {
 
 	if strings.Contains(out, "ran every step") {
 		t.Errorf("--where spoke in the past tense about a running run:\n%s", out)
+	}
+}
+
+// TestWhereNamesWhoTheStepRanAs: the run page showed the uid:gid a step ran as and the terminal did not. A worker that named none prints "-", never an invented 0:0, which would read as root.
+func TestWhereNamesWhoTheStepRanAs(t *testing.T) {
+	root := 0
+	hash := strings.Repeat("e", 64)
+	other := strings.Repeat("f", 64)
+
+	path := whereFixture(t, func(ctx context.Context, st store.Store) {
+		recordPlacedRun(ctx, t, st, "as-who", []store.Placement{
+			{StepName: "on-ssh", NodeHash: hash, Address: "ssh://box", UID: &root, GID: &root},
+			{StepName: "in-docker", NodeHash: other, Address: "docker+ssh://box", Image: "alpine:3"},
+		})
+	})
+
+	var err error
+
+	out := captureStdout(t, func() {
+		err = cli.Run(append([]string{"runs", "where", "as-who"}, readArgs(path)...))
+	})
+	if err != nil {
+		t.Fatalf("steps runs where: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 || !strings.Contains(lines[0], "IDENTITY") {
+		t.Fatalf("steps runs where printed:\n%s\nwant a header with IDENTITY and two rows", out)
+	}
+
+	if fields := strings.Fields(lines[1]); !strings.HasPrefix(lines[1], "on-ssh") || !slices.Contains(fields, "0:0") {
+		t.Errorf("the ssh row does not name uid:gid 0:0:\n%s", out)
+	}
+
+	if fields := strings.Fields(lines[2]); !strings.HasPrefix(lines[2], "in-docker") || !slices.Contains(fields, "-") || slices.Contains(fields, "0:0") {
+		t.Errorf("the docker row does not say it named no identity:\n%s", out)
+	}
+}
+
+// recordPlacedRun records a finished run of build whose steps ran where placements say, one step per placement.
+func recordPlacedRun(ctx context.Context, t *testing.T, st store.Store, runID string, placements []store.Placement) {
+	t.Helper()
+
+	err := st.StartRun(ctx, store.NewRun{ID: runID, JobName: "build"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	for i, placement := range placements {
+		err = st.RecordNode(ctx, store.NodeRecord{
+			Hash: placement.NodeHash, Kind: "task", StepIndex: i, Resource: placement.StepName,
+			Content: map[string]any{"body": placement.StepName},
+		}, "build", "succeeded", nil, nil)
+		if err != nil {
+			t.Fatalf("RecordNode: %v", err)
+		}
+
+		placement.RunID, placement.StepIndex, placement.JobName = runID, i, "build"
+		placement.Slot, placement.Tag, placement.GOOS, placement.GOARCH = placement.NodeHash, "box", "linux", "arm64"
+
+		err = st.RecordPlacement(ctx, placement)
+		if err != nil {
+			t.Fatalf("RecordPlacement: %v", err)
+		}
+	}
+
+	err = st.FinishRun(ctx, runID, "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
 	}
 }
