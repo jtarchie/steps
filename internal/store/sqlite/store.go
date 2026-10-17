@@ -269,8 +269,13 @@ var readPoolSize = max(4, runtime.GOMAXPROCS(0))
 // every committed transaction at the moment their statement starts, and
 // every write in this package has committed before its method returns, so a
 // read after a write through one handle sees it.
+//
+// cache_size is 512 KiB, a quarter of SQLite's default, because the cache is
+// per CONNECTION and this pool is one per core: a page that misses is a pread
+// the OS page cache answers, where the default held up to readPoolSize copies
+// of it in this process's heap.
 func openReadPool(path string) (*sql.DB, error) {
-	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", readPoolSize)
+	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=cache_size(-512)", readPoolSize)
 }
 
 // openReadOnlyDB opens an existing file for a reader.

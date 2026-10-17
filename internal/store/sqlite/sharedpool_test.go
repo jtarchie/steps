@@ -184,3 +184,27 @@ func TestReadPoolKeepsTheConnectionsItOpens(t *testing.T) {
 		t.Fatalf("the read pool closed %d connections for want of idle room", closed)
 	}
 }
+
+// Every reader connection fills its own page cache, and the pool is a connection per core: at SQLite's 2 MB default that was ~22 MB of heap on a 10-core daemon, copying pages the OS already caches for the file. Readers get a small cache; the one writer keeps the default.
+func TestReadPoolKeepsASmallPageCache(t *testing.T) {
+	t.Parallel()
+
+	st := mustOpenStoreNamed(t, filepath.Join(t.TempDir(), "state.db"), "p")
+	defer func() { _ = st.Close() }()
+
+	var reads, writes int
+
+	err := st.reads.QueryRowContext(context.Background(), "PRAGMA cache_size").Scan(&reads)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = st.db.QueryRowContext(context.Background(), "PRAGMA cache_size").Scan(&writes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reads != -512 || writes != -2000 {
+		t.Fatalf("cache_size: reads %d, writer %d; want -512 (KiB) and SQLite's default -2000", reads, writes)
+	}
+}
