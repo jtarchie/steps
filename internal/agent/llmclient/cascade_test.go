@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openai/openai-go/v3"
-
 	"github.com/jtarchie/steps/internal/outcome"
 )
 
@@ -37,7 +35,7 @@ func TestClassifySource(t *testing.T) {
 		{"a task-level failure is a conclusion", outcome.Fail(errors.New("the model said no")), sourceServed},
 		{
 			"a task-level failure wrapping a 5xx shape is still a conclusion",
-			outcome.Fail(&openai.Error{StatusCode: http.StatusInternalServerError}),
+			outcome.Fail(&APIError{StatusCode: http.StatusInternalServerError}),
 			sourceServed,
 		},
 		{
@@ -46,15 +44,15 @@ func TestClassifySource(t *testing.T) {
 			sourceServed,
 		},
 
-		{"a 5xx is the provider being unwell", &openai.Error{StatusCode: http.StatusInternalServerError}, sourceUnwell},
+		{"a 5xx is the provider being unwell", &APIError{StatusCode: http.StatusInternalServerError}, sourceUnwell},
 		{"a connection failure likewise", dialErr, sourceUnwell},
 
 		// The pin bug: this used to fall through to "concluded", so a source
 		// that rejected the request outright was recorded as the one to
 		// prefer — and nothing ever un-records it, since preflight probes
 		// only the primary.
-		{"a 400 is the provider refusing", &openai.Error{StatusCode: http.StatusBadRequest}, sourceRefused},
-		{"a 404 likewise", &openai.Error{StatusCode: http.StatusNotFound}, sourceRefused},
+		{"a 400 is the provider refusing", &APIError{StatusCode: http.StatusBadRequest}, sourceRefused},
+		{"a 404 likewise", &APIError{StatusCode: http.StatusNotFound}, sourceRefused},
 
 		// The release bug: a step that merely ran long used to read as
 		// evidence against its source and drop a healthy pin.
@@ -85,7 +83,7 @@ func TestClassifySourceReadsTheJobContext(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if got := ClassifySource(canceled, &openai.Error{StatusCode: http.StatusInternalServerError}); got != sourceUnproven {
+	if got := ClassifySource(canceled, &APIError{StatusCode: http.StatusInternalServerError}); got != sourceUnproven {
 		t.Errorf("ClassifySource on a canceled job = %v, want sourceUnproven — an abort says nothing about the provider", got)
 	}
 }

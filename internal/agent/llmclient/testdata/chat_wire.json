@@ -1,0 +1,1090 @@
+{
+ "req/deepseek-chat/dials": {
+  "auth": "Bearer k",
+  "body": {
+   "max_tokens": 99,
+   "messages": [
+    {
+     "content": "hello\nsecond",
+     "role": "user"
+    }
+   ],
+   "model": "deepseek-chat",
+   "reasoning_effort": "high",
+   "response_format": {
+    "type": "json_object"
+   },
+   "stop": "END",
+   "temperature": 0.25,
+   "tool_choice": "auto",
+   "top_p": 0.5
+  },
+  "ctype": "application/json"
+ },
+ "req/deepseek-chat/history": {
+  "auth": "Bearer k",
+  "body": {
+   "messages": [
+    {
+     "content": "be brief\nline two",
+     "role": "system"
+    },
+    {
+     "content": "hello\nsecond",
+     "role": "user"
+    },
+    {
+     "content": "answer",
+     "reasoning_content": "thinking hard",
+     "role": "assistant",
+     "tool_calls": [
+      {
+       "function": {
+        "arguments": "{\"path\":\"a.txt\"}",
+        "name": "read_file"
+       },
+       "id": "call_1",
+       "type": "function"
+      },
+      {
+       "function": {
+        "arguments": "{}",
+        "name": "noargs"
+       },
+       "id": "tc_42f2d97335669f86846b721a8aa58551a4656",
+       "type": "function"
+      }
+     ]
+    },
+    {
+     "content": "{\"content\":\"x\"}",
+     "role": "tool",
+     "tool_call_id": "call_1"
+    },
+    {
+     "content": "{}",
+     "role": "tool",
+     "tool_call_id": "tc_42f2d97335669f86846b721a8aa58551a4656"
+    },
+    {
+     "reasoning_content": "",
+     "role": "assistant",
+     "tool_calls": [
+      {
+       "function": {
+        "arguments": "{}",
+        "name": "read_file"
+       },
+       "id": "call_2",
+       "type": "function"
+      }
+     ]
+    },
+    {
+     "content": "for context",
+     "role": "user"
+    }
+   ],
+   "model": "deepseek-chat",
+   "tools": [
+    {
+     "function": {
+      "description": "reads",
+      "name": "read_file",
+      "parameters": {
+       "properties": {
+        "opts": {
+         "properties": {},
+         "type": "object"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "noargs"
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "schema",
+      "parameters": {
+       "properties": {
+        "n": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    }
+   ]
+  },
+  "ctype": "application/json"
+ },
+ "req/deepseek-chat/media": {
+  "auth": "Bearer k",
+  "body": {
+   "messages": [
+    {
+     "content": [
+      {
+       "text": "look",
+       "type": "text"
+      },
+      {
+       "image_url": {
+        "detail": "auto",
+        "url": "data:image/png;base64,cG5n"
+       },
+       "type": "image_url"
+      },
+      {
+       "input_audio": {
+        "data": "bXAz",
+        "format": "mp3"
+       },
+       "type": "input_audio"
+      },
+      {
+       "file": {
+        "file_data": "data:application/pdf;base64,cGRm"
+       },
+       "type": "file"
+      },
+      {
+       "file": {
+        "file_data": "data:text/plain;base64,dHh0"
+       },
+       "type": "file"
+      },
+      {
+       "image_url": {
+        "detail": "auto",
+        "url": "https://x/y.jpg"
+       },
+       "type": "image_url"
+      }
+     ],
+     "role": "user"
+    }
+   ],
+   "model": "deepseek-chat"
+  },
+  "ctype": "application/json"
+ },
+ "req/deepseek-chat/minimal": {
+  "auth": "Bearer k",
+  "body": {
+   "max_tokens": 1,
+   "messages": [
+    {
+     "content": "hi",
+     "role": "user"
+    }
+   ],
+   "model": "deepseek-chat"
+  },
+  "ctype": "application/json"
+ },
+ "req/deepseek-chat/none": {
+  "auth": "Bearer k",
+  "body": {
+   "messages": [
+    {
+     "content": "hello\nsecond",
+     "role": "user"
+    }
+   ],
+   "model": "deepseek-chat",
+   "reasoning_effort": "low",
+   "tool_choice": "none",
+   "tools": [
+    {
+     "function": {
+      "description": "reads",
+      "name": "read_file",
+      "parameters": {
+       "properties": {
+        "opts": {
+         "properties": {},
+         "type": "object"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "noargs"
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "schema",
+      "parameters": {
+       "properties": {
+        "n": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    }
+   ]
+  },
+  "ctype": "application/json"
+ },
+ "req/deepseek-chat/required": {
+  "auth": "Bearer k",
+  "body": {
+   "messages": [
+    {
+     "content": "hello\nsecond",
+     "role": "user"
+    }
+   ],
+   "model": "deepseek-chat",
+   "tool_choice": "required",
+   "tools": [
+    {
+     "function": {
+      "description": "reads",
+      "name": "read_file",
+      "parameters": {
+       "properties": {
+        "opts": {
+         "properties": {},
+         "type": "object"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "noargs"
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "schema",
+      "parameters": {
+       "properties": {
+        "n": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    }
+   ]
+  },
+  "ctype": "application/json"
+ },
+ "req/deepseek-chat/schema": {
+  "auth": "Bearer k",
+  "body": {
+   "messages": [
+    {
+     "content": "hello\nsecond",
+     "role": "user"
+    }
+   ],
+   "model": "deepseek-chat",
+   "reasoning_effort": "medium",
+   "response_format": {
+    "json_schema": {
+     "description": "out",
+     "name": "response",
+     "schema": {
+      "description": "out",
+      "properties": {
+       "x": {
+        "items": {
+         "enum": [
+          "p",
+          "q"
+         ],
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "x"
+      ],
+      "type": "object"
+     },
+     "strict": true
+    },
+    "type": "json_schema"
+   },
+   "stop": [
+    "a",
+    "b"
+   ],
+   "tool_choice": {
+    "function": {
+     "name": "read_file"
+    },
+    "type": "function"
+   },
+   "tools": [
+    {
+     "function": {
+      "description": "reads",
+      "name": "read_file",
+      "parameters": {
+       "properties": {
+        "opts": {
+         "properties": {},
+         "type": "object"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "noargs"
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "schema",
+      "parameters": {
+       "properties": {
+        "n": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    }
+   ]
+  },
+  "ctype": "application/json"
+ },
+ "req/gpt-4o/dials": {
+  "auth": "Bearer k",
+  "body": {
+   "max_tokens": 99,
+   "messages": [
+    {
+     "content": "hello\nsecond",
+     "role": "user"
+    }
+   ],
+   "model": "gpt-4o",
+   "reasoning_effort": "high",
+   "response_format": {
+    "type": "json_object"
+   },
+   "stop": "END",
+   "temperature": 0.25,
+   "tool_choice": "auto",
+   "top_p": 0.5
+  },
+  "ctype": "application/json"
+ },
+ "req/gpt-4o/history": {
+  "auth": "Bearer k",
+  "body": {
+   "messages": [
+    {
+     "content": "be brief\nline two",
+     "role": "system"
+    },
+    {
+     "content": "hello\nsecond",
+     "role": "user"
+    },
+    {
+     "content": "<think>\nthinking hard\n</think>\nanswer",
+     "role": "assistant",
+     "tool_calls": [
+      {
+       "function": {
+        "arguments": "{\"path\":\"a.txt\"}",
+        "name": "read_file"
+       },
+       "id": "call_1",
+       "type": "function"
+      },
+      {
+       "function": {
+        "arguments": "{}",
+        "name": "noargs"
+       },
+       "id": "tc_42f2d97335669f86846b721a8aa58551a4656",
+       "type": "function"
+      }
+     ]
+    },
+    {
+     "content": "{\"content\":\"x\"}",
+     "role": "tool",
+     "tool_call_id": "call_1"
+    },
+    {
+     "content": "{}",
+     "role": "tool",
+     "tool_call_id": "tc_42f2d97335669f86846b721a8aa58551a4656"
+    },
+    {
+     "content": "<think>\nonly thought\n</think>",
+     "role": "assistant"
+    },
+    {
+     "role": "assistant",
+     "tool_calls": [
+      {
+       "function": {
+        "arguments": "{}",
+        "name": "read_file"
+       },
+       "id": "call_2",
+       "type": "function"
+      }
+     ]
+    },
+    {
+     "content": "for context",
+     "role": "user"
+    }
+   ],
+   "model": "gpt-4o",
+   "tools": [
+    {
+     "function": {
+      "description": "reads",
+      "name": "read_file",
+      "parameters": {
+       "properties": {
+        "opts": {
+         "properties": {},
+         "type": "object"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "noargs"
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "schema",
+      "parameters": {
+       "properties": {
+        "n": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    }
+   ]
+  },
+  "ctype": "application/json"
+ },
+ "req/gpt-4o/media": {
+  "auth": "Bearer k",
+  "body": {
+   "messages": [
+    {
+     "content": [
+      {
+       "text": "look",
+       "type": "text"
+      },
+      {
+       "image_url": {
+        "detail": "auto",
+        "url": "data:image/png;base64,cG5n"
+       },
+       "type": "image_url"
+      },
+      {
+       "input_audio": {
+        "data": "bXAz",
+        "format": "mp3"
+       },
+       "type": "input_audio"
+      },
+      {
+       "file": {
+        "file_data": "data:application/pdf;base64,cGRm"
+       },
+       "type": "file"
+      },
+      {
+       "file": {
+        "file_data": "data:text/plain;base64,dHh0"
+       },
+       "type": "file"
+      },
+      {
+       "image_url": {
+        "detail": "auto",
+        "url": "https://x/y.jpg"
+       },
+       "type": "image_url"
+      }
+     ],
+     "role": "user"
+    }
+   ],
+   "model": "gpt-4o"
+  },
+  "ctype": "application/json"
+ },
+ "req/gpt-4o/minimal": {
+  "auth": "Bearer k",
+  "body": {
+   "max_tokens": 1,
+   "messages": [
+    {
+     "content": "hi",
+     "role": "user"
+    }
+   ],
+   "model": "gpt-4o"
+  },
+  "ctype": "application/json"
+ },
+ "req/gpt-4o/none": {
+  "auth": "Bearer k",
+  "body": {
+   "messages": [
+    {
+     "content": "hello\nsecond",
+     "role": "user"
+    }
+   ],
+   "model": "gpt-4o",
+   "reasoning_effort": "low",
+   "tool_choice": "none",
+   "tools": [
+    {
+     "function": {
+      "description": "reads",
+      "name": "read_file",
+      "parameters": {
+       "properties": {
+        "opts": {
+         "properties": {},
+         "type": "object"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "noargs"
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "schema",
+      "parameters": {
+       "properties": {
+        "n": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    }
+   ]
+  },
+  "ctype": "application/json"
+ },
+ "req/gpt-4o/required": {
+  "auth": "Bearer k",
+  "body": {
+   "messages": [
+    {
+     "content": "hello\nsecond",
+     "role": "user"
+    }
+   ],
+   "model": "gpt-4o",
+   "tool_choice": "required",
+   "tools": [
+    {
+     "function": {
+      "description": "reads",
+      "name": "read_file",
+      "parameters": {
+       "properties": {
+        "opts": {
+         "properties": {},
+         "type": "object"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "noargs"
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "schema",
+      "parameters": {
+       "properties": {
+        "n": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    }
+   ]
+  },
+  "ctype": "application/json"
+ },
+ "req/gpt-4o/schema": {
+  "auth": "Bearer k",
+  "body": {
+   "messages": [
+    {
+     "content": "hello\nsecond",
+     "role": "user"
+    }
+   ],
+   "model": "gpt-4o",
+   "reasoning_effort": "medium",
+   "response_format": {
+    "json_schema": {
+     "description": "out",
+     "name": "response",
+     "schema": {
+      "description": "out",
+      "properties": {
+       "x": {
+        "items": {
+         "enum": [
+          "p",
+          "q"
+         ],
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "x"
+      ],
+      "type": "object"
+     },
+     "strict": true
+    },
+    "type": "json_schema"
+   },
+   "stop": [
+    "a",
+    "b"
+   ],
+   "tool_choice": {
+    "function": {
+     "name": "read_file"
+    },
+    "type": "function"
+   },
+   "tools": [
+    {
+     "function": {
+      "description": "reads",
+      "name": "read_file",
+      "parameters": {
+       "properties": {
+        "opts": {
+         "properties": {},
+         "type": "object"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "noargs"
+     },
+     "type": "function"
+    },
+    {
+     "function": {
+      "description": "",
+      "name": "schema",
+      "parameters": {
+       "properties": {
+        "n": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "function"
+    }
+   ]
+  },
+  "ctype": "application/json"
+ },
+ "resp/deepseek-chat/err400": [
+  {
+   "rejection": true,
+   "transient": false
+  }
+ ],
+ "resp/deepseek-chat/err429": [
+  {
+   "rejection": false,
+   "transient": true
+  }
+ ],
+ "resp/deepseek-chat/err500": [
+  {
+   "rejection": false,
+   "transient": true
+  }
+ ],
+ "resp/deepseek-chat/filter": [
+  {
+   "content": {
+    "role": "model"
+   },
+   "finishReason": "SAFETY",
+   "turnComplete": true
+  }
+ ],
+ "resp/deepseek-chat/full": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "rc",
+      "thought": true
+     },
+     {
+      "text": "hello"
+     },
+     {
+      "functionCall": {
+       "args": {
+        "path": "a"
+       },
+       "id": "t1",
+       "name": "read_file"
+      }
+     },
+     {
+      "functionCall": {
+       "id": "t2",
+       "name": "noargs"
+      }
+     },
+     {
+      "functionCall": {
+       "id": "t3",
+       "name": "bad"
+      }
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "STOP",
+   "turnComplete": true,
+   "usageMetadata": {
+    "cachedContentTokenCount": 3,
+    "candidatesTokenCount": 5,
+    "promptTokenCount": 10,
+    "thoughtsTokenCount": 2,
+    "totalTokenCount": 15
+   }
+  }
+ ],
+ "resp/deepseek-chat/nochoices": [
+  {
+   "rejection": false,
+   "transient": false
+  }
+ ],
+ "resp/deepseek-chat/nousage": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "x"
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "STOP",
+   "turnComplete": true
+  }
+ ],
+ "resp/deepseek-chat/nullreason": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "z"
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "FINISH_REASON_UNSPECIFIED",
+   "turnComplete": true
+  }
+ ],
+ "resp/deepseek-chat/other": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "y"
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "FINISH_REASON_UNSPECIFIED",
+   "turnComplete": true
+  }
+ ],
+ "resp/deepseek-chat/reasoning": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "r only",
+      "thought": true
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "MAX_TOKENS",
+   "turnComplete": true,
+   "usageMetadata": {
+    "candidatesTokenCount": 1,
+    "promptTokenCount": 1,
+    "totalTokenCount": 2
+   }
+  }
+ ],
+ "resp/gpt-4o/err400": [
+  {
+   "rejection": true,
+   "transient": false
+  }
+ ],
+ "resp/gpt-4o/err429": [
+  {
+   "rejection": false,
+   "transient": true
+  }
+ ],
+ "resp/gpt-4o/err500": [
+  {
+   "rejection": false,
+   "transient": true
+  }
+ ],
+ "resp/gpt-4o/filter": [
+  {
+   "content": {
+    "role": "model"
+   },
+   "finishReason": "SAFETY",
+   "turnComplete": true
+  }
+ ],
+ "resp/gpt-4o/full": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "hello"
+     },
+     {
+      "functionCall": {
+       "args": {
+        "path": "a"
+       },
+       "id": "t1",
+       "name": "read_file"
+      }
+     },
+     {
+      "functionCall": {
+       "id": "t2",
+       "name": "noargs"
+      }
+     },
+     {
+      "functionCall": {
+       "id": "t3",
+       "name": "bad"
+      }
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "STOP",
+   "turnComplete": true,
+   "usageMetadata": {
+    "cachedContentTokenCount": 3,
+    "candidatesTokenCount": 5,
+    "promptTokenCount": 10,
+    "thoughtsTokenCount": 2,
+    "totalTokenCount": 15
+   }
+  }
+ ],
+ "resp/gpt-4o/nochoices": [
+  {
+   "rejection": false,
+   "transient": false
+  }
+ ],
+ "resp/gpt-4o/nousage": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "x"
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "STOP",
+   "turnComplete": true
+  }
+ ],
+ "resp/gpt-4o/nullreason": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "z"
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "FINISH_REASON_UNSPECIFIED",
+   "turnComplete": true
+  }
+ ],
+ "resp/gpt-4o/other": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "y"
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "FINISH_REASON_UNSPECIFIED",
+   "turnComplete": true
+  }
+ ],
+ "resp/gpt-4o/reasoning": [
+  {
+   "content": {
+    "role": "model"
+   },
+   "finishReason": "MAX_TOKENS",
+   "turnComplete": true,
+   "usageMetadata": {
+    "candidatesTokenCount": 1,
+    "promptTokenCount": 1,
+    "totalTokenCount": 2
+   }
+  }
+ ]
+}

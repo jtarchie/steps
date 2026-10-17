@@ -10,11 +10,9 @@ import (
 	"net/url"
 	"os"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
-	genaiopenai "github.com/achetronic/adk-utils-go/genai/openai/completions"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -28,7 +26,7 @@ import (
 
 // New constructs the model.LLM used for real runs, given the
 // already-resolved base URL/model/key (see config.ResolveAgentInvocation).
-// Returning the model.LLM interface (not the concrete *openai.Model) keeps
+// Returning the model.LLM interface (not the concrete *chatModel) keeps
 // runAgentConversation testable against an in-process fake.
 //
 // Every invocation gets the package's shared HTTP client (see
@@ -41,17 +39,7 @@ import (
 // place — the three call sites (PreparedStep.Run, RunFix, buildSubAgentTool) can't
 // individually mix up which field feeds which parameter.
 func New(ri config.ResolvedInvocation, apiKey string) model.LLM {
-	cfg := genaiopenai.Config{
-		APIKey:    apiKey,
-		BaseURL:   ri.BaseURL,
-		ModelName: ri.ModelName,
-		Dialect:   dialectFor(ri.ModelName),
-		HTTPOptions: genaiopenai.HTTPOptions{
-			Client: agentHTTPClient(ri),
-		},
-	}
-
-	return newLLMFuncs(genaiopenai.New(cfg), ri.BaseURL)
+	return newLLMFuncs(newChatModel(agentHTTPClient(ri), ri.BaseURL, apiKey, ri.ModelName), ri.BaseURL)
 }
 
 // agentHTTPClient returns the *http.Client an invocation's LLM uses. Its
@@ -110,24 +98,13 @@ func LookupAPIKey(envVar string, required bool) (string, error) {
 	return val, nil
 }
 
-// dialectFor picks the client's provider dialect by model name rather than endpoint, since one gateway (OpenCode, OpenRouter) serves many providers; nil keeps the adapter OpenAI-pure, which is every model but DeepSeek's.
-func dialectFor(modelName string) genaiopenai.Dialect {
-	if strings.Contains(strings.ToLower(modelName), "deepseek") {
-		return deepSeekDialect{}
-	}
-
-	return nil
-}
-
-// agentResponseHeaderTimeout mirrors the bound openai-go's own
-// defaultHTTPClient applies when the caller supplies no client. Supplying
-// one (which every agent now does, for the repair transport) opts out of
-// that default, so it is re-applied here rather than silently dropping
-// stuck-connection protection.
+// agentResponseHeaderTimeout is the bound openai-go's defaultHTTPClient
+// applied, kept when the client went: no other timeout covers a provider that
+// accepts the connection and then never answers.
 const agentResponseHeaderTimeout = 10 * time.Minute
 
 // agentBaseTransport is the transport every agent LLM client shares, built
-// once. It reproduces openai-go's defaultHTTPClient (clone
+// once. It is what openai-go's defaultHTTPClient was (clone
 // http.DefaultTransport, bound the wait for response headers) and is
 // process-wide rather than per-client: only the thin per-agent wrappers
 // (repair, and for OpenRouter the session/cache transport) differ per
@@ -149,7 +126,7 @@ var agentBaseTransport = sync.OnceValue(func() http.RoundTripper { //nolint:goch
 	return transport
 })
 
-// llmFuncs holds method values, not the model: adk-utils' Model in an interface keeps all of openai-go linked (~8MB) via its client field.
+// llmFuncs is the model with tracing around each call.
 type llmFuncs struct {
 	name     func() string
 	generate func(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error]
@@ -157,7 +134,7 @@ type llmFuncs struct {
 	server string
 }
 
-func newLLMFuncs(m *genaiopenai.Model, baseURL string) llmFuncs {
+func newLLMFuncs(m *chatModel, baseURL string) llmFuncs {
 	server := ""
 
 	parsed, err := url.Parse(baseURL)

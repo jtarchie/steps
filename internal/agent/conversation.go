@@ -892,15 +892,14 @@ func (conv agentConversation) trackToolResults(parts []*genai.Part, satisfied ma
 }
 
 // forceRequiredTool constrains req's next generateOnce call to a tool call,
-// via the provider's tool_choice mechanism (see genaiopenai's ToolConfig →
-// tool_choice mapping) — the model cannot decline or reply with plain text
+// via the provider's tool_choice mechanism (see toolChoice in llmclient/chat.go) — the model cannot decline or reply with plain text
 // on that turn. Cleared once any tool call comes back (see
 // runAgentConversation) so later turns aren't stuck forced to the same
 // name.
 //
 // stringOnly == false (the default) names name specifically, mapping to
 // OpenAI's named tool_choice object — the precise force. stringOnly == true
-// leaves AllowedFunctionNames empty, which genaiopenai instead maps to the
+// leaves AllowedFunctionNames empty, which toolChoice instead maps to the
 // generic string tool_choice: "required" — some OpenAI-compat local servers
 // (e.g. LM Studio) reject the named-object form outright.
 func forceRequiredTool(req *model.LLMRequest, name string, stringOnly bool) {

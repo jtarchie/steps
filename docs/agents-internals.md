@@ -111,12 +111,9 @@ The fix agent's timeout/attempts are separate budgets — they don't consume or 
 
 **It is the only layer that can see a request.** A request is the operation `attempts:` names, and everything above the transport deals in conversations.
 
-**It is the only layer that can switch off the client's own retry.** `openai-go/v3` retries every request twice by default, and `adk-utils-go`'s `genai/openai/completions` `Config` has no `MaxRetries`. A retry loop anywhere *above* the transport therefore **multiplies** with that hidden one instead of replacing it, which is exactly the `attempts: × 3` problem that used to make `attempts: 6` cost up to eighteen requests. From inside the transport the retry can be refused, using the two mechanisms openai-go documents:
+**It is the only retry under the call.** The Chat Completions client (`chat.go`) is plain `net/http` and retries nothing, so `attempts:` is the whole budget: a retry loop anywhere *above* the transport would multiply with this one instead of replacing it. That was the `attempts: × 3` problem when the client was `openai-go/v3`, which retried every request twice more of its own accord and had to be switched off per response, and which made `attempts: 6` cost up to eighteen requests. `requests_test.go` covers the retry rules and `e2e_test.go` pins the request count end to end.
 
-- `x-should-retry: false` set on the **response** — `requestconfig.shouldRetry` honors it above the status code. This covers every failure that reached a server.
-- `X-Stainless-Retry-Count` read off the **request** — the client's own counter, `0` on a first send. A connection error has no response to carry a header, and the client retries those unconditionally, so the transport stashes the exhausted error and hands it straight back on any round above 0, without touching the network.
-
-Both paths are covered by tests in `requests_test.go`, and `e2e_test.go` pins the request count end to end — a dependency bump that breaks either mechanism fails the suite rather than silently re-pricing every failing call.
+**The provider's own word wins over the status code.** A retry waits `Retry-After-Ms`, else `Retry-After` (seconds or an HTTP date), else the linear backoff; a provider asking for longer than two minutes is not retried at all, so the attempt goes to `fallback:` instead. `x-should-retry: true` retries a 4xx and `x-should-retry: false` stops a 5xx. These are `openai-go`'s rules, kept when it went.
 
 One accounting detail: three failing requests produce two `agent.request_retry` lines. The third failure is the one the step reports, via `agent.conversation_failed` with the full `provider_requests` count beside it; logging it in both places would double-count the number this exists to make honest.
 

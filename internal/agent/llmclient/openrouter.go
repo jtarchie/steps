@@ -270,7 +270,7 @@ func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	return base.RoundTrip(req) //nolint:wrapcheck // surface the base transport's error verbatim, per the RoundTripper contract
 }
 
-// rewriteBody re-wraps req's body even when splice changes nothing (reading consumed it), and resets GetBody so openai-go's retry path replays the rewritten bytes.
+// rewriteBody re-wraps req's body even when splice changes nothing (reading consumed it), and resets GetBody so requestRetryTransport, beneath it, replays the rewritten bytes.
 func rewriteBody(req *http.Request, splice func([]byte) []byte) error {
 	if req.Body == nil {
 		return nil

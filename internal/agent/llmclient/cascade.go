@@ -22,8 +22,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/openai/openai-go/v3"
-
 	"github.com/jtarchie/steps/internal/outcome"
 )
 
@@ -149,7 +147,7 @@ func ClassifySource(jobCtx context.Context, runErr error) SourceOutcome {
 // statuses. It exists to keep such a rejection from being read as this
 // source having served the step.
 func isProviderRejection(err error) bool {
-	var apiErr *openai.Error
+	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		return false
 	}

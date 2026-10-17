@@ -632,7 +632,7 @@ func TestOpenRouterTransportRequestHandling(t *testing.T) {
 	t.Run("rewritten body is replayable via GetBody", func(t *testing.T) {
 		t.Parallel()
 
-		// openai-go retries a failed request by replaying GetBody. If the
+		// requestRetryTransport retries a failed request by replaying GetBody. If the
 		// rewrite left GetBody pointing at the consumed original, a retry
 		// would send an empty body.
 		var replayed []byte

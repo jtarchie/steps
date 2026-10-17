@@ -110,20 +110,3 @@ func TestRequestRetryTransportReportsAFailedRewind(t *testing.T) {
 		t.Errorf("requests = %d; want the first send only", len(got))
 	}
 }
-
-// TestRequestRetryTransportAFirstSendIsNotARetry: the SDK stamps 0 on every first send, so an exhaustion recorded earlier in the conversation must not refuse the next fresh request.
-func TestRequestRetryTransportAFirstSendIsNotARetry(t *testing.T) {
-	captureLogs(t)
-
-	counter := &RequestCounter{}
-	counter.setExhausted(errors.New("an earlier request ran out of attempts"))
-
-	transport := &requestRetryTransport{base: http.DefaultTransport, agent: "coder", attempts: 1}
-	server, count := countingServer(t, http.StatusOK)
-
-	defer doRequest(t, transport, counter, server.URL).Body.Close() //nolint:errcheck // test teardown
-
-	if count.Load() != 1 {
-		t.Errorf("provider requests = %d; want the fresh send to reach the provider", count.Load())
-	}
-}

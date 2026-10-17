@@ -788,8 +788,9 @@ linters:
         # agent/llmclient is the provider layer: building a model.LLM for a
         # resolved agent and the HTTP transports under it (retry, tool-call
         # repair, OpenRouter's caching levers), plus which source of a
-        # fallback: cascade to try. It is the only package that touches an
-        # OpenAI-compatible SDK; it knows nothing of a conversation or a tool.
+        # fallback: cascade to try. It is the only package that speaks the
+        # OpenAI-compatible wire (chat.go); it knows nothing of a conversation
+        # or a tool.
         AgentLLMClient:
           files:
             - "**/internal/agent/llmclient/**"
@@ -797,13 +798,8 @@ linters:
             - "$gostd"
             - "google.golang.org/adk/v2"
             - "google.golang.org/genai"
-            - "github.com/achetronic/adk-utils-go"
-            # requests.go classifies a failed request by status code
-            # (isTransientProviderError, for the mid-run fallback: cascade),
-            # which means unwrapping the SDK's own *openai.Error rather than
-            # adk-utils-go's wrapper around it. Already an indirect
-            # dependency via adk-utils-go; this makes the direct use honest.
-            - "github.com/openai/openai-go/v3"
+            # adk-utils-go's genai/common only: its tool-payload and ADK-internal-call rules, shared with the adapter chat.go is ported from.
+            - "github.com/achetronic/adk-utils-go/genai/common"
             # The OpenTelemetry API, never the SDK: a model call's GenAI span and token metrics, and otelhttp tracing each attempt under its turn.
             - "go.opentelemetry.io/otel"
             - "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"

@@ -616,7 +616,7 @@ func requiredToolConversation(t *testing.T, dir string) agentConversation {
 // TestRunAgentConversationForcesRequiredToolCall drives a model that tries
 // to stop without calling the required tool, then (once forced) complies —
 // simulating a provider that honors tool_choice, which real OpenAI-compatible
-// backends do (see genaiopenai's ToolConfig mapping). It also asserts the
+// backends do (see toolChoice in llmclient/chat.go). It also asserts the
 // forcing request itself was actually sent, not just that things worked out.
 func TestRunAgentConversationForcesRequiredToolCall(t *testing.T) {
 	t.Parallel()
@@ -659,7 +659,7 @@ func TestRunAgentConversationForcesRequiredToolCall(t *testing.T) {
 // TestRunAgentConversationForcesRequiredToolCallStringOnly covers the
 // toolChoiceStringOnly fallback (config.ResolvedInvocation.StringOnlyToolChoice)
 // for providers whose OpenAI-compat server rejects the named-function
-// tool_choice object (e.g. LM Studio) — genaiopenai maps an empty
+// tool_choice object (e.g. LM Studio) — toolChoice maps an empty
 // AllowedFunctionNames under ModeAny to the generic string tool_choice:
 // "required" instead.
 func TestRunAgentConversationForcesRequiredToolCallStringOnly(t *testing.T) {

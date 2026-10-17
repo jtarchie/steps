@@ -12,8 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/openai/openai-go/v3"
+	"time"
 )
 
 // countingServer replies with the given statuses in order, repeating the last
@@ -49,10 +48,6 @@ func doRequest(t *testing.T, transport *requestRetryTransport, counter *RequestC
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// The SDK stamps this on every request it sends; a value of 0 means "this
-	// is the first send", which is what a fresh request always is here.
-	req.Header.Set(retryCountHeader, "0")
 
 	resp, err := (&http.Client{Transport: transport}).Do(req)
 	if err != nil {
@@ -94,26 +89,6 @@ func TestRequestRetryTransportSpendsExactlyAttempts(t *testing.T) {
 				t.Errorf("counter.Total() = %d, want %d — this is the number a failed step reports", got, test.want)
 			}
 		})
-	}
-}
-
-// TestRequestRetryTransportRefusesTheClientsOwnRetries is what keeps attempts:
-// from silently meaning attempts: x 3 again. openai-go retries a failing
-// request twice of its own accord unless the response says otherwise, and
-// there is no way to configure that through the wrapper this project uses — so
-// the transport sets the header the client honors.
-func TestRequestRetryTransportRefusesTheClientsOwnRetries(t *testing.T) {
-	server, _ := countingServer(t, http.StatusInternalServerError)
-	captureLogs(t)
-
-	transport := &requestRetryTransport{base: http.DefaultTransport, agent: "coder", attempts: 2}
-
-	resp := doRequest(t, transport, &RequestCounter{}, server.URL)
-	defer resp.Body.Close() //nolint:errcheck // test teardown
-
-	if got := resp.Header.Get(shouldRetryHeader); got != "false" {
-		t.Errorf("%s = %q, want \"false\" — without it the client adds two more requests per call",
-			shouldRetryHeader, got)
 	}
 }
 
@@ -202,13 +177,8 @@ func TestRequestRetryTransportDoesNotRetryClientErrors(t *testing.T) {
 	}
 }
 
-// TestRequestRetryTransportSuppressesClientRetryOfAConnectionError covers the
-// one path a response header cannot: when the request never reached a server
-// there is no response to carry `x-should-retry: false`, and openai-go retries
-// a connection error unconditionally. Left alone that would restore the
-// multiplication — attempts: worth of dials, then two more rounds of the same.
-func TestRequestRetryTransportSuppressesClientRetryOfAConnectionError(t *testing.T) {
-	// A server that is closed immediately: every dial is refused.
+// TestRequestRetryTransportSpendsAttemptsOnAConnectionError: a refused dial has no response to read a status from, and is retried like a 5xx — attempts: of them and no more.
+func TestRequestRetryTransportSpendsAttemptsOnAConnectionError(t *testing.T) {
 	server, _ := countingServer(t)
 	url := server.URL
 	server.Close()
@@ -217,43 +187,122 @@ func TestRequestRetryTransportSuppressesClientRetryOfAConnectionError(t *testing
 
 	counter := &RequestCounter{}
 	transport := &requestRetryTransport{base: http.DefaultTransport, agent: "coder", attempts: 2}
-	client := &http.Client{Transport: transport}
-	ctx := WithRequestCounter(context.Background(), counter)
 
-	// Round 0 is the client's first send; it spends the transport's attempts.
-	first, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(WithRequestCounter(context.Background(), counter), http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	first.Header.Set(retryCountHeader, "0")
-
-	_, err = client.Do(first) //nolint:bodyclose // every dial is refused, so there is no body
+	_, err = (&http.Client{Transport: transport}).Do(req) //nolint:bodyclose // every dial is refused, so there is no body
 	if err == nil {
 		t.Fatal("expected a connection error against a closed server")
 	}
 
-	if counter.Total() != 2 {
-		t.Fatalf("provider requests = %d, want 2 (attempts:)", counter.Total())
-	}
-
-	// Rounds 1 and 2 are the client retrying that error. They must cost nothing.
-	for round := 1; round <= 2; round++ {
-		retry, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if reqErr != nil {
-			t.Fatal(reqErr)
-		}
-
-		retry.Header.Set(retryCountHeader, "1")
-
-		_, doErr := client.Do(retry) //nolint:bodyclose // every dial is refused, so there is no body
-		if doErr == nil {
-			t.Fatalf("round %d succeeded against a closed server", round)
-		}
-	}
-
 	if got := counter.Total(); got != 2 {
-		t.Errorf("provider requests = %d after the client's own retries, want 2 — attempts: is the whole budget", got)
+		t.Errorf("provider requests = %d, want 2 (attempts:)", got)
+	}
+}
+
+// headerServer answers each request with the next status and headers, repeating the last.
+func headerServer(t *testing.T, replies ...func(http.ResponseWriter)) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+
+	var count atomic.Int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		replies[min(int(count.Add(1))-1, len(replies)-1)](w)
+	}))
+	t.Cleanup(server.Close)
+
+	return server, &count
+}
+
+func reply(status int, headers ...string) func(http.ResponseWriter) {
+	return func(w http.ResponseWriter) {
+		for i := 0; i+1 < len(headers); i += 2 {
+			w.Header().Set(headers[i], headers[i+1])
+		}
+
+		w.WriteHeader(status)
+	}
+}
+
+// TestRequestRetryTransportGivesUpWhenAskedToWaitTooLong: a provider saying "come back in an hour" is not answered in half a second, and retrying it early only spends the attempt — the response goes back, and fallback: can move on.
+func TestRequestRetryTransportGivesUpWhenAskedToWaitTooLong(t *testing.T) {
+	server, count := headerServer(t, reply(http.StatusTooManyRequests, "Retry-After", "3600"))
+	captureLogs(t)
+
+	transport := &requestRetryTransport{base: http.DefaultTransport, agent: "coder", attempts: 3}
+
+	resp := doRequest(t, transport, &RequestCounter{}, server.URL)
+	defer resp.Body.Close() //nolint:errcheck // test teardown
+
+	if got := count.Load(); got != 1 || resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("requests = %d, status %d; want the 429 back after 1", got, resp.StatusCode)
+	}
+}
+
+// TestRequestRetryTransportHonorsTheProvidersRetryHint: x-should-retry is OpenAI's own word on a response, above its status, both ways.
+func TestRequestRetryTransportHonorsTheProvidersRetryHint(t *testing.T) {
+	captureLogs(t)
+
+	server, count := headerServer(t, reply(http.StatusBadRequest, "x-should-retry", "true", "Retry-After-Ms", "1"), reply(http.StatusOK))
+	transport := &requestRetryTransport{base: http.DefaultTransport, agent: "coder", attempts: 3}
+
+	resp := doRequest(t, transport, &RequestCounter{}, server.URL)
+	_ = resp.Body.Close()
+
+	if got := count.Load(); got != 2 || resp.StatusCode != http.StatusOK {
+		t.Errorf("a 400 marked retryable: requests = %d, status %d; want the 200 after 2", got, resp.StatusCode)
+	}
+
+	server, count = headerServer(t, reply(http.StatusServiceUnavailable, "x-should-retry", "false"))
+
+	resp = doRequest(t, transport, &RequestCounter{}, server.URL)
+	_ = resp.Body.Close()
+
+	if got := count.Load(); got != 1 {
+		t.Errorf("a 503 marked not retryable: requests = %d, want 1", got)
+	}
+}
+
+// TestRetryDelay: the provider's own Retry-After-Ms or Retry-After wins over the linear backoff, up to retryAfterLimit; past it, no retry at all.
+func TestRetryDelay(t *testing.T) {
+	t.Parallel()
+
+	soon := time.Now().Add(30 * time.Second).UTC().Format(http.TimeFormat)
+
+	tests := []struct {
+		name    string
+		headers []string
+		want    time.Duration
+		retry   bool
+	}{
+		{"no header is the linear backoff", nil, 2 * retryBackoffUnit, true},
+		{"milliseconds", []string{"Retry-After-Ms", "1500"}, 1500 * time.Millisecond, true},
+		{"seconds", []string{"Retry-After", "2"}, 2 * time.Second, true},
+		{"fractional seconds", []string{"Retry-After", "0.25"}, 250 * time.Millisecond, true},
+		{"milliseconds win over seconds", []string{"Retry-After-Ms", "10", "Retry-After", "9"}, 10 * time.Millisecond, true},
+		{"an HTTP date", []string{"Retry-After", soon}, 30 * time.Second, true},
+		{"past the limit is no retry", []string{"Retry-After", "121"}, 0, false},
+		{"garbage is the linear backoff", []string{"Retry-After", "soon"}, 2 * retryBackoffUnit, true},
+		{"negative is the linear backoff", []string{"Retry-After-Ms", "-5"}, 2 * retryBackoffUnit, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			resp := &http.Response{Header: http.Header{}}
+			for i := 0; i+1 < len(test.headers); i += 2 {
+				resp.Header.Set(test.headers[i], test.headers[i+1])
+			}
+
+			got, retry := retryDelay(resp, 2)
+			if retry != test.retry || (got != test.want && (got < test.want-2*time.Second || got > test.want)) {
+				t.Errorf("retryDelay = %v, %v; want %v, %v", got, retry, test.want, test.retry)
+			}
+		})
 	}
 }
 
@@ -303,10 +352,10 @@ func TestIsTransientProviderError(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{"5xx api error", &openai.Error{StatusCode: http.StatusInternalServerError}, true},
-		{"429 api error", &openai.Error{StatusCode: http.StatusTooManyRequests}, true},
-		{"400 api error", &openai.Error{StatusCode: http.StatusBadRequest}, false},
-		{"401 api error", &openai.Error{StatusCode: http.StatusUnauthorized}, false},
+		{"5xx api error", &APIError{StatusCode: http.StatusInternalServerError}, true},
+		{"429 api error", &APIError{StatusCode: http.StatusTooManyRequests}, true},
+		{"400 api error", &APIError{StatusCode: http.StatusBadRequest}, false},
+		{"401 api error", &APIError{StatusCode: http.StatusUnauthorized}, false},
 		{"connection error", dialErr, true},
 		{"wrapped connection error", fmt.Errorf("agent: generate content: %w", dialErr), true},
 		{"context canceled", context.Canceled, false},

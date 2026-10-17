@@ -1,9 +1,9 @@
 // repair.go fixes malformed tool-call arguments at the HTTP response
 // boundary, the last place the model's raw arguments text still exists.
 //
-// The genaiopenai adapter parses each tool call's `arguments` string into
+// The chat client parses each tool call's `arguments` string into
 // map[string]any and — on any parse failure — silently substitutes an EMPTY
-// map (see parseJSONArgs in adk-utils-go). So a local model that emits
+// map (see parseJSONArgs in chat.go). So a local model that emits
 // truncated JSON (hit max_tokens mid-string), trailing commas, or prose
 // wrapped around the object arrives at runAgentConversation as a call with
 // NO arguments at all: its actual arguments are discarded, and the tool's

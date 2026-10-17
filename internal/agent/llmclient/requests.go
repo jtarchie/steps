@@ -18,14 +18,15 @@ package llmclient
 // file is where that happens.
 //
 // Doing it here rather than around the conversation is what makes the count
-// honest. The LLM client retries every request twice on its own (openai-go/v3
-// defaults to MaxRetries: 2) and adk-utils-go's Config exposes no knob for it,
-// so a retry loop anywhere above this transport MULTIPLIES with that hidden
-// one rather than replacing it — the old 'attempts: x 3' problem. Owning the
-// retry at the transport lets us also switch the SDK's own off per response,
-// so attempts: is the whole story:
+// honest: this is the only retry under an agent's call, so a retry loop above
+// it would multiply with it rather than replace it — the old 'attempts: x 3'
+// problem, from when openai-go retried every request twice more of its own
+// accord and this transport had to switch that off per response:
 //
 //	requests per failing turn  =  attempts:      (was: attempts: x 3)
+//
+// What that client did right is kept here: the provider's Retry-After and
+// x-should-retry are honored over the status code.
 
 import (
 	"context"
@@ -33,13 +34,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/openai/openai-go/v3"
 )
 
 // retryBackoffUnit is the linear pause between request retries, matching
@@ -47,22 +47,14 @@ import (
 // endpoint, where a short pause is more likely to help than to waste time.
 const retryBackoffUnit = 500 * time.Millisecond
 
-// The two headers this transport uses to take ownership of retrying from the
-// SDK. Both are part of openai-go's documented behavior, not a workaround:
-//
-//   - shouldRetryHeader on a RESPONSE tells the client not to retry it
-//     (requestconfig.shouldRetry honors it above the status code).
-//   - retryCountHeader on a REQUEST is the client's own retry counter. A
-//     non-zero value means the client is retrying something this transport has
-//     already finished with, which only happens on the connection-error path
-//     where no response exists to carry the header above.
-const (
-	shouldRetryHeader = "x-should-retry"
-	retryCountHeader  = "X-Stainless-Retry-Count"
-)
+// shouldRetryHeader is OpenAI's word on a response, above its status: "true" retries a 4xx, "false" does not retry a 5xx.
+const shouldRetryHeader = "x-should-retry"
 
-// retryableStatuses are the responses openai-go retries: request timeout,
-// conflict, rate limit, and every 5xx.
+// retryAfterLimit is the longest a provider's Retry-After is waited out, openai-go's own bound: past it the attempt is better spent on fallback:.
+const retryAfterLimit = 2 * time.Minute
+
+// retryableStatus is what openai-go retried: request timeout, conflict, rate
+// limit, and every 5xx.
 func retryableStatus(code int) bool {
 	switch code {
 	case http.StatusRequestTimeout, http.StatusConflict, http.StatusTooManyRequests:
@@ -72,14 +64,12 @@ func retryableStatus(code int) bool {
 	}
 }
 
-// RequestCounter tallies the provider requests one agent conversation makes,
-// and remembers the last connection error so the client's own retry of it
-// costs nothing (see RoundTrip). It is what lets a failed step report the
-// requests it really spent rather than the turns it took.
+// RequestCounter tallies the provider requests one agent conversation makes.
+// It is what lets a failed step report the requests it really spent rather
+// than the turns it took.
 type RequestCounter struct {
-	mu        sync.Mutex
-	total     int
-	exhausted error
+	mu    sync.Mutex
+	total int
 }
 
 // record counts one round trip.
@@ -98,23 +88,6 @@ func (c *RequestCounter) Total() int {
 	return c.total
 }
 
-// setExhausted/takeExhausted carry a connection error across the client's own
-// retry rounds. A response can refuse further retries with a header; an error
-// cannot, because there is no response to put one on.
-func (c *RequestCounter) setExhausted(err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.exhausted = err
-}
-
-func (c *RequestCounter) takeExhausted() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.exhausted
-}
-
 type requestCounterKey struct{}
 
 // WithRequestCounter scopes a counter to one agent conversation, so the count
@@ -130,14 +103,10 @@ func requestCounterFrom(ctx context.Context) *RequestCounter {
 }
 
 // requestRetryTransport is the agent step's attempts:. It retries one failing
-// request up to attempts times with a linear backoff, logs every retry, and
-// tells the SDK not to add retries of its own on top.
-//
-// It has to be a transport rather than a wrapper around the conversation for
-// two reasons. It is the only layer that can see an individual request, which
-// is the operation attempts: now names; and it is the only layer that can
-// switch off the client's built-in retry, without which any retry above it
-// would multiply by three rather than replace.
+// request up to attempts times — after the provider's Retry-After when it
+// sent one, a linear backoff otherwise — and logs every retry. A transport,
+// because it is the only layer that sees an individual request, which is the
+// operation attempts: names.
 type requestRetryTransport struct {
 	base     http.RoundTripper
 	agent    string
@@ -146,42 +115,7 @@ type requestRetryTransport struct {
 }
 
 func (t *requestRetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// The client is retrying a connection error this transport already spent
-	// its attempts on. Hand back the same error without touching the network:
-	// its retry budget is not ours to spend, and letting it through would
-	// restore the multiplication this design removes.
-	spent := t.alreadySpent(req)
-	if spent != nil {
-		return nil, spent
-	}
-
-	resp, err := t.retryLoop(req)
-
-	// attempts: is the whole retry budget. Refuse the client's own rounds:
-	// on a response with the header it honors, and on a connection error by
-	// stashing it for the branch above, since there is no response to put a
-	// header on.
-	counter := requestCounterFrom(req.Context())
-
-	switch {
-	case resp != nil:
-		resp.Header.Set(shouldRetryHeader, "false")
-	case counter != nil:
-		counter.setExhausted(err)
-	}
-
-	return resp, err
-}
-
-// alreadySpent reports the error a previous RoundTrip exhausted its attempts
-// on, when this request is the client retrying that same failure.
-func (t *requestRetryTransport) alreadySpent(req *http.Request) error {
-	counter := requestCounterFrom(req.Context())
-	if counter == nil || !isClientRetry(req) {
-		return nil
-	}
-
-	return counter.takeExhausted()
+	return t.retryLoop(req)
 }
 
 // retryLoop sends req until it succeeds, fails unretryably, or runs out of
@@ -195,13 +129,18 @@ func (t *requestRetryTransport) retryLoop(req *http.Request) (*http.Response, er
 			return resp, err
 		}
 
+		delay, ok := retryDelay(resp, attempt)
+		if !ok {
+			return resp, err
+		}
+
 		t.logRetry(req.Context(), resp, err, attempt, attempts)
 		discard(resp)
 
 		select {
 		case <-req.Context().Done():
 			return nil, req.Context().Err() //nolint:wrapcheck // ctx.Err() is a well-known sentinel; wrapping adds nothing
-		case <-time.After(time.Duration(attempt) * retryBackoffUnit):
+		case <-time.After(delay):
 		}
 
 		req, err = rewind(req)
@@ -230,7 +169,10 @@ func (t *requestRetryTransport) retryable(resp *http.Response, err error) bool {
 	}
 
 	//nolint:nilaway // err is nil here, and a RoundTripper returning a nil error must return a response
-	if resp.Header.Get(shouldRetryHeader) == "false" {
+	switch resp.Header.Get(shouldRetryHeader) {
+	case "true":
+		return true
+	case "false":
 		return false
 	}
 
@@ -254,13 +196,50 @@ func (t *requestRetryTransport) logRetry(ctx context.Context, resp *http.Respons
 	slog.WarnContext(ctx, "agent.request_retry", fields...)
 }
 
-// isClientRetry reports whether the SDK is reissuing a request it already sent
-// once. Its retry counter starts at 0 and increments per round, so anything
-// above 0 is a retry.
-func isClientRetry(req *http.Request) bool {
-	count, err := strconv.Atoi(req.Header.Get(retryCountHeader))
+// retryDelay is the wait before the retry after attempt: the provider's Retry-After-Ms, else its Retry-After (seconds or an HTTP date), else the linear backoff. ok is false when the provider asked for longer than retryAfterLimit.
+func retryDelay(resp *http.Response, attempt int) (time.Duration, bool) {
+	if resp != nil {
+		if delay, ok, found := retryAfter(resp.Header.Get("Retry-After-Ms"), time.Millisecond); found {
+			return delay, ok
+		}
 
-	return err == nil && count > 0
+		if delay, ok, found := retryAfter(resp.Header.Get("Retry-After"), time.Second); found {
+			return delay, ok
+		}
+	}
+
+	return time.Duration(attempt) * retryBackoffUnit, true
+}
+
+// retryAfter reads one header's value as a count of unit, or — for seconds — an HTTP date. found is false for a value that says nothing usable.
+func retryAfter(value string, unit time.Duration) (time.Duration, bool, bool) {
+	if value == "" {
+		return 0, false, false
+	}
+
+	number, err := strconv.ParseFloat(value, 64)
+	if err == nil {
+		switch {
+		case number < 0 || math.IsNaN(number):
+			return 0, false, false
+		case number > float64(retryAfterLimit/unit):
+			return 0, false, true
+		default:
+			return time.Duration(number * float64(unit)), true, true
+		}
+	}
+
+	when, err := http.ParseTime(value)
+	if err != nil || unit != time.Second {
+		return 0, false, false
+	}
+
+	delay := max(time.Until(when), 0)
+	if delay > retryAfterLimit {
+		return 0, false, true
+	}
+
+	return delay, true, true
 }
 
 // replayable reports whether a request's body can be sent again. A body with
@@ -317,7 +296,7 @@ func rewind(req *http.Request) (*http.Request, error) {
 // that was simply too big — ClassifySource handles both as sourceUnproven,
 // which is what keeps either from moving an agent's pinned source.
 func isTransientProviderError(err error) bool {
-	var apiErr *openai.Error
+	var apiErr *APIError
 	if errors.As(err, &apiErr) {
 		return retryableStatus(apiErr.StatusCode)
 	}
