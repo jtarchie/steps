@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -28,8 +29,8 @@ var (
 	poolsByFile = map[string]*pools{}
 )
 
-// acquirePools hands out the file's pools, opening them for the first holder.
-func acquirePools(path string) (*pools, error) {
+// acquirePools hands out the file's pools, opening them for the first holder — which is also when a file an older steps wrote is upgraded, so every writer gets it and poolsMu keeps two from both doing it.
+func acquirePools(ctx context.Context, path string) (*pools, error) {
 	key, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("could not resolve state db %q: %w", path, err)
@@ -51,6 +52,14 @@ func acquirePools(path string) (*pools, error) {
 
 	reads, err := openReadPool(path)
 	if err != nil {
+		_ = db.Close()
+
+		return nil, err
+	}
+
+	err = upgrade(ctx, db, path)
+	if err != nil {
+		_ = reads.Close()
 		_ = db.Close()
 
 		return nil, err

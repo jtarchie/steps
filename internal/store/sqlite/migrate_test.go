@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -205,4 +206,92 @@ func schemaOf(t *testing.T, path string) []string {
 
 func missingFrom(have, other []string) []string {
 	return slices.DeleteFunc(slices.Clone(have), func(fact string) bool { return slices.Contains(other, fact) })
+}
+
+// TestEveryWriterUpgradesAV010File: `steps web` with nobody signing in reaches the file first through Identity, and its reader refuses a file no writer has upgraded — so a writer that skipped the upgrade left the daemon unable to start on the very file it was told would be upgraded.
+func TestEveryWriterUpgradesAV010File(t *testing.T) {
+	t.Parallel()
+
+	for name, open := range map[string]func(path string) error{
+		"OpenStore": func(path string) error {
+			st, err := OpenStore(path, "app")
+			if err == nil {
+				_ = st.Close()
+			}
+
+			return err
+		},
+		"OpenAccounts": func(path string) error {
+			accounts, err := OpenAccounts(path)
+			if err == nil {
+				_ = accounts.Close()
+			}
+
+			return err
+		},
+		"Identity": func(path string) error {
+			_, err := Identity(context.Background(), path)
+
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "state.db")
+			execFile(t, path, v010)
+
+			err := open(path)
+			if err != nil {
+				t.Fatalf("%s on a v0.1.0 file: %v", name, err)
+			}
+
+			if got := queryStrings(t, path, "PRAGMA user_version"); !slices.Equal(got, []string{strconv.Itoa(schemaVersion)}) {
+				t.Errorf("user_version after %s = %v, want %d", name, got, schemaVersion)
+			}
+		})
+	}
+}
+
+// TestABackupSweepTouchesOnlyItsOwnFile: the sweep that keeps only the newest copy must not refuse a path holding a glob metacharacter, nor take a neighbouring database's copies with it.
+func TestABackupSweepTouchesOnlyItsOwnFile(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "team[a]")
+	path := filepath.Join(dir, "state.db")
+
+	err := os.MkdirAll(dir, 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	execFile(t, path, v010)
+
+	stale, neighbour := path+".v27.bak", filepath.Join(dir, "state.db.v2.db.v28.bak")
+
+	for _, file := range []string{stale, neighbour} {
+		err = os.WriteFile(file, nil, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	st, err := OpenStore(path, "app")
+	if err != nil {
+		t.Fatalf("OpenStore under %q: %v", dir, err)
+	}
+
+	_ = st.Close()
+
+	_, err = os.Stat(stale)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the older backup of this file survived: %v", err)
+	}
+
+	_, err = os.Stat(neighbour)
+	if err != nil {
+		t.Errorf("a neighbouring database's backup was removed: %v", err)
+	}
+
+	assertBackedUp(t, path+".v28.bak")
 }

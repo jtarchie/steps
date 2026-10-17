@@ -82,7 +82,7 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 		return nil, err
 	}
 
-	held, err := acquirePools(path)
+	held, err := acquirePools(context.Background(), path)
 	if err != nil {
 		return nil, err
 	}
@@ -132,11 +132,6 @@ func createPrivate(path string) error {
 // takes the write lock at BEGIN, so under WAL a concurrent reader sees either
 // nothing or all of it.
 func initDB(ctx context.Context, db *sql.DB, path, pipelineName string) (int64, error) {
-	err := upgrade(ctx, db, path)
-	if err != nil {
-		return 0, err
-	}
-
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("could not open state db %q: %w", path, err)

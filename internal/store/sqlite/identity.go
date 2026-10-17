@@ -21,7 +21,7 @@ func Identity(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 
-	held, err := acquirePools(path)
+	held, err := acquirePools(ctx, path)
 	if err != nil {
 		return "", err
 	}
