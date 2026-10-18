@@ -1,6 +1,7 @@
 package venue
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/shell"
@@ -32,5 +33,22 @@ func TestBareCloseFilesBackOnlyAttachedCaches(t *testing.T) {
 
 	if s.detachCaches() == "" {
 		t.Error("close would leave an attached cache behind")
+	}
+}
+
+// TestBareDetachNeverNestsOnLinux: a plain mv onto a directory a concurrent close just filed moves the cache inside it; GNU mv -T refuses instead.
+func TestBareDetachNeverNestsOnLinux(t *testing.T) {
+	t.Parallel()
+
+	s := &bareSession{dir: "/w/steps-build.x", cachesAttached: true, spec: shell.RunnerSpec{Caches: map[string]string{"c": "abc"}}}
+
+	s.goos = "linux"
+	if script := s.detachCaches(); !strings.Contains(script, "mv -T ") || strings.Contains(script, "; mv '") {
+		t.Errorf("a linux worker files the cache back without mv -T: %q", script)
+	}
+
+	s.goos = "darwin"
+	if script := s.detachCaches(); strings.Contains(script, "mv -T") {
+		t.Errorf("a worker without GNU mv is handed -T: %q", script)
 	}
 }

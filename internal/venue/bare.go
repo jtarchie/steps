@@ -251,9 +251,15 @@ func (s *bareSession) detachCaches() string {
 
 	script.WriteString("mkdir -p " + s.root() + "/steps-task-caches; ")
 
+	// A concurrent close can file the entry between the rm and the mv, and a plain mv then moves this cache inside it. GNU mv -T refuses instead, and one retry keeps the last finisher's. ponytail: no -T outside Linux, so the race can still nest there; a lock is the upgrade.
+	move := "mv %[2]s %[1]s"
+	if s.goos == "linux" {
+		move = "{ mv -T %[2]s %[1]s || { rm -rf %[1]s; mv -T %[2]s %[1]s; }; }"
+	}
+
 	for _, pair := range s.cachePairs() {
 		// The .pipeline file is what a later run of this pipeline judges the cache by when its config stops naming it.
-		fmt.Fprintf(&script, `if [ -d %[2]s ]; then rm -rf %[1]s; mv %[2]s %[1]s && printf %%s %[3]s > %[1]s.pipeline; fi; `, pair[0], pair[1], shellQuote(s.pipeline))
+		fmt.Fprintf(&script, `if [ -d %[2]s ]; then rm -rf %[1]s; `+move+` && printf %%s %[3]s > %[1]s.pipeline; fi; `, pair[0], pair[1], shellQuote(s.pipeline))
 	}
 
 	return script.String()
