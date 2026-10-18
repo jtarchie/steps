@@ -33,7 +33,7 @@ func TestTopLevelCommandsAreTheDocumentedSet(t *testing.T) {
 	want := map[string]bool{
 		"Run": true, "Test": true, "Validate": true,
 		"Runs": true, "Plan": true, "MCP": true,
-		"Jobs": true, "Approvals": true, "Questions": true, "Memory": true,
+		"Jobs": true, "Approvals": true, "Questions": true, "Memory": true, "ClearTaskCache": true,
 		"Web": true, "Pipeline": true, "Docs": true,
 	}
 

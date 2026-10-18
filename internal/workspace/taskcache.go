@@ -157,3 +157,43 @@ func move(src, dst string) error {
 
 	return nil
 }
+
+// ClearTaskCaches deletes the caches keyed by keys under ws's root, reporting which were there; ws must name a root, since under a temp one no cache outlives its run.
+func ClearTaskCaches(ws *config.WorkspaceConfig, keys []string) (map[string]bool, error) {
+	provider, err := NewProvider(ws, false)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() { _ = provider.Close() }()
+
+	p, ok := provider.(*isolatingProvider)
+	if !ok {
+		return nil, fmt.Errorf("%w: workspace strategy %q", errUnsupportedStrategy, ws.EffectiveStrategy())
+	}
+
+	found := make(map[string]bool, len(keys))
+
+	for _, key := range keys {
+		entry, usable := p.taskCaches.path(key)
+		if !usable {
+			continue
+		}
+
+		_, statErr := os.Lstat(entry)
+		if errors.Is(statErr, fs.ErrNotExist) {
+			continue
+		}
+
+		err = p.taskCaches.removeEntry(entry)
+		if err != nil {
+			return found, fmt.Errorf("removing cache %s: %w", entry, err)
+		}
+
+		found[key] = true
+	}
+
+	return found, nil
+}
+
+var errUnsupportedStrategy = errors.New("not supported on this machine")

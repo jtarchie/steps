@@ -75,6 +75,9 @@ steps questions -p <name>   list ask_user questions waiting for an answer
 steps memory -p <name>      list what agent steps remember, by scope
                             (--scope <s> for its entries; steps memory rm
                             --scope <s> <id>...|--all -p <name> deletes)
+steps clear-task-cache <pipeline> -j <job> -s <step>
+                            empty a step's caches: here and on its workers
+                            (-c <path> for one; --worker as steps run takes it)
 steps mcp list|tools|login  inspect or authorize mcp_servers: entries
                             (login <server> -c f.yml authorizes this machine;
                             -p <name> --target <url> authorizes a daemon)

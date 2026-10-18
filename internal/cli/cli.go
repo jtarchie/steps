@@ -37,21 +37,22 @@ import (
 // default logger before any subcommand's Run method executes — see
 // InitLogging.
 type CLI struct {
-	LogLevel  string           `default:"info"                          enum:"debug,info,warn,error"                                             env:"STEPS_LOG_LEVEL"        help:"log verbosity: debug, info, warn, or error"`
-	Version   kong.VersionFlag `help:"print the steps version and exit" name:"version"`
-	Run       RunCmd           `cmd:""                                  default:"withargs"                                                       help:"run a single job once"`
-	Test      TestCmd          `cmd:""                                  help:"run every job (force) and verify assert directives"`
-	Validate  ValidateCmd      `cmd:""                                  help:"check a pipeline for errors without running anything"`
-	Runs      RunsCmd          `cmd:""                                  help:"show what past runs recorded"`
-	Plan      PlanCmd          `cmd:""                                  help:"show which steps a run would execute or skip"`
-	MCP       MCPCmd           `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`
-	Jobs      JobsCmd          `cmd:""                                  help:"jobs the circuit breaker has paused, and taking one out of it"`
-	Approvals ApprovalsCmd     `cmd:""                                  help:"approval: steps waiting for a decision, and deciding them"`
-	Questions QuestionsCmd     `cmd:""                                  help:"ask_user questions waiting for an answer, and answering them"`
-	Memory    MemoryCmd        `cmd:""                                  help:"what agent steps remember between runs, and deleting it"`
-	Web       WebCmd           `cmd:""                                  help:"serve the UI, poll trigger: true resources, and run affected jobs"`
-	Pipeline  PipelineCmd      `cmd:""                                  help:"tell a steps web daemon which pipelines to serve"`
-	Docs      DocsCmd          `cmd:""                                  help:"read the docs in the terminal (no page name lists them)"`
+	LogLevel       string            `default:"info"                          enum:"debug,info,warn,error"                                             env:"STEPS_LOG_LEVEL"        help:"log verbosity: debug, info, warn, or error"`
+	Version        kong.VersionFlag  `help:"print the steps version and exit" name:"version"`
+	Run            RunCmd            `cmd:""                                  default:"withargs"                                                       help:"run a single job once"`
+	Test           TestCmd           `cmd:""                                  help:"run every job (force) and verify assert directives"`
+	Validate       ValidateCmd       `cmd:""                                  help:"check a pipeline for errors without running anything"`
+	Runs           RunsCmd           `cmd:""                                  help:"show what past runs recorded"`
+	Plan           PlanCmd           `cmd:""                                  help:"show which steps a run would execute or skip"`
+	MCP            MCPCmd            `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`
+	Jobs           JobsCmd           `cmd:""                                  help:"jobs the circuit breaker has paused, and taking one out of it"`
+	Approvals      ApprovalsCmd      `cmd:""                                  help:"approval: steps waiting for a decision, and deciding them"`
+	Questions      QuestionsCmd      `cmd:""                                  help:"ask_user questions waiting for an answer, and answering them"`
+	Memory         MemoryCmd         `cmd:""                                  help:"what agent steps remember between runs, and deleting it"`
+	ClearTaskCache ClearTaskCacheCmd `cmd:""                                  help:"empty a step's caches: so its next run starts cold"`
+	Web            WebCmd            `cmd:""                                  help:"serve the UI, poll trigger: true resources, and run affected jobs"`
+	Pipeline       PipelineCmd       `cmd:""                                  help:"tell a steps web daemon which pipelines to serve"`
+	Docs           DocsCmd           `cmd:""                                  help:"read the docs in the terminal (no page name lists them)"`
 }
 
 // BuildVersion is the version string steps --version prints. Overridden at

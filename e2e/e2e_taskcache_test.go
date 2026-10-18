@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/testsshd"
 )
@@ -393,4 +395,255 @@ func volumeBytesFilled(t *testing.T) int64 {
 	}
 
 	return total
+}
+
+// placedCachePipeline is TestEndToEndPlacedTaskCacheStaysOnItsWorker's pipeline with the compile step's placement lines as given, so one file can be warmed placed or unplaced.
+func placedCachePipeline(t *testing.T, dir, placement, report string) string {
+	t.Helper()
+
+	return writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  root: %[1]s
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    %[2]s
+    volatile: true
+    caches:
+    - path: .gocache
+    outputs: [out]
+    run: |
+      n=$(cat .gocache/runs 2>/dev/null || echo 0)
+      n=$((n + 1))
+      echo "$n" > .gocache/runs
+      echo "$n" > out/runs
+  - task: publish
+    volatile: true
+    inputs: [out]
+    run: cat out/runs >> %[3]s
+`, filepath.Join(dir, "ws"), placement, report))
+}
+
+// TestEndToEndClearTaskCacheEmptiesTheLocalCache: fly clear-task-cache's job, against a cache this machine keeps.
+func TestEndToEndClearTaskCacheEmptiesTheLocalCache(t *testing.T) {
+	dir := t.TempDir()
+	report := filepath.Join(dir, "runs.txt")
+	path := taskCachePipeline(t, dir, filepath.Join(dir, "ws"), report)
+
+	mustRun(t, "run", path, "--force")
+
+	out := captureStdout(t, func() { mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile") })
+	if !strings.Contains(out, "cleared .gocache") {
+		t.Errorf("clear-task-cache printed %q, want it to say it cleared .gocache", out)
+	}
+
+	mustRun(t, "run", path, "--force")
+
+	if got := readFileString(t, report); got != "1\n1\n" {
+		t.Errorf("runs reported %q, want the run after the clear to start cold (\"1\\n1\\n\")", got)
+	}
+}
+
+// TestEndToEndClearTaskCacheOnlyThePathNamed: -c is compared cleaned, which Concourse's own command does not do.
+func TestEndToEndClearTaskCacheOnlyThePathNamed(t *testing.T) {
+	dir := t.TempDir()
+	report := filepath.Join(dir, "runs.txt")
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  root: %[1]s
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    volatile: true
+    caches:
+    - path: .a
+    - path: .b
+    run: |
+      for c in .a .b; do
+        n=$(cat $c/runs 2>/dev/null || echo 0)
+        n=$((n + 1))
+        echo "$n" > $c/runs
+        printf '%%s=%%s ' "$c" "$n" >> %[2]s
+      done
+      echo >> %[2]s
+`, filepath.Join(dir, "ws"), report))
+
+	mustRun(t, "run", path, "--force")
+	mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile", "-c", "./.a/")
+	mustRun(t, "run", path, "--force")
+
+	if got := readFileString(t, report); got != ".a=1 .b=1 \n.a=1 .b=2 \n" {
+		t.Errorf("runs reported %q, want only .a cleared", got)
+	}
+
+	err := cli.Run([]string{"clear-task-cache", path, "-j", "build", "-s", "compile", "-c", ".c"})
+	if err == nil || !strings.Contains(err.Error(), ".a, .b") {
+		t.Errorf("clearing an undeclared path: %v, want a refusal naming the step's paths", err)
+	}
+}
+
+// TestEndToEndClearTaskCacheRefusesWhatItCannotName: each refusal names what the pipeline does have.
+func TestEndToEndClearTaskCacheRefusesWhatItCannotName(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: compile
+    caches:
+    - path: .gocache
+    run: "true"
+  - task: lint
+    run: "true"
+`)
+
+	for _, tc := range []struct{ name, job, step, want string }{
+		{"unknown job", "deploy", "compile", `no job named "deploy"`},
+		{"unknown step", "build", "test", `no task or agent step named "test"`},
+		{"no caches", "build", "lint", `"lint" declares no caches`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := cli.Run([]string{"clear-task-cache", path, "-j", tc.job, "-s", tc.step})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("got %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+
+	out := captureStdout(t, func() { mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile") })
+	if !strings.Contains(out, "workspace.root") {
+		t.Errorf("with no workspace.root it printed %q, want it to say no cache outlives a run", out)
+	}
+}
+
+// TestEndToEndClearTaskCacheRefusesAnUnmappedWorker: the local cache must survive the refusal, or the command cleared half of what it was asked and said no.
+func TestEndToEndClearTaskCacheRefusesAnUnmappedWorker(t *testing.T) {
+	dir := t.TempDir()
+	report := filepath.Join(dir, "runs.txt")
+
+	path := placedCachePipeline(t, dir, "", report)
+	mustRun(t, "run", path, "--force")
+
+	placedCachePipeline(t, dir, "tags: [box]", report)
+
+	err := cli.Run([]string{"clear-task-cache", path, "-j", "build", "-s", "compile"})
+	if err == nil || !strings.Contains(err.Error(), "--worker box=") {
+		t.Fatalf("clearing a placed step with no --worker: %v, want a refusal naming the tag", err)
+	}
+
+	placedCachePipeline(t, dir, "", report)
+	mustRun(t, "run", path, "--force")
+
+	if got := readFileString(t, report); got != "1\n2\n" {
+		t.Errorf("runs reported %q, want the refused clear to leave the local cache warm (\"1\\n2\\n\")", got)
+	}
+}
+
+// TestEndToEndClearTaskCacheOnACloudWorker: a launched machine took its caches with it, so there is nothing to do; a parked one keeps them on a disk only a start reaches, which costs money and so is asked for.
+func TestEndToEndClearTaskCacheOnACloudWorker(t *testing.T) {
+	dir := t.TempDir()
+	path := placedCachePipeline(t, dir, "tags: [box]", filepath.Join(dir, "runs.txt"))
+
+	out := captureStdout(t, func() {
+		mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=aws://launch/lt-0123456789abcdef0?region=us-east-2")
+	})
+	if !strings.Contains(out, "worker box: nothing to clear") {
+		t.Errorf("a launch-rung worker printed %q, want it to say there is nothing to clear", out)
+	}
+
+	err := cli.Run([]string{"clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=aws://stopped/i-0123456789abcdef0?region=us-east-2"})
+	if err == nil || !strings.Contains(err.Error(), "--start") {
+		t.Errorf("a stopped worker without --start: %v, want a refusal naming --start", err)
+	}
+}
+
+// TestEndToEndClearTaskCacheOnADockerWorker: the worker's volume goes, and one a container still mounts is refused by the daemon, reported, and fails the command.
+func TestEndToEndClearTaskCacheOnADockerWorker(t *testing.T) {
+	requireDockerE2E(t)
+	t.Cleanup(func() { removeTaskCacheVolumes(t) })
+
+	dir := t.TempDir()
+	report := filepath.Join(dir, "runs.txt")
+	path := placedCachePipeline(t, dir, "tags: [box]\n    image: "+dockerE2EImage, report)
+
+	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+
+	release := holdTaskCacheVolumes(t)
+
+	err := cli.Run([]string{"clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=local:"})
+	if err == nil {
+		t.Error("clearing a volume a container mounts succeeded, want the daemon's refusal reported as a failure")
+	}
+
+	release()
+	mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=local:")
+	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+
+	if got := readFileString(t, report); got != "1\n1\n" {
+		t.Errorf("runs reported %q, want the run after the clear to start cold (\"1\\n1\\n\")", got)
+	}
+}
+
+// holdTaskCacheVolumes mounts every cache volume this process made into a never-started container, which is enough for the daemon to refuse removing them.
+func holdTaskCacheVolumes(t *testing.T) func() {
+	t.Helper()
+
+	docker, err := dockerapi.New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = docker.Close() })
+
+	volumes, err := docker.ListVolumes(t.Context(), map[string]string{"steps.pid": strconv.Itoa(os.Getpid())})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var mounts []string
+
+	for _, volume := range volumes {
+		if strings.HasPrefix(volume.Name, "steps-tc-") {
+			mounts = append(mounts, volume.Name+":/cache"+strconv.Itoa(len(mounts)))
+		}
+	}
+
+	if len(mounts) == 0 {
+		t.Fatal("the run left no cache volume to hold")
+	}
+
+	holder, err := docker.CreateHolder(t.Context(), "steps-test-hold-"+strconv.Itoa(os.Getpid()), dockerE2EImage, nil, mounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var once sync.Once
+
+	remove := func() {
+		once.Do(func() { _ = docker.RemoveContainer(context.WithoutCancel(t.Context()), holder) })
+	}
+
+	t.Cleanup(remove)
+
+	return remove
+}
+
+// TestEndToEndClearTaskCacheOnAnSSHWorker: a bare worker's cache is a directory under its root.
+func TestEndToEndClearTaskCacheOnAnSSHWorker(t *testing.T) {
+	dir := t.TempDir()
+	report := filepath.Join(dir, "runs.txt")
+	worker := testsshd.New(t).URL
+	path := placedCachePipeline(t, dir, "tags: [box]", report)
+
+	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+	mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box="+worker)
+	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+
+	if got := readFileString(t, report); got != "1\n1\n" {
+		t.Errorf("runs reported %q, want the run after the clear to start cold (\"1\\n1\\n\")", got)
+	}
 }
