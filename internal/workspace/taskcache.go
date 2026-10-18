@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -53,7 +54,7 @@ func TaskCacheKeys(pipeline, job, step string, caches []config.TaskCache) map[st
 
 // AttachCaches moves each kept cache into dir at its path, by rename, and returns what moves them back. A rename rather than a mount or a copy: the cache and every step directory share the root's filesystem, so it costs nothing at any size and works the same for a host command and a bind-mounted container. A concurrent run of the same step finds the entry gone and starts empty (in Concourse both start warm); whichever finishes last is kept, as there.
 func (b *isolatingBuild) AttachCaches(ctx context.Context, dir string, caches map[string]string) func() {
-	type attached struct{ entry, dst string }
+	type attached struct{ entry, dir, rel string }
 
 	var done []attached
 
@@ -69,10 +70,16 @@ func (b *isolatingBuild) AttachCaches(ctx context.Context, dir string, caches ma
 
 		dst := filepath.Join(dir, rel)
 
+		if !symlinkFree(dir, rel) {
+			slog.WarnContext(ctx, "workspace.task_cache_symlinked", "dir", dst)
+
+			continue
+		}
+
 		attach(ctx, entry, dst, ok)
 
 		if ok {
-			done = append(done, attached{entry: entry, dst: dst})
+			done = append(done, attached{entry: entry, dir: dir, rel: rel})
 		}
 	}
 
@@ -81,7 +88,7 @@ func (b *isolatingBuild) AttachCaches(ctx context.Context, dir string, caches ma
 
 	return func() {
 		for _, a := range done {
-			b.detach(saveCtx, a.entry, a.dst)
+			b.detach(saveCtx, a.entry, a.dir, a.rel)
 		}
 
 		if len(done) > 0 {
@@ -115,8 +122,37 @@ func attach(ctx context.Context, entry, dst string, ok bool) {
 	}
 }
 
-// detach files dst back as the entry, replacing one a concurrent run filed first. An empty cache is not kept: the next attach makes an empty directory anyway, and keeping it would spend an LRU slot on nothing.
-func (b *isolatingBuild) detach(ctx context.Context, entry, dst string) {
+// symlinkFree reports that no directory between dir and dir/rel is a symlink. An input keeps its symlinks and a step can plant one, so without this a cache's remove or rename would follow one out of dir: deleting a host directory, or filing it into a cache the next container mounts.
+func symlinkFree(dir, rel string) bool {
+	parts := strings.Split(filepath.Clean(rel), string(filepath.Separator))
+	cur := dir
+
+	for _, part := range parts[:len(parts)-1] {
+		cur = filepath.Join(cur, part)
+
+		info, err := os.Lstat(cur)
+		if errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+
+		if err != nil || info.Mode()&fs.ModeSymlink != 0 {
+			return false
+		}
+	}
+
+	return true
+}
+
+// detach files dir/rel back as the entry, replacing one a concurrent run filed first. An empty cache is not kept: the next attach makes an empty directory anyway, and keeping it would spend an LRU slot on nothing.
+func (b *isolatingBuild) detach(ctx context.Context, entry, dir, rel string) {
+	dst := filepath.Join(dir, rel)
+
+	if !symlinkFree(dir, rel) {
+		slog.WarnContext(ctx, "workspace.task_cache_symlinked", "dir", dst)
+
+		return
+	}
+
 	entries, err := os.ReadDir(dst)
 	if err != nil {
 		return
@@ -128,9 +164,10 @@ func (b *isolatingBuild) detach(ctx context.Context, entry, dst string) {
 		return
 	}
 
-	err = b.taskCaches.removeEntry(entry)
-	if err == nil {
-		err = move(ctx, dst, entry)
+	err = b.fileBack(ctx, entry, dst)
+	// A concurrent run can file the entry between the remove and the rename, which then refuses; one retry keeps the last finisher's.
+	if err != nil {
+		err = b.fileBack(ctx, entry, dst)
 	}
 
 	if err != nil {
@@ -140,6 +177,15 @@ func (b *isolatingBuild) detach(ctx context.Context, entry, dst string) {
 	}
 
 	b.taskCaches.touch(entry)
+}
+
+func (b *isolatingBuild) fileBack(ctx context.Context, entry, dst string) error {
+	err := b.taskCaches.removeEntry(entry)
+	if err != nil {
+		return fmt.Errorf("removing the kept cache: %w", err)
+	}
+
+	return move(ctx, dst, entry)
 }
 
 // move renames, or copies and removes when the two sides are different filesystems or btrfs subvolumes (a cache inside an input is inside that input's snapshot). Only EXDEV copies: any other refusal, a concurrent run's entry already in place among them, copied would merge two caches into one.

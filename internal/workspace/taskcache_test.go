@@ -204,3 +204,74 @@ func TestTaskCacheNeverCopiesARefusedRename(t *testing.T) {
 		t.Errorf("a refused rename was filed by copy: %v", err)
 	}
 }
+
+// TestTaskCacheNeverFollowsASymlinkOutOfTheStep: an input keeps its symlinks, so a repository whose src is a link to elsewhere must not have that elsewhere's node_modules removed, nor a step's planted link file a host directory into the cache.
+func TestTaskCacheNeverFollowsASymlinkOutOfTheStep(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	caches := map[string]string{"src/node_modules": TaskCacheKey("p", "j", "s", "src/node_modules")}
+	outside := t.TempDir()
+	mustWrite(t, filepath.Join(outside, "node_modules/precious"), "x")
+
+	planted := t.TempDir()
+
+	err := os.Symlink(outside, filepath.Join(planted, "src"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bw.AttachCaches(t.Context(), planted, caches)()
+
+	dir := t.TempDir()
+	detach := bw.AttachCaches(t.Context(), dir, caches)
+
+	err = os.RemoveAll(filepath.Join(dir, "src"))
+	if err == nil {
+		err = os.Symlink(outside, filepath.Join(dir, "src"))
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detach()
+
+	_, err = os.Stat(filepath.Join(outside, "node_modules/precious"))
+	if err != nil {
+		t.Errorf("a cache reached through a symlink out of the step: %v", err)
+	}
+}
+
+// TestTaskCacheRetriesAnEntryFiledConcurrently: a run that files the entry between this one's remove and rename does not cost this, the later, finisher its cache.
+func TestTaskCacheRetriesAnEntryFiledConcurrently(t *testing.T) {
+	bw := newBuild(t)
+	caches := map[string]string{"c": TaskCacheKey("p", "j", "s", "c")}
+
+	dir := t.TempDir()
+	detach := bw.AttachCaches(t.Context(), dir, caches)
+	mustWrite(t, filepath.Join(dir, "c/mine"), "x")
+
+	raced := false
+	rename = func(src, dst string) error {
+		if !raced {
+			raced = true
+
+			mustWrite(t, filepath.Join(dst, "theirs"), "y")
+		}
+
+		return os.Rename(src, dst)
+	}
+	t.Cleanup(func() { rename = os.Rename })
+
+	detach()
+
+	rename = os.Rename
+	next := t.TempDir()
+	bw.AttachCaches(t.Context(), next, caches)
+
+	_, err := os.Stat(filepath.Join(next, "c/mine"))
+	if err != nil {
+		t.Errorf("the last finisher's cache was dropped: %v", err)
+	}
+}

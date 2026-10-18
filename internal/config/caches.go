@@ -92,7 +92,7 @@ func validateCachePaths(label string, caches []TaskCache, inputs, outputs []stri
 
 	for _, cache := range caches {
 		cleaned, ok := ConfinedPath(".", cache.Path)
-		if cache.Path == "" || !ok || cleaned == "." || path.IsAbs(cache.Path) {
+		if !ok || cleaned == "." {
 			return fmt.Errorf("%s: cache path %q must be a directory inside the working directory", label, cache.Path)
 		}
 
