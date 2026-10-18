@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -102,5 +103,57 @@ func TestTaskCacheKeysSeparateEveryScope(t *testing.T) {
 
 	if TaskCacheKey("p", "j", "s", "./c/") != base {
 		t.Error("an uncleaned spelling of the same path names a different cache")
+	}
+}
+
+// TestTaskCacheEmptyIsNotKept: an empty cache would spend an LRU slot on what the next attach makes anyway.
+func TestTaskCacheEmptyIsNotKept(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	build, _ := bw.(*isolatingBuild)
+	key := TaskCacheKey("p", "j", "s", "c")
+
+	dir := t.TempDir()
+	bw.AttachCaches(t.Context(), dir, map[string]string{"c": key})()
+
+	entry, _ := build.taskCaches.path(key)
+
+	_, err := os.Stat(entry)
+	if !os.IsNotExist(err) {
+		t.Errorf("an untouched cache was filed: %v", err)
+	}
+
+	_, err = os.Stat(filepath.Join(dir, "c"))
+	if !os.IsNotExist(err) {
+		t.Errorf("the empty stand-in was left in the step directory: %v", err)
+	}
+}
+
+// TestTaskCacheSurvivesARenameAcrossFilesystems: a cache inside an input sits in that input's btrfs snapshot, where rename answers EXDEV.
+func TestTaskCacheSurvivesARenameAcrossFilesystems(t *testing.T) {
+	rename = func(string, string) error { return &os.LinkError{Op: "rename", Err: errors.New("cross-device link")} }
+	t.Cleanup(func() { rename = os.Rename })
+
+	bw := newBuild(t)
+	key := TaskCacheKey("p", "j", "s", "src/node_modules")
+	caches := map[string]string{"src/node_modules": key}
+
+	first := t.TempDir()
+	detach := bw.AttachCaches(t.Context(), first, caches)
+	mustWrite(t, filepath.Join(first, "src/node_modules/pkg/index.js"), "x")
+	detach()
+
+	_, err := os.Stat(filepath.Join(first, "src/node_modules"))
+	if !os.IsNotExist(err) {
+		t.Errorf("the cache stayed in the step directory after the copy: %v", err)
+	}
+
+	second := t.TempDir()
+	bw.AttachCaches(t.Context(), second, caches)
+
+	got, err := os.ReadFile(filepath.Join(second, "src/node_modules/pkg/index.js")) //nolint:gosec // a path under t.TempDir()
+	if err != nil || string(got) != "x" {
+		t.Errorf("the cache did not come back by copy: %q, %v", got, err)
 	}
 }

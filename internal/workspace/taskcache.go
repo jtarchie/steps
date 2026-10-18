@@ -6,6 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -20,6 +23,9 @@ const taskCacheDirName = "steps-task-caches"
 const defaultTaskCacheMaxEntries = 50
 
 const taskCacheDomain = "steps/task-cache/v1"
+
+// rename is a test seam: an EXDEV is only real across filesystems or btrfs subvolumes, neither of which a unit test can make.
+var rename = os.Rename //nolint:gochecknoglobals // test seam
 
 // TaskCacheKey names one cache: Concourse's job + step name + path, under the pipeline that owns the job.
 func TaskCacheKey(pipeline, job, step, path string) string {
@@ -89,8 +95,8 @@ func attach(ctx context.Context, entry, dst string, ok bool) {
 	}
 
 	if err == nil && ok {
-		err = os.Rename(entry, dst)
-		if os.IsNotExist(err) {
+		err = move(entry, dst)
+		if errors.Is(err, fs.ErrNotExist) {
 			err = nil
 		}
 	}
@@ -105,16 +111,22 @@ func attach(ctx context.Context, entry, dst string, ok bool) {
 	}
 }
 
-// detach files dst back as the entry, replacing one a concurrent run filed first.
+// detach files dst back as the entry, replacing one a concurrent run filed first. An empty cache is not kept: the next attach makes an empty directory anyway, and keeping it would spend an LRU slot on nothing.
 func (b *isolatingBuild) detach(entry, dst string) {
-	info, err := os.Stat(dst)
-	if err != nil || !info.IsDir() {
+	entries, err := os.ReadDir(dst)
+	if err != nil {
 		return
 	}
 
-	err = os.RemoveAll(entry)
+	if len(entries) == 0 {
+		_ = os.Remove(dst)
+
+		return
+	}
+
+	err = b.taskCaches.removeEntry(entry)
 	if err == nil {
-		err = os.Rename(dst, entry)
+		err = move(dst, entry)
 	}
 
 	if err != nil {
@@ -124,4 +136,24 @@ func (b *isolatingBuild) detach(entry, dst string) {
 	}
 
 	b.taskCaches.touch(entry)
+}
+
+// move renames, or copies and removes when the two sides are different filesystems or btrfs subvolumes (a cache inside an input is inside that input's snapshot). ponytail: a plain copy; a reflink-aware one is the upgrade if a nested cache on btrfs is ever measured to matter.
+func move(src, dst string) error {
+	err := rename(src, dst)
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+
+	copyErr := os.CopyFS(dst, os.DirFS(src))
+	if copyErr != nil {
+		return errors.Join(err, copyErr)
+	}
+
+	err = os.RemoveAll(src)
+	if err != nil {
+		return fmt.Errorf("removing the moved cache: %w", err)
+	}
+
+	return nil
 }

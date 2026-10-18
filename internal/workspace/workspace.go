@@ -367,7 +367,7 @@ func (p *isolatingProvider) enableCache(ws *config.WorkspaceConfig) error {
 		p.cache = cache
 	}
 
-	taskCaches, err := newEntryStore(p.root, taskCacheDirName, defaultTaskCacheMaxEntries, os.RemoveAll)
+	taskCaches, err := newEntryStore(p.root, taskCacheDirName, defaultTaskCacheMaxEntries, p.backend.removeTree)
 	if err != nil {
 		return err
 	}

@@ -271,3 +271,126 @@ jobs:
 		t.Errorf("runs reported %q, want the second run to see the worker's cache (\"1\\n2\\n\")", got)
 	}
 }
+
+// TestEndToEndPlacedStepCacheNeverCrossesTheWire: a cache warmed here must not reach a worker, where it would be packed into the tree sent over and thrown away under the worker's own. The step cannot see the difference, so the proof is the bytes the placement sent.
+func TestEndToEndPlacedStepCacheNeverCrossesTheWire(t *testing.T) {
+	dir := t.TempDir()
+	worker := testsshd.New(t).URL
+
+	const markerBytes = 1 << 20
+
+	pipeline := func(tags string) string {
+		return fmt.Sprintf(`
+workspace:
+  root: %[1]s
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    %[2]s
+    volatile: true
+    caches:
+    - path: .gocache
+    run: head -c %[3]d /dev/zero > .gocache/marker
+`, filepath.Join(dir, "ws"), tags, markerBytes)
+	}
+
+	path := writePipeline(t, dir, pipeline(""))
+	mustRun(t, "run", path, "--force")
+
+	writePipelineFile(t, path, pipeline("tags: [box]"))
+	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+
+	var sent int64
+
+	err := openStateDB(t, path).QueryRowContext(t.Context(), `SELECT bytes_sent FROM run_placements WHERE step_name = 'compile'`).Scan(&sent)
+	if err != nil {
+		t.Fatalf("query placement: %v", err)
+	}
+
+	if sent >= markerBytes {
+		t.Errorf("the placement sent %d bytes, want fewer than the %d-byte local cache: it crossed the wire", sent, markerBytes)
+	}
+}
+
+// TestEndToEndPlacedAgentCacheNeverCrossesTheWire is the agent's own seam for the same rule: it attaches its caches itself, so it must also know not to.
+func TestEndToEndPlacedAgentCacheNeverCrossesTheWire(t *testing.T) {
+	requireDockerE2E(t)
+	t.Cleanup(func() { removeTaskCacheVolumes(t) })
+
+	dir := t.TempDir()
+
+	const markerBytes = 1 << 20
+
+	run := []turn{callsTool("run_shell", map[string]any{"command": fmt.Sprintf("head -c %d /dev/zero > .cache/marker", markerBytes)}), says("done")}
+	fake := newFakeLLM(t, append(run, run...)...)
+
+	pipeline := func(tags string) string {
+		return fmt.Sprintf(`
+workspace:
+  root: %[3]s
+
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: builder
+  image: %[2]s
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell]
+  caches:
+  - path: .cache
+
+jobs:
+- name: build
+  plan:
+  - agent: builder
+    %[4]s
+    volatile: true
+    messages:
+      - Build it.
+`, fake.URL, dockerE2EImage, filepath.Join(dir, "ws"), tags)
+	}
+
+	path := writePipeline(t, dir, pipeline(""))
+	mustRun(t, "run", path, "--force")
+
+	writePipelineFile(t, path, pipeline("tags: [box]"))
+	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+
+	// A placed agent records no placement row (observed: notePlacement is only called for tasks and resources), so the bytes are read off the daemon: every tree a docker+ session sends is filled into a data volume labelled with its size.
+	if filled := volumeBytesFilled(t); filled >= markerBytes {
+		t.Errorf("the session filled %d bytes into the worker, want fewer than the %d-byte local cache: it crossed the wire", filled, markerBytes)
+	}
+}
+
+// volumeBytesFilled sums the trees this process sent to the local daemon.
+func volumeBytesFilled(t *testing.T) int64 {
+	t.Helper()
+
+	docker, err := dockerapi.New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = docker.Close() }()
+
+	volumes, err := docker.ListVolumes(t.Context(), map[string]string{"steps.pid": strconv.Itoa(os.Getpid())})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var total int64
+
+	for _, volume := range volumes {
+		size, _ := strconv.ParseInt(volume.Labels["steps.size"], 10, 64)
+		total += size
+	}
+
+	return total
+}

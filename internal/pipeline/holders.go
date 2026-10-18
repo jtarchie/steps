@@ -164,9 +164,9 @@ func noteHeld(ctx context.Context, runner shell.Runner) {
 	sink.held, sink.holder = held, holder
 }
 
-// attachTaskCaches puts a step's caches: in its directory. A placed step gets them too, as empty directories its worker mounts its own over.
-func attachTaskCaches(ctx context.Context, bw workspace.BuildWorkspace, space workspace.StepSpace, name string, caches []config.TaskCache) func() {
-	if len(caches) == 0 {
+// attachTaskCaches puts a step's caches: in its directory. Not for a placed step: its worker holds the cache, and a local one attached here would be packed into the tree sent over.
+func attachTaskCaches(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, space workspace.StepSpace, name string, caches []config.TaskCache) func() {
+	if len(caches) == 0 || placementTag(step) != "" {
 		return func() {}
 	}
 

@@ -306,9 +306,9 @@ func (s *plusSession) compose(ctx context.Context) ([]string, []string, error) {
 	var files []string
 
 	if s.spec.Cwd != "" {
-		entries, err := s.treeEntries()
+		entries, err := os.ReadDir(s.spec.Cwd)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("%w", err)
 		}
 
 		for _, entry := range entries {
@@ -341,20 +341,6 @@ func (s *plusSession) compose(ctx context.Context) ([]string, []string, error) {
 	s.emptyTree = len(mounts) == 1 && len(files) == 0
 
 	return mounts, files, nil
-}
-
-// treeEntries are the tree's top-level entries but a cache's, whose local directory is an empty stand-in for the worker's own volume.
-func (s *plusSession) treeEntries() ([]os.DirEntry, error) {
-	entries, err := os.ReadDir(s.spec.Cwd)
-	if err != nil {
-		return nil, fmt.Errorf("%w", err)
-	}
-
-	return slices.DeleteFunc(entries, func(entry os.DirEntry) bool {
-		_, cached := s.spec.Caches[entry.Name()]
-
-		return cached
-	}), nil
 }
 
 // cacheMounts finds or makes each of the step's cache volumes on this worker, mounted over the empty stand-in the tree carried.

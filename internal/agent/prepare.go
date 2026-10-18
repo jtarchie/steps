@@ -306,13 +306,22 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	return preparedAgentStep{
-		detachCaches: bw.AttachCaches(ctx, space.Dir(), caches),
+		detachCaches: attachAgentCaches(ctx, bw, step, space.Dir(), caches),
 		dir:          dir, runner: runner, lost: lost,
 		step: step, ri: ri, primary: primary, fallbackIndex: fallbackIndex, agent: agent,
 		pin:   agentPinScope(cfg, ri.AgentName),
 		space: space, conv: conv, llm: invocationLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir,
 	}, nil
+}
+
+// attachAgentCaches puts the step's caches: in its directory, unless the step is placed: its worker holds them, and one attached here would be packed into the tree sent over. resolveTags stamped the effective placement onto step.Tags at load.
+func attachAgentCaches(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, dir string, caches map[string]string) func() {
+	if len(step.Tags) > 0 {
+		return func() {}
+	}
+
+	return bw.AttachCaches(ctx, dir, caches)
 }
 
 // applyQuestionBudget binds max_questions: to the ask_user grant, if the step
