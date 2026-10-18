@@ -537,6 +537,8 @@ type placementSink struct {
 	mu    sync.Mutex
 	last  venue.Placement
 	noted bool
+	// watched is read when the step is recorded rather than noted by a defer: an agent's runner is built and closed inside internal/agent, where no defer of this package's can reach.
+	watched shell.Runner
 }
 
 func (s *placementSink) note(placement venue.Placement) {
@@ -550,7 +552,24 @@ func (s *placementSink) taken() (venue.Placement, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if !s.noted && s.watched != nil {
+		return venue.PlacementOf(s.watched)
+	}
+
 	return s.last, s.noted
+}
+
+// watchPlacement leaves the runner itself, for a step whose runner outlives every frame here that could note it.
+func watchPlacement(ctx context.Context, runner shell.Runner) {
+	sink, _ := ctx.Value(placementSinkKey{}).(*placementSink)
+	if sink == nil {
+		return
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+
+	sink.watched = runner
 }
 
 // withPlacementSink gives one step somewhere to leave its placement facts.

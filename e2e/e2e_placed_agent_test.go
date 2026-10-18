@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestPlacedAgentSharesOneTreeWithItsShell places an agent on a local: worker and makes its file tools and its shell take turns on one file. Docker is required and the issue's "needs no docker" framing could not hold: `tags:` without `image:` stays refused, so the only placed agent there is runs its tools in a container on the worker.
@@ -212,4 +215,117 @@ jobs:
 	if !strings.Contains(found, "fenced-note") {
 		t.Errorf("search_files result = %q, want the line the fenced container's shell wrote", found)
 	}
+}
+
+const placedAgentHead = `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: hand
+  image: %[2]s
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell]
+
+jobs:
+- name: place
+  plan:
+  - task: prepare
+    outputs: [data]
+    run: head -c 4096 /dev/urandom > data/blob
+`
+
+// placedAgentPipeline is one placed agent whose run_shell has a tree to push, with extra appended to the agent step.
+func placedAgentPipeline(t *testing.T, dir, endpoint, extra string) string {
+	t.Helper()
+
+	return writePipeline(t, dir, fmt.Sprintf(placedAgentHead+`
+  - agent: hand
+    tags: [box]
+    inputs: [data]
+    messages:
+      - Look at the blob.
+%[3]s`, endpoint, dockerE2EImage, extra))
+}
+
+func seesTheBlob(t *testing.T, last string) *fakeLLM {
+	t.Helper()
+
+	return newFakeLLM(t,
+		callsTool("run_shell", map[string]any{"command": "test -s data/blob && echo seen"}),
+		says(last),
+	)
+}
+
+// assertPlacedAgentRow holds the row to a task's: an agent builds its runner through a factory, so the note a task defers never ran for it and a run named every placed task's machine but not the agent's.
+func assertPlacedAgentRow(t *testing.T, row store.Placement) {
+	t.Helper()
+
+	if row.Tag != "box" {
+		t.Errorf("tag = %q, want box", row.Tag)
+	}
+
+	if row.JobName != "place" {
+		t.Errorf("job_name = %q, want place", row.JobName)
+	}
+
+	if row.Address == "" || row.GOOS == "" || row.GOARCH == "" || row.Workdir == "" {
+		t.Errorf("placement = %+v, want the worker's address, platform and workdir", row)
+	}
+
+	assertBytesCrossed(t, row)
+}
+
+// TestPlacedAgentRecordsWhereItRan holds an agent to a task's record: written once the conversation is finished with the runner, so the bytes it pushed are counted.
+func TestPlacedAgentRecordsWhereItRan(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	path := placedAgentPipeline(t, dir, seesTheBlob(t, "Done").URL, "")
+
+	mustRun(t, path, "--worker", "box=local:")
+
+	assertPlacedAgentRow(t, placementNamed(t, runPlacements(t, path), "hand"))
+}
+
+// TestPlacedAgentRecordsWhereItFailed: the step that failed on a worker is the one whose machine somebody wants named.
+func TestPlacedAgentRecordsWhereItFailed(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	path := placedAgentPipeline(t, dir, seesTheBlob(t, "Not what the assert wants").URL, "    assert:\n      stdout: Done\n")
+
+	err := cli.Run([]string{path, "--worker", "box=local:"})
+	if err == nil {
+		t.Fatal("run succeeded, want the assert to fail the agent step")
+	}
+
+	assertPlacedAgentRow(t, placementNamed(t, runPlacements(t, path), "hand"))
+}
+
+// TestPlacedAgentHookRecordsWhereItRan: a hook has no node, so its row is keyed on the hook's scope, as a task or put hook's is.
+func TestPlacedAgentHookRecordsWhereItRan(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	path := writePipeline(t, dir, fmt.Sprintf(placedAgentHead+`    on_success:
+      agent: hand
+      tags: [box]
+      inputs: [data]
+      messages:
+        - Look at the blob.
+`, seesTheBlob(t, "Done").URL, dockerE2EImage))
+
+	mustRun(t, path, "--worker", "box=local:")
+
+	row := placementNamed(t, runPlacements(t, path), "hand")
+	if !strings.Contains(row.Slot, "hook") {
+		t.Errorf("slot = %q, want the hook's scope", row.Slot)
+	}
+
+	assertPlacedAgentRow(t, row)
 }

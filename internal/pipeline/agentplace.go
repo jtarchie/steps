@@ -24,6 +24,9 @@ func placedAgentRunner(step config.Step) agent.RunnerFactory {
 			return nil, fmt.Errorf("agent %q: %w", step.Agent, err)
 		}
 
+		// Read when the step is recorded, after internal/agent has finished with and closed the runner: the session dials lazily and counts bytes as it goes, so no earlier moment has the whole facts.
+		watchPlacement(ctx, runner)
+
 		// Unlabelled: prepareAgentStep labels what this hands back, and doing it here only to have it replaced would read as the display name mattering when nothing ever sees it.
 		return runner, nil
 	}
