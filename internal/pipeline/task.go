@@ -244,6 +244,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 		Worker: worker, WorkerTag: placementTag(step), Fetch: rt.Outputs, ReusedWarm: reusedWarm(ctx, step),
 		DeferFetch:   deferrable(step, rt),
 		RemoteInputs: remote,
+		Caches:       taskCacheKeys(ctx, step.Task, rt.Caches),
 		// The same postmortem, on the machine that actually ran the step: a
 		// worker's scratch is the remote half of the step directory, and a
 		// flag whose whole purpose is having the files afterwards would stop

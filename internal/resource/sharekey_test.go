@@ -32,6 +32,7 @@ var shareUnkeyed = map[string]string{
 	"DeferFetch":   "a check has no tree",
 	"Keep":         "a check has no tree",
 	"RemoteInputs": "a check has no tree",
+	"Caches":       "a check has no tree, and resources take no caches:",
 	"Volumes":      "a check has no tree",
 	"DockerHost":   "set only by a venue, and a placed check never shares",
 	"DockerDial":   "set only by a venue, and a placed check never shares",

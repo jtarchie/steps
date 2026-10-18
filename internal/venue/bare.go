@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"github.com/jtarchie/steps/internal/redact"
 	"io"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -188,7 +190,65 @@ func (s *bareSession) connect(ctx context.Context) error {
 		return err
 	}
 
-	return s.upload(ctx)
+	err = s.upload(ctx)
+	if err != nil {
+		return err
+	}
+
+	return s.attachCaches(ctx)
+}
+
+// cachePairs is each cache's kept directory beside the step's place for it, shell-quoted, in a stable order.
+func (s *bareSession) cachePairs() [][2]string {
+	rels := slices.Sorted(maps.Keys(s.spec.Caches))
+	pairs := make([][2]string, 0, len(rels))
+
+	for _, rel := range rels {
+		pairs = append(pairs, [2]string{s.root() + "/steps-task-caches/" + s.spec.Caches[rel], shellQuote(path.Join(s.dir, rel))})
+	}
+
+	return pairs
+}
+
+// attachCaches moves each kept cache over the uploaded stand-in, the rename the local workspace does, on the worker.
+func (s *bareSession) attachCaches(ctx context.Context) error {
+	if len(s.spec.Caches) == 0 {
+		return nil
+	}
+
+	var script strings.Builder
+
+	for _, pair := range s.cachePairs() {
+		fmt.Fprintf(&script, `rm -rf %[2]s; mkdir -p "$(dirname %[2]s)"; if [ -d %[1]s ]; then mv %[1]s %[2]s; else mkdir -p %[2]s; fi; `, pair[0], pair[1])
+	}
+
+	code, err := s.exec(ctx, script.String(), nil, io.Discard, io.Discard)
+	if err == nil && code != 0 {
+		err = fmt.Errorf("%w: exit %d", errBareTransfer, code)
+	}
+
+	if err != nil {
+		return fmt.Errorf("restoring the step's caches: %w", err)
+	}
+
+	return nil
+}
+
+// detachCaches is the shell that files each cache back, replacing one a concurrent session filed first; run after the step's processes are gone.
+func (s *bareSession) detachCaches() string {
+	if len(s.spec.Caches) == 0 {
+		return ""
+	}
+
+	var script strings.Builder
+
+	script.WriteString("mkdir -p " + s.root() + "/steps-task-caches; ")
+
+	for _, pair := range s.cachePairs() {
+		fmt.Fprintf(&script, `if [ -d %[2]s ]; then rm -rf %[1]s; mv %[2]s %[1]s; fi; `, pair[0], pair[1])
+	}
+
+	return script.String()
 }
 
 func (s *bareSession) root() string {
@@ -606,12 +666,12 @@ func (s *bareSession) close() error {
 
 	// The directory stays; its owner file goes, or the next session from this machine sweeps it once this process exits.
 	if s.spec.Keep {
-		_, _ = s.exec(ctx, "rm -f "+owner+" "+pids, nil, io.Discard, io.Discard)
+		_, _ = s.exec(ctx, s.detachCaches()+"rm -f "+owner+" "+pids, nil, io.Discard, io.Discard)
 
 		return nil
 	}
 
-	code, err := s.exec(ctx, `for f in `+pids+`; do p=$(cat "$f" 2>/dev/null) && kill -KILL -- -"$p" 2>/dev/null; done; rm -rf `+shellQuote(s.dir)+" "+owner+" "+pids, nil, io.Discard, io.Discard)
+	code, err := s.exec(ctx, `for f in `+pids+`; do p=$(cat "$f" 2>/dev/null) && kill -KILL -- -"$p" 2>/dev/null; done; `+s.detachCaches()+`rm -rf `+shellQuote(s.dir)+" "+owner+" "+pids, nil, io.Discard, io.Discard)
 	if err == nil && code != 0 {
 		err = fmt.Errorf("%w: rm exited %d", errBareTransfer, code)
 	}

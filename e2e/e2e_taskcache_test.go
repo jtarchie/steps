@@ -3,9 +3,16 @@ package e2e
 // caches: a directory a step keeps between runs, which only makes it faster and never changes what it is.
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/testsshd"
 )
 
 // taskCachePipeline counts its runs in a cache dir; --force and volatile: because a skipped step never runs, so would never touch the cache.
@@ -103,5 +110,164 @@ jobs:
 
 	if got := readFileString(t, report); got != "1\n2\n" {
 		t.Errorf("runs reported %q, want the second run to see the first's cache (\"1\\n2\\n\")", got)
+	}
+}
+
+// TestEndToEndPlacedTaskCacheStaysOnItsWorker: the local stand-in stays empty, so a warm second run can only have come from the worker's own volume.
+func TestEndToEndPlacedTaskCacheStaysOnItsWorker(t *testing.T) {
+	requireDockerE2E(t)
+	t.Cleanup(func() { removeTaskCacheVolumes(t) })
+
+	dir := t.TempDir()
+	report := filepath.Join(dir, "runs.txt")
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  root: %[1]s
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    tags: [box]
+    image: `+dockerE2EImage+`
+    volatile: true
+    caches:
+    - path: .gocache
+    outputs: [out]
+    run: |
+      n=$(cat .gocache/runs 2>/dev/null || echo 0)
+      n=$((n + 1))
+      echo "$n" > .gocache/runs
+      echo "$n" > out/runs
+  - task: publish
+    volatile: true
+    inputs: [out]
+    run: cat out/runs >> %[2]s
+`, filepath.Join(dir, "ws"), report))
+
+	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+
+	if got := readFileString(t, report); got != "1\n2\n" {
+		t.Errorf("runs reported %q, want the second run to see the worker's cache (\"1\\n2\\n\")", got)
+	}
+}
+
+// removeTaskCacheVolumes drops the cache volumes this process made, which by design nothing else ever removes.
+func removeTaskCacheVolumes(t *testing.T) {
+	t.Helper()
+
+	docker, err := dockerapi.New("")
+	if err != nil {
+		t.Logf("cleanup: %v", err)
+
+		return
+	}
+
+	defer func() { _ = docker.Close() }()
+
+	ctx := context.WithoutCancel(t.Context())
+
+	volumes, err := docker.ListVolumes(ctx, map[string]string{"steps.pid": strconv.Itoa(os.Getpid())})
+	if err != nil {
+		t.Logf("cleanup: %v", err)
+
+		return
+	}
+
+	for _, volume := range volumes {
+		if strings.HasPrefix(volume.Name, "steps-tc-") {
+			_ = docker.RemoveVolume(ctx, volume.Name)
+		}
+	}
+}
+
+// TestEndToEndSSHWorkerTaskCacheStaysOnItsWorker: a bare ssh:// worker keeps its caches under its root, beside the builds it removes.
+func TestEndToEndSSHWorkerTaskCacheStaysOnItsWorker(t *testing.T) {
+	dir := t.TempDir()
+	report := filepath.Join(dir, "runs.txt")
+	worker := testsshd.New(t).URL
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  root: %[1]s
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    tags: [box]
+    volatile: true
+    caches:
+    - path: .gocache
+    outputs: [out]
+    run: |
+      n=$(cat .gocache/runs 2>/dev/null || echo 0)
+      n=$((n + 1))
+      echo "$n" > .gocache/runs
+      echo "$n" > out/runs
+  - task: publish
+    volatile: true
+    inputs: [out]
+    run: cat out/runs >> %[2]s
+`, filepath.Join(dir, "ws"), report))
+
+	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+
+	if got := readFileString(t, report); got != "1\n2\n" {
+		t.Errorf("runs reported %q, want the second run to see the worker's cache (\"1\\n2\\n\")", got)
+	}
+}
+
+// TestEndToEndPlacedAgentCacheStaysOnItsWorker crosses the seam the task test does not: the agent builds its own runner spec, which must carry the keys to the worker.
+func TestEndToEndPlacedAgentCacheStaysOnItsWorker(t *testing.T) {
+	requireDockerE2E(t)
+	t.Cleanup(func() { removeTaskCacheVolumes(t) })
+
+	dir := t.TempDir()
+	report := filepath.Join(dir, "runs.txt")
+	count := `n=$(cat .cache/runs 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > .cache/runs; echo "$n" > out/runs`
+	run := []turn{callsTool("run_shell", map[string]any{"command": count}), says("done")}
+	fake := newFakeLLM(t, append(run, run...)...)
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  root: %[3]s
+
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: builder
+  image: %[2]s
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell]
+  caches:
+  - path: .cache
+
+jobs:
+- name: build
+  plan:
+  - agent: builder
+    tags: [box]
+    volatile: true
+    outputs: [out]
+    messages:
+      - Build it.
+  - task: publish
+    volatile: true
+    inputs: [out]
+    run: cat out/runs >> %[4]s
+`, fake.URL, dockerE2EImage, filepath.Join(dir, "ws"), report))
+
+	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+
+	if got := readFileString(t, report); got != "1\n2\n" {
+		t.Errorf("runs reported %q, want the second run to see the worker's cache (\"1\\n2\\n\")", got)
 	}
 }

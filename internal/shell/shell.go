@@ -144,6 +144,8 @@ type RunnerSpec struct {
 	// resource's in:, which fills an empty directory and declares nothing.
 	// Meaningless without a Worker.
 	FetchAll bool
+	// Caches are the step's caches: (path relative to Cwd → cache key). A host or local container gets them in Cwd already; a docker+ worker mounts a volume of its own at each, so the cache stays on the machine that ran the step.
+	Caches map[string]string
 	// HoldAs is the artifact name a FetchAll tree kept on its worker (DeferFetch) is held under: the name the next step offers it by. Read only by the venue.
 	HoldAs string
 	// Keep leaves a worker's scratch behind, following --keep-workspace. Read

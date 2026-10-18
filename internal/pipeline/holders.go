@@ -170,7 +170,11 @@ func attachTaskCaches(ctx context.Context, bw workspace.BuildWorkspace, space wo
 		return func() {}
 	}
 
+	return bw.AttachCaches(ctx, space.Dir(), taskCacheKeys(ctx, name, caches))
+}
+
+func taskCacheKeys(ctx context.Context, name string, caches []config.TaskCache) map[string]string {
 	meta := shell.MetadataFrom(ctx)
 
-	return bw.AttachCaches(ctx, space.Dir(), workspace.TaskCacheKeys(meta.PipelineName, meta.JobName, name, caches))
+	return workspace.TaskCacheKeys(meta.PipelineName, meta.JobName, name, caches)
 }

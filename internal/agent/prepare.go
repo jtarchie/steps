@@ -237,7 +237,10 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	// Cwd is the whole step directory and Subdir is where the model works, even though dir: is the only thing that makes them differ. The step's outputs: are named relative to the SPACE, so a placed agent that sent only its subdirectory would fetch them from a path that does not exist and come home with nothing.
-	runner, err := newRunner.build(ctx, shell.RunnerSpec{Image: ri.Image, Cwd: space.Dir(), Subdir: step.Dir,
+	meta := shell.MetadataFrom(ctx)
+	caches := workspace.TaskCacheKeys(meta.PipelineName, meta.JobName, step.Agent, ri.Caches)
+
+	runner, err := newRunner.build(ctx, shell.RunnerSpec{Image: ri.Image, Cwd: space.Dir(), Subdir: step.Dir, Caches: caches,
 		Env: ri.Env, User: ri.User, Network: ri.Network,
 		Privileged: ri.Privileged, CPUShares: ri.Limits.CPUShares(), MemoryBytes: ri.Limits.MemoryBytes(),
 		Fetch: step.Outputs, Keep: workspace.Kept(space)})
@@ -302,10 +305,8 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		usage:                &stepUsage{name: ri.AgentName, budget: ri.BudgetTokens, delegateFraction: cfg.DelegateBudgetFraction(ri.AgentName)},
 	}
 
-	meta := shell.MetadataFrom(ctx)
-
 	return preparedAgentStep{
-		detachCaches: bw.AttachCaches(ctx, space.Dir(), workspace.TaskCacheKeys(meta.PipelineName, meta.JobName, step.Agent, ri.Caches)),
+		detachCaches: bw.AttachCaches(ctx, space.Dir(), caches),
 		dir:          dir, runner: runner, lost: lost,
 		step: step, ri: ri, primary: primary, fallbackIndex: fallbackIndex, agent: agent,
 		pin:   agentPinScope(cfg, ri.AgentName),

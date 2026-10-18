@@ -258,12 +258,12 @@ jobs:
 ```
 
 - **Scoped like Concourse's**: pipeline + job + step name + path. Renaming any of them starts a fresh cache; two steps sharing a name in one job share one. Every `across:` cell of a step shares its cache.
-- **Empty on first use**, and on any other machine — a cache lives where the step ran. A step placed on a worker (`tags:`) keeps its cache on that worker.
+- **Empty on first use**, and on any other machine — a cache lives where the step ran. A step placed on a worker (`tags:`) keeps its cache on that worker: a docker volume on a `docker+ssh://`, `local:` or cloud worker, a directory under the worker's root on an `ssh://` one. Nothing crosses the wire either way.
 - **Kept whatever the step's exit code**, as Concourse keeps it. A step skipped from the step cache never runs, so never touches its task cache.
 - **Never hashed, never an artifact.** A warm cache must not make identical work look different, so it reaches neither the merkle hash nor the step cache's key, is not passed to other steps, and is never captured or mirrored to the artifact store.
 - **Paths**: relative, inside the working directory. A cache may sit inside an input (`src/node_modules`), shadowing that part of it; it may not be or contain an input, overlap an output, or overlap another cache — a load error each.
 - **Concurrent runs of one step**: the first takes the cache, a second starts empty, and whichever finishes last is kept. (Concourse starts both warm from a copy; steps moves the directory rather than copying it, so a multi-GB cache costs nothing to attach.)
-- **Lifetime**: under a durable `root:` they outlive the run; without one they last only the run, like everything else in a temp root. Least-recently-used caches are evicted past 50.
+- **Lifetime**: here, under a durable `root:` they outlive the run, least-recently-used evicted past 50; without one they last only the run, like everything else in a temp root. On a worker they are not bounded yet — as Concourse's are not without a `ttl:` — so a long-lived worker's disk is yours to watch.
 
 ## Resuming a failed run
 

@@ -253,6 +253,13 @@ func (s *plusSession) connect(ctx context.Context) error {
 		return err
 	}
 
+	caches, err := s.cacheMounts(ctx)
+	if err != nil {
+		return err
+	}
+
+	mounts = append(mounts, caches...)
+
 	s.holder, err = s.docker.CreateHolder(ctx, "steps-holder-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), mounts)
 	if err != nil {
 		return fmt.Errorf("%w", err)
@@ -299,9 +306,9 @@ func (s *plusSession) compose(ctx context.Context) ([]string, []string, error) {
 	var files []string
 
 	if s.spec.Cwd != "" {
-		entries, err := os.ReadDir(s.spec.Cwd)
+		entries, err := s.treeEntries()
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w", err)
+			return nil, nil, err
 		}
 
 		for _, entry := range entries {
@@ -334,6 +341,43 @@ func (s *plusSession) compose(ctx context.Context) ([]string, []string, error) {
 	s.emptyTree = len(mounts) == 1 && len(files) == 0
 
 	return mounts, files, nil
+}
+
+// treeEntries are the tree's top-level entries but a cache's, whose local directory is an empty stand-in for the worker's own volume.
+func (s *plusSession) treeEntries() ([]os.DirEntry, error) {
+	entries, err := os.ReadDir(s.spec.Cwd)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	return slices.DeleteFunc(entries, func(entry os.DirEntry) bool {
+		_, cached := s.spec.Caches[entry.Name()]
+
+		return cached
+	}), nil
+}
+
+// cacheMounts finds or makes each of the step's cache volumes on this worker, mounted over the empty stand-in the tree carried.
+func (s *plusSession) cacheMounts(ctx context.Context) ([]string, error) {
+	mounts := make([]string, 0, len(s.spec.Caches))
+
+	for rel, key := range s.spec.Caches {
+		volume, err := s.docker.CreateVolume(ctx, taskCacheVolume(s.namespace, key), shell.OwnershipLabels(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("cache %q: %w", rel, err)
+		}
+
+		mounts = append(mounts, volumeMount(volume.Name, path.Join(plusWorkdir, rel), false))
+	}
+
+	return mounts, nil
+}
+
+// taskCacheVolume names a step's cache on this worker. Not in sessionPrefixes, so neither a session's teardown nor eviction ever removes it. ponytail: unbounded on the worker, as Concourse's are without a ttl:; a count bound beside trim is the upgrade.
+func taskCacheVolume(namespace, key string) string {
+	sum := sha256.Sum256([]byte(namespace + "\x00" + key))
+
+	return "steps-tc-" + hex.EncodeToString(sum[:16])
 }
 
 // mountFor places one top-level directory; an empty declared output gets a fresh volume, which is what lets it be held afterwards without a copy.
