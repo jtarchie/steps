@@ -271,6 +271,7 @@ func (c *Config) validate() error {
 		c.validateContextFrom,
 		c.validateMemory,
 		c.validateVolatileSteps,
+		c.validateCaches,
 		c.validateStepTransitions,
 		c.validateAsserts,
 		c.validateDelegateBudgets,

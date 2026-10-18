@@ -105,6 +105,8 @@ var stepOperators = []stepOperator{
 
 	// Remove the repair and the task simply stays broken.
 	{tag: "fix", apply: deleteKey("fix")},
+	// Remove a cache and the step that expected it warm runs cold.
+	{tag: "caches", apply: deleteKey("caches")},
 	// Remove the decision the reader was handed and its consumer has
 	// nothing to read.
 	{tag: "context", apply: deleteKey("context")},

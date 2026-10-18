@@ -71,6 +71,8 @@ type Task struct {
 	// it, which is the opposite of reusable.
 	Inputs  *InputSpec `yaml:"inputs,omitempty"`
 	Outputs []string   `yaml:"outputs,omitempty"`
+	// Caches are directories this task keeps between runs on the machine that ran it (see TaskCache). A referencing step's own Caches, if non-nil, override these for that step only.
+	Caches []TaskCache `yaml:"caches,omitempty"`
 }
 
 // FixSpec is a task step's fix: — the agent to invoke when a run misses the

@@ -26,6 +26,13 @@ func WithBuildMetadata(ctx context.Context, m BuildMetadata) context.Context {
 	return context.WithValue(ctx, buildMetadataKey{}, m)
 }
 
+// MetadataFrom is the metadata the context carries, zero when none.
+func MetadataFrom(ctx context.Context) BuildMetadata {
+	m, _ := ctx.Value(buildMetadataKey{}).(BuildMetadata)
+
+	return m
+}
+
 // buildEnvNames are the variables BuildMetadata sets, in the order of its fields.
 //
 //nolint:gochecknoglobals // static, read-only
@@ -40,7 +47,7 @@ func BuildEnvNames() []string {
 // carries none. An empty field is unset rather than empty, the STEPS_WORKER
 // convention, and a fresh map is returned because callers merge into it.
 func BuildEnv(ctx context.Context) map[string]string {
-	m, _ := ctx.Value(buildMetadataKey{}).(BuildMetadata)
+	m := MetadataFrom(ctx)
 
 	values := []string{m.RunID, m.JobName, m.PipelineName, m.PipelineRevision, m.URL}
 

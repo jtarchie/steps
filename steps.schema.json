@@ -758,6 +758,9 @@
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
         },
+        "caches": {
+          "$ref": "#/$defs/caches"
+        },
         "container_limits": {
           "$ref": "#/$defs/containerLimits"
         },
@@ -1181,6 +1184,9 @@
         "privileged": {
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
+        },
+        "caches": {
+          "$ref": "#/$defs/caches"
         },
         "container_limits": {
           "$ref": "#/$defs/containerLimits"
@@ -1703,6 +1709,9 @@
           "type": "boolean",
           "description": "Never reuse this step's result. Set it on a task or agent step that reads something the pipeline never declared \u2014 a clock, a network endpoint, a path outside its inputs \u2014 where a recorded answer would be a stale one."
         },
+        "caches": {
+          "$ref": "#/$defs/caches"
+        },
         "when": {
           "$ref": "#/$defs/whenSpec"
         },
@@ -1988,6 +1997,27 @@
               "description": "How many cached versions to keep, least-recently-used evicted first. 0 takes the default."
             }
           }
+        }
+      }
+    },
+    "caches": {
+      "type": "array",
+      "description": "Directories this step keeps between runs on the machine that ran it (Concourse's task caches). A speed-up only: never hashed, never an input or output, empty on first use and on any other machine.",
+      "items": {
+        "$ref": "#/$defs/taskCache"
+      }
+    },
+    "taskCache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Directory relative to the working directory. May sit inside an input (shadowing it); may not be or contain an input, nor overlap an output."
         }
       }
     },

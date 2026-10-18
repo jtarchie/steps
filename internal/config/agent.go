@@ -175,6 +175,8 @@ type Agent struct {
 	// capability the pipeline must declare, not inherit. Rejected on hosted
 	// (HTTP) agents, where there is no CLI to configure.
 	Settings string `yaml:"settings,omitempty"`
+	// Caches are directories this agent's commands keep between runs on the machine that ran them (see TaskCache). A referencing step's own Caches, if non-nil, override these for that step only.
+	Caches []TaskCache `yaml:"caches,omitempty"`
 }
 
 // AgentSource selects the model and how to reach it. Model may carry a

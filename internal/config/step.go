@@ -315,6 +315,8 @@ type Step struct {
 	// which is the contract a task's run: has always had. Valid only on task
 	// and agent steps: they are the two kinds the step cache reuses at all.
 	Volatile bool `yaml:"volatile,omitempty"`
+	// Caches, on a task or agent step, overrides the referenced task's/agent's caches: for this step only (declared-wins, like Env). See TaskCache.
+	Caches []TaskCache `yaml:"caches,omitempty"`
 	// When, on a task/put/agent step, gates whether the step runs at all: an
 	// explicit command whose exit code decides (0 runs, nonzero skips). See
 	// WhenSpec. Invalid on get steps — a get fans the remainder of the plan

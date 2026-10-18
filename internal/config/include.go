@@ -271,6 +271,10 @@ func mergeTaskDocument(t *Task, doc Task) {
 	if t.Outputs == nil {
 		t.Outputs = doc.Outputs
 	}
+
+	if t.Caches == nil {
+		t.Caches = doc.Caches
+	}
 }
 
 func mergeTaskContainer(t *Task, doc Task) {
@@ -365,6 +369,10 @@ func mergeAgentIdentity(a *Agent, doc Agent) {
 
 	if a.Settings == "" {
 		a.Settings = doc.Settings
+	}
+
+	if a.Caches == nil {
+		a.Caches = doc.Caches
 	}
 
 	if a.Fallback == nil {

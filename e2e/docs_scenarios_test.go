@@ -232,6 +232,14 @@ var docScenarios = map[string]docScenario{
 		},
 	},
 
+	// The builder's run_shell writes into its cache dir, which only exists if caches: put it there.
+	"workspace-agent-cache": {
+		fake: scripted(
+			callsTool("run_shell", map[string]any{"command": "touch .cache/built"}),
+			says("Built."),
+		),
+	},
+
 	// The writer creates report/summary.md and the publish task proves the
 	// artifact flowed.
 	"agents-writer": {

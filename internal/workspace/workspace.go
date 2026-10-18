@@ -132,6 +132,8 @@ type BuildWorkspace interface {
 	// ResetArtifact replaces whatever the store holds under name with a fresh
 	// empty directory, for a collecting across: (see isolatingBuild's).
 	ResetArtifact(ctx context.Context, name string) error
+	// AttachCaches puts each cache (path relative to dir → TaskCacheKey) in place before a step runs; the func it returns files them back and must run before the space closes.
+	AttachCaches(ctx context.Context, dir string, caches map[string]string) func()
 	// HasArtifact reports whether name is in the build store, or held by a
 	// worker on the build's behalf, so a resume that keeps a get's artifact
 	// can refuse a tree that lost it.
@@ -338,7 +340,9 @@ type isolatingProvider struct {
 	// stepCache reuses task/agent outputs across runs, nil when the root is
 	// this provider's own temp directory — see enableCache.
 	stepCache *stepCache
-	builds    atomic.Int64
+	// taskCaches holds caches: directories between runs; under a provider-owned temp root they last only the run.
+	taskCaches *entryStore
+	builds     atomic.Int64
 }
 
 // enableCache attaches the two cross-build caches.
@@ -362,6 +366,13 @@ func (p *isolatingProvider) enableCache(ws *config.WorkspaceConfig) error {
 
 		p.cache = cache
 	}
+
+	taskCaches, err := newEntryStore(p.root, taskCacheDirName, defaultTaskCacheMaxEntries, os.RemoveAll)
+	if err != nil {
+		return err
+	}
+
+	p.taskCaches = taskCaches
 
 	if p.ownsRoot {
 		return nil
@@ -548,7 +559,7 @@ func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWo
 
 	return &isolatingBuild{
 		backend: p.backend, root: root, artifacts: artifacts, stepsDir: steps,
-		keep: p.keep, cache: p.cache, stepCache: p.stepCache,
+		keep: p.keep, cache: p.cache, stepCache: p.stepCache, taskCaches: p.taskCaches,
 	}, nil
 }
 
@@ -558,11 +569,12 @@ func (p *isolatingProvider) reusedBuild(ctx context.Context, dir string) *isolat
 
 	return &isolatingBuild{
 		backend: p.backend, root: dir,
-		artifacts: filepath.Join(dir, "artifacts"),
-		stepsDir:  filepath.Join(dir, "steps"),
-		keep:      true, // never tear down a tree we did not create
-		cache:     p.cache,
-		stepCache: p.stepCache,
+		artifacts:  filepath.Join(dir, "artifacts"),
+		stepsDir:   filepath.Join(dir, "steps"),
+		keep:       true, // never tear down a tree we did not create
+		cache:      p.cache,
+		stepCache:  p.stepCache,
+		taskCaches: p.taskCaches,
 	}
 }
 
@@ -602,6 +614,7 @@ type isolatingBuild struct {
 	keep        bool
 	cache       *resourceCache
 	stepCache   *stepCache
+	taskCaches  *entryStore
 	stepCounter atomic.Int64
 
 	// digests memoizes artifactDigest per artifact name. An artifact's bytes

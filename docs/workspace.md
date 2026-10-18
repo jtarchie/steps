@@ -202,6 +202,69 @@ jobs:
 - **A hit costs a snapshot** (free on btrfs, a copy under `copy`), never a model call. **A failed step is never cached**, and **a cache failure never fails a build** — anything wrong falls back to running the step. Entries are evicted least-recently-used.
 - **The cache is a reader on this disk.** A placed step's outputs stay on its worker until something here reads them; with a durable `root:` the step cache is that something, and the outputs come home to be filed.
 
+## Task caches (`caches:`)
+
+A directory a task or agent step keeps between runs, on the machine that ran it — Concourse's [task caches](https://concourse-ci.org/tasks.html#caches). For a build tool's own cache (`GOCACHE`, `node_modules`, `~/.m2`): the step still runs, it just starts warm.
+
+```yaml
+jobs:
+- name: build
+  plan:
+  - task: compile
+    caches:
+    - path: .gocache          # relative to the working directory
+    run: |
+      if [ -e .gocache/built ]; then echo warm; else echo cold; fi
+      touch .gocache/built
+  - task: compile             # the same step name in the same job: the same cache
+    caches:
+    - path: .gocache
+    run: |
+      if [ -e .gocache/built ]; then echo warm; else echo cold; fi
+    assert:
+      stdout: warm
+  assert:
+    execution: [compile, compile]
+    outcome: succeeded
+```
+
+On a `tasks:` or `agents:` entry it applies to every step using that entry; a step's own `caches:` replaces the entry's, and `caches: []` turns them off. On an agent, it is where `run_shell` builds land:
+
+```yaml test=workspace-agent-cache
+tasks:
+- name: test
+  caches:
+  - path: .gocache
+  run: GOCACHE=$PWD/.gocache true
+
+agents:
+- name: builder
+  source:
+    model: lmstudio/qwen3.8
+  tools: [run_shell]
+  caches:
+  - path: .cache
+
+jobs:
+- name: build
+  plan:
+  - task: test
+  - agent: builder
+    messages:
+      - Build it.
+  assert:
+    execution: [test, builder]
+    outcome: succeeded
+```
+
+- **Scoped like Concourse's**: pipeline + job + step name + path. Renaming any of them starts a fresh cache; two steps sharing a name in one job share one. Every `across:` cell of a step shares its cache.
+- **Empty on first use**, and on any other machine — a cache lives where the step ran. A step placed on a worker (`tags:`) keeps its cache on that worker.
+- **Kept whatever the step's exit code**, as Concourse keeps it. A step skipped from the step cache never runs, so never touches its task cache.
+- **Never hashed, never an artifact.** A warm cache must not make identical work look different, so it reaches neither the merkle hash nor the step cache's key, is not passed to other steps, and is never captured or mirrored to the artifact store.
+- **Paths**: relative, inside the working directory. A cache may sit inside an input (`src/node_modules`), shadowing that part of it; it may not be or contain an input, overlap an output, or overlap another cache — a load error each.
+- **Concurrent runs of one step**: the first takes the cache, a second starts empty, and whichever finishes last is kept. (Concourse starts both warm from a copy; steps moves the directory rather than copying it, so a multi-GB cache costs nothing to attach.)
+- **Lifetime**: under a durable `root:` they outlive the run; without one they last only the run, like everything else in a temp root. Least-recently-used caches are evicted past 50.
+
 ## Resuming a failed run
 
 If a step fails, re-running the job from the beginning pays for every expensive step again — and for agent steps it is **lossy**: an agent is not deterministic, so re-running does not reproduce the output that already passed review.

@@ -51,6 +51,8 @@ type ResolvedTask struct {
 	// Assert). It always comes from the step (top-level tasks: entries carry
 	// no assert), so a matching assert makes a non-zero-exit task a success.
 	Assert *Assert
+	// Caches are the directories this task keeps between runs. See TaskCache.
+	Caches []TaskCache
 }
 
 // resolveTaskRuntime merges the execution settings a step may override on the
@@ -107,7 +109,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, User: step.User, Network: step.Network,
 			Privileged: step.Privileged, Limits: step.Limits, Timeout: step.Timeout,
 			InputMapping: step.InputMapping, OutputMapping: step.OutputMapping,
-			Assert: step.Assert,
+			Assert: step.Assert, Caches: step.Caches,
 		}, nil
 	}
 
@@ -143,6 +145,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		Image: runtime.Image, Env: runtime.Env, User: runtime.User, Network: runtime.Network,
 		Privileged: runtime.Privileged, Limits: runtime.Limits, Timeout: timeout,
 		InputMapping: step.InputMapping, OutputMapping: step.OutputMapping, Assert: step.Assert,
+		Caches: resolveCaches(task.Caches, step),
 	}, nil
 }
 
@@ -249,6 +252,8 @@ type ResolvedInvocation struct {
 	// in a container from this image instead of on the host. See
 	// Agent.Image/Step.Image.
 	Image string
+	// Caches are the directories this step's commands keep between runs. See TaskCache.
+	Caches []TaskCache
 }
 
 // resolveAgentRuntime merges the three container settings a step may override
@@ -371,6 +376,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		Network:              runtime.Network,
 		Privileged:           runtime.Privileged,
 		Limits:               runtime.Limits,
+		Caches:               resolveCaches(agent.Caches, step),
 	}, nil
 }
 

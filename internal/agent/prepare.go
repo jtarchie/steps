@@ -75,6 +75,8 @@ type preparedAgentStep struct {
 	runner shell.Runner
 	// lost is the conversation's record of an unreachable tree, shared with the tree openTree builds.
 	lost *tree.Lost
+	// detachCaches files the step's caches: back, after its runner lets go of the directory and before the directory goes.
+	detachCaches func()
 }
 
 // openTree settles where this step's file tools reach and what the model is told its working directory is.
@@ -108,6 +110,10 @@ func (p preparedAgentStep) openTree(ctx context.Context) (preparedAgentStep, err
 // failure than the ordinary case this runs in.
 func (p preparedAgentStep) close(stepLabel string) {
 	closeAll(p.closers)
+
+	if p.detachCaches != nil {
+		p.detachCaches()
+	}
 
 	// Under --keep-workspace the step's directory survives for a postmortem,
 	// and the spilled tool outputs are exactly what the kept transcript's
@@ -296,8 +302,11 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		usage:                &stepUsage{name: ri.AgentName, budget: ri.BudgetTokens, delegateFraction: cfg.DelegateBudgetFraction(ri.AgentName)},
 	}
 
+	meta := shell.MetadataFrom(ctx)
+
 	return preparedAgentStep{
-		dir: dir, runner: runner, lost: lost,
+		detachCaches: bw.AttachCaches(ctx, space.Dir(), workspace.TaskCacheKeys(meta.PipelineName, meta.JobName, step.Agent, ri.Caches)),
+		dir:          dir, runner: runner, lost: lost,
 		step: step, ri: ri, primary: primary, fallbackIndex: fallbackIndex, agent: agent,
 		pin:   agentPinScope(cfg, ri.AgentName),
 		space: space, conv: conv, llm: invocationLLM(ri, apiKey),

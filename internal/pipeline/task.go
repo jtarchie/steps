@@ -108,6 +108,7 @@ func executeTask(
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 	defer workspace.CloseSpace(space, rt.Name)
+	defer attachTaskCaches(ctx, bw, space, step.Task, rt.Caches)()
 
 	// A shell command cannot be handed a synthetic tool result, so a task that
 	// declared context: from: gets each demanded decision as a file it can

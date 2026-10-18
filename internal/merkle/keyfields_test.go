@@ -301,6 +301,7 @@ func keyProbes() []keyProbe {
 		"Source.StringToolChoice": "source: config.AgentSource — how one request is spelled for a server that cannot parse the precise form, not what is asked",
 		"Source.APIKeyEnv":        secretNamed,
 		"File":                    loadedInto, "SystemFile": loadedInto, "Description": loadedInto,
+		"Caches": "source: config.TaskCache — a speed-up only, never hashed, or a warm cache would make identical work look different",
 	}
 
 	with := func(base map[string]string, more map[string]string) map[string]string {
