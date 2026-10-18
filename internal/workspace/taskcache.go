@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/jtarchie/steps/internal/config"
 )
@@ -75,9 +76,12 @@ func (b *isolatingBuild) AttachCaches(ctx context.Context, dir string, caches ma
 		}
 	}
 
+	// Detached: a cancelled step is still one whose cache is worth filing back, and a copy across filesystems runs cp under this context.
+	saveCtx := context.WithoutCancel(ctx)
+
 	return func() {
 		for _, a := range done {
-			b.detach(a.entry, a.dst)
+			b.detach(saveCtx, a.entry, a.dst)
 		}
 
 		if len(done) > 0 {
@@ -95,7 +99,7 @@ func attach(ctx context.Context, entry, dst string, ok bool) {
 	}
 
 	if err == nil && ok {
-		err = move(entry, dst)
+		err = move(ctx, entry, dst)
 		if errors.Is(err, fs.ErrNotExist) {
 			err = nil
 		}
@@ -112,7 +116,7 @@ func attach(ctx context.Context, entry, dst string, ok bool) {
 }
 
 // detach files dst back as the entry, replacing one a concurrent run filed first. An empty cache is not kept: the next attach makes an empty directory anyway, and keeping it would spend an LRU slot on nothing.
-func (b *isolatingBuild) detach(entry, dst string) {
+func (b *isolatingBuild) detach(ctx context.Context, entry, dst string) {
 	entries, err := os.ReadDir(dst)
 	if err != nil {
 		return
@@ -126,11 +130,11 @@ func (b *isolatingBuild) detach(entry, dst string) {
 
 	err = b.taskCaches.removeEntry(entry)
 	if err == nil {
-		err = move(dst, entry)
+		err = move(ctx, dst, entry)
 	}
 
 	if err != nil {
-		slog.Warn("workspace.task_cache_save_failed", "dir", dst, "error", err)
+		slog.WarnContext(ctx, "workspace.task_cache_save_failed", "dir", dst, "error", err)
 
 		return
 	}
@@ -138,16 +142,22 @@ func (b *isolatingBuild) detach(entry, dst string) {
 	b.taskCaches.touch(entry)
 }
 
-// move renames, or copies and removes when the two sides are different filesystems or btrfs subvolumes (a cache inside an input is inside that input's snapshot). ponytail: a plain copy; a reflink-aware one is the upgrade if a nested cache on btrfs is ever measured to matter.
-func move(src, dst string) error {
+// move renames, or copies and removes when the two sides are different filesystems or btrfs subvolumes (a cache inside an input is inside that input's snapshot). Only EXDEV copies: any other refusal, a concurrent run's entry already in place among them, copied would merge two caches into one.
+func move(ctx context.Context, src, dst string) error {
 	err := rename(src, dst)
-	if err == nil || errors.Is(err, fs.ErrNotExist) {
+	if !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
 
-	copyErr := os.CopyFS(dst, os.DirFS(src))
-	if copyErr != nil {
-		return errors.Join(err, copyErr)
+	err = os.MkdirAll(dst, 0o750)
+	if err == nil {
+		err = copyTree(ctx, src, dst)
+	}
+
+	if err != nil {
+		_ = os.RemoveAll(dst)
+
+		return fmt.Errorf("copying the cache across filesystems: %w", err)
 	}
 
 	err = os.RemoveAll(src)

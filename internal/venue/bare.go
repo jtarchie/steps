@@ -55,9 +55,11 @@ type bareSession struct {
 
 	conn liveSSH
 	// orphans are the pid files of commands whose connection failed under them: still running, for all this end knows.
-	orphans        []string
-	dir            string
-	pipeline       string
+	orphans  []string
+	dir      string
+	pipeline string
+	// cachesAttached is what lets close file the caches back: before attachCaches has run, what sits at a cache path inside an input is the input's own upload, not the cache.
+	cachesAttached bool
 	goos, goarch   string
 	uid, gid       *int
 	fetchMu        sync.Mutex
@@ -213,18 +215,16 @@ func (s *bareSession) cachePairs() [][2]string {
 
 // attachCaches moves each kept cache over the uploaded stand-in, the rename the local workspace does, on the worker.
 func (s *bareSession) attachCaches(ctx context.Context) error {
+	if len(s.spec.Caches) == 0 {
+		return nil
+	}
+
 	s.pipeline = shell.MetadataFrom(ctx).PipelineName
 
 	var script strings.Builder
 
-	script.WriteString(reapScript(ctx, s.root()))
-
 	for _, pair := range s.cachePairs() {
 		fmt.Fprintf(&script, `rm -rf %[2]s; mkdir -p "$(dirname %[2]s)"; if [ -d %[1]s ]; then mv %[1]s %[2]s; else mkdir -p %[2]s; fi; `, pair[0], pair[1])
-	}
-
-	if script.Len() == 0 {
-		return nil
 	}
 
 	code, err := s.exec(ctx, script.String(), nil, io.Discard, io.Discard)
@@ -236,12 +236,14 @@ func (s *bareSession) attachCaches(ctx context.Context) error {
 		return fmt.Errorf("restoring the step's caches: %w", err)
 	}
 
+	s.cachesAttached = true
+
 	return nil
 }
 
 // detachCaches is the shell that files each cache back, replacing one a concurrent session filed first; run after the step's processes are gone.
 func (s *bareSession) detachCaches() string {
-	if len(s.spec.Caches) == 0 {
+	if !s.cachesAttached {
 		return ""
 	}
 
@@ -267,7 +269,13 @@ func (s *bareSession) root() string {
 
 // probe makes the step's directory and learns what the worker is, in one round trip. The owner file sits beside the directory, never in the tree a step sees.
 func (s *bareSession) probe(ctx context.Context) error {
-	script := `set -e; mkdir -p ` + s.root() + `; uname -s; uname -m; id -u; id -g; ` +
+	// The reap rides the probe rather than a round trip of its own, and is best effort: ignored by set -e, as the left of an || is.
+	reap := reapScript(ctx, s.root())
+	if reap != "" {
+		reap = `{ ` + reap + `} >/dev/null 2>&1 || true; `
+	}
+
+	script := `set -e; mkdir -p ` + s.root() + `; uname -s; uname -m; id -u; id -g; ` + reap +
 		`d=$(mktemp -d ` + s.root() + `/steps-build.XXXXXX); ` +
 		`printf '%s %s\n' ` + shellQuote(shell.OwnerHost()) + ` ` + strconv.Itoa(os.Getpid()) + ` > "$d.owner"; echo "$d"`
 

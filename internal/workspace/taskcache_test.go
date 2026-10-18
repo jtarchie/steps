@@ -1,11 +1,23 @@
 package workspace
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
+
+// renameRefusing stands in for a rename that answers errno for any entry that exists, and ENOENT, as a real one does, for one that does not.
+func renameRefusing(errno syscall.Errno) func(string, string) error {
+	return func(src, dst string) error {
+		_, err := os.Lstat(src)
+		if err != nil {
+			return &os.LinkError{Op: "rename", Old: src, New: dst, Err: syscall.ENOENT}
+		}
+
+		return &os.LinkError{Op: "rename", Old: src, New: dst, Err: errno}
+	}
+}
 
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
@@ -130,9 +142,9 @@ func TestTaskCacheEmptyIsNotKept(t *testing.T) {
 	}
 }
 
-// TestTaskCacheSurvivesARenameAcrossFilesystems: a cache inside an input sits in that input's btrfs snapshot, where rename answers EXDEV.
+// TestTaskCacheSurvivesARenameAcrossFilesystems: a cache inside an input sits in that input's btrfs snapshot, where rename answers EXDEV. The copy keeps modes, which a plain os.CopyFS widens to 0o666 less umask.
 func TestTaskCacheSurvivesARenameAcrossFilesystems(t *testing.T) {
-	rename = func(string, string) error { return &os.LinkError{Op: "rename", Err: errors.New("cross-device link")} }
+	rename = renameRefusing(syscall.EXDEV)
 	t.Cleanup(func() { rename = os.Rename })
 
 	bw := newBuild(t)
@@ -152,8 +164,43 @@ func TestTaskCacheSurvivesARenameAcrossFilesystems(t *testing.T) {
 	second := t.TempDir()
 	bw.AttachCaches(t.Context(), second, caches)
 
-	got, err := os.ReadFile(filepath.Join(second, "src/node_modules/pkg/index.js")) //nolint:gosec // a path under t.TempDir()
+	restored := filepath.Join(second, "src/node_modules/pkg/index.js")
+
+	got, err := os.ReadFile(restored) //nolint:gosec // a path under t.TempDir()
 	if err != nil || string(got) != "x" {
 		t.Errorf("the cache did not come back by copy: %q, %v", got, err)
+	}
+
+	info, err := os.Stat(restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("the copy changed the file's mode to %v", info.Mode().Perm())
+	}
+}
+
+// TestTaskCacheNeverCopiesARefusedRename: only EXDEV is a different filesystem; ENOTEMPTY is a concurrent run's entry already filed, and copying into it would merge two caches into one.
+func TestTaskCacheNeverCopiesARefusedRename(t *testing.T) {
+	bw := newBuild(t)
+	caches := map[string]string{"c": TaskCacheKey("p", "j", "s", "c")}
+
+	dir := t.TempDir()
+	detach := bw.AttachCaches(t.Context(), dir, caches)
+	mustWrite(t, filepath.Join(dir, "c/mine"), "x")
+
+	rename = renameRefusing(syscall.ENOTEMPTY)
+	t.Cleanup(func() { rename = os.Rename })
+
+	detach()
+
+	rename = os.Rename
+	next := t.TempDir()
+	bw.AttachCaches(t.Context(), next, caches)
+
+	_, err := os.Stat(filepath.Join(next, "c/mine"))
+	if !os.IsNotExist(err) {
+		t.Errorf("a refused rename was filed by copy: %v", err)
 	}
 }

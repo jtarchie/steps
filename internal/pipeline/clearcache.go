@@ -59,11 +59,9 @@ func ClearTaskCaches(ctx context.Context, cfg *config.Config, jobName, step, cac
 			jobName, pluralTag(len(names)), describeMissing(missing, names), names[0])
 	}
 
-	keyed := workspace.TaskCacheKeys(cfg.Name, jobName, step, cachesOf(paths))
 	keys := make([]string, 0, len(paths))
-
 	for _, p := range paths {
-		keys = append(keys, keyed[p])
+		keys = append(keys, workspace.TaskCacheKey(cfg.Name, jobName, step, p))
 	}
 
 	cleared, err := clearLocal(cfg.Workspace, paths, keys)
@@ -226,13 +224,4 @@ func cachesFor(cfg *config.Config, s config.Step) ([]config.TaskCache, string, b
 	}
 
 	return nil, "", false
-}
-
-func cachesOf(paths []string) []config.TaskCache {
-	caches := make([]config.TaskCache, 0, len(paths))
-	for _, p := range paths {
-		caches = append(caches, config.TaskCache{Path: p})
-	}
-
-	return caches
 }
