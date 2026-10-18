@@ -193,7 +193,12 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 
 		return err
 	case config.StepKindAgent:
+		ctx, placed := withPlacementSink(ctx)
+
 		err := agent.RunHook(ctx, scope.cfg, scope.jobName, step, scope.bw, scope.st, placedAgentRunner(step))
+
+		recordPlacement(ctx, scope.stepRunner, placed, 0, executedStepName(step), scope.label, "")
+
 		if err != nil {
 			return fmt.Errorf("agent hook: %w", err)
 		}

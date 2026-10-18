@@ -34,6 +34,19 @@ type agentOutcome struct {
 // never chain-skippable), reuses it when the step cache holds its outputs, and
 // otherwise runs its conversation and records the outcome.
 func executeAgentStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (agentOutcome, error) {
+	ctx, placed := withPlacementSink(ctx)
+
+	out, err := runAgentStepUnrecorded(ctx, r, i, step, parentHash)
+
+	// After its Close, and only under a node it recorded: a failure before the node has no row to reference, and it never ran anywhere either.
+	if out.hash != "" {
+		recordPlacement(ctx, r, placed, i, step.DisplayName(), out.hash, out.hash)
+	}
+
+	return out, err
+}
+
+func runAgentStepUnrecorded(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (agentOutcome, error) {
 	fail := func(err error) error { return fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err) }
 
 	prepared, err := agent.PrepareStep(ctx, r.cfg, step, r.bw, r.st, placedAgentRunner(step))
