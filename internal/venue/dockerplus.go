@@ -240,6 +240,7 @@ func (s *plusSession) connect(ctx context.Context) error {
 	s.watchDrain()
 
 	s.evict(ctx)
+	s.reapTaskCaches(ctx)
 
 	work, err := s.newVolume(ctx, "work")
 	if err != nil {
@@ -348,7 +349,7 @@ func (s *plusSession) cacheMounts(ctx context.Context) ([]string, error) {
 	mounts := make([]string, 0, len(s.spec.Caches))
 
 	for rel, key := range s.spec.Caches {
-		volume, err := s.docker.CreateVolume(ctx, taskCacheVolume(s.namespace, key), shell.OwnershipLabels(), nil)
+		volume, err := s.docker.CreateVolume(ctx, taskCacheVolume(s.namespace, key), taskCacheLabels(ctx, key), nil)
 		if err != nil {
 			return nil, fmt.Errorf("cache %q: %w", rel, err)
 		}
@@ -359,7 +360,7 @@ func (s *plusSession) cacheMounts(ctx context.Context) ([]string, error) {
 	return mounts, nil
 }
 
-// taskCacheVolume names a step's cache on this worker. Not in sessionPrefixes, so neither a session's teardown nor eviction ever removes it. ponytail: unbounded on the worker, as Concourse's are without a ttl:; a count bound beside trim is the upgrade.
+// taskCacheVolume names a step's cache on this worker. Not in sessionPrefixes, so neither a session's teardown nor eviction ever removes it; reapTaskCaches does, once its pipeline stops naming it. ponytail: no size bound on the worker, as Concourse has none; a per-worker ?task_cache_max= evicting by last use (run_placements) is the upgrade.
 func taskCacheVolume(namespace, key string) string {
 	sum := sha256.Sum256([]byte(namespace + "\x00" + key))
 

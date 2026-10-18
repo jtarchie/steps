@@ -121,7 +121,7 @@ func clearDirs(ctx context.Context, worker Worker, keys []string) ([]ClearedCach
 
 	for _, key := range keys {
 		// A key is a hex digest, but it reaches a shell, so it is quoted all the same.
-		fmt.Fprintf(&script, `d=%[1]s/steps-task-caches/%[2]s; if [ ! -e "$d" ]; then echo %[2]s absent; elif rm -rf "$d"; then echo %[2]s removed; else echo %[2]s failed; fi; `, s.root(), shellQuote(key))
+		fmt.Fprintf(&script, `d=%[1]s/steps-task-caches/%[2]s; if [ ! -e "$d" ]; then echo %[2]s absent; elif rm -rf "$d" "$d.pipeline"; then echo %[2]s removed; else echo %[2]s failed; fi; `, s.root(), shellQuote(key))
 	}
 
 	var stdout, stderr strings.Builder

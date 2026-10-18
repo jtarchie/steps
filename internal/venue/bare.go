@@ -57,6 +57,7 @@ type bareSession struct {
 	// orphans are the pid files of commands whose connection failed under them: still running, for all this end knows.
 	orphans        []string
 	dir            string
+	pipeline       string
 	goos, goarch   string
 	uid, gid       *int
 	fetchMu        sync.Mutex
@@ -212,14 +213,18 @@ func (s *bareSession) cachePairs() [][2]string {
 
 // attachCaches moves each kept cache over the uploaded stand-in, the rename the local workspace does, on the worker.
 func (s *bareSession) attachCaches(ctx context.Context) error {
-	if len(s.spec.Caches) == 0 {
-		return nil
-	}
+	s.pipeline = shell.MetadataFrom(ctx).PipelineName
 
 	var script strings.Builder
 
+	script.WriteString(reapScript(ctx, s.root()))
+
 	for _, pair := range s.cachePairs() {
 		fmt.Fprintf(&script, `rm -rf %[2]s; mkdir -p "$(dirname %[2]s)"; if [ -d %[1]s ]; then mv %[1]s %[2]s; else mkdir -p %[2]s; fi; `, pair[0], pair[1])
+	}
+
+	if script.Len() == 0 {
+		return nil
 	}
 
 	code, err := s.exec(ctx, script.String(), nil, io.Discard, io.Discard)
@@ -245,7 +250,8 @@ func (s *bareSession) detachCaches() string {
 	script.WriteString("mkdir -p " + s.root() + "/steps-task-caches; ")
 
 	for _, pair := range s.cachePairs() {
-		fmt.Fprintf(&script, `if [ -d %[2]s ]; then rm -rf %[1]s; mv %[2]s %[1]s; fi; `, pair[0], pair[1])
+		// The .pipeline file is what a later run of this pipeline judges the cache by when its config stops naming it.
+		fmt.Fprintf(&script, `if [ -d %[2]s ]; then rm -rf %[1]s; mv %[2]s %[1]s && printf %%s %[3]s > %[1]s.pipeline; fi; `, pair[0], pair[1], shellQuote(s.pipeline))
 	}
 
 	return script.String()

@@ -647,3 +647,103 @@ func TestEndToEndClearTaskCacheOnAnSSHWorker(t *testing.T) {
 		t.Errorf("runs reported %q, want the run after the clear to start cold (\"1\\n1\\n\")", got)
 	}
 }
+
+// reapPipeline counts each cache's runs; v2 drops compile's .b and renames lint to vet, as an edited pipeline would.
+func reapPipeline(t *testing.T, dir, placement, report string, v2 bool) string {
+	t.Helper()
+
+	compileCaches, compileRun, lint := "[{path: .a}, {path: .b}]", `echo "a=$(count .a) b=$(count .b)"`, "lint"
+	if v2 {
+		compileCaches, compileRun, lint = "[{path: .a}]", `echo "a=$(count .a)"`, "vet"
+	}
+
+	const count = `count() { n=$(($(cat "$1/n" 2>/dev/null || echo 0) + 1)); echo "$n" > "$1/n"; echo "$n"; }`
+
+	return writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  root: %[1]s
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    %[3]s
+    volatile: true
+    outputs: [cout]
+    caches: %[4]s
+    run: |
+      %[7]s
+      %[5]s > cout/r
+  - task: %[6]s
+    %[3]s
+    volatile: true
+    outputs: [lout]
+    caches: [{path: .c}]
+    run: |
+      %[7]s
+      echo "c=$(count .c)" > lout/r
+  - task: publish
+    volatile: true
+    inputs: [cout, lout]
+    run: cat cout/r lout/r >> %[2]s
+`, filepath.Join(dir, "ws"), report, placement, compileCaches, compileRun, lint, count))
+}
+
+// assertReaped runs v1, another pipeline beside it, v2, then both again: a cache v2 no longer names starts cold, the one it kept stays warm, and another pipeline's is never touched.
+func assertReaped(t *testing.T, placement string, run func(path string)) {
+	t.Helper()
+
+	dir, otherDir := t.TempDir(), t.TempDir()
+	report, otherReport := filepath.Join(dir, "runs.txt"), filepath.Join(otherDir, "runs.txt")
+	other := reapPipeline(t, otherDir, placement, otherReport, false)
+
+	run(reapPipeline(t, dir, placement, report, false))
+	run(other)
+	run(reapPipeline(t, dir, placement, report, true))
+	run(reapPipeline(t, dir, placement, report, false))
+	run(other)
+
+	if got, want := readFileString(t, report), "a=1 b=1\nc=1\na=2\nc=1\na=3 b=1\nc=1\n"; got != want {
+		t.Errorf("runs reported %q, want %q: the caches v2 dropped (compile's .b, lint's .c) reaped, compile's .a kept", got, want)
+	}
+
+	if got, want := readFileString(t, otherReport), "a=1 b=1\nc=1\na=2 b=2\nc=2\n"; got != want {
+		t.Errorf("the other pipeline reported %q, want %q: its caches are not this pipeline's to reap", got, want)
+	}
+}
+
+func TestEndToEndPlacedTaskCacheOfARemovedStepIsReaped(t *testing.T) {
+	requireDockerE2E(t)
+	t.Cleanup(func() { removeTaskCacheVolumes(t) })
+
+	assertReaped(t, "tags: [box]\n    image: "+dockerE2EImage, func(path string) {
+		mustRun(t, "run", path, "--force", "--worker", "box=local:")
+	})
+}
+
+func TestEndToEndSSHWorkerTaskCacheOfARemovedStepIsReaped(t *testing.T) {
+	worker := testsshd.New(t).URL
+
+	assertReaped(t, "tags: [box]", func(path string) {
+		mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+	})
+}
+
+// TestEndToEndTaskCacheReapStaysInItsWorker: two local: roots on one daemon are two workers, and v2 placed on one leaves the other's caches alone.
+func TestEndToEndTaskCacheReapStaysInItsWorker(t *testing.T) {
+	requireDockerE2E(t)
+	t.Cleanup(func() { removeTaskCacheVolumes(t) })
+
+	dir := t.TempDir()
+	report := filepath.Join(dir, "runs.txt")
+	placement := "tags: [box]\n    image: " + dockerE2EImage
+	here, there := "box=local:"+filepath.Join(dir, "here"), "box=local:"+filepath.Join(dir, "there")
+
+	mustRun(t, "run", reapPipeline(t, dir, placement, report, false), "--force", "--worker", here)
+	mustRun(t, "run", reapPipeline(t, dir, placement, report, true), "--force", "--worker", there)
+	mustRun(t, "run", reapPipeline(t, dir, placement, report, false), "--force", "--worker", here)
+
+	if got, want := readFileString(t, report), "a=1 b=1\nc=1\na=1\nc=1\na=2 b=2\nc=2\n"; got != want {
+		t.Errorf("runs reported %q, want %q: v2 on the other worker reaps only its own caches", got, want)
+	}
+}

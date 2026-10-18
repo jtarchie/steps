@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -185,6 +186,22 @@ func (m *matchedSteps) visit(_ string, s *config.Step) error {
 	}
 
 	return nil
+}
+
+// liveTaskCacheKeys is every cache cfg declares, across all its jobs: what a worker keeps of this pipeline, and nothing else.
+func liveTaskCacheKeys(cfg *config.Config) []string {
+	var keys []string
+
+	for i := range cfg.Jobs {
+		_ = cfg.Jobs[i].VisitSteps(func(_ string, s *config.Step) error {
+			caches, name, _ := cachesFor(cfg, *s)
+			keys = append(keys, slices.Collect(maps.Values(workspace.TaskCacheKeys(cfg.Name, cfg.Jobs[i].Name, name, caches)))...)
+
+			return nil
+		})
+	}
+
+	return keys
 }
 
 // cachesFor is a step's resolved caches and the name they are keyed by, for a task or agent step.
