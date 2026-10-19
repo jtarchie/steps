@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/jtarchie/steps/internal/redact"
 	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"path"
@@ -58,8 +59,8 @@ type bareSession struct {
 	orphans  []string
 	dir      string
 	pipeline string
-	// cachesAttached is what lets close file the caches back: before attachCaches has run, what sits at a cache path inside an input is the input's own upload, not the cache.
-	cachesAttached bool
+	// attached are the caches (by their place in cachePairs) close may file back: one not put in place holds the input's own upload, or nothing, never the cache.
+	attached       map[int]bool
 	goos, goarch   string
 	uid, gid       *int
 	fetchMu        sync.Mutex
@@ -236,25 +237,41 @@ func (s *bareSession) attachCaches(ctx context.Context) error {
 
 	s.pipeline = shell.MetadataFrom(ctx).PipelineName
 
-	code, err := s.exec(ctx, s.attachScript(), nil, io.Discard, io.Discard)
-	if err == nil && code != 0 {
-		err = fmt.Errorf("%w: exit %d", errBareTransfer, code)
-	}
+	var stdout, stderr strings.Builder
 
+	_, err := s.exec(ctx, s.attachScript(), nil, &stdout, &stderr)
 	if err != nil {
 		return fmt.Errorf("restoring the step's caches: %w", err)
 	}
 
-	s.cachesAttached = true
+	s.markAttached(stdout.String())
+
+	// A cache is a speed-up, so one that cannot be put back is an empty cache, as on this machine, never a failed step.
+	if len(s.attached) < len(s.spec.Caches) {
+		slog.WarnContext(ctx, "venue.ssh.task_cache_restore_failed", "worker", s.worker.String(), "restored", len(s.attached), "caches", len(s.spec.Caches), "stderr", strings.TrimSpace(stderr.String()))
+	}
 
 	return nil
+}
+
+// markAttached reads attachScript's one "attached <i>" line per cache it put in place.
+func (s *bareSession) markAttached(stdout string) {
+	s.attached = map[int]bool{}
+
+	for line := range strings.Lines(stdout) {
+		i, err := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(line), "attached "))
+		if err == nil {
+			s.attached[i] = true
+		}
+	}
 }
 
 func (s *bareSession) attachScript() string {
 	var script strings.Builder
 
-	for _, pair := range s.cachePairs() {
-		fmt.Fprintf(&script, `if ! %[3]s; then rm -rf %[2]s; mkdir -p "$(dirname %[2]s)"; if [ -d %[1]s ]; then mv %[1]s %[2]s; else mkdir -p %[2]s; fi; fi; `, pair[0], pair[1], pair[2])
+	for i, pair := range s.cachePairs() {
+		// A failure leaves the cache where it was kept; the step gets an empty directory if one can be made.
+		fmt.Fprintf(&script, `if ! %[3]s; then { rm -rf %[2]s && mkdir -p "$(dirname %[2]s)" && if [ -d %[1]s ]; then mv %[1]s %[2]s; else mkdir -p %[2]s; fi && echo attached %[4]d; } || mkdir -p %[2]s; fi; `, pair[0], pair[1], pair[2], i)
 	}
 
 	return script.String()
@@ -262,7 +279,7 @@ func (s *bareSession) attachScript() string {
 
 // detachCaches is the shell that files each cache back, replacing one a concurrent session filed first; run after the step's processes are gone.
 func (s *bareSession) detachCaches() string {
-	if !s.cachesAttached {
+	if len(s.attached) == 0 {
 		return ""
 	}
 
@@ -276,7 +293,11 @@ func (s *bareSession) detachCaches() string {
 		move = "{ mv -T %[2]s %[1]s || { rm -rf %[1]s; mv -T %[2]s %[1]s; }; }"
 	}
 
-	for _, pair := range s.cachePairs() {
+	for i, pair := range s.cachePairs() {
+		if !s.attached[i] {
+			continue
+		}
+
 		// The .pipeline file is what a later run of this pipeline judges the cache by when its config stops naming it.
 		fmt.Fprintf(&script, `if ! %[4]s && [ -d %[2]s ]; then rm -rf %[1]s; `+move+` && printf %%s %[3]s > %[1]s.pipeline; fi; `, pair[0], pair[1], shellQuote(s.pipeline), pair[2])
 	}

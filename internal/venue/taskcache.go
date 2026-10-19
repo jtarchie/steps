@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/jtarchie/steps/internal/shell"
 )
@@ -38,7 +39,7 @@ func liveTaskCachesFrom(ctx context.Context) (liveCaches, bool) {
 // reapTaskCaches removes this pipeline's cache volumes its config no longer names. Best effort: a cache left behind only costs disk.
 func (s *plusSession) reapTaskCaches(ctx context.Context) {
 	live, ok := liveTaskCachesFrom(ctx)
-	if !ok {
+	if !ok || !reapDue(s.worker.String()+"\x00"+s.namespace, live) {
 		return
 	}
 
@@ -62,6 +63,17 @@ func (s *plusSession) reapTaskCaches(ctx context.Context) {
 			slog.InfoContext(ctx, "venue.docker.task_cache_reaped", "worker", s.worker.String(), "volume", volume.Name)
 		}
 	}
+}
+
+// reaped remembers which worker has been reaped against which config, so a job's every step does not pay a daemon round trip (over a tunnel, for a cloud worker) for an answer that only a new config changes.
+var reaped sync.Map //nolint:gochecknoglobals // per-process memory, like swept
+
+// reapDue is true the first time this process reaps worker for this pipeline's set of live caches. An orphan left by a run of an older config still in flight waits for the next config, which costs only disk.
+func reapDue(worker string, live liveCaches) bool {
+	keys := slices.Sorted(slices.Values(live.keys))
+	_, done := reaped.LoadOrStore(worker+"\x00"+live.pipeline+"\x00"+strings.Join(keys, " "), true)
+
+	return !done
 }
 
 func taskCacheLabels(ctx context.Context, key string) map[string]string {

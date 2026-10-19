@@ -196,16 +196,26 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, fmt.Errorf("workspace: %w", err)
 	}
 
+	// Before anything reads the directory (prompt files, context_paths:, a stdio MCP server's cwd), as Concourse mounts a cache before the task starts.
+	meta := shell.MetadataFrom(ctx)
+	caches := workspace.TaskCacheKeys(meta.PipelineName, meta.JobName, step.Agent, ri.Caches)
+	detachCaches := attachAgentCaches(ctx, bw, step, space.Dir(), caches)
+	label := step.Agent
+	abandon := func() {
+		detachCaches()
+		workspace.CloseSpace(space, label)
+	}
+
 	dir, err := resolveAgentDir(space.Dir(), step.Dir)
 	if err != nil {
-		workspace.CloseSpace(space, step.Agent)
+		abandon()
 
 		return preparedAgentStep{}, err
 	}
 
 	step, err = prepareStepPrompt(space.Dir(), step)
 	if err != nil {
-		workspace.CloseSpace(space, step.Agent)
+		abandon()
 
 		return preparedAgentStep{}, err
 	}
@@ -216,7 +226,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	// dir is finally known, rather than at load time.
 	tools, closers, err := buildAgentTools(ctx, config.WithResolvedMCPCwd(cfg, dir), ri.ToolSpecs, ri.Image)
 	if err != nil {
-		workspace.CloseSpace(space, step.Agent)
+		abandon()
 
 		return preparedAgentStep{}, err
 	}
@@ -230,22 +240,19 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	verdictTool, err := injectVerdictTool(step.VerdictNames(), step.NoteRequired, tools, expect)
 	if err != nil {
-		workspace.CloseSpace(space, step.Agent)
+		abandon()
 		closeAll(closers)
 
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
 	// Cwd is the whole step directory and Subdir is where the model works, even though dir: is the only thing that makes them differ. The step's outputs: are named relative to the SPACE, so a placed agent that sent only its subdirectory would fetch them from a path that does not exist and come home with nothing.
-	meta := shell.MetadataFrom(ctx)
-	caches := workspace.TaskCacheKeys(meta.PipelineName, meta.JobName, step.Agent, ri.Caches)
-
 	runner, err := newRunner.build(ctx, shell.RunnerSpec{Image: ri.Image, Cwd: space.Dir(), Subdir: step.Dir, Caches: caches,
 		Env: ri.Env, User: ri.User, Network: ri.Network,
 		Privileged: ri.Privileged, CPUShares: ri.Limits.CPUShares(), MemoryBytes: ri.Limits.MemoryBytes(),
 		Fetch: step.Outputs, Keep: workspace.Kept(space)})
 	if err != nil {
-		workspace.CloseSpace(space, step.Agent)
+		abandon()
 		closeAll(closers)
 
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
@@ -259,7 +266,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	apiKey, err := llmclient.LookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
-		workspace.CloseSpace(space, step.Agent)
+		abandon()
 		closeAll(closers)
 
 		return preparedAgentStep{}, fmt.Errorf("%w", err)
@@ -269,7 +276,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	contextBlocks, err := prepareContextBlocks(ctx, dir, ri, tools.decls)
 	if err != nil {
-		workspace.CloseSpace(space, step.Agent)
+		abandon()
 		closeAll(closers)
 
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
@@ -306,7 +313,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	return preparedAgentStep{
-		detachCaches: attachAgentCaches(ctx, bw, step, space.Dir(), caches),
+		detachCaches: detachCaches,
 		dir:          dir, runner: runner, lost: lost,
 		step: step, ri: ri, primary: primary, fallbackIndex: fallbackIndex, agent: agent,
 		pin:   agentPinScope(cfg, ri.AgentName),

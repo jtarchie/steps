@@ -32,7 +32,7 @@ func TestBareCloseFilesBackOnlyAttachedCaches(t *testing.T) {
 		t.Errorf("close would file back a cache never attached: %q", script)
 	}
 
-	s.cachesAttached = true
+	s.attached = map[int]bool{0: true}
 
 	if s.detachCaches() == "" {
 		t.Error("close would leave an attached cache behind")
@@ -43,7 +43,7 @@ func TestBareCloseFilesBackOnlyAttachedCaches(t *testing.T) {
 func TestBareDetachNeverNestsOnLinux(t *testing.T) {
 	t.Parallel()
 
-	s := &bareSession{dir: "/w/steps-build.x", cachesAttached: true, spec: shell.RunnerSpec{Caches: map[string]string{"c": "abc"}}}
+	s := &bareSession{dir: "/w/steps-build.x", attached: map[int]bool{0: true}, spec: shell.RunnerSpec{Caches: map[string]string{"c": "abc"}}}
 
 	s.goos = "linux"
 	if script := s.detachCaches(); !strings.Contains(script, "mv -T ") || strings.Contains(script, "; mv '") {
@@ -80,7 +80,7 @@ func TestBareCachesNeverFollowASymlinkOutOfTheStep(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := &bareSession{dir: dir, worker: Worker{Root: root}, cachesAttached: true, spec: shell.RunnerSpec{Caches: map[string]string{"src/node_modules": "abc", "c/d": "def"}}}
+	s := &bareSession{dir: dir, worker: Worker{Root: root}, attached: map[int]bool{0: true, 1: true}, spec: shell.RunnerSpec{Caches: map[string]string{"src/node_modules": "abc", "c/d": "def"}}}
 
 	out, err := exec.CommandContext(t.Context(), "sh", "-c", s.attachScript()+s.detachCaches()).CombinedOutput() //nolint:gosec // the scripts under test, over t.TempDir() paths
 	if err != nil {
@@ -95,5 +95,40 @@ func TestBareCachesNeverFollowASymlinkOutOfTheStep(t *testing.T) {
 	info, err := os.Stat(filepath.Join(root, "steps-task-caches/def"))
 	if err != nil || !info.IsDir() {
 		t.Errorf("a cache with no link above it was not filed back: %v", err)
+	}
+}
+
+// TestBareCloseFilesBackOnlyTheCachesPutInPlace: one cache of two failing to restore leaves its path to the input, which close must not file over the kept cache.
+func TestBareCloseFilesBackOnlyTheCachesPutInPlace(t *testing.T) {
+	t.Parallel()
+
+	s := &bareSession{dir: "/w/steps-build.x", spec: shell.RunnerSpec{Caches: map[string]string{"a": "aaa", "src/b": "bbb"}}}
+	s.markAttached("attached 0\n")
+
+	script := s.detachCaches()
+	if !strings.Contains(script, "steps-task-caches/aaa") || strings.Contains(script, "steps-task-caches/bbb") {
+		t.Errorf("close files back %q, want only the cache put in place (aaa)", script)
+	}
+}
+
+func TestReapDueOncePerWorkerAndConfig(t *testing.T) {
+	t.Parallel()
+
+	live := liveCaches{pipeline: t.Name(), keys: []string{"b", "a"}}
+
+	if !reapDue("w1", live) {
+		t.Error("the first connect of a config does not reap")
+	}
+
+	if reapDue("w1", liveCaches{pipeline: t.Name(), keys: []string{"a", "b"}}) {
+		t.Error("a second connect under the same config reaps again")
+	}
+
+	if !reapDue("w2", live) {
+		t.Error("another worker is not reaped")
+	}
+
+	if !reapDue("w1", liveCaches{pipeline: t.Name(), keys: []string{"a"}}) {
+		t.Error("a changed config is not reaped")
 	}
 }

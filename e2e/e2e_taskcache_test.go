@@ -747,3 +747,143 @@ func TestEndToEndTaskCacheReapStaysInItsWorker(t *testing.T) {
 		t.Errorf("runs reported %q, want %q: v2 on the other worker reaps only its own caches", got, want)
 	}
 }
+
+// TestEndToEndSSHWorkerCacheThatCannotBeRestoredIsEmpty: f/x is a file in the input, so the cache under it cannot be put back; that is an empty cache, as on this machine, never a failed step, and the other cache is still kept.
+func TestEndToEndSSHWorkerCacheThatCannotBeRestoredIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	report := filepath.Join(dir, "runs.txt")
+	worker := testsshd.New(t).URL
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  root: %[1]s
+
+jobs:
+- name: build
+  plan:
+  - task: source
+    volatile: true
+    outputs: [f]
+    run: echo file > f/x
+  - task: compile
+    tags: [box]
+    volatile: true
+    inputs: [f]
+    caches: [{path: a}, {path: f/x/b}]
+    outputs: [out]
+    run: |
+      n=$(($(cat a/n 2>/dev/null || echo 0) + 1))
+      echo "$n" > a/n
+      echo "$n" > out/runs
+  - task: publish
+    volatile: true
+    inputs: [out]
+    run: cat out/runs >> %[2]s
+`, filepath.Join(dir, "ws"), report))
+
+	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+
+	if got := readFileString(t, report); got != "1\n2\n" {
+		t.Errorf("runs reported %q, want both to run and the restorable cache kept (\"1\\n2\\n\")", got)
+	}
+}
+
+// TestEndToEndAgentContextSeesItsCache: the cache is in place before the agent reads its context_paths:, as a Concourse cache is mounted before the task starts, so a context file under the cache is the cache's, not the input copy it shadows. The first run has no context_paths: because an empty cache shadows the file it would read.
+func TestEndToEndAgentContextSeesItsCache(t *testing.T) {
+	dir := t.TempDir()
+	run := []turn{callsTool("run_shell", map[string]any{"command": "echo from-cache > src/cache/notes"}), says("done")}
+	fake := newFakeLLM(t, append(run, run...)...)
+
+	pipeline := func(context string) string {
+		return writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  root: %[2]s
+
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: builder
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell, read_file]
+  caches:
+  - path: src/cache
+
+jobs:
+- name: build
+  plan:
+  - task: source
+    volatile: true
+    outputs: [src]
+    run: mkdir -p src/cache && echo from-input > src/cache/notes
+  - agent: builder
+    volatile: true
+    inputs: [src]
+    %[3]s
+    messages:
+      - Build it.
+`, fake.URL, filepath.Join(dir, "ws"), context))
+	}
+
+	mustRun(t, "run", pipeline(""), "--force")
+	mustRun(t, "run", pipeline("context_paths: [src/cache/notes]"), "--force")
+
+	if second := fake.request(3); !second.toolResultContains("from-cache") {
+		t.Errorf("the second run's context read %q, want the cache's notes (from-cache)", second.toolResults())
+	}
+}
+
+// TestEndToEndAgentCacheSurvivesAFailedPrepare: once attached, the cache is filed back on every way out, so an agent refused before its first turn (a context path its cache does not hold) keeps it.
+func TestEndToEndAgentCacheSurvivesAFailedPrepare(t *testing.T) {
+	dir := t.TempDir()
+	report := filepath.Join(dir, "seen.txt")
+	run := []turn{callsTool("run_shell", map[string]any{"command": "cat .cache/notes >> " + report + " 2>/dev/null; echo kept > .cache/notes"}), says("done")}
+	fake := newFakeLLM(t, append(run, run...)...)
+
+	pipeline := func(context string) string {
+		return writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  root: %[2]s
+
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: builder
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell, read_file]
+  caches:
+  - path: .cache
+
+jobs:
+- name: build
+  plan:
+  - agent: builder
+    volatile: true
+    %[3]s
+    messages:
+      - Build it.
+`, fake.URL, filepath.Join(dir, "ws"), context))
+	}
+
+	mustRun(t, "run", pipeline(""), "--force")
+
+	err := cli.Run([]string{"run", pipeline("context_paths: [.cache/missing]"), "--force"})
+	if err == nil {
+		t.Fatal("a context path the cache does not hold was not refused")
+	}
+
+	mustRun(t, "run", pipeline(""), "--force")
+
+	if got := readFileString(t, report); got != "kept\n" {
+		t.Errorf("the run after the refused one saw %q, want the cache the first run kept (\"kept\\n\")", got)
+	}
+}
