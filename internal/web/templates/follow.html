@@ -23,7 +23,8 @@
   var deadline = Date.now() + 120000;
   var checks = document.getElementById('follow-checks');
 
-  var words = { pending: 'queued', running: 'starting', waiting: 'waiting for the queue' };
+  var words = { pending: 'queued', running: 'starting', waiting: 'waiting for the queue', failed: 'failed', aborted: 'aborted' };
+  var terminal = { failed: true, aborted: true };
 
   function drawChecks(list) {
     checks.replaceChildren();
@@ -47,6 +48,11 @@
 
       state.textContent = words[data.state] || 'queued';
       drawChecks(data.checks);
+
+      if (terminal[data.state]) {
+        hint.textContent = data.error || ('the trigger ' + data.state + ' before any step ran');
+        return;
+      }
 
       if (Date.now() > deadline) {
         hint.textContent = 'Stopped checking. Reload to look again.';

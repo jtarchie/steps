@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -1017,6 +1018,44 @@ func TestFollowSaysAJobHeldByItsSerialGroupIsQueued(t *testing.T) {
 	}
 }
 
+// TestFollowSurfacesATriggerThatFailedBeforeAnyRun: a preflight failure marks the queue row "failed" and never creates a run, so the page used to poll "queued" forever. It now reports the terminal state and the error — but only a failure within this page's own follow window, never a stale one from an earlier trigger.
+func TestFollowSurfacesATriggerThatFailedBeforeAnyRun(t *testing.T) {
+	t.Parallel()
+
+	server, st := serialGroupServer(t)
+
+	id, got, _ := enqueueAndClaim(t, st, "lint")
+	if got != "lint" {
+		t.Fatalf("claimed %q, want lint", got)
+	}
+
+	failure := errors.New(`job "lint": preflight failed, no steps were run`)
+
+	err := st.CompleteJob(t.Context(), id, "failed", failure)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	within := time.Now().UTC().Add(-time.Minute).UnixMilli()
+
+	answer, body := latestRun(t, server, fmt.Sprintf("/p/demo/jobs/lint/latest-run?since=%d", within))
+	if answer.Run != nil || answer.State != "failed" || !strings.Contains(answer.Error, "preflight failed") {
+		t.Errorf("within window: latest-run = %s, want no run, state failed, and the preflight error", body)
+	}
+
+	if len(answer.Checks) != 0 {
+		t.Errorf("within window: checks = %s, want none for a terminal row", body)
+	}
+
+	// A follow stamp AFTER the failure belongs to a trigger this failure predates, so it must not be credited to it.
+	after := time.Now().UTC().Add(time.Minute).UnixMilli()
+
+	stale, body := latestRun(t, server, fmt.Sprintf("/p/demo/jobs/lint/latest-run?since=%d", after))
+	if stale.State != "waiting" || stale.Error != "" {
+		t.Errorf("after window: latest-run = %s, want a stale failure ignored (waiting, no error)", body)
+	}
+}
+
 // TestFollowSaysWhatAQueuedRunIsWaitingOn: after two minutes the page used to guess "Is a runner draining this queue?". It can say which of the drain's own checks is blocking, as Concourse's "preparing build" does — and only checks the drain actually makes.
 func TestFollowSaysWhatAQueuedRunIsWaitingOn(t *testing.T) {
 	t.Parallel()
@@ -1189,6 +1228,7 @@ type latestRunAnswer struct {
 	Run    *string       `json:"run"`
 	State  string        `json:"state"`
 	Checks []followCheck `json:"checks"`
+	Error  string        `json:"error"`
 }
 
 func latestRun(t *testing.T, server *Server, target string) (latestRunAnswer, string) {

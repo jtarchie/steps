@@ -89,12 +89,12 @@ func (s *Server) handleLatestRun(c *echo.Context) error {
 		return fmt.Errorf("web: %w", queueErr)
 	}
 
-	state, inFlight := queuedState(queue, name)
+	state, inFlight, failErr := queuedState(queue, name, since)
 
-	// With no row of this job left in the queue there is nothing waiting to explain.
+	// A terminal row carries its own error line, so only a live one gets the preparing-checklist.
 	var checks []followCheck
 
-	if state != "waiting" {
+	if state == "pending" || state == "running" {
 		checks, err = followChecks(ctx, readsOf(c, pipeline), s.capacity, name, state == "running", inFlight)
 		if err != nil {
 			return err
@@ -102,13 +102,15 @@ func (s *Server) handleLatestRun(c *echo.Context) error {
 	}
 
 	//nolint:wrapcheck // echo's JSON error is returned verbatim
-	return c.JSON(http.StatusOK, map[string]any{"run": nil, "state": state, "checks": checks})
+	return c.JSON(http.StatusOK, map[string]any{"run": nil, "state": state, "checks": checks, "error": failErr})
 }
 
-// queuedState is where a job's newest queue row stands, and how many of its builds are running.
-func queuedState(queue []store.QueueRow, name string) (string, int) {
+// queuedState is a job's newest-row state, its running-build count, and the error that ended that row when a preflight failure marked the queue row "failed" without ever creating a run for the page to forward to.
+func queuedState(queue []store.QueueRow, name string, since time.Time) (string, int, string) {
 	state := "waiting"
 	inFlight := 0
+	failErr := ""
+	decided := false
 
 	for _, row := range queue {
 		if row.JobName != name {
@@ -119,12 +121,26 @@ func queuedState(queue []store.QueueRow, name string) (string, int) {
 			inFlight++
 		}
 
-		if state == "waiting" && (row.Status == "pending" || row.Status == "running") {
+		// Newest-first, so the first row for this job sets the state; later rows only still add to inFlight.
+		if decided {
+			continue
+		}
+
+		decided = true
+
+		switch row.Status {
+		case "pending", "running":
 			state = row.Status
+		case "failed", "aborted":
+			// Credit a terminal row only to a follow page (non-zero stamp) and only when it ended at/after that stamp, never a stale failure nor a board column that just asks "is anything queued".
+			if !since.IsZero() && !row.FinishedAt.Before(since) {
+				state = row.Status
+				failErr = row.Error
+			}
 		}
 	}
 
-	return state, inFlight
+	return state, inFlight, failErr
 }
 
 // followCheck is one line of what a queued run waits on, as Concourse's "preparing build" lists them.
@@ -220,7 +236,7 @@ func waitingOn(ctx context.Context, reads *pipelineReads, capacity Capacity, que
 		return "", nil //nolint:nilerr // a dropped job is a row with no reason, not a broken page
 	}
 
-	_, inFlight := queuedState(queue, name)
+	_, inFlight, _ := queuedState(queue, name, time.Time{})
 
 	checks, err := followChecks(ctx, reads, capacity, name, false, inFlight)
 	if err != nil {

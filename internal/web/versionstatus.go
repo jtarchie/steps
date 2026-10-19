@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
@@ -174,7 +175,7 @@ func versionRows(ctx context.Context, st versionReader, resource string, version
 			}
 		}
 
-		state, _ := queuedState(queue, c.Job)
+		state, _, _ := queuedState(queue, c.Job, time.Time{})
 		fillColumn(rows, col, c, byJob[c.Job], orders, mark, newest, state != "waiting")
 	}
 
