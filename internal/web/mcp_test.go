@@ -71,7 +71,7 @@ func (m *mcpAuthorizer) StartProbe(_ *Pipeline, server string) error {
 }
 
 // mcpServerPipeline is a pipeline that declares one of each shape a status cell has to have a word for, since the column is the tab's whole reason to exist.
-func mcpServerPipeline(t *testing.T, runner Runner) (*Server, *Pipeline, *mcpAuthorizer) {
+func mcpServerPipeline(t *testing.T, runner Runner, opts ...Option) (*Server, *Pipeline, *mcpAuthorizer) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -119,7 +119,7 @@ jobs:
 
 	pipeline := NewPipeline("demo", path, cfg, st, events.New(nil))
 
-	server, err := New([]*Pipeline{pipeline}, runner)
+	server, err := New([]*Pipeline{pipeline}, runner, opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -237,6 +237,36 @@ func TestReadOnlyKeepsTheDiagnosticAndWithholdsTheButtons(t *testing.T) {
 
 	if len(authorizer.started)+len(authorizer.probed) != 0 {
 		t.Error("a read-only daemon started a login or a probe anyway")
+	}
+}
+
+// Whoever opens a pending login's authorization URL and consents finishes that login as THEMSELVES — the callback trusts the state and nothing else — so a viewer handed it could swap their own account in as the pipeline's credential. The URL goes only to the role that may start a login.
+func TestAPendingLoginsURLIsOnlyForWhoeverMayStartOne(t *testing.T) {
+	t.Parallel()
+
+	roles, err := CompileRoles([]string{`admin=UserID == "alex"`, `viewer=true`})
+	if err != nil {
+		t.Fatalf("CompileRoles: %v", err)
+	}
+
+	users := WithLocalUsers([]LocalUser{{Name: "alex", Hash: []byte(mustHash(t, "a"))}, {Name: "vic", Hash: []byte(mustHash(t, "v"))}})
+	server, _, authorizer := mcpServerPipeline(t, stubRunner{}, users, WithRoles(roles))
+	authorizer.authorizeURL = "https://as.example/authorize?state=minted"
+
+	for _, target := range []string{"/p/demo/mcp", "/api/pipelines/demo/mcp/linear/login"} {
+		code, _, body := authCall(t, server, http.MethodGet, target, "vic", "v", nil)
+		if code != http.StatusOK || strings.Contains(body, "state=minted") {
+			t.Errorf("viewer GET %s = %d, want 200 without the authorization URL; got %s", target, code, body)
+		}
+
+		if !strings.Contains(body, "login in progress") && !strings.Contains(body, `"state":"pending"`) {
+			t.Errorf("viewer GET %s no longer says a login is pending: %s", target, body)
+		}
+
+		code, _, body = authCall(t, server, http.MethodGet, target, "alex", "a", nil)
+		if code != http.StatusOK || !strings.Contains(body, "state=minted") {
+			t.Errorf("admin GET %s = %d, want 200 with the authorization URL", target, code)
+		}
 	}
 }
 

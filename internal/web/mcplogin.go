@@ -96,11 +96,15 @@ func (s *Server) handleAPILoginStatus(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "no login has been started for this server")
 	}
 
+	if !s.mayFinishLogin(c) {
+		status.AuthorizeURL = ""
+	}
+
 	//nolint:wrapcheck // echo writes the response; an encoding failure is reported verbatim
 	return c.JSON(http.StatusOK, status)
 }
 
-// handleMCPCallback is where an authorization server sends the browser. It asks for no credentials (see skipAuth) because the request cannot carry any: it is authenticated by its state, a nonce minted for one login and seen only by whoever was handed that login's authorization URL. A state nobody is waiting on is a 404 — not a 401, which would prompt, and not a 400, which would confirm the route is listening for something.
+// handleMCPCallback is where an authorization server sends the browser. It asks for no credentials (see skipAuth) because the request cannot carry any: it is authenticated by its state, a nonce minted for one login and seen only by whoever was handed that login's authorization URL, which is only ever somebody who could have started it (mayFinishLogin). A state nobody is waiting on is a 404 — not a 401, which would prompt, and not a 400, which would confirm the route is listening for something.
 func (s *Server) handleMCPCallback(c *echo.Context) error {
 	var handler http.Handler
 

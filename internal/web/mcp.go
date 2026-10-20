@@ -130,6 +130,10 @@ func (s *Server) handleMCP(c *echo.Context) error {
 
 	for _, server := range servers {
 		row := s.mcpRowFor(pipeline, server)
+		if !s.mayFinishLogin(c) {
+			row.AuthorizeURL = ""
+		}
+
 		if row.NeedsAttention {
 			attention = append(attention, row)
 
@@ -200,6 +204,11 @@ func (s *Server) mcpRowFor(pipeline *Pipeline, server config.MCPServer) mcpRow {
 	row.settle()
 
 	return row
+}
+
+// mayFinishLogin is whether this reader may be handed a pending login's authorization URL. Whoever opens it and consents finishes the login as THEMSELVES — the callback is authenticated by the state in that URL and nothing else — so the URL is worth exactly what starting a login is, and goes only to the role that may.
+func (s *Server) mayFinishLogin(c *echo.Context) bool {
+	return s.roleOf(c) >= RoleAdmin
 }
 
 // settle decides the two things the row's shape depends on, from everything else already on it.
