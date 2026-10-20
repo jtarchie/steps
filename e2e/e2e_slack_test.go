@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -74,6 +75,12 @@ type fakeSlackWorkspace struct {
 	// that endpoint answers with instead of ok — 200 with ok:false, the way
 	// the real API refuses.
 	reactionError map[string]string
+	// tags is the reactions people have left, keyed "channel/ts", then emoji,
+	// then who. reactions.list answers from it, and a successful
+	// reactions.add/remove edits it as the token's user (UBOT), so a check
+	// after a put sees the mark the put left.
+	tags          map[string]map[string][]string
+	reactionPages int
 }
 
 // fakeSlack serves the default transcript — all most tests need. Read what it
@@ -172,10 +179,12 @@ func (f *fakeSlackWorkspace) serve(w http.ResponseWriter, r *http.Request) {
 	case "/api/conversations.replies":
 		f.answer(w, map[string]any{
 			"ok":       true,
-			"messages": f.replies(query.Get("channel"), query.Get("ts"), query.Get("oldest")),
+			"messages": f.replies(query.Get("channel"), query.Get("ts"), query.Get("oldest"), query.Get("limit")),
 		})
 	case "/api/reactions.add", "/api/reactions.remove":
 		f.react(w, r)
+	case "/api/reactions.list":
+		f.reactionsList(w, query.Get("user"), query.Get("limit"), query.Get("cursor"))
 	case "/api/chat.postMessage":
 		f.post(w, r)
 	default:
@@ -281,8 +290,8 @@ func (f *fakeSlackWorkspace) annotate(msg slackMsg) map[string]any {
 
 // replies answers conversations.replies: the parent message first — always,
 // even when it is older than oldest — then every reply above that exclusive
-// floor.
-func (f *fakeSlackWorkspace) replies(channel, parent, oldest string) []map[string]any {
+// floor, oldest first, cut to limit at the NEW end, as the real API cuts it.
+func (f *fakeSlackWorkspace) replies(channel, parent, oldest, limit string) []map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -308,6 +317,11 @@ func (f *fakeSlackWorkspace) replies(channel, parent, oldest string) []map[strin
 		if msg.parent == parent && slackTS(msg.ts) > floor {
 			messages = append(messages, f.annotate(msg))
 		}
+	}
+
+	count, err := strconv.Atoi(limit)
+	if err == nil && count > 0 && len(messages) > count {
+		messages = messages[:count]
 	}
 
 	return messages
@@ -342,6 +356,18 @@ func (f *fakeSlackWorkspace) react(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.reacted = append(f.reacted, payload)
 	code := f.reactionError[r.URL.Path]
+
+	if code == "" {
+		channel, _ := payload["channel"].(string)
+		ts, _ := payload["timestamp"].(string)
+		name, _ := payload["name"].(string)
+
+		if r.URL.Path == "/api/reactions.add" {
+			f.tagLocked(channel, ts, name, "UBOT")
+		} else if emojis := f.tags[channel+"/"+ts]; emojis != nil {
+			emojis[name] = slices.DeleteFunc(slices.Clone(emojis[name]), func(u string) bool { return u == "UBOT" })
+		}
+	}
 	f.mu.Unlock()
 
 	if code != "" {
@@ -351,6 +377,119 @@ func (f *fakeSlackWorkspace) react(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f.answer(w, map[string]any{"ok": true})
+}
+
+// tag records that users reacted to a message with emoji, the way people do
+// in Slack between two polls.
+func (f *fakeSlackWorkspace) tag(channel, ts, emoji string, users ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for _, user := range users {
+		f.tagLocked(channel, ts, emoji, user)
+	}
+}
+
+// tagLocked is tag for a caller holding f.mu.
+func (f *fakeSlackWorkspace) tagLocked(channel, ts, emoji, user string) {
+	if f.tags == nil {
+		f.tags = map[string]map[string][]string{}
+	}
+
+	key := channel + "/" + ts
+	if f.tags[key] == nil {
+		f.tags[key] = map[string][]string{}
+	}
+
+	if !slices.Contains(f.tags[key][emoji], user) {
+		f.tags[key][emoji] = append(f.tags[key][emoji], user)
+	}
+}
+
+// reactionsList answers reactions.list the way the real API is scoped: only
+// messages USER reacted to, each carrying its WHOLE reaction list (everyone's,
+// every emoji), newest message first, limit per page and an opaque
+// next_cursor.
+func (f *fakeSlackWorkspace) reactionsList(w http.ResponseWriter, user, limit, cursor string) {
+	f.mu.Lock()
+	f.reactionPages++
+	code := f.reactionError["/api/reactions.list"]
+	items := f.reactedItems(user)
+	f.mu.Unlock()
+
+	if code != "" {
+		f.answer(w, map[string]any{"ok": false, "error": code})
+
+		return
+	}
+
+	start, _ := strconv.Atoi(cursor)
+	start = min(start, len(items))
+
+	count, err := strconv.Atoi(limit)
+	if err != nil || count <= 0 {
+		count = 100
+	}
+
+	end := min(start+count, len(items))
+	next := ""
+
+	if end < len(items) {
+		next = strconv.Itoa(end)
+	}
+
+	f.answer(w, map[string]any{
+		"ok":                true,
+		"items":             items[start:end],
+		"response_metadata": map[string]any{"next_cursor": next},
+	})
+}
+
+// reactedItems renders every message user reacted to as a reactions.list
+// item, newest first. A reply carries thread_ts, its parent's ts, as Slack's
+// does. Callers hold f.mu.
+func (f *fakeSlackWorkspace) reactedItems(user string) []map[string]any {
+	items := []map[string]any{}
+
+	for _, msg := range f.transcript {
+		emojis := f.tags[msg.channel+"/"+msg.ts]
+		if !slices.ContainsFunc(slices.Collect(maps.Values(emojis)), func(users []string) bool { return slices.Contains(users, user) }) {
+			continue
+		}
+
+		rendered := f.annotate(msg)
+		if msg.parent != "" {
+			rendered["thread_ts"] = msg.parent
+		}
+
+		reactions := []map[string]any{}
+
+		for _, name := range slices.Sorted(maps.Keys(emojis)) {
+			if len(emojis[name]) > 0 {
+				reactions = append(reactions, map[string]any{"name": name, "users": emojis[name], "count": len(emojis[name])})
+			}
+		}
+
+		rendered["reactions"] = reactions
+		items = append(items, map[string]any{"type": "message", "channel": msg.channel, "message": rendered})
+	}
+
+	slices.SortFunc(items, func(a, b map[string]any) int {
+		left, _ := a["message"].(map[string]any)["ts"].(string)
+		right, _ := b["message"].(map[string]any)["ts"].(string)
+
+		return cmp.Compare(slackTS(right), slackTS(left))
+	})
+
+	return items
+}
+
+// reactionPagesAsked is how many reactions.list pages checks have asked for.
+func (f *fakeSlackWorkspace) reactionPagesAsked() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.reactionPages
 }
 
 // slackTS parses a Slack ts for comparison. A ts is a string and must be

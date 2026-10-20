@@ -37,7 +37,7 @@ It fetches the exact commit the plan pinned, shallowly, so a branch that moves m
 
 ## The built-in `slack-mentions`, `slack-reply` and `slack-reaction` types
 
-Three more built-ins, all [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot in a channel, plus every message in a 1:1 DM (no `@mention` required there — nobody types one in a 1:1 chat), oldest first, as a `{channel, ts, thread_ts, user}` version — `ts` is the message that named the bot, `thread_ts` the thread it lives in (the same value, for a top-level message), `user` who wrote it. `slack-reply` is put-only: posts a message, threaded or top-level. `slack-reaction` is put-only too: puts an emoji on a message, takes one off, or swaps one for another in a single publish.
+Three more built-ins, all [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot in a channel, plus every message in a 1:1 DM (no `@mention` required there — nobody types one in a 1:1 chat), oldest first, as a `{channel, ts, thread_ts, user}` version — `ts` is the message that named the bot, `thread_ts` the thread it lives in (the same value, for a top-level message), `user` who wrote it. `slack-reply` is put-only: posts a message, threaded or top-level. `slack-reaction` puts an emoji on a message, takes one off, or swaps one for another in a single publish — and, as a get, watches for messages the token's user reacted to with a given emoji ([below](#watching-for-a-reaction-a-slack-reaction-get)).
 
 Cold start does not mean a backlog: like every resource, the first-ever check of a freshly-deployed `slack-mentions` records everything it finds and answers only the newest of it — see [Version history](#version-history) below. That rule is a `steps web` behavior; `steps run` has no persisted cursor, so every `steps run` check is a first check.
 
@@ -104,6 +104,10 @@ All three need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for 
 |---|---|---|
 | `channels` (`slack-mentions`) | no | `[]` watches every channel (and 1:1 DM) the bot is in; a list of ids narrows it |
 | `limit` (`slack-mentions`) | no | per-channel messages fetched per check, default `200` |
+| `emoji` (`slack-reaction`) | to get | the emoji to watch for, no colons |
+| `done` (`slack-reaction`) | no | an emoji that, left by the token's user, means "answered": the message is no longer reported |
+| `limit` (`slack-reaction`) | no | `reactions.list` page size, default `100` |
+| `pages` (`slack-reaction`) | no | how many pages a check reads, default `5` |
 | `base_url` (any) | no | overrides `https://slack.com` — for pointing a test at a fake server |
 | `token_env` (any) | no | overrides `SLACK_BOT_TOKEN` as the env var name to read the token from |
 
@@ -138,6 +142,57 @@ Where each put type aims comes from a fetched `slack-mentions` input (or the one
 | `target/ts` | `slack-reaction` | without a fetched input | the `ts` of the message to mark |
 
 There is deliberately no `check:`/`in:` on `slack-reply` and no `out:` on `slack-mentions` — `get: reply` or `put: mentions` are both load errors, the same rule `git`'s missing `out:` follows.
+
+### Watching for a reaction: a `slack-reaction` get
+
+React to any message with an emoji and a build answers it. `source.emoji` makes a `slack-reaction` resource a watcher; its check reports every message the **token's user** reacted to with that emoji, oldest first, as the same `{channel, ts, thread_ts, user}` version `slack-mentions` reports — so `slack-reply` answers in the thread and a `slack-reaction` put marks the message, reading it unchanged. `noexec` because it reaches a real workspace.
+
+```yaml noexec=network
+resources:
+- name: tagged
+  type: slack-reaction
+  env: [SLACK_USER_TOKEN]
+  source:
+    token_env: SLACK_USER_TOKEN   # a user token: whose reactions count
+    emoji: robot_face             # the ask
+    done: white_check_mark        # your own ✅ = answered, never reported again
+
+- name: reply
+  type: slack-reply
+  env: [SLACK_USER_TOKEN]
+  source: {token_env: SLACK_USER_TOKEN}
+
+- name: mark                      # a second resource: a watcher cannot be put to
+  type: slack-reaction
+  env: [SLACK_USER_TOKEN]
+  source: {token_env: SLACK_USER_TOKEN}
+
+jobs:
+- name: answer
+  plan:
+  - get: tagged
+    trigger: true
+    version: every
+  - task: compose
+    inputs: [tagged]
+    outputs: [answer]
+    run: echo "on it" > answer/reply.md
+  - put: reply
+    inputs: [tagged, answer]
+  - put: mark
+    inputs: [tagged]
+    params: {add: white_check_mark}
+```
+
+**The token decides whose reactions count.** Slack's `reactions.list` lists the reactions the token's own user made, and nothing else. A user token (`xoxp-`, with `reactions:read`) makes the watch "messages I reacted to"; the default bot token watches only reactions the bot itself left. Watching anybody's reaction is the Events API's `reaction_added`, a [webhook](webhooks.md), not a poll.
+
+**`done` is the durable "answered".** Your own done emoji on a message drops it from the check, and it lives in Slack rather than the state database, so resetting the database cannot answer a thread twice — and adding it by hand suppresses a message. Each item carries the message's whole reaction list, so both filters require the token's user among that emoji's users: a message where you left 👍 and someone else left the watched emoji does not match.
+
+**A watcher cannot be put to.** A put records its own version on the resource it publishes to, and the watching get would fetch that as new and answer the message again — so a put to a resource with `source.emoji` is refused at load, as is a get from a `slack-reaction` resource without one. Mark through a second resource, as `mark` above does.
+
+**There is no cursor.** `reactions.list` reports no reaction time, so a cursor over message `ts` would make reacting to an old message do nothing. Each check reads up to `pages` pages of `limit` items and lets version identity dedupe. Slack does not document the list's order: if it is by message age, a freshly reacted old message sits deep and only `pages` decides whether it is found.
+
+Besides `version.json`, `thread.json` and `user` (who wrote the reacted message), the get writes **`message.json`**: the reacted message itself, so nothing downstream has to find it in the thread by `ts`. A thread longer than 1000 messages is cut at its newest end, where a fresh reaction usually is, so a message missing from `thread.json` is fetched on its own.
 
 ## The built-in GitHub types
 

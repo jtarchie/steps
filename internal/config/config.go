@@ -290,6 +290,7 @@ func (c *Config) validate() error {
 		c.validateCronResources,
 		c.validateGitHubResources,
 		c.validateSlackReactionPuts,
+		c.validateSlackReactionGets,
 		c.validateGitResources,
 		c.validateApprovals,
 		c.validateCredentialHandling,

@@ -1,5 +1,6 @@
 # The built-in `slack-reaction` resource type: put an emoji on a message, take
-# one off, or swap one for another in a single publish.
+# one off, or swap one for another in a single publish — and, as a get, every
+# message the token's user reacted to with source.emoji, oldest first.
 #
 # Registered automatically as `type: slack-reaction` (see
 # registerBuiltinResourceTypes), so a pipeline that wants to mark a message
@@ -61,9 +62,49 @@
 # (config.Resource.Env), since env() only reads names the type's env: already
 # allows and that list is shared by every slack-reaction resource.
 #
-# There is deliberately no check:/in:, so `get: reaction` against this type is
-# a load error rather than a silent no-op: there is nothing here to detect or
-# fetch, only something to publish.
+# THE GET: react to a message with source.emoji and a build answers it.
+#
+#   - name: tagged
+#     type: slack-reaction
+#     env: [SLACK_USER_TOKEN]
+#     source:
+#       token_env: SLACK_USER_TOKEN
+#       emoji: robot_face        # required to get; no colons
+#       done: white_check_mark   # optional; your own done emoji = answered
+#       limit: 100               # optional; reactions.list page size
+#       pages: 5                 # optional; how many pages a check reads
+#
+# reactions.list lists the reactions the TOKEN'S USER made and nothing else,
+# so the token decides whose reactions count. A user token (xoxp-, with
+# reactions:read) makes it "messages I reacted to"; a bot token watches only
+# the bot's own reactions, which is rarely what anyone means. Watching
+# anybody's reaction is the Events API's reaction_added, a webhook, not this.
+#
+# Each item carries the message's WHOLE reaction list, everyone's, so the
+# filter checks that the token's user is among the users of source.emoji: a
+# message where you left 👍 and someone else left the emoji would otherwise
+# match on name alone. full=true because that users list is otherwise allowed
+# to be partial.
+#
+# source.done is the durable "answered": your own done emoji on the message
+# drops it from the check, and it lives in Slack, so a reset state database
+# cannot answer a thread twice. Adding it by hand suppresses a message.
+#
+# NO CURSOR. reactions.list reports no reaction time, so a cursor over message
+# ts would make "react to an old message" do nothing, which is most of the
+# point. Each check reads `pages` pages and lets version identity dedupe. The
+# residual risk: Slack does not document the list's order. If it is
+# reaction-recency, one page is enough; if it is message ts, a freshly reacted
+# old message sits deep and only `pages` decides whether it is found.
+#
+# The version is slack-mentions' shape, {channel, ts, thread_ts, user}, so
+# slack-reply answers in the thread and a slack-reaction put marks the
+# message, reading it unchanged. user is who WROTE the reacted message.
+#
+# A watching resource cannot be put to (validateSlackReactionPuts): a put
+# records its own version on the resource it publishes to, and the watching
+# get would fetch that as new and answer the message again. Mark through a
+# second slack-reaction resource with no emoji.
 #
 # expr:, not check:/in:/out: — this type is a JSON HTTP API and nothing else
 # (docs/expr.md), so it evaluates in-process and can never run in a container:
@@ -78,6 +119,71 @@ env:
 
 config:
   expr:
+    # Pagination is the reduce idiom (docs/expr.md): the range is the page
+    # cap, and the done guard stops it calling past the last page.
+    check: |
+      let base = source.base_url ?? "https://slack.com";
+      let auth = {Authorization: "Bearer " + env(source.token_env ?? "SLACK_BOT_TOKEN")};
+      let retry = {on: [429, 503], max: 3};
+      // validateSlackReactionGets refuses a get with no emoji at load.
+      let emoji = string(source.emoji ?? "");
+      let done = string(source.done ?? "");
+      let limit = source.limit ?? 100;
+      let pages = source.pages ?? 5;
+
+      let whoami = http({url: base + "/api/auth.test"}, {headers: auth, retry: retry}).json;
+      let me = whoami.ok ? whoami.user_id : fail("slack auth.test: " + (whoami.error ?? "failed"));
+
+      let items = reduce(1..pages,
+        #acc.done ? #acc : (
+          let page = http({url: base + "/api/reactions.list",
+                           query: {user: me, full: "true", limit: limit, cursor: #acc.cursor}},
+                          {headers: auth, retry: retry}).json;
+          let next = page.ok ? (page.response_metadata?.next_cursor ?? "")
+            : fail("slack reactions.list: " + (page.error ?? "failed"));
+          {cursor: next, items: concat(#acc.items, page.items ?? []), done: next == ""}
+        ),
+        {cursor: "", items: [], done: false}).items;
+
+      // A Slack ts is a STRING, so sorting it as one silently misorders.
+      items
+        | filter(#.type == "message" && #.message != nil)
+        | filter(any(#.message.reactions ?? [], .name == emoji && me in (.users ?? [])))
+        | filter(done == "" || none(#.message.reactions ?? [], .name == done && me in (.users ?? [])))
+        | map(({channel: #.channel, ts: #.message.ts,
+                thread_ts: #.message.thread_ts ?? #.message.ts, user: #.message.user ?? ""}))
+        | sortBy(float(#.ts))
+
+    # slack-mentions' files, plus message.json: the reacted message itself, so
+    # nobody downstream has to find it in the thread by ts. The thread is cut
+    # at its NEWEST end past 1000 messages (Slack returns it oldest first),
+    # which is where a fresh reaction usually is, so a message missing from it
+    # is fetched on its own: conversations.replies asked for a reply's ts
+    # answers with that one message.
+    in: |
+      let base = source.base_url ?? "https://slack.com";
+      let auth = {Authorization: "Bearer " + env(source.token_env ?? "SLACK_BOT_TOKEN")};
+      let thread = http({url: base + "/api/conversations.replies",
+                         query: {channel: version.channel, ts: version.thread_ts ?? version.ts, limit: "1000"}},
+                        {headers: auth}).json;
+
+      !thread.ok ? fail("slack conversations.replies " + version.channel + ": " + (thread.error ?? "failed")) :
+
+      let found = (thread.messages ?? []) | filter(#.ts == version.ts) | first();
+      let alone = found != nil ? {ok: true, messages: [found]} :
+        http({url: base + "/api/conversations.replies",
+              query: {channel: version.channel, ts: version.ts, limit: "1"}},
+             {headers: auth}).json;
+      let message = alone.ok ? first(alone.messages ?? []) :
+        fail("slack conversations.replies " + version.channel + ": " + (alone.error ?? "failed"));
+
+      {
+        "version.json": toJSON(version),
+        "thread.json": toJSON(thread),
+        "message.json": toJSON(message ?? {}),
+        "user": version.user ?? (message?.user ?? ""),
+      }
+
     # version() returns nil when no input was fetched, which is what drops
     # this to the files. trim() because an upstream task typically writes
     # those ids with a trailing newline, which would otherwise become part of

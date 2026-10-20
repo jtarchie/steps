@@ -268,9 +268,9 @@ func TestBuiltinGitBranchIsOptional(t *testing.T) {
 	}
 }
 
-// `type: slack-reaction` is the third of the Slack trio and the other
-// publish-only one: a get: against it is a load error, and its env: names the
-// same token the other two read.
+// `type: slack-reaction` is the third of the Slack trio: a put marks a
+// message, a get watches for messages the token's user reacted to, and its
+// env: names the same token the other two read.
 func TestBuiltinSlackReactionResourceTypeRegistered(t *testing.T) {
 	t.Parallel()
 
@@ -302,8 +302,8 @@ jobs:
 		t.Error("built-in slack-reaction is missing an out expression")
 	}
 
-	if resourceType.Config.Expr.Check != "" || resourceType.Config.Expr.In != "" {
-		t.Errorf("built-in slack-reaction declares expr.check/in, want neither (publish-only)")
+	if resourceType.Config.Expr.Check == "" || resourceType.Config.Expr.In == "" {
+		t.Errorf("built-in slack-reaction is missing expr.check/in: its get watches for reactions")
 	}
 
 	found := false
