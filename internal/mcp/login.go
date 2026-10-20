@@ -260,6 +260,18 @@ func authorize(ctx context.Context, srv config.MCPServer, handler *auth.Authoriz
 		// whose 401 challenge gets parsed, and some servers spell it in a
 		// way the SDK's strict parser rejects (see challenge.go).
 		HTTPClient: challengeRepairClient(),
+		// Same flag as newTransport (client.go), for the same server. The
+		// SDK otherwise opens a long-lived GET right after initialize, and
+		// mcp.honeybadger.io serves one request per session at a time, so
+		// the `notifications/initialized` POST sits behind that stream until
+		// the server drops it — about a minute. Connect (client.go) hits its
+		// 60s handshake deadline and fails there; this path runs under the
+		// login's ten-minute bound, so it waited the minute out and then
+		// SUCCEEDED, which read as a login that hung and then mysteriously
+		// worked. The browser had long since been sent back to a tab saying
+		// "needs login". Nothing after the exchange consumes the stream: the
+		// session is closed as soon as the token is read.
+		DisableStandaloneSSE: true,
 	}
 
 	client := sdkmcp.NewClient(clientImplementation, nil)

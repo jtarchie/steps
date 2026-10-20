@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +51,10 @@ type fakeOAuthServer struct {
 	issuesRefreshToken   bool
 	challenge            string
 	registration         map[string]any
+	// mcpGets counts GET requests at the MCP endpoint, which is the
+	// standalone SSE stream and nothing else: the login must not open one
+	// (see authorize).
+	mcpGets atomic.Int64
 }
 
 func newFakeOAuthServer(t *testing.T) *fakeOAuthServer {
@@ -68,7 +73,14 @@ func newFakeOAuthServer(t *testing.T) *fakeOAuthServer {
 	base := f.server.URL
 
 	mcpHandler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return echoServer() }, nil)
-	f.mux.Handle("/mcp", requireBearer(f.issuedToken, func() string { return f.challenge }, mcpHandler))
+	f.mux.Handle("/mcp", requireBearer(f.issuedToken, func() string { return f.challenge },
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				f.mcpGets.Add(1)
+			}
+
+			mcpHandler.ServeHTTP(w, r)
+		})))
 
 	f.mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -198,6 +210,44 @@ func TestLoginEndToEnd(t *testing.T) {
 
 	assertLoginPersisted(t, tf, srv, fake.issuedToken)
 	assertPersistedTokenWorks(t, ctx, srv)
+}
+
+// TestLoginDoesNotOpenAStandaloneSSEStream is client_test's
+// TestConnectDoesNotOpenAStandaloneSSEStream for the login's own transport,
+// which authorize builds separately and which was left without the flag.
+// Against mcp.honeybadger.io that was a login that sat for a minute after the
+// browser had come back — the `notifications/initialized` POST queued behind
+// the stream until the server dropped it — and then succeeded, so nothing
+// else in this file could have noticed: the token was fine.
+//
+// The fake answers the GET rather than deadlocking on it, for the reason the
+// client test gives: a server built to deadlock deadlocks the SDK's teardown
+// too, and the test hangs instead of failing. The count is the assertion.
+func TestLoginDoesNotOpenAStandaloneSSEStream(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv (via TokenPath's os.UserConfigDir()).
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	fake := newFakeOAuthServer(t)
+
+	srv := config.MCPServer{
+		Name:     "fake",
+		Endpoint: fake.server.URL + "/mcp",
+		Auth:     config.MCPServerAuth{Type: "oauth"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err := Login(ctx, testPipeline, srv, fakeBrowserOpen(t))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	if n := fake.mcpGets.Load(); n != 0 {
+		t.Fatalf("the login opened %d standalone SSE stream(s) at the MCP endpoint, want 0", n)
+	}
 }
 
 // capturingBrowserOpen is fakeBrowserOpen plus a record of the authorization
