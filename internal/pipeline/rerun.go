@@ -51,8 +51,16 @@ func rerunOf(ctx context.Context) string {
 // either.
 //
 // A version history no longer holds refuses the rerun before anything runs,
-// in Concourse's words. A run that recorded nothing is refused unless the plan
-// has no get at all, in which case there is nothing to bind.
+// in Concourse's words.
+//
+// A run that recorded nothing never resolved: preflight refused it before
+// planning. Its retry is the fresh resolution it never reached — and it TAKES
+// what it builds, as the refused run would have, because a rerun's usual
+// take-nothing would leave the version looking unbuilt and the next ordinary
+// run would build it a second time. What survives of the rerun is the link
+// (rerun_of) and the cache skip. Refusing it ("recorded no input versions")
+// was tried first, and it refused exactly the run a person retries after
+// fixing the configuration.
 func rerunInputSets(ctx context.Context, st store.Versions, resolution setResolution, history *resourceHistory) (setResolution, error) {
 	of := rerunOf(ctx)
 	if of == "" {
@@ -65,11 +73,7 @@ func rerunInputSets(ctx context.Context, st store.Versions, resolution setResolu
 	}
 
 	if len(inputs) == 0 {
-		if len(resolution.resources) == 0 {
-			return resolution, nil
-		}
-
-		return setResolution{}, fmt.Errorf("cannot rerun run %q: it recorded no input versions", of)
+		return resolution, nil
 	}
 
 	set := merkle.InputSet{}

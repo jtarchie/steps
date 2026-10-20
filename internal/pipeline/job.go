@@ -108,11 +108,6 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 		return err
 	}
 
-	err = preflight(ctx, cfg, job)
-	if err != nil {
-		return err
-	}
-
 	bw, err := provider.NewBuild(ctx, job.Name)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
@@ -172,13 +167,23 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	runner := stepRunner{cfg: cfg, jobName: job.Name, bw: bw, st: st}
 
 	// Everything from here on has a workspace to run job-level hooks in, so
-	// funnel planning and execution into one outcome and dispatch the job's
-	// hooks around it. Pre-workspace failures above fire no hooks — there's
-	// nowhere for a job-level hook to run yet. Job hooks fire on every
+	// funnel preflight, planning and execution into one outcome and dispatch
+	// the job's hooks around it. Pre-workspace failures above fire no hooks —
+	// there's nowhere for a job-level hook to run yet. Job hooks fire on every
 	// invocation past this point, cached or not; they are never hashed or
 	// skipped. Concourse has no job-level hook construct to compare against
 	// (its hooks are step modifiers) — see docs/conformance.md.
-	runErr := runJobPlan(ctx, runner, job, opts, skipCache)
+	//
+	// Preflight sits inside the run rather than before it. Refusing earlier
+	// left no run at all: under `steps web` a dead model or a tool the server
+	// stopped exposing was a failed queue row and a log line — nothing red,
+	// no on_error, no Retry — and a refusal is the one outcome nobody is
+	// watching for. An unmarked error classifies as errored, which is right:
+	// the machinery said no before any step could.
+	runErr := preflight(ctx, cfg, job)
+	if runErr == nil {
+		runErr = runJobPlan(ctx, runner, job, opts, skipCache)
+	}
 
 	finalErr := runHooks(ctx, runner.scope(fmt.Sprintf("job %q", job.Name)), job.Hooks, runErr)
 

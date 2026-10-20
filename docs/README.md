@@ -110,7 +110,7 @@ steps: error: pipeline.yml cannot run here:
 
 `steps validate --live` answers the run-time version of the same question: not "is this pipeline runnable" but "is it runnable *right now*". It sends a minimal request to every model the pipeline reaches and starts every MCP server it grants; `--job <name>` narrows that to one job.
 
-**`steps run` does this automatically, before any step executes.** Without it, a plan like `plan -> code -> check -> review -> publish` discovers a dead model half an hour in, with everything before it paid for and thrown away. With it, the run fails in seconds, saying explicitly that nothing ran:
+**`steps run` does this automatically, before any step executes.** Without it, a plan like `plan -> code -> check -> review -> publish` discovers a dead model half an hour in, with everything before it paid for and thrown away. With it, the run fails in seconds, saying explicitly that nothing ran. It is a run all the same — errored, with no steps, the reason in its head — so under `steps web` the job turns red, the job's `on_error` fires, and Retry on that run builds what it refused:
 
 ```
 $ steps run pipeline.yml --job self-build
