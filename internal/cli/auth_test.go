@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/web"
 )
 
 func TestTheTargetsCredentialsTravelInTheHeaderAndNotTheURL(t *testing.T) {
@@ -253,6 +255,34 @@ func TestALoopbackListenAndAnAuthedPublicOneAreQuiet(t *testing.T) {
 
 		if strings.Contains(out, "s3cret") {
 			t.Errorf("%s printed the password:\n%s", cmd.Listen, out)
+		}
+	}
+}
+
+// Only a loopback listen implies its names: any other is reached through whatever the operator put in front of it, which forwards a name only the operator knows.
+func TestOnlyALoopbackListenImpliesItsHosts(t *testing.T) {
+	t.Parallel()
+
+	for listen, want := range map[string]int{
+		"127.0.0.1:8088": http.StatusForbidden,
+		"localhost:8088": http.StatusForbidden,
+		"0.0.0.0:8088":   http.StatusOK,
+		":8088":          http.StatusOK,
+		"10.0.0.5:8088":  http.StatusOK,
+	} {
+		server, err := web.New(nil, nil, (&WebCmd{Listen: listen}).hostOptions()...)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/static/app.css", nil)
+		req.Host = "evil.test"
+
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != want {
+			t.Errorf("--listen %s answering evil.test = %d, want %d", listen, rec.Code, want)
 		}
 	}
 }

@@ -60,8 +60,8 @@ type WebCmd struct {
 	GoogleClientID    string   `help:"sign people in with Google: the OAuth client id"                                                                                                                                  name:"google-client-id"                                                                        placeholder:"ID"`
 	GoogleSecretEnv   string   `default:"STEPS_GOOGLE_CLIENT_SECRET"                                                                                                                                                    help:"the environment variable holding that client's secret"                                   name:"google-client-secret-env" placeholder:"NAME"`
 	LocalUsersFile    string   `help:"an htpasswd file of local accounts, bcrypt hashes only"                                                                                                                           name:"local-users-file"                                                                        placeholder:"PATH"              type:"existingfile"`
-	// Opt-in because a reverse proxy forwards the client's Host, so only the operator knows this daemon's names; see docs/web.md#security.
-	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed)" name:"allowed-host" placeholder:"NAME"`
+	// Implied on a loopback listen (hostOptions); elsewhere opt-in, because a reverse proxy forwards the client's Host, so only the operator knows this daemon's names; see docs/web.md#security.
+	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed, and on a loopback --listen so is --external-url's)" name:"allowed-host" placeholder:"NAME"`
 	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
 	ExternalURL string `help:"the URL steps publish to every step as STEPS_URL (default http://<listen>)" name:"external-url"`
 
@@ -267,6 +267,24 @@ func (w *WebCmd) allowedHosts() error {
 	return nil
 }
 
+// hostOptions is which Host names the daemon answers. A loopback listen has no name a browser reaches it by but a loopback one and the --external-url it is published at, so it refuses the rest with no list given — DNS rebinding. Any other listen leaves the list to the operator, because a reverse proxy forwards the client's name.
+func (w *WebCmd) hostOptions() []web.Option {
+	opts := []web.Option{web.WithAllowedHosts(w.AllowedHost)}
+
+	if loopbackOnly(w.Listen) {
+		var published []string
+
+		parsed, err := url.Parse(w.published)
+		if err == nil && parsed.Hostname() != "" {
+			published = append(published, parsed.Hostname())
+		}
+
+		opts = append(opts, web.WithLoopbackHosts(published...))
+	}
+
+	return opts
+}
+
 // Run serves until canceled, holding whatever the state database says was set.
 func (w *WebCmd) Run() error {
 	// Rejected rather than shrugged at: a server that quietly served forever
@@ -341,7 +359,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 
 	defer closeAccounts()
 
-	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(version()), web.WithCapacity(local), web.WithTracing(telemetry.Middleware(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory), web.WithExternalURL(w.published))...)
+	server, err := web.New(nil, runner, append(append(opts, w.hostOptions()...), web.WithVersion(version()), web.WithCapacity(local), web.WithTracing(telemetry.Middleware(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory), web.WithExternalURL(w.published))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

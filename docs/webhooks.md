@@ -178,7 +178,7 @@ ingress:
   - service: http_status:404
 ```
 
-Tailscale Funnel and any reverse proxy work the same way: route `^/p/[^/]+/hooks/[^/]+$` and nothing else.
+Tailscale Funnel and any reverse proxy work the same way: route `^/p/[^/]+/hooks/[^/]+$` and nothing else. The tunnel forwards `hooks.example.com` as the `Host`, which a loopback daemon accepts on the hook route without being told; with `--allowed-host` set, name it there too.
 
 ## Lost deliveries
 

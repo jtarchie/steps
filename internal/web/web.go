@@ -145,8 +145,9 @@ type Server struct {
 	// exporter builds exports and exports holds the built ones: see exports.go.
 	exporter Exporter
 	exports  exportCache
-	// nil answers any Host, which is the default: see hosts.go.
+	// nil answers any Host: see hosts.go. hostsImplied is a list nobody named, which a webhook delivery is exempt from.
 	allowedHosts map[string]bool
+	hostsImplied bool
 	// version is what the footer prints, so a bug report can name the build.
 	version string
 	// tracing is the outermost middleware when set, so a request any later one refuses is still traced. Nil in page tests, which keep talking to a bare echo.
@@ -648,7 +649,7 @@ func refuseFraming(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// No page here calls /api, and to the origin check a DNS-rebinding page is same-origin (its own name arrives as both Host and Origin) while a set is a remote shell; not a Host check by default, because a reverse proxy forwards the client's — --allowed-host is the opt-in one (hosts.go).
+// No page here calls /api, and to the origin check a DNS-rebinding page is same-origin (its own name arrives as both Host and Origin) while a set is a remote shell; not a Host check, because a reverse proxy forwards the client's — refuseOtherHosts is that, implied on a loopback listen and named with --allowed-host elsewhere (hosts.go).
 func refuseBrowsers(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		header := c.Request().Header
@@ -659,7 +660,7 @@ func refuseBrowsers(next echo.HandlerFunc) echo.HandlerFunc {
 			return echo.NewHTTPError(http.StatusForbidden, "the /api routes answer the steps CLI, not a browser")
 		}
 
-		// ponytail: without --allowed-host a rebinding page's GET carries neither and is answered, showing it nothing the UI's own pages do not, and its UI POSTs pass sameOriginMutations; the allow-list closes both.
+		// ponytail: on a non-loopback listen without --allowed-host a rebinding page's GET carries neither and is answered, showing it nothing the UI's own pages do not, and its UI POSTs pass sameOriginMutations; the allow-list closes both.
 		return next(c)
 	}
 }

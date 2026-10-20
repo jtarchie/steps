@@ -78,3 +78,41 @@ func TestNoAllowedHostsAnswersAnyName(t *testing.T) {
 		t.Errorf("Host evil.test with no allow-list = %d, want 200", got)
 	}
 }
+
+// A daemon bound to loopback refuses every other name with no list at all, since a browser can reach it by no other — except the hook route: a tunnel forwards the sender's own name, and a delivery is authenticated by its signature, which a rebinding page has no more of than any other site.
+func TestLoopbackHostsRefuseOtherNamesButNotADelivery(t *testing.T) {
+	t.Parallel()
+
+	server, err := New(nil, stubRunner{}, WithLoopbackHosts())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for host, want := range map[string]int{
+		"localhost:8088": http.StatusOK,
+		"127.0.0.1:8088": http.StatusOK,
+		"[::1]:8088":     http.StatusOK,
+		"evil.test":      http.StatusForbidden,
+		"evil.test:8088": http.StatusForbidden,
+		"10.0.0.5:8088":  http.StatusForbidden,
+		"steps.example.": http.StatusForbidden,
+	} {
+		if got := hostStatus(t, server, http.MethodGet, "/static/app.css", host); got != want {
+			t.Errorf("Host %q = %d, want %d", host, got, want)
+		}
+	}
+
+	if got := hostStatus(t, server, http.MethodPost, "/p/demo/hooks/push", "hooks.example.com"); got == http.StatusForbidden {
+		t.Errorf("a tunnelled delivery to a loopback daemon = %d, want it to reach the hook route", got)
+	}
+
+	// An explicit list is the operator naming every host, hooks' included, so it stays uniform.
+	listed, err := New(nil, stubRunner{}, WithLoopbackHosts(), WithAllowedHosts([]string{"steps.example"}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if got := hostStatus(t, listed, http.MethodPost, "/p/demo/hooks/push", "hooks.example.com"); got != http.StatusForbidden {
+		t.Errorf("a delivery naming an unlisted host under --allowed-host = %d, want 403", got)
+	}
+}

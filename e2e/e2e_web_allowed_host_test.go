@@ -78,14 +78,39 @@ jobs:
 	}
 }
 
-// Not t.Parallel(): startWeb backgrounds cli.Run in this process and stop signals the whole test binary.
-func TestWithoutAllowedHostEveryNameIsServed(t *testing.T) {
-	served := startWeb(t, "--db", filepath.Join(t.TempDir(), "daemon.db"))
+// A daemon bound to loopback has no name a browser can honestly reach it by other than a loopback one, so with no --allowed-host it answers only those — and the --external-url it was told it is published at, which is the name a proxy on this machine forwards. Anything else is a rebinding page. Not t.Parallel(), for startWeb's reason.
+func TestALoopbackListenRefusesOtherNamesByDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: compile
+    run: "true"
+`)
+
+	served := startWeb(t, "--db", filepath.Join(dir, "daemon.db"), "--external-url", "https://steps.example")
 	defer served.stopIfRunning(t)
 
-	for _, host := range []string{"evil.test", "steps.example"} {
+	served.set(t, "demo", path)
+
+	if code := hostCall(t, served, http.MethodPost, "/p/demo/jobs/build/trigger", "evil.test:8088", true); code != http.StatusForbidden {
+		t.Errorf("a rebinding trigger against a loopback daemon = %d, want 403", code)
+	}
+
+	if code := hostCall(t, served, http.MethodGet, "/p/demo", "evil.test", false); code != http.StatusForbidden {
+		t.Errorf("a rebinding read against a loopback daemon = %d, want 403", code)
+	}
+
+	for _, host := range []string{"localhost:8088", served.addr, "steps.example"} {
 		if code := hostCall(t, served, http.MethodGet, "/static/app.css", host, false); code != http.StatusOK {
-			t.Errorf("GET /static/app.css as %s with no allow-list = %d, want 200", host, code)
+			t.Errorf("GET /static/app.css as %s = %d, want 200", host, code)
 		}
+	}
+
+	// docs/webhooks.md's tunnel forwards the sender's name to a loopback daemon; the delivery's signature is what admits it, so the name must not refuse it first.
+	if code := hostCall(t, served, http.MethodPost, "/p/demo/hooks/push", "hooks.example.com", false); code == http.StatusForbidden {
+		t.Errorf("a tunnelled delivery = %d, want it to reach the hook route", code)
 	}
 }

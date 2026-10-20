@@ -847,15 +847,27 @@ same-origin request looks like. So everything under `/api/` — what
 header only a browser attaches: an `Origin` of any value, which every browser
 sends on the `PUT`, `POST` and `DELETE` those verbs use, or a `Sec-Fetch-Site`
 saying anything but `none`, which is a URL typed into the address bar. The CLI
-sends neither, and no page in the UI calls `/api/`. `Host` is not checked by
-default, because a reverse proxy in front of the daemon forwards the name the
-client used — only you know which names are this daemon's.
+sends neither, and no page in the UI calls `/api/`.
+
+**On a loopback `--listen`, other names are refused by default.** A browser
+can reach a daemon bound to `127.0.0.1` by a loopback name and by nothing
+else, so a request carrying any other `Host` is a rebinding page and gets a
+403 before it reaches a page or a button. Two names pass anyway: the host of
+`--external-url`, which is what a reverse proxy on this machine forwards, and
+anything on a webhook delivery route (`/p/<pipeline>/hooks/<resource>`),
+because a tunnel forwards the sender's own name and a delivery is admitted by
+its signature, which a rebinding page has no more of than any other site.
+Naming `--allowed-host` replaces this list with yours, hooks included. On any
+other `--listen`, `Host` is not checked unless you name `--allowed-host`,
+because a reverse proxy in front of the daemon forwards the name the client
+used — only you know which names are this daemon's.
 
 The browser's own controls — trigger, retry, approve, answer, release, pause,
 abort, connect, test — are `POST`s refused when their `Origin` names another host, which stops another
-site aiming a form at your port. A rebinding page is not another host: it can
-read every page, configurations included, and press those controls, unless
-`--allowed-host` refuses its name or `--read-only` has withheld them. It cannot set, destroy or rename a pipeline:
+site aiming a form at your port. A rebinding page is not another host: on a
+non-loopback `--listen` it can read every page, configurations included, and
+press those controls, unless `--allowed-host` refuses its name or
+`--read-only` has withheld them. It cannot set, destroy or rename a pipeline:
 those verbs live under `/api`, which refuses anything browser-shaped.
 
 **`--allowed-host` closes rebinding.** Name every host this daemon is reached
@@ -913,8 +925,8 @@ on this side is everything that changes what a pipeline IS.
                  how many entries the activity log keeps across every pipeline
                  (default 10000, 0 is no limit; see Activity)
 --allowed-host   refuse any request whose Host is not this name (repeatable;
-                 loopback names always pass; env STEPS_ALLOWED_HOSTS,
-                 comma-separated; see Security)
+                 loopback names always pass; implied on a loopback --listen;
+                 env STEPS_ALLOWED_HOSTS, comma-separated; see Security)
 --run-history / --version-history
                  how many runs of each job / versions of each resource to keep;
                  a pipeline's defaults: wins (see infra.md)
