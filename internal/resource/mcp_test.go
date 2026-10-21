@@ -852,3 +852,17 @@ func TestRunInMCPArgsKeepNumbersExact(t *testing.T) {
 		t.Errorf("arguments = %+v, want the version's digits verbatim, not %%v's exponent form", echoed)
 	}
 }
+
+// An out: tool's structured version keeps an integer wider than 53 bits exact, as every sibling decoder does.
+func TestParseVersionObjectKeepsWideIntegersExact(t *testing.T) {
+	t.Parallel()
+
+	const id = int64(1<<60 + 1)
+
+	got := parseVersionObject(&sdkmcp.CallToolResult{StructuredContent: map[string]any{"id": id}})
+
+	number, ok := got["id"].(json.Number)
+	if !ok || number.String() != "1152921504606846977" {
+		t.Errorf("id = %#v, want json.Number 1152921504606846977", got["id"])
+	}
+}

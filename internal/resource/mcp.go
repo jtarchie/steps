@@ -706,9 +706,7 @@ func convertToMap(v any) (map[string]any, error) {
 		return nil, fmt.Errorf("could not marshal: %w", err)
 	}
 
-	var obj map[string]any
-
-	err = json.Unmarshal(data, &obj)
+	obj, err := decodeOutVersion(data)
 	if err != nil {
 		return nil, fmt.Errorf("not a JSON object: %w", err)
 	}
