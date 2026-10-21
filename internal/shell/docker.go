@@ -117,9 +117,9 @@ type dockerSession struct {
 	// released by close. Held rather than reopened per command: connecting is
 	// the expensive half of an exec against a container that is already up.
 	client *dockerapi.Client
-	// attempted records that start has been tried, so a failure is sticky:
+	// attempted records that start has been tried, so a daemon's refusal is sticky:
 	// a bad image must not be re-pulled once per command in an agent's
-	// conversation.
+	// conversation. A start the daemon never answered leaves it unset.
 	attempted bool
 	// closed records that the session was torn down, so a command issued
 	// afterwards fails saying so. Without it, close's clearing of name would
@@ -175,18 +175,25 @@ func (s *dockerSession) ensure(ctx context.Context) (*dockerapi.Client, string, 
 		return nil, "", "", err
 	}
 
-	client, err := s.dial()
+	err = s.connect()
 	if err != nil {
-		s.startErr = fmt.Errorf("connecting to the daemon for image %q: %w", s.image, err)
+		s.startErr = err
 
-		return nil, "", "", s.startErr
+		return nil, "", "", err
 	}
-
-	s.client = client
 
 	slog.DebugContext(ctx, "shell.docker.session_start", "image", s.image, "container", containerName, "cwd", s.resolvedCwd)
 
 	containerID, startErr := s.start(ctx, containerName)
+	if startErr != nil && (ctx.Err() != nil || !dockerapi.IsDaemonRefusal(startErr)) {
+		// No answer from the daemon (cancelled, unreachable, dropped) says nothing about the image: not the command saying no, and not worth pinning, since the next call may reach a daemon that answers.
+		s.attempted = false
+
+		slog.DebugContext(ctx, "shell.docker.session_start_unanswered", "image", s.image, "error", startErr)
+
+		return s.client, "", "", fmt.Errorf("starting a container from image %q: %w", s.image, startErr)
+	}
+
 	if startErr != nil {
 		s.startOut = startErr.Error()
 		s.startErr = &ExitError{Command: "starting a container from image " + s.image, Code: dockerDaemonRefusedCode}
@@ -232,6 +239,22 @@ func (s *dockerSession) workingDir() string {
 	}
 
 	return path.Join(s.resolvedCwd, s.subdir)
+}
+
+// connect opens the daemon connection once; an unanswered start retries on the same one.
+func (s *dockerSession) connect() error {
+	if s.client != nil {
+		return nil
+	}
+
+	client, err := s.dial()
+	if err != nil {
+		return fmt.Errorf("connecting to the daemon for image %q: %w", s.image, err)
+	}
+
+	s.client = client
+
+	return nil
 }
 
 func (s *dockerSession) dial() (*dockerapi.Client, error) {

@@ -115,7 +115,7 @@ func reportPullProgress(stream io.Reader, progress io.Writer) error {
 		}
 
 		if message.Error != "" {
-			return errors.New(message.Error)
+			return pullRefusal(message.Error)
 		}
 
 		if message.Progress != "" || message.Status == "" {
@@ -130,4 +130,32 @@ func reportPullProgress(stream io.Reader, progress io.Writer) error {
 
 		_, _ = fmt.Fprintf(progress, "%s: %s\n", message.ID, message.Status)
 	}
+}
+
+// pullRefusal marks a failure the daemon reported inside the pull stream: the registry or daemon answered, so it is a refusal, unlike a stream that merely broke.
+type pullRefusal string
+
+func (e pullRefusal) Error() string { return string(e) }
+
+// IsDaemonRefusal reports whether err is the daemon ANSWERING a create, start or pull with no, as opposed to the call never getting an answer (cancelled, deadline, an unreachable or dropped connection). Only an answer is data about the image; anything else is infrastructure and must not be read as the command saying no.
+func IsDaemonRefusal(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
+	if _, ok := errors.AsType[pullRefusal](err); ok {
+		return true
+	}
+
+	for _, is := range []func(error) bool{
+		errdefs.IsNotFound, errdefs.IsInvalidArgument, errdefs.IsConflict, errdefs.IsUnauthorized,
+		errdefs.IsPermissionDenied, errdefs.IsNotImplemented, errdefs.IsAlreadyExists,
+		errdefs.IsFailedPrecondition, errdefs.IsInternal,
+	} {
+		if is(err) {
+			return true
+		}
+	}
+
+	return false
 }
