@@ -119,29 +119,34 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 // exists: a var is a value substituted into later steps, not a data transfer.
 const maxVarFileBytes = maxAcrossFileBytes
 
-// readVarFile reads a load_var: file from inside dir. Load confines a literal
-// file:, but a rendered one can be steered by a captured var, so the lexical
-// check repeats here; OpenInRoot also refuses a symlink in the tree that
-// points out of it.
+// readVarFile reads a load_var: file from inside dir.
 func readVarFile(dir, file string) ([]byte, error) {
-	if _, ok := config.ConfinedPath(".", file); !ok {
+	return readConfinedFile(dir, file, maxVarFileBytes)
+}
+
+// errFileTooLarge marks a confined read that hit its cap, so a caller can word it for its own field.
+var errFileTooLarge = errors.New("is above the limit")
+
+// readConfinedFile reads rel from inside dir, at most limit bytes. Load confines a literal path, but a rendered one can be steered by a captured var and a producing step controls what the tree holds, so the lexical check repeats here; OpenInRoot also refuses a symlink in the tree that points out of it, and opening once closes the stat-then-read race.
+func readConfinedFile(dir, rel string, limit int) ([]byte, error) {
+	if _, ok := config.ConfinedPath(".", rel); !ok {
 		return nil, errors.New("escapes the workspace; it must be a path inside a declared input")
 	}
 
-	f, err := os.OpenInRoot(dir, filepath.FromSlash(file))
+	f, err := os.OpenInRoot(dir, filepath.FromSlash(rel))
 	if err != nil {
 		return nil, fmt.Errorf("open: %w", err)
 	}
 
 	defer func() { _ = f.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(f, maxVarFileBytes+1))
+	body, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
 	if err != nil {
 		return nil, fmt.Errorf("read: %w", err)
 	}
 
-	if len(body) > maxVarFileBytes {
-		return nil, fmt.Errorf("is above the limit of %d bytes", maxVarFileBytes)
+	if len(body) > limit {
+		return nil, fmt.Errorf("%w of %d bytes", errFileTooLarge, limit)
 	}
 
 	return body, nil

@@ -74,3 +74,26 @@ func TestReadVarFileAcceptsExactlyTheLimit(t *testing.T) {
 		t.Errorf("read %d bytes, want %d", len(body), maxVarFileBytes)
 	}
 }
+
+func TestReadConfinedFileRefusesASymlinkOutOfTheTree(t *testing.T) {
+	t.Parallel()
+
+	outside := filepath.Join(t.TempDir(), "secret")
+
+	err := os.WriteFile(outside, []byte("s3cret"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+
+	err = os.Symlink(outside, filepath.Join(dir, "link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := readConfinedFile(dir, "link", 10)
+	if err == nil {
+		t.Fatalf("read %q through a symlink out of the tree", body)
+	}
+}

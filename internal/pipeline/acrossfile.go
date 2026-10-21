@@ -11,10 +11,10 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
-	"os"
-	"path/filepath"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -67,20 +67,15 @@ func readAcrossFile(ctx context.Context, axis config.AcrossVar, bw workspace.Bui
 	}
 	defer workspace.CloseSpace(space, label)
 
-	// The path is confined at load (checkFromFilePath rejects absolute paths
-	// and any ".." that climbs out), so this cannot leave the space.
-	full := filepath.Join(space.Dir(), filepath.FromSlash(axis.FromFile))
+	data, err := readConfinedFile(space.Dir(), axis.FromFile, maxAcrossFileBytes)
+	if errors.Is(err, errFileTooLarge) {
+		return nil, fmt.Errorf("%s %w of %d bytes", axis.FromFile, errFileTooLarge, maxAcrossFileBytes)
+	}
 
-	info, err := os.Stat(full)
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("could not read %s: %w — the step that produces %q must write it before this block runs", axis.FromFile, err, artifact)
 	}
 
-	if info.Size() > maxAcrossFileBytes {
-		return nil, fmt.Errorf("%s is %d bytes, above the limit of %d", axis.FromFile, info.Size(), maxAcrossFileBytes)
-	}
-
-	data, err := os.ReadFile(full) //nolint:gosec // path confined at load by checkFromFilePath, joined under this step's own materialized space
 	if err != nil {
 		return nil, fmt.Errorf("could not read %s: %w", axis.FromFile, err)
 	}

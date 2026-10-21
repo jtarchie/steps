@@ -170,10 +170,11 @@ jobs:
 // block naming the file, rather than expanding into something surprising. The
 // array is written during the run, so this is the likeliest failure there is.
 func TestEndToEndAcrossFromFileRejectsBadContent(t *testing.T) {
-	for _, tc := range []struct{ name, content, wantErr string }{
+	for _, tc := range []struct{ name, content, wantErr, script string }{
 		{name: "objects", content: `[{"id":"a"}]`, wantErr: "must hold a JSON array of strings"},
 		{name: "not json", content: `alpha`, wantErr: "must hold a JSON array of strings"},
 		{name: "missing file", content: "", wantErr: "could not read findings/items.json"},
+		{name: "symlink out of the workspace", script: "mkdir -p findings && ln -s /etc/hosts findings/items.json", wantErr: "could not read findings/items.json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -181,6 +182,10 @@ func TestEndToEndAcrossFromFileRejectsBadContent(t *testing.T) {
 			write := fmt.Sprintf("mkdir -p findings && printf %s > findings/items.json", quoteForShell(tc.content))
 			if tc.content == "" {
 				write = "mkdir -p findings" // the directory, but no file in it
+			}
+
+			if tc.script != "" {
+				write = tc.script
 			}
 
 			path := writePipeline(t, dir, fmt.Sprintf(`
