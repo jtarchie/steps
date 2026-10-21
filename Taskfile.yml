@@ -173,7 +173,7 @@ tasks:
   cover-diff:
     desc: "Advisory: which changed lines (vs BASE, default HEAD) did no test execute. Born from a measured failure: a whole eviction layer landed uncovered and its deletion shipped green. Run before committing; triage every line it names — add the test, or know exactly why not."
     cmds:
-      - go test ./... -coverprofile=.cover.out
+      - go test ./... -coverpkg=./... -coverprofile=.cover.out
       - go run ./tools/coverdiff -profile .cover.out -base {{.BASE | default "HEAD"}}
       - rm -f .cover.out
 

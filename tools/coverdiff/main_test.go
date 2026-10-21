@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +34,39 @@ func TestHunkPattern(t *testing.T) {
 
 		if match[1] != want[0] || match[2] != want[1] {
 			t.Errorf("%q parsed as start=%q count=%q, want %v", header, match[1], match[2], want)
+		}
+	}
+}
+
+func TestAnEmptyChangeSetIsNotReportedAsCovered(t *testing.T) {
+	t.Parallel()
+
+	if got := summary("HEAD", 0, true); got != "coverdiff: no changed Go lines vs HEAD" {
+		t.Errorf("summary of nothing = %q, want it to say there was nothing to check", got)
+	}
+
+	if got := summary("HEAD", 2, true); !strings.Contains(got, "every changed executable line") {
+		t.Errorf("summary of a clean change = %q", got)
+	}
+
+	if got := summary("HEAD", 2, false); got != "" {
+		t.Errorf("summary of a dirty change = %q, want the per-file lines to stand alone", got)
+	}
+}
+
+func TestFixturesUnderTestdataAreNotReportable(t *testing.T) {
+	t.Parallel()
+
+	for file, want := range map[string]bool{
+		"internal/a/a.go":                      true,
+		"internal/a/a_test.go":                 false,
+		"tools/kindswitch/testdata/src/p/p.go": false,
+		"testdata/x.go":                        false,
+		"internal/store/sqlite/schema.sql":     false,
+		"tools/mutants/main.go":                true,
+	} {
+		if got := reportable(file); got != want {
+			t.Errorf("reportable(%q) = %v, want %v", file, got, want)
 		}
 	}
 }

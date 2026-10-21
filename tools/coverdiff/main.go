@@ -68,23 +68,42 @@ func run(profilePath, base string) error {
 
 	sort.Strings(files)
 
-	clean := true
+	clean, considered := true, 0
 
 	for _, file := range files {
-		if !strings.HasSuffix(file, ".go") || strings.HasSuffix(file, "_test.go") {
+		if !reportable(file) {
 			continue
 		}
+
+		considered++
 
 		if !report(file, changed[file], covered[file], uncovered[file]) {
 			clean = false
 		}
 	}
 
-	if clean {
-		fmt.Printf("coverdiff: every changed executable line vs %s was executed by a test\n", base)
+	if line := summary(base, considered, clean); line != "" {
+		fmt.Println(line)
 	}
 
 	return nil
+}
+
+// reportable is a changed file that production coverage can speak to: not a test, and not a fixture under testdata, which no profile ever contains.
+func reportable(file string) bool {
+	return strings.HasSuffix(file, ".go") && !strings.HasSuffix(file, "_test.go") && !strings.HasPrefix(file, "testdata/") && !strings.Contains(file, "/testdata/")
+}
+
+// summary is the closing line; an empty change set says so rather than claiming a clean bill, because "nothing was checked" is not "everything was executed".
+func summary(base string, considered int, clean bool) string {
+	switch {
+	case considered == 0:
+		return "coverdiff: no changed Go lines vs " + base
+	case clean:
+		return fmt.Sprintf("coverdiff: every changed executable line vs %s was executed by a test", base)
+	}
+
+	return ""
 }
 
 // lineSets reads the profile into per-file sets: lines inside an executed
