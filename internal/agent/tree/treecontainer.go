@@ -5,6 +5,7 @@ package tree
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -129,13 +130,18 @@ func (c Container) OpenRange(ctx context.Context, p string, through int) (io.Rea
 // maxWriteChunkBytes bounds one script's share of a write once quoted, keeping the command well inside a kernel's argument limit. A write larger than this becomes several appends into a staging file, so the size a model may write is not capped by what one exec can carry.
 const maxWriteChunkBytes = 24 << 10
 
+// stagingPath is unique per call: concurrent writes into one directory from one process must not share a staging file.
+func stagingPath(p string) string {
+	return path.Join(path.Dir(p), ".steps-write-"+rand.Text())
+}
+
 // WriteFile stages the content and finishes with `cat staged > target`, never a move. The redirection writes THROUGH the existing inode, so the file keeps its mode; a rename would replace it and quietly strip the executable bit off a checked-in script.
 func (c Container) WriteFile(ctx context.Context, p string, data []byte, appendTo bool) error {
 	if bytes.IndexByte(data, 0) >= 0 {
 		return errNULInContent
 	}
 
-	staged := path.Join(path.Dir(p), ".steps-write-"+strconv.Itoa(os.Getpid()))
+	staged := stagingPath(p)
 
 	scripts := writeScripts(p, staged, string(data), appendTo)
 	for i, script := range scripts {
