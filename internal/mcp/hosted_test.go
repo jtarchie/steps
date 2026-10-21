@@ -17,6 +17,7 @@ func TestLoginHostedEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	fake := newFakeOAuthServer(t)
 

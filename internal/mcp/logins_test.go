@@ -1,13 +1,11 @@
 package mcp
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 )
@@ -22,6 +20,7 @@ func useConfigDir(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	root, err := os.UserConfigDir()
 	if err != nil {
@@ -158,49 +157,6 @@ func TestMoveLoginsRefusesAnExistingDestination(t *testing.T) {
 	}
 }
 
-func TestARefreshAfterTheLoginMovedDoesNotRecreateIt(t *testing.T) {
-	ts, _ := tokenEndpointServer(t)
-	root := useConfigDir(t)
-
-	srv := config.MCPServer{Name: "linear", Endpoint: "https://mcp.linear.app/mcp", Auth: config.MCPServerAuth{Type: "oauth"}}
-
-	path, err := TokenPath(testPipeline, srv.Name)
-	if err != nil {
-		t.Fatalf("TokenPath: %v", err)
-	}
-
-	tf := &TokenFile{
-		Endpoint:     srv.Endpoint,
-		ClientID:     "client-id",
-		TokenURL:     ts.URL,
-		AccessToken:  "stale-access-token",
-		RefreshToken: "stale-refresh-token",
-		Expiry:       time.Now().Add(-time.Hour),
-	}
-
-	err = tf.Save(path)
-	if err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	source, err := oauthTokenSource(context.Background(), testPipeline, srv)
-	if err != nil {
-		t.Fatalf("oauthTokenSource: %v", err)
-	}
-
-	err = ForgetLogins(testPipeline)
-	if err != nil {
-		t.Fatalf("ForgetLogins: %v", err)
-	}
-
-	refreshAndCheck(t, source, "access-token-call-1")
-
-	_, err = os.Stat(filepath.Join(root, testPipeline))
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("a refresh recreated the removed login directory: %v", err)
-	}
-}
-
 func TestAFlatLoginFromBeforePipelinesNeedsLogin(t *testing.T) {
 	root := useConfigDir(t)
 
@@ -213,7 +169,7 @@ func TestAFlatLoginFromBeforePipelinesNeedsLogin(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	got := InspectToken(testPipeline, srv)
+	got := InspectToken(t.Context(), testPipeline, srv)
 	if got.Connected || got.Detail != "needs login" {
 		t.Fatalf("InspectToken with only a flat file = %+v, want needs login", got)
 	}

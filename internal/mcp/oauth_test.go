@@ -112,6 +112,7 @@ func TestOAuthTokenSourceRefreshesAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir) // covers both darwin ($HOME-based) and linux (XDG-based) os.UserConfigDir()
+	UseVault(fileVault{})
 	path, err := TokenPath(testPipeline, "linear")
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
@@ -261,6 +262,7 @@ func TestOAuthTokenSourceMissingFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	srv := config.MCPServer{Name: "ghost-server", Endpoint: "https://example.com/mcp", Auth: config.MCPServerAuth{Type: "oauth"}}
 
@@ -275,6 +277,7 @@ func TestOAuthTokenSourceEndpointMismatch(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	srv := config.MCPServer{Name: "linear", Endpoint: "https://mcp.linear.app/mcp", Auth: config.MCPServerAuth{Type: "oauth"}}
 
@@ -309,6 +312,7 @@ func TestOAuthTokenSourceNeedsLoginWhenExpiredWithNoRefreshToken(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	path, err := TokenPath(testPipeline, "metabase")
 	if err != nil {
@@ -353,6 +357,7 @@ func TestOAuthTokenSourceUnexpiredWithNoRefreshTokenStillWorks(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	path, err := TokenPath(testPipeline, "metabase")
 	if err != nil {
@@ -452,6 +457,7 @@ func TestOAuthTokenSourceNeedsLoginWhenRefreshRejected(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	path, err := TokenPath(testPipeline, "linear")
 	if err != nil {
@@ -499,6 +505,7 @@ func TestOAuthTokenSourceKeepsNetworkFailureWaitable(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	path, err := TokenPath(testPipeline, "linear")
 	if err != nil {
@@ -570,6 +577,7 @@ func TestOAuthTokenSourceKeepsServerErrorWaitable(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("HOME", dir)
 			t.Setenv("XDG_CONFIG_HOME", dir)
+			UseVault(fileVault{})
 
 			path, err := TokenPath(testPipeline, "linear")
 			if err != nil {
@@ -627,6 +635,7 @@ func TestOAuthTokenSourceNeedsLoginOnEmptyBodiedRefusal(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("HOME", dir)
 			t.Setenv("XDG_CONFIG_HOME", dir)
+			UseVault(fileVault{})
 
 			path, err := TokenPath(testPipeline, "linear")
 			if err != nil {

@@ -1,11 +1,9 @@
 package cli
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	"github.com/jtarchie/steps/internal/sealbox"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -44,6 +43,7 @@ func TestMCPStateReportsWhatASavedTokenIsWorth(t *testing.T) {
 
 	held := servingDaemon(t)
 	setPipeline(t, held, "app", mcpStatePipeline)
+	useFixtureLogins(t, held)
 
 	target := held.server.Lookup("app")
 	live := "https://tracker.example/mcp"
@@ -140,6 +140,7 @@ jobs:
   - task: work
     run: "true"
 `)
+	useFixtureLogins(t, held)
 
 	target := held.server.Lookup("app")
 
@@ -342,35 +343,51 @@ func TestASecondClickWhileAProbeRunsIsNotASecondProbe(t *testing.T) {
 // tokenFixtureServer is the one oauth server every fixture in this package declares, so writeTokenFile names it rather than taking it.
 const tokenFixtureServer = "tracker"
 
-// writeTokenFile puts one saved credential where a login would have left it, or removes it for nil.
+// fixtureLogins is the vault writeTokenFile saves into, installed over a test daemon's own database by useFixtureLogins.
+//
+//nolint:gochecknoglobals // set only by tests that are not t.Parallel(), since the vault and the key are process state
+var fixtureLogins *sealedLogins
+
+// useFixtureLogins installs a sealed vault over held's database, as `steps web` does over its own.
+func useFixtureLogins(t testing.TB, held *daemon) {
+	t.Helper()
+
+	t.Setenv(sealbox.KeyEnv, testKey(t))
+	t.Setenv(sealbox.OldKeyEnv, "")
+
+	previous := stepsmcp.UseVault(nil)
+
+	logins, err := useLogins(held.state, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fixtureLogins = logins
+
+	t.Cleanup(func() {
+		stepsmcp.UseVault(previous)
+		fixtureLogins = nil
+	})
+}
+
+// writeTokenFile saves one login for app's tracker, as a login would have; nil is a server nobody logged into, which there is no way back to once one has.
 func writeTokenFile(t testing.TB, token *stepsmcp.TokenFile) {
 	t.Helper()
 
-	path, err := stepsmcp.TokenPath("app", tokenFixtureServer)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = os.MkdirAll(filepath.Dir(path), 0o700)
-	if err != nil {
-		t.Fatal(err)
+	if fixtureLogins == nil {
+		t.Fatal("writeTokenFile needs useFixtureLogins first")
 	}
 
 	if token == nil {
-		err = os.Remove(path)
-		if err != nil && !os.IsNotExist(err) {
-			t.Fatal(err)
+		_, found, err := fixtureLogins.Load(t.Context(), "app", tokenFixtureServer)
+		if err != nil || found {
+			t.Fatalf("a login is already saved (%v), and nothing removes one but a destroy", err)
 		}
 
 		return
 	}
 
-	body, err := json.Marshal(token) //nolint:gosec // G117: writing the token file IS this fixture's job; the struct is the format under test and every value in it is invented here
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = os.WriteFile(path, body, 0o600)
+	err := fixtureLogins.Save(t.Context(), "app", tokenFixtureServer, loginJSON(t, token))
 	if err != nil {
 		t.Fatal(err)
 	}

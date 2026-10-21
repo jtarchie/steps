@@ -36,18 +36,14 @@ import (
 // is what both preflight callers set from this.
 var ErrNeedsLogin = errors.New("run `steps mcp login`")
 
-// TokenFile is the on-disk shape persisted per oauth-configured server —
-// see tokenPath for where. It holds everything a later process needs to
+// TokenFile is one pipeline's login for one oauth-configured server, as handed to the Vault. It holds everything a later process needs to
 // silently refresh an access token without repeating discovery or dynamic
 // client registration: the resolved client credentials and token endpoint
 // (captured once, during `steps mcp login` — see login.go) alongside the
-// token itself. Endpoint guards against a stale file authorizing the wrong
+// token itself. Endpoint guards against a stale login authorizing the wrong
 // server if a name is ever reused for a different endpoint.
 //
-// Deliberately NOT stored via internal/store (no OpenStore call, no new
-// table) and NOT merkle-hashed — the same trust-boundary treatment
-// validateAgentEndpoints gives LLM provider credentials, for a second kind
-// of secret. See docs/mcp.md's "Trust boundary" section.
+// Never merkle-hashed, and never reaches the state database unsealed: the vault internal/cli installs encrypts it first. See docs/mcp.md's "Trust boundary" section.
 type TokenFile struct {
 	Endpoint     string    `json:"endpoint"`
 	ClientID     string    `json:"client_id"`
@@ -80,7 +76,7 @@ type TokenFile struct {
 // silently.
 const expiryDelta = 10 * time.Second
 
-// checkRefreshable reports the one broken state a token file can be in that
+// checkRefreshable reports the one broken state a login can be in that
 // is knowable without a single request: the access token has expired and
 // there is no refresh token to trade for a new one.
 //
@@ -119,14 +115,9 @@ var ErrLoginsExist = errors.New("mcp logins already exist")
 // can exist, so moving or removing one has nothing to do.
 var errNoConfigDir = errors.New("mcp: resolve user config dir")
 
-// TokenPath returns where pipeline's login for server lives:
+// TokenPath is where steps before the state database kept pipeline's login for server, in the clear:
 // ${XDG_CONFIG_HOME:-~/.config}/steps/mcp/<pipeline>/<server>.json (via
-// os.UserConfigDir()), never inside a pipeline's .steps/ directory and never
-// in the state database. It is per pipeline because a daemon holds several,
-// and a login keyed by server name alone let a login done for one pipeline
-// change which account another acted as. Every caller already holds the
-// pipeline's config, so the name is passed rather than stamped onto
-// config.MCPServer, where it would duplicate cfg.Name and move the cache key.
+// os.UserConfigDir()). A login still there is imported on first use (importLegacyLogin) and the file removed.
 func TokenPath(pipeline, server string) (string, error) {
 	if server == "" {
 		return "", errors.New("mcp: token path needs a server name")
@@ -288,88 +279,10 @@ func LoadTokenFile(path string) (*TokenFile, error) {
 	return &tf, nil
 }
 
-// Save writes t to path atomically (temp file in the same directory, then
-// rename), so a concurrent reader — e.g. another `steps web
-// --max-concurrent` worker refreshing the same server's token — never
-// observes a half-written file. File permissions are 0600 (dir 0700).
-// Only a login calls it: it is the one writer allowed to create the
-// pipeline's directory.
-func (t *TokenFile) Save(path string) error {
-	dir := filepath.Dir(path)
-
-	err := os.MkdirAll(dir, 0o700)
-	if err != nil {
-		return fmt.Errorf("mkdir %q: %w", dir, err)
-	}
-
-	return t.replace(path)
-}
-
-// replace is Save without creating the directory, for a refresh write-back:
-// after a rename or destroy moved the directory away, recreating it would
-// leave a live refresh token under a name a later pipeline inherits.
-func (t *TokenFile) replace(path string) error {
-	dir := filepath.Dir(path)
-
-	data, err := json.MarshalIndent(t, "", "  ") //nolint:gosec // deliberate: this whole file's job is persisting these secrets to a 0600, non-merkle-hashed, per-pipeline token file — see TokenFile's doc comment
-	if err != nil {
-		return fmt.Errorf("marshal token file: %w", err)
-	}
-
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp token file: %w", err)
-	}
-
-	tmpPath := tmp.Name()
-
-	err = saveTemp(tmp, data, tmpPath)
-	if err != nil {
-		return err
-	}
-
-	err = os.Chmod(tmpPath, 0o600)
-	if err != nil {
-		_ = os.Remove(tmpPath)
-
-		return fmt.Errorf("chmod temp token file: %w", err)
-	}
-
-	err = os.Rename(tmpPath, path)
-	if err != nil {
-		_ = os.Remove(tmpPath)
-
-		return fmt.Errorf("rename temp token file: %w", err)
-	}
-
-	return nil
-}
-
-// saveTemp writes data to the already-created tmp file and closes it,
-// cleaning up on any failure — split out of Save to keep it simple.
-func saveTemp(tmp *os.File, data []byte, tmpPath string) error {
-	_, writeErr := tmp.Write(data)
-
-	closeErr := tmp.Close()
-	if writeErr != nil {
-		_ = os.Remove(tmpPath)
-
-		return fmt.Errorf("write temp token file: %w", writeErr)
-	}
-
-	if closeErr != nil {
-		_ = os.Remove(tmpPath)
-
-		return fmt.Errorf("close temp token file: %w", closeErr)
-	}
-
-	return nil
-}
-
 // oauthTokenSource builds a self-refreshing oauth2.TokenSource for an
-// oauth-configured server at run/watch time, from its persisted per-user
-// token file — never interactive (that's login.go's Login, used only by
-// `steps mcp login`). A missing token file, or one persisted for a
+// oauth-configured server at run/watch time, from the pipeline's
+// login in the vault — never interactive (that's login.go's Login, used only by
+// `steps mcp login`). A missing login, or one persisted for a
 // different endpoint, surfaces an actionable error naming the login command
 // to run.
 //
@@ -379,34 +292,36 @@ func saveTemp(tmp *os.File, data []byte, tmpPath string) error {
 // second gets invalid_grant, which classifyRefreshError rightly reads as
 // ErrNeedsLogin, and a working credential demands a human.
 func oauthTokenSource(ctx context.Context, pipeline string, srv config.MCPServer) (oauth2.TokenSource, error) {
-	tf, path, _, err := checkCredential(pipeline, srv)
+	tf, _, err := checkCredential(ctx, pipeline, srv)
 	if err != nil {
 		return nil, err
 	}
 
-	return &connTokenSource{ctx: ctx, shared: sharedTokenFor(path, tf)}, nil
+	return &connTokenSource{ctx: ctx, shared: sharedTokenFor(ctx, pipeline, srv.Name, tf)}, nil
 }
 
 var sharedTokens = struct {
-	mu     sync.Mutex
-	byPath map[string]*sharedToken
-}{byPath: map[string]*sharedToken{}}
+	mu    sync.Mutex
+	byKey map[string]*sharedToken
+}{byKey: map[string]*sharedToken{}}
 
-// sharedTokenFor returns the process's one sharedToken for the login at path. An existing one re-reads the file, so a `steps mcp login` done while a daemon runs takes effect on the next connect, as it did when every connect read the file afresh.
-func sharedTokenFor(path string, tf *TokenFile) *sharedToken {
+// sharedTokenFor returns the process's one sharedToken for pipeline's login to server. An existing one re-reads the vault, so a `steps mcp login` done while a daemon runs takes effect on the next connect.
+func sharedTokenFor(ctx context.Context, pipeline, server string, tf *TokenFile) *sharedToken {
 	sharedTokens.mu.Lock()
 	defer sharedTokens.mu.Unlock()
 
-	shared, ok := sharedTokens.byPath[path]
+	key := pipeline + "\x00" + server
+
+	shared, ok := sharedTokens.byKey[key]
 	if !ok {
-		shared = &sharedToken{path: path, file: tf, onDisk: tf.AccessToken}
-		sharedTokens.byPath[path] = shared
+		shared = &sharedToken{pipeline: pipeline, server: server, file: tf, saved: tf.AccessToken}
+		sharedTokens.byKey[key] = shared
 
 		return shared
 	}
 
 	shared.mu.Lock()
-	shared.reload()
+	shared.reload(ctx)
 	shared.mu.Unlock()
 
 	return shared
@@ -424,7 +339,7 @@ func (c *connTokenSource) Token() (*oauth2.Token, error) {
 }
 
 // sharedToken is a login's token, refreshed by one caller at a time and
-// written back to disk. The write-back is not optional: many providers
+// written back to the vault. The write-back is not optional: many providers
 // rotate the refresh token on every use, so the next process to start must
 // see the new one. A failed write is logged, not returned — the in-memory
 // token is still valid for this process, and failing the current call over
@@ -433,10 +348,11 @@ func (c *connTokenSource) Token() (*oauth2.Token, error) {
 // The refresh happens under mu, which is the single flight: a caller that
 // waited finds the token the first one fetched and returns it.
 type sharedToken struct {
-	mu     sync.Mutex
-	path   string
-	file   *TokenFile
-	onDisk string // the access token the file holds as of this process's last read or write of it
+	mu       sync.Mutex
+	pipeline string
+	server   string
+	file     *TokenFile
+	saved    string // the access token the vault holds as of this process's last read or write of it
 }
 
 func (s *sharedToken) token(ctx context.Context) (*oauth2.Token, error) {
@@ -447,7 +363,7 @@ func (s *sharedToken) token(ctx context.Context) (*oauth2.Token, error) {
 		return tok, nil
 	}
 
-	s.reload()
+	s.reload(ctx)
 
 	if tok := s.file.token(); tok.Valid() {
 		return tok, nil
@@ -465,23 +381,22 @@ func (s *sharedToken) token(ctx context.Context) (*oauth2.Token, error) {
 		return nil, fmt.Errorf("refresh access token: %w", classifyRefreshError(err))
 	}
 
-	s.persist(tok)
+	s.persist(ctx, tok)
 
 	return tok, nil
 }
 
-// reload adopts the file when something other than this process has written
-// it — another process's refresh, whose refresh token is now the only live
-// one, or a fresh login. A file still holding what this process last saw is
+// reload adopts the saved login when something other than this sharedToken has written
+// it — a fresh login, or a refresh by a process sharing the database. A login still holding what this process last saw is
 // ignored: after a failed write it holds a refresh token already spent.
-func (s *sharedToken) reload() {
-	onDisk, err := LoadTokenFile(s.path)
-	if err != nil || onDisk.AccessToken == s.onDisk {
+func (s *sharedToken) reload(ctx context.Context) {
+	saved, err := loadLogin(ctx, s.pipeline, s.server)
+	if err != nil || saved == nil || saved.AccessToken == s.saved {
 		return
 	}
 
-	s.file = onDisk
-	s.onDisk = onDisk.AccessToken
+	s.file = saved
+	s.saved = saved.AccessToken
 }
 
 // classifyRefreshError marks a refresh failure the caller cannot wait out.
@@ -528,7 +443,10 @@ func classifyRefreshError(err error) error {
 	return fmt.Errorf("%w — %w", err, ErrNeedsLogin)
 }
 
-func (s *sharedToken) persist(tok *oauth2.Token) {
+// persistBound caps the write-back, which runs under its own context: a refresh's caller going away right after is exactly when a rotated refresh token must still land.
+const persistBound = 10 * time.Second
+
+func (s *sharedToken) persist(ctx context.Context, tok *oauth2.Token) {
 	updated := *s.file
 	updated.AccessToken = tok.AccessToken
 	updated.TokenType = tok.TokenType
@@ -540,13 +458,16 @@ func (s *sharedToken) persist(tok *oauth2.Token) {
 
 	s.file = &updated
 
-	err := updated.replace(s.path)
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistBound)
+	defer cancel()
+
+	err := saveLogin(writeCtx, s.pipeline, s.server, &updated)
 	if err != nil {
-		slog.Warn("mcp.oauth.persist_failed", "path", s.path, "error", err,
-			"hint", "if the pipeline's login was moved or removed, the rotated token is not saved and it needs a login again")
+		slog.WarnContext(ctx, "mcp.oauth.persist_failed", "pipeline", s.pipeline, "server", s.server, "error", err,
+			"hint", "the rotated token is not saved, so a later process needs a login again")
 
 		return
 	}
 
-	s.onDisk = tok.AccessToken
+	s.saved = tok.AccessToken
 }

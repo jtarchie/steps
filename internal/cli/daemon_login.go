@@ -21,7 +21,7 @@ import (
 // loginBound is how long a started login waits for its browser. A person reading a consent screen is slow; a login nobody finishes must still let go of its goroutine.
 const loginBound = 10 * time.Minute
 
-// logins is every oauth login this daemon has started, by pipeline and server name (loginKey): that is what a token file is keyed by (mcp.TokenPath), so two logins for one pair would be racing to write one file, and the second replaces the first instead.
+// logins is every oauth login this daemon has started, by pipeline and server name (loginKey): that is what a saved login is keyed by, so two logins for one pair would be racing to write one file, and the second replaces the first instead.
 type logins struct {
 	base context.Context //nolint:containedctx // a login outlives the request that started it, and dies with the daemon
 	mu   sync.Mutex
@@ -33,6 +33,8 @@ type logins struct {
 	wait  sync.WaitGroup
 	// attempts numbers the logins this daemon has started, which is what tells one attempt from the one that replaced it under the same pipeline and server.
 	attempts atomic.Uint64
+	// ready is whether a login finished now could be saved; the seam a parallel test sets, since the key is process environment.
+	ready func() error
 }
 
 type pendingLogin struct {
@@ -60,7 +62,7 @@ type staleLogin struct {
 const staleLogins = 4
 
 func newLogins(base context.Context) *logins {
-	return &logins{base: base, held: map[string]*pendingLogin{}, live: map[*pendingLogin]struct{}{}}
+	return &logins{base: base, held: map[string]*pendingLogin{}, live: map[*pendingLogin]struct{}{}, ready: loginsReady}
 }
 
 // nextID names one ATTEMPT, since the newest login for a pipeline and server owns that key. A counter rather than a nonce: it is compared with itself by the request that started the login and never leaves this process as anything a caller could authenticate with.
@@ -91,6 +93,12 @@ func (l *logins) StartLogin(pipeline *web.Pipeline, server string, req web.Login
 
 	if srv.Auth.Type != "oauth" {
 		return web.LoginStatus{}, fmt.Errorf("mcp server %q is not auth: {type: oauth}; nothing to log in to", server)
+	}
+
+	// Before anybody is sent to a consent screen: a login refused only once it is granted wastes the grant, and with no key every one is.
+	err = l.ready()
+	if err != nil {
+		return web.LoginStatus{}, fmt.Errorf("%w: %w", web.ErrRefused, err)
 	}
 
 	redirect, err := redirectFor(req.Base)
@@ -140,9 +148,6 @@ func (l *logins) StartLogin(pipeline *web.Pipeline, server string, req web.Login
 		loginErr := stepsmcp.LoginHosted(ctx, name, *srv, pending.hosted)
 
 		pending.set(func(status *web.LoginStatus) {
-			// The path even on failure: a login that authorized and then refused itself (no refresh token) DID save what it got, and says so.
-			status.TokenPath, _ = stepsmcp.TokenPath(name, server)
-
 			if loginErr != nil {
 				status.State, status.Message = web.LoginFailed, loginErr.Error()
 

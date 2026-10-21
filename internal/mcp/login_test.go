@@ -181,6 +181,7 @@ func TestLoginEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	fake := newFakeOAuthServer(t)
 
@@ -283,6 +284,7 @@ func TestLoginRegistersRefreshGrant(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	fake := newFakeOAuthServer(t)
 
@@ -338,6 +340,7 @@ func TestLoginRequestsConfiguredScopes(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	fake := newFakeOAuthServer(t)
 
@@ -371,6 +374,7 @@ func TestLoginWithoutConfiguredScopesAsksForWhatIsOffered(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	fake := newFakeOAuthServer(t)
 
@@ -408,6 +412,7 @@ func TestLoginFailsWhenNoRefreshTokenIssued(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	fake := newFakeOAuthServer(t)
 	fake.issuesRefreshToken = false
@@ -460,6 +465,7 @@ func TestLoginKeepsARenewableTokenOverADisposableOne(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	fake := newFakeOAuthServer(t)
 	fake.issuesRefreshToken = false
@@ -559,6 +565,7 @@ func TestLoginSpaceSeparatedChallenge(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	fake := newFakeOAuthServer(t)
 	fake.challenge = fmt.Sprintf(
@@ -604,6 +611,7 @@ func TestLoginPreregisteredClientWithoutDCR(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 	t.Setenv("TEST_MCP_CLIENT_SECRET", "registered-client-secret")
 
 	fake := newFakeOAuthServer(t)
@@ -661,6 +669,7 @@ func TestLoginWithoutDCRNorClientIDNamesTheFix(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	fake := newFakeOAuthServer(t)
 	fake.supportsRegistration = false
@@ -691,6 +700,7 @@ func TestLoginPreregisteredSecretEnvUnset(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 	t.Setenv("TEST_MCP_CLIENT_SECRET", "")
 
 	fake := newFakeOAuthServer(t)
@@ -760,6 +770,7 @@ func TestLoginAcceptsAnUnadvertisedIss(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	fake := newFakeOAuthServer(t)
 
@@ -792,6 +803,7 @@ func TestLoginRejectsAMismatchedIss(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	fake := newFakeOAuthServer(t)
 
@@ -823,6 +835,7 @@ func TestLoginHonoursCallbackPort(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	UseVault(fileVault{})
 
 	// Borrow a port the OS says is free, release it, then require Login to
 	// bind that exact one. Asking for a hardcoded port would flake against

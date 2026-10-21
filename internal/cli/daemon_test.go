@@ -507,6 +507,7 @@ func servingDaemon(t testing.TB) *daemon {
 	}
 
 	held := newDaemon(t.Context(), server, local, State(filepath.Join(t.TempDir(), "steps.db")), ExecFlags{}, HistoryFlags{}, time.Hour)
+	held.ready = func() error { return nil }
 	t.Cleanup(held.Close)
 
 	return held

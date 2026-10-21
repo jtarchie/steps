@@ -4,11 +4,13 @@ package e2e
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -29,6 +31,9 @@ type oauthFixture struct {
 }
 
 const oauthFixtureToken = "issued-to-the-daemon"
+
+// testEncryptionKey is the STEPS_ENCRYPTION_KEY every login in these tests is sealed under: 32 bytes, base64.
+const testEncryptionKey = "c3RlcHMtZTJlLWVuY3J5cHRpb24ta2V5LTMyLWJ5dGU="
 
 func newOAuthFixture(t *testing.T) *oauthFixture {
 	t.Helper()
@@ -130,6 +135,7 @@ func TestMCPLoginAgainstADaemonAuthorizesItsPipelines(t *testing.T) {
 
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("STEPS_ENCRYPTION_KEY", testEncryptionKey)
 	t.Setenv("HOME", dir)
 	fakeBrowser(t)
 
@@ -195,7 +201,7 @@ jobs:
 	}
 
 	loginSaidWhatItShould(t, out, fixture, pass)
-	theDaemonHoldsTheToken(t, fixture, served.addr, dir)
+	theDaemonHoldsTheToken(t, fixture, served.addr, dir, filepath.Join(dir, "daemon.db"))
 
 	if code, _ := authGet(t, served.addr, "/mcp/callback?code=late&state="+abandoned, "", ""); code != http.StatusNotFound {
 		t.Errorf("the abandoned login's redirect = %d, want 404: it was replaced, and its state must have died with it", code)
@@ -219,8 +225,8 @@ func loginSaidWhatItShould(t *testing.T, out string, fixture *oauthFixture, pass
 	}
 }
 
-// The redirect has to name the DAEMON, at the address the CLI reached it on and with the credentials taken off: a loopback URI would send the browser to the operator's own laptop, and userinfo would hand the password to the provider.
-func theDaemonHoldsTheToken(t *testing.T, fixture *oauthFixture, addr, dir string) {
+// The redirect has to name the DAEMON, at the address the CLI reached it on and with the credentials taken off: a loopback URI would send the browser to the operator's own laptop, and userinfo would hand the password to the provider. And the token lands in the daemon's database, sealed: a copy of the file is not a copy of the credential.
+func theDaemonHoldsTheToken(t *testing.T, fixture *oauthFixture, addr, dir, db string) {
 	t.Helper()
 
 	registered, _ := fixture.redirectURIs.Load().([]any)
@@ -228,20 +234,59 @@ func theDaemonHoldsTheToken(t *testing.T, fixture *oauthFixture, addr, dir strin
 		t.Errorf("registered redirect_uris = %v, want exactly http://%s/mcp/callback", registered, addr)
 	}
 
-	// Found rather than named, since os.UserConfigDir puts it under $XDG_CONFIG_HOME on Linux and $HOME/Library on macOS.
-	saved := 0
+	if got := pipelinesWithLogins(t, db); len(got) != 1 {
+		t.Errorf("pipelines holding a login = %v, want exactly one", got)
+	}
 
-	_ = filepath.WalkDir(dir, func(found string, _ os.DirEntry, _ error) error {
-		if filepath.Base(found) == "tracker.json" {
-			saved++
+	noFileHoldsTheToken(t, dir)
+}
+
+// noFileHoldsTheToken reads every byte under dir, the database and its write-ahead log included, for the token in the clear.
+func noFileHoldsTheToken(t *testing.T, dir string) {
+	t.Helper()
+
+	_ = filepath.WalkDir(dir, func(found string, entry os.DirEntry, _ error) error {
+		if entry == nil || entry.IsDir() {
+			return nil
+		}
+
+		body, _ := os.ReadFile(found) //nolint:gosec // a path under this test's own temp dir
+		if strings.Contains(string(body), oauthFixtureToken) || strings.Contains(string(body), "fixture-refresh") {
+			t.Errorf("%s holds the token in the clear", found)
 		}
 
 		return nil
 	})
+}
 
-	if saved != 1 {
-		t.Errorf("found %d tracker.json token files under the daemon's config dir, want 1", saved)
+// pipelinesWithLogins names every pipeline the state database holds a sealed login for, read past steps so nothing is decrypted on the way.
+func pipelinesWithLogins(t *testing.T, db string) []string {
+	t.Helper()
+
+	conn, err := sql.Open("sqlite", db)
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	defer func() { _ = conn.Close() }()
+
+	rows, err := conn.QueryContext(t.Context(), `SELECT p.name FROM credentials c JOIN pipelines p ON p.id = c.pipeline_id ORDER BY p.name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	var names []string
+
+	for rows.Next() {
+		var name string
+
+		_ = rows.Scan(&name)
+		names = append(names, name)
+	}
+
+	return names
 }
 
 func thePipelineSpendsTheToken(t *testing.T, fixture *oauthFixture, ran string) {
@@ -368,6 +413,7 @@ func TestAnMCPLoginBelongsToOnePipeline(t *testing.T) {
 
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("STEPS_ENCRYPTION_KEY", testEncryptionKey)
 	t.Setenv("HOME", dir)
 	fakeBrowser(t)
 
@@ -401,7 +447,7 @@ func TestAnMCPLoginBelongsToOnePipeline(t *testing.T) {
 	}
 
 	thePipelineSpendsTheToken(t, fixture, logs["app"])
-	onlyAppIsLoggedIn(t, served.addr, user, pass, logs["other"])
+	onlyAppIsLoggedIn(t, served.addr, user, pass, logs["other"], filepath.Join(dir, "daemon.db"))
 
 	browser := newBrowser(t, served.addr, user, pass)
 	theTabEventuallySays(t, browser, "/p/app/mcp", "renews automatically")
@@ -412,6 +458,27 @@ func TestAnMCPLoginBelongsToOnePipeline(t *testing.T) {
 
 	theLoginFollowsARename(t, fixture, browser, target)
 	aRenameOntoLoginsIsRefusedAndADestroyRemovesOnlyItsOwn(t, served.addr, user, pass, target)
+	aDestroyTakesTheLoginWithIt(t, browser, target, filepath.Join(dir, "daemon.db"), fixture.server.URL, filepath.Join(dir, "app2-again.log"))
+	noFileHoldsTheToken(t, dir)
+}
+
+// A pipeline set under a destroyed one's name is a stranger to it, and must not inherit its accounts.
+func aDestroyTakesTheLoginWithIt(t *testing.T, browser *browserClient, target, db, endpoint, ran string) {
+	t.Helper()
+
+	if got := pipelinesWithLogins(t, db); slices.Contains(got, "app2") {
+		t.Errorf("app2's login survived its destroy: pipelines with logins = %v", got)
+	}
+
+	path := filepath.Join(filepath.Dir(db), "app2-again.yml")
+	writePipelineFile(t, path, trackerPipeline(endpoint, ran))
+
+	err := cli.Run([]string{"pipeline", "set", "-p", "app2", "-c", path, "-n", "--target", target})
+	if err != nil {
+		t.Fatalf("set app2 again: %v", err)
+	}
+
+	theTabEventuallySays(t, browser, "/p/app2/mcp", "needs login")
 }
 
 // A rename keeps history, so it keeps the login, and the pipeline goes on spending it.
@@ -421,10 +488,6 @@ func theLoginFollowsARename(t *testing.T, fixture *oauthFixture, browser *browse
 	err := cli.Run([]string{"pipeline", "rename", "-p", "app", "--to", "app2", "--target", target})
 	if err != nil {
 		t.Fatalf("rename: %v", err)
-	}
-
-	if !fileExists(filepath.Join(mcpLogins(t), "app2", "tracker.json")) {
-		t.Error("the login did not follow the rename")
 	}
 
 	theTabEventuallySays(t, browser, "/p/app2/mcp", "renews automatically")
@@ -439,7 +502,7 @@ func theLoginFollowsARename(t *testing.T, fixture *oauthFixture, browser *browse
 	}
 }
 
-// Renaming onto somebody's logins would inherit or destroy them; destroying a pipeline takes its own and nobody else's.
+// A login an older steps left on disk under a name is still somebody's: renaming onto it would hand it over on first use, so the rename is refused; destroying a pipeline leaves another name's alone.
 func aRenameOntoLoginsIsRefusedAndADestroyRemovesOnlyItsOwn(t *testing.T, addr, user, pass, target string) {
 	t.Helper()
 
@@ -466,17 +529,12 @@ func aRenameOntoLoginsIsRefusedAndADestroyRemovesOnlyItsOwn(t *testing.T, addr, 
 		t.Fatalf("destroy: %v", err)
 	}
 
-	_, err = os.Stat(filepath.Join(mcpLogins(t), "app2"))
-	if !os.IsNotExist(err) {
-		t.Errorf("app2's logins survived its destroy: %v", err)
-	}
-
 	if !fileExists(seeded) {
 		t.Error("a destroy removed another name's logins")
 	}
 }
 
-func onlyAppIsLoggedIn(t *testing.T, addr, user, pass, otherLog string) {
+func onlyAppIsLoggedIn(t *testing.T, addr, user, pass, otherLog, db string) {
 	t.Helper()
 
 	time.Sleep(500 * time.Millisecond)
@@ -489,18 +547,8 @@ func onlyAppIsLoggedIn(t *testing.T, addr, user, pass, otherLog string) {
 		t.Errorf("other's login status = %d, want 404: the login was app's", code)
 	}
 
-	var saved []string
-
-	_ = filepath.WalkDir(mcpLogins(t), func(found string, _ os.DirEntry, _ error) error {
-		if filepath.Base(found) == "tracker.json" {
-			saved = append(saved, filepath.Base(filepath.Dir(found)))
-		}
-
-		return nil
-	})
-
-	if len(saved) != 1 || saved[0] != "app" {
-		t.Errorf("tracker.json saved under %v, want exactly [app]", saved)
+	if got := pipelinesWithLogins(t, db); !slices.Equal(got, []string{"app"}) {
+		t.Errorf("pipelines holding a login = %v, want exactly [app]", got)
 	}
 }
 
@@ -510,6 +558,7 @@ func onlyAppIsLoggedIn(t *testing.T, addr, user, pass, otherLog string) {
 func TestALocalLoginFollowsDashName(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("STEPS_ENCRYPTION_KEY", testEncryptionKey)
 	t.Setenv("HOME", dir)
 	fakeBrowser(t)
 
@@ -529,9 +578,11 @@ func TestALocalLoginFollowsDashName(t *testing.T) {
 		t.Errorf("the login did not say which pipeline it saved for:\n%s", out)
 	}
 
-	if !fileExists(filepath.Join(mcpLogins(t), "infra", "tracker.json")) {
-		t.Fatal("the login was not saved under --name's pipeline")
+	if got := pipelinesWithLogins(t, filepath.Join(dir, ".steps", "p.yml.db")); !slices.Equal(got, []string{"infra"}) {
+		t.Fatalf("pipelines holding a login beside the file = %v, want [infra]", got)
 	}
+
+	noFileHoldsTheToken(t, dir)
 
 	captureStdout(t, func() {
 		err := cli.Run([]string{"validate", "--live", path, "--name", "infra=" + path})
@@ -541,9 +592,78 @@ func TestALocalLoginFollowsDashName(t *testing.T) {
 	})
 
 	captureStdout(t, func() {
-		err := cli.Run([]string{"test", path, "--db", filepath.Join(dir, "p.db")})
+		err := cli.Run([]string{"test", path})
 		if err == nil || !strings.Contains(err.Error(), `not authorized for pipeline "p"`) {
 			t.Errorf("a run under the file's own name = %v, want it not authorized for pipeline p", err)
 		}
 	})
+}
+
+// With no key there is nowhere safe to keep a login, so it is refused before a browser opens — and an older steps' plaintext login is left where it is rather than read into a database that would hold it in the clear.
+//
+// Not t.Parallel(): the token directory, the key and $BROWSER are process environment.
+func TestALoginWithNoKeyIsRefusedBeforeTheBrowserOpens(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("HOME", dir)
+	t.Setenv("STEPS_ENCRYPTION_KEY", "")
+	fakeBrowser(t)
+
+	fixture := newOAuthFixture(t)
+	path := filepath.Join(dir, "p.yml")
+	writePipelineFile(t, path, trackerPipeline(fixture.server.URL, filepath.Join(dir, "ran.log")))
+
+	err := cli.Run([]string{"mcp", "login", "tracker", "-c", path})
+	if err == nil || !strings.Contains(err.Error(), "STEPS_ENCRYPTION_KEY") {
+		t.Fatalf("a login with no key = %v, want it refused naming STEPS_ENCRYPTION_KEY", err)
+	}
+
+	if registered, _ := fixture.redirectURIs.Load().([]any); registered != nil {
+		t.Errorf("the refused login still registered a client (%v): the refusal came after the flow started", registered)
+	}
+}
+
+// A login an older steps saved in the clear is moved into the state database, sealed, the first time a run needs it, and the plaintext file goes.
+//
+// Not t.Parallel(): the token directory and the key are process environment.
+func TestALegacyLoginIsSealedOnFirstUse(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("HOME", dir)
+	t.Setenv("STEPS_ENCRYPTION_KEY", testEncryptionKey)
+
+	fixture := newOAuthFixture(t)
+	ran := filepath.Join(dir, "ran.log")
+	path := filepath.Join(dir, "p.yml")
+	writePipelineFile(t, path, trackerPipeline(fixture.server.URL, ran))
+
+	legacy := filepath.Join(mcpLogins(t), "p", "tracker.json")
+
+	err := os.MkdirAll(filepath.Dir(legacy), 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writePipelineFile(t, legacy, `{"endpoint":"`+fixture.server.URL+`/mcp","client_id":"fixture-client","token_url":"`+fixture.server.URL+`/token","access_token":"`+oauthFixtureToken+`","refresh_token":"fixture-refresh","expiry":"`+time.Now().Add(time.Hour).UTC().Format(time.RFC3339)+`"}`)
+
+	captureStdout(t, func() {
+		err = cli.Run([]string{"test", path})
+	})
+	if err != nil {
+		t.Fatalf("a run over a legacy login: %v", err)
+	}
+
+	if body, _ := os.ReadFile(ran); !strings.Contains(string(body), "ITEM-1") { //nolint:gosec // a path this test made
+		t.Errorf("the run did not spend the imported login (ran.log = %q)", body)
+	}
+
+	if fileExists(legacy) {
+		t.Error("the plaintext login survived its import")
+	}
+
+	if got := pipelinesWithLogins(t, filepath.Join(dir, ".steps", "p.yml.db")); !slices.Equal(got, []string{"p"}) {
+		t.Errorf("pipelines holding a login = %v, want [p]", got)
+	}
+
+	noFileHoldsTheToken(t, dir)
 }

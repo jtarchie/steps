@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 30 added credentials, sealed secrets a pipeline keeps (mcp oauth logins).
+//
 // 29 dropped run_placements.fstype and fs_free: nothing has measured the
 // workdir's filesystem since the shim went, so every row said "not reported".
 //
@@ -90,7 +92,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 29
+const schemaVersion = 30
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -604,6 +606,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_text ON memories(pipeline_id, sco
 -- A scope's entries in age order: the preload's listing and the cap's eviction.
 CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(pipeline_id, scope, id);
 CREATE INDEX IF NOT EXISTS idx_memories_run ON memories(run_id);
+
+-- What a pipeline keeps secret, SEALED: encrypted above the store
+-- (internal/sealbox, keyed from STEPS_ENCRYPTION_KEY) and bound to the
+-- pipeline's id, so a copy of this file opens nothing and a row moved onto
+-- another pipeline does not open either. name is the caller's (mcp:<server>).
+CREATE TABLE IF NOT EXISTS credentials (
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    sealed      BLOB NOT NULL,
+    PRIMARY KEY (pipeline_id, name)
+);
 
 -- Questions an agent step asked its end user, and what came back.
 --

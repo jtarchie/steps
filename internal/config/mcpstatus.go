@@ -20,7 +20,7 @@ const (
 	MCPReady MCPReadiness = iota
 	// MCPMissing is a static condition that FAILS, and that waiting will not fix: the command is not on PATH, or the variable is not set.
 	MCPMissing
-	// MCPUnknown is a server whose readiness this package cannot answer — an oauth server's credential is a token file internal/mcp owns, and a stdio server with a relative cwd: resolves per step.
+	// MCPUnknown is a server whose readiness this package cannot answer — an oauth server's credential is a login internal/mcp keeps, and a stdio server with a relative cwd: resolves per step.
 	MCPUnknown
 )
 
@@ -76,7 +76,7 @@ func (s MCPServer) NotProbableHere() string {
 	return ""
 }
 
-// StaticStatus answers what this machine can say about the server right now without a single request: whether a stdio command is on PATH, and whether a bearer variable is set. The oauth answer is deliberately MCPUnknown rather than a guess — the credential is a token file internal/mcp owns, this package may not import it, and a config package reading a path out of the user's home directory to answer a question about a YAML file would be the wrong thing in the wrong place. Whoever holds the token fills that in; see web.Authorizer.
+// StaticStatus answers what this machine can say about the server right now without a single request: whether a stdio command is on PATH, and whether a bearer variable is set. The oauth answer is deliberately MCPUnknown rather than a guess — the credential is a login internal/mcp keeps, sealed in the state database, and this package may not import it. Whoever holds the token fills that in; see web.Authorizer.
 func (s MCPServer) StaticStatus() MCPStatus {
 	if skip := s.NotProbableHere(); skip != "" {
 		return MCPStatus{Readiness: MCPUnknown, Detail: skip}

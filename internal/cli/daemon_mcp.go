@@ -90,7 +90,7 @@ func probeFingerprint(srv *config.MCPServer) string {
 }
 
 // probeWorthMaking resolves the server a Test names and refuses the two kinds this daemon will not dial: one it cannot honestly reach from here, and one there is nothing to connect with.
-func probeWorthMaking(pipeline *web.Pipeline, server string) (*config.MCPServer, error) {
+func probeWorthMaking(ctx context.Context, pipeline *web.Pipeline, server string) (*config.MCPServer, error) {
 	srv, err := pipeline.Config().FindMCPServer(server)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
@@ -101,17 +101,17 @@ func probeWorthMaking(pipeline *web.Pipeline, server string) (*config.MCPServer,
 	}
 
 	// The same rule `steps mcp list` follows before it dials anything: a server whose credential is already missing answers a probe with the problem the status cell has just stated, in the words of whatever refused it — one problem reported twice, in two vocabularies, the second of them long enough to set the width of a page.
-	if reason := notConnectable(pipeline.Config().Name, *srv); reason != "" {
+	if reason := notConnectable(ctx, pipeline.Config().Name, *srv); reason != "" {
 		return nil, fmt.Errorf("mcp server %q has nothing to connect with: %s", server, reason)
 	}
 
 	return srv, nil
 }
 
-// notConnectable reports why a probe could not succeed whatever the server does, or "" for one worth dialling. The oauth half is the reason this is not just StaticStatus: a token file is the credential, and only the holder can look at it.
-func notConnectable(pipeline string, srv config.MCPServer) string {
+// notConnectable reports why a probe could not succeed whatever the server does, or "" for one worth dialling. The oauth half is the reason this is not just StaticStatus: the saved login is the credential, and only the holder can look at it.
+func notConnectable(ctx context.Context, pipeline string, srv config.MCPServer) string {
 	if srv.Auth.Type == "oauth" {
-		token := stepsmcp.InspectToken(pipeline, srv)
+		token := stepsmcp.InspectToken(ctx, pipeline, srv)
 		if !token.Connected {
 			return token.Detail
 		}
@@ -138,7 +138,7 @@ func (p *probes) MCPState(pipeline *web.Pipeline, server string) web.MCPState {
 	}
 
 	if srv.Auth.Type == "oauth" {
-		state.Credential = p.creds.of(pipeline.Config().Name, *srv)
+		state.Credential = p.creds.of(p.base, pipeline.Config().Name, *srv)
 	}
 
 	p.mu.Lock()
@@ -154,7 +154,7 @@ func (p *probes) MCPState(pipeline *web.Pipeline, server string) web.MCPState {
 
 // StartProbe connects to one server in the background. Detached rather than inline because a preflight timeout is thirty seconds by default and a page is never otherwise slow: the click comes straight back, the row says it is testing, and the poll that already drives the page swaps in the answer.
 func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
-	srv, err := probeWorthMaking(pipeline, server)
+	srv, err := probeWorthMaking(p.base, pipeline, server)
 	if err != nil {
 		return err
 	}

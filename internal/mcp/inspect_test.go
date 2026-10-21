@@ -18,6 +18,7 @@ const inspectEndpoint = "https://tracker.example/mcp"
 // What a page is allowed to say about a saved credential. The checks are the ones a RUN makes, so the two cannot disagree about whether a server works — only about the wording, because a run's error names the login command to type and a page has a button for it.
 func TestInspectTokenReadsTheFileAndNothingElse(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	UseVault(fileVault{})
 
 	srv := config.MCPServer{Name: "tracker", Endpoint: inspectEndpoint, Auth: config.MCPServerAuth{Type: "oauth"}}
 
@@ -68,18 +69,13 @@ func TestInspectTokenReadsTheFileAndNothingElse(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			saveTokenFile(t, srv.Name, test.token)
 
-			got := InspectToken(testPipeline, srv)
+			got := InspectToken(t.Context(), testPipeline, srv)
 			if got.Connected != test.connected || got.Renews != test.renews {
 				t.Errorf("%+v, want connected=%v renews=%v", got, test.connected, test.renews)
 			}
 
 			if !strings.Contains(got.Detail, test.detail) {
 				t.Errorf("detail = %q, want it to say %q", got.Detail, test.detail)
-			}
-
-			// An operator has to be able to find, inspect or delete the file this is about.
-			if got.Path == "" {
-				t.Error("the state does not say where the token lives")
 			}
 
 			// A page renders this, and the credential is the one thing that must never reach one.

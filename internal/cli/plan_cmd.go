@@ -41,9 +41,9 @@ func (p *PlanCmd) Run() error {
 		return err
 	}
 
-	st, err := openState(StatePath(p.Pipeline, p.DB), resolvePipelineName(p.Pipeline, p.Name))
+	st, err := openLocalState(p.Pipeline, p.DB, resolvePipelineName(p.Pipeline, p.Name))
 	if err != nil {
-		return fmt.Errorf("could not open state store: %w", err)
+		return err
 	}
 	defer func() { _ = st.Close() }()
 

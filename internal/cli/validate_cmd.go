@@ -37,7 +37,8 @@ type ValidateCmd struct {
 	Live bool   `help:"also probe the models and MCP servers, live"                                    name:"live"`
 	Job  string `help:"with --live, probe only this job's models and MCP servers (default: every job)"`
 	// Name is here because --live dials oauth servers with the pipeline's own login, which is filed under this name.
-	Name map[string]string `help:"name the pipeline a file's mcp logins are filed under, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
+	Name map[string]string `help:"name the pipeline a file's mcp logins are filed under, e.g. --name infra=infra/pipeline.yml (repeatable)"                                    name:"name"`
+	DB   DB                `help:"state database the logins are sealed into: a sqlite file path, sqlite:// or postgres:// url (default: .steps/<pipeline>.db beside the YAML)" name:"db"   placeholder:"URL"`
 }
 
 // Run loads the pipeline (which runs every config-level validator) and then
@@ -50,6 +51,11 @@ func (v *ValidateCmd) Run() error {
 	}
 
 	cfg, err := v.Load(v.Pipeline, resolvePipelineName(v.Pipeline, v.Name))
+	if err != nil {
+		return err
+	}
+
+	_, err = useLogins(StatePath(v.Pipeline, v.DB), true)
 	if err != nil {
 		return err
 	}

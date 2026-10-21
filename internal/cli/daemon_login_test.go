@@ -283,6 +283,7 @@ func TestCloseTakesAWaitingLoginDownWithIt(t *testing.T) {
 	}
 
 	held := newDaemon(context.Background(), server, local, State(filepath.Join(t.TempDir(), "steps.db")), ExecFlags{}, HistoryFlags{}, time.Hour)
+	held.ready = func() error { return nil }
 	setPipeline(t, held, "app", waitingPipeline(waitingAuthServer(t)))
 
 	pending := startWaitingLogin(t, held, "app")
@@ -481,7 +482,7 @@ func TestARemoteLoginAnnouncesItsURLOnce(t *testing.T) {
 	polls := []web.LoginStatus{
 		{State: web.LoginPending, AuthorizeURL: authorize},
 		{State: web.LoginPending, AuthorizeURL: authorize},
-		{State: web.LoginAuthorized, TokenPath: "/tokens/tracker.json"},
+		{State: web.LoginAuthorized},
 	}
 
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

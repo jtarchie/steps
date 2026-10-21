@@ -199,7 +199,7 @@ func githubCredentialProblems(name string, source map[string]any) []Problem {
 
 // checkMCPServers reports every mcp_servers: entry this machine cannot satisfy without a request: a stdio binary that is not on PATH, and a bearer credential whose api_key_env names an unset variable. The first would have caught a `gopls` grant on a machine without gopls installed; the second is the same treatment checkAgentCredentials gives an agent's api_key_env, and it was missing — an unset $GITHUB_PAT was knowable in microseconds and surfaced only as a failed run.
 //
-// An oauth server is deliberately not checked here: its credential is a token file internal/mcp owns, and this package may not import it. It is checked where it is spent, and reported by whoever holds it — see the web UI's mcp tab.
+// An oauth server is deliberately not checked here: its credential is a login internal/mcp keeps, and this package may not import it. It is checked where it is spent, and reported by whoever holds it — see the web UI's mcp tab.
 func (c *Config) checkMCPServers() []Problem {
 	var problems []Problem
 

@@ -1055,7 +1055,7 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 	// pipeline. internal/resource/preflight.go keys its sibling cache the
 	// same way and was immune to both.
 	// Except for oauth: the definition no longer identifies that connection,
-	// because the credential it sends is the PIPELINE's (mcp.TokenPath), so
+	// because the credential it sends is the PIPELINE's saved login, so
 	// one pipeline's login must not vouch for another's missing one.
 	srv, err := cfg.FindMCPServer(spec.MCP)
 	if err != nil {
@@ -1099,7 +1099,7 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 	// human running `steps mcp login`, or clicking Connect on the daemon's
 	// own mcp tab. Remembering that verdict makes the daemon disbelieve work
 	// that has already been done — the login succeeds, the tab says
-	// authorized, the token file is on disk, and every poll for the rest of
+	// authorized, the login is saved, and every poll for the rest of
 	// the window still fails quoting a stat that stopped being true. Nothing
 	// else clears it either: ResetProbeCache has no caller outside tests, so
 	// the only cure was restarting the daemon.

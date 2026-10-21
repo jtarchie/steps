@@ -22,6 +22,7 @@ func TestMCPTabConnectsAnOAuthServerFromTheBrowser(t *testing.T) {
 
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("STEPS_ENCRYPTION_KEY", testEncryptionKey)
 	t.Setenv("HOME", dir)
 	t.Setenv("TRACKER_PAT", "a-static-token")
 

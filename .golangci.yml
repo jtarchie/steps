@@ -160,6 +160,8 @@ linters:
             # store.Store down. Nothing below it names a driver.
             - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/store/postgres"
+            # sealbox: cli reads the encryption key from the environment and seals mcp logins before they reach the store.
+            - "github.com/jtarchie/steps/internal/sealbox"
             - "github.com/jtarchie/steps/internal/trigger"
             # web is the UI front end: the CLI constructs it and hands it
             # loaded pipelines, exactly as it does trigger.Watch. events is the
@@ -360,6 +362,14 @@ linters:
             - "**/internal/redact/**"
           allow:
             - "$gostd"
+        # sealbox encrypts what the state database keeps secret; a leaf, so the key never has a reason to travel further than cli.
+        Sealbox:
+          files:
+            - "**/internal/sealbox/**"
+          allow:
+            - "$gostd"
+            # its own external test package
+            - "github.com/jtarchie/steps/internal/sealbox"
         # runview folds recorded run events into the step tree a reader sees,
         # and holds the bus observers that draw a run (Plain, Live, Log).
         # Shared by both front ends (web, and the terminal in cli) so the two

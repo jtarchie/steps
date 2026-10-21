@@ -75,7 +75,7 @@ func login(ctx context.Context, pipeline string, srv config.MCPServer, cb *loopb
 	// and a login that throws away a working credential because it will not
 	// last is worse than one that keeps it and says so — `steps run` right
 	// now works either way.
-	err = persistLoginResult(pipeline, srv, asm, reg, tok)
+	err = persistLoginResult(ctx, pipeline, srv, asm, reg, tok)
 	if err != nil {
 		return err
 	}
@@ -471,13 +471,8 @@ func withScopes(authURL string, scopes []string) string {
 // token would otherwise overwrite a working, renewable token with one that
 // dies at expiry, report the failure, and leave no way back to what was there
 // a moment ago.
-func persistLoginResult(pipeline string, srv config.MCPServer, asm *oauthex.AuthServerMeta, reg *oauthex.ClientRegistrationResponse, tok *oauth2.Token) error {
-	path, err := TokenPath(pipeline, srv.Name)
-	if err != nil {
-		return err
-	}
-
-	err = checkNotADowngrade(srv, path, tok)
+func persistLoginResult(ctx context.Context, pipeline string, srv config.MCPServer, asm *oauthex.AuthServerMeta, reg *oauthex.ClientRegistrationResponse, tok *oauth2.Token) error {
+	err := checkNotADowngrade(ctx, pipeline, srv, tok)
 	if err != nil {
 		return err
 	}
@@ -494,9 +489,9 @@ func persistLoginResult(pipeline string, srv config.MCPServer, asm *oauthex.Auth
 		Expiry:       tok.Expiry,
 	}
 
-	err = tf.Save(path)
+	err = saveLogin(ctx, pipeline, srv.Name, tf)
 	if err != nil {
-		return fmt.Errorf("mcp server %q: save token: %w", srv.Name, err)
+		return fmt.Errorf("mcp server %q: %w", srv.Name, err)
 	}
 
 	return nil
@@ -505,18 +500,18 @@ func persistLoginResult(pipeline string, srv config.MCPServer, asm *oauthex.Auth
 // checkNotADowngrade refuses a write that would trade a renewable credential
 // for one that cannot outlive the session, keeping what is already on disk.
 //
-// Only that one direction is refused. Anything else — no file yet, an
-// unreadable one, a file for a different endpoint, or a new token that also
+// Only that one direction is refused. Anything else — no login yet, an
+// unreadable one, one for a different endpoint, or a new token that also
 // carries a refresh token — is a normal login and proceeds, because the
 // alternative to writing is having nothing.
-func checkNotADowngrade(srv config.MCPServer, path string, tok *oauth2.Token) error {
+func checkNotADowngrade(ctx context.Context, pipeline string, srv config.MCPServer, tok *oauth2.Token) error {
 	if tok.RefreshToken != "" {
 		return nil
 	}
 
-	existing, err := LoadTokenFile(path)
-	if err != nil {
-		// No file, or one this version cannot read. Either way there is
+	existing, err := loadLogin(ctx, pipeline, srv.Name)
+	if err != nil || existing == nil {
+		// None, or one this process cannot read. Either way there is
 		// nothing here worth preserving over a token that works right now.
 		return nil //nolint:nilerr // absence of a previous credential is not an error, it is the common case
 	}
@@ -527,8 +522,8 @@ func checkNotADowngrade(srv config.MCPServer, path string, tok *oauth2.Token) er
 
 	return fmt.Errorf(
 		"mcp server %q: this login obtained a token the authorization server issued no refresh token for, "+
-			"but the existing one at %s can still be renewed — keeping it rather than replacing a credential that "+
+			"but the one pipeline %q already holds can still be renewed — keeping it rather than replacing a credential that "+
 			"survives unattended with one that stops working at %s. "+
-			"Re-run with the same scopes as before, or delete that file to accept the downgrade",
-		srv.Name, path, tok.Expiry.Format(time.RFC3339))
+			"Re-run with the same scopes as before",
+		srv.Name, pipeline, tok.Expiry.Format(time.RFC3339))
 }

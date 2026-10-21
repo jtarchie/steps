@@ -24,8 +24,7 @@ type LoginStatus struct {
 	// AuthorizeURL appears once discovery and registration are done, which is network work the start request does not wait out.
 	AuthorizeURL string `json:"authorize_url,omitempty"`
 	// Message is the refusal, in the flow's own words — including the one that matters most unattended: authorized, but with a token that cannot be renewed.
-	Message   string `json:"message,omitempty"`
-	TokenPath string `json:"token_path,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // LoginRequest starts one. Base is the address the CLI reached this daemon on, userinfo already removed: it is proven to work, the browser finishing the flow sits beside that CLI, and it is what the redirect URI is built from — so a password left on it would be handed to the authorization server.

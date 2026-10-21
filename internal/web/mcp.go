@@ -36,7 +36,7 @@ type MCPProbe struct {
 	Tools []string
 }
 
-// MCPState is everything the token-holder knows about one declared server. internal/web cannot import internal/mcp (depguard), and should not: a token file is not this package's business, and the interface is what keeps it that way.
+// MCPState is everything the token-holder knows about one declared server. internal/web cannot import internal/mcp (depguard), and should not: a saved login is not this package's business, and the interface is what keeps it that way.
 type MCPState struct {
 	Credential MCPCredential
 	// Probe is the last Test of this server, nil when nobody has asked.

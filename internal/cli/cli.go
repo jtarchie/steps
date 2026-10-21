@@ -248,9 +248,9 @@ func setup(
 			cfg.Name, name)
 	}
 
-	st, err := openState(StatePath(pipelinePath, flags.DB), name)
+	st, err := openLocalState(pipelinePath, flags.DB, name)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("could not open state store: %w", err)
+		return nil, nil, nil, err
 	}
 
 	// This is the funnel every command that RUNS a local pipeline file comes

@@ -20,6 +20,7 @@ func BenchmarkMCPState(b *testing.B) {
 
 	held := servingDaemon(b)
 	setPipeline(b, held, "app", mcpStatePipeline)
+	useFixtureLogins(b, held)
 
 	target := held.server.Lookup("app")
 

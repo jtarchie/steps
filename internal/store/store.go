@@ -89,6 +89,7 @@ type Store interface {
 	Deliveries
 	Memories
 	Activity
+	Credentials
 }
 
 // ErrSchemaVersion is a database some other build of steps wrote.

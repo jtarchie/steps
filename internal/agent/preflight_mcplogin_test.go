@@ -34,6 +34,7 @@ func TestPreflightDoesNotCacheAServerThatNeedsALogin(t *testing.T) {
 	// os.UserConfigDir(), which is what TokenPath resolves through.
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	useMemoryVault(t)
 
 	mcp := newCountingMCPServer(t)
 	endpoint := mcp.ts.URL + "/mcp"
@@ -81,6 +82,7 @@ func TestPreflightStillCachesAnAuthorizedServer(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	useMemoryVault(t)
 
 	mcp := newCountingMCPServer(t)
 	endpoint := mcp.ts.URL + "/mcp"
@@ -123,6 +125,7 @@ func TestPreflightDoesNotLetOnePipelinesLoginVouchForAnother(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	useMemoryVault(t)
 
 	mcp := newCountingMCPServer(t)
 	endpoint := mcp.ts.URL + "/mcp"
@@ -144,17 +147,12 @@ func TestPreflightDoesNotLetOnePipelinesLoginVouchForAnother(t *testing.T) {
 	}
 }
 
-// authorize writes the token file a finished `steps mcp login` leaves behind,
+// authorize saves the login a finished `steps mcp login` leaves behind,
 // which is the whole of what the browser half of that flow contributes here:
 // the endpoint it was issued for (checkCredential refuses a file belonging to
 // a different one) and an access token with room left on it.
 func authorize(t *testing.T, pipeline, endpoint string) {
 	t.Helper()
-
-	path, err := stepsmcp.TokenPath(pipeline, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	tf := &stepsmcp.TokenFile{
 		Endpoint:     endpoint,
@@ -166,8 +164,22 @@ func authorize(t *testing.T, pipeline, endpoint string) {
 		Expiry:       time.Now().Add(time.Hour),
 	}
 
-	err = tf.Save(path)
+	err := fixtureVault.Put(pipeline, "test", tf)
 	if err != nil {
-		t.Fatalf("saving the token file a login would have written: %v", err)
+		t.Fatalf("saving the login a login would have written: %v", err)
 	}
+}
+
+// fixtureVault is where useMemoryVault keeps this test's logins.
+//
+//nolint:gochecknoglobals // set only by tests that are not t.Parallel(), since the vault is process state
+var fixtureVault *stepsmcp.MemoryVault
+
+func useMemoryVault(t *testing.T) {
+	t.Helper()
+
+	fixtureVault = &stepsmcp.MemoryVault{}
+	previous := stepsmcp.UseVault(fixtureVault)
+
+	t.Cleanup(func() { stepsmcp.UseVault(previous) })
 }

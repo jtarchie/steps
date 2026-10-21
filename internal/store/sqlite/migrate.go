@@ -20,6 +20,12 @@ const oldestUpgradable = 28
 var migrations = []func(ctx context.Context, tx *sql.Tx) error{
 	execStep(`ALTER TABLE run_placements DROP COLUMN fstype;
 ALTER TABLE run_placements DROP COLUMN fs_free;`),
+	execStep(`CREATE TABLE credentials (
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    sealed      BLOB NOT NULL,
+    PRIMARY KEY (pipeline_id, name)
+);`),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {

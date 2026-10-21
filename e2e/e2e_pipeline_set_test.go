@@ -577,6 +577,7 @@ func TestPipelineDestroyForgetsEverything(t *testing.T) {
 	// A destroy or rename acts on the mcp logins filed under the pipeline's name, so not the real user's.
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("STEPS_ENCRYPTION_KEY", testEncryptionKey)
 	t.Setenv("HOME", dir)
 
 	path := flagFixture(t)
@@ -626,6 +627,7 @@ func TestPipelineRenameKeepsHistory(t *testing.T) {
 	// A destroy or rename acts on the mcp logins filed under the pipeline's name, so not the real user's.
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("STEPS_ENCRYPTION_KEY", testEncryptionKey)
 	t.Setenv("HOME", dir)
 
 	path := flagFixture(t)
@@ -666,6 +668,7 @@ func TestPipelineRenameKeepsHistory(t *testing.T) {
 func TestPipelineRenameRefusesWhileABuildRuns(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("STEPS_ENCRYPTION_KEY", testEncryptionKey)
 	t.Setenv("HOME", dir)
 
 	started := filepath.Join(dir, "started")

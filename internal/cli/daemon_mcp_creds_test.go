@@ -5,6 +5,7 @@ package cli
 // parallel: the token directory is process environment.
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,13 +42,14 @@ func countingDaemon(t *testing.T) (*daemon, *int) {
 
 	held := servingDaemon(t)
 	setPipeline(t, held, "app", strings.Replace(oauthServerPipeline, "ENDPOINT", trackerEndpoint, 1))
+	useFixtureLogins(t, held)
 
 	reads := 0
 	inner := held.creds.inspect
-	held.creds.inspect = func(pipeline string, srv config.MCPServer) stepsmcp.TokenState {
+	held.creds.inspect = func(ctx context.Context, pipeline string, srv config.MCPServer) stepsmcp.TokenState {
 		reads++
 
-		return inner(pipeline, srv)
+		return inner(ctx, pipeline, srv)
 	}
 
 	return held, &reads
@@ -63,10 +65,10 @@ func liveToken() *stepsmcp.TokenFile {
 	return &stepsmcp.TokenFile{Endpoint: trackerEndpoint, AccessToken: secretToken, RefreshToken: "r"}
 }
 
-// TestASavedTokenIsReadOnceUntilTheFileChanges: the whole point. The header
+// TestASavedTokenIsReadOnceUntilALoginIsSaved: the whole point. The header
 // asks this for every oauth server of every served pipeline on every render,
-// so a second ask against an unchanged file must cost a stat and nothing else.
-func TestASavedTokenIsReadOnceUntilTheFileChanges(t *testing.T) {
+// so a second ask with nothing saved since must cost a counter read and nothing else.
+func TestASavedTokenIsReadOnceUntilALoginIsSaved(t *testing.T) {
 	held, reads := countingDaemon(t)
 	writeTokenFile(t, liveToken())
 
@@ -113,23 +115,6 @@ func TestALoginIsVisibleImmediately(t *testing.T) {
 
 	if got := credentialOf(t, held); !got.Connected {
 		t.Errorf("credential = %+v right after a login, want connected", got)
-	}
-}
-
-// TestATokenGoingAwayIsVisibleImmediately: the other direction, which is what
-// a `steps mcp logout` or a hand-deleted file looks like.
-func TestATokenGoingAwayIsVisibleImmediately(t *testing.T) {
-	held, _ := countingDaemon(t)
-	writeTokenFile(t, liveToken())
-
-	if got := credentialOf(t, held); !got.Connected {
-		t.Fatalf("credential = %+v, want connected", got)
-	}
-
-	writeTokenFile(t, nil)
-
-	if got := credentialOf(t, held); got.Connected {
-		t.Errorf("credential = %+v after the token was removed, want not connected", got)
 	}
 }
 

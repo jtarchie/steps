@@ -14,6 +14,12 @@ const oldestUpgradable = 14
 //nolint:gochecknoglobals // a fact about the schema, not state
 var migrations = []string{
 	`ALTER TABLE run_placements DROP COLUMN fstype, DROP COLUMN fs_free`,
+	`CREATE TABLE credentials (
+    pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    sealed      BYTEA NOT NULL,
+    PRIMARY KEY (pipeline_id, name)
+)`,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

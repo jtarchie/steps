@@ -460,7 +460,7 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 	// identity is its whole invocation, so args/cwd are in the key too —
 	// `npx server --repo a` and `--repo b` expose different tools. An oauth
 	// server adds the pipeline, whose login is the credential it connects
-	// with (mcp.TokenPath): one pipeline's login must not vouch for another's.
+	// with (its saved login): one pipeline's login must not vouch for another's.
 	identity := []string{srv.Name, srv.Endpoint, srv.Command, srv.Cwd}
 	if srv.Auth.Type == "oauth" {
 		identity = append(identity, cfg.Name)

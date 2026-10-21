@@ -42,6 +42,8 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
+	UseVault(fileVault{})
+
 	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read"))
 }
 

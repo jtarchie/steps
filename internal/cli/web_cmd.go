@@ -350,6 +350,12 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 	}
 
 	state := DaemonStatePath(w.DB)
+
+	_, err := useLogins(state, false)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
 	readLog := func() (store.Reader, error) { return openStateReader(state) } //nolint:contextcheck // opening a store takes none
 
 	opts, closeAccounts, err := w.signedInOptions(opts, state, local) //nolint:contextcheck // opening a store takes none
