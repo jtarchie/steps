@@ -39,7 +39,7 @@ func exprCheckVersions(
 		return nil, fmt.Errorf("check %q: this resource type sets no expr.check, so it can only be published to", rt.Name)
 	}
 
-	slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "source", source, "version", version, "backend", "expr")
+	slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "source_keys", keyNames(source), "version", version, "backend", "expr")
 
 	versions, err := exprlang.RunCheck(ctx, rt.Config.Expr.Check, exprInput(rt, extraEnv, source, version, nil, ""))
 	if err != nil {
@@ -63,8 +63,8 @@ func exprRunIn(
 		return writeJSONFile(filepath.Join(destDir, "version.json"), version)
 	}
 
-	slog.DebugContext(ctx, "resource.in", "resource_type", rt.Name, "source", source, "version", version,
-		"params", params, "dest_dir", destDir, "backend", "expr")
+	slog.DebugContext(ctx, "resource.in", "resource_type", rt.Name, "source_keys", keyNames(source), "version", version,
+		"param_keys", keyNames(params), "dest_dir", destDir, "backend", "expr")
 
 	files, err := exprlang.RunIn(ctx, rt.Config.Expr.In, exprInput(rt, extraEnv, source, version, params, ""))
 	if err != nil {
@@ -119,7 +119,7 @@ func exprRunOut(
 		return nil, fmt.Errorf("out %q: this resource type sets no expr.out", rt.Name)
 	}
 
-	slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "source", source, "params", params,
+	slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "source_keys", keyNames(source), "param_keys", keyNames(params),
 		"src_dir", srcDir, "backend", "expr")
 
 	in := exprInput(rt, extraEnv, source, nil, params, srcDir)

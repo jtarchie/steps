@@ -101,7 +101,7 @@ func (m *chatModel) generate(ctx context.Context, req *model.LLMRequest) (*model
 
 	response, err := m.client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("POST %q: %w", m.endpoint, err)
+		return nil, fmt.Errorf("chat request: %w", err)
 	}
 
 	defer func() { _ = response.Body.Close() }()

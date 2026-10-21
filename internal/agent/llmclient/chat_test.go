@@ -257,3 +257,30 @@ func TestAKeylessSourceSendsNoCredential(t *testing.T) {
 		t.Errorf("Authorization = %q, want none", auth)
 	}
 }
+
+func TestATransportErrorNamesTheEndpointOnceWithoutItsPassword(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	host := strings.TrimPrefix(server.URL, "http://")
+
+	server.Close()
+
+	llm := New(config.ResolvedInvocation{BaseURL: "http://user:pw9sentinel@" + host + "/v1/", ModelName: "local", Attempts: 1}, "")
+
+	var got error
+
+	for _, err := range llm.GenerateContent(context.Background(), parityRequests()[0].req, false) {
+		got = err
+	}
+
+	if got == nil {
+		t.Fatal("want a transport error from a closed server")
+	}
+
+	if strings.Contains(got.Error(), "pw9sentinel") {
+		t.Errorf("the endpoint's password leaked: %v", got)
+	}
+
+	if n := strings.Count(got.Error(), "/chat/completions"); n != 1 {
+		t.Errorf("the endpoint appears %d times, want once: %v", n, got)
+	}
+}

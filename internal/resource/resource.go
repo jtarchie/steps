@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
@@ -61,11 +63,14 @@ func runnerSpec(rt config.ResourceType, extraEnv []string) shell.RunnerSpec {
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()}
 }
 
+// keyNames is what a debug line may say about a source or params map: their values carry credentials (see template.Render).
+func keyNames(m map[string]any) []string { return slices.Sorted(maps.Keys(m)) }
+
 type shellBackend struct{}
 
 func (shellBackend) check(ctx context.Context, c Call) ([]map[string]any, error) {
 	rt, source, version := c.Type, c.Resource.Source, c.Version
-	slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "source", source, "version", version)
+	slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "source_keys", keyNames(source), "version", version)
 
 	command, err := template.Render(rt.Config.Check, map[string]any{"source": source, "version": version})
 	if err != nil {
@@ -111,7 +116,7 @@ func runShellCheck(ctx context.Context, rt config.ResourceType, spec shell.Runne
 	// A version is an identity, and this is the path that mints one.
 	versions, err := decodeVersionArray(out)
 	if err != nil {
-		slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "output", string(out))
+		slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "output_bytes", len(out))
 
 		return nil, fmt.Errorf("check %q: could not parse JSON output: %w", rt.Name, err)
 	}
@@ -266,7 +271,7 @@ func RunIn(ctx context.Context, c Call) error {
 
 func (shellBackend) in(ctx context.Context, c Call) error {
 	rt, source, version, params, destDir := c.Type, c.Resource.Source, c.Version, c.Params, c.Dir
-	slog.DebugContext(ctx, "resource.in", "resource_type", rt.Name, "source", source, "version", version, "params", params, "dest_dir", destDir)
+	slog.DebugContext(ctx, "resource.in", "resource_type", rt.Name, "source_keys", keyNames(source), "version", version, "param_keys", keyNames(params), "dest_dir", destDir)
 
 	command, err := template.Render(rt.Config.In, map[string]any{"source": source, "version": version, "params": params})
 	if err != nil {
@@ -324,7 +329,7 @@ func RunOut(ctx context.Context, c Call) (map[string]any, error) {
 
 func (shellBackend) out(ctx context.Context, c Call) (map[string]any, error) {
 	rt, source, params, srcDir := c.Type, c.Resource.Source, c.Params, c.Dir
-	slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "source", source, "params", params, "src_dir", srcDir)
+	slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "source_keys", keyNames(source), "param_keys", keyNames(params), "src_dir", srcDir)
 
 	command, err := template.Render(rt.Config.Out, map[string]any{"source": source, "params": params})
 	if err != nil {
@@ -350,7 +355,7 @@ func (shellBackend) out(ctx context.Context, c Call) (map[string]any, error) {
 
 	result, unmarshalErr := decodeOutVersion(out)
 	if unmarshalErr != nil {
-		slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "output", string(out), "parse_error", unmarshalErr)
+		slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "output_bytes", len(out), "parse_error", unmarshalErr)
 
 		return nil, nil //nolint:nilnil // unparsable/empty stdout is not an error; nil result means "no version produced"
 	}
