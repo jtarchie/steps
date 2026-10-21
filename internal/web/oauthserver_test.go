@@ -303,6 +303,32 @@ func TestPKCEIsRequiredAndChecked(t *testing.T) {
 	}
 }
 
+func TestRegistrationNameIsCutOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	server, _ := exportServer(t)
+
+	body, err := json.Marshal(map[string]any{"client_name": strings.Repeat("é", 150), "redirect_uris": []string{"https://x.example/cb"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := serve(t, server, http.MethodPost, "/oauth/register", string(body), "")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register = %d %s", rec.Code, rec.Body.String())
+	}
+
+	var client struct {
+		Name string `json:"client_name"`
+	}
+
+	_ = json.Unmarshal(rec.Body.Bytes(), &client)
+
+	if client.Name != strings.Repeat("é", 100) {
+		t.Errorf("name = %d bytes, want 100 whole runes", len(client.Name))
+	}
+}
+
 func TestRegistrationRefusesRedirectsThatRunSomething(t *testing.T) {
 	t.Parallel()
 

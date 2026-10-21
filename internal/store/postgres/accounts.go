@@ -160,6 +160,12 @@ func (a *Accounts) RegisterClient(ctx context.Context, client store.OAuthClient,
 			return err //nolint:wrapcheck // wrapped below
 		}
 
+		_, err = tx.ExecContext(ctx, `DELETE FROM oauth_clients WHERE created_at < $1 AND id NOT IN (SELECT client_id FROM oauth_tokens)`,
+			client.CreatedAt.Add(-store.UnusedClientTTL).UTC())
+		if err != nil {
+			return err //nolint:wrapcheck // wrapped below
+		}
+
 		var count int
 
 		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oauth_clients`).Scan(&count)

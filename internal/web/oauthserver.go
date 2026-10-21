@@ -218,8 +218,8 @@ func (s *Server) handleRegister(c *echo.Context) error {
 	}
 
 	name := strings.TrimSpace(req.ClientName)
-	if len(name) > 100 {
-		name = name[:100]
+	if runes := []rune(name); len(runes) > 100 {
+		name = string(runes[:100])
 	}
 
 	if name == "" {

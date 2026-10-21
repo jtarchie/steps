@@ -151,6 +151,40 @@ func (s accountsSuite) TestClientRegistrationIsBounded(t *testing.T) {
 	}
 }
 
+// TestAFullTableOfUnusedClientsStillRegisters: nothing else ever deletes a client, so unauthenticated registration used to fill the table for good and lock every agent out. Unused clients past the TTL make room; a client holding a token never does, and a fresh unused one is kept.
+func (s accountsSuite) TestAFullTableOfUnusedClientsStillRegisters(t *testing.T) {
+	t.Parallel()
+
+	accounts := s.open(t)
+	now := time.Now()
+	stale := now.Add(-2 * store.UnusedClientTTL)
+
+	for _, id := range []string{"spam1", "spam2", "used"} {
+		err := accounts.RegisterClient(ctxFor(t), store.OAuthClient{ID: id, Name: id, RedirectURIs: []string{"https://x/cb"}, CreatedAt: stale}, 0)
+		if err != nil {
+			t.Fatalf("RegisterClient(%s): %v", id, err)
+		}
+	}
+
+	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "t", Kind: "access", Grant: store.Grant{ClientID: "used", Actor: "a", Pipeline: "p", Export: "e"}, CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("IssueToken: %v", err)
+	}
+
+	err = accounts.RegisterClient(ctxFor(t), store.OAuthClient{ID: "fresh", Name: "fresh", RedirectURIs: []string{"https://x/cb"}, CreatedAt: now}, 3)
+	if err != nil {
+		t.Fatalf("RegisterClient into a full table of unused clients = %v, want room made", err)
+	}
+
+	assertClients(t, accounts, map[string]bool{"spam1": false, "spam2": false, "used": true, "fresh": true})
+	assertTokensLive(t, accounts, map[string]bool{"t": true})
+
+	err = accounts.RegisterClient(ctxFor(t), store.OAuthClient{ID: "over", Name: "over", RedirectURIs: []string{"https://x/cb"}, CreatedAt: now}, 2)
+	if !errors.Is(err, store.ErrTooManyClients) {
+		t.Errorf("a table of in-use and fresh clients = %v, want ErrTooManyClients", err)
+	}
+}
+
 // TestAGrantCanBeRevokedWhole: disconnecting a client ends every token it holds for that export, and only those.
 func (s accountsSuite) TestAGrantCanBeRevokedWhole(t *testing.T) {
 	t.Parallel()
@@ -227,6 +261,17 @@ func (s accountsSuite) TestAnExpiredTokenIsNotFound(t *testing.T) {
 	_, found, err := accounts.FindToken(ctxFor(t), "old")
 	if err != nil || found {
 		t.Errorf("FindToken(expired) = %v, %v; want not found", found, err)
+	}
+}
+
+func assertClients(t *testing.T, accounts store.Accounts, want map[string]bool) {
+	t.Helper()
+
+	for id, wantFound := range want {
+		_, found, err := accounts.FindClient(ctxFor(t), id)
+		if err != nil || found != wantFound {
+			t.Errorf("FindClient(%s) = %v, %v; want found=%v", id, found, err, wantFound)
+		}
 	}
 }
 

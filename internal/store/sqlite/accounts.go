@@ -193,6 +193,12 @@ func (a *Accounts) RegisterClient(ctx context.Context, client store.OAuthClient,
 
 	defer func() { _ = tx.Rollback() }()
 
+	_, err = tx.ExecContext(ctx, `DELETE FROM oauth_clients WHERE created_at < ? AND id NOT IN (SELECT client_id FROM oauth_tokens)`,
+		client.CreatedAt.Add(-store.UnusedClientTTL).UTC().Format(sortableNano))
+	if err != nil {
+		return fmt.Errorf("could not register a client: %w", err)
+	}
+
 	var count int
 
 	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oauth_clients`).Scan(&count)

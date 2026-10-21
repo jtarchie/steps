@@ -28,7 +28,8 @@ type Accounts interface {
 	FindUser(ctx context.Context, actor string) (User, bool, error)
 	// RegisterClient records an agent that registered itself to connect to
 	// exports (RFC 7591), refusing one past limit: registration answers
-	// anybody, so its table must not grow without bound.
+	// anybody, so its table must not grow without bound. Before counting it
+	// evicts clients holding no token that are older than UnusedClientTTL.
 	RegisterClient(ctx context.Context, client OAuthClient, limit int) error
 	FindClient(ctx context.Context, id string) (OAuthClient, bool, error)
 	// IssueToken records a token by its digest, never the token.
@@ -73,6 +74,9 @@ type User struct {
 
 // ErrTooManyClients is a registration past the limit.
 var ErrTooManyClients = errors.New("too many registered clients")
+
+// UnusedClientTTL is how long a registered client with no token may sit before a registration is free to evict it; it is the only thing that frees a place, since registration answers anybody and nothing else deletes a client.
+const UnusedClientTTL = 24 * time.Hour
 
 // OAuthClient is an agent that registered itself to connect to exports.
 type OAuthClient struct {
