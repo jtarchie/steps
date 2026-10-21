@@ -519,7 +519,7 @@ func TestGCPAFailedStartIsUnlabelledBeforeItIsStopped(t *testing.T) {
 
 // A start EC2 refuses leaves a stopped machine; its stamp comes off, or a hand start inside the stamp window reads as this daemon's and the next restart's sweep stops it.
 func TestARefusedStartIsUntagged(t *testing.T) {
-	fake := &fakeEC2{startErr: &smithy.GenericAPIError{Code: "InsufficientInstanceCapacity", Message: "no capacity"}}
+	fake := &fakeEC2{startErr: &smithy.GenericAPIError{Code: "InsufficientInstanceCapacity", Message: "no capacity", Fault: smithy.FaultClient}}
 	seamEC2(t, fake)
 
 	_, err := NewRegistry(testOwner).Leases(boxWorker(t, "aws://stopped/i-0abc123def456789")).Resolve(context.Background(), "box")

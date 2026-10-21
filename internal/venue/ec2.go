@@ -108,11 +108,17 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 
 	_, err = api.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{worker.Instance}})
 	if err != nil {
-		// Untagged but not stopped: a refused start may be somebody else's start racing this one.
-		if tagged {
-			untagCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-			untagEC2(api, worker, worker.Instance)(untagCtx)
-			cancel()
+		if refused(err) {
+			// Untagged but not stopped: a refused start may be somebody else's start racing this one.
+			if tagged {
+				untagCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+				untagEC2(api, worker, worker.Instance)(untagCtx)
+				cancel()
+			}
+		} else {
+			// AWS may have ACCEPTED a start whose answer was lost, cancelled or timed out: parked again under its own context, as GCE does.
+			//nolint:contextcheck // deliberately not the caller's context: its being cancelled is the likeliest reason to be here
+			cleanupAfterFailure(worker, worker.Instance, "venue.stop_failed", park)
 		}
 
 		return Worker{}, nil, fmt.Errorf("starting %s for %q: %w", worker.Instance, worker.URL, err)
