@@ -262,3 +262,37 @@ func TestLineSimilarity(t *testing.T) {
 		t.Errorf("unrelated lines scored %v, want 0", got)
 	}
 }
+
+// An ambiguous exact match must not be rescued by a fuzzy strategy that happens to yield one unique span.
+func TestReplaceEditSpanAmbiguityIsFinal(t *testing.T) {
+	t.Parallel()
+
+	src := "foo()\nbar\n    foo()\n"
+
+	_, err := replaceEditSpan(src, "foo()", "baz()", false)
+
+	var ambiguous editAmbiguousError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("err = %v, want editAmbiguousError", err)
+	}
+
+	if ambiguous.count != 2 {
+		t.Errorf("count = %d, want 2", ambiguous.count)
+	}
+}
+
+// replace_all through a fuzzy strategy replaces every distinct matched span, not just the first.
+func TestReplaceEditSpanReplaceAllFuzzy(t *testing.T) {
+	t.Parallel()
+
+	src := "a\n\tx()\nb\n    x()\n"
+
+	outcome, err := replaceEditSpan(src, "  x()  ", "Y", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if outcome.updated != "a\nY\nb\nY\n" || outcome.mode != "line-trimmed" || outcome.replacements != 2 {
+		t.Errorf("got %+v", outcome)
+	}
+}

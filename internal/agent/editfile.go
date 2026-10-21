@@ -104,55 +104,90 @@ var editReplacers = []editReplacer{
 }
 
 // replaceEditSpan applies the replacer chain: the first candidate that is
-// unique in content wins (or, with replaceAll, the first candidate at all —
-// every occurrence of it is replaced). The returned error is one of
-// errEditNotFound, editAmbiguousError, or errEditDisproportionate.
+// unique in content wins. Ambiguity under any strategy is final (a fuzzy
+// strategy must not rescue an ambiguous exact match onto one lookalike);
+// only NOT FOUND falls through to the next strategy. With replaceAll every
+// distinct span the first matching strategy yields is replaced everywhere.
+// The returned error is one of errEditNotFound, editAmbiguousError, or
+// errEditDisproportionate.
 func replaceEditSpan(content, oldString, newString string, replaceAll bool) (editOutcome, error) {
-	notFound := true
-	ambiguousCount := 0
-
 	for _, r := range editReplacers {
-		for _, span := range r.find(content, oldString) {
-			index := strings.Index(content, span)
-			if index == -1 {
-				continue
-			}
-
-			notFound = false
-
-			if isDisproportionateMatch(span, oldString) {
-				return editOutcome{}, errEditDisproportionate
-			}
-
-			if replaceAll {
-				return editOutcome{
-					updated:      strings.ReplaceAll(content, span, newString),
-					matchIndex:   index,
-					replacements: strings.Count(content, span),
-					mode:         r.mode,
-				}, nil
-			}
-
-			if index != strings.LastIndex(content, span) {
-				ambiguousCount = strings.Count(content, span)
-
-				continue
-			}
-
-			return editOutcome{
-				updated:      content[:index] + newString + content[index+len(span):],
-				matchIndex:   index,
-				replacements: 1,
-				mode:         r.mode,
-			}, nil
+		spans, err := distinctSpans(r, content, oldString)
+		if err != nil {
+			return editOutcome{}, err
 		}
+
+		if len(spans) == 0 {
+			continue
+		}
+
+		if replaceAll {
+			return replaceEverySpan(content, newString, r.mode, spans), nil
+		}
+
+		span := spans[0]
+		index := strings.Index(content, span)
+
+		if len(spans) > 1 || index != strings.LastIndex(content, span) {
+			count := 0
+			for _, sp := range spans {
+				count += strings.Count(content, sp)
+			}
+
+			return editOutcome{}, editAmbiguousError{count: count}
+		}
+
+		return editOutcome{
+			updated:      content[:index] + newString + content[index+len(span):],
+			matchIndex:   index,
+			replacements: 1,
+			mode:         r.mode,
+		}, nil
 	}
 
-	if notFound {
-		return editOutcome{}, errEditNotFound
+	return editOutcome{}, errEditNotFound
+}
+
+// distinctSpans is a strategy's candidates that occur in content, deduplicated, each vetted for proportion.
+func distinctSpans(r editReplacer, content, oldString string) ([]string, error) {
+	var spans []string
+
+	seen := map[string]bool{}
+
+	for _, span := range r.find(content, oldString) {
+		if seen[span] || !strings.Contains(content, span) {
+			continue
+		}
+
+		seen[span] = true
+
+		if isDisproportionateMatch(span, oldString) {
+			return nil, errEditDisproportionate
+		}
+
+		spans = append(spans, span)
 	}
 
-	return editOutcome{}, editAmbiguousError{count: ambiguousCount}
+	return spans, nil
+}
+
+// replaceEverySpan replaces every occurrence of each span in one pass, so a replacement is never rescanned.
+func replaceEverySpan(content, newString, mode string, spans []string) editOutcome {
+	pairs := make([]string, 0, 2*len(spans))
+	count, first := 0, len(content)
+
+	for _, span := range spans {
+		pairs = append(pairs, span, newString)
+		count += strings.Count(content, span)
+		first = min(first, strings.Index(content, span))
+	}
+
+	return editOutcome{
+		updated:      strings.NewReplacer(pairs...).Replace(content),
+		matchIndex:   first,
+		replacements: count,
+		mode:         mode,
+	}
 }
 
 // exactSpans is strategy 1: the old_string itself, unchanged.
