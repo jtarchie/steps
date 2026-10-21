@@ -222,6 +222,13 @@ func TestBypass(t *testing.T) {
 		"/usr/bin/git commit --no-verify",
 		"cat > msg.txt <<EOF\nan innocent message\nEOF\ngit commit --no-verify -F msg.txt",
 		"git commit -F - <<<'message' --no-verify",
+		"bash -c 'git commit --no-verify'",
+		`sh -c "git commit -n"`,
+		`git commit "--no-verify"`,
+		`git commit "-n" -m x`,
+		`zsh -lc "cd x && git commit -nm y"`,
+		`eval "git commit --no-verify"`,
+		"git status; git commit -n",
 	}
 
 	for _, command := range refused {
@@ -238,6 +245,17 @@ func TestBypass(t *testing.T) {
 		"git log -n 5",
 		"grep -rn -- --no-verify CLAUDE.md",
 		"echo -n hi && git status",
+		"git commit -m x && tail -n 5 f",
+		"git commit -m x; head -n 3 f",
+		"git add . | grep -n x; git commit -q -m x",
+		`git commit -m "fix n handling" -a`,
+		`git commit -am "drop -n and --no-verify"`,
+		`bash -c 'git commit -m "a -n b"'`,
+		`sh -c "git status && wc -n"`,
+		"git commit --amend --no-edit",
+		"git commit -m x && git push origin main",
+		`git commit -m"fix n"`,
+		"git commit -m eval -a",
 	}
 
 	for _, command := range allowed {

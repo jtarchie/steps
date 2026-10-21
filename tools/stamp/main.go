@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -290,25 +291,113 @@ func guard(stdin io.Reader, stdout io.Writer) error {
 //
 // ponytail: a quote-aware word splitter, not a shell parser — it does not expand variables or aliases, so `git $X` is not seen. Upgrade to mvdan.cc/sh if the agent is ever caught going around it that way.
 func bypass(command string) string {
-	var inGit, inCommit bool
+	var state scan
 
-	for _, word := range shellWords(withoutHeredocs(command)) {
-		switch {
-		case word == "git" || strings.HasSuffix(word, "/git"):
-			inGit, inCommit = true, false
-		case !inGit:
-		case word == "commit":
-			inCommit = true
-		case strings.Contains(word, "core.hooksPath"):
-			return "core.hooksPath is what points git at hack/hooks, so changing it disables the commit gate"
-		case word == "--no-verify":
-			return "--no-verify skips the commit gate"
-		case inCommit && isShortFlagWith(word, 'n'):
-			return "`git commit -n` is --no-verify, which skips the commit gate"
+	for _, raw := range shellWords(withoutHeredocs(command)) {
+		if reason := state.next(raw); reason != "" {
+			return reason
 		}
 	}
 
 	return ""
+}
+
+// scan is where bypass is in the command line: inside which command, and whether the next word is data or a script to read.
+type scan struct{ inGit, inCommit, inShell, takesValue, recurse bool }
+
+func (s *scan) next(raw string) string {
+	word := unquote(raw)
+
+	switch {
+	case raw == separator:
+		*s = scan{}
+	case s.recurse:
+		s.recurse = false
+
+		return bypass(word)
+	case !s.inGit && s.shellStep(word):
+	case word == "git" || strings.HasSuffix(word, "/git"):
+		s.inGit, s.inCommit = true, false
+	case s.inGit:
+		return s.gitStep(raw, word)
+	}
+
+	return ""
+}
+
+// shellStep tracks `sh -c SCRIPT` and `eval SCRIPT`, whose next word is a command line of its own.
+func (s *scan) shellStep(word string) bool {
+	switch {
+	case isShell(word):
+		s.inShell = true
+	case word == "eval" || (s.inShell && isShortFlagWith(word, 'c')):
+		s.recurse = true
+	default:
+		return false
+	}
+
+	return true
+}
+
+func (s *scan) gitStep(raw, word string) string {
+	switch {
+	case strings.Contains(raw, "core.hooksPath"):
+		return "core.hooksPath is what points git at hack/hooks, so changing it disables the commit gate"
+	case s.takesValue:
+		s.takesValue = false
+	case word == "commit":
+		s.inCommit = true
+	case word == "--no-verify":
+		return "--no-verify skips the commit gate"
+	case s.inCommit && shortNoVerify(word):
+		return "`git commit -n` is --no-verify, which skips the commit gate"
+	case s.inCommit && commitValueFlags[word]:
+		s.takesValue = true
+	}
+
+	return ""
+}
+
+// commitValueFlags are the git commit options whose next word is data, such as a message that may name the flags this guard refuses.
+var commitValueFlags = map[string]bool{
+	"-m": true, "-F": true, "-C": true, "-c": true, "-t": true, "--message": true, "--file": true, "--reuse-message": true,
+	"--reedit-message": true, "--template": true, "--author": true, "--date": true, "--cleanup": true, "--fixup": true, "--squash": true,
+}
+
+func isShell(word string) bool {
+	switch filepath.Base(word) {
+	case "sh", "bash", "zsh", "dash":
+		return true
+	}
+
+	return false
+}
+
+// shortNoVerify reports a short-flag bundle that reaches n before any letter that takes a value: in -am"fix n" the n belongs to the message.
+func shortNoVerify(word string) bool {
+	if len(word) < 2 || word[0] != '-' || word[1] == '-' {
+		return false
+	}
+
+	for _, r := range word[1:] {
+		switch {
+		case r == 'n':
+			return true
+		case !unicode.IsLetter(r) || strings.ContainsRune("mFCctu", r):
+			return false
+		}
+	}
+
+	return false
+}
+
+// unquote drops the quote characters of a word, so "--no-verify" and --no-verify compare equal; the splitter already kept a quoted span whole.
+func unquote(word string) string {
+	if n := len(word); n >= 2 && (word[0] == '"' || word[0] == '\'') && word[n-1] == word[0] {
+		return word[1 : n-1]
+	}
+
+	return strings.NewReplacer(`"`, "", `'`, "").Replace(word)
 }
 
 var heredoc = regexp.MustCompile(`(?:^|[^<])<<-?\s*['"]?(\w+)`)
@@ -339,6 +428,17 @@ func withoutHeredocs(command string) string {
 	return strings.Join(kept, "\n")
 }
 
+func closeQuote(open, r rune) rune {
+	if r == open {
+		return 0
+	}
+
+	return open
+}
+
+// separator is the token shellWords emits for an unquoted ; & | ( ) or newline, so a flag in one command is never read as belonging to the git command before it.
+const separator = "\x00"
+
 // shellWords splits on unquoted whitespace and command separators, keeping a quoted span whole — which is what lets a commit MESSAGE say "--no-verify" without being refused for it.
 func shellWords(command string) []string {
 	var (
@@ -357,16 +457,18 @@ func shellWords(command string) []string {
 	for _, r := range command {
 		switch {
 		case quote != 0:
-			if r == quote {
-				quote = 0
-			}
+			quote = closeQuote(quote, r)
 
 			word.WriteRune(r)
 		case r == '"' || r == '\'':
 			quote = r
 
 			word.WriteRune(r)
-		case strings.ContainsRune(" \t\n;&|()", r):
+		case strings.ContainsRune(";&|()\n", r):
+			flush()
+
+			words = append(words, separator)
+		case r == ' ' || r == '\t':
 			flush()
 		default:
 			word.WriteRune(r)
