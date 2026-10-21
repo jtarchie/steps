@@ -218,12 +218,17 @@ func interruptedTrees(ctx context.Context, state State, rows []store.PipelineRow
 }
 
 // restore serves a pipeline from the database, which after a restart is the only copy of it there is.
-//
-//nolint:contextcheck // opening and closing a store take none, and the placement check deliberately reads the daemon's own context — see accept
 func (d *daemon) restore(ctx context.Context, name, from string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	return d.restoreLocked(ctx, name, from)
+}
+
+// restoreLocked is restore under a d.mu the caller already holds.
+//
+//nolint:contextcheck // opening and closing a store take none, and the placement check deliberately reads the daemon's own context — see accept
+func (d *daemon) restoreLocked(ctx context.Context, name, from string) error {
 	st, err := openState(d.state, name)
 	if err != nil {
 		return fmt.Errorf("web: could not open state for %q: %w", name, err)
@@ -628,6 +633,12 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 
 	// The logins stay when the rows did: a restart serves the pipeline again, and it would then need them.
 	if err != nil {
+		// Serve it again from the rows that survived, so a refused destroy is one that did not happen; the detach already stopped its runs, which the queue requeues like any restart's.
+		restoreErr := d.restoreLocked(writeCtx, name, served.target.Path())
+		if restoreErr != nil {
+			return fmt.Errorf("could not destroy %q: %w; nor could it be served again, so a restart does: %w", name, err, restoreErr)
+		}
+
 		return fmt.Errorf("could not destroy %q: %w", name, err)
 	}
 

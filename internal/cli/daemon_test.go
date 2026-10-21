@@ -1093,3 +1093,47 @@ func recordedNotes(t *testing.T, st store.Store) string {
 
 	return notes.String()
 }
+
+type deleteFails struct {
+	store.Store
+	fail *bool
+}
+
+func (s deleteFails) Delete(ctx context.Context) error {
+	if *s.fail {
+		return errors.New("disk on fire")
+	}
+
+	return s.Store.Delete(ctx) //nolint:wrapcheck // test double
+}
+
+func TestAFailedDestroyLeavesThePipelineServed(t *testing.T) {
+	isolateLogins(t)
+
+	held := servingDaemon(t)
+	setPipeline(t, held, "doomed", idlePipeline)
+
+	fail := true
+	target := served(t, held, "doomed")
+	target.Store = deleteFails{Store: target.Store, fail: &fail}
+
+	err := held.Destroy(t.Context(), "doomed")
+	if err == nil {
+		t.Fatal("destroy succeeded with a store that refuses to delete")
+	}
+
+	if held.server.Lookup("doomed") == nil {
+		t.Fatal("a failed destroy left the pipeline unserved")
+	}
+
+	fail = false
+
+	err = held.Destroy(t.Context(), "doomed")
+	if err != nil {
+		t.Fatalf("retry destroy: %v", err)
+	}
+
+	if held.server.Lookup("doomed") != nil {
+		t.Fatal("pipeline still served after a successful destroy")
+	}
+}
