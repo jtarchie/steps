@@ -6,13 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/jtarchie/steps/internal/store"
 )
 
 // Accounts is the daemon-level handle on the people who sign in; see the sqlite driver.
 type Accounts struct {
-	held *pool
+	held     *pool
+	released atomic.Bool
 }
 
 var _ store.Accounts = (*Accounts)(nil)
@@ -38,6 +40,10 @@ func OpenAccounts(rawURL string) (*Accounts, error) {
 
 // Close lets go of the URL's pool, closing it if nothing else holds it.
 func (a *Accounts) Close() error {
+	if a.released.Swap(true) {
+		return nil
+	}
+
 	if a.held.release() {
 		return a.held.db.Close() //nolint:wrapcheck // closing a pool says nothing a caller acts on
 	}
@@ -131,8 +137,12 @@ func (a *Accounts) FindUser(ctx context.Context, who string) (store.User, bool, 
 		return store.User{}, false, fmt.Errorf("could not read user %q: %w", who, err)
 	}
 
-	_ = json.Unmarshal([]byte(orgs), &user.Organizations)
-	_ = json.Unmarshal([]byte(groups), &user.Groups)
+	// A corrupt column must not read as "no groups": a rule written as an exclusion would then match.
+	err = errors.Join(json.Unmarshal([]byte(orgs), &user.Organizations), json.Unmarshal([]byte(groups), &user.Groups))
+	if err != nil {
+		return store.User{}, false, fmt.Errorf("could not decode user %q: %w", who, err)
+	}
+
 	user.RefreshedAt = user.RefreshedAt.UTC()
 
 	return user, true, nil

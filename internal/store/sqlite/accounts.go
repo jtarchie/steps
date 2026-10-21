@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -15,8 +16,9 @@ import (
 
 // Accounts is the daemon-level handle on the people who sign in: sessions now, beside the pipelines rather than in one.
 type Accounts struct {
-	held *pools
-	path string
+	held     *pools
+	path     string
+	released atomic.Bool
 }
 
 var _ store.Accounts = (*Accounts)(nil)
@@ -69,6 +71,10 @@ func OpenAccounts(path string) (*Accounts, error) {
 
 // Close lets go of the file's pools, closing them if nothing else holds them.
 func (a *Accounts) Close() error {
+	if a.released.Swap(true) {
+		return nil
+	}
+
 	if a.held.release() {
 		return errors.Join(a.held.reads.Close(), a.held.db.Close())
 	}
@@ -163,8 +169,12 @@ func (a *Accounts) FindUser(ctx context.Context, who string) (store.User, bool, 
 		return store.User{}, false, fmt.Errorf("could not read user %q: %w", who, err)
 	}
 
-	_ = json.Unmarshal([]byte(orgs), &user.Organizations)
-	_ = json.Unmarshal([]byte(groups), &user.Groups)
+	// A corrupt column must not read as "no groups": a rule written as an exclusion would then match.
+	err = errors.Join(json.Unmarshal([]byte(orgs), &user.Organizations), json.Unmarshal([]byte(groups), &user.Groups))
+	if err != nil {
+		return store.User{}, false, fmt.Errorf("could not decode user %q: %w", who, err)
+	}
+
 	user.RefreshedAt = parseTimestamp(refreshedAt)
 
 	return user, true, nil
