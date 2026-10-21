@@ -95,9 +95,13 @@ func run(ctx context.Context, pkg string, shards int, race bool, timeout time.Du
 		return err
 	}
 
-	names, err := listTests(ctx, binary, pkgDir)
+	names, skipped, err := listTests(ctx, binary, pkgDir)
 	if err != nil {
 		return err
+	}
+
+	if skipped > 0 {
+		_, _ = fmt.Fprintf(out, "testshard: WARNING %s: STEPS_TESTSHARD_SKIP=%q excluded %d tests from this run\n", pkg, os.Getenv("STEPS_TESTSHARD_SKIP"), skipped)
 	}
 
 	cache := filepath.Join(durationsDir, strings.NewReplacer("/", "_", ".", "_").Replace(pkg)+".json")
@@ -172,36 +176,52 @@ func goCommand(ctx context.Context, args ...string) *exec.Cmd {
 // testName is what -test.list prints that -test.run runs; a Benchmark is listed too, and only -test.bench runs it.
 var testName = regexp.MustCompile(`^(Test|Fuzz|Example)`)
 
-func listTests(ctx context.Context, binary, dir string) ([]string, error) {
+func listTests(ctx context.Context, binary, dir string) ([]string, int, error) {
 	cmd := exec.CommandContext(ctx, binary, "-test.list", ".")
 	cmd.Dir = dir
 	cmd.Env = raceEnv()
 
 	listed, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("listing tests: %w", err)
+		return nil, 0, fmt.Errorf("listing tests: %w", err)
 	}
 
-	var names []string
+	return filterTests(string(listed), os.Getenv("STEPS_TESTSHARD_SKIP"))
+}
 
-	// STEPS_TESTSHARD_SKIP is the sharded counterpart of go test -skip, which -test.list ignores: a name matching it is never listed, so never run.
+// filterTests keeps the runnable names of a -test.list output; STEPS_TESTSHARD_SKIP is the sharded counterpart of go test -skip, which -test.list ignores: a name matching it is never listed, so never run. An empty result is an error, because a run that checked nothing must not look like one that passed.
+func filterTests(listed, skipExpr string) ([]string, int, error) {
 	skip := regexp.MustCompile(`^$`)
-	if expr := os.Getenv("STEPS_TESTSHARD_SKIP"); expr != "" {
-		compiled, compileErr := regexp.Compile(expr)
-		if compileErr != nil {
-			return nil, fmt.Errorf("STEPS_TESTSHARD_SKIP: %w", compileErr)
+
+	if skipExpr != "" {
+		compiled, err := regexp.Compile(skipExpr)
+		if err != nil {
+			return nil, 0, fmt.Errorf("STEPS_TESTSHARD_SKIP: %w", err)
 		}
 
 		skip = compiled
 	}
 
-	for name := range strings.FieldsSeq(string(listed)) {
-		if testName.MatchString(name) && !skip.MatchString(name) {
+	var (
+		names   []string
+		skipped int
+	)
+
+	for name := range strings.FieldsSeq(listed) {
+		switch {
+		case !testName.MatchString(name):
+		case skip.MatchString(name):
+			skipped++
+		default:
 			names = append(names, name)
 		}
 	}
 
-	return names, nil
+	if len(names) == 0 {
+		return nil, skipped, fmt.Errorf("no tests to run (%d excluded by STEPS_TESTSHARD_SKIP=%q)", skipped, skipExpr)
+	}
+
+	return names, skipped, nil
 }
 
 // raceEnv drops the race runtime's one-second sleep at exit, which exists so a goroutine still running can report; every package here fails its run through goleak if one is still running, so the second buys nothing and costs one per process.
@@ -312,6 +332,10 @@ func runShard(ctx context.Context, binary, dir string, names []string, race bool
 		if parseErr == nil {
 			durations[match[1]] = took
 		}
+	}
+
+	if err == nil && len(durations) != len(names) {
+		err = fmt.Errorf("expected %d test verdicts, saw %d: a TestMain exited early or -test.run matched nothing", len(names), len(durations))
 	}
 
 	return shardResult{output: output.Bytes(), durations: durations, took: time.Since(started), err: err}
