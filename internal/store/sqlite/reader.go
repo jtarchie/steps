@@ -305,6 +305,20 @@ func Attach(path, pipelineName string) (*Store, error) {
 		return nil, err
 	}
 
+	found, err := readSchemaVersion(context.Background(), held.reads, path)
+	if err == nil && found != schemaVersion {
+		err = schemaVersionError(path, found)
+	}
+
+	if err != nil {
+		if held.release() {
+			_ = held.reads.Close()
+			_ = held.db.Close()
+		}
+
+		return nil, err
+	}
+
 	var id int64
 
 	err = held.reads.QueryRowContext(context.Background(), `SELECT id FROM pipelines WHERE name = ?`, pipelineName).Scan(&id)
