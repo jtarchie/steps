@@ -68,7 +68,7 @@ func (s *Store) Delete(ctx context.Context) error {
 			return err //nolint:wrapcheck // wrapped below with the pipeline
 		}
 
-		return pruneNodeContent(ctx, tx)
+		return pruneNodeContent(ctx, tx, nil)
 	})
 	if err != nil {
 		return fmt.Errorf("could not delete pipeline %q: %w", s.pipeline, err)

@@ -43,7 +43,7 @@ func (s *Store) pruneRuns(ctx context.Context, jobName string, limit int, keepRu
 			return err
 		}
 
-		prunedNodes, err := pruneNodes(ctx, tx, s.pipelineID, jobName, limit*store.NodesPerRetainedRun)
+		prunedContent, err := pruneNodes(ctx, tx, s.pipelineID, jobName, limit*store.NodesPerRetainedRun)
 		if err != nil {
 			return err
 		}
@@ -53,13 +53,13 @@ func (s *Store) pruneRuns(ctx context.Context, jobName string, limit int, keepRu
 			return err
 		}
 
-		if prunedNodes {
+		if len(prunedContent) > 0 {
 			err = clearDanglingParents(ctx, tx, s.pipelineID)
 			if err != nil {
 				return err
 			}
 
-			err = pruneNodeContent(ctx, tx)
+			err = pruneNodeContent(ctx, tx, prunedContent)
 			if err != nil {
 				return err
 			}
@@ -99,11 +99,9 @@ func pruneRunRows(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName str
 	return nil
 }
 
-// pruneNodes bounds a job's merkle cache to keep entries, newest inserted
-// first, exempting every node a surviving run still names — by event,
-// placement or usage — and reports whether any went.
-func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, keep int) (bool, error) {
-	result, err := tx.ExecContext(ctx, `
+// pruneNodes bounds a job's merkle cache to keep entries, newest inserted first, exempting every node a surviving run still names (by event, placement or usage), and returns the content hashes of the nodes that went: the only rows the content sweep has reason to look at.
+func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, keep int) ([]string, error) {
+	hashes, err := collect(ctx, tx, "the pruned nodes", `
 		DELETE FROM nodes
 		WHERE pipeline_id = $1
 		  AND seq IN (
@@ -126,17 +124,17 @@ func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName strin
 		      SELECT 1 FROM agent_usage u
 		      WHERE u.pipeline_id = nodes.pipeline_id AND u.node_hash = nodes.hash
 		  )
-	`, pipelineID, jobName, keep)
+		RETURNING content_hash
+	`, []any{pipelineID, jobName, keep}, scanString)
 	if err != nil {
-		return false, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
+		return nil, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
 	}
 
-	affected, err := result.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
+		return nil, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
 	}
 
-	return affected > 0, nil
+	return hashes, nil
 }
 
 // clearDanglingParents nulls a parent link that names no node, which is what
@@ -173,14 +171,8 @@ func pruneJobRuns(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName str
 	return nil
 }
 
-// pruneNodeContent drops interned content nothing points at, across every
-// pipeline in the schema: content is shared by construction, so "referenced
-// by nothing" is the only question there is.
-//
-// It takes the content lock EXCLUSIVE, against RecordNode's shared hold; see
-// RecordNode for the race that closes. Both callers already hold their
-// pipeline's lock, and nothing takes the two in the other order.
-func pruneNodeContent(ctx context.Context, tx *sql.Tx) error {
+// pruneNodeContent drops interned content nothing points at, across every pipeline, since content is shared by construction. candidates narrows the sweep to the content of nodes the caller just deleted (the caller skips the call, and the lock, when it deleted none); nil sweeps the whole table (Delete, whose cascade removed nodes this transaction never saw). The EXCLUSIVE content lock is against RecordNode's shared hold, and nothing takes it and a pipeline lock in the other order.
+func pruneNodeContent(ctx context.Context, tx *sql.Tx, candidates []string) error {
 	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, classContent)
 	if err != nil {
 		return fmt.Errorf("could not lock interned node content: %w", err)
@@ -188,8 +180,9 @@ func pruneNodeContent(ctx context.Context, tx *sql.Tx) error {
 
 	_, err = tx.ExecContext(ctx, `
 		DELETE FROM node_content c
-		WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.content_hash = c.content_hash)
-	`)
+		WHERE ($1::text[] IS NULL OR c.content_hash = ANY($1::text[]))
+		  AND NOT EXISTS (SELECT 1 FROM nodes n WHERE n.content_hash = c.content_hash)
+	`, candidates)
 	if err != nil {
 		return fmt.Errorf("could not prune interned node content: %w", err)
 	}
