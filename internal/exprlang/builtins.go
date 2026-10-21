@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -70,9 +72,9 @@ func fileFunc(dir string) func(...any) (any, error) {
 			return nil, fmt.Errorf("file(%q): must be a relative path inside the put's inputs", path)
 		}
 
-		data, err := os.ReadFile(filepath.Join(dir, path)) //nolint:gosec // IsLocal above confines the path to dir
+		data, err := readInRoot(dir, path)
 		if err != nil {
-			if os.IsNotExist(err) && hasFallback {
+			if errors.Is(err, fs.ErrNotExist) && hasFallback {
 				return fallback, nil
 			}
 
@@ -81,6 +83,30 @@ func fileFunc(dir string) func(...any) (any, error) {
 
 		return string(data), nil
 	}
+}
+
+// maxFileBytes caps a file() read: the result is substituted into a request, not streamed.
+const maxFileBytes = 1 << 20
+
+// readInRoot opens through os.OpenInRoot because IsLocal is lexical: a symlink in the put's read view would otherwise carry file() out of dir, and http() could send what it read.
+func readInRoot(dir, path string) ([]byte, error) {
+	f, err := os.OpenInRoot(dir, path)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the caller wraps with the file() name and needs fs.ErrNotExist intact
+	}
+
+	defer func() { _ = f.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the caller wraps with the file() name
+	}
+
+	if len(data) > maxFileBytes {
+		return nil, fmt.Errorf("is above the limit of %d bytes", maxFileBytes)
+	}
+
+	return data, nil
 }
 
 // versionFunc builds version(name) / version(): the version a get called name

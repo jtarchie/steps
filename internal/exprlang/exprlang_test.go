@@ -453,3 +453,45 @@ func TestVersionFuncCopies(t *testing.T) {
 		t.Errorf("shared nested m = %#v, want json.Number(\"7\") untouched", nested["m"])
 	}
 }
+
+func TestFileFuncRefusesASymlinkOutOfTheInputs(t *testing.T) {
+	t.Parallel()
+
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+
+	err := os.WriteFile(outside, []byte("s3cret"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+
+	err = os.Symlink(outside, filepath.Join(dir, "link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The default must not mask the refusal: only a missing file falls back.
+	for _, expr := range []string{`{a: file("link")}`, `{a: file("link", "fallback")}`} {
+		version, err := RunOut(context.Background(), expr, Input{Dir: dir})
+		if err == nil {
+			t.Errorf("%s = %+v, want an error: the symlink leaves the put's inputs", expr, version)
+		}
+	}
+}
+
+func TestFileFuncCapsWhatItReads(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "big"), make([]byte, maxFileBytes+1), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = RunOut(context.Background(), `{a: file("big")}`, Input{Dir: dir})
+	if err == nil || !strings.Contains(err.Error(), "above the limit") {
+		t.Fatalf("err = %v, want the size cap", err)
+	}
+}
