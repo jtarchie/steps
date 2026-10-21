@@ -152,7 +152,7 @@ func runAgentConversation(
 	// and both later writes then failed the foreign keys they had just gained —
 	// losing the tokens an aborted agent step spent and its transcript, on
 	// precisely the runs worth investigating.
-	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, "running", nil, nil)
+	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, "running", nil, nil))
 
 	res, err := prepared.Run(ctx, agent.StepRun{JobName: r.jobName, Index: node.StepIndex, Name: node.Resource, NodeHash: node.Hash})
 	if err != nil {

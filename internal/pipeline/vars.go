@@ -110,7 +110,7 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindLoadVar,
 		StepIndex: i, Resource: step.LoadVar, Content: content,
 	}
-	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, "succeeded", nil, nil)
+	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, "succeeded", nil, nil))
 
 	return ran(hash), nil
 }

@@ -141,7 +141,7 @@ func (w *planWalk) forgetUnfinishedChains(ctx context.Context, err error) {
 			continue
 		}
 
-		_ = w.st.ForgetChain(ctx, w.jobName, chain[len(chain)-1])
+		bestEffort(ctx, "ForgetChain", w.st.ForgetChain(ctx, w.jobName, chain[len(chain)-1]))
 	}
 }
 
@@ -294,7 +294,7 @@ func recordCompletedStep(ctx context.Context, st store.Runs, build string, i int
 		return
 	}
 
-	_ = st.RecordRunStep(context.WithoutCancel(ctx), resume.id, store.RunStep{BuildID: build, Index: i, Name: executedStepName(step)})
+	bestEffort(ctx, "RecordRunStep", st.RecordRunStep(context.WithoutCancel(ctx), resume.id, store.RunStep{BuildID: build, Index: i, Name: executedStepName(step)}))
 }
 
 // runNonGetStep runs a non-get step and dispatches its hooks around the
@@ -360,7 +360,7 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 
 	final := runHooks(ctx, r.scope(stepLabel(i, step)), step.Hooks, err)
 	if err == nil && final != nil {
-		_ = r.st.ForgetChain(context.WithoutCancel(ctx), r.jobName, res.hash)
+		bestEffort(ctx, "ForgetChain", r.st.ForgetChain(context.WithoutCancel(ctx), r.jobName, res.hash))
 
 		return stepResult{verdict: res.verdict, note: res.note, stepID: mark.id}, final
 	}

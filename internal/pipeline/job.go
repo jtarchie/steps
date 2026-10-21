@@ -195,7 +195,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 		// step had just written when it failed are the most useful thing to
 		// look at, and they are what a resume continues from.
 		if !interruptedByShutdown(ctx, opts, finalErr) {
-			_ = st.FinishRun(context.WithoutCancel(ctx), resume.id, failedStatus(ctx, finalErr))
+			bestEffort(ctx, "FinishRun", st.FinishRun(context.WithoutCancel(ctx), resume.id, failedStatus(ctx, finalErr)))
 		}
 
 		publishJobFinished(ctx, job.Name, jobStarted, finalErr)
@@ -206,7 +206,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 
 	workspace.CloseBuild(bw, job.Name)
 
-	_ = st.FinishRun(context.WithoutCancel(ctx), resume.id, store.RunSucceeded)
+	bestEffort(ctx, "FinishRun", st.FinishRun(context.WithoutCancel(ctx), resume.id, store.RunSucceeded))
 
 	publishJobFinished(ctx, job.Name, jobStarted, nil)
 

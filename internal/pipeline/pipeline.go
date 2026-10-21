@@ -6,6 +6,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -13,6 +14,13 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
+
+// bestEffort logs a store write that must not mask the error being returned; a lost FinishRun leaves a run 'running' and a lost ForgetChain leaves a skip entry for failed work.
+func bestEffort(ctx context.Context, operation string, err error) {
+	if err != nil {
+		slog.ErrorContext(ctx, "store.best_effort_failed", "operation", operation, "error", err)
+	}
+}
 
 // stepRunner is what every step runner needs regardless of kind: the pipeline
 // to resolve against, the job it belongs to, the workspace it runs in, and the
@@ -124,7 +132,7 @@ func nodeRecord(n merkle.Node) store.NodeRecord {
 // (failed vs errored vs aborted), and drops the chain from the skip index —
 // a --force rerun that fails must not skip on the older success. Both write
 // under a detached context so an aborted step's outcome still persists rather
-// than being dropped by the canceled context. Best-effort: recording errors are ignored so they can't
+// than being dropped by the canceled context. Best-effort: recording errors are logged, never returned, so they can't
 // mask the original error returned to the caller.
 func recordStepFailure(ctx context.Context, r stepRunner, node merkle.Node, err error) {
 	recordStepFailureWith(ctx, r, node, nil, err)
@@ -137,8 +145,8 @@ func recordStepFailure(ctx context.Context, r stepRunner, node merkle.Node, err 
 func recordStepFailureWith(ctx context.Context, r stepRunner, node merkle.Node, result map[string]any, err error) {
 	status := string(outcome.Classify(ctx, err))
 	recCtx := context.WithoutCancel(ctx)
-	_ = r.st.RecordNode(recCtx, nodeRecord(node), r.jobName, status, result, err)
-	_ = r.st.ForgetChain(recCtx, r.jobName, node.Hash)
+	bestEffort(ctx, "RecordNode", r.st.RecordNode(recCtx, nodeRecord(node), r.jobName, status, result, err))
+	bestEffort(ctx, "ForgetChain", r.st.ForgetChain(recCtx, r.jobName, node.Hash))
 }
 
 // recordBlock records a container's own node under the class its outcome
@@ -150,7 +158,7 @@ func recordBlock(ctx context.Context, r stepRunner, node merkle.Node, result map
 }
 
 func recordBlockAs(ctx context.Context, r stepRunner, node merkle.Node, class outcome.Class, result map[string]any, err error) {
-	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, string(class), result, err)
+	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, string(class), result, err))
 }
 
 // runPlaced owns a leaf step's recording order: the node, then where it ran — run_placements references the node, and a step that FAILED on a worker is the one whose machine somebody wants named.
