@@ -22,11 +22,12 @@ import (
 // with a lock: this is the hottest write there is. Batching or fanning out
 // these inserts must keep it.
 func (s *Store) AppendRunEvent(ctx context.Context, row store.RunEventRow) error {
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_events
 			(run_id, type, step_index, step_name, step_kind, step_id, parent_step_id,
 			 status, hash, text, name, detail, duration_ms, worker, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+		WHERE EXISTS (SELECT 1 FROM runs WHERE id = $16 AND pipeline_id = $17)
 	`, row.RunID, row.Type, row.StepIndex, clean(row.StepName), row.StepKind,
 		row.StepID, row.ParentStepID,
 		row.Status, row.Hash,
@@ -35,12 +36,12 @@ func (s *Store) AppendRunEvent(ctx context.Context, row store.RunEventRow) error
 		eventText(row.Detail),
 		row.DurationMS,
 		eventText(row.Worker),
-		row.At.UTC().Truncate(time.Microsecond))
+		row.At.UTC().Truncate(time.Microsecond), row.RunID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not append run event for %q: %w", row.RunID, err)
 	}
 
-	return nil
+	return s.requireRun(ctx, result, row.RunID)
 }
 
 // DeleteStepEvents removes a step's events of one type. One statement that reads nothing first, so it needs no write() lock.

@@ -137,6 +137,6 @@ var (
 	// start is a bad afternoon; that was silent history corruption, and
 	// nothing downstream could tell it had happened.
 	ErrRunExists = errors.New("a run with this id already exists")
-	// ErrNoSuchRun is a RESUME of a run this pipeline does not have.
+	// ErrNoSuchRun is a RESUME of, or a run-scoped write to, a run this pipeline does not have.
 	ErrNoSuchRun = errors.New("no run with this id")
 )

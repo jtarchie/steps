@@ -290,16 +290,16 @@ func (s *Store) RecordConsumedMark(ctx context.Context, jobName, resourceName st
 func (s *Store) RecordRunInput(ctx context.Context, runID string, input store.RunInput) error {
 	inputName, resourceName, versionJSON := input.Input, input.Resource, input.Version
 
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_inputs (run_id, input_name, resource_name, version_json)
-		VALUES ($1, $2, $3, $4)
+		SELECT $1, $2, $3, $4 WHERE EXISTS (SELECT 1 FROM runs WHERE id = $5 AND pipeline_id = $6)
 		ON CONFLICT (run_id, input_name) DO NOTHING
-	`, runID, inputName, resourceName, versionJSON)
+	`, runID, inputName, resourceName, versionJSON, runID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not record the inputs of run %q: %w", runID, err)
 	}
 
-	return nil
+	return s.requireRun(ctx, result, runID)
 }
 
 // RunInputs reports the versions a run was created with.

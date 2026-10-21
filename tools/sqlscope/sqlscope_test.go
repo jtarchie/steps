@@ -19,7 +19,7 @@ var unscopedByDesign = map[string]map[string]string{
 	"../../internal/store/postgres": {
 		"LEFT JOIN pipeline_revisions v ON v.id = p.current_revision_id":                                "Reader.Pipelines lists every pipeline in the schema; the join is one row per pipeline through its own RESTRICTed revision id",
 		"JOIN pipeline_revisions r ON r.id = p.current_revision_id":                                     "CurrentRevision is scoped by WHERE p.id = $1, the pipelines row itself, and reaches the revision through that row's own foreign key",
-		"WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.content_hash = c.content_hash)":                "node_content is global, keyed by a hash of the content, and its sweep must stay pipeline-blind or the RESTRICT fires (see pruneNodeContent)",
+		"AND NOT EXISTS (SELECT 1 FROM nodes n WHERE n.content_hash = c.content_hash)":                  "node_content is global, keyed by a hash of the content, and its sweep must stay pipeline-blind or the RESTRICT fires (see pruneNodeContent)",
 		"DELETE FROM activity WHERE id <= (SELECT id FROM activity ORDER BY id DESC LIMIT 1 OFFSET $1)": "the activity log is one per database, capped by count across every pipeline, so its trim is daemon-wide by design and deletes only the oldest entries",
 	},
 }
@@ -33,8 +33,8 @@ func TestEveryStoreStatementOnAScopedTableNamesThePipeline(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if report.Tables < 5 || report.Statements < 50 {
-				t.Fatalf("read %d scoped tables and %d statements: the source walk has stopped working, and an empty report would pass for a clean one", report.Tables, report.Statements)
+			if report.Tables < 5 || report.RunTables < 3 || report.Statements < 50 {
+				t.Fatalf("read %d scoped tables, %d run-scoped tables and %d statements: the source walk has stopped working, and an empty report would pass for a clean one", report.Tables, report.RunTables, report.Statements)
 			}
 
 			used := map[string]bool{}
@@ -82,6 +82,8 @@ func TestCheckFindsExactlyTheUnscopedStatements(t *testing.T) {
 	want := []string{
 		"nodes: SELECT COUNT(*) FROM nodes WHERE hash = ?",
 		"nodes: DELETE FROM nodes WHERE hash IN ( ? )",
+		"run_steps: INSERT INTO run_steps (run_id, step_name) VALUES (?, ?)",
+		"late: DELETE FROM late WHERE id = ?",
 	}
 
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {

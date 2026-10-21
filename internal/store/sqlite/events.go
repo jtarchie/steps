@@ -12,13 +12,14 @@ import (
 )
 
 // AppendRunEvent persists one run event. Called from the bus's sink
-// goroutine (internal/events), so writes are already serialized.
+// goroutine (internal/events), so writes are already serialized. The EXISTS guard is one more primary-key probe of runs, the same one the foreign key already pays.
 func (s *Store) AppendRunEvent(ctx context.Context, row store.RunEventRow) error {
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_events
 			(run_id, type, step_index, step_name, step_kind, step_id, parent_step_id,
 			 status, hash, text, name, detail, duration_ms, worker, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND pipeline_id = ?)
 	`, row.RunID, row.Type, row.StepIndex, row.StepName, row.StepKind,
 		row.StepID, row.ParentStepID,
 		row.Status, row.Hash,
@@ -27,12 +28,12 @@ func (s *Store) AppendRunEvent(ctx context.Context, row store.RunEventRow) error
 		store.TruncateUTF8(row.Detail, store.MaxEventTextBytes),
 		row.DurationMS,
 		store.TruncateUTF8(row.Worker, store.MaxEventTextBytes),
-		row.At.UTC().Format(sortableNano))
+		row.At.UTC().Format(sortableNano), row.RunID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not append run event for %q: %w", row.RunID, err)
 	}
 
-	return nil
+	return s.requireRun(ctx, result, row.RunID)
 }
 
 // DeleteStepEvents removes a step's events of one type. Called from the sink goroutine ahead of the record that replaces them, so the two never interleave with a chunk still queued.

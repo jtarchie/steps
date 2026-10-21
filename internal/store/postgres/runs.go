@@ -122,12 +122,38 @@ func (s *Store) FinishRun(ctx context.Context, id string, status store.RunStatus
 func (s *Store) RecordRunStep(ctx context.Context, runID string, step store.RunStep) error {
 	buildID, index, name := step.BuildID, step.Index, step.Name
 
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO run_steps (run_id, build_id, step_index, step_name) VALUES ($1, $2, $3, $4)
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO run_steps (run_id, build_id, step_index, step_name)
+		SELECT $1, $2, $3, $4 WHERE EXISTS (SELECT 1 FROM runs WHERE id = $5 AND pipeline_id = $6)
 		ON CONFLICT (run_id, build_id, step_index) DO NOTHING
-	`, runID, buildID, index, name)
+	`, runID, buildID, index, name, runID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not record step %d of build %q: %w", index, buildID, err)
+	}
+
+	return s.requireRun(ctx, result, runID)
+}
+
+// requireRun turns a write that landed no row into ErrNoSuchRun when the run is not this pipeline's. The run_* tables carry no pipeline_id, so the insert's own EXISTS guard is their only scope; a conflict no-op also lands no row, which is why the miss is confirmed rather than assumed.
+func (s *Store) requireRun(ctx context.Context, result sql.Result, runID string) error {
+	landed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("could not tell whether a write to run %q landed: %w", runID, err)
+	}
+
+	if landed > 0 {
+		return nil
+	}
+
+	var owned bool
+
+	err = s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1 AND pipeline_id = $2)`, runID, s.pipelineID).Scan(&owned)
+	if err != nil {
+		return fmt.Errorf("could not check run %q: %w", runID, err)
+	}
+
+	if !owned {
+		return fmt.Errorf("%w: %q", store.ErrNoSuchRun, runID)
 	}
 
 	return nil

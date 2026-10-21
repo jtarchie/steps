@@ -1,4 +1,4 @@
-// Package sqlscope finds SQL statements that touch a pipeline-scoped table without naming pipeline_id. It lives in tools/ because it reads source, and its test is what holds each driver in internal/store to the rule CLAUDE.md states in prose.
+// Package sqlscope finds SQL statements that touch a pipeline-scoped table without naming pipeline_id, or a run-scoped one (run_id REFERENCES runs, no pipeline_id of its own) without naming pipeline_id or reaching runs. It lives in tools/ because it reads source, and its test is what holds each driver in internal/store to the rule CLAUDE.md states in prose.
 package sqlscope
 
 import (
@@ -24,12 +24,16 @@ type Finding struct {
 type Report struct {
 	Findings   []Finding
 	Tables     int
+	RunTables  int
 	Statements int
 }
 
 var (
 	createTable = regexp.MustCompile(`(?s)CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\s*\)`)
 	statement   = regexp.MustCompile(`(?i)^\s*(SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH)\b`)
+	runColumn   = regexp.MustCompile(`(?i)\brun_id\b[^,\n]*\bREFERENCES\s+runs\b`)
+	addColumn   = regexp.MustCompile(`(?i)ALTER TABLE\s+(\w+)\s+ADD\s+(?:COLUMN\s+)?pipeline_id\b`)
+	runsTable   = regexp.MustCompile(`\bruns\b`)
 )
 
 // Check reads every non-test Go file in dir. The scoped tables come from the CREATE TABLE statements found there rather than from a list, so a new table is held to the rule the day it is created.
@@ -41,17 +45,9 @@ func Check(dir string) (Report, error) {
 		return Report{}, err
 	}
 
-	scoped := map[string]*regexp.Regexp{}
+	scoped, runScoped := tablesOf(texts)
 
-	for _, sql := range texts {
-		for _, match := range createTable.FindAllStringSubmatch(sql.text, -1) {
-			if strings.Contains(match[2], "pipeline_id") {
-				scoped[match[1]] = regexp.MustCompile(`\b` + match[1] + `\b`)
-			}
-		}
-	}
-
-	report := Report{Tables: len(scoped)}
+	report := Report{Tables: len(scoped), RunTables: len(runScoped)}
 
 	for _, sql := range texts {
 		if !statement.MatchString(sql.text) {
@@ -64,15 +60,52 @@ func Check(dir string) (Report, error) {
 			continue
 		}
 
-		for table, named := range scoped {
-			if named.MatchString(sql.text) {
-				report.Findings = append(report.Findings, Finding{Pos: sql.pos, Table: table, SQL: sql.text})
-			}
+		report.Findings = append(report.Findings, mentions(sql, scoped)...)
+
+		if !runsTable.MatchString(sql.text) {
+			report.Findings = append(report.Findings, mentions(sql, runScoped)...)
 		}
 	}
 
 	return report, nil
 }
+
+// tablesOf is the pipeline-scoped tables and the run-scoped ones (a run_id into runs and no pipeline_id), read from CREATE TABLE bodies and from ALTER TABLE ... ADD pipeline_id, which a migration-added column would otherwise hide.
+func tablesOf(texts []sqlText) (scoped, runScoped map[string]*regexp.Regexp) {
+	scoped, runScoped = map[string]*regexp.Regexp{}, map[string]*regexp.Regexp{}
+
+	for _, sql := range texts {
+		for _, match := range createTable.FindAllStringSubmatch(sql.text, -1) {
+			switch {
+			case strings.Contains(match[2], "pipeline_id"):
+				scoped[match[1]] = named(match[1])
+			case runColumn.MatchString(match[2]):
+				runScoped[match[1]] = named(match[1])
+			}
+		}
+
+		for _, match := range addColumn.FindAllStringSubmatch(sql.text, -1) {
+			scoped[match[1]] = named(match[1])
+			delete(runScoped, match[1])
+		}
+	}
+
+	return scoped, runScoped
+}
+
+func mentions(sql sqlText, tables map[string]*regexp.Regexp) []Finding {
+	var found []Finding
+
+	for table, mention := range tables {
+		if mention.MatchString(sql.text) {
+			found = append(found, Finding{Pos: sql.pos, Table: table, SQL: sql.text})
+		}
+	}
+
+	return found
+}
+
+func named(table string) *regexp.Regexp { return regexp.MustCompile(`\b` + table + `\b`) }
 
 type sqlText struct {
 	pos  string

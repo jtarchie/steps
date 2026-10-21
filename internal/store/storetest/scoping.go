@@ -433,6 +433,74 @@ func (s suite) TestRunEventsAreScopedToTheirPipeline(t *testing.T) {
 	}
 }
 
+// TestRunScopedWritesRefuseAnotherPipelinesRun: run_steps, run_events and run_inputs carry no pipeline_id, so a write naming a run id is scoped only if the statement itself checks the run is this pipeline's. A handle that owns no such run must be refused, and the owner must see nothing the intruder tried to write.
+func (s suite) TestRunScopedWritesRefuseAnotherPipelinesRun(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	web := s.open(t, "web")
+	infra := s.open(t, "infra")
+
+	const run = "FOREIGN01"
+
+	err := web.StartRun(ctx, store.NewRun{ID: run, JobName: "build", Workspace: "/tmp/web"})
+	if err != nil {
+		t.Fatalf("StartRun web: %v", err)
+	}
+
+	writes := map[string]error{
+		"RecordRunStep":  infra.RecordRunStep(ctx, run, store.RunStep{BuildID: "b", Index: 1, Name: "evil"}),
+		"AppendRunEvent": infra.AppendRunEvent(ctx, store.RunEventRow{RunID: run, Type: "step_started", StepName: "evil", At: time.Now()}),
+		"RecordRunInput": infra.RecordRunInput(ctx, run, store.RunInput{Input: "repo", Resource: "repo", Version: `{"ref":"evil"}`}),
+		"no such run":    infra.RecordRunStep(ctx, "NOSUCHRUN", store.RunStep{BuildID: "b", Index: 1, Name: "x"}),
+	}
+
+	for name, err := range writes {
+		if !errors.Is(err, store.ErrNoSuchRun) {
+			t.Errorf("%s against a run of another pipeline (or none) returned %v, want store.ErrNoSuchRun", name, err)
+		}
+	}
+
+	if got := runRows(ctx, t, web, run); got != 0 {
+		t.Fatalf("another pipeline's writes landed in the run: %d row(s)", got)
+	}
+
+	// The owner still writes, and writing the same step twice stays a no-op rather than a refusal.
+	for range 2 {
+		err = web.RecordRunStep(ctx, run, store.RunStep{BuildID: "b", Index: 1, Name: "ok"})
+		if err != nil {
+			t.Fatalf("owner RecordRunStep: %v", err)
+		}
+
+		err = web.RecordRunInput(ctx, run, store.RunInput{Input: "repo", Resource: "repo", Version: `{"ref":"ok"}`})
+		if err != nil {
+			t.Fatalf("owner RecordRunInput: %v", err)
+		}
+	}
+}
+
+// runRows is how many step, event and input rows a run holds.
+func runRows(ctx context.Context, t *testing.T, st store.Store, run string) int {
+	t.Helper()
+
+	steps, err := st.CompletedRunSteps(ctx, run)
+	if err != nil {
+		t.Fatalf("CompletedRunSteps: %v", err)
+	}
+
+	events, err := st.RunEvents(ctx, run, 0, 0)
+	if err != nil {
+		t.Fatalf("RunEvents: %v", err)
+	}
+
+	inputs, err := st.RunInputs(ctx, run)
+	if err != nil {
+		t.Fatalf("RunInputs: %v", err)
+	}
+
+	return len(steps) + len(events) + len(inputs)
+}
+
 // TestFindRevisionIsScopedToItsPipeline: a state file may hold several
 // pipelines, and a hash identifies bytes rather than a pipeline — so an
 // unscoped lookup would serve one pipeline's page a configuration another
