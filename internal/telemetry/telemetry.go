@@ -105,11 +105,15 @@ func Start(ctx context.Context, version string) (func(context.Context), error) {
 
 	meter, stopMetrics, err := startMetrics(ctx, res, metrics)
 	if err != nil {
+		unwind(ctx, stopTraces)
+
 		return nil, err
 	}
 
 	recorder, err := newRunTracer(tracer, meter)
 	if err != nil {
+		unwind(ctx, stopTraces, stopMetrics)
+
 		return nil, err
 	}
 
@@ -129,6 +133,16 @@ func Start(ctx context.Context, version string) (func(context.Context), error) {
 			}
 		}
 	}, nil
+}
+
+// unwind shuts down what Start already installed when a later step fails, under a context of its own because the caller's may be the reason Start failed.
+func unwind(ctx context.Context, stops ...func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownBound)
+	defer cancel()
+
+	for _, stop := range stops {
+		_ = stop(ctx)
+	}
 }
 
 func noShutdown(context.Context) error { return nil }
