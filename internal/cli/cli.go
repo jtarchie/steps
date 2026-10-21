@@ -213,7 +213,7 @@ func Run(args []string) error {
 		}
 	}
 
-	slog.Debug("cli.parse", "args", args)
+	slog.Debug("cli.parse", "command", kctx.Command(), "args", len(args))
 
 	flush, err := telemetry.Start(context.Background(), version())
 	if err != nil {

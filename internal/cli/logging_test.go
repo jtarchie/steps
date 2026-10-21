@@ -3,8 +3,42 @@ package cli
 import (
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
+
+// Not t.Parallel(): it swaps os.Stderr, which InitLogging captures.
+func TestDebugLogDoesNotCarryArgv(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	orig := os.Stderr
+	os.Stderr = f
+
+	t.Cleanup(func() {
+		os.Stderr = orig
+		_ = f.Close()
+	})
+
+	runErr := Run([]string{"--log-level", "debug", "run", "--var", "k=hunter2sentinel", "--db", "postgres://u:pw9sentinel@h/db", "no-such.yml"})
+
+	logged, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(logged), "cli.parse") {
+		t.Fatalf("debug line missing, test is vacuous: %s (run err %v)", logged, runErr)
+	}
+
+	for _, secret := range []string{"hunter2sentinel", "pw9sentinel"} {
+		if strings.Contains(string(logged), secret) {
+			t.Errorf("%q leaked into the debug log: %s", secret, logged)
+		}
+	}
+}
 
 // Leaves slog.Default() alone: every Run() elsewhere in this package installs a new global logger, so asserting on it races whichever Run() finished last.
 func TestParseLogLevel(t *testing.T) {
