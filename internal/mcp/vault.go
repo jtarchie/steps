@@ -14,11 +14,14 @@ import (
 
 // Vault is where a pipeline's oauth logins are kept. internal/cli installs the one that seals them into the state database; this package hands it plaintext and never decides where it lands.
 type Vault interface {
-	// Load is the login saved for server in pipeline; found is false when there is none.
-	Load(ctx context.Context, pipeline, server string) (data []byte, found bool, err error)
-	// Save replaces it. A vault that cannot keep it safe refuses rather than keep it in the clear.
-	Save(ctx context.Context, pipeline, server string, data []byte) error
+	// Load is the login saved for server in pipeline, and scope names the pipeline it was read under: stable across a rename, different for a pipeline later set under a destroyed one's name. found is false when there is none.
+	Load(ctx context.Context, pipeline, server string) (data []byte, scope string, found bool, err error)
+	// Save replaces it. A non-empty scope is a write-back, refused with ErrLoginOrphaned unless the pipeline is still the one the login was read under; empty is a fresh login for whichever pipeline holds the name. A vault that cannot keep it safe refuses rather than keep it in the clear.
+	Save(ctx context.Context, pipeline, server, scope string, data []byte) error
 }
+
+// ErrLoginOrphaned is a write-back for a pipeline that is gone: destroyed, or its name taken by another since the login was read.
+var ErrLoginOrphaned = errors.New("the pipeline this login was read under is gone")
 
 var errNoVault = errors.New("mcp: this command keeps no oauth logins (no credential store installed)")
 
@@ -61,7 +64,7 @@ func loadLogin(ctx context.Context, pipeline, server string) (*TokenFile, error)
 		return nil, err
 	}
 
-	data, found, err := vault.Load(ctx, pipeline, server)
+	data, scope, found, err := vault.Load(ctx, pipeline, server)
 	if err != nil {
 		return nil, fmt.Errorf("read the login: %w", err)
 	}
@@ -77,6 +80,8 @@ func loadLogin(ctx context.Context, pipeline, server string) (*TokenFile, error)
 		return nil, fmt.Errorf("parse the login: %w", err)
 	}
 
+	tf.scope = scope
+
 	return &tf, nil
 }
 
@@ -91,7 +96,7 @@ func saveLogin(ctx context.Context, pipeline, server string, tf *TokenFile) erro
 		return fmt.Errorf("marshal the login: %w", err)
 	}
 
-	err = vault.Save(ctx, pipeline, server, data)
+	err = vault.Save(ctx, pipeline, server, tf.scope, data)
 	if err != nil {
 		return fmt.Errorf("save the login: %w", err)
 	}
@@ -121,7 +126,7 @@ func importLegacyLogin(ctx context.Context, vault Vault, pipeline, server string
 		return nil, fmt.Errorf("marshal the login: %w", err)
 	}
 
-	err = vault.Save(ctx, pipeline, server, data)
+	err = vault.Save(ctx, pipeline, server, "", data)
 	if err != nil {
 		return nil, fmt.Errorf("found a login an older steps saved at %s, which moves into the state database on first use: %w", path, err)
 	}
@@ -145,18 +150,18 @@ type MemoryVault struct {
 	logins map[string][]byte
 }
 
-// Load is the login saved for pipeline's server.
-func (m *MemoryVault) Load(_ context.Context, pipeline, server string) ([]byte, bool, error) {
+// Load is the login saved for pipeline's server; a MemoryVault has one scope.
+func (m *MemoryVault) Load(_ context.Context, pipeline, server string) ([]byte, string, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	data, found := m.logins[pipeline+"\x00"+server]
 
-	return data, found, nil
+	return data, "", found, nil
 }
 
 // Save replaces it.
-func (m *MemoryVault) Save(_ context.Context, pipeline, server string, data []byte) error {
+func (m *MemoryVault) Save(_ context.Context, pipeline, server, _ string, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -176,12 +181,12 @@ func (m *MemoryVault) Put(pipeline, server string, tf *TokenFile) error {
 		return fmt.Errorf("marshal the login: %w", err)
 	}
 
-	return m.Save(context.Background(), pipeline, server, data)
+	return m.Save(context.Background(), pipeline, server, "", data)
 }
 
 // Get is the login saved for pipeline's server, or nil.
 func (m *MemoryVault) Get(pipeline, server string) *TokenFile {
-	data, found, _ := m.Load(context.Background(), pipeline, server)
+	data, _, found, _ := m.Load(context.Background(), pipeline, server)
 	if !found {
 		return nil
 	}

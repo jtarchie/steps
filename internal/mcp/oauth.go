@@ -54,6 +54,8 @@ type TokenFile struct {
 	RefreshToken string    `json:"refresh_token,omitempty"`
 	TokenType    string    `json:"token_type,omitempty"`
 	Expiry       time.Time `json:"expiry,omitempty"`
+	// scope is which pipeline the vault read this under (Vault.Load), so a write-back lands on that pipeline or nowhere — never on a stranger that took its name since. Empty for a login not yet saved.
+	scope string
 }
 
 // expiryDelta mirrors x/oauth2's own defaultExpiryDelta (token.go), the

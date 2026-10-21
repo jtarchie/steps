@@ -33,6 +33,15 @@ func openExistingState(state State, name string) (store.Store, error) {
 	return sqlite.OpenExisting(string(state), name) //nolint:wrapcheck // every caller names what it was opening
 }
 
+// attachState is a writable handle on a pipeline already in the database, registering nothing.
+func attachState(state State, name string) (store.Store, error) {
+	if state.postgres() {
+		return postgres.Attach(string(state), name) //nolint:wrapcheck // every caller names what it was opening
+	}
+
+	return sqlite.Attach(string(state), name) //nolint:wrapcheck // every caller names what it was opening
+}
+
 // openAccounts opens the daemon-level handle on who signs in.
 func openAccounts(state State) (store.Accounts, error) {
 	if state.postgres() {

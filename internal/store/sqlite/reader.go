@@ -292,3 +292,34 @@ func HasNothingRecorded(path string) bool {
 
 	return false
 }
+
+// Attach is a writable handle on a pipeline ALREADY in the file, over the file's shared pools, registering nothing: a write that must not resurrect a pipeline a destroy just removed (a login refreshed late) goes through this, and the foreign key refuses it if the row goes between this open and the write.
+func Attach(path, pipelineName string) (*Store, error) {
+	_, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("could not open state db %q: %w", path, err)
+	}
+
+	held, err := acquirePools(context.Background(), path)
+	if err != nil {
+		return nil, err
+	}
+
+	var id int64
+
+	err = held.reads.QueryRowContext(context.Background(), `SELECT id FROM pipelines WHERE name = ?`, pipelineName).Scan(&id)
+	if err != nil {
+		if held.release() {
+			_ = held.reads.Close()
+			_ = held.db.Close()
+		}
+
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %s is not in %s", store.ErrNoSuchPipeline, pipelineName, path)
+		}
+
+		return nil, fmt.Errorf("could not resolve pipeline %q in %q: %w", pipelineName, path, err)
+	}
+
+	return &Store{db: held.db, reads: held.reads, shared: held, path: path, pipeline: pipelineName, pipelineID: id}, nil
+}

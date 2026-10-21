@@ -92,3 +92,22 @@ func (s suite) TestARenameKeepsCredentialsAndADestroyTakesThem(t *testing.T) {
 		t.Errorf("a pipeline created under a destroyed one's name inherited its credential: found %v, %v", found, err)
 	}
 }
+
+// The backstop for a write racing a destroy: a handle opened before the destroy still holds the old id, and the row it would write names a pipeline that is gone.
+func (s suite) TestACredentialForADestroyedPipelineIsRefused(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	before := s.open(t, "racing")
+	destroyer := s.open(t, "racing")
+
+	err := destroyer.Delete(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = before.SaveCredential(ctx, "mcp:tracker", []byte{1})
+	if err == nil {
+		t.Fatal("a credential was saved for a pipeline already destroyed")
+	}
+}

@@ -19,7 +19,7 @@ type refusingVault struct {
 	refuse error
 }
 
-func (r *refusingVault) Save(ctx context.Context, pipeline, server string, data []byte) error {
+func (r *refusingVault) Save(ctx context.Context, pipeline, server, scope string, data []byte) error {
 	if r.refuse != nil {
 		return r.refuse
 	}
@@ -28,7 +28,7 @@ func (r *refusingVault) Save(ctx context.Context, pipeline, server string, data 
 		return fmt.Errorf("refusing vault: %w", ctx.Err())
 	}
 
-	return r.MemoryVault.Save(ctx, pipeline, server, data)
+	return r.MemoryVault.Save(ctx, pipeline, server, scope, data)
 }
 
 func useVault(t *testing.T, v Vault) {
@@ -133,4 +133,67 @@ func TestNoVaultIsNotMistakenForNoLogin(t *testing.T) {
 
 func inspectServer() config.MCPServer {
 	return config.MCPServer{Name: "tracker", Endpoint: inspectEndpoint, Auth: config.MCPServerAuth{Type: "oauth"}}
+}
+
+// scopeVault records the scope each save carried.
+type scopeVault struct {
+	MemoryVault
+	saved []string
+}
+
+func (v *scopeVault) Save(ctx context.Context, pipeline, server, scope string, data []byte) error {
+	v.saved = append(v.saved, scope)
+
+	return v.MemoryVault.Save(ctx, pipeline, server, scope, data)
+}
+
+// A refresh writes back to the pipeline it read from, by identity, so the vault can refuse one whose pipeline is gone.
+//
+// Not t.Parallel(): the vault is process state.
+func TestAWriteBackCarriesTheIdentityItWasReadUnder(t *testing.T) {
+	vault := &scopeVault{}
+	useVault(t, vault)
+
+	shared := &sharedToken{pipeline: testPipeline, server: "tracker", file: &TokenFile{Endpoint: inspectEndpoint, AccessToken: "old", scope: "pipeline-7"}}
+	shared.persist(t.Context(), &oauth2.Token{AccessToken: "new"})
+
+	if len(vault.saved) != 1 || vault.saved[0] != "pipeline-7" {
+		t.Errorf("write-back saved under scopes %q, want the one it was read under", vault.saved)
+	}
+}
+
+// fixedScopeVault answers every Load under one scope.
+type fixedScopeVault struct{ scopeVault }
+
+func (v *fixedScopeVault) Load(ctx context.Context, pipeline, server string) ([]byte, string, bool, error) {
+	data, _, found, err := v.MemoryVault.Load(ctx, pipeline, server)
+
+	return data, "pipeline-9", found, err
+}
+
+// Not t.Parallel(): the vault is process state.
+func TestTheScopeALoginWasReadUnderIsTheOneItIsSavedUnder(t *testing.T) {
+	vault := &fixedScopeVault{}
+	useVault(t, vault)
+
+	err := vault.Put(testPipeline, "tracker", &TokenFile{Endpoint: inspectEndpoint, AccessToken: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tf, err := loadLogin(t.Context(), testPipeline, "tracker")
+	if err != nil || tf == nil {
+		t.Fatalf("loadLogin = %v, %v", tf, err)
+	}
+
+	vault.saved = nil
+
+	err = saveLogin(t.Context(), testPipeline, "tracker", tf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(vault.saved) != 1 || vault.saved[0] != "pipeline-9" {
+		t.Errorf("saved under scopes %q, want the one it was read under", vault.saved)
+	}
 }

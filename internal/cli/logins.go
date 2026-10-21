@@ -90,68 +90,75 @@ func noSuchState(err error) bool {
 // Load opens the pipeline's sealed login, re-sealing it under the current key when only the old one opened it.
 //
 //nolint:contextcheck // opening a store takes none
-func (l *sealedLogins) Load(ctx context.Context, pipeline, server string) ([]byte, bool, error) {
-	st, err := openExistingState(l.state, pipeline)
+func (l *sealedLogins) Load(ctx context.Context, pipeline, server string) ([]byte, string, bool, error) {
+	st, err := attachState(l.state, pipeline)
 	if noSuchState(err) {
-		return nil, false, nil
+		return nil, "", false, nil
 	}
 
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 
 	defer release(st)
 
 	name := credentialName(server)
+	scope := st.CredentialScope()
 
 	sealed, found, err := st.Credential(ctx, name)
 	if err != nil || !found {
-		return nil, false, err //nolint:wrapcheck // the store names the credential and the pipeline
+		return nil, "", false, err //nolint:wrapcheck // the store names the credential and the pipeline
 	}
 
 	plain, stale, err := l.box.Open(sealed, credentialAAD(st, name))
 	if err != nil {
-		return nil, false, unopenable{err}
+		return nil, "", false, unopenable{err}
 	}
 
 	if stale {
-		err = l.Save(ctx, pipeline, server, plain)
+		err = l.seal(ctx, st, name, plain)
 		if err != nil {
 			slog.WarnContext(ctx, "mcp.login.reseal_failed", "pipeline", pipeline, "server", server, "error", err,
 				"hint", "it opens under "+sealbox.OldKeyEnv+" still; keep that set until a later read re-seals it")
 		}
 	}
 
-	return plain, true, nil
+	return plain, scope, true, nil
 }
 
 // Save seals data under the current key, bound to the pipeline, and refuses with no key before anything is written.
 //
+// Only a local command's fresh login may register the pipeline. Everything else attaches to a pipeline already there, so a write-back cannot resurrect one a destroy removed, and checks it is still the pipeline the login was read under, so it cannot land on a stranger that took the name; a destroy between the two is refused by the foreign key.
+//
 //nolint:contextcheck // opening a store takes none
-func (l *sealedLogins) Save(ctx context.Context, pipeline, server string, data []byte) error {
+func (l *sealedLogins) Save(ctx context.Context, pipeline, server, scope string, data []byte) error {
 	err := l.box.Ready()
 	if err != nil {
 		return err //nolint:wrapcheck // sealbox names the variable to set
 	}
 
-	if !l.register {
-		existing, err := openExistingState(l.state, pipeline)
-		if err != nil {
-			return fmt.Errorf("not saving a login for pipeline %q, which this daemon does not hold: %w", pipeline, err)
-		}
+	var st store.Store
 
-		release(existing)
+	if l.register && scope == "" {
+		st, err = openState(l.state, pipeline)
+	} else {
+		st, err = attachState(l.state, pipeline)
 	}
 
-	st, err := openState(l.state, pipeline)
 	if err != nil {
-		return fmt.Errorf("could not open state for %q: %w", pipeline, err)
+		return fmt.Errorf("not saving a login for pipeline %q: %w", pipeline, err)
 	}
 
 	defer release(st)
 
-	name := credentialName(server)
+	if scope != "" && st.CredentialScope() != scope {
+		return fmt.Errorf("not saving a login for pipeline %q: %w", pipeline, stepsmcp.ErrLoginOrphaned)
+	}
 
+	return l.seal(ctx, st, credentialName(server), data)
+}
+
+func (l *sealedLogins) seal(ctx context.Context, st store.Store, name string, data []byte) error {
 	sealed, err := l.box.Seal(data, credentialAAD(st, name))
 	if err != nil {
 		return err //nolint:wrapcheck // sealbox names the variable to set

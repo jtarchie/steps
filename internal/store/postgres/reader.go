@@ -211,3 +211,39 @@ func HasNothingRecorded(rawURL string) bool {
 
 	return false
 }
+
+// Attach is a writable handle on a pipeline ALREADY in the schema, over the URL's shared pool, registering nothing; see the sqlite driver.
+func Attach(rawURL, pipelineName string) (*Store, error) {
+	held, err := acquirePool(rawURL)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+
+	fail := func(err error) (*Store, error) {
+		if held.release() {
+			_ = held.db.Close()
+		}
+
+		return nil, err
+	}
+
+	err = checkExisting(ctx, held.connection)
+	if err != nil {
+		return fail(err)
+	}
+
+	var id int64
+
+	err = held.db.QueryRowContext(ctx, `SELECT id FROM pipelines WHERE name = $1`, pipelineName).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fail(fmt.Errorf("%w: %s is not in %s", store.ErrNoSuchPipeline, pipelineName, held.description))
+	}
+
+	if err != nil {
+		return fail(fmt.Errorf("could not resolve pipeline %q in %s: %w", pipelineName, held.description, err))
+	}
+
+	return &Store{db: held.db, shared: held, description: held.description, pipeline: pipelineName, pipelineID: id}, nil
+}

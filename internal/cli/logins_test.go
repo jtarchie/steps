@@ -99,7 +99,7 @@ func TestALoginIsSealedInTheStateDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "steps.db")
 	logins := installTestLogins(t, State(path), true)
 
-	err := logins.Save(t.Context(), "app", "tracker", loginJSON(t, &stepsmcp.TokenFile{AccessToken: secretToken, RefreshToken: "refresh-" + secretToken}))
+	err := logins.Save(t.Context(), "app", "tracker", "", loginJSON(t, &stepsmcp.TokenFile{AccessToken: secretToken, RefreshToken: "refresh-" + secretToken}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestALoginIsSealedInTheStateDatabase(t *testing.T) {
 		t.Fatal("the state database holds the token in the clear")
 	}
 
-	plain, found, err := logins.Load(t.Context(), "app", "tracker")
+	plain, _, found, err := logins.Load(t.Context(), "app", "tracker")
 	if err != nil || !found || !bytes.Contains(plain, []byte(secretToken)) {
 		t.Fatalf("Load = %q, %v, %v; want the login back", plain, found, err)
 	}
@@ -129,7 +129,7 @@ func TestNoKeyRefusesALoginAndWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = logins.Save(t.Context(), "app", "tracker", []byte(`{}`))
+	err = logins.Save(t.Context(), "app", "tracker", "", []byte(`{}`))
 	if !errors.Is(err, sealbox.ErrNoKey) || !strings.Contains(err.Error(), sealbox.KeyEnv) {
 		t.Fatalf("Save with no key = %v, want ErrNoKey naming %s", err, sealbox.KeyEnv)
 	}
@@ -149,7 +149,7 @@ func TestADaemonSavesOnlyForPipelinesItHolds(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "steps.db")
 	logins := installTestLogins(t, State(path), false)
 
-	err := logins.Save(t.Context(), "gone", "tracker", []byte(`{}`))
+	err := logins.Save(t.Context(), "gone", "tracker", "", []byte(`{}`))
 	if err == nil {
 		t.Fatal("a daemon saved a login for a pipeline it does not hold")
 	}
@@ -171,7 +171,7 @@ func TestAKeyRotationReSealsOnRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = logins.Save(t.Context(), "app", "tracker", []byte(`{"access_token":"a"}`))
+	err = logins.Save(t.Context(), "app", "tracker", "", []byte(`{"access_token":"a"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestAKeyRotationReSealsOnRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = newOnly.Load(t.Context(), "app", "tracker")
+	_, _, _, err = newOnly.Load(t.Context(), "app", "tracker")
 	if !errors.Is(err, sealbox.ErrWrongKey) {
 		t.Fatalf("Load under a new key alone = %v, want ErrWrongKey", err)
 	}
@@ -196,14 +196,14 @@ func TestAKeyRotationReSealsOnRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, found, err := rotating.Load(t.Context(), "app", "tracker")
+	_, _, found, err := rotating.Load(t.Context(), "app", "tracker")
 	if err != nil || !found {
 		t.Fatalf("Load during a rotation = found %v, %v", found, err)
 	}
 
 	t.Setenv(sealbox.OldKeyEnv, "")
 
-	_, found, err = newOnly.Load(context.Background(), "app", "tracker")
+	_, _, found, err = newOnly.Load(context.Background(), "app", "tracker")
 	if err != nil || !found {
 		t.Errorf("Load under the new key after a rotating read = found %v, %v; want it re-sealed", found, err)
 	}
@@ -213,7 +213,7 @@ func TestAKeyRotationReSealsOnRead(t *testing.T) {
 func TestAnUnopenableLoginNeedsALogin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "steps.db")
 
-	err := installTestLogins(t, State(path), true).Save(t.Context(), "app", "tracker", []byte(`{"access_token":"a"}`))
+	err := installTestLogins(t, State(path), true).Save(t.Context(), "app", "tracker", "", []byte(`{"access_token":"a"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestAnUnopenableLoginNeedsALogin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = other.Load(t.Context(), "app", "tracker")
+	_, _, _, err = other.Load(t.Context(), "app", "tracker")
 	if !errors.Is(err, sealbox.ErrWrongKey) || !errors.Is(err, stepsmcp.ErrNeedsLogin) {
 		t.Errorf("Load under another key = %v, want ErrWrongKey classed as ErrNeedsLogin", err)
 	}
@@ -237,7 +237,7 @@ func TestARowCopiedOntoAnotherPipelineDoesNotOpen(t *testing.T) {
 	logins := installTestLogins(t, State(path), true)
 
 	for _, name := range []string{"app", "other"} {
-		err := logins.Save(t.Context(), name, "tracker", []byte(`{"access_token":"`+name+`"}`))
+		err := logins.Save(t.Context(), name, "tracker", "", []byte(`{"access_token":"`+name+`"}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -255,7 +255,7 @@ func TestARowCopiedOntoAnotherPipelineDoesNotOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = logins.Load(t.Context(), "other", "tracker")
+	_, _, _, err = logins.Load(t.Context(), "other", "tracker")
 	if !errors.Is(err, sealbox.ErrWrongKey) {
 		t.Errorf("Load of app's row copied onto other = %v, want ErrWrongKey", err)
 	}
@@ -277,5 +277,75 @@ func TestADaemonWithNoKeyRefusesToStartALogin(t *testing.T) {
 
 	if _, found := held.LoginStatus(held.server.Lookup("app"), "tracker"); found {
 		t.Error("a refused login was left pending")
+	}
+}
+
+// readThenDestroy saves app's login, reads it back as a refresh would, and destroys app, handing back the identity it was read under.
+func readThenDestroy(t *testing.T, path string) (*sealedLogins, string) {
+	t.Helper()
+
+	logins := installTestLogins(t, State(path), false)
+
+	st, err := openState(State(path), "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = logins.Save(t.Context(), "app", "tracker", "", []byte(`{"access_token":"a"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, scope, found, err := logins.Load(t.Context(), "app", "tracker")
+	if err != nil || !found || scope == "" {
+		t.Fatalf("Load = scope %q, found %v, %v", scope, found, err)
+	}
+
+	err = st.Delete(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	release(st)
+
+	return logins, scope
+}
+
+// A refresh landing after a destroy must not bring the pipeline back: the next set under its name would inherit the token.
+func TestAWriteBackAfterADestroyResurrectsNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "steps.db")
+	logins, scope := readThenDestroy(t, path)
+
+	err := logins.Save(t.Context(), "app", "tracker", scope, []byte(`{"access_token":"rotated"}`))
+	if err == nil {
+		t.Fatal("a write-back for a destroyed pipeline was saved")
+	}
+
+	_, err = openExistingState(State(path), "app")
+	if !noSuchState(err) {
+		t.Errorf("the write-back brought app back: %v", err)
+	}
+}
+
+// Nor may it land on a stranger that took the name.
+func TestAWriteBackDoesNotLandOnAPipelineThatTookTheName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "steps.db")
+	logins, scope := readThenDestroy(t, path)
+
+	again, err := openState(State(path), "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	release(again)
+
+	err = logins.Save(t.Context(), "app", "tracker", scope, []byte(`{"access_token":"rotated"}`))
+	if !errors.Is(err, stepsmcp.ErrLoginOrphaned) {
+		t.Fatalf("a write-back onto the new app = %v, want ErrLoginOrphaned", err)
+	}
+
+	_, _, found, err := logins.Load(t.Context(), "app", "tracker")
+	if err != nil || found {
+		t.Errorf("the new app holds the old one's login: found %v, %v", found, err)
 	}
 }
