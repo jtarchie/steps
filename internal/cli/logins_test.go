@@ -209,6 +209,28 @@ func TestAKeyRotationReSealsOnRead(t *testing.T) {
 	}
 }
 
+// No poll heals a login no key here opens, so preflight must neither wait on it as transient nor cache it past the login that fixes it.
+func TestAnUnopenableLoginNeedsALogin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "steps.db")
+
+	err := installTestLogins(t, State(path), true).Save(t.Context(), "app", "tracker", []byte(`{"access_token":"a"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(sealbox.KeyEnv, testKey(t))
+
+	other, err := useLogins(State(path), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = other.Load(t.Context(), "app", "tracker")
+	if !errors.Is(err, sealbox.ErrWrongKey) || !errors.Is(err, stepsmcp.ErrNeedsLogin) {
+		t.Errorf("Load under another key = %v, want ErrWrongKey classed as ErrNeedsLogin", err)
+	}
+}
+
 // A sealed row moved onto another pipeline's is a credential that pipeline was never given.
 func TestARowCopiedOntoAnotherPipelineDoesNotOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "steps.db")

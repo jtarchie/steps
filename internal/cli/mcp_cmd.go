@@ -57,11 +57,6 @@ func (m *MCPListCmd) Run() error {
 		return fmt.Errorf("could not load pipeline: %w", err)
 	}
 
-	_, err = useLogins(StatePath(m.Pipeline, m.DB), true)
-	if err != nil {
-		return err
-	}
-
 	if len(cfg.MCPServers) == 0 {
 		fmt.Printf("no mcp_servers: entries in %s\n", m.Pipeline)
 
@@ -76,6 +71,11 @@ func (m *MCPListCmd) Run() error {
 	var probeErr error
 
 	if !m.Offline {
+		_, err = useLogins(StatePath(m.Pipeline, m.DB), true)
+		if err != nil {
+			return err
+		}
+
 		probeErr = probeMCPServers(ctx, cfg, statuses)
 	}
 
@@ -288,8 +288,6 @@ func (m *MCPLoginCmd) Run() error {
 		return fmt.Errorf("mcp server %q is not auth: {type: oauth}; nothing to log in to", m.Server)
 	}
 
-	fmt.Printf("→ opening browser to authorize %q…\n", m.Server)
-
 	state := StatePath(m.Config, m.DB)
 
 	logins, err := useLogins(state, true)
@@ -302,6 +300,8 @@ func (m *MCPLoginCmd) Run() error {
 	if err != nil {
 		return fmt.Errorf("mcp login: %w", err)
 	}
+
+	fmt.Printf("→ opening browser to authorize %q…\n", m.Server)
 
 	err = stepsmcp.Login(ctx, cfg.Name, *srv, openBrowser)
 	if err != nil {

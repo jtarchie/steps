@@ -182,3 +182,25 @@ func TestOnePipelinesLoginDoesNotConnectAnother(t *testing.T) {
 		t.Errorf("read the token files %d times for 3 renders of two pipelines, want 2", *reads)
 	}
 }
+
+// A destroy saves nothing, so an answer read before it and cached after its drop must not be the one the next render gets.
+func TestAnAnswerReadAcrossADropIsNotKept(t *testing.T) {
+	held, reads := countingDaemon(t)
+	writeTokenFile(t, liveToken())
+
+	counted := held.creds.inspect
+	held.creds.inspect = func(ctx context.Context, pipeline string, srv config.MCPServer) stepsmcp.TokenState {
+		state := counted(ctx, pipeline, srv)
+		held.creds.drop(loginKey(pipeline, ""))
+
+		return state
+	}
+
+	_ = credentialOf(t, held)
+	held.creds.inspect = counted
+	_ = credentialOf(t, held)
+
+	if *reads != 2 {
+		t.Errorf("read the login %d times across a drop, want 2: the answer from before it was served after", *reads)
+	}
+}

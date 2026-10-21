@@ -71,6 +71,11 @@ func loginsReady() error {
 	return box.Ready() //nolint:wrapcheck // as above
 }
 
+// unopenable is a sealed login no key here opens, in sealbox's words but classed as stepsmcp.ErrNeedsLogin: no poll heals it, so preflight must neither wait on it as transient nor cache it past the login that fixes it.
+type unopenable struct{ error }
+
+func (u unopenable) Unwrap() []error { return []error{u.error, stepsmcp.ErrNeedsLogin} }
+
 func credentialName(server string) string { return "mcp:" + server }
 
 func credentialAAD(st store.Credentials, name string) []byte {
@@ -106,7 +111,7 @@ func (l *sealedLogins) Load(ctx context.Context, pipeline, server string) ([]byt
 
 	plain, stale, err := l.box.Open(sealed, credentialAAD(st, name))
 	if err != nil {
-		return nil, false, err //nolint:wrapcheck // sealbox names the variable to set
+		return nil, false, unopenable{err}
 	}
 
 	if stale {

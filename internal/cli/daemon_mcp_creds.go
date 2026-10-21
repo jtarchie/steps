@@ -88,6 +88,9 @@ func (c *credentials) of(ctx context.Context, pipeline string, srv config.MCPSer
 
 // drop forgets every entry whose key starts with prefix, so a destroyed or renamed pipeline's entries do not accumulate.
 func (c *credentials) drop(prefix string) {
+	// A destroy took the logins without a save, and an of() inspecting across this drop would re-insert what it read before.
+	loginSaves.Add(1)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
