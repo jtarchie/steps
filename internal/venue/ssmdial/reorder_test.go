@@ -5,6 +5,7 @@ package ssmdial
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 // TestReassembleRefusesAFrameItAlreadyPassed pins that bytes the client
@@ -77,5 +78,52 @@ func TestReassembleStillOrdersWithinTheStream(t *testing.T) {
 
 	if len(run) != 2 || string(run[0]) != "b" || string(run[1]) != "c" {
 		t.Errorf("run = %q, want b then c released together", run)
+	}
+}
+
+// TestReassembleRefusesAGapThatNeverFills pins that a peer cannot grow this end memory by withholding one frame and streaming the rest.
+func TestReassembleRefusesAGapThatNeverFills(t *testing.T) {
+	t.Parallel()
+
+	for name, c := range map[string]struct{ size, frames int }{"frames": {1, 5000}, "bytes": {1 << 20, 20}} {
+		size := c.size
+
+		channel := &Channel{inBuf: map[int64][]byte{}}
+
+		_, err := channel.reassemble(&agentMessage{sequenceNumber: 0, payload: []byte("a")})
+		if err != nil {
+			t.Fatalf("%s: first frame: %v", name, err)
+		}
+
+		for seq := int64(2); seq < int64(c.frames); seq++ {
+			_, err = channel.reassemble(&agentMessage{sequenceNumber: seq, payload: make([]byte, size)})
+			if err != nil {
+				break
+			}
+		}
+
+		if !errors.Is(err, ErrBacklog) {
+			t.Fatalf("%s: error = %v after %d frames held, want ErrBacklog", name, err, len(channel.inBuf))
+		}
+	}
+}
+
+// TestSendRefusesWhenNothingIsAcknowledged pins the outbound half: an agent that never acks cannot make this end retain unbounded writes.
+func TestSendRefusesWhenNothingIsAcknowledged(t *testing.T) {
+	t.Parallel()
+
+	channel := &Channel{unacked: map[int64]*unackedMessage{}, synSent: true, unackedBytes: maxBacklogBytes}
+
+	message := newAgentMessage(time.Now())
+	message.messageType = msgInputStreamData
+	message.payload = []byte("x")
+
+	err := channel.send(message, true)
+	if !errors.Is(err, ErrBacklog) {
+		t.Fatalf("error = %v, want ErrBacklog", err)
+	}
+
+	if len(channel.unacked) != 0 {
+		t.Fatalf("retained %d messages past the cap", len(channel.unacked))
 	}
 }

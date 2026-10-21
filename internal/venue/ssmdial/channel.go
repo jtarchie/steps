@@ -30,12 +30,14 @@ type Channel struct {
 	writeMu sync.Mutex
 
 	// mu guards the sequence and retransmission state below.
-	mu       sync.Mutex
-	seq      int64
-	synSent  bool
-	unacked  map[int64]*unackedMessage
-	closed   bool
-	closeErr error
+	mu      sync.Mutex
+	seq     int64
+	synSent bool
+	unacked map[int64]*unackedMessage
+	// unackedBytes is the payload held in unacked, capped at maxBacklogBytes.
+	unackedBytes int
+	closed       bool
+	closeErr     error
 
 	// delivered carries reassembled payload bytes to Read.
 	delivered chan []byte
@@ -55,8 +57,10 @@ type Channel struct {
 	// inLowest is the first sequence this stream ever saw. A frame below it
 	// belongs before everything delivered, which is a reordering this client
 	// cannot repair rather than a duplicate it can ignore.
-	inLowest     int64
-	inBuf        map[int64][]byte
+	inLowest int64
+	inBuf    map[int64][]byte
+	// inBufBytes is the payload held in inBuf, capped with len(inBuf) so a gap that never fills cannot grow memory.
+	inBufBytes   int
 	agentVersion string
 
 	stop     chan struct{}
@@ -269,31 +273,49 @@ func (c *Channel) send(message *agentMessage, retain bool) error {
 		return cause
 	}
 
+	err := c.stampLocked(message, retain)
+
+	c.mu.Unlock()
+
+	if err != nil {
+		return err
+	}
+
+	return c.writeMessage(message)
+}
+
+// stampLocked assigns flags and sequence, and retains the message for retransmission when asked. c.mu must be held.
+func (c *Channel) stampLocked(message *agentMessage, retain bool) error {
 	if message.messageType == msgAcknowledge {
 		// An acknowledgement carries the sequence number it answers, is never
 		// itself acknowledged, and must not claim the channel's opening SYN —
 		// a Windows agent rejects a SYN-flagged ack and the handshake stalls.
 		message.flags = flagAck
-	} else {
-		if !c.synSent {
-			c.synSent = true
-			c.seq = 0
-			message.flags = flagSyn
-		} else {
-			c.seq++
-			message.flags = flagData
-		}
 
-		message.sequenceNumber = c.seq
-
-		if retain {
-			c.unacked[message.sequenceNumber] = &unackedMessage{message: message, sentAt: c.now()}
-		}
+		return nil
 	}
 
-	c.mu.Unlock()
+	if retain && c.unackedBytes+len(message.payload) > maxBacklogBytes {
+		return fmt.Errorf("%w: %d bytes sent and never acknowledged", ErrBacklog, c.unackedBytes)
+	}
 
-	return c.writeMessage(message)
+	if !c.synSent {
+		c.synSent = true
+		c.seq = 0
+		message.flags = flagSyn
+	} else {
+		c.seq++
+		message.flags = flagData
+	}
+
+	message.sequenceNumber = c.seq
+
+	if retain {
+		c.unackedBytes += len(message.payload)
+		c.unacked[message.sequenceNumber] = &unackedMessage{message: message, sentAt: c.now()}
+	}
+
+	return nil
 }
 
 // writeMessage renders and writes one message.
@@ -506,6 +528,15 @@ func (c *Channel) deliver(message *agentMessage) error {
 	return nil
 }
 
+// maxBacklogFrames and maxBacklogBytes bound what a gap that never fills (inbound) or an agent that never acknowledges (outbound) can make this end hold: the per-frame read limit alone lets a compromised worker grow orchestrator memory without bound.
+const (
+	maxBacklogFrames = 4096
+	maxBacklogBytes  = 8 << 20
+)
+
+// ErrBacklog is a peer that left more buffered on this end than maxBacklogFrames or maxBacklogBytes allows.
+var ErrBacklog = errors.New("the SSM peer left too much unacknowledged or out-of-order data buffered")
+
 // ErrOutOfOrder is a frame belonging before everything already delivered.
 var ErrOutOfOrder = errors.New("an SSM frame arrived after the stream had passed it")
 
@@ -544,6 +575,11 @@ func (c *Channel) reassemble(message *agentMessage) ([][]byte, error) {
 		return nil, nil
 	}
 
+	if message.sequenceNumber != c.inSeq && (len(c.inBuf) >= maxBacklogFrames || c.inBufBytes+len(message.payload) > maxBacklogBytes) {
+		return nil, fmt.Errorf("%w: %d frames, %d bytes held behind a gap at %d", ErrBacklog, len(c.inBuf), c.inBufBytes, c.inSeq)
+	}
+
+	c.inBufBytes += len(message.payload) - len(c.inBuf[message.sequenceNumber])
 	c.inBuf[message.sequenceNumber] = append([]byte(nil), message.payload...)
 
 	var run [][]byte
@@ -556,6 +592,7 @@ func (c *Channel) reassemble(message *agentMessage) ([][]byte, error) {
 
 		run = append(run, next)
 		delete(c.inBuf, c.inSeq)
+		c.inBufBytes -= len(next)
 		c.inSeq++
 	}
 }
@@ -598,7 +635,10 @@ func (c *Channel) clearAcked(message *agentMessage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	delete(c.unacked, sequence)
+	if held, ok := c.unacked[sequence]; ok {
+		c.unackedBytes -= len(held.message.payload)
+		delete(c.unacked, sequence)
+	}
 }
 
 // channelClosed ends the session, carrying the agent's own explanation.
