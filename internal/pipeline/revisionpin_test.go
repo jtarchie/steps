@@ -4,8 +4,8 @@ package pipeline
 //
 // The revision used to live on the store HANDLE and the configuration
 // travelled as a pointer, and the two are read minutes apart: RunJob takes
-// the config, then validates placement, acquires leases, pulls images and
-// preflights before its row is written. A reload anywhere in that window made
+// the config, then validates placement, acquires leases and pulls images
+// before its row is written. A reload anywhere in that window made
 // the run record a configuration it never ran — and the run page then says
 // "the configuration changed" about a run where nothing moved.
 
@@ -74,7 +74,7 @@ jobs:
 // TestRunRecordsAConfigASweepAlreadyReclaimed is the other half of the same
 // window, and the one that survives an edit landing MID-BUILD.
 //
-// A run's row is written after placement, leases, image pulls and preflight —
+// A run's row is written after placement, leases and image pulls —
 // long after the job was handed its configuration. A reload in that window
 // adopts a newer one and sweeps every revision no run references yet, which is
 // exactly what this one still is. The sha alone then resolves to nothing, and

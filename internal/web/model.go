@@ -408,6 +408,25 @@ func (r runView) MCPBlamed() string {
 	return found[1]
 }
 
+// mcpMissingTool is internal/agent's wording for a grant naming a tool the server does not expose — a server that answered, so the connection hint would send the reader to a green row.
+var mcpMissingTool = regexp.MustCompile(`mcp server "([^"]+)" has no tool named "([^"]+)"`)
+
+// missingTool is the server that answered and the tool it lacks.
+type missingTool struct {
+	Server string
+	Tool   string
+}
+
+// MCPMissingTool is the tool the blamed server does not expose, or nil when the run died of something else: a tool name a server renamed is a configuration error, not a connection to go and check.
+func (r runView) MCPMissingTool() *missingTool {
+	found := mcpMissingTool.FindStringSubmatch(r.JobError)
+	if found == nil {
+		return nil
+	}
+
+	return &missingTool{Server: found[1], Tool: found[2]}
+}
+
 // HeadError is the run's error when no failed step holds it: a failing step's error is what the job error IS (the plan wraps it and returns it), so it is read on the step and the head only names that step — but a run that died before any step failed (a pull, a placement, a resource check) has no row to carry it.
 func (r runView) HeadError() string {
 	for _, step := range r.Steps {

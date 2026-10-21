@@ -1018,7 +1018,7 @@ func TestFollowSaysAJobHeldByItsSerialGroupIsQueued(t *testing.T) {
 	}
 }
 
-// TestFollowSurfacesATriggerThatFailedBeforeAnyRun: a preflight failure marks the queue row "failed" and never creates a run, so the page used to poll "queued" forever. It now reports the terminal state and the error — but only a failure within this page's own follow window, never a stale one from an earlier trigger.
+// TestFollowSurfacesATriggerThatFailedBeforeAnyRun: a claim finalized without a run (a job the configuration no longer names) marks the queue row "failed" and never creates a run, so the page used to poll "queued" forever. It now reports the terminal state and the error — but only a failure within this page's own follow window, never a stale one from an earlier trigger.
 func TestFollowSurfacesATriggerThatFailedBeforeAnyRun(t *testing.T) {
 	t.Parallel()
 
@@ -1029,7 +1029,7 @@ func TestFollowSurfacesATriggerThatFailedBeforeAnyRun(t *testing.T) {
 		t.Fatalf("claimed %q, want lint", got)
 	}
 
-	failure := errors.New(`job "lint": preflight failed, no steps were run`)
+	failure := errors.New(`job "lint" is not in this pipeline`)
 
 	err := st.CompleteJob(t.Context(), id, "failed", failure)
 	if err != nil {
@@ -1039,8 +1039,8 @@ func TestFollowSurfacesATriggerThatFailedBeforeAnyRun(t *testing.T) {
 	within := time.Now().UTC().Add(-time.Minute).UnixMilli()
 
 	answer, body := latestRun(t, server, fmt.Sprintf("/p/demo/jobs/lint/latest-run?since=%d", within))
-	if answer.Run != nil || answer.State != "failed" || !strings.Contains(answer.Error, "preflight failed") {
-		t.Errorf("within window: latest-run = %s, want no run, state failed, and the preflight error", body)
+	if answer.Run != nil || answer.State != "failed" || !strings.Contains(answer.Error, "not in this pipeline") {
+		t.Errorf("within window: latest-run = %s, want no run, state failed, and the row's error", body)
 	}
 
 	if len(answer.Checks) != 0 {

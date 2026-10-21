@@ -320,8 +320,10 @@
      is lined up against are a daemon's, not the reader's. */}}
 {{define "took"}}{{if .Took}}<span class="dur{{if .Slow}} warn{{end}}" title="sent {{rfc3339 .Sent}} · {{if .Pending}}step ended{{else}}answered{{end}} {{rfc3339 .At}}{{if .Slow}} · over a tenth of this step's timeout{{end}}">{{duration .Took}}{{if .Slow}}<span class="visually-hidden"> — slow request</span>{{end}}</span>{{end}}{{end}}
 
-{{/* The way to the server a run died on, wherever its error is drawn. Takes the page. */}}
-{{define "mcphint"}}{{if and .Run.MCPBlamed .Nav.HasMCP}}<div class="errhint">mcp server <code>{{.Run.MCPBlamed}}</code> — <a href="/p/{{.Nav.Current}}/mcp#mcp-{{.Run.MCPBlamed}}">is it connected?</a></div>{{end}}{{end}}
+{{/* The way to the server a run died on, wherever its error is drawn. Takes the page.
+     A tool the server does not expose is the one mcp failure the mcp tab cannot explain —
+     the row there is green — so it says what is wrong instead of asking. */}}
+{{define "mcphint"}}{{with .Run.MCPMissingTool}}<div class="errhint">mcp server <code>{{.Server}}</code> answers, but has no tool named <code>{{.Tool}}</code> — an agent grants a tool it does not expose; <code>steps mcp tools</code> lists what it does</div>{{else}}{{if and .Run.MCPBlamed .Nav.HasMCP}}<div class="errhint">mcp server <code>{{.Run.MCPBlamed}}</code> — <a href="/p/{{.Nav.Current}}/mcp#mcp-{{.Run.MCPBlamed}}">is it connected?</a></div>{{end}}{{end}}{{end}}
 
 {{/* One note a step's machinery left. A warning says so in words, not only in colour. */}}
 {{define "chunk"}}<span>{{.}}</span>{{end}}

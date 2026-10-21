@@ -105,7 +105,7 @@ func (s *Server) handleLatestRun(c *echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"run": nil, "state": state, "checks": checks, "error": failErr})
 }
 
-// queuedState is a job's newest-row state, its running-build count, and the error that ended that row when a preflight failure marked the queue row "failed" without ever creating a run for the page to forward to.
+// queuedState is a job's newest-row state, its running-build count, and the error that ended that row when a claim was finalized without a run for the page to forward to — a job the configuration no longer names.
 func queuedState(queue []store.QueueRow, name string, since time.Time) (string, int, string) {
 	state := "waiting"
 	inFlight := 0

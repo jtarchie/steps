@@ -80,6 +80,43 @@ func TestAnErrorNoStepHoldsStaysInTheHead(t *testing.T) {
 	}
 }
 
+// A server that answers but lacks a tool the grant names is not a connection problem, and "is it connected?" sent the reader to an mcp row that said green. The hint says what is actually wrong instead.
+func TestAMissingToolIsNotHintedAsAConnection(t *testing.T) {
+	t.Parallel()
+
+	server, _, _ := mcpServerPipeline(t, stubRunner{})
+	pipeline := server.Lookup("demo")
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-no-tool", JobName: "build", Workspace: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-no-tool", []store.RunEventRow{
+		{Type: events.TypeJobFinished, Status: "errored", Text: "job \"build\": preflight failed, no steps were run:\n  mcp \"linear\": mcp server \"linear\" has no tool named \"read_resource\""},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-no-tool", "failed")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-no-tool")
+
+	if strings.Contains(body, "is it connected?") {
+		t.Errorf("a missing tool is hinted as a connection problem:\n%s", body)
+	}
+
+	if !strings.Contains(body, `<code>linear</code> answers, but has no tool named <code>read_resource</code>`) {
+		t.Errorf("the hint does not say the tool is missing:\n%s", body)
+	}
+
+	if !strings.Contains(body, "This run recorded no steps.") {
+		t.Errorf("a refused run does not say it ran nothing:\n%s", body)
+	}
+}
+
 // The "is it connected?" hint follows the error to the step that holds it, since that is now where the reader meets the server's name.
 func TestAnMCPFailureAStepHoldsIsHintedOnTheStep(t *testing.T) {
 	t.Parallel()
