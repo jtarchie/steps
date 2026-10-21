@@ -422,10 +422,14 @@ func sweepMutant(ctx context.Context, dir, work string, m mutant, tests []string
 
 	build := exec.CommandContext(ctx, "go", "test", "-c", "-overlay", overlay, "-o", binary, dir) //nolint:gosec // paths this command made
 
-	// ponytail: a mutant that does not compile (string + to -) scores KILLED, because gremlins' `go test` failed the same way and every ledger floor was measured so; NOT VIABLE is the honest status once the floors are re-baselined.
-	_, err = build.CombinedOutput()
+	// ponytail: a mutant the compiler rejects (string + to -) scores KILLED, because gremlins' `go test` failed the same way and every ledger floor was measured so; NOT VIABLE is the honest status once the floors are re-baselined. Any other build failure is an error: outcome.
+	out, err := build.CombinedOutput()
 	if err != nil {
-		return "KILLED", nil
+		if ctx.Err() == nil && compileFailure(string(out)) {
+			return "KILLED", nil
+		}
+
+		return "error: build failed: " + strings.TrimSpace(string(out)), nil
 	}
 
 	// gremlins' coefficient over what just these tests took, plus room for a process to start: the timeout is what stops a mutant that loops — one that allocated without bound reached 174GB under gremlins' whole-suite budget.
@@ -446,7 +450,7 @@ func sweepMutant(ctx context.Context, dir, work string, m mutant, tests []string
 	test := exec.CommandContext(runCtx, binary, "-test.run", "^("+strings.Join(quoted, "|")+")$", "-test.v", "-test.count=1", "-test.failfast")
 	test.Dir = dir
 	test.WaitDelay = 10 * time.Second
-	out, err := test.CombinedOutput()
+	out, err = test.CombinedOutput()
 
 	switch {
 	case runCtx.Err() != nil:
@@ -456,6 +460,16 @@ func sweepMutant(ctx context.Context, dir, work string, m mutant, tests []string
 	}
 
 	return "KILLED", failedTests(string(out))
+}
+
+var (
+	compileDiagnostic = regexp.MustCompile(`(?m)^\S+\.go:\d+:\d+: \S`)
+	buildInfraFailure = regexp.MustCompile(`no space left|signal: killed|out of memory|cannot allocate memory|too many open files|input/output error|cannot find toolchain|toolchain not available`)
+)
+
+// compileFailure reports whether a failed build's output is the compiler rejecting the mutant (a file:line:col diagnostic) rather than the machine or toolchain failing, which says nothing about the tests and must not score as a kill.
+func compileFailure(out string) bool {
+	return compileDiagnostic.MatchString(out) && !buildInfraFailure.MatchString(out)
 }
 
 // parallel calls fn for 0..n-1, workers at a time, telling it which worker it is so it can have a directory of its own.
@@ -498,10 +512,16 @@ func writeReport(path, dir string, mutants []mutant, elapsed time.Duration) erro
 	byFile := map[string][]mutation{}
 	counts := map[string]int{}
 
+	var errored []string
+
 	for _, m := range mutants {
 		name := strings.TrimPrefix(m.File, strings.TrimPrefix(dir, "./")+"/")
 		byFile[name] = append(byFile[name], mutation{m.Type, m.Outcome, m.Line, m.Column, m.Killers})
 		counts[m.Outcome]++
+
+		if strings.HasPrefix(m.Outcome, "error:") {
+			errored = append(errored, fmt.Sprintf("%s:%d:%d %s", m.File, m.Line, m.Column, m.Outcome))
+		}
 	}
 
 	files := make([]file, 0, len(byFile))
@@ -523,7 +543,7 @@ func writeReport(path, dir string, mutants []mutant, elapsed time.Duration) erro
 		"go_module": "github.com/jtarchie/steps", "files": files,
 		"test_efficacy": efficacy, "mutations_coverage": coverage, "mutants_total": len(mutants),
 		"mutants_killed": killed, "mutants_lived": lived, "mutants_not_viable": counts["NOT VIABLE"],
-		"mutants_not_covered": notCovered, "elapsed_time": elapsed.Seconds(),
+		"mutants_not_covered": notCovered, "mutants_errored": len(errored), "errored": errored, "elapsed_time": elapsed.Seconds(),
 	})
 	if err != nil {
 		return fmt.Errorf("%w", err)
@@ -539,7 +559,11 @@ func writeReport(path, dir string, mutants []mutant, elapsed time.Duration) erro
 		return fmt.Errorf("%w", err)
 	}
 
-	fmt.Printf("%s: %d killed, %d lived, %d timed out, %d not covered, %d not viable — efficacy %.2f%%\n", dir, killed, lived, counts["TIMED OUT"], notCovered, counts["NOT VIABLE"], efficacy)
+	fmt.Printf("%s: %d killed, %d lived, %d timed out, %d not covered, %d not viable, %d errored (excluded from efficacy) — efficacy %.2f%%\n", dir, killed, lived, counts["TIMED OUT"], notCovered, counts["NOT VIABLE"], len(errored), efficacy)
+
+	for _, line := range errored {
+		fmt.Printf("  errored: %s\n", line)
+	}
 
 	return nil
 }

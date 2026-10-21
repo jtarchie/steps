@@ -325,11 +325,26 @@ type gremlinsResult struct {
 	Killed     int     `json:"mutants_killed"`
 	Lived      int     `json:"mutants_lived"`
 	NotCovered int     `json:"mutants_not_covered"`
+	Errored    int     `json:"mutants_errored"`
 	Files      []struct {
 		Mutations []struct {
 			Status string `json:"status"`
 		} `json:"mutations"`
 	} `json:"files"`
+}
+
+func (r gremlinsResult) timedOut() int {
+	n := 0
+
+	for _, file := range r.Files {
+		for _, mutation := range file.Mutations {
+			if mutation.Status == "TIMED OUT" {
+				n++
+			}
+		}
+	}
+
+	return n
 }
 
 // record turns one measurement into a ledger row. What triage wrote — the note and the equivalents — is kept, because a re-measurement did not make those decisions and must not unmake them.
@@ -341,6 +356,10 @@ func (book *ledger) record(pkg string, report []byte, commit, date string) error
 		return fmt.Errorf("reading the gremlins report for %s: %w", pkg, err)
 	}
 
+	if result.Errored > 0 {
+		return fmt.Errorf("%s: %d mutants errored (build or harness failure, neither killed nor lived), so the efficacy is not a measurement — fix the cause and sweep again", pkg, result.Errored)
+	}
+
 	before, swept := book.Packages[pkg]
 
 	efficacy := float64(int(result.Efficacy*100+0.5)) / 100 //nolint:mnd // two decimal places, which is what gremlins prints
@@ -349,15 +368,7 @@ func (book *ledger) record(pkg string, report []byte, commit, date string) error
 		return fmt.Errorf("%s: efficacy fell from %.2f to %.2f — that is a finding, not a number to overwrite. Triage what now survives; edit the ledger by hand only once the drop is understood", pkg, before.Efficacy, efficacy)
 	}
 
-	timedOut := 0
-
-	for _, file := range result.Files {
-		for _, mutation := range file.Mutations {
-			if mutation.Status == "TIMED OUT" {
-				timedOut++
-			}
-		}
-	}
+	timedOut := result.timedOut()
 
 	after := before
 	after.SweptAt, after.Date = commit, date
