@@ -339,16 +339,41 @@ func (c *doClient) remove(id int) func(context.Context) error {
 	}
 }
 
-// removeNamed deletes whatever answers to a name only this process chose: a create whose answer was lost may still have made a droplet.
-func (c *doClient) removeNamed(name string) func(context.Context) error {
+// removeNamed deletes whatever answers to a name only this process chose: a create whose answer was lost may still have made a droplet. With patient, an empty list is asked again up to lostLaunchSearches times, because the list lags a create it has not yet seen.
+func (c *doClient) removeNamed(name string, patient bool) func(context.Context) error {
 	return func(ctx context.Context) error {
-		var failures []error
+		searches := 1
+		if patient {
+			searches = lostLaunchSearches
+		}
 
-		err := c.eachDroplet(ctx, url.Values{"name": {name}}, func(droplet doDroplet) {
-			failures = append(failures, c.remove(droplet.ID)(ctx))
-		})
+		var err error
 
-		return errors.Join(append(failures, err)...)
+		for attempt := range searches {
+			var (
+				failures []error
+				found    bool
+			)
+
+			listErr := c.eachDroplet(ctx, url.Values{"name": {name}}, func(droplet doDroplet) {
+				found = true
+
+				failures = append(failures, c.remove(droplet.ID)(ctx))
+			})
+
+			err = errors.Join(append(failures, listErr)...)
+			if found || attempt == searches-1 {
+				return err
+			}
+
+			select {
+			case <-time.After(acquirePoll):
+			case <-ctx.Done():
+				return errors.Join(err, ctx.Err())
+			}
+		}
+
+		return err
 	}
 }
 
@@ -473,13 +498,22 @@ func acquireDO(ctx context.Context, worker Worker) (Worker, func(context.Context
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: creating droplet %s (%s, %s in %s)", worker.URL, name, worker.Template, worker.Size, worker.Region))
 	slog.InfoContext(ctx, "worker.launching", "worker", worker.URL, "droplet", name, "image", worker.Template, "size", worker.Size, "region", worker.Region)
 
-	droplet, err := api.create(ctx, &doCreateRequest{
+	// Not the caller's context: cancelled once DigitalOcean has accepted, the request errors with no droplet id, leaving a billing machine only its name can find. Bounded instead, and the caller checked once the id is known.
+	createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), acquireTimeout)
+	defer cancelCreate()
+
+	droplet, err := api.create(createCtx, &doCreateRequest{
 		Name: name, Region: worker.Region, Size: worker.Size,
 		Image: doImage(worker.Template), UserData: userData, Tags: tags,
 	})
 	if err != nil || droplet == nil {
+		// A 4xx is a request DigitalOcean refused, not one it may have acted on, so there is nothing to wait for the list to show.
+		var apiErr *doAPIError
+
+		refusedCreate := errors.As(err, &apiErr) && apiErr.status/100 == 4
+
 		//nolint:contextcheck // as cleanupAfterFailure: the caller's context may be the problem
-		cleanupAfterFailure(worker, name, "venue.delete_failed", api.removeNamed(name))
+		cleanupAfterFailure(worker, name, "venue.delete_failed", api.removeNamed(name, !refusedCreate))
 
 		return Worker{}, nil, fmt.Errorf("creating a droplet for %q: %w", worker.URL, cmp.Or(err, errors.New("the API answered with no droplet")))
 	}

@@ -55,6 +55,10 @@ type fakeDO struct {
 	vanishAfter int
 	// noBoot skips the sshd, for the tests that never dial.
 	noBoot bool
+	// listLag is how many name searches answer empty before a created droplet shows up, standing in for the list's replica lagging a create.
+	listLag int
+	// onCreate runs inside POST /v2/droplets, before the droplet exists.
+	onCreate func()
 
 	dialed []string
 }
@@ -154,6 +158,10 @@ func (f *fakeDO) create(w http.ResponseWriter, r *http.Request) {
 
 	f.creates = append(f.creates, request)
 
+	if f.onCreate != nil {
+		f.onCreate()
+	}
+
 	if f.createStatus != 0 && !f.createThenFail {
 		http.Error(w, `{"id":"unprocessable_entity","message":"refused"}`, f.createStatus)
 
@@ -224,6 +232,14 @@ func (f *fakeDO) list(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 
 	var found []godo.Droplet
+
+	if name != "" && f.listLag > 0 {
+		f.listLag--
+
+		writeJSON(w, http.StatusOK, map[string]any{"droplets": found, "links": map[string]any{}, "meta": map[string]any{"total": 0}})
+
+		return
+	}
 
 	for _, droplet := range f.droplets {
 		if name == "" || droplet.Name == name {
