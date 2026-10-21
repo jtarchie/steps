@@ -79,11 +79,16 @@ func (s *Server) signsIn(who actor.Actor) bool {
 
 // safeNext is where a sign-in may send the browser on: a path on this server and nothing else. "//" and "/\\" are hosts to a browser, which is how a sign-in page becomes a way off the site — and a browser strips tabs and newlines from a URL before reading it, so "/\t/evil" is "//evil" by the time it is followed.
 func safeNext(next string) string {
-	if strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") && !strings.ContainsAny(next, "\\\t\r\n") {
+	if isLocalPath(next) {
 		return next
 	}
 
 	return "/"
+}
+
+// isLocalPath is whether a browser would read s as a path on this server rather than a host.
+func isLocalPath(s string) bool {
+	return strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "//") && !strings.ContainsAny(s, "\\\t\r\n")
 }
 
 func (s *Server) handleLoginPage(c *echo.Context) error {

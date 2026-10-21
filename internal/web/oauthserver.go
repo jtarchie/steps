@@ -29,7 +29,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/labstack/echo/v5"
@@ -258,43 +257,12 @@ type authRequest struct {
 	state       string
 	challenge   string
 	grant       store.Grant
-	expires     time.Time
 }
 
 // pendingAuth holds consents awaiting an answer and codes awaiting exchange, both single-use, in memory: one daemon is the only thing that will ever be asked for them.
 type pendingAuth struct {
-	mu       sync.Mutex
-	consents map[string]authRequest
-	codes    map[string]authRequest
-}
-
-func (p *pendingAuth) put(into *map[string]authRequest, key string, req authRequest) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if *into == nil {
-		*into = map[string]authRequest{}
-	}
-
-	now := time.Now()
-	for old, entry := range *into {
-		if now.After(entry.expires) {
-			delete(*into, old)
-		}
-	}
-
-	(*into)[key] = req
-}
-
-// take reads the map through from under the lock, as put assigns it: the field read is the race, not only the map access.
-func (p *pendingAuth) take(from *map[string]authRequest, key string) (authRequest, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	req, found := (*from)[key]
-	delete(*from, key)
-
-	return req, found && time.Now().Before(req.expires)
+	consents ttlMap[authRequest]
+	codes    ttlMap[authRequest]
 }
 
 // withQuery adds parameters to a redirect address, keeping any query it already had.
@@ -357,14 +325,13 @@ func (s *Server) handleAuthorize(c *echo.Context) error {
 	}
 
 	consent := randomToken()
-	s.auths.put(&s.auths.consents, consent, authRequest{
+	s.auths.consents.put(consent, authRequest{
 		client:      client,
 		redirectURI: query.Get("redirect_uri"),
 		state:       query.Get("state"),
 		challenge:   query.Get("code_challenge"),
 		grant:       store.Grant{ClientID: client.ID, Actor: who.String(), Pipeline: target.Slug, Export: export.Name},
-		expires:     time.Now().Add(consentWait),
-	})
+	}, time.Now().Add(consentWait))
 
 	page.Consent = consent
 
@@ -396,7 +363,7 @@ func redirectHost(raw string) string {
 
 // handleConsent is the person's answer. Only a consent this daemon showed this person, unanswered and unexpired, is honoured.
 func (s *Server) handleConsent(c *echo.Context) error {
-	req, found := s.auths.take(&s.auths.consents, c.FormValue("consent"))
+	req, found := s.auths.consents.take(c.FormValue("consent"))
 	if !found || req.grant.Actor != actor.From(c.Request().Context()).String() {
 		return s.renderConsent(c, http.StatusBadRequest, consentPage{Problem: "That connection request expired or was not shown to you. Start again from the agent."})
 	}
@@ -407,8 +374,7 @@ func (s *Server) handleConsent(c *echo.Context) error {
 	}
 
 	code := randomToken()
-	req.expires = time.Now().Add(authCodeTTL)
-	s.auths.put(&s.auths.codes, code, req)
+	s.auths.codes.put(code, req, time.Now().Add(authCodeTTL))
 
 	if target := s.Lookup(req.grant.Pipeline); target != nil {
 		detail, err := json.Marshal(map[string]string{"client": req.client.Name, "to": redirectHost(req.redirectURI)})
@@ -461,7 +427,7 @@ func (s *Server) handleToken(c *echo.Context) error {
 }
 
 func (s *Server) exchangeCode(c *echo.Context) error {
-	req, found := s.auths.take(&s.auths.codes, c.FormValue("code"))
+	req, found := s.auths.codes.take(c.FormValue("code"))
 	if !found || req.client.ID != c.FormValue("client_id") || req.redirectURI != c.FormValue("redirect_uri") {
 		return oauthError(c, http.StatusBadRequest, "invalid_grant", "unknown, used, expired or mismatched code")
 	}

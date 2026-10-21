@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -16,7 +18,10 @@ import (
 )
 
 // fakeGitHub answers what goth and the team lookup ask github.com for, as alex in acme's eng team.
-func fakeGitHub(t *testing.T) *http.Client {
+func fakeGitHub(t *testing.T) *http.Client { return fakeGitHubTeams(t, 1) }
+
+// fakeGitHubTeams is fakeGitHub with alex in n teams, eng first, served a hundred to a page with a Link to the next as GitHub does.
+func fakeGitHubTeams(t *testing.T, n int) *http.Client {
 	t.Helper()
 
 	reply := func(body any) http.HandlerFunc {
@@ -39,7 +44,27 @@ func fakeGitHub(t *testing.T) *http.Client {
 	mux.HandleFunc("GET /user", reply(map[string]any{"login": "alex", "id": 7, "email": "alex@acme.dev", "name": "Alex"}))
 	mux.HandleFunc("GET /user/emails", reply([]map[string]any{{"email": "alex@acme.dev", "primary": true, "verified": true}}))
 	mux.HandleFunc("GET /user/orgs", reply([]map[string]string{{"login": "acme"}}))
-	mux.HandleFunc("GET /user/teams", reply([]map[string]any{{"slug": "eng", "organization": map[string]string{"login": "acme"}}}))
+	mux.HandleFunc("GET /user/teams", func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		page = max(page, 1)
+
+		teams := []map[string]any{}
+
+		for i := (page - 1) * 100; i < min(page*100, n); i++ {
+			slug := "eng"
+			if i > 0 {
+				slug = "team-" + strconv.Itoa(i)
+			}
+
+			teams = append(teams, map[string]any{"slug": slug, "organization": map[string]string{"login": "acme"}})
+		}
+
+		if page*100 < n {
+			w.Header().Set("Link", `<`+githubAPI+`/user/teams?per_page=100&page=`+strconv.Itoa(page+1)+`>; rel="next", <`+githubAPI+`/user/teams?per_page=100&page=99>; rel="last"`)
+		}
+
+		reply(teams)(w, r)
+	})
 
 	fake := httptest.NewServer(mux)
 	t.Cleanup(fake.Close)
@@ -201,5 +226,72 @@ func assertAlexRecorded(t *testing.T, accounts store.Accounts) {
 	user, found, err := accounts.FindUser(t.Context(), "github:alex")
 	if err != nil || !found || user.AccountID != "7" || user.Email != "alex@acme.dev" || strings.Join(user.Groups, ",") != "acme/eng" || strings.Join(user.Organizations, ",") != "acme" {
 		t.Errorf("FindUser = %+v, %v, %v; want alex with acme and acme/eng", user, found, err)
+	}
+}
+
+func githubSignInServer(t *testing.T, teams int) (*Server, store.Accounts) {
+	t.Helper()
+
+	_, pipeline := testPipeline(t)
+
+	accounts, err := sqlite.OpenAccounts(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("OpenAccounts: %v", err)
+	}
+
+	t.Cleanup(func() { _ = accounts.Close() })
+
+	server, err := New([]*Pipeline{pipeline}, nil, WithSessions(accounts), WithSignInProviders(GitHubSignIn("client", "secret", "http://steps.example", fakeGitHubTeams(t, teams))), WithRoles(githubRoles(t)))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	return server, accounts
+}
+
+// A rule like !("acme/x" in Groups) fails open for whoever's membership was cut off at a page, so every page is read.
+func TestAUserInMoreThanAPageOfTeamsKeepsThemAll(t *testing.T) {
+	t.Parallel()
+
+	server, accounts := githubSignInServer(t, 101)
+	state, started := startGitHub(t, server)
+
+	rec := browserRequest(t, server, "/auth/github/callback?code=good-code&state="+url.QueryEscape(state), started)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("sign-in = %d", rec.Code)
+	}
+
+	user, _, _ := accounts.FindUser(t.Context(), "github:alex")
+	if len(user.Groups) != 101 || !slices.Contains(user.Groups, "acme/team-100") {
+		t.Errorf("recorded %d groups, want all 101 including acme/team-100", len(user.Groups))
+	}
+}
+
+// Past the page bound the list is unknown, and a sign-in on a guess is the fail-open this refuses.
+func TestSignInFailsWhenTheTeamListNeverEnds(t *testing.T) {
+	t.Parallel()
+
+	server, accounts := githubSignInServer(t, 100*(maxGitHubPages+2))
+	state, started := startGitHub(t, server)
+
+	rec := browserRequest(t, server, "/auth/github/callback?code=good-code&state="+url.QueryEscape(state), started)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("sign-in with an unbounded team list = %d, want refused", rec.Code)
+	}
+
+	if _, found, _ := accounts.FindUser(t.Context(), "github:alex"); found {
+		t.Error("a user with a truncated team list was recorded")
+	}
+}
+
+func TestNextLinkNeverLeavesGitHub(t *testing.T) {
+	t.Parallel()
+
+	if got := nextLink(`<https://evil.example/x>; rel="next"`); got != "" {
+		t.Errorf("followed %q off GitHub with the bearer token", got)
+	}
+
+	if got := nextLink(`<https://api.github.com/user/teams?page=1>; rel="prev", <https://api.github.com/user/teams?page=3>; rel="next"`); got != "https://api.github.com/user/teams?page=3" {
+		t.Errorf("next = %q", got)
 	}
 }

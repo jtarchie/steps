@@ -75,13 +75,18 @@ func (s *Server) handleDecideApproval(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "decision must be approve or reject")
 	}
 
+	reason := c.FormValue("reason")
+	if len(reason) > maxFreeText {
+		return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "the reason is too long")
+	}
+
 	// A decision that no longer matches a pending row is a resubmission — a
 	// double click, or a refresh re-POSTing the form. The first one recorded
 	// the audit trail correctly, so settle on it rather than reporting a 500
 	// for work that succeeded. Any other failure recorded nothing, and a
 	// redirect would tell the person their decision landed while the build
 	// stays parked on it.
-	err = pipeline.Store.DecideApproval(c.Request().Context(), id, status, decidedBy(c), c.FormValue("reason"))
+	err = pipeline.Store.DecideApproval(c.Request().Context(), id, status, decidedBy(c), reason)
 
 	switch {
 	case err == nil:
@@ -122,6 +127,10 @@ func (s *Server) handleAnswerQuestion(c *echo.Context) error {
 
 	if answer == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "an answer is required")
+	}
+
+	if len(answer) > maxFreeText {
+		return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "the answer is too long")
 	}
 
 	// Two failures, and only one of them is the caller's business. A question

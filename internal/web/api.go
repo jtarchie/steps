@@ -248,5 +248,5 @@ func (s *Server) setPaused(c *echo.Context, pause bool) error {
 }
 
 func echoError(err error) error {
-	return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	return echo.NewHTTPError(http.StatusInternalServerError, "internal error").Wrap(err)
 }

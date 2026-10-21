@@ -111,6 +111,7 @@ func TestAControlReturnsOnlyToThisServer(t *testing.T) {
 	for _, probe := range []struct{ sent, want string }{
 		{"/p/demo/runs", "/p/demo/runs"},
 		{"//evil.tld/x", "/p/demo"},
+		{"/%09/evil.tld/x", "/p/demo"},
 		{`/\evil.tld/x`, "/p/demo"},
 		{"https://evil.tld/x", "/p/demo"},
 		{"", "/p/demo"},

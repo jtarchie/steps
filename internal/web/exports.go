@@ -12,6 +12,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -55,7 +56,7 @@ func (s *Server) handleExport(c *echo.Context) error {
 
 	grant, ok := s.bearerGrant(c)
 	if !ok {
-		c.Response().Header().Set(echo.HeaderWWWAuthenticate, `Bearer resource_metadata="`+s.external+`/.well-known/oauth-protected-resource/mcp/x/`+c.Param("pipeline")+`/`+c.Param("export")+`"`)
+		c.Response().Header().Set(echo.HeaderWWWAuthenticate, `Bearer resource_metadata="`+s.external+`/.well-known/oauth-protected-resource/mcp/x/`+url.PathEscape(c.Param("pipeline"))+`/`+url.PathEscape(c.Param("export"))+`"`)
 
 		return echo.ErrUnauthorized
 	}

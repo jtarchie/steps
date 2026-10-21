@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/labstack/echo/v5"
@@ -70,11 +69,9 @@ func GoogleSignIn(clientID, secret, externalURL string, client *http.Client) Sig
 func describeGitHub(ctx context.Context, client *http.Client, user goth.User) (store.User, error) {
 	described := store.User{Actor: actor.Actor{Kind: "github", ID: user.NickName}.String(), AccountID: user.UserID, Email: user.Email}
 
-	var orgs []struct {
+	orgs, err := githubList[struct {
 		Login string `json:"login"`
-	}
-
-	err := githubGet(ctx, client, user.AccessToken, "/user/orgs", &orgs)
+	}](ctx, client, user.AccessToken, "/user/orgs")
 	if err != nil {
 		return store.User{}, err
 	}
@@ -83,14 +80,12 @@ func describeGitHub(ctx context.Context, client *http.Client, user goth.User) (s
 		described.Organizations = append(described.Organizations, org.Login)
 	}
 
-	var teams []struct {
+	teams, err := githubList[struct {
 		Slug         string `json:"slug"`
 		Organization struct {
 			Login string `json:"login"`
 		} `json:"organization"`
-	}
-
-	err = githubGet(ctx, client, user.AccessToken, "/user/teams", &teams)
+	}](ctx, client, user.AccessToken, "/user/teams")
 	if err != nil {
 		return store.User{}, err
 	}
@@ -102,17 +97,47 @@ func describeGitHub(ctx context.Context, client *http.Client, user goth.User) (s
 	return described, nil
 }
 
-// githubAPI is GitHub's API root; goth's own requests use the same host.
-const githubAPI = "https://api.github.com"
+const (
+	// githubAPI is GitHub's API root; goth's own requests use the same host.
+	githubAPI = "https://api.github.com"
+	// maxGitHubPages bounds a list at 2000 entries; past it the sign-in fails, because a membership cut short makes a `!("x" in Groups)` rule pass for somebody it should stop.
+	maxGitHubPages = 20
+	// githubTimeout bounds the whole lookup, since the default client has none.
+	githubTimeout = 30 * time.Second
+)
 
-func githubGet(ctx context.Context, client *http.Client, token, path string, into any) error {
+// githubList reads every page of a list, following Link rel=next.
+func githubList[T any](ctx context.Context, client *http.Client, token, path string) ([]T, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: githubTimeout}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubAPI+path+"?per_page=100", nil)
+	var all []T
+
+	next := githubAPI + path + "?per_page=100"
+
+	for range maxGitHubPages {
+		page, link, err := githubPage[T](ctx, client, token, path, next)
+		if err != nil {
+			return nil, err
+		}
+
+		all = append(all, page...)
+
+		if link == "" {
+			return all, nil
+		}
+
+		next = link
+	}
+
+	return nil, fmt.Errorf("github %s: more than %d pages", path, maxGitHubPages)
+}
+
+func githubPage[T any](ctx context.Context, client *http.Client, token, path, target string) ([]T, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return fmt.Errorf("github %s: %w", path, err)
+		return nil, "", fmt.Errorf("github %s: %w", path, err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -120,21 +145,40 @@ func githubGet(ctx context.Context, client *http.Client, token, path string, int
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("github %s: %w", path, err)
+		return nil, "", fmt.Errorf("github %s: %w", path, err)
 	}
 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("github %s: %s", path, resp.Status)
+		return nil, "", fmt.Errorf("github %s: %s", path, resp.Status)
 	}
 
-	err = json.NewDecoder(resp.Body).Decode(into)
+	var page []T
+
+	err = json.NewDecoder(resp.Body).Decode(&page)
 	if err != nil {
-		return fmt.Errorf("github %s: %w", path, err)
+		return nil, "", fmt.Errorf("github %s: %w", path, err)
 	}
 
-	return nil
+	return page, nextLink(resp.Header.Get("Link")), nil
+}
+
+// nextLink is the rel="next" target of a Link header, and only if it stays on GitHub's API: the bearer token goes wherever this points.
+func nextLink(header string) string {
+	for part := range strings.SplitSeq(header, ",") {
+		target, params, _ := strings.Cut(strings.TrimSpace(part), ";")
+		if !strings.Contains(params, `rel="next"`) {
+			continue
+		}
+
+		target = strings.Trim(strings.TrimSpace(target), "<>")
+		if strings.HasPrefix(target, githubAPI+"/") {
+			return target
+		}
+	}
+
+	return ""
 }
 
 func describeGoogle(_ context.Context, _ *http.Client, user goth.User) (store.User, error) {
@@ -180,7 +224,6 @@ type pendingSignIn struct {
 	provider string
 	session  string
 	next     string
-	expires  time.Time
 }
 
 const (
@@ -190,39 +233,7 @@ const (
 	signInCookie = "steps_signin"
 )
 
-type pendingSignIns struct {
-	mu      sync.Mutex
-	entries map[string]pendingSignIn
-}
-
-func (p *pendingSignIns) put(state string, entry pendingSignIn) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.entries == nil {
-		p.entries = map[string]pendingSignIn{}
-	}
-
-	now := time.Now()
-	for key, old := range p.entries {
-		if now.After(old.expires) {
-			delete(p.entries, key)
-		}
-	}
-
-	p.entries[state] = entry
-}
-
-// take is single-use: a state answered once cannot be answered again.
-func (p *pendingSignIns) take(state string) (pendingSignIn, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	entry, found := p.entries[state]
-	delete(p.entries, state)
-
-	return entry, found && time.Now().Before(entry.expires)
-}
+type pendingSignIns = ttlMap[pendingSignIn]
 
 // handleSignInStart sends the browser to the provider.
 func (s *Server) handleSignInStart(c *echo.Context) error {
@@ -245,7 +256,7 @@ func (s *Server) handleSignInStart(c *echo.Context) error {
 		return echoError(err)
 	}
 
-	s.pending.put(state, pendingSignIn{provider: provider.Name, session: session.Marshal(), next: safeNext(c.QueryParam("next")), expires: time.Now().Add(signInWait)})
+	s.pending.put(state, pendingSignIn{provider: provider.Name, session: session.Marshal(), next: safeNext(c.QueryParam("next"))}, time.Now().Add(signInWait))
 
 	// The state is also this browser's: a callback link somebody else started and sent here would otherwise sign this browser in as them.
 	c.SetCookie(&http.Cookie{ //nolint:gosec // Secure is servedOverTLS, as the session cookie

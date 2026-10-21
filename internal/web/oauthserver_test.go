@@ -395,8 +395,8 @@ func TestPendingAuthIsSafeFromItsFirstUse(t *testing.T) {
 		wg      sync.WaitGroup
 	)
 
-	wg.Go(func() { pending.put(&pending.consents, "asked", authRequest{expires: time.Now().Add(time.Minute)}) })
-	wg.Go(func() { _, _ = pending.take(&pending.consents, "asked") })
+	wg.Go(func() { pending.consents.put("asked", authRequest{}, time.Now().Add(time.Minute)) })
+	wg.Go(func() { _, _ = pending.consents.take("asked") })
 	wg.Wait()
 }
 

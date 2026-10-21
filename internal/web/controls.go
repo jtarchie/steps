@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -200,7 +199,7 @@ func (s *Server) setPausedFromPage(c *echo.Context, pause bool) error {
 // "//" is a URL with a host (browsers read //evil.tld as absolute) and so is one starting "/\", since a browser folds that backslash to a slash before it reads the authority — which is how a redirect to a page's own referrer becomes a redirect off it.
 func returnTo(c *echo.Context, fallback string) string {
 	to := c.FormValue("return")
-	if strings.HasPrefix(to, "/") && !strings.HasPrefix(to, "//") && !strings.HasPrefix(to, `/\`) {
+	if isLocalPath(to) {
 		return to
 	}
 

@@ -32,6 +32,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -59,6 +60,13 @@ const livePollInterval = 400 * time.Millisecond
 //
 //nolint:gochecknoglobals // a test seam; see liveBatch
 var liveIdleTimeout = 5 * time.Minute
+
+// liveRecheckInterval is how often a stream asks again whether its reader may still watch: a stream is authorized once at the door, and a sign-out, a removed account or a narrowed access: rule would otherwise keep receiving a live run until it ends.
+//
+// A variable so a test can shrink it; see liveBatch.
+//
+//nolint:gochecknoglobals // a test seam; see liveBatch
+var liveRecheckInterval = 30 * time.Second
 
 // liveBatch is how many events one read of the stream takes. The stream pages
 // rather than reading a run whole, which is what keeps it working past
@@ -120,6 +128,8 @@ func (s *Server) handleRunEvents(c *echo.Context) error {
 	deadline := time.NewTimer(liveIdleTimeout)
 	defer deadline.Stop()
 
+	lastChecked := time.Now()
+
 	for {
 		before := after
 
@@ -152,7 +162,7 @@ func (s *Server) handleRunEvents(c *echo.Context) error {
 			return nil
 		}
 
-		if !waitForMore(ctx, ticker.C, deadline.C) {
+		if !s.waitForMore(c, ticker.C, deadline.C, &lastChecked) {
 			return nil
 		}
 
@@ -177,6 +187,29 @@ func (s *Server) handleRunEvents(c *echo.Context) error {
 			return nil
 		}
 	}
+}
+
+// mayStillWatch is authenticate and authorize asked again of a stream already open: the same session, account and role-narrowing questions, with the reader's own cookie.
+func (s *Server) mayStillWatch(c *echo.Context) bool {
+	who, found := s.sessionActor(c)
+	if !found {
+		username, password, sent := c.Request().BasicAuth()
+		if !sent || !s.auth.matches(username, password) {
+			return false
+		}
+
+		who = actor.Local(username)
+	}
+
+	ctx := c.Request().Context()
+	id := s.identityOf(ctx, who)
+	role := s.roles.highest(id)
+
+	if target := pipelineOf(c); target != nil {
+		role = target.narrow(role, id)
+	}
+
+	return role >= RoleViewer
 }
 
 // requireRun refuses a run this pipeline does not have, before anything has
@@ -229,15 +262,24 @@ func endStream(c *echo.Context, runID string, err error) error {
 // keep going. Silence long enough to trip the deadline ends it without a
 // word — see liveIdleTimeout for why a live reader is better off reconnecting
 // than being told anything.
-func waitForMore(ctx context.Context, tick, deadline <-chan time.Time) bool {
+//
+// A reader who may no longer watch is also ended without a word, like the idle close: their reconnect meets the door and is told why.
+func (s *Server) waitForMore(c *echo.Context, tick, deadline <-chan time.Time, lastChecked *time.Time) bool {
 	select {
-	case <-ctx.Done():
+	case <-c.Request().Context().Done():
 		return false
 	case <-deadline:
 		return false
 	case <-tick:
+	}
+
+	if s.auth == nil || time.Since(*lastChecked) < liveRecheckInterval {
 		return true
 	}
+
+	*lastChecked = time.Now()
+
+	return s.mayStillWatch(c)
 }
 
 // openStream puts the response into server-sent-event mode.

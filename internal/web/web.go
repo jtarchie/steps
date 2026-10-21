@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
@@ -66,6 +67,16 @@ const readHeaderTimeout = 5 * time.Second
 
 // maxUploadSize bounds a `steps pipeline set`. It is the only unauthenticated write this server takes, and what it holds is buffered whole and then written into TEXT columns retention cannot reap while they are the current revision — every other free-text column here already declares a cap.
 const maxUploadSize int64 = 8 << 20
+
+// maxBodySize bounds every other request body: net/http's form parsing would otherwise buffer 10MB per anonymous POST. /api keeps maxUploadSize and a webhook delivery is bounded by the trigger that reads it.
+const maxBodySize int64 = 1 << 20
+
+// maxFreeText bounds the one free-text value a form stores whole: an approval's reason, a question's answer.
+const maxFreeText = 64 << 10
+
+func hasOwnBodyLimit(c *echo.Context) bool {
+	return strings.HasPrefix(c.Request().URL.Path, "/api/") || strings.HasSuffix(c.Path(), "/hooks/:resource")
+}
 
 // shutdownGrace is how long a cancelled daemon waits for the requests it is already answering.
 const shutdownGrace = 5 * time.Second
@@ -427,6 +438,7 @@ func (s *Server) routes() error {
 
 	e.Use(refuseFraming)
 	e.Use(middleware.Recover())
+	e.Use(middleware.BodyLimitWithConfig(middleware.BodyLimitConfig{LimitBytes: maxBodySize, Skipper: hasOwnBodyLimit}))
 
 	// Before auth, so a rebinding page is refused before it is asked for a password it could phish.
 	if s.allowedHosts != nil {
@@ -673,7 +685,7 @@ func (s *Server) handleError(c *echo.Context, err error) {
 	}
 
 	status := http.StatusInternalServerError
-	message := err.Error()
+	message := "internal error"
 
 	var httpErr *echo.HTTPError
 	if errors.As(err, &httpErr) {
@@ -682,6 +694,11 @@ func (s *Server) handleError(c *echo.Context, err error) {
 	} else if code := echo.StatusCode(err); code != 0 {
 		// echo's own status sentinels carry a code and nothing else — an oversized `steps pipeline set` returns ErrStatusRequestEntityTooLarge, which errors.As does not see, and a 413 reported as 500 tells the terminal the daemon broke rather than that its upload was too big.
 		status = code
+	}
+
+	// What a failing layer said is SQL and paths; the log keeps it and the viewer gets the fact.
+	if status >= http.StatusInternalServerError {
+		slog.ErrorContext(c.Request().Context(), "web.request_failed", "method", c.Request().Method, "path", c.Request().URL.Path, "status", status, "error", err)
 	}
 
 	// The API answers a terminal, not a browser, and a page of HTML where a

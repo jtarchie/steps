@@ -354,9 +354,13 @@ func safeURL(destination string) string {
 	trimmed := strings.TrimSpace(destination)
 
 	// A relative link or a fragment names something on this site and carries
-	// no scheme to vet.
-	if trimmed == "" || strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "#") {
+	// no scheme to vet. "//host" is not relative, it is a link off the site.
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") || isLocalPath(trimmed) {
 		return trimmed
+	}
+
+	if strings.HasPrefix(trimmed, "/") {
+		return ""
 	}
 
 	parsed, err := url.Parse(trimmed)
