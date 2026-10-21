@@ -16,6 +16,38 @@ func mustParse(t *testing.T, text string) profile {
 	return p
 }
 
+func TestAnEmptyTestListingIsAnError(t *testing.T) {
+	t.Parallel()
+
+	_, err := listedTests("\n")
+	if err == nil {
+		t.Fatal("no tests listed: want an error, not an attribution of nothing")
+	}
+}
+
+func TestASkippedTestIsNotEvidenceForDeletingIt(t *testing.T) {
+	t.Parallel()
+
+	if !skippedTop("=== RUN   TestDocker\n--- SKIP: TestDocker (0.00s)\n    x_test.go:9: no daemon\nPASS\n", "TestDocker") {
+		t.Fatal("a top-level --- SKIP line was not recognised")
+	}
+
+	if skippedTop("--- PASS: TestDocker (0.00s)\n    --- SKIP: TestDocker/sub (0.00s)\n", "TestDocker") {
+		t.Fatal("a skipped subtest marked its passing parent as skipped")
+	}
+
+	report := attribute(mustParse(t, "mode: set\n"), map[string]profile{"TestDocker": mustParse(t, "mode: set\n")},
+		map[string]float64{"TestDocker": 1}, map[string]bool{"TestDocker": true})
+
+	var out strings.Builder
+
+	report.print(&out)
+
+	if !strings.Contains(out.String(), "0 of 1 e2e tests execute nothing") || !strings.Contains(out.String(), "SKIPPED themselves") || !strings.Contains(out.String(), "TestDocker") {
+		t.Errorf("report = %q, want the skipped test named apart from the 'executes nothing' count", out.String())
+	}
+}
+
 // The three answers that matter: a block the package tests execute is nobody's; a block only one e2e test executes is that test's alone; a block two do is e2e-only but unique to neither.
 func TestAttributeSeparatesPackageSharedAndUniqueBlocks(t *testing.T) { //nolint:cyclop // one check per answer the attribution gives
 	t.Parallel()
@@ -39,7 +71,7 @@ github.com/jtarchie/steps/internal/b/b.go:1.1,2.1 7 1
 `),
 	}
 
-	report := attribute(pkg, tests, map[string]float64{"TestOne": 2, "TestTwo": 1})
+	report := attribute(pkg, tests, map[string]float64{"TestOne": 2, "TestTwo": 1}, nil)
 
 	if report.Statements != 26 || report.PkgCovered != 3 || report.E2EOnly != 12 || report.BothCovered != 15 {
 		t.Fatalf("totals = %+v, want 26 statements, 3 package, 12 e2e-only, 15 either", report)

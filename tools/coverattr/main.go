@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -54,7 +55,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 
-	seconds, err := profileE2E(ctx, abs, *parallel)
+	seconds, skipped, err := profileE2E(ctx, abs, *parallel)
 	if err != nil {
 		return err
 	}
@@ -64,7 +65,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 
-	report := attribute(pkg, tests, seconds)
+	report := attribute(pkg, tests, seconds, skipped)
 	report.print(out)
 
 	encoded, err := json.MarshalIndent(report, "", " ")
@@ -103,7 +104,7 @@ func profilePackages(ctx context.Context, dir string) error {
 }
 
 // profileE2E runs each top-level e2e test alone in a process, from one binary built with coverage, and answers how long each took.
-func profileE2E(ctx context.Context, dir string, parallel int) (map[string]float64, error) {
+func profileE2E(ctx context.Context, dir string, parallel int) (map[string]float64, map[string]bool, error) {
 	binary := filepath.Join(dir, "e2e.test")
 
 	build := exec.CommandContext(ctx, "go", "test", "-c", "-cover", "-coverpkg=./internal/...", "-o", binary, "./e2e") //nolint:gosec // a path under the output directory
@@ -111,7 +112,7 @@ func profileE2E(ctx context.Context, dir string, parallel int) (map[string]float
 
 	err := build.Run()
 	if err != nil {
-		return nil, fmt.Errorf("building e2e: %w", err)
+		return nil, nil, fmt.Errorf("building e2e: %w", err)
 	}
 
 	listing := exec.CommandContext(ctx, binary, "-test.list", "^Test") //nolint:gosec // the binary just built
@@ -119,14 +120,18 @@ func profileE2E(ctx context.Context, dir string, parallel int) (map[string]float
 
 	out, err := listing.Output()
 	if err != nil {
-		return nil, fmt.Errorf("listing e2e tests: %w", err)
+		return nil, nil, fmt.Errorf("listing e2e tests: %w", err)
 	}
 
-	names := strings.Fields(string(out))
+	names, err := listedTests(string(out))
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var (
 		mu       sync.Mutex
 		seconds  = map[string]float64{}
+		skipped  = map[string]bool{}
 		failures []string
 		wg       sync.WaitGroup
 	)
@@ -144,7 +149,7 @@ func profileE2E(ctx context.Context, dir string, parallel int) (map[string]float
 			start := time.Now()
 
 			//nolint:gosec // a binary this command just built, running a test it listed
-			test := exec.CommandContext(ctx, binary, "-test.run", "^"+name+"$", "-test.count=1",
+			test := exec.CommandContext(ctx, binary, "-test.run", "^"+name+"$", "-test.count=1", "-test.v",
 				"-test.coverprofile="+filepath.Join(dir, "prof", name+".out"))
 			test.Dir = "e2e"
 			output, runErr := test.CombinedOutput()
@@ -153,6 +158,7 @@ func profileE2E(ctx context.Context, dir string, parallel int) (map[string]float
 			defer mu.Unlock()
 
 			seconds[name] = time.Since(start).Seconds()
+			skipped[name] = skippedTop(string(output), name)
 
 			if runErr != nil {
 				failures = append(failures, name+":\n"+string(output))
@@ -164,10 +170,24 @@ func profileE2E(ctx context.Context, dir string, parallel int) (map[string]float
 
 	if len(failures) > 0 {
 		// A failing test's profile is what it reached before failing, which is not what it covers.
-		return nil, fmt.Errorf("%d e2e tests failed:\n%s", len(failures), strings.Join(failures, "\n"))
+		return nil, nil, fmt.Errorf("%d e2e tests failed:\n%s", len(failures), strings.Join(failures, "\n"))
 	}
 
-	return seconds, nil
+	return seconds, skipped, nil
+}
+
+func listedTests(listing string) ([]string, error) {
+	names := strings.Fields(listing)
+	if len(names) == 0 {
+		return nil, errors.New("the e2e binary listed no tests, so there is nothing to attribute")
+	}
+
+	return names, nil
+}
+
+// skippedTop reports a test that skipped itself (no docker daemon, say): it exits 0 with an empty profile, which looks exactly like a test that executes nothing.
+func skippedTop(output, name string) bool {
+	return strings.Contains("\n"+output, "\n--- SKIP: "+name+" (")
 }
 
 // readProfiles reads back the package tests' profile and each e2e test's.
@@ -253,6 +273,7 @@ type Test struct {
 	Seconds float64        `json:"seconds"`
 	E2EOnly int            `json:"e2e_only"`
 	Unique  int            `json:"unique"`
+	Skipped bool           `json:"skipped,omitempty"`
 	Where   map[string]int `json:"where,omitempty"`
 }
 
@@ -268,7 +289,7 @@ type Report struct {
 }
 
 // attribute compares what the package tests executed with what each e2e test did.
-func attribute(pkg profile, tests map[string]profile, seconds map[string]float64) Report {
+func attribute(pkg profile, tests map[string]profile, seconds map[string]float64, skipped map[string]bool) Report {
 	statements := map[string]int{}
 	for block, n := range pkg.statements {
 		statements[block] = n
@@ -307,7 +328,7 @@ func attribute(pkg profile, tests map[string]profile, seconds map[string]float64
 
 	sort.Slice(report.Blocks, func(i, j int) bool { return report.Blocks[i].Block < report.Blocks[j].Block })
 
-	report.Tests = testRows(pkg, tests, seconds, statements, holders)
+	report.Tests = testRows(pkg, tests, seconds, skipped, statements, holders)
 
 	sort.Slice(report.Tests, func(i, j int) bool {
 		if report.Tests[i].Unique != report.Tests[j].Unique {
@@ -321,11 +342,11 @@ func attribute(pkg profile, tests map[string]profile, seconds map[string]float64
 }
 
 // testRows is each e2e test's share: what only e2e executes that it does, and of that, what no other e2e test does.
-func testRows(pkg profile, tests map[string]profile, seconds map[string]float64, statements map[string]int, holders map[string][]string) []Test {
+func testRows(pkg profile, tests map[string]profile, seconds map[string]float64, skipped map[string]bool, statements map[string]int, holders map[string][]string) []Test {
 	rows := make([]Test, 0, len(tests))
 
 	for name, test := range tests {
-		row := Test{Name: name, Seconds: seconds[name], Where: map[string]int{}}
+		row := Test{Name: name, Seconds: seconds[name], Skipped: skipped[name], Where: map[string]int{}}
 
 		for block := range test.covered {
 			if pkg.covered[block] {
@@ -371,8 +392,16 @@ func (r Report) print(out io.Writer) {
 
 	var none, noneSeconds, total float64
 
+	var skipped []string
+
 	for _, test := range r.Tests {
 		total += test.Seconds
+
+		if test.Skipped {
+			skipped = append(skipped, test.Name)
+
+			continue
+		}
 
 		if test.Unique == 0 {
 			none++
@@ -382,6 +411,12 @@ func (r Report) print(out io.Writer) {
 
 	_, _ = fmt.Fprintf(out, "\n%.0f of %d e2e tests execute nothing no other test does (%.0fs of %.0fs). Executing is not asserting: `mutants judge` says which of them notice a change.\n",
 		none, len(r.Tests), noneSeconds, total)
+
+	if len(skipped) > 0 {
+		sort.Strings(skipped)
+
+		_, _ = fmt.Fprintf(out, "%d e2e tests SKIPPED themselves (no docker daemon?) and are NOT evidence for deleting anything: %s\n", len(skipped), strings.Join(skipped, ", "))
+	}
 
 	for _, test := range r.Tests {
 		if test.Unique == 0 {
