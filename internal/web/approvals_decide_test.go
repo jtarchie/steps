@@ -69,3 +69,40 @@ func TestDecideApprovalSettlesOnlyOnAResubmission(t *testing.T) {
 		t.Errorf("a decision the store failed to record = %d, want 500", code)
 	}
 }
+
+// TestDecideApprovalRequiresAnExplicitDecision: only "approve" approves. A POST with no decision, or one garbled in transit, used to fall through to approve and release the gated step.
+func TestDecideApprovalRequiresAnExplicitDecision(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	_, pipeline := testPipeline(t)
+
+	server, err := New([]*Pipeline{pipeline}, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	id, err := pipeline.Store.RequestApproval(ctx, "build", "ship it?")
+	if err != nil {
+		t.Fatalf("RequestApproval: %v", err)
+	}
+
+	for _, form := range []map[string]string{{}, {"decision": ""}, {"decision": "Approve"}, {"decision": "garbage"}} {
+		if code := post(t, server, "/p/demo/approvals/1", form); code != http.StatusBadRequest {
+			t.Errorf("form %v = %d, want 400", form, code)
+		}
+
+		if got, _ := pipeline.Store.ApprovalStatus(ctx, id); got.Status != store.ApprovalPending {
+			t.Fatalf("form %v decided the approval: %q", form, got.Status)
+		}
+	}
+
+	if code := post(t, server, "/p/demo/approvals/1", map[string]string{"decision": "reject"}); code != http.StatusSeeOther {
+		t.Fatalf("reject = %d", code)
+	}
+
+	if got, _ := pipeline.Store.ApprovalStatus(ctx, id); got.Status != store.ApprovalRejected {
+		t.Errorf("status = %q, want rejected", got.Status)
+	}
+}

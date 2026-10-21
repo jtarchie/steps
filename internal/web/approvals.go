@@ -64,9 +64,15 @@ func (s *Server) handleDecideApproval(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "approval id must be a number")
 	}
 
-	status := store.ApprovalApproved
-	if c.FormValue("decision") == "reject" {
+	var status store.ApprovalStatus
+
+	switch c.FormValue("decision") {
+	case "approve":
+		status = store.ApprovalApproved
+	case "reject":
 		status = store.ApprovalRejected
+	default:
+		return echo.NewHTTPError(http.StatusBadRequest, "decision must be approve or reject")
 	}
 
 	// A decision that no longer matches a pending row is a resubmission — a
