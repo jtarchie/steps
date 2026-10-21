@@ -185,12 +185,42 @@ func (c *Client) RunOnce(ctx context.Context, spec ContainerSpec) (int, string, 
 	}
 	defer func() { _ = logs.Close() }()
 
-	var stdout, stderr strings.Builder
+	stdout, stderr := &cappedBuffer{}, &cappedBuffer{}
 
-	_, err = stdcopy.StdCopy(&stdout, &stderr, logs)
+	_, err = stdcopy.StdCopy(stdout, stderr, logs)
 	if err != nil {
 		return code, "", "", fmt.Errorf("reading container %s's output: %w", id, err)
 	}
 
 	return code, strings.TrimSpace(stdout.String()), stderr.String(), nil
+}
+
+// runOnceOutputCap bounds each of RunOnce's streams: the output is whatever the image chooses to print, and the one caller reads a digest from the first line, so truncating (with a marker) loses nothing it parses.
+const runOnceOutputCap = 1 << 20
+
+// cappedBuffer keeps the first runOnceOutputCap bytes and swallows the rest, reporting full writes so the log stream is still drained rather than failed with a short write.
+type cappedBuffer struct {
+	buf       strings.Builder
+	truncated bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+
+	room := runOnceOutputCap - b.buf.Len()
+	if len(p) > room {
+		p, b.truncated = p[:room], true
+	}
+
+	_, _ = b.buf.Write(p)
+
+	return n, nil
+}
+
+func (b *cappedBuffer) String() string {
+	if b.truncated {
+		return b.buf.String() + "\n[output truncated at 1 MiB]"
+	}
+
+	return b.buf.String()
 }
