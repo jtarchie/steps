@@ -41,8 +41,8 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env too
 // budget, the call is rejected as ordinary tool-result data — never executed,
 // since the budget's whole point is bounding side effects — so the model sees
 // the rejection and can react on its next turn instead of the attempt
-// aborting. A successful dispatch increments the counter; a rejected one does
-// not (it's already at the ceiling). Tools absent from maxCalls are
+// aborting. Every dispatch increments the counter, success or not; a rejected one
+// does not (it's already at the ceiling). Tools absent from maxCalls are
 // unlimited.
 //
 // Every call (budget-rejected or dispatched) is bracketed by a debug-level

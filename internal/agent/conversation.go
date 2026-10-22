@@ -36,8 +36,8 @@ type recordedToolCall struct {
 	// (see markTrajectoryResults), so it is false for a call that failed or
 	// was rejected by a max_calls: budget without ever running. Trajectory
 	// CONSUMERS differ on whether they want it: assert.tool_calls judges what
-	// the model chose, success or not, while a handoff note's computed
-	// files-touched section must list only what genuinely happened.
+	// the model chose, success or not, while the computed
+	// files-touched summary must list only what genuinely happened.
 	ok bool
 }
 
@@ -94,17 +94,7 @@ type conversationResult struct {
 // resumeCheckpoint is a conversation's position, carried from one source to
 // the next when the mid-run fallback: cascade (failover.go) swaps sources.
 //
-// It is ONE struct rather than a set of parallel resume*/end* field pairs
-// because every field here was added the same way: something turned out not
-// to survive a swap, and the fix was another pair threaded through
-// agentConversation, conversationResult, seedResumeState, every
-// conversationResult literal in runConversationLoop, and failover.go's copy
-// block. Each omission was a real bug — a required tool re-firing its side
-// effect, a budgeted tool getting a fresh allowance per source, a turn
-// ceiling multiplying by the length of the fallback list. Grouping them means
-// the next thing a conversation must remember is added in one place and
-// carried by construction, instead of relying on five call sites being
-// updated together.
+// One struct so whatever a conversation must remember across a swap is carried by construction: each omission was a real bug (a required tool re-firing its side effect, a fresh budget allowance per source, a turn ceiling multiplied by the fallback list length).
 type resumeCheckpoint struct {
 	// contents is the request's accumulated message history. Seeding a
 	// request with it verbatim (see buildAgentRequest) is what makes a swap a
@@ -189,8 +179,7 @@ type agentConversation struct {
 	expect stepExpectation
 	// compactAfterTokens caps req.Contents' estimated size before older turns
 	// are summarized away and replaced by a running summary — see maybeCompact
-	// in compaction.go. 0 disables compaction entirely: the turn loop then
-	// behaves exactly as it did before this field existed.
+	// in compaction.go. 0 disables compaction entirely.
 	compactAfterTokens int
 	// usage tallies the provider's own reported token counts across this
 	// conversation and enforces the agent's per-invocation budget: (see
@@ -332,10 +321,10 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 // It runs ONCE per step. Nothing restarts it: attempts: retries the failing
 // REQUEST (see llmclient/requests.go), so a transient fault is absorbed without losing a
 // single accumulated turn. A tool failure, required or not, is handed back
-// into this same conversation as data and is never a reason to abort. That
-// also retires a real hazard — a restart used to re-invoke tool calls whose
-// side effects had already happened (posting a PR review, say), because the
-// workspace survived the restart while the memory did not.
+// into this same conversation as data and is never a reason to abort. A
+// restart would re-invoke tool calls whose side effects already happened
+// (posting a PR review, say), because the workspace survives while the memory
+// does not.
 //
 // If the model tries to stop without every required tool having succeeded
 // (exit_code 0 — a failed call doesn't count, and the model already saw why
@@ -459,9 +448,7 @@ const unlimitedBudget = -1.0
 // maxIgnoredForces is how many turns in a row the model may answer with text
 // while a forced tool call goes unmade before the attempt is failed.
 //
-// It costs a capped step nothing but wasted turns: the verdict at the end of
-// the old path was the same task-level failure naming the same unsatisfied
-// tools, just reached thirty turns later. Five matches loopDetectionMaxRepeats
+// Five matches loopDetectionMaxRepeats
 // on the same premise — a model that has declined an API-level constraint five
 // consecutive times is not about to comply on the sixth — and any tool call at
 // all resets it, so a model that stalls once and then complies is unaffected.
@@ -530,8 +517,8 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// anyway. The detector cannot see these: it hashes tool INTERACTIONS, and
 	// a turn with no tool call produces none — so this is the only thing
 	// standing between a provider that disregards tool_choice and a loop that
-	// never ends. max_turns used to be that backstop, which stopped being true
-	// the moment max_turns: 0 became expressible.
+	// never ends. max_turns is no longer a backstop, since max_turns: 0
+	// is expressible.
 	ignoredForces := 0
 
 	// budget is fixed before the loop so the sentinel is compared, not
@@ -688,9 +675,8 @@ func (conv agentConversation) handleStopAttempt(
 // forcingIsGoingNowhere ends an attempt whose model has answered with text
 // through maxIgnoredForces consecutive forced tool calls. nil means carry on.
 //
-// The failure is task-level, matching what the turn cap used to produce on
-// this same path — the conversation ran and did not finish its task, which is
-// not an infrastructure fault.
+// The failure is task-level: the conversation ran and did not finish its
+// task, which is not an infrastructure fault.
 func (conv agentConversation) forcingIsGoingNowhere(ignored int, satisfied map[string]bool) error {
 	if ignored < maxIgnoredForces {
 		return nil
@@ -733,9 +719,8 @@ func (conv agentConversation) outOfTurns(
 	// request, or a token ceiling breached by it, is infrastructure — it has to
 	// stay unmarked so it classifies as `errored` and fires on_error, exactly
 	// as the identical failure would one turn earlier inside the loop. Wrapping
-	// it in outcome.Fail below (which is what "err == nil &&" used to fall
-	// through to) reported a provider outage as a task-level failure, and threw
-	// away the cause with it.
+	// it in outcome.Fail below would report a provider outage as a task-level
+	// failure and throw away the cause.
 	if err != nil {
 		slog.WarnContext(ctx, "agent.turns_exhausted_wrapup_failed", "max_turns", conv.maxTurns, "error", err)
 

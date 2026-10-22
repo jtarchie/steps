@@ -96,7 +96,7 @@ const upstreamHeader = "What an earlier step of this run decided. " +
 // Absence is deliberately not an error. A reader that runs BEFORE its sender —
 // the writer at the top of a revise loop, whose critic has not judged anything
 // yet — gets nothing on the first pass and the critic's verdict on every pass
-// after. That is the same "routed entry only" behaviour handoff: had, arrived
+// after. That is the same "routed entry only" behaviour, arrived
 // at by asking whether the sender has run rather than by inspecting the route.
 func RenderUpstream(name string, level config.FromLevel, up Upstream) string {
 	if up.Verdict == "" {

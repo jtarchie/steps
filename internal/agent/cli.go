@@ -40,8 +40,8 @@ const cliWaitDelay = 5 * time.Second
 
 // runCLIConversation runs a prepared agent step as a CLI subprocess, once per
 // attempt, and returns the same conversationResult an HTTP conversation would
-// have produced — so everything downstream (asserts, routing, recording,
-// handoff) is unaware which one ran.
+// have produced — so everything downstream (asserts, routing, recording)
+// is unaware which one ran.
 //
 // attempts: means something different here than it does on the HTTP path,
 // where it retries an individual request beneath a conversation that survives
@@ -50,12 +50,9 @@ const cliWaitDelay = 5 * time.Second
 // same session rather than starting the task over.
 //
 // That distinction is the whole point, and it is not a cost optimization.
-// `attempts:` used to restart an agent's conversation on the hosted path too,
-// and was deliberately removed (see llmclient/requests.go and commit "attempts: meant
-// two different things on task vs agent"): the workspace survived a restart
-// but the memory did not, so a retried attempt inherited its own half-finished
-// edits with no recollection of making them. A CLI agent has exactly that
-// problem — more of it, since it edits more — so it gets exactly that fix.
+// A restart would keep the workspace but lose the memory, so a retried attempt
+// would inherit its own half-finished edits with no recollection of making
+// them; resuming the session avoids that.
 //
 // Only INFRASTRUCTURE failures are retried either way: a CLI that ran and
 // decided the task failed gets its answer respected, not re-rolled —
@@ -98,10 +95,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		return conversationResult{}, fmt.Errorf("agent %q: %w", prepared.ri.AgentName, err)
 	}
 
-	// The CLI is always a host subprocess now (see cliexec.go), so its
-	// transcript always lands under the host's own ~/.claude and
-	// cleanupCLISession always applies — there is no containerized $HOME to
-	// clean up instead.
+	// The CLI is always a host subprocess (see cliexec.go), so its transcript lands under the host's ~/.claude.
 	defer cleanupCLISession(session)
 
 	// One state for the whole step, not one per attempt: the attempts share a
@@ -310,10 +304,9 @@ func runCLIRounds(
 // markDelivered records that the child has had the message, once it actually
 // has.
 //
-// Composing the prompt used to record it, which meant a failure BEFORE
-// delivery — the bridge config, a pipe, the spawn itself — left the retry
-// telling the child to continue a question it never received, and the step
-// reported success having silently skipped that message.
+// Recording at prompt-composition time would let a failure BEFORE delivery
+// (bridge config, a pipe, the spawn) make the retry tell the child to continue
+// a question it never received, silently skipping that message.
 //
 // Erring the other way is the safe direction: a delivery this fails to record
 // is re-asked, which the child can see and handle. A question dropped is a
@@ -352,10 +345,8 @@ func recordCLIOpening(prepared preparedAgentStep, plan cliAttempt) {
 // (pendingCLIMessage), a "your previous attempt did not finish" continuation
 // after a dead attempt, or a files-nudge. All three are prompt text the child
 // is actually told and none of them was ever gated for the same reason
-// pendingCLIMessage isn't — this used to gate on `pending` alone, which is
-// true only for the first case, so the transcript recorded system/opening
-// and any real messages:, but never the continuation or nudge text the
-// child's OWN recorded reply was actually answering.
+// pendingCLIMessage isn't; gating on `pending` alone would drop the
+// continuation and nudge text the child's recorded reply was answering.
 //
 // Gated on success for the same reason markDelivered is: a failed attempt's
 // prompt is retried, and recording it before delivery succeeds would leave a
@@ -752,9 +743,8 @@ func newCLISessionID() (string, error) {
 // cleanupCLISession removes the transcript the CLI persisted for this step.
 //
 // Persistence has to stay on — it is what makes a retry able to resume — but a
-// pipeline should not silently accumulate a dead session file per agent step
-// in the operator's home directory, which is what happened before this
-// existed. Matching on the session id we minted rather than on a derived
+// pipeline should not accumulate a dead session file per agent step in the
+// operator's home directory. Matching on the session id we minted rather than on a derived
 // directory name keeps the deletion precise: the only file that can match is
 // one this step created, whatever layout the CLI uses around it.
 //
