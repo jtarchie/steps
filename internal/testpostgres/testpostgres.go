@@ -2,6 +2,7 @@
 package testpostgres
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -21,6 +22,9 @@ import (
 
 // ErrUnavailable means the server's binaries could not be had (the first run on a machine downloads them), which a caller treats as a skip. Anything else Start returns is a failure.
 var ErrUnavailable = errors.New("postgres binaries unavailable")
+
+// RequireEnv names the variable that, set to 1, turns unobtainable binaries from a skip into a failure, for a run that must not pass by not testing Postgres.
+const RequireEnv = "STEPS_REQUIRE_POSTGRES"
 
 // Fast trades durability for speed, for tests whose database dies with the run. A measurement leaves it out: Postgres' own defaults are what an operator gets.
 var Fast = map[string]string{
@@ -54,18 +58,42 @@ func (s *Server) URL() string {
 // workRoot holds one directory per test process, named by pid so a later run can tell a dead process's server from a live one's.
 func workRoot() string { return filepath.Join(os.TempDir(), "steps-testpg") }
 
-// Start sweeps first because a run killed outright never reached its own Stop.
+// startDB is a seam so a test can simulate a failed fetch or a taken port without depending on the machine's binaries.
+var startDB = func(db *embeddedpostgres.EmbeddedPostgres) error { return db.Start() }
+
+// startAttempts bounds the retry for a port that was free when probed and taken before Postgres bound it.
+const startAttempts = 3
+
+// Start sweeps first because a run killed outright never reached its own Stop. With STEPS_REQUIRE_POSTGRES=1 unobtainable binaries are a failure rather than an ErrUnavailable skip.
 func Start(settings map[string]string) (*Server, error) {
 	sweep()
 
-	listener, err := (&net.ListenConfig{}).Listen(nil, "tcp", "127.0.0.1:0") //nolint:staticcheck // no context to give a test fixture's port probe
+	var err error
+
+	for range startAttempts {
+		var server *Server
+
+		server, err = startOnce(settings)
+		if err == nil {
+			return server, nil
+		}
+
+		if !strings.Contains(strings.ToLower(err.Error()), "address already in use") {
+			return nil, err
+		}
+	}
+
+	return nil, err
+}
+
+func startOnce(settings map[string]string) (*Server, error) {
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("finding a port for the test postgres: %w", err)
 	}
 
 	host := listener.Addr().String()
 	_ = listener.Close()
-
 	_, portText, _ := net.SplitHostPort(host)
 
 	port, err := strconv.ParseUint(portText, 10, 32)
@@ -75,7 +103,6 @@ func Start(settings map[string]string) (*Server, error) {
 
 	root := filepath.Join(workRoot(), strconv.Itoa(os.Getpid()))
 	password := rand.Text()
-
 	db := embeddedpostgres.NewDatabase(embeddedpostgres.DefaultConfig().
 		Version(embeddedpostgres.V17).
 		Port(uint32(port)).
@@ -86,11 +113,15 @@ func Start(settings map[string]string) (*Server, error) {
 		StartTimeout(3 * time.Minute).
 		Logger(io.Discard))
 
-	err = db.Start()
+	err = startDB(db)
 	if err != nil {
 		_ = os.RemoveAll(root)
 
 		if strings.Contains(err.Error(), "unable to connect to") || strings.Contains(err.Error(), "error fetching postgres") {
+			if os.Getenv(RequireEnv) == "1" {
+				return nil, fmt.Errorf("%s=1 but the postgres binaries are unavailable: %w", RequireEnv, err)
+			}
+
 			return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
 
