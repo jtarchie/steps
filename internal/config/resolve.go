@@ -322,6 +322,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		return ResolvedInvocation{}, err
 	}
 
+	// Not redundant with validateReasoningEffort: Configs built in code never pass through Load.
 	reasoning := strings.ToLower(agent.ReasoningEffort)
 	if reasoning != "" && !validReasoningEfforts[reasoning] {
 		return ResolvedInvocation{}, fmt.Errorf("reasoning_effort %q must be one of low, medium, high", agent.ReasoningEffort)

@@ -782,7 +782,8 @@
         },
         "reasoning_effort": {
           "type": "string",
-          "enum": ["low", "medium", "high"]
+          "description": "low, medium or high, in any letter case (the loader lowercases before checking). A pattern because JSON Schema has no case-insensitive enum.",
+          "pattern": "^([Ll][Oo][Ww]|[Mm][Ee][Dd][Ii][Uu][Mm]|[Hh][Ii][Gg][Hh])$"
         },
         "max_turns": {
           "type": "integer",
