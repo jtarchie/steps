@@ -157,7 +157,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 // row should stay running so ResetStaleRunning re-queues it on the next
 // daemon startup, since a graceful shutdown isn't a real failure and nothing
 // else will re-trigger the job.
-func (s *Store) CompleteJob(ctx context.Context, id int64, status string, runErr error) error {
+func (s *Store) CompleteJob(ctx context.Context, id int64, status store.QueueStatus, runErr error) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE trigger_queue
 		SET status = ?, finished_at = ?, error = ?

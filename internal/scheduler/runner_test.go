@@ -1038,7 +1038,7 @@ func queueStatuses(t *testing.T, st store.Store) string {
 
 	statuses := make([]string, 0, len(rows))
 	for i := len(rows) - 1; i >= 0; i-- {
-		statuses = append(statuses, rows[i].Status)
+		statuses = append(statuses, string(rows[i].Status))
 	}
 
 	return strings.Join(statuses, " ")

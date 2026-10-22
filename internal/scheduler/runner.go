@@ -435,7 +435,7 @@ func (r *LocalRunner) DrainOne(ctx context.Context, target *Pipeline) bool {
 		// Detached, like every other finalize here: a job the config no
 		// longer names is terminal, and a SIGINT at this instant must not
 		// strand the row running with nothing recorded.
-		_ = target.Store.CompleteJob(context.WithoutCancel(ctx), id, "failed", err)
+		_ = target.Store.CompleteJob(context.WithoutCancel(ctx), id, store.QueueFailed, err)
 
 		return true
 	}
@@ -460,7 +460,7 @@ func finalizePanic(ctx context.Context, target *Pipeline, job *config.Job, id in
 
 	slog.ErrorContext(ctx, "web.job.panic", "pipeline", target.Slug, "job", job.Name, "recovered", recovered, "stack", string(debug.Stack()))
 
-	err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, "failed", panicErr)
+	err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, store.QueueFailed, panicErr)
 	if err != nil {
 		slog.ErrorContext(ctx, "web.job.panic_unrecorded", "pipeline", target.Slug, "job", job.Name, "error", err)
 	}
@@ -480,7 +480,7 @@ func (r *LocalRunner) runAndFinalize(
 	if runErr != nil && aborted {
 		slog.InfoContext(ctx, "web.job.aborted", "pipeline", target.Slug, "job", job.Name)
 
-		err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, "aborted", runErr)
+		err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, store.QueueAborted, runErr)
 		if err != nil {
 			slog.ErrorContext(ctx, "web.complete", "pipeline", target.Slug, "job", job.Name, "error", err)
 		}
@@ -500,9 +500,9 @@ func (r *LocalRunner) runAndFinalize(
 		return
 	}
 
-	status := "succeeded"
+	status := store.QueueSucceeded
 	if runErr != nil {
-		status = "failed"
+		status = store.QueueFailed
 
 		slog.ErrorContext(ctx, "web.run", "pipeline", target.Slug, "job", job.Name, "error", runErr)
 	}
@@ -558,7 +558,7 @@ func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobNam
 	slog.WarnContext(ctx, "web.job.held", "pipeline", target.Slug, "job", jobName,
 		"release", "steps jobs release "+jobName+" -p <pipeline>")
 
-	err = target.Store.CompleteJob(context.WithoutCancel(ctx), id, "skipped", nil)
+	err = target.Store.CompleteJob(context.WithoutCancel(ctx), id, store.QueueSkipped, nil)
 	if err != nil {
 		slog.ErrorContext(ctx, "web.complete", "pipeline", target.Slug, "job", jobName, "error", err)
 	}

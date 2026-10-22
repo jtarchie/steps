@@ -52,9 +52,12 @@ func (r Transcript) Running() bool { return r.Run.Status == store.RunRunning }
 // run is in flight, and an unknown status must keep a live step live — a
 // stuck clock is the lesser wrong than a running step drawn as dead.
 func (r Transcript) ended() bool {
-	switch string(r.Run.Status) {
-	case "succeeded", "failed", "errored", "aborted":
+	switch r.Run.Status {
+	// "errored" is no RunStatus (FinishRun records such a run failed) but outcome's word for it, and a fold handed an event-side run status must still end its steps.
+	case store.RunSucceeded, store.RunFailed, store.RunAborted, "errored":
 		return true
+	case store.RunRunning:
+		return false
 	default:
 		return false
 	}

@@ -166,7 +166,7 @@ func (s accountsSuite) TestAFullTableOfUnusedClientsStillRegisters(t *testing.T)
 		}
 	}
 
-	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "t", Kind: "access", Grant: store.Grant{ClientID: "used", Actor: "a", Pipeline: "p", Export: "e"}, CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "t", Kind: store.TokenAccess, Grant: store.Grant{ClientID: "used", Actor: "a", Pipeline: "p", Export: "e"}, CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -197,14 +197,14 @@ func (s accountsSuite) TestAGrantCanBeRevokedWhole(t *testing.T) {
 	later := time.Now().Add(time.Hour)
 
 	for hash, g := range map[string]store.Grant{"access": grant, "refresh": grant, "elsewhere": other} {
-		err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: hash, Kind: "access", Grant: g, CreatedAt: time.Now(), ExpiresAt: later})
+		err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: hash, Kind: store.TokenAccess, Grant: g, CreatedAt: time.Now(), ExpiresAt: later})
 		if err != nil {
 			t.Fatalf("IssueToken: %v", err)
 		}
 	}
 
 	token, found, err := accounts.FindToken(ctxFor(t), "access")
-	if err != nil || !found || token.Grant != grant || token.Kind != "access" {
+	if err != nil || !found || token.Grant != grant || token.Kind != store.TokenAccess {
 		t.Fatalf("FindToken = %+v, %v, %v", token, found, err)
 	}
 
@@ -253,7 +253,7 @@ func (s accountsSuite) TestAnExpiredTokenIsNotFound(t *testing.T) {
 	accounts := s.open(t)
 	registerClient(t, accounts, "c")
 
-	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "old", Kind: "access", Grant: store.Grant{ClientID: "c", Actor: "a", Pipeline: "p", Export: "e"}, CreatedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-time.Hour)})
+	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "old", Kind: store.TokenAccess, Grant: store.Grant{ClientID: "c", Actor: "a", Pipeline: "p", Export: "e"}, CreatedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-time.Hour)})
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -296,7 +296,7 @@ func (s accountsSuite) TestConnectionsAreTheLiveGrants(t *testing.T) {
 	later := time.Now().Add(time.Hour)
 
 	for hash, g := range map[string]store.Grant{"a1": alex, "a2": alex, "s1": sam} {
-		err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: hash, Kind: "access", Grant: g, CreatedAt: time.Now(), ExpiresAt: later})
+		err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: hash, Kind: store.TokenAccess, Grant: g, CreatedAt: time.Now(), ExpiresAt: later})
 		if err != nil {
 			t.Fatal(err)
 		}

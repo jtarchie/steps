@@ -24,7 +24,7 @@ type Queue interface {
 	// row comes back from the statement that claimed it, so nothing can be
 	// read between the claim and what the trigger asked for.
 	ClaimNextJob(ctx context.Context) (ClaimedJob, bool, error)
-	CompleteJob(ctx context.Context, id int64, status string, runErr error) error
+	CompleteJob(ctx context.Context, id int64, status QueueStatus, runErr error) error
 	// AbortQueuedJob finalizes the job's pending row as aborted so it is never claimed, reporting false when nothing was pending. A running row is not its to touch: that build is stopped through its context, and holds its serial slot until it actually ends.
 	AbortQueuedJob(ctx context.Context, jobName string) (bool, error)
 	// ResetStaleRunning reclaims every running row as an abandoned leftover.
@@ -60,12 +60,26 @@ type ClaimedJob struct {
 	Resume string
 }
 
+// QueueStatus is where a trigger-queue row is: pending until claimed, running until CompleteJob (or ResetStaleRunning, which copies the run's status) closes it.
+type QueueStatus string
+
+// The statuses a queue row is stored with; the SQL in both drivers spells the same strings.
+const (
+	QueuePending   QueueStatus = "pending"
+	QueueRunning   QueueStatus = "running"
+	QueueSucceeded QueueStatus = "succeeded"
+	QueueFailed    QueueStatus = "failed"
+	QueueAborted   QueueStatus = "aborted"
+	// QueueSkipped is a row the circuit breaker took out of the rotation without running it.
+	QueueSkipped QueueStatus = "skipped"
+)
+
 // QueueRow is one entry in the downstream-trigger queue.
 type QueueRow struct {
 	ID         int64
 	JobName    string
 	Reason     string
-	Status     string
+	Status     QueueStatus
 	EnqueuedAt time.Time
 	StartedAt  time.Time
 	FinishedAt time.Time

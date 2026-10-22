@@ -272,7 +272,7 @@ func TestNodePageExplainsSkipsOnlyForASuccess(t *testing.T) {
 
 	server, pipeline := testPipeline(t)
 
-	for hash, status := range map[string]string{"hash-green": "succeeded", "hash-red": "failed"} {
+	for hash, status := range map[string]store.NodeStatus{"hash-green": store.NodeSucceeded, "hash-red": store.NodeFailed} {
 		err := pipeline.Store.RecordNode(t.Context(), store.NodeRecord{Hash: hash, Kind: "task", Resource: "build"}, "build", status, nil, nil)
 		if err != nil {
 			t.Fatalf("RecordNode: %v", err)

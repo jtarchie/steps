@@ -10,6 +10,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -92,7 +93,7 @@ func reuseStep(
 		return cached, nil
 	}
 
-	err := r.st.RecordNode(ctx, nodeRecord(node), r.jobName, "succeeded", cached.NodeResult(), nil)
+	err := r.st.RecordNode(ctx, nodeRecord(node), r.jobName, store.NodeSucceeded, cached.NodeResult(), nil)
 	if err != nil {
 		return cached, fmt.Errorf("%w", err)
 	}

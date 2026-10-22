@@ -23,7 +23,7 @@ import (
 // this statement seeing it and the node's reference to it, failing the
 // foreign key. sqlite serialized the file, so the window never existed there.
 // Shared, so recording nodes never waits on another recording.
-func (s *Store) RecordNode(ctx context.Context, node store.NodeRecord, jobName, status string, result map[string]any, execErr error) error {
+func (s *Store) RecordNode(ctx context.Context, node store.NodeRecord, jobName string, status store.NodeStatus, result map[string]any, execErr error) error {
 	content, err := json.Marshal(node.Content)
 	if err != nil {
 		return fmt.Errorf("could not marshal node content: %w", err)

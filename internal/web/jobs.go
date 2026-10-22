@@ -84,7 +84,7 @@ func (s *Server) markQueued(ctx context.Context, reads *pipelineReads, queue []s
 		next := &queuedJob{Since: row.EnqueuedAt.UnixMilli()}
 
 		// A claimed row with no run yet is starting, and every limit has already let it through.
-		if row.Status == "pending" {
+		if row.Status == store.QueuePending {
 			next.WaitingOn, err = reason(views[i].Name)
 			if err != nil {
 				return nil, err
@@ -100,7 +100,7 @@ func (s *Server) markQueued(ctx context.Context, reads *pipelineReads, queue []s
 	for _, row := range outstanding {
 		view := queueRowView{QueueRow: row}
 
-		if row.Status == "pending" {
+		if row.Status == store.QueuePending {
 			waiting, err := reason(row.JobName)
 			if err != nil {
 				return nil, err
@@ -127,7 +127,7 @@ func pendingQueue(rows []store.QueueRow) []store.QueueRow {
 	var out []store.QueueRow
 
 	for _, row := range rows {
-		if row.Status == "pending" || row.Status == "running" {
+		if row.Status == store.QueuePending || row.Status == store.QueueRunning {
 			out = append(out, row)
 		}
 	}
@@ -306,7 +306,7 @@ func (s *Server) runStrip(ctx context.Context, pipeline *Pipeline, jobName strin
 // queuedRow is the job's newest outstanding queue row, while no run has started since it was enqueued.
 func queuedRow(ctx context.Context, pipeline *Pipeline, queue []store.QueueRow, jobName string) (store.QueueRow, bool, error) {
 	for _, row := range queue {
-		if row.JobName != jobName || (row.Status != "pending" && row.Status != "running") {
+		if row.JobName != jobName || (row.Status != store.QueuePending && row.Status != store.QueueRunning) {
 			continue
 		}
 

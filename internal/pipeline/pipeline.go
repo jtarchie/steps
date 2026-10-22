@@ -143,7 +143,7 @@ func recordStepFailure(ctx context.Context, r stepRunner, node merkle.Node, err 
 // somebody reconstructs afterwards, so its response and tool calls are
 // recorded rather than dropped.
 func recordStepFailureWith(ctx context.Context, r stepRunner, node merkle.Node, result map[string]any, err error) {
-	status := string(outcome.Classify(ctx, err))
+	status := store.NodeStatus(outcome.Classify(ctx, err))
 	recCtx := context.WithoutCancel(ctx)
 	bestEffort(ctx, "RecordNode", r.st.RecordNode(recCtx, nodeRecord(node), r.jobName, status, result, err))
 	bestEffort(ctx, "ForgetChain", r.st.ForgetChain(recCtx, r.jobName, node.Hash))
@@ -158,7 +158,7 @@ func recordBlock(ctx context.Context, r stepRunner, node merkle.Node, result map
 }
 
 func recordBlockAs(ctx context.Context, r stepRunner, node merkle.Node, class outcome.Class, result map[string]any, err error) {
-	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, string(class), result, err))
+	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, store.NodeStatus(class), result, err))
 }
 
 // runPlaced owns a leaf step's recording order: the node, then where it ran — run_placements references the node, and a step that FAILED on a worker is the one whose machine somebody wants named.
@@ -175,7 +175,7 @@ func runPlaced(
 		return failedAt(node.Hash), err
 	}
 
-	err = r.st.RecordNode(ctx, nodeRecord(node), r.jobName, "succeeded", result, nil)
+	err = r.st.RecordNode(ctx, nodeRecord(node), r.jobName, store.NodeSucceeded, result, nil)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (%s %q): could not record node %q: %w", node.StepIndex, node.Kind, placedAs, node.Hash, err)
 	}

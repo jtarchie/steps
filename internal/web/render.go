@@ -363,11 +363,11 @@ func shortID(id string) string {
 }
 
 // statusWord maps a stored status to the word the UI shows. The vocabulary
-// differs by table (a node says "succeeded", a queue row says "done"), and a
+// differs by table (a node says "succeeded", a run says "succeeded", a pending queue row "queued"), and a
 // reader should not have to know which table they are looking at.
 func statusWord[S ~string](status S) string {
 	switch string(status) {
-	case "succeeded", "done":
+	case "succeeded":
 		return "passed"
 	case "pending":
 		return "queued"

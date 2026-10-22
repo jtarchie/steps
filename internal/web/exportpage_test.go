@@ -79,7 +79,7 @@ func connect(t *testing.T, server *Server, accounts store.Accounts) {
 	client := register(t, server, "https://agent.example/cb")
 	grant := store.Grant{ClientID: client, Actor: "local:alex", Pipeline: "ops", Export: "support"}
 
-	err := accounts.IssueToken(t.Context(), store.OAuthToken{TokenHash: "connected", Kind: "access", Grant: grant, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)})
+	err := accounts.IssueToken(t.Context(), store.OAuthToken{TokenHash: "connected", Kind: store.TokenAccess, Grant: grant, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}

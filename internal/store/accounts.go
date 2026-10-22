@@ -95,11 +95,19 @@ type Grant struct {
 	Export   string
 }
 
+// TokenKind says what an OAuth token may do: an access token calls tools, a refresh token only mints the next access token.
+type TokenKind string
+
+// The kinds a token is stored with.
+const (
+	TokenAccess  TokenKind = "access"
+	TokenRefresh TokenKind = "refresh"
+)
+
 // OAuthToken is a token issued under a grant.
 type OAuthToken struct {
 	TokenHash string
-	// Kind is "access" or "refresh": an access token calls tools, a refresh token only mints the next access token.
-	Kind      string
+	Kind      TokenKind
 	Grant     Grant
 	CreatedAt time.Time
 	ExpiresAt time.Time

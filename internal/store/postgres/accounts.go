@@ -237,7 +237,7 @@ func (a *Accounts) IssueToken(ctx context.Context, token store.OAuthToken) error
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO oauth_tokens (token_hash, kind, client_id, actor, pipeline, export, created_at, expires_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		`, clean(token.TokenHash), clean(token.Kind), clean(token.Grant.ClientID), clean(token.Grant.Actor),
+		`, clean(token.TokenHash), clean(string(token.Kind)), clean(token.Grant.ClientID), clean(token.Grant.Actor),
 			clean(token.Grant.Pipeline), clean(token.Grant.Export), token.CreatedAt.UTC(), token.ExpiresAt.UTC())
 
 		return err //nolint:wrapcheck // wrapped below

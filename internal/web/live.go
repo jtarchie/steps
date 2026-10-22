@@ -414,7 +414,7 @@ func (s *Server) flushBatch(
 	// later in the same drain. The done that ends the stream reloads the
 	// page, and the reload is what settles a row nothing closed.
 	inFlight := run
-	inFlight.Status = "running"
+	inFlight.Status = store.RunRunning
 
 	view := runView{Transcript: folder.View(inFlight)}
 

@@ -28,7 +28,7 @@ type Cache interface {
 	RecordChainSucceeded(ctx context.Context, jobName, rootHash string) error
 	ForgetChain(ctx context.Context, jobName, rootHash string) error
 	HasSucceededBatch(ctx context.Context, jobName string, rootHashes []string) (map[string]bool, error)
-	RecordNode(ctx context.Context, node NodeRecord, jobName, status string, result map[string]any, execErr error) error
+	RecordNode(ctx context.Context, node NodeRecord, jobName string, status NodeStatus, result map[string]any, execErr error) error
 	HasNodeSucceeded(ctx context.Context, jobName, hash string) (bool, error)
 	// HasNodesSucceeded is HasNodeSucceeded for many hashes in one read; a
 	// hash that has not succeeded is absent rather than false.
@@ -54,6 +54,18 @@ type NodeRecord struct {
 	Content    map[string]any
 }
 
+// NodeStatus is how a step's node ended: running while an agent step is in flight, otherwise the outcome.Class the step earned.
+type NodeStatus string
+
+// The statuses a node is stored with; they equal outcome.Class's strings, which store cannot import.
+const (
+	NodeRunning   NodeStatus = "running"
+	NodeSucceeded NodeStatus = "succeeded"
+	NodeFailed    NodeStatus = "failed"
+	NodeErrored   NodeStatus = "errored"
+	NodeAborted   NodeStatus = "aborted"
+)
+
 // NodeRow is one recorded step, with whatever the step produced.
 type NodeRow struct {
 	Hash      string
@@ -61,7 +73,7 @@ type NodeRow struct {
 	JobName   string
 	Resource  string
 	StepIndex int
-	Status    string
+	Status    NodeStatus
 	Error     string
 	Result    string
 	CreatedAt time.Time

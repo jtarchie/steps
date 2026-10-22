@@ -180,9 +180,9 @@ func runQueued(ctx context.Context, t *testing.T, cfg *config.Config, st store.S
 			t.Fatalf("%s: %v", jobName, runErr)
 		}
 
-		status := "succeeded"
+		status := store.QueueSucceeded
 		if runErr != nil {
-			status = "failed"
+			status = store.QueueFailed
 		}
 
 		err = st.CompleteJob(ctx, id, status, runErr)

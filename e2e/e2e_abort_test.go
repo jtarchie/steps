@@ -369,7 +369,7 @@ func queueStatuses(t *testing.T, state, name string) string {
 
 	pairs := make([]string, 0, len(rows))
 	for i := len(rows) - 1; i >= 0; i-- {
-		pairs = append(pairs, rows[i].JobName+":"+rows[i].Status)
+		pairs = append(pairs, rows[i].JobName+":"+string(rows[i].Status))
 	}
 
 	return strings.Join(pairs, " ")

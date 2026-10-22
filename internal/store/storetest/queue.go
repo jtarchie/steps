@@ -433,7 +433,7 @@ func (s suite) TestStoreClaimSerializesSameJob(t *testing.T) {
 	assertQueueEmpty(t, st)
 
 	// Once the running build completes, the queued change becomes claimable.
-	err := st.CompleteJob(context.Background(), id, "done", nil)
+	err := st.CompleteJob(context.Background(), id, store.QueueSucceeded, nil)
 	if err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
@@ -649,7 +649,7 @@ func (s suite) TestConformanceSerialGroupsBlockAcrossJobs(t *testing.T) {
 	// deploy-prod shares "deploy" with the running deploy-staging, so it is not.
 	assertQueueEmpty(t, st)
 
-	err = st.CompleteJob(context.Background(), id, "done", nil)
+	err = st.CompleteJob(context.Background(), id, store.QueueSucceeded, nil)
 	if err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
@@ -698,7 +698,7 @@ func (s suite) TestConformanceMaxInFlightAdmitsUpToTheLimit(t *testing.T) {
 	assertQueueEmpty(t, st)
 
 	// One finishes, so a slot opens.
-	err = st.CompleteJob(context.Background(), first, "done", nil)
+	err = st.CompleteJob(context.Background(), first, store.QueueSucceeded, nil)
 	if err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
@@ -778,4 +778,47 @@ func (s suite) TestSyncJobLimitsClearsBothMirrors(t *testing.T) {
 
 	mustEnqueueJob(t, st, "build", "resource-b")
 	assertQueueEmpty(t, st)
+}
+
+// TestQueueStatusesMatchTheSQL: the drivers write 'pending', 'running' and 'aborted' as SQL literals, and CompleteJob stores what it is handed, so the constants are only the stored forms if a real row says so.
+func (s suite) TestQueueStatusesMatchTheSQL(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	mustEnqueueJob(t, st, "build", "r")
+	assertNewestQueueStatus(t, st, store.QueuePending)
+
+	id, _ := mustClaimJob(t, st, "build")
+	assertNewestQueueStatus(t, st, store.QueueRunning)
+
+	err := st.CompleteJob(ctx, id, store.QueueSucceeded, nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	assertNewestQueueStatus(t, st, store.QueueSucceeded)
+
+	mustEnqueueJob(t, st, "lint", "r")
+
+	aborted, err := st.AbortQueuedJob(ctx, "lint")
+	if err != nil || !aborted {
+		t.Fatalf("AbortQueuedJob = %v, %v; want true", aborted, err)
+	}
+
+	assertNewestQueueStatus(t, st, store.QueueAborted)
+}
+
+func assertNewestQueueStatus(t *testing.T, st store.Store, want store.QueueStatus) {
+	t.Helper()
+
+	rows, err := st.ListTriggerQueue(context.Background(), 1)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListTriggerQueue: %v (%d rows)", err, len(rows))
+	}
+
+	if rows[0].Status != want {
+		t.Errorf("queue row status = %q, want %q", rows[0].Status, want)
+	}
 }

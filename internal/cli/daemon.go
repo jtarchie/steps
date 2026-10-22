@@ -78,7 +78,7 @@ func (d *daemon) pending(ctx context.Context) map[string]int64 {
 		}
 
 		for _, row := range rows {
-			if row.Status == "pending" {
+			if row.Status == store.QueuePending {
 				counts[name]++
 			}
 		}

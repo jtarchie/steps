@@ -20,7 +20,7 @@ import (
 // single statement cannot do that, and doing it without the transaction would
 // leave a window where the node's reference has no parent row — which the
 // RESTRICT on that reference correctly refuses.
-func (s *Store) RecordNode(ctx context.Context, node store.NodeRecord, jobName, status string, result map[string]any, execErr error) error {
+func (s *Store) RecordNode(ctx context.Context, node store.NodeRecord, jobName string, status store.NodeStatus, result map[string]any, execErr error) error {
 	content, err := json.Marshal(node.Content)
 	if err != nil {
 		return fmt.Errorf("could not marshal node content: %w", err)

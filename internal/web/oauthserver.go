@@ -449,7 +449,7 @@ func (s *Server) refresh(c *echo.Context) error {
 		return echoError(err)
 	}
 
-	if !found || token.Kind != "refresh" || token.Grant.ClientID != c.FormValue("client_id") {
+	if !found || token.Kind != store.TokenRefresh || token.Grant.ClientID != c.FormValue("client_id") {
 		return oauthError(c, http.StatusBadRequest, "invalid_grant", "unknown, used or expired refresh token")
 	}
 
@@ -477,8 +477,8 @@ func (s *Server) issuePair(c *echo.Context, grant store.Grant) error {
 	access, refresh, now := randomToken(), randomToken(), time.Now()
 
 	for _, token := range []store.OAuthToken{
-		{TokenHash: tokenDigest(access), Kind: "access", Grant: grant, CreatedAt: now, ExpiresAt: now.Add(accessTokenTTL)},
-		{TokenHash: tokenDigest(refresh), Kind: "refresh", Grant: grant, CreatedAt: now, ExpiresAt: now.Add(refreshTokenTTL)},
+		{TokenHash: tokenDigest(access), Kind: store.TokenAccess, Grant: grant, CreatedAt: now, ExpiresAt: now.Add(accessTokenTTL)},
+		{TokenHash: tokenDigest(refresh), Kind: store.TokenRefresh, Grant: grant, CreatedAt: now, ExpiresAt: now.Add(refreshTokenTTL)},
 	} {
 		err := s.sessions.IssueToken(ctx, token)
 		if err != nil {

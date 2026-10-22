@@ -156,7 +156,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 }
 
 // CompleteJob marks a claimed row done or failed.
-func (s *Store) CompleteJob(ctx context.Context, id int64, status string, runErr error) error {
+func (s *Store) CompleteJob(ctx context.Context, id int64, status store.QueueStatus, runErr error) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE trigger_queue
 		SET status = $1, finished_at = $2, error = $3

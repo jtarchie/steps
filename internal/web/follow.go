@@ -117,7 +117,7 @@ func queuedState(queue []store.QueueRow, name string, since time.Time) (string, 
 			continue
 		}
 
-		if row.Status == "running" {
+		if row.Status == store.QueueRunning {
 			inFlight++
 		}
 
@@ -129,14 +129,15 @@ func queuedState(queue []store.QueueRow, name string, since time.Time) (string, 
 		decided = true
 
 		switch row.Status {
-		case "pending", "running":
-			state = row.Status
-		case "failed", "aborted":
+		case store.QueuePending, store.QueueRunning:
+			state = string(row.Status)
+		case store.QueueFailed, store.QueueAborted:
 			// Credit a terminal row only to a follow page (non-zero stamp) and only when it ended at/after that stamp, never a stale failure nor a board column that just asks "is anything queued".
 			if !since.IsZero() && !row.FinishedAt.Before(since) {
-				state = row.Status
+				state = string(row.Status)
 				failErr = row.Error
 			}
+		case store.QueueSucceeded, store.QueueSkipped:
 		}
 	}
 

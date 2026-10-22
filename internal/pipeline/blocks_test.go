@@ -97,7 +97,7 @@ func TestBlockNodesRecordWhatTheBlockConcluded(t *testing.T) {
 	} {
 		_, st := runFixtureBeside(t, "jobs:\n- name: build\n  plan:\n  - task: make\n    outputs: [out]\n    run: \"true\""+c.plan+"\n", c.wantFailure, nil)
 
-		if got := blockNode(t, st, c.kind).Status; got != c.want {
+		if got := blockNode(t, st, c.kind).Status; string(got) != c.want {
 			t.Errorf("%s: %s node recorded %q, want %q", name, c.kind, got, c.want)
 		}
 	}
