@@ -86,11 +86,6 @@ func runBranches(ctx context.Context, r stepRunner, i int, step config.Step, blo
 		logs = make([]*execLog, len(branches))
 	)
 
-	// Slots are acquired HERE, in the parent, rather than inside each
-	// goroutine. That makes branches start in declaration order — under
-	// `limit:` especially, "which two go first" is otherwise whichever
-	// goroutines the scheduler happened to run, which is nothing a pipeline
-	// author can reason about.
 	// Identity is stamped here, in the parent, rather than inside the
 	// goroutine: under fail_fast a branch may never start, and a zero-value
 	// result would then wrongly claim index 0. Every branch now carries its
@@ -99,6 +94,11 @@ func runBranches(ctx context.Context, r stepRunner, i int, step config.Step, blo
 		results[index] = branchResult{index: index, name: executedStepName(branches[index])}
 	}
 
+	// Slots are acquired HERE, in the parent, rather than inside each
+	// goroutine. That makes branches start in declaration order — under
+	// `limit:` especially, "which two go first" is otherwise whichever
+	// goroutines the scheduler happened to run, which is nothing a pipeline
+	// author can reason about.
 	for index := range branches {
 		slot.acquire()
 

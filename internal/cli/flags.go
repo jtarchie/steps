@@ -307,8 +307,7 @@ func DaemonStatePath(db DB) State {
 // something an operator asks for, and the database keeps them apart when they
 // do — every row is scoped to a pipelines row (see internal/store/schema.go).
 //
-// There is no migration, per this repo's no-migration rule: a database from an
-// older schema is refused rather than upgraded.
+// An older database is upgraded by the store's migrations; only one older than the oldest upgradable schema, or newer than this build, is refused.
 func StatePath(pipeline string, db DB) State {
 	if location := db.location(); location != "" {
 		return location

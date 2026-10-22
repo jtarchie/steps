@@ -195,7 +195,7 @@ const (
 // it. The machine is a HASH of registryKey because nothing of the URL leaves
 // this process.
 //
-// ponytail: host+pid repeat across restarts of a pid-1 daemon with a stable hostname — fine for listing leftovers, not for an automatic sweep; add a random per-process id label before one exists.
+// host+pid repeat across restarts of a pid-1 daemon with a stable hostname — fine for listing leftovers; the labels are listing-only and the owner-stamp sweep (owner.go) does not depend on them.
 func (w Worker) launchLabels() map[string]string {
 	sum := sha256.Sum256([]byte(w.registryKey()))
 

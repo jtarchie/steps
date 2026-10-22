@@ -21,6 +21,8 @@ import (
 // taken and the take itself. Two claims of one job under max_in_flight > 1
 // otherwise both resolve the same oldest version before either records it.
 // In-process is enough: one daemon per state database is the deployment rule.
+//
+// ponytail: never pruned and process-global — grows one mutex per pipeline+job name for the process lifetime; hang it off the run owner and drop entries on pipeline delete.
 var cursorLocks sync.Map //nolint:gochecknoglobals // per-process lock table; see above
 
 // resolvedSets runs inside that critical section, after a run has resolved
