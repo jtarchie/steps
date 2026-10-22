@@ -45,9 +45,11 @@ func (s *Store) RequestApprovalFor(ctx context.Context, runID, stepKey, jobName,
 
 	var id int64
 
+	// Not filtered by status: a decision can land between the insert and this read, and the row is still the one this request made or found. The unique index admits one pending-or-approved row per step, so the newest is always it.
 	err = s.db.QueryRowContext(ctx, `
 		SELECT id FROM approvals
-		WHERE pipeline_id = ? AND run_id = ? AND step_key = ? AND status IN ('pending', 'approved')
+		WHERE pipeline_id = ? AND run_id = ? AND step_key = ?
+		ORDER BY id DESC LIMIT 1
 	`, s.pipelineID, runID, stepKey).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("could not request approval for job %q: %w", jobName, err)

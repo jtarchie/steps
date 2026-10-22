@@ -5,6 +5,8 @@ package storetest
 import (
 	"context"
 	"errors"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -314,5 +316,51 @@ func (s suite) TestAGrantedApprovalStandsForTheResumedStep(t *testing.T) {
 	retried, err := st.RequestApprovalFor(ctx, "RUN1", "step-b", "deploy", "ship it?")
 	if err != nil || retried == refused {
 		t.Fatalf("a retry after a refusal got approval %d (%v), want a new one", retried, err)
+	}
+}
+
+// TestARequestSurvivesBeingDecidedAtOnce: a request returns the id of the row it made even when a decision lands the instant that row is visible. A request that looked its row up by "still pending" lost it to a fast decider and reported a failure for work that had succeeded.
+func (s suite) TestARequestSurvivesBeingDecidedAtOnce(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	requester := s.open(t, "test")
+	decider := s.open(t, "test")
+
+	startRuns(t, requester, "RUN1")
+
+	stop := make(chan struct{})
+
+	var deciders sync.WaitGroup
+
+	for range 8 {
+		deciders.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+
+				pending, err := decider.Approvals(ctx, true, 100)
+				if err != nil {
+					return
+				}
+
+				for _, approval := range pending {
+					_ = decider.DecideApproval(ctx, approval.ID, store.ApprovalRejected, "test", "no")
+				}
+			}
+		})
+	}
+
+	t.Cleanup(deciders.Wait)
+	t.Cleanup(func() { close(stop) })
+
+	for i := range 300 {
+		_, err := requester.RequestApprovalFor(ctx, "RUN1", "step-"+strconv.Itoa(i), "deploy", "ship it?")
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
 	}
 }
