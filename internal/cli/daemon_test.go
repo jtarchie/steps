@@ -1111,11 +1111,11 @@ func TestAFailedDestroyLeavesThePipelineServed(t *testing.T) {
 	isolateLogins(t)
 
 	held := servingDaemon(t)
-	setPipeline(t, held, "doomed", idlePipeline)
 
 	fail := true
-	target := served(t, held, "doomed")
-	target.Store = deleteFails{Store: target.Store, fail: &fail}
+	held.wrapStore = func(st store.Store) store.Store { return deleteFails{Store: st, fail: &fail} }
+
+	setPipeline(t, held, "doomed", idlePipeline)
 
 	err := held.Destroy(t.Context(), "doomed")
 	if err == nil {

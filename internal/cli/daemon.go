@@ -35,6 +35,9 @@ type daemon struct {
 	exec     ExecFlags
 	history  HistoryFlags
 	interval time.Duration
+
+	// wrapStore is a test seam: it wraps each store the daemon opens, so a fault is in place before the drain goroutine reads the store.
+	wrapStore func(store.Store) store.Store
 	// One answer for every pipeline's poll asking the identical check.
 	checks *trigger.SharedChecks
 	// Every pipeline's loops hang off a child of the process's own lifetime, so destroying one stops its loops and no others.
@@ -349,6 +352,10 @@ func (d *daemon) stateFor(name string, existing *servedPipeline) (store.Store, e
 	st, err := openState(d.state, name)
 	if err != nil {
 		return nil, fmt.Errorf("could not open state for %q: %w", name, err)
+	}
+
+	if d.wrapStore != nil {
+		st = d.wrapStore(st)
 	}
 
 	return st, nil
