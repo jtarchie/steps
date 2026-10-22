@@ -42,6 +42,7 @@ const (
 	defaultMaxBytes    = 8 << 20 // 8 MiB
 	maxRetryAfter      = 60 * time.Second
 	maxRetryBackoff    = 30 * time.Second
+	maxRedirects       = 10
 )
 
 // requestSpec is one parsed request. The raw map is kept verbatim for the
@@ -457,7 +458,7 @@ func doBatch(ctx context.Context, requests []requestSpec, options httpOptions) (
 		// reads as "nothing new". A batch that should survive a bad member
 		// says so with tolerate_errors, and filters on #.error.
 		if !options.tolerate {
-			return nil, fmt.Errorf("http(): %s %s: %w", requests[i].method, requests[i].url, err)
+			return nil, fmt.Errorf("http(): %s %s: %w", requests[i].method, withoutQuery(requests[i].url), err)
 		}
 
 		results[i] = map[string]any{
@@ -567,7 +568,13 @@ func doOnce(ctx context.Context, request requestSpec, options httpOptions) (map[
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // doBatch names the request; this is the cause
+		// *url.Error repeats the full URL, query included, which is where tokens ride
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -632,10 +639,35 @@ func envelopeOf(request requestSpec, resp *http.Response, data []byte) map[strin
 	}
 }
 
-// httpClient is shared so connections are reused across a batch and across
-// the calls one expression makes. Redirects and TLS verification are the
-// stdlib defaults, and there is deliberately no knob to weaken either.
-var httpClient = &http.Client{}
+// httpClient is shared so connections are reused across a batch and across the calls one expression makes; TLS verification is the stdlib default with deliberately no knob to weaken it.
+var httpClient = &http.Client{CheckRedirect: checkRedirect}
+
+// checkRedirect is the stdlib's ten-hop limit plus one rule: a hop to another host:port drops every header the request carries, because Go itself strips only Authorization, Cookie and Www-Authenticate cross-host and an X-Api-Key read from env() would otherwise follow a 30x anywhere.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+
+	if req.URL.Host != via[0].URL.Host {
+		req.Header = http.Header{} //nolint:gosec // this IS the cross-origin header strip G119 asks for
+	}
+
+	return nil
+}
+
+// withoutQuery is for error text: a query string is where tokens ride.
+func withoutQuery(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		before, _, _ := strings.Cut(raw, "?")
+
+		return before
+	}
+
+	parsed.RawQuery = ""
+
+	return parsed.String()
+}
 
 // CloseIdleConnections releases the keep-alive connections a run left behind.
 // Called when an evaluation finishes so a test's goroutine leak check sees a
