@@ -33,14 +33,14 @@ const maxReadFileBytes = 100_000
 func execReadFile(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
-		return map[string]any{"error": `read_file: missing required argument "path"`}
+		return errorResult(`read_file: missing required argument "path"`)
 	}
 
 	files := env.readTree(rel)
 
 	resolved, err := files.Resolve(ctx, rel)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	startLine, hasStart := intArg(args, "start_line")
@@ -55,11 +55,11 @@ func execReadFile(ctx context.Context, args map[string]any, env toolEnv) map[str
 	}
 
 	if startLine < 1 {
-		return map[string]any{"error": "read_file: start_line must be >= 1"}
+		return errorResult("read_file: start_line must be >= 1")
 	}
 
 	if hasEnd && endLine < startLine {
-		return map[string]any{"error": "read_file: end_line must be >= start_line"}
+		return errorResult("read_file: end_line must be >= start_line")
 	}
 
 	answer, nonText := readFileNonTextRange(ctx, files, resolved, rel, env.sight)
@@ -78,7 +78,7 @@ func execReadFile(ctx context.Context, args map[string]any, env toolEnv) map[str
 func readFileNonTextRange(ctx context.Context, files tree.Tree, resolved, rel string, sight imageSight) (map[string]any, bool) {
 	head, err := files.ReadBytes(ctx, resolved, sniffBytes)
 	if err != nil {
-		return map[string]any{"error": err.Error()}, true
+		return errorResult(err.Error()), true
 	}
 
 	if !isNonText(head) {
@@ -87,7 +87,7 @@ func readFileNonTextRange(ctx context.Context, files tree.Tree, resolved, rel st
 
 	stat, err := files.Stat(ctx, resolved)
 	if err != nil {
-		return map[string]any{"error": err.Error()}, true
+		return errorResult(err.Error()), true
 	}
 
 	answer := nonTextResult(ctx, files, resolved, rel, head, stat.Size, sight)
@@ -106,7 +106,7 @@ func readFileNonTextRange(ctx context.Context, files tree.Tree, resolved, rel st
 func readFileFull(ctx context.Context, files tree.Tree, resolved, rel string, sight imageSight) map[string]any {
 	stat, err := files.Stat(ctx, resolved)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	// Read at most maxReadFileBytes regardless of the file's real size, so a
@@ -116,7 +116,7 @@ func readFileFull(ctx context.Context, files tree.Tree, resolved, rel string, si
 	// would have said had it read the whole file.
 	data, err := files.ReadBytes(ctx, resolved, maxReadFileBytes)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	if isNonText(data) {
@@ -147,13 +147,13 @@ func readFileRange(ctx context.Context, files tree.Tree, resolved string, startL
 
 	f, err := files.OpenRange(ctx, resolved, through)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 	defer func() { _ = f.Close() }()
 
 	content, lastLine, truncated, err := scanLineRange(f, startLine, endLine, hasEnd)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	if lastLine == 0 {

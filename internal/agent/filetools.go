@@ -28,12 +28,12 @@ func execListDir(ctx context.Context, args map[string]any, env toolEnv) map[stri
 
 	resolved, err := files.Resolve(ctx, rel)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	entries, err := files.ListDir(ctx, resolved)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	total := len(entries)
@@ -64,7 +64,7 @@ func execListDir(ctx context.Context, args map[string]any, env toolEnv) map[stri
 func execRunShell(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 	command := stringArg(args, "command")
 	if command == "" {
-		return map[string]any{"error": `run_shell: missing required argument "command"`}
+		return errorResult(`run_shell: missing required argument "command"`)
 	}
 
 	// run_shell is a builtin, so it carries no max_output_bytes: of its own
@@ -79,24 +79,24 @@ func execRunShell(ctx context.Context, args map[string]any, env toolEnv) map[str
 func execWriteFile(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
-		return map[string]any{"error": `write_file: missing required argument "path"`}
+		return errorResult(`write_file: missing required argument "path"`)
 	}
 
 	content, ok := args["content"].(string)
 	if !ok {
-		return map[string]any{"error": `write_file: missing required argument "content"`}
+		return errorResult(`write_file: missing required argument "content"`)
 	}
 
 	resolved, err := env.files().ResolveWrite(ctx, rel)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	appendArg, _ := args["append"].(bool)
 
 	err = env.files().WriteFile(ctx, resolved, []byte(content), appendArg)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	return map[string]any{"bytes_written": len(content), "path": rel}

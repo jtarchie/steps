@@ -55,11 +55,11 @@ func buildVerdictTool(verdicts []string, noteRequired bool, expect stepExpectati
 	impl := func(_ context.Context, args map[string]any, env toolEnv) map[string]any {
 		choice := stringArg(args, "choice")
 		if !allowed[choice] {
-			return map[string]any{"error": fmt.Sprintf("verdict: choice %q is not one of: %s", choice, strings.Join(verdicts, ", "))}
+			return errorResult(fmt.Sprintf("verdict: choice %q is not one of: %s", choice, strings.Join(verdicts, ", ")))
 		}
 
 		if _, message := expect.owed(verdictTrajectory(env, args)); message != "" {
-			return map[string]any{"error": "verdict: " + message}
+			return errorResult("verdict: " + message)
 		}
 
 		result := map[string]any{"exit_code": 0, "verdict": choice}

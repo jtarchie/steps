@@ -82,12 +82,12 @@ func execWebFetch(allow []string) toolImpl {
 	return func(ctx context.Context, args map[string]any, _ toolEnv) map[string]any {
 		target, errMsg := parseWebFetchURL(args)
 		if errMsg != "" {
-			return map[string]any{"error": errMsg}
+			return errorResult(errMsg)
 		}
 
 		err := checkWebFetchHost(target, allow)
 		if err != nil {
-			return map[string]any{"error": err.Error()}
+			return errorResult(err.Error())
 		}
 
 		return doWebFetch(ctx, target, allow)
@@ -120,7 +120,7 @@ func parseWebFetchURL(args map[string]any) (*url.URL, string) {
 func doWebFetch(ctx context.Context, target *url.URL, allow []string) map[string]any {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
-		return map[string]any{"error": fmt.Sprintf("web_fetch: %v", err)}
+		return errorResult(fmt.Sprintf("web_fetch: %v", err))
 	}
 
 	client := &http.Client{
@@ -137,13 +137,13 @@ func doWebFetch(ctx context.Context, target *url.URL, allow []string) map[string
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return map[string]any{"error": fmt.Sprintf("web_fetch: %v", err)}
+		return errorResult(fmt.Sprintf("web_fetch: %v", err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxWebFetchBytes+1))
 	if err != nil {
-		return map[string]any{"error": fmt.Sprintf("web_fetch: reading response body: %v", err)}
+		return errorResult(fmt.Sprintf("web_fetch: reading response body: %v", err))
 	}
 
 	truncated := len(body) > maxWebFetchBytes

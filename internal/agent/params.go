@@ -257,7 +257,7 @@ func withParamLimits(tool string, limits []paramLimit, impl toolImpl) toolImpl {
 			}
 
 			if why := checkParam(limit, filled[limit.name]); why != "" {
-				return map[string]any{"error": fmt.Sprintf("%s: %s %s", tool, limit.name, why)}
+				return errorResult(fmt.Sprintf("%s: %s %s", tool, limit.name, why))
 			}
 		}
 

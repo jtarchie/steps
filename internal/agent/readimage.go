@@ -180,9 +180,9 @@ func nonTextResult(ctx context.Context, files tree.Tree, resolved, rel string, r
 	}
 
 	if size > sight.maxBytes {
-		return map[string]any{"error": fmt.Sprintf(
+		return errorResult(fmt.Sprintf(
 			"read_file: %s is a %s, over the %s an image can be sent to this model at. Make a smaller copy (scaled down or cropped) and read that instead.",
-			rel, describeImage(mime, size, width, height), shell.FormatBytes(int(sight.maxBytes)))}
+			rel, describeImage(mime, size, width, height), shell.FormatBytes(int(sight.maxBytes))))
 	}
 
 	data := read
@@ -192,12 +192,12 @@ func nonTextResult(ctx context.Context, files tree.Tree, resolved, rel string, r
 
 		data, err = files.ReadBytes(ctx, resolved, sight.maxBytes)
 		if err != nil {
-			return map[string]any{"error": err.Error()}
+			return errorResult(err.Error())
 		}
 	}
 
 	if int64(len(data)) != size {
-		return map[string]any{"error": fmt.Sprintf("read_file: %s changed while it was being read (%d of %d bytes)", rel, len(data), size)}
+		return errorResult(fmt.Sprintf("read_file: %s changed while it was being read (%d of %d bytes)", rel, len(data), size))
 	}
 
 	return imageResult(rel, mime, data, sight)
@@ -217,9 +217,9 @@ func imageResult(rel, mime string, data []byte, sight imageSight) map[string]any
 	}
 
 	if sight.maxEdge > 0 && max(width, height) > sight.maxEdge {
-		return map[string]any{"error": fmt.Sprintf(
+		return errorResult(fmt.Sprintf(
 			"read_file: %s is a %s, over the %d-pixel side an image can be sent to this model at. Make a scaled-down copy and read that instead.",
-			rel, describeImage(mime, size, width, height), sight.maxEdge)}
+			rel, describeImage(mime, size, width, height), sight.maxEdge))
 	}
 
 	return map[string]any{

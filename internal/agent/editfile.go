@@ -434,28 +434,28 @@ const maxEditFileBytes = 10 << 20
 func execEditFile(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
-		return map[string]any{"error": `edit_file: missing required argument "path"`}
+		return errorResult(`edit_file: missing required argument "path"`)
 	}
 
 	oldString := stringArg(args, "old_string")
 	if oldString == "" {
-		return map[string]any{"error": `edit_file: "old_string" must not be empty — use write_file to create or replace a whole file`}
+		return errorResult(`edit_file: "old_string" must not be empty — use write_file to create or replace a whole file`)
 	}
 
 	// Not stringArg: "" is a legal new_string (it deletes old_string), so
 	// absent must be distinguished from empty.
 	newString, ok := args["new_string"].(string)
 	if !ok {
-		return map[string]any{"error": `edit_file: missing required argument "new_string"`}
+		return errorResult(`edit_file: missing required argument "new_string"`)
 	}
 
 	if oldString == newString {
-		return map[string]any{"error": "edit_file: old_string and new_string are identical; nothing to do"}
+		return errorResult("edit_file: old_string and new_string are identical; nothing to do")
 	}
 
 	resolved, err := env.files().ResolveWrite(ctx, rel)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	replaceAll, _ := args["replace_all"].(bool)
@@ -470,26 +470,26 @@ func readEditTarget(ctx context.Context, files tree.Tree, resolved, rel string) 
 	stat, err := files.Stat(ctx, resolved)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", map[string]any{"error": fmt.Sprintf("edit_file: %q does not exist — use write_file to create it", rel)}
+			return "", errorResult(fmt.Sprintf("edit_file: %q does not exist — use write_file to create it", rel))
 		}
 
-		return "", map[string]any{"error": err.Error()}
+		return "", errorResult(err.Error())
 	}
 
 	if stat.IsDir {
-		return "", map[string]any{"error": fmt.Sprintf("edit_file: %q is a directory, not a file", rel)}
+		return "", errorResult(fmt.Sprintf("edit_file: %q is a directory, not a file", rel))
 	}
 
 	if stat.Size > maxEditFileBytes {
-		return "", map[string]any{"error": fmt.Sprintf(
+		return "", errorResult(fmt.Sprintf(
 			"edit_file: %q is %s, over the %s edit limit",
 			rel, shell.FormatBytes(int(stat.Size)), shell.FormatBytes(maxEditFileBytes),
-		)}
+		))
 	}
 
 	data, err := files.ReadBytes(ctx, resolved, maxEditFileBytes)
 	if err != nil {
-		return "", map[string]any{"error": err.Error()}
+		return "", errorResult(err.Error())
 	}
 
 	return string(data), nil
@@ -508,12 +508,12 @@ func applyEdit(ctx context.Context, files tree.Tree, resolved, rel, oldString, n
 
 	outcome, err := replaceEditSpan(content, oldString, newString, replaceAll)
 	if err != nil {
-		return map[string]any{"error": editFailureAdvice(err, rel)}
+		return errorResult(editFailureAdvice(err, rel))
 	}
 
 	err = files.WriteFile(ctx, resolved, []byte(outcome.updated), false)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	return map[string]any{

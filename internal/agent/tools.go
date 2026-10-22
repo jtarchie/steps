@@ -539,12 +539,12 @@ func execCustomTool(spec config.ToolSpec, params []string) toolImpl {
 				msg += fmt.Sprintf(" (expected: %s)", quoteJoin(expected))
 			}
 
-			return map[string]any{"error": msg}
+			return errorResult(msg)
 		}
 
 		rendered, err := template.Render(spec.Run, map[string]any{"args": merged})
 		if err != nil {
-			return map[string]any{"error": err.Error()}
+			return errorResult(err.Error())
 		}
 
 		return shellToolResult(ctx, rendered, env, outputLimit(spec.MaxOutputBytes))
@@ -607,7 +607,7 @@ func quoteJoin(names []string) string {
 func executeAgentTool(ctx context.Context, call *genai.FunctionCall, env toolEnv, registry map[string]toolImpl) map[string]any {
 	impl, ok := registry[call.Name]
 	if !ok {
-		return map[string]any{"error": fmt.Sprintf("unknown tool %q", call.Name)}
+		return errorResult(fmt.Sprintf("unknown tool %q", call.Name))
 	}
 
 	return impl(ctx, call.Args, env)

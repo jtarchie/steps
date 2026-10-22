@@ -155,7 +155,7 @@ func (c preparedSubAgent) allowanceFrom(parent *stepUsage) (int, error) {
 func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 	request := stringArg(args, subAgentRequestParam)
 	if request == "" {
-		return map[string]any{"error": fmt.Sprintf("%s: missing required argument %q", c.ri.AgentName, subAgentRequestParam)}
+		return errorResult(fmt.Sprintf("%s: missing required argument %q", c.ri.AgentName, subAgentRequestParam))
 	}
 
 	// Sized before any work starts: a delegation the parent cannot fund is
@@ -165,12 +165,12 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// failure honours.
 	allowance, err := c.allowanceFrom(env.usage)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	runner, err := shell.NewRunner(containerSpec(c.ri.Image, env.dir, c.ri.Env, c.ri.User, c.ri.Network, c.ri.Privileged, c.ri.Limits))
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	runner = runner.WithLabel(c.ri.AgentName)
@@ -179,7 +179,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// The child's own image decides where ITS file tools run, not the parent's: a hosted child of a containerized parent reads this machine, and a containerized child of a host parent reads its container. tags: on an agent granting a sub-agent is refused at load, so these are always the same machine and there is one tree either way.
 	childTree, childDir, err := tree.ForStep(ctx, runner, c.ri.Image, env.dir, c.ri.ToolSpecs, env.lost)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	// context_paths is step-level only (not inherited by sub-agents), so
@@ -188,7 +188,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// data, the same contract every child failure honours.
 	contextBlocks, err := loadContextBlocks(ctx, env.dir, c.ri.ContextPaths, c.ri.MaxContextBytes, sightFor(c.ri))
 	if err != nil {
-		return map[string]any{"error": fmt.Sprintf("%s: %s", c.ri.AgentName, err)}
+		return errorResult(fmt.Sprintf("%s: %s", c.ri.AgentName, err))
 	}
 
 	// A sub-agent has no timeout: of its own — it shares whatever deadline
@@ -274,7 +274,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	env.transcript.subagent(c.ri.AgentName, request, res.transcript)
 
 	if runErr != nil {
-		return map[string]any{"error": runErr.Error()}
+		return errorResult(runErr.Error())
 	}
 
 	// Cap the child's answer like every other tool result — a chatty child with

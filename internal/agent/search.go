@@ -94,12 +94,12 @@ func execSearchFiles(ctx context.Context, args map[string]any, env toolEnv) map[
 
 	base, err := files.Resolve(ctx, rel)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	result, err := files.Search(ctx, base, opts)
 	if err != nil {
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	return searchResultMap(base, opts, result)
@@ -110,7 +110,7 @@ func execSearchFiles(ctx context.Context, args map[string]any, env toolEnv) map[
 // error result for the caller.
 func searchMode(pattern, glob, requested string) (string, map[string]any) {
 	if pattern == "" && glob == "" {
-		return "", map[string]any{"error": `search_files: supply at least one of "pattern" (a regexp matched against file contents) or "glob" (a shell pattern matched against file paths)`}
+		return "", errorResult(`search_files: supply at least one of "pattern" (a regexp matched against file contents) or "glob" (a shell pattern matched against file paths)`)
 	}
 
 	mode := requested
@@ -119,17 +119,17 @@ func searchMode(pattern, glob, requested string) (string, map[string]any) {
 	}
 
 	if mode != "files_with_matches" && mode != "content" && mode != "count" {
-		return "", map[string]any{"error": fmt.Sprintf(
+		return "", errorResult(fmt.Sprintf(
 			"search_files: unknown output_mode %q (expected files_with_matches, content, or count)", mode,
-		)}
+		))
 	}
 
 	// content and count both report per-line matches, which a filename-only
 	// search has none of.
 	if pattern == "" && mode != "files_with_matches" {
-		return "", map[string]any{"error": fmt.Sprintf(
+		return "", errorResult(fmt.Sprintf(
 			"search_files: output_mode %q needs a pattern; a glob-only search can only report which files matched", mode,
-		)}
+		))
 	}
 
 	return mode, nil
@@ -142,10 +142,10 @@ func buildSearchOpts(args map[string]any, pattern, glob, mode string) (tree.Sear
 	opts := tree.SearchOpts{Glob: glob, Mode: mode, Pattern: pattern}
 
 	if strings.Contains(glob, "**") && !strings.HasPrefix(glob, "**/") {
-		return opts, map[string]any{"error": fmt.Sprintf(
+		return opts, errorResult(fmt.Sprintf(
 			"search_files: glob %q uses ** somewhere other than the start; ** is only supported as a leading segment (e.g. \"**/*.go\"). Match on a file name (\"*_test.go\") or a full relative path instead.",
 			glob,
-		)}
+		))
 	}
 
 	if pattern != "" {
@@ -158,7 +158,7 @@ func buildSearchOpts(args map[string]any, pattern, glob, mode string) (tree.Sear
 
 		re, err := regexp.Compile(expr)
 		if err != nil {
-			return opts, map[string]any{"error": "search_files: invalid pattern: " + err.Error()}
+			return opts, errorResult("search_files: invalid pattern: " + err.Error())
 		}
 
 		opts.Re = re

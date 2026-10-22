@@ -75,7 +75,7 @@ func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env tool
 	var response map[string]any
 
 	if budget, ok := maxCalls[call.Name]; ok && callCounts[call.Name] >= budget {
-		response = map[string]any{"error": fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", call.Name, budget)}
+		response = errorResult(fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", call.Name, budget))
 	} else {
 		response = executeAgentTool(ctx, call, env, registry)
 		callCounts[call.Name]++

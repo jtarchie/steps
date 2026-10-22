@@ -163,7 +163,7 @@ func shellToolResult(ctx context.Context, command string, env toolEnv, limit int
 			env.lost.Note(fmt.Errorf("%w: %w", tree.ErrNoAccess, err))
 		}
 
-		return map[string]any{"error": err.Error()}
+		return errorResult(err.Error())
 	}
 
 	return map[string]any{

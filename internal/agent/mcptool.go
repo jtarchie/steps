@@ -217,7 +217,7 @@ func mcpToolImpl(client stepsmcp.Client, name string, limit int, pins *mcpPins) 
 
 		result, err := client.CallTool(ctx, name, args)
 		if err != nil {
-			return map[string]any{"error": err.Error()}
+			return errorResult(err.Error())
 		}
 
 		text := joinTextContent(result.Content)
@@ -227,7 +227,7 @@ func mcpToolImpl(client stepsmcp.Client, name string, limit int, pins *mcpPins) 
 				text = fmt.Sprintf("mcp tool %q returned an error with no text content", name)
 			}
 
-			return map[string]any{"error": spillOrTruncateLimit(text, limit, env.spillDir)}
+			return errorResult(spillOrTruncateLimit(text, limit, env.spillDir))
 		}
 
 		return map[string]any{
