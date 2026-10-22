@@ -103,6 +103,27 @@ func TestBlockNodesRecordWhatTheBlockConcluded(t *testing.T) {
 	}
 }
 
+// cancelOnceLive cancels the run once its block is observably running — the task has written its marker, or the approval is pending — because a fixed delay loses the race on a loaded machine and cancels before the block exists.
+func cancelOnceLive(ctx context.Context, cancel context.CancelFunc, st store.Store, kind merkle.NodeKind, marker string) {
+	live := func() bool {
+		if kind == merkle.NodeKindApproval {
+			pending, err := st.Approvals(ctx, true, 1)
+
+			return err == nil && len(pending) > 0
+		}
+
+		_, err := os.Stat(marker)
+
+		return err == nil
+	}
+
+	for !live() && ctx.Err() == nil {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+}
+
 // TestBlockNodesRecordAnAbort: a block stopped by the job's cancellation is aborted in the store, like the leaf inside it, not failed.
 func TestBlockNodesRecordAnAbort(t *testing.T) {
 	t.Parallel()
@@ -114,16 +135,16 @@ func TestBlockNodesRecordAnAbort(t *testing.T) {
 		"do": {merkle.NodeKindDo, `
   - do:
     - task: a
-      run: sleep 30`},
+      run: touch 'MARKER'; sleep 30`},
 		"in_parallel": {merkle.NodeKindParallel, `
   - in_parallel:
       steps:
       - task: a
-        run: sleep 30`},
+        run: touch 'MARKER'; sleep 30`},
 		"try": {merkle.NodeKindTry, `
   - try:
       task: a
-      run: sleep 30`},
+      run: touch 'MARKER'; sleep 30`},
 		"approval": {merkle.NodeKindApproval, `
   - approval:
       message: ship it?`},
@@ -134,7 +155,10 @@ func TestBlockNodesRecordAnAbort(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "fixture.yml")
 
-			err := os.WriteFile(path, []byte("jobs:\n- name: build\n  plan:"+c.plan+"\n"), 0o600)
+			marker := filepath.Join(dir, "started")
+			plan := strings.ReplaceAll(c.plan, "MARKER", marker)
+
+			err := os.WriteFile(path, []byte("jobs:\n- name: build\n  plan:"+plan+"\n"), 0o600)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -157,7 +181,9 @@ func TestBlockNodesRecordAnAbort(t *testing.T) {
 			t.Cleanup(func() { _ = provider.Close() })
 
 			ctx, cancel := context.WithCancel(t.Context())
-			time.AfterFunc(300*time.Millisecond, cancel)
+			t.Cleanup(cancel)
+
+			go cancelOnceLive(ctx, cancel, st, c.kind, marker)
 
 			if RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider}) == nil {
 				t.Fatal("RunJob returned nil for a cancelled run")
