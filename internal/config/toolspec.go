@@ -217,12 +217,22 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
+// The builtin tools that more than one package names.
+const (
+	ReadFileBuiltinName    = "read_file"
+	ListDirBuiltinName     = "list_dir"
+	SearchFilesBuiltinName = "search_files"
+	WriteFileBuiltinName   = "write_file"
+	EditFileBuiltinName    = "edit_file"
+	RunShellBuiltinName    = "run_shell"
+)
+
 // DefaultAgentToolSpecs is used when an agent grants no tools — the default
 // is the read-only built-ins. Anything that mutates state or reaches the
 // host (run_shell, write_file, edit_file) is a capability the agent must be
 // granted explicitly.
 func DefaultAgentToolSpecs() []ToolSpec {
-	return []ToolSpec{{Builtin: "read_file"}, {Builtin: "list_dir"}, {Builtin: "search_files"}}
+	return []ToolSpec{{Builtin: ReadFileBuiltinName}, {Builtin: ListDirBuiltinName}, {Builtin: SearchFilesBuiltinName}}
 }
 
 // MCPToolNameSep separates the server and tool names in a single-tool MCP

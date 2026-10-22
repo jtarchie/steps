@@ -14,6 +14,7 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/usage"
 )
@@ -299,12 +300,12 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 
 	for i, block := range conv.contextBlocks {
 		args := map[string]any{"path": block.path}
-		contents = append(contents, syntheticToolExchange(fmt.Sprintf("ctx_%d", i), "read_file", args, block)...)
-		conv.env.transcript.call("read_file", args)
+		contents = append(contents, syntheticToolExchange(fmt.Sprintf("ctx_%d", i), config.ReadFileBuiltinName, args, block)...)
+		conv.env.transcript.call(config.ReadFileBuiltinName, args)
 		// Bounded for the same reason: context_paths: caps what the MODEL sees
 		// at max_context_bytes (default 100,000, or uncapped at 0), which is a
 		// much looser ceiling than what a transcript result normally carries.
-		conv.env.transcript.result("read_file", truncateToolOutputLimit(block.content, maxRecordedResultBytes))
+		conv.env.transcript.result(config.ReadFileBuiltinName, truncateToolOutputLimit(block.content, maxRecordedResultBytes))
 	}
 
 	return &model.LLMRequest{

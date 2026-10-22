@@ -119,10 +119,10 @@ func builtinAgentTools(image string) map[string]builtinTool {
 		// The catalogue entry is the unrestricted form; a grant carrying
 		// allow: is rebuilt with the list bound in (see resolveToolSpec).
 		config.WebFetchBuiltinName: {decl: webFetchDecl, impl: webFetchImpl},
-		"read_file": {
+		config.ReadFileBuiltinName: {
 			decl: &genai.FunctionDeclaration{
-				Name:        "read_file",
-				Description: toolDescription("read_file", readFileDescription),
+				Name:        config.ReadFileBuiltinName,
+				Description: toolDescription(config.ReadFileBuiltinName, readFileDescription),
 				Parameters: objectSchema(map[string]*genai.Schema{
 					"path":       pathParam("File path, relative to the working directory (or an absolute path inside it, e.g. one returned by a spilled tool output's pointer message)."),
 					"start_line": {Type: genai.TypeInteger, Description: "First line to return, 1-indexed and inclusive. Defaults to 1."},
@@ -131,9 +131,9 @@ func builtinAgentTools(image string) map[string]builtinTool {
 			},
 			impl: execReadFile,
 		},
-		"list_dir": {
+		config.ListDirBuiltinName: {
 			decl: &genai.FunctionDeclaration{
-				Name:        "list_dir",
+				Name:        config.ListDirBuiltinName,
 				Description: listDirDescription,
 				Parameters: objectSchema(map[string]*genai.Schema{
 					"path": pathParam("Directory path, relative to the working directory (or an absolute path inside it)."),
@@ -141,9 +141,9 @@ func builtinAgentTools(image string) map[string]builtinTool {
 			},
 			impl: execListDir,
 		},
-		"run_shell": {
+		config.RunShellBuiltinName: {
 			decl: &genai.FunctionDeclaration{
-				Name:        "run_shell",
+				Name:        config.RunShellBuiltinName,
 				Description: runShellDescription(image),
 				Parameters: objectSchema(map[string]*genai.Schema{
 					"command": {Type: genai.TypeString, Description: "Command to run via sh -c."},
@@ -151,10 +151,10 @@ func builtinAgentTools(image string) map[string]builtinTool {
 			},
 			impl: execRunShell,
 		},
-		"write_file": {
+		config.WriteFileBuiltinName: {
 			decl: &genai.FunctionDeclaration{
-				Name:        "write_file",
-				Description: toolDescription("write_file", writeFileDescription),
+				Name:        config.WriteFileBuiltinName,
+				Description: toolDescription(config.WriteFileBuiltinName, writeFileDescription),
 				Parameters: objectSchema(map[string]*genai.Schema{
 					"path":    pathParam("File path, relative to the working directory (or an absolute path inside it)."),
 					"content": {Type: genai.TypeString, Description: "The text content to write."},
@@ -163,10 +163,10 @@ func builtinAgentTools(image string) map[string]builtinTool {
 			},
 			impl: execWriteFile,
 		},
-		"edit_file": {
+		config.EditFileBuiltinName: {
 			decl: &genai.FunctionDeclaration{
-				Name:        "edit_file",
-				Description: toolDescription("edit_file", editFileDescription),
+				Name:        config.EditFileBuiltinName,
+				Description: toolDescription(config.EditFileBuiltinName, editFileDescription),
 				Parameters: objectSchema(map[string]*genai.Schema{
 					"path":        pathParam("File path, relative to the working directory (or an absolute path inside it)."),
 					"old_string":  {Type: genai.TypeString, Description: "The exact text to replace, copied verbatim from a read_file result — same indentation, same line breaks."},
@@ -176,9 +176,9 @@ func builtinAgentTools(image string) map[string]builtinTool {
 			},
 			impl: execEditFile,
 		},
-		"search_files": {
+		config.SearchFilesBuiltinName: {
 			decl: &genai.FunctionDeclaration{
-				Name:        "search_files",
+				Name:        config.SearchFilesBuiltinName,
 				Description: searchFilesDescription,
 				Parameters: objectSchema(map[string]*genai.Schema{
 					"pattern":          {Type: genai.TypeString, Description: "Regular expression matched against each line of each file. Omit to search by filename only (then glob is required)."},

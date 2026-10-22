@@ -559,7 +559,7 @@ func prepareContextBlocks(ctx context.Context, dir string, ri config.ResolvedInv
 // hasReadFileDecl reports whether decls declares the read_file tool.
 func hasReadFileDecl(decls *genai.Tool) bool {
 	for _, decl := range decls.FunctionDeclarations {
-		if decl.Name == "read_file" {
+		if decl.Name == config.ReadFileBuiltinName {
 			return true
 		}
 	}
