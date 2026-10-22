@@ -363,16 +363,50 @@ jobs:
 	mustRun(t, "run", path, "--force")
 
 	writePipelineFile(t, path, pipeline("tags: [box]"))
+
+	// Volumes an earlier test in this shard process left behind carry the same pid label and would count as bytes this placement sent.
+	before := volumeNames(t)
+
 	mustRun(t, "run", path, "--force", "--worker", "box=local:")
 
 	// A placed agent records no placement row (observed: notePlacement is only called for tasks and resources), so the bytes are read off the daemon: every tree a docker+ session sends is filled into a data volume labelled with its size.
-	if filled := volumeBytesFilled(t); filled >= markerBytes {
+	if filled := volumeBytesFilled(t, before); filled >= markerBytes {
 		t.Errorf("the session filled %d bytes into the worker, want fewer than the %d-byte local cache: it crossed the wire", filled, markerBytes)
 	}
 }
 
-// volumeBytesFilled sums the trees this process sent to the local daemon.
-func volumeBytesFilled(t *testing.T) int64 {
+// volumeNames is the set of data volumes this process has on the local daemon.
+func volumeNames(t *testing.T) map[string]bool {
+	t.Helper()
+
+	names := map[string]bool{}
+
+	for _, volume := range processVolumes(t) {
+		names[volume.Name] = true
+	}
+
+	return names
+}
+
+// volumeBytesFilled sums the trees this process sent to the local daemon in volumes that were not already there.
+func volumeBytesFilled(t *testing.T, already map[string]bool) int64 {
+	t.Helper()
+
+	var total int64
+
+	for _, volume := range processVolumes(t) {
+		if already[volume.Name] {
+			continue
+		}
+
+		size, _ := strconv.ParseInt(volume.Labels["steps.size"], 10, 64)
+		total += size
+	}
+
+	return total
+}
+
+func processVolumes(t *testing.T) []dockerapi.Volume {
 	t.Helper()
 
 	docker, err := dockerapi.New("")
@@ -387,14 +421,37 @@ func volumeBytesFilled(t *testing.T) int64 {
 		t.Fatal(err)
 	}
 
-	var total int64
+	return volumes
+}
 
-	for _, volume := range volumes {
-		size, _ := strconv.ParseInt(volume.Labels["steps.size"], 10, 64)
-		total += size
+// TestVolumeBytesFilledIgnoresVolumesAlreadyThere: a volume an earlier test in this shard process left behind has the same pid label, and counting it made the placed-agent test above fail with someone else's megabyte.
+func TestVolumeBytesFilledIgnoresVolumesAlreadyThere(t *testing.T) {
+	requireDockerE2E(t)
+
+	docker, err := dockerapi.New("")
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	return total
+	t.Cleanup(func() { _ = docker.Close() })
+
+	name := "steps-test-leftover-" + strconv.Itoa(os.Getpid())
+	labels := map[string]string{"steps.pid": strconv.Itoa(os.Getpid()), "steps.size": strconv.Itoa(2 << 20)}
+
+	_, err = docker.CreateVolume(t.Context(), name, labels, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = docker.RemoveVolume(context.WithoutCancel(t.Context()), name) })
+
+	if got := volumeBytesFilled(t, nil); got < 2<<20 {
+		t.Fatalf("the leftover counted %d bytes with nothing excluded, want at least 2 MiB (the helper is not seeing the volume)", got)
+	}
+
+	if got := volumeBytesFilled(t, volumeNames(t)); got != 0 {
+		t.Errorf("volumes already there counted %d bytes, want 0", got)
+	}
 }
 
 // placedCachePipeline is TestEndToEndPlacedTaskCacheStaysOnItsWorker's pipeline with the compile step's placement lines as given, so one file can be warmed placed or unplaced.
