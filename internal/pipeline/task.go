@@ -17,7 +17,6 @@ import (
 	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/retry"
 	"github.com/jtarchie/steps/internal/shell"
-	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -95,7 +94,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 // step/job records it).
 func executeTask(
 	ctx context.Context, cfg *config.Config, step config.Step,
-	rt config.ResolvedTask, bw workspace.BuildWorkspace, st store.Store,
+	rt config.ResolvedTask, bw workspace.BuildWorkspace, st agent.StepStore,
 ) error {
 	// A cell of a collecting matrix captures each output under its own
 	// coordinates (findings -> findings/alpha) instead of the plain name, so
@@ -263,7 +262,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 // streams output live and any nonzero exit is a hard failure.
 func runTaskCommand(
 	ctx context.Context, cfg *config.Config, runner shell.Runner,
-	rt config.ResolvedTask, workspaceDir string, st store.Store,
+	rt config.ResolvedTask, workspaceDir string, st agent.StepStore,
 ) error {
 	switch {
 	case rt.Fix != nil:
@@ -323,7 +322,7 @@ func classifyRunError(ctx context.Context, err error) error {
 // it failed while exiting 0.
 func runFixTask(
 	ctx context.Context, cfg *config.Config, runner shell.Runner,
-	rt config.ResolvedTask, workspaceDir string, st store.Store,
+	rt config.ResolvedTask, workspaceDir string, st agent.StepStore,
 ) error {
 	stdout, stderr, exitCode, err := runCaptured(ctx, runner, rt)
 	if err != nil {

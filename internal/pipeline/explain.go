@@ -30,7 +30,7 @@ type ExplainRow struct {
 //
 // It resolves get versions the way planning always has (check commands do
 // run), but executes no step and writes no node, job_run, or workspace.
-func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, st store.Store) ([]ExplainRow, error) {
+func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, st explainStore) ([]ExplainRow, error) {
 	err := validateJob(ctx, cfg, job)
 	if err != nil {
 		return nil, err
@@ -125,4 +125,10 @@ func shortHash(hash string) string {
 	}
 
 	return hash[:width]
+}
+
+// explainStore is what a plan reads: recorded versions and the skip index.
+type explainStore interface {
+	store.Versions
+	store.Cache
 }

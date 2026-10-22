@@ -43,7 +43,7 @@ import (
 // become two runs, side by side, which is the entire point of being able to do
 // this cheaply.
 func PrepareReplay(
-	ctx context.Context, st store.Store, provider workspace.Provider,
+	ctx context.Context, st runLookup, provider workspace.Provider,
 	sourceRunID, fromStep string, cfg *config.Config, job *config.Job,
 ) (context.Context, string, error) {
 	source, err := findRun(ctx, st, sourceRunID)
@@ -158,7 +158,7 @@ func refuseReplayAcrossGet(job *config.Job, from int, fromStep string) error {
 // step before --from outside any build — and they are filed under the
 // replay's own id, which is the build its walk asks about.
 func replayDoneSteps(
-	ctx context.Context, st store.Store, sourceRunID, replayID string, job *config.Job, from int,
+	ctx context.Context, st store.Runs, sourceRunID, replayID string, job *config.Job, from int,
 ) (map[doneKey]string, error) {
 	steps, err := st.CompletedRunSteps(ctx, sourceRunID)
 	if err != nil {

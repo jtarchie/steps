@@ -363,7 +363,7 @@ func forced(ctx context.Context) bool {
 // is the only one that records none. The upsert is idempotent, so the common
 // case pays one statement against a row that is already there.
 func recordRunIdentity(
-	ctx context.Context, st store.Store, resume *resumeState, jobName, workspaceRoot string, revision config.Revision, queueID int64,
+	ctx context.Context, st recordRunStore, resume *resumeState, jobName, workspaceRoot string, revision config.Revision, queueID int64,
 ) error {
 	if revision.Recorded() {
 		err := st.RecordRevision(ctx, revision.SHA, revision.Source, revision.Includes)
@@ -507,4 +507,10 @@ func findRun(ctx context.Context, st runLookup, runID string) (store.RunRow, err
 	}
 
 	return run, nil
+}
+
+// recordRunStore is what stamping a run's identity writes: the revision it ran and the run row itself.
+type recordRunStore interface {
+	store.Revisions
+	store.Runs
 }
