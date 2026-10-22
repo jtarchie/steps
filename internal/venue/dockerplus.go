@@ -295,8 +295,8 @@ func (s *plusSession) connect(ctx context.Context) error {
 }
 
 // compose lays the step's tree out as volumes: each input directory a copy-on-write view of a cached tree, each empty output a plain volume of its own, and the work volume under them for whatever else the tree holds.
-func (s *plusSession) compose(ctx context.Context) ([]string, []string, error) {
-	mounts := []string{volumeMount(s.work, plusWorkdir, false)}
+func (s *plusSession) compose(ctx context.Context) ([]dockerapi.Bind, []string, error) {
+	mounts := []dockerapi.Bind{volumeMount(s.work, plusWorkdir, false)}
 	s.outputs = map[string]string{}
 
 	declared := map[string]bool{}
@@ -345,8 +345,8 @@ func (s *plusSession) compose(ctx context.Context) ([]string, []string, error) {
 }
 
 // cacheMounts finds or makes each of the step's cache volumes on this worker, mounted over the empty stand-in the tree carried.
-func (s *plusSession) cacheMounts(ctx context.Context) ([]string, error) {
-	mounts := make([]string, 0, len(s.spec.Caches))
+func (s *plusSession) cacheMounts(ctx context.Context) ([]dockerapi.Bind, error) {
+	mounts := make([]dockerapi.Bind, 0, len(s.spec.Caches))
 
 	for rel, key := range s.spec.Caches {
 		volume, err := s.docker.CreateVolume(ctx, taskCacheVolume(s.namespace, key), taskCacheLabels(ctx, key), nil)
@@ -368,13 +368,13 @@ func taskCacheVolume(namespace, key string) string {
 }
 
 // mountFor places one top-level directory; an empty declared output gets a fresh volume, which is what lets it be held afterwards without a copy.
-func (s *plusSession) mountFor(ctx context.Context, name, local string, output bool) (string, error) {
+func (s *plusSession) mountFor(ctx context.Context, name, local string, output bool) (dockerapi.Bind, error) {
 	target := path.Join(plusWorkdir, name)
 
 	if output && isEmptyDir(local) {
 		volume, err := s.newVolume(ctx, "out")
 		if err != nil {
-			return "", err
+			return dockerapi.Bind{}, err
 		}
 
 		s.outputs[name] = volume.Name
@@ -384,19 +384,15 @@ func (s *plusSession) mountFor(ctx context.Context, name, local string, output b
 
 	volume, err := s.placeLocal(ctx, local)
 	if err != nil {
-		return "", fmt.Errorf("input %q: %w", name, err)
+		return dockerapi.Bind{}, fmt.Errorf("input %q: %w", name, err)
 	}
 
 	return volumeMount(volume, target, false), nil
 }
 
 // volumeMount always says nocopy: docker otherwise fills an empty volume, mode and contents, from whatever the image has at the mount path, on every first mount, undoing openRoots.
-func volumeMount(volume, target string, readOnly bool) string {
-	if readOnly {
-		return volume + ":" + target + ":ro,nocopy"
-	}
-
-	return volume + ":" + target + ":nocopy"
+func volumeMount(volume, target string, readOnly bool) dockerapi.Bind {
+	return dockerapi.Bind{Source: volume, Target: target, ReadOnly: readOnly, NoCopy: true}
 }
 
 func isEmptyDir(dir string) bool {
@@ -538,15 +534,13 @@ func (s *plusSession) newVolume(ctx context.Context, kind string) (dockerapi.Vol
 // Through the holder's archive endpoint, not a container: unpacking a directory entry over a directory that exists applies the entry's mode to it, a mount point included, and only "." is skipped, so the entries are written from the parent of plusWorkdir.
 //
 // ponytail: an input's files arrive root-owned with the modes they had, so a non-root user: reads what is world-readable and adds to an input but cannot overwrite it; the cache is shared across users, so ownership cannot follow the step. Concourse has the same limit.
-func (s *plusSession) openRoots(ctx context.Context, mounts []string) error {
+func (s *plusSession) openRoots(ctx context.Context, mounts []dockerapi.Bind) error {
 	var roots bytes.Buffer
 
 	archive := tar.NewWriter(&roots)
 
 	for _, mount := range mounts {
-		target := strings.SplitN(mount, ":", 3)[1]
-
-		err := archive.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: strings.TrimPrefix(target, path.Dir(plusWorkdir)+"/") + "/", Mode: 0o777})
+		err := archive.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: strings.TrimPrefix(mount.Target, path.Dir(plusWorkdir)+"/") + "/", Mode: 0o777})
 		if err != nil {
 			return fmt.Errorf("opening the step's volumes: %w", err)
 		}

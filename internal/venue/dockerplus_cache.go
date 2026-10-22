@@ -109,7 +109,7 @@ func (s *plusSession) fill(ctx context.Context, digest string, pack func(io.Writ
 
 // pour reports the bytes it sent, which is what the entry is weighed at for eviction.
 func (s *plusSession) pour(ctx context.Context, volume string, pack func(io.Writer) error) (int64, error) {
-	holder, err := s.docker.CreateHolder(ctx, "steps-fill-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), []string{volumeMount(volume, holderMount, false)})
+	holder, err := s.docker.CreateHolder(ctx, "steps-fill-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), []dockerapi.Bind{volumeMount(volume, holderMount, false)})
 	if err != nil {
 		return 0, fmt.Errorf("%w", err)
 	}
@@ -180,7 +180,7 @@ func (s *plusSession) runDigest(ctx context.Context, volume, weigh string) (stri
 		Name:    "steps-digest-" + randomSuffix(),
 		Labels:  shell.OwnershipLabels(),
 		Network: "none",
-		Mounts:  []string{volumeMount(volume, holderMount, true)},
+		Mounts:  []dockerapi.Bind{volumeMount(volume, holderMount, true)},
 	})
 	if err != nil {
 		return "", 0, fmt.Errorf("%w", err)
@@ -353,7 +353,7 @@ func pullPlus(ctx context.Context, worker Worker, digest, dst string) (int64, er
 		return 0, err
 	}
 
-	holder, err := s.docker.CreateHolder(ctx, "steps-pull-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), []string{volumeMount(data.Name, holderMount, true)})
+	holder, err := s.docker.CreateHolder(ctx, "steps-pull-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), []dockerapi.Bind{volumeMount(data.Name, holderMount, true)})
 	if err != nil {
 		return 0, fmt.Errorf("%w", err)
 	}

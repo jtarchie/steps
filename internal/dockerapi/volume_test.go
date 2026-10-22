@@ -100,7 +100,7 @@ func volume(t *testing.T, client *Client, suffix string, driverOpts map[string]s
 	return created
 }
 
-func holder(t *testing.T, client *Client, suffix string, mounts ...string) string {
+func holder(t *testing.T, client *Client, suffix string, mounts ...Bind) string {
 	t.Helper()
 
 	if !client.ImagePresent(t.Context(), testImage) {
@@ -155,7 +155,7 @@ func roundTrip(t *testing.T, client *Client) {
 	t.Helper()
 
 	data := volume(t, client, "data", nil)
-	id := holder(t, client, "holder", data.Name+":/in")
+	id := holder(t, client, "holder", Bind{Source: data.Name, Target: "/in"})
 
 	sent := map[string]entry{
 		"run":      {mode: 0o755, body: "#!/bin/sh\necho hi\n"},
@@ -195,13 +195,13 @@ func TestOverlayVolumeLeavesItsLowerAlone(t *testing.T) {
 	upper := volume(t, client, "upper", nil)
 	work := volume(t, client, "work", nil)
 
-	err := client.PutArchive(t.Context(), holder(t, client, "fill", lower.Name+":/l"), "/l", tarOf(t, map[string]entry{"a": {mode: 0o644, body: "lower"}}))
+	err := client.PutArchive(t.Context(), holder(t, client, "fill", Bind{Source: lower.Name, Target: "/l"}), "/l", tarOf(t, map[string]entry{"a": {mode: 0o644, body: "lower"}}))
 	if err != nil {
 		t.Fatalf("filling the lower: %v", err)
 	}
 
 	child := volume(t, client, "child", OverlayOptions(lower.Mountpoint, upper.Mountpoint, work.Mountpoint))
-	childHolder := holder(t, client, "child-holder", child.Name+":/c")
+	childHolder := holder(t, client, "child-holder", Bind{Source: child.Name, Target: "/c"})
 
 	if got := readFile(t, client, childHolder, "/c/a"); got != "lower" {
 		t.Fatalf("the child reads %q, want the lower's file", got)
@@ -216,7 +216,7 @@ func TestOverlayVolumeLeavesItsLowerAlone(t *testing.T) {
 		t.Fatalf("the child reads %q after its own write", got)
 	}
 
-	lowerHolder := holder(t, client, "lower-holder", lower.Name+":/l:ro")
+	lowerHolder := holder(t, client, "lower-holder", Bind{Source: lower.Name, Target: "/l", ReadOnly: true})
 	if got := readFile(t, client, lowerHolder, "/l/a"); got != "lower" {
 		t.Fatalf("the lower now reads %q: the child wrote through it", got)
 	}
@@ -235,7 +235,7 @@ func TestOverlayVolumeWithAMissingLowerFailsNamingIt(t *testing.T) {
 	work := volume(t, client, "work", nil)
 	child := volume(t, client, "child", OverlayOptions("/nonexistent/steps-lower", upper.Mountpoint, work.Mountpoint))
 
-	err := client.PutArchive(t.Context(), holder(t, client, "holder", child.Name+":/c"), "/c", tarOf(t, map[string]entry{"a": {mode: 0o644, body: "x"}}))
+	err := client.PutArchive(t.Context(), holder(t, client, "holder", Bind{Source: child.Name, Target: "/c"}), "/c", tarOf(t, map[string]entry{"a": {mode: 0o644, body: "x"}}))
 	if err == nil || !strings.Contains(err.Error(), child.Name) {
 		t.Fatalf("want an error naming %s, got %v", child.Name, err)
 	}
@@ -260,7 +260,7 @@ func TestRemoveVolumeRefusesOneInUse(t *testing.T) {
 	client := requireDaemon(t)
 
 	data := volume(t, client, "data", nil)
-	holder(t, client, "holder", data.Name+":/in")
+	holder(t, client, "holder", Bind{Source: data.Name, Target: "/in"})
 
 	err := client.RemoveVolume(t.Context(), data.Name)
 	if err == nil {
@@ -303,7 +303,7 @@ func TestCreateVolumeReturnsAnExistingOneUntouched(t *testing.T) {
 
 	first := volume(t, client, "reused", nil)
 
-	err := client.PutArchive(t.Context(), holder(t, client, "fill", first.Name+":/v"), "/v", tarOf(t, map[string]entry{"f": {mode: 0o644, body: "stale"}}))
+	err := client.PutArchive(t.Context(), holder(t, client, "fill", Bind{Source: first.Name, Target: "/v"}), "/v", tarOf(t, map[string]entry{"f": {mode: 0o644, body: "stale"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestCreateVolumeReturnsAnExistingOneUntouched(t *testing.T) {
 		t.Fatalf("CreateVolume again: %v", err)
 	}
 
-	if got := readFile(t, client, holder(t, client, "read", again.Name+":/v"), "/v/f"); got != "stale" {
+	if got := readFile(t, client, holder(t, client, "read", Bind{Source: again.Name, Target: "/v"}), "/v/f"); got != "stale" {
 		t.Fatalf("the second create emptied the volume: %q", got)
 	}
 }
@@ -328,7 +328,7 @@ func TestRunOnceReportsStdoutApartFromStderrAndTheExitCode(t *testing.T) {
 
 	data := volume(t, client, "data", nil)
 
-	err := client.PutArchive(t.Context(), holder(t, client, "fill", data.Name+":/d"), "/d", tarOf(t, map[string]entry{"f": {mode: 0o644, body: "inside"}}))
+	err := client.PutArchive(t.Context(), holder(t, client, "fill", Bind{Source: data.Name, Target: "/d"}), "/d", tarOf(t, map[string]entry{"f": {mode: 0o644, body: "inside"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestRunOnceReportsStdoutApartFromStderrAndTheExitCode(t *testing.T) {
 		Cmd:    []string{"sh", "-c", "cat /d/f; echo noise >&2; exit 5"},
 		Name:   once,
 		Labels: map[string]string{"steps.once": once},
-		Mounts: []string{data.Name + ":/d:ro"},
+		Mounts: []Bind{{Source: data.Name, Target: "/d", ReadOnly: true}},
 	})
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)

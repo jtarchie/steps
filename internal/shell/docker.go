@@ -90,7 +90,7 @@ type dockerSession struct {
 	// this machine's.
 	dockerHost string
 	dockerDial func(ctx context.Context) (net.Conn, error)
-	volumes    []string
+	volumes    []dockerapi.Bind
 	// envNames are the variables the pipeline's env: opted this command into.
 	// They are passed at container start, so every exec in the session
 	// inherits them.

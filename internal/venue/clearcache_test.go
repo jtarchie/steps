@@ -113,7 +113,7 @@ func holdVolume(t *testing.T, docker *dockerapi.Client, volume string) {
 		}
 	}
 
-	holder, err := docker.CreateHolder(t.Context(), "steps-test-"+randomSuffix(), "alpine:3", shell.OwnershipLabels(), []string{volume + ":/c"})
+	holder, err := docker.CreateHolder(t.Context(), "steps-test-"+randomSuffix(), "alpine:3", shell.OwnershipLabels(), []dockerapi.Bind{{Source: volume, Target: "/c"}})
 	if err != nil {
 		t.Fatal(err)
 	}

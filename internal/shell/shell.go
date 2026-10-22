@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/redact"
 	"io"
 	"log/slog"
@@ -85,7 +86,7 @@ type RunnerSpec struct {
 	// DockerDial reaches DockerHost through a connection the caller makes, for a socket with no address here (a docker+ worker's, over ssh); DockerHost then only names it in errors.
 	DockerDial func(ctx context.Context) (net.Conn, error)
 	// Volumes are daemon-side named volumes as `name:target`; with MountPath they REPLACE the tree bind, because a docker+ worker's tree lives in volumes and never at a path.
-	Volumes []string
+	Volumes []dockerapi.Bind
 	// EnvValues are variables the CALLER supplies with their values rather
 	// than by name, for the ones that exist nowhere in this process's own
 	// environment. A venue's STEPS_WORKER is the case: it names the tag a

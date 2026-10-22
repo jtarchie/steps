@@ -241,16 +241,34 @@ func TestCloseReportsNoErrorForAHealthyClient(t *testing.T) {
 	}
 }
 
+func TestBindStringIsDockersBindSyntax(t *testing.T) {
+	tests := []struct {
+		bind Bind
+		want string
+	}{
+		{Bind{Source: "/a", Target: "/b"}, "/a:/b"},
+		{Bind{Source: "v", Target: "/d", ReadOnly: true}, "v:/d:ro"},
+		{Bind{Source: "v", Target: "/d", NoCopy: true}, "v:/d:nocopy"},
+		{Bind{Source: "v", Target: "/d", ReadOnly: true, NoCopy: true}, "v:/d:ro,nocopy"},
+	}
+
+	for _, tt := range tests {
+		if got := tt.bind.String(); got != tt.want {
+			t.Errorf("%+v = %q, want %q", tt.bind, got, tt.want)
+		}
+	}
+}
+
 func TestBindsMountTheTreeUnlessVolumesStandIn(t *testing.T) {
 	tests := []struct {
 		name string
 		spec ContainerSpec
 		want []string
 	}{
-		{"tree at its own path", ContainerSpec{WorkingDir: "/w", Mounts: []string{"/a:/a"}}, []string{"/w:/w", "/a:/a"}},
+		{"tree at its own path", ContainerSpec{WorkingDir: "/w", Mounts: []Bind{{Source: "/a", Target: "/a"}}}, []string{"/w:/w", "/a:/a"}},
 		{"mount dir outranks the working dir", ContainerSpec{MountDir: "/m", WorkingDir: "/m/sub"}, []string{"/m:/m"}},
-		{"volumes replace the tree", ContainerSpec{WorkingDir: "/w", Volumes: []string{"v:/w"}, Mounts: []string{"/a:/a"}}, []string{"v:/w", "/a:/a"}},
-		{"no tree", ContainerSpec{Mounts: []string{"/a:/a"}}, []string{"/a:/a"}},
+		{"volumes replace the tree", ContainerSpec{WorkingDir: "/w", Volumes: []Bind{{Source: "v", Target: "/w"}}, Mounts: []Bind{{Source: "/a", Target: "/a"}}}, []string{"v:/w", "/a:/a"}},
+		{"no tree", ContainerSpec{Mounts: []Bind{{Source: "/a", Target: "/a"}}}, []string{"/a:/a"}},
 	}
 
 	for _, tt := range tests {

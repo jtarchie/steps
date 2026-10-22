@@ -63,10 +63,10 @@ type ContainerSpec struct {
 	// ExtraHosts are `name:address` entries, for reaching the host from
 	// inside by a name that works on Docker Desktop and Linux alike.
 	ExtraHosts []string
-	// Mounts are bind mounts beyond WorkingDir, as `source:target[:ro]`.
-	Mounts []string
-	// Volumes are named volumes as `name:target`; set, they replace the tree bind, since their tree is on the daemon already.
-	Volumes []string
+	// Mounts are bind mounts beyond WorkingDir.
+	Mounts []Bind
+	// Volumes are named volumes; set, they replace the tree bind, since their tree is on the daemon already.
+	Volumes []Bind
 	// OpenStdin keeps the container's stdin open for a caller that attaches
 	// to it, which a foreground run does and a session container does not.
 	OpenStdin bool
@@ -216,7 +216,7 @@ var errNotPublished = errors.New("the port is not published")
 // wrote.
 func (spec ContainerSpec) binds() []string {
 	if len(spec.Volumes) > 0 {
-		return append(slices.Clone(spec.Volumes), spec.Mounts...)
+		return bindStrings(slices.Concat(spec.Volumes, spec.Mounts))
 	}
 
 	tree := spec.MountDir
@@ -225,13 +225,10 @@ func (spec ContainerSpec) binds() []string {
 	}
 
 	if tree == "" {
-		return spec.Mounts
+		return bindStrings(spec.Mounts)
 	}
 
-	binds := make([]string, 0, len(spec.Mounts)+1)
-	binds = append(binds, tree+":"+tree)
-
-	return append(binds, spec.Mounts...)
+	return bindStrings(slices.Concat([]Bind{{Source: tree, Target: tree}}, spec.Mounts))
 }
 
 // StartContainer runs a created container.
@@ -474,3 +471,37 @@ func writerOrDiscard(w io.Writer) io.Writer {
 
 // removalBound is how long a teardown's removal is given once detached from its caller, so a daemon that never answers cannot hold the caller with it.
 var removalBound = 30 * time.Second
+
+// Bind is one mount of a path or named volume into a container, in docker's `source:target[:options]` form.
+type Bind struct {
+	Source, Target string
+	ReadOnly       bool
+	// NoCopy stops docker filling an empty named volume from the image's content at Target.
+	NoCopy bool
+}
+
+func (b Bind) String() string {
+	switch {
+	case b.ReadOnly && b.NoCopy:
+		return b.Source + ":" + b.Target + ":ro,nocopy"
+	case b.ReadOnly:
+		return b.Source + ":" + b.Target + ":ro"
+	case b.NoCopy:
+		return b.Source + ":" + b.Target + ":nocopy"
+	}
+
+	return b.Source + ":" + b.Target
+}
+
+func bindStrings(binds []Bind) []string {
+	if binds == nil {
+		return nil
+	}
+
+	out := make([]string, len(binds))
+	for i, bind := range binds {
+		out[i] = bind.String()
+	}
+
+	return out
+}

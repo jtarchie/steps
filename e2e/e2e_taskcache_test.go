@@ -661,11 +661,11 @@ func holdTaskCacheVolumes(t *testing.T) func() {
 		t.Fatal(err)
 	}
 
-	var mounts []string
+	var mounts []dockerapi.Bind
 
 	for _, volume := range volumes {
 		if strings.HasPrefix(volume.Name, "steps-tc-") {
-			mounts = append(mounts, volume.Name+":/cache"+strconv.Itoa(len(mounts)))
+			mounts = append(mounts, dockerapi.Bind{Source: volume.Name, Target: "/cache" + strconv.Itoa(len(mounts))})
 		}
 	}
 

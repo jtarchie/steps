@@ -114,12 +114,12 @@ func (c *Client) RemoveVolume(ctx context.Context, name string) error {
 }
 
 // CreateHolder creates a never-started container whose only job is to mount volumes for the archive endpoints; image must already be present.
-func (c *Client) CreateHolder(ctx context.Context, name, image string, labels map[string]string, mounts []string) (string, error) {
+func (c *Client) CreateHolder(ctx context.Context, name, image string, labels map[string]string, mounts []Bind) (string, error) {
 	created, err := c.createContainer(ctx, client.ContainerCreateOptions{
 		Name: name,
 		// An image only because the client refuses a create without one (the daemon would not); never started, so never run.
 		Config:     &container.Config{Image: image, Cmd: []string{"true"}, Labels: labels},
-		HostConfig: &container.HostConfig{Binds: mounts},
+		HostConfig: &container.HostConfig{Binds: bindStrings(mounts)},
 	})
 	if err != nil {
 		return "", fmt.Errorf("creating holder %s on %s: %w", name, c.host, err)
