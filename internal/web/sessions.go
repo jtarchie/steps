@@ -146,15 +146,7 @@ func (s *Server) startSession(c *echo.Context, who actor.Actor) error {
 	}
 
 	// Secure exactly when the browser came over https: a daemon on plain-HTTP loopback, the default, would have a Secure cookie dropped and never sign anybody in.
-	c.SetCookie(&http.Cookie{ //nolint:gosec // Secure is servedOverTLS, see above
-		Name:     sessionCookie,
-		Value:    token,
-		Path:     "/",
-		MaxAge:   int(sessionTTL.Seconds()),
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   servedOverTLS(c.Request()),
-	})
+	setCookie(c, sessionCookie, token, "/", int(sessionTTL.Seconds()))
 
 	return nil
 }
@@ -171,7 +163,7 @@ func (s *Server) handleLogout(c *echo.Context) error {
 
 	slog.InfoContext(c.Request().Context(), "web.signed_out", "actor", actor.From(c.Request().Context()).String())
 
-	c.SetCookie(&http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: servedOverTLS(c.Request())}) //nolint:gosec // as handleLogin
+	setCookie(c, sessionCookie, "", "/", -1)
 
 	//nolint:wrapcheck // as above
 	return c.Redirect(http.StatusSeeOther, loginPath)
@@ -180,6 +172,19 @@ func (s *Server) handleLogout(c *echo.Context) error {
 // servedOverTLS is whether the browser reached this daemon over https, directly or through a proxy that terminated it — the one case a cookie can be marked Secure without being dropped.
 func servedOverTLS(r *http.Request) bool {
 	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// setCookie writes one of this package's cookies; a negative maxAge clears it. Secure exactly when the browser came over https, see servedOverTLS.
+func setCookie(c *echo.Context, name, value, path string, maxAge int) {
+	c.SetCookie(&http.Cookie{ //nolint:gosec // Secure is servedOverTLS
+		Name:     name,
+		Value:    value,
+		Path:     path,
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   servedOverTLS(c.Request()),
+	})
 }
 
 // sessionKey marks a request authenticate let in by its session, so the page can offer to end it without reading the session twice.

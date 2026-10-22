@@ -259,15 +259,7 @@ func (s *Server) handleSignInStart(c *echo.Context) error {
 	s.pending.put(state, pendingSignIn{provider: provider.Name, session: session.Marshal(), next: safeNext(c.QueryParam("next"))}, time.Now().Add(signInWait))
 
 	// The state is also this browser's: a callback link somebody else started and sent here would otherwise sign this browser in as them.
-	c.SetCookie(&http.Cookie{ //nolint:gosec // Secure is servedOverTLS, as the session cookie
-		Name:     signInCookie,
-		Value:    state,
-		Path:     "/auth/",
-		MaxAge:   int(signInWait.Seconds()),
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   servedOverTLS(c.Request()),
-	})
+	setCookie(c, signInCookie, state, "/auth/", int(signInWait.Seconds()))
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
 	return c.Redirect(http.StatusSeeOther, to)
@@ -300,7 +292,7 @@ func (s *Server) handleSignInCallback(c *echo.Context) error {
 		return echoError(err)
 	}
 
-	c.SetCookie(&http.Cookie{Name: signInCookie, Value: "", Path: "/auth/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: servedOverTLS(c.Request())}) //nolint:gosec // as above
+	setCookie(c, signInCookie, "", "/auth/", -1)
 
 	slog.InfoContext(c.Request().Context(), "web.signed_in", "actor", who.String())
 
