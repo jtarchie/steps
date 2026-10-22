@@ -60,8 +60,7 @@ func CLIBinary(cli string) string {
 	return cliProviders[cli].binary
 }
 
-// CLIProviderNames lists every recognized CLI key. Exported so internal/agent
-// can assert its own table covers exactly these.
+// CLIProviderNames lists every recognized CLI key; only this package's tests walk it.
 func CLIProviderNames() []string {
 	names := make([]string, 0, len(cliProviders))
 	for name := range cliProviders {

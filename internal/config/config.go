@@ -145,12 +145,6 @@ func LoadConfig(path string) (*Config, error) {
 	return Load(path, Slugify(path), nil)
 }
 
-// LoadConfigWithVars is LoadConfig with vars, under the same default
-// identity.
-func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
-	return Load(path, Slugify(path), vars)
-}
-
 // Load is the on-disk form of Parse: substitution happens BEFORE the parse so a var may appear anywhere a value does, and a substituted value is ORDINARY CONFIG, hashed and stored — vars are parameters, never secrets.
 func Load(path string, name string, vars map[string]string) (*Config, error) {
 	source, err := ReadSource(path, vars)

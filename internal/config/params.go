@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -40,6 +41,24 @@ func (p ParamSpec) NumberLimits() bool {
 	return p.Min != nil || p.Max != nil
 }
 
+// patternCache holds compiled ParamSpec patterns; a package-level cache because ParamSpec is passed by value and an unexported field would trip the reflection tests over config structs. Bounded by the patterns a loaded pipeline declares.
+var patternCache sync.Map //nolint:gochecknoglobals // process-wide memo of a pure function
+
+func compiledPattern(pattern string) (*regexp.Regexp, error) {
+	if cached, ok := patternCache.Load(pattern); ok {
+		return cached.(*regexp.Regexp), nil //nolint:forcetypeassert // only *regexp.Regexp is ever stored
+	}
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("compile pattern: %w", err)
+	}
+
+	patternCache.Store(pattern, re)
+
+	return re, nil
+}
+
 // CheckString is why value is not an acceptable string for p, or "".
 func (p ParamSpec) CheckString(value string) string {
 	length := utf8.RuneCountInString(value)
@@ -53,8 +72,8 @@ func (p ParamSpec) CheckString(value string) string {
 	}
 
 	if p.Pattern != "" {
-		matched, err := regexp.MatchString(p.Pattern, value)
-		if err != nil || !matched {
+		re, err := compiledPattern(p.Pattern)
+		if err != nil || !re.MatchString(value) {
 			return "must match the pattern " + p.Pattern
 		}
 	}
