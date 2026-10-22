@@ -34,6 +34,7 @@ jobs:
 - `name` is how `agents:` tool grants and `resource_types:` `mcp:` blocks reference this server — declared once, shared by any number of consumers, the same "reusable top-level block" idiom as `agents:`/`resources:`.
 - `endpoint` must not embed userinfo (`https://user:token@host/`), since it's folded into cache-hashed content — use `auth.api_key_env` for a credential, never the endpoint itself. Checked at load.
 - `auth.type` is `"none"` (default, when `auth:` is omitted entirely), `"bearer"`, or `"oauth"`. `"bearer"` requires `api_key_env` — a static token read from that OS environment variable at run time, exactly like an LLM `agents:` entry's `api_key_env` (the value is never stored in YAML or hashed; only the env var *name* is).
+- `api_key_env` (and `oauth`'s `client_secret_env`) may name **any** environment variable of the machine running the pipeline; there is no allowlist. That is consistent with `steps pipeline set` being a remote shell on that machine: whoever can upload a pipeline can already run commands there and read its environment, so restricting these names would add no boundary. Treat upload access to a daemon as access to every secret in its environment.
 
 ## Local (stdio) servers
 
