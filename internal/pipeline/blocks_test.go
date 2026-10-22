@@ -107,9 +107,7 @@ func TestBlockNodesRecordWhatTheBlockConcluded(t *testing.T) {
 func cancelOnceLive(ctx context.Context, cancel context.CancelFunc, st store.Store, kind merkle.NodeKind, marker string) {
 	live := func() bool {
 		if kind == merkle.NodeKindApproval {
-			pending, err := st.Approvals(ctx, true, 1)
-
-			return err == nil && len(pending) > 0
+			return approvalIsWaiting(ctx, st)
 		}
 
 		_, err := os.Stat(marker)
@@ -122,6 +120,27 @@ func cancelOnceLive(ctx context.Context, cancel context.CancelFunc, st store.Sto
 	}
 
 	cancel()
+}
+
+// approvalIsWaiting reports whether the build's approval step has announced that it is waiting: the pending row alone is visible before the step can be cancelled cleanly, and a cancel between the two loses the block's node.
+func approvalIsWaiting(ctx context.Context, st store.Store) bool {
+	runs, err := st.ListRuns(ctx, "build", 1)
+	if err != nil || len(runs) == 0 {
+		return false
+	}
+
+	events, err := st.RunEvents(ctx, runs[0].ID, 0, 1000)
+	if err != nil {
+		return false
+	}
+
+	for _, event := range events {
+		if strings.Contains(event.Text, "waiting up to") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // TestBlockNodesRecordAnAbort: a block stopped by the job's cancellation is aborted in the store, like the leaf inside it, not failed.
