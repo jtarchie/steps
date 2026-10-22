@@ -96,6 +96,12 @@ func (p preparedAgentStep) openTree(ctx context.Context) (preparedAgentStep, err
 	return p, nil
 }
 
+// containerSpec is the one place a resolved invocation, task or export becomes a RunnerSpec's isolation fields, so a field added to the shape cannot be missed at one of the four call sites; callers set the placement fields (Subdir, Caches, Fetch, Keep) on the result.
+func containerSpec(image, cwd string, env []string, user, network string, privileged bool, limits *config.ContainerLimits) shell.RunnerSpec {
+	return shell.RunnerSpec{Image: image, Cwd: cwd, Env: env, User: user, Network: network,
+		Privileged: privileged, CPUShares: limits.CPUShares(), MemoryBytes: limits.MemoryBytes()}
+}
+
 // close releases everything prepareAgentStep opened for this step: any tool
 // connections (MCP) and the shell runner, then its workspace space, then its
 // spill dir (removed, not just closed — it may hold files a large
@@ -247,10 +253,10 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	// Cwd is the whole step directory and Subdir is where the model works, even though dir: is the only thing that makes them differ. The step's outputs: are named relative to the SPACE, so a placed agent that sent only its subdirectory would fetch them from a path that does not exist and come home with nothing.
-	runner, err := newRunner.build(ctx, shell.RunnerSpec{Image: ri.Image, Cwd: space.Dir(), Subdir: step.Dir, Caches: caches,
-		Env: ri.Env, User: ri.User, Network: ri.Network,
-		Privileged: ri.Privileged, CPUShares: ri.Limits.CPUShares(), MemoryBytes: ri.Limits.MemoryBytes(),
-		Fetch: step.Outputs, Keep: workspace.Kept(space)})
+	spec := containerSpec(ri.Image, space.Dir(), ri.Env, ri.User, ri.Network, ri.Privileged, ri.Limits)
+	spec.Subdir, spec.Caches, spec.Fetch, spec.Keep = step.Dir, caches, step.Outputs, workspace.Kept(space)
+
+	runner, err := newRunner.build(ctx, spec)
 	if err != nil {
 		abandon()
 		closeAll(closers)

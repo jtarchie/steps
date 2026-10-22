@@ -168,8 +168,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		return map[string]any{"error": err.Error()}
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: c.ri.Image, Cwd: env.dir, Env: c.ri.Env, User: c.ri.User, Network: c.ri.Network,
-		Privileged: c.ri.Privileged, CPUShares: c.ri.Limits.CPUShares(), MemoryBytes: c.ri.Limits.MemoryBytes()})
+	runner, err := shell.NewRunner(containerSpec(c.ri.Image, env.dir, c.ri.Env, c.ri.User, c.ri.Network, c.ri.Privileged, c.ri.Limits))
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
