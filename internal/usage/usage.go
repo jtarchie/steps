@@ -74,9 +74,9 @@ type Step struct {
 	// and a truncated JSON or verdict is a failure that reads as a bad answer.
 	FinishReason string
 	// Raw is the provider's usage block for the LAST response of the
-	// conversation, as JSON — the fields nobody has asked for yet. The store
-	// has no migration, so a field not captured today cannot be backfilled
-	// tomorrow; keeping the block whole costs a column and buys
+	// conversation, as JSON — the fields nobody has asked for yet. A field not
+	// captured today cannot be backfilled tomorrow; keeping the block whole now
+	// avoids a migration later, costs a column and buys
 	// every future question about spend.
 	//
 	// One response, deliberately, while every count beside it is the whole

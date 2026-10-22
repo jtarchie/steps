@@ -407,12 +407,7 @@ func checkSchemaVersion(ctx context.Context, db executor, path string) error {
 	}
 
 	if found == 0 && freshlyCreated(ctx, db) {
-		_, err = db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
-		if err != nil {
-			return fmt.Errorf("could not stamp the schema version of %q: %w", path, err)
-		}
-
-		return nil
+		return writeVersion(ctx, db, path)
 	}
 
 	return schemaVersionError(path, found)
@@ -636,8 +631,8 @@ func scanPair(rows *sql.Rows) ([2]string, error) {
 // collect runs a query and decodes every row through scan.
 //
 // It exists because the alternative — query, defer Close, loop, scan, check
-// rows.Err — is fifteen lines of identical bookkeeping at every one of the
-// sixteen list queries in this package, and the last of those five steps is
+// rows.Err — is fifteen lines of identical bookkeeping at every list query in this
+// package, and the last of those five steps is
 // the one that is quietly forgotten. what names the thing being read, for the
 // error message.
 func collect[T any](ctx context.Context, db *sql.DB, what, query string, args []any, scan func(*sql.Rows) (T, error)) ([]T, error) {
@@ -665,4 +660,15 @@ func collect[T any](ctx context.Context, db *sql.DB, what, query string, args []
 	}
 
 	return out, nil
+}
+
+func writeVersion(ctx context.Context, db interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, path string) error {
+	_, err := db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
+	if err != nil {
+		return fmt.Errorf("could not stamp the schema version of %q: %w", path, err)
+	}
+
+	return nil
 }

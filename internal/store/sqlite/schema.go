@@ -927,8 +927,7 @@ CREATE INDEX IF NOT EXISTS idx_run_placements_node ON run_placements(pipeline_id
 -- A browser signed in to the daemon (store.Accounts). Daemon-level, so no
 -- pipeline: a session is somebody's standing with the daemon. The token is
 -- never stored, only its digest, so a copy of this file signs nobody in.
--- Revocation is a timestamp rather than a DELETE so a sign-out is still
--- readable as one.
+-- Revocation is a timestamp; CreateSession deletes revoked rows on the next sign-in.
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
     actor      TEXT NOT NULL,
@@ -1005,17 +1004,4 @@ CREATE TABLE IF NOT EXISTS node_transcripts (
 );
 `
 
-// steps has no released version and no migration path, deliberately: the schema
-// is created by CREATE TABLE IF NOT EXISTS and nothing rewrites an older one.
-// A database from before a schema change is not upgraded, it is deleted — the
-// only thing in it that cannot be rebuilt by running the pipeline again is run
-// history, and pre-production that is not worth a migration framework whose
-// every entry is a permanent cost.
-//
-// What this replaced: an addedColumns list of ALTER statements, a rebuiltTables
-// list pairing each table with a predicate for detecting its own legacy shape,
-// and the drop-and-recreate pass that ran them. Roughly 150 lines existing only
-// to carry state nobody is keeping.
-//
-// If that changes, the thing to add back is a real migration story — a version
-// counter and ordered steps — not another table-shaped special case.
+// Schema changes are append-only migrations stamped in PRAGMA user_version (see migrate.go and internal/store/CLAUDE.md).

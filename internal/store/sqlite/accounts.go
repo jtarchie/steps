@@ -137,7 +137,7 @@ func (a *Accounts) RevokeSession(ctx context.Context, tokenHash string) error {
 
 // SaveUser replaces what was last recorded about a person.
 func (a *Accounts) SaveUser(ctx context.Context, user store.User) error {
-	orgs, groups := jsonStrings(user.Organizations), jsonStrings(user.Groups)
+	orgs, groups := jsonList(user.Organizations), jsonList(user.Groups)
 
 	_, err := a.held.db.ExecContext(ctx, `
 		INSERT INTO users (actor, account_id, email, organizations, groups_json, refreshed_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -180,20 +180,6 @@ func (a *Accounts) FindUser(ctx context.Context, who string) (store.User, bool, 
 	return user, true, nil
 }
 
-// jsonStrings is a list as the JSON array a column keeps, never null.
-func jsonStrings(list []string) string {
-	if len(list) == 0 {
-		return "[]"
-	}
-
-	encoded, err := json.Marshal(list)
-	if err != nil {
-		return "[]"
-	}
-
-	return string(encoded)
-}
-
 // RegisterClient records a self-registered agent, refusing one past limit. The count and the insert share a transaction, so two registrations racing for the last place cannot both have it.
 func (a *Accounts) RegisterClient(ctx context.Context, client store.OAuthClient, limit int) error {
 	tx, err := a.held.db.BeginTx(ctx, nil)
@@ -221,7 +207,7 @@ func (a *Accounts) RegisterClient(ctx context.Context, client store.OAuthClient,
 	}
 
 	_, err = tx.ExecContext(ctx, `INSERT INTO oauth_clients (id, name, redirect_uris, created_at) VALUES (?, ?, ?, ?)`,
-		client.ID, client.Name, jsonStrings(client.RedirectURIs), client.CreatedAt.UTC().Format(sortableNano))
+		client.ID, client.Name, jsonList(client.RedirectURIs), client.CreatedAt.UTC().Format(sortableNano))
 	if err != nil {
 		return fmt.Errorf("could not register a client: %w", err)
 	}
@@ -326,7 +312,7 @@ func (a *Accounts) RevokeGrant(ctx context.Context, grant store.Grant) error {
 
 // Grants are the live connections, newest first.
 func (a *Accounts) Grants(ctx context.Context, filter store.Grant) ([]store.Connection, error) {
-	rows, err := a.held.reads.QueryContext(ctx, `
+	return collect(ctx, a.held.reads, "connections", `
 		SELECT t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export, MIN(t.created_at)
 		FROM oauth_tokens t JOIN oauth_clients c ON c.id = t.client_id
 		WHERE t.revoked_at IS NULL AND t.expires_at > ?
@@ -334,35 +320,21 @@ func (a *Accounts) Grants(ctx context.Context, filter store.Grant) ([]store.Conn
 		  AND (? = '' OR t.pipeline = ?) AND (? = '' OR t.export = ?)
 		GROUP BY t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export
 		ORDER BY MIN(t.created_at) DESC
-	`, nowNano(), filter.ClientID, filter.ClientID, filter.Actor, filter.Actor, filter.Pipeline, filter.Pipeline, filter.Export, filter.Export)
-	if err != nil {
-		return nil, fmt.Errorf("could not read connections: %w", err)
-	}
+	`, []any{nowNano(), filter.ClientID, filter.ClientID, filter.Actor, filter.Actor, filter.Pipeline, filter.Pipeline, filter.Export, filter.Export},
+		func(rows *sql.Rows) (store.Connection, error) {
+			var (
+				conn               store.Connection
+				redirects, created string
+			)
 
-	defer func() { _ = rows.Close() }()
+			err := rows.Scan(&conn.ClientID, &conn.Client, &redirects, &conn.Actor, &conn.Pipeline, &conn.Export, &created)
+			if err != nil {
+				return store.Connection{}, fmt.Errorf("scan: %w", err)
+			}
 
-	var connections []store.Connection
+			_ = json.Unmarshal([]byte(redirects), &conn.RedirectURIs)
+			conn.AuthorizedAt = parseTimestamp(created)
 
-	for rows.Next() {
-		var (
-			conn               store.Connection
-			redirects, created string
-		)
-
-		err = rows.Scan(&conn.ClientID, &conn.Client, &redirects, &conn.Actor, &conn.Pipeline, &conn.Export, &created)
-		if err != nil {
-			return nil, fmt.Errorf("could not read connections: %w", err)
-		}
-
-		_ = json.Unmarshal([]byte(redirects), &conn.RedirectURIs)
-		conn.AuthorizedAt = parseTimestamp(created)
-		connections = append(connections, conn)
-	}
-
-	err = rows.Err()
-	if err != nil {
-		return nil, fmt.Errorf("could not read connections: %w", err)
-	}
-
-	return connections, nil
+			return conn, nil
+		})
 }

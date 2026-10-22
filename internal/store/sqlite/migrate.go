@@ -63,9 +63,9 @@ func upgrade(ctx context.Context, db *sql.DB, path string) error {
 		}
 	}
 
-	_, err = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
+	err = writeVersion(ctx, tx, path)
 	if err != nil {
-		return fmt.Errorf("could not stamp the schema version of %q: %w", path, err)
+		return err
 	}
 
 	err = tx.Commit()
