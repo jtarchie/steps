@@ -182,15 +182,6 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		return errorResult(err.Error())
 	}
 
-	// context_paths is step-level only (not inherited by sub-agents), so
-	// c.ri.ContextPaths is always empty here — loadContextBlocks still
-	// resolves nil/empty safely. A bad path arrives as ordinary tool-result
-	// data, the same contract every child failure honours.
-	contextBlocks, err := loadContextBlocks(ctx, env.dir, c.ri.ContextPaths, c.ri.MaxContextBytes, sightFor(c.ri))
-	if err != nil {
-		return errorResult(fmt.Sprintf("%s: %s", c.ri.AgentName, err))
-	}
-
 	// A sub-agent has no timeout: of its own — it shares whatever deadline
 	// the parent conversation is already running under (ctx, here, is the
 	// parent's convCtx, already wrapped by withAgentDeadline). Disclosing
@@ -199,9 +190,8 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	timeout := remainingOrNoDeadline(ctx)
 
 	conv := agentConversation{
-		system:        buildSystemMessage(c.ri.Persona, childDir, timeout),
-		messages:      []string{request},
-		contextBlocks: contextBlocks,
+		system:   buildSystemMessage(c.ri.Persona, childDir, timeout),
+		messages: []string{request},
 		// The parent's ask context travels down, renamed: a sub-agent granted
 		// ask_user is asking on behalf of a real, recorded run, and without
 		// this it was told there was nobody to ask on a run that manifestly
