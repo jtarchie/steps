@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -202,7 +203,22 @@ func judge(ctx context.Context, args []string) error {
 
 	printVerdicts(mutants, tests)
 
-	return nil
+	return requireJudged(mutants)
+}
+
+// requireJudged refuses a judge that built no mutant: every one unbuildable is a broken overlay or tree, not a verdict.
+func requireJudged(mutants []mutant) error {
+	for _, m := range mutants {
+		if !strings.HasPrefix(m.Outcome, "unbuildable:") {
+			return nil
+		}
+	}
+
+	if len(mutants) == 0 {
+		return errors.New("no mutants were judged")
+	}
+
+	return fmt.Errorf("none of %d mutants built, the first said: %s", len(mutants), mutants[0].Outcome)
 }
 
 // runAll judges the mutants workers at a time, each worker in a directory of its own under work.

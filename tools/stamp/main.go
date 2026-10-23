@@ -71,6 +71,10 @@ func seal(ctx context.Context) error {
 		return err
 	}
 
+	if skip := os.Getenv("STEPS_TESTSHARD_SKIP"); skip != "" {
+		return fmt.Errorf("STEPS_TESTSHARD_SKIP=%q left tests out of this run, so it vouches for less than a stamp says — unset it and rerun `task`", skip)
+	}
+
 	if tree != began {
 		return fmt.Errorf("the tree changed while the checks ran, so they vouch for neither version — rerun `task`:\n%s", treeDiff(ctx, began, tree))
 	}

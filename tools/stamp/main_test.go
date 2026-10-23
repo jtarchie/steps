@@ -211,6 +211,29 @@ func TestATreeEditedDuringTheRunIsNotSealed(t *testing.T) {
 	}
 }
 
+// A run with STEPS_TESTSHARD_SKIP set left tests out, so it vouches for less than the stamp says.
+func TestARunThatSkippedTestsIsNotSealed(t *testing.T) {
+	dir := repo(t)
+	ctx := context.Background()
+
+	err := begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("STEPS_TESTSHARD_SKIP", "TestSlow")
+
+	err = seal(ctx)
+	if err == nil || !strings.Contains(err.Error(), "STEPS_TESTSHARD_SKIP") {
+		t.Fatalf("error = %v, want a refusal naming STEPS_TESTSHARD_SKIP", err)
+	}
+
+	_, statErr := os.Stat(filepath.Join(dir, ".git", stampFile))
+	if statErr == nil {
+		t.Fatal("a stamp was written for a run that skipped tests")
+	}
+}
+
 func TestBypass(t *testing.T) {
 	refused := []string{
 		"git commit --no-verify -m x",

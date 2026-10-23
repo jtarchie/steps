@@ -42,3 +42,26 @@ func TestMutantsInFindsOnlyTheBlocksOperators(t *testing.T) {
 		t.Errorf("applying && -> || gave:\n%s", applied)
 	}
 }
+
+// A judge whose every mutant failed to build checked nothing, and its "never the only one to notice" list would name every e2e test: that must fail, not print.
+func TestJudgeFailsWhenNoMutantBuilt(t *testing.T) {
+	t.Parallel()
+
+	broken := make([]mutant, 0, 3)
+	broken = append(broken, mutant{Outcome: "unbuildable: overlay: no such file"}, mutant{Outcome: "unbuildable: overlay: no such file"})
+
+	err := requireJudged(broken)
+	if err == nil || !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("requireJudged(all unbuildable) = %v, want an error carrying the build output", err)
+	}
+
+	err = requireJudged(nil)
+	if err == nil {
+		t.Error("requireJudged(none) = nil, want an error")
+	}
+
+	err = requireJudged(append(broken, mutant{Outcome: "lived"}))
+	if err != nil {
+		t.Errorf("requireJudged(one built) = %v, want nil", err)
+	}
+}
