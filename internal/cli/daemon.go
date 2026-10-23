@@ -275,13 +275,14 @@ func (d *daemon) restoreLocked(ctx context.Context, name, from string) error {
 //
 //nolint:contextcheck // as restore: the validation reads the daemon's context on purpose, and opening a store takes none
 func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.SetResult, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
+	// Before the lock: validation reads no served state, and a slow one must not stall every other verb.
 	cfg, err := d.accept(name, req.Source, convertIncludes[string](req.Includes))
 	if err != nil {
 		return web.SetResult{}, err
 	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
 	_, repairing := d.server.BrokenReason(name)
 

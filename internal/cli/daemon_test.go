@@ -768,6 +768,32 @@ func TestASetIsRefusedForWhatValidateWouldRefuse(t *testing.T) {
 	}
 }
 
+// A refused set answers while another verb holds the daemon's lock: validation is not serialized behind a slow Destroy.
+func TestARefusedSetDoesNotWaitForTheDaemonLock(t *testing.T) {
+	t.Parallel()
+
+	held := servingDaemon(t)
+
+	held.mu.Lock()
+	defer held.mu.Unlock()
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := held.Set(t.Context(), "app", web.SetRequest{Source: "jobs:\n- name: build\n  plan:\n  - task: work\n    inputs: [ghost]\n    run: \"true\"\n"})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, web.ErrRefused) {
+			t.Errorf("Set = %v, want a refusal", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a set that validation refuses still waited for the daemon lock")
+	}
+}
+
 // Not t.Parallel(), as it sets the environment: a held pipeline this machine can no longer run used to stop the restarted daemon from serving any of the others.
 func TestARestartSkipsAPipelineThisMachineCannotRunAndServesTheRest(t *testing.T) {
 	held := servingDaemon(t)
