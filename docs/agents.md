@@ -11,6 +11,7 @@ An agent step runs a tool-calling conversation loop:
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
    - If the model requests tools, execute them (`read_file`, `list_dir`, `search_files`, `run_shell`, `write_file`, `edit_file`, `web_fetch`, or a custom/sub-agent tool).
+   - When one turn carries several calls, a run of consecutive `read_file`/`list_dir`/`search_files` calls (up to four at a time) executes concurrently; any other call waits for everything before it and holds back everything after it. Results go back in the order the model made the calls, and `max_calls:` budgets are decided in that order.
    - Cap any tool output at 32,000 bytes before it goes back to the model — output over that is saved to a file under the step's working directory instead of being dropped, with a short pointer message taking its place (see [compaction](agents-internals.md#compacting-long-conversations)). Two tools carry their own bound instead, both at 100,000 bytes and neither spilling: `read_file` (a spilled file exists precisely so the model can pull it back), degrading to plain truncation with `start_line`/`end_line` paging, and `web_fetch`, which cuts the body off and says so — the page is still on the web, so a narrower URL is the way to the rest.
    - Append the tool results and continue.
 4. Exit when the model stops requesting tools, `max_turns` is exceeded, or [loop detection](agents-internals.md#loop-detection) kills a stuck conversation.

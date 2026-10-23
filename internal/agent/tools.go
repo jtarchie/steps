@@ -144,6 +144,8 @@ type agentTools struct {
 	// from the map is unlimited. Enforced by the conversation loop's
 	// per-attempt counter, before a call reaches its toolImpl.
 	maxCalls map[string]int
+	// readOnly names the tools whose consecutive calls in one turn may run concurrently.
+	readOnly map[string]bool
 }
 
 // resolvedSpec is what one tools: entry produced. A spec yields several
@@ -153,6 +155,8 @@ type resolvedSpec struct {
 	decls  []*genai.FunctionDeclaration
 	impls  map[string]toolImpl
 	closer io.Closer
+	// readOnly carries builtinTool.readOnly for the one declaration; add records it.
+	readOnly bool
 }
 
 // buildAgentTools turns a step's resolved tools: list into the declarations
@@ -184,6 +188,7 @@ func buildAgentTools(ctx context.Context, cfg *config.Config, specs []config.Too
 		registry: make(map[string]toolImpl, len(specs)),
 		required: requiredToolNames(specs),
 		maxCalls: maxCallsByName(specs),
+		readOnly: map[string]bool{},
 	}
 
 	decls := make([]*genai.FunctionDeclaration, 0, len(specs))
@@ -215,6 +220,11 @@ func buildAgentTools(ctx context.Context, cfg *config.Config, specs []config.Too
 
 		if err == nil {
 			err = resolved.limited(spec)
+		}
+
+		// A rule may run a judge agent or a command, which is no longer a read.
+		if len(spec.Rules) > 0 {
+			resolved.readOnly = false
 		}
 
 		if err == nil {
@@ -269,6 +279,7 @@ func (t agentTools) add(resolved resolvedSpec, decls *[]*genai.FunctionDeclarati
 
 		*decls = append(*decls, decl)
 		t.registry[decl.Name] = resolved.impls[decl.Name]
+		t.readOnly[decl.Name] = resolved.readOnly
 	}
 
 	return nil
@@ -331,7 +342,10 @@ func resolveBuiltinSpec(ctx context.Context, cfg *config.Config, spec config.Too
 		return one(decl, impl, nil), nil
 	}
 
-	return one(bt.decl, bt.impl, nil), nil
+	resolved := one(bt.decl, bt.impl, nil)
+	resolved.readOnly = bt.readOnly
+
+	return resolved, nil
 }
 
 // one is the single-declaration resolvedSpec every kind but a bare MCP grant

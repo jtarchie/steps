@@ -14,6 +14,8 @@ import (
 type builtinTool struct {
 	decl *genai.FunctionDeclaration
 	impl toolImpl
+	// readOnly marks a tool that cannot mutate the tree or reach beyond it and shares no state between calls, so consecutive calls to it in one model turn may run concurrently (see toolResponseParts). web_fetch is deliberately not: it reaches the network.
+	readOnly bool
 }
 
 // toolDescription returns the description text for a built-in tool, loading
@@ -129,7 +131,8 @@ func builtinAgentTools(image string) map[string]builtinTool {
 					"end_line":   {Type: genai.TypeInteger, Description: "Last line to return, 1-indexed and inclusive. Defaults to the end of the file."},
 				}, "path"),
 			},
-			impl: execReadFile,
+			impl:     execReadFile,
+			readOnly: true,
 		},
 		config.ListDirBuiltinName: {
 			decl: &genai.FunctionDeclaration{
@@ -139,7 +142,8 @@ func builtinAgentTools(image string) map[string]builtinTool {
 					"path": pathParam("Directory path, relative to the working directory (or an absolute path inside it)."),
 				}),
 			},
-			impl: execListDir,
+			impl:     execListDir,
+			readOnly: true,
 		},
 		config.RunShellBuiltinName: {
 			decl: &genai.FunctionDeclaration{
@@ -192,7 +196,8 @@ func builtinAgentTools(image string) map[string]builtinTool {
 				// execSearchFiles enforces "at least one" instead, which a JSON
 				// schema cannot express.
 			},
-			impl: execSearchFiles,
+			impl:     execSearchFiles,
+			readOnly: true,
 		},
 	}
 

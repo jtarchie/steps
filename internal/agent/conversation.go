@@ -590,7 +590,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 			conv.env.transcript.call(call.Name, call.Args)
 		}
 
-		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.maxCalls, state.callCounts)
+		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.readOnly, conv.tools.maxCalls, state.callCounts)
 		markTrajectoryResults(state.trajectory[turnStart:], parts)
 		conv.env.transcript.results(parts)
 
