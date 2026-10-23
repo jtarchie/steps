@@ -67,3 +67,26 @@ func TestDOCancelledMidCreateDeletesTheDroplet(t *testing.T) {
 		t.Errorf("after a cancel mid-create: %d left, deletes %v — want the droplet deleted", live, deletes)
 	}
 }
+
+// The id is what finds a droplet the list does not show yet, so a cancel must not abort the create that returns it.
+func TestDOCancelledMidCreateDeletesByIDWhenTheListNeverShowsIt(t *testing.T) {
+	fake := newFakeDO(t)
+	fake.noBoot = true
+	fake.listLag = 1 << 30
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fake.onCreate = cancel
+
+	worker, _ := ParseWorker("do://launch/")
+
+	_, _, err := acquire(ctx, worker)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("acquire = %v, want the cancellation", err)
+	}
+
+	if _, deletes, live := fake.snapshot(); live != 0 || len(deletes) != 1 {
+		t.Errorf("after a cancel mid-create with the list lagging: %d left, deletes %v — want the droplet deleted by its id", live, deletes)
+	}
+}
