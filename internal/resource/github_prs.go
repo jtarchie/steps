@@ -175,7 +175,7 @@ func githubPRsIn(ctx context.Context, raw, version map[string]any, destDir strin
 		return fmt.Errorf("%w", err)
 	}
 
-	number, sha := versionField(version, "number"), versionField(version, "sha")
+	number, sha := versionNumber(version, "number"), versionField(version, "sha")
 	if number == "" || sha == "" {
 		return fmt.Errorf("version %v names no pull request number and commit", version)
 	}

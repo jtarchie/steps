@@ -320,7 +320,7 @@ type commentTarget struct {
 // github-comments get's — the only versions that carry a kind.
 func resolveComment(from string, inputs PutInputs) (commentTarget, error) {
 	isComment := func(version map[string]any) bool {
-		return versionField(version, "id") != "" && versionField(version, "kind") != ""
+		return versionNumber(version, "id") != "" && versionField(version, "kind") != ""
 	}
 
 	var version map[string]any
@@ -352,7 +352,7 @@ func resolveComment(from string, inputs PutInputs) (commentTarget, error) {
 		}
 	}
 
-	target := commentTarget{id: versionField(version, "id"), kind: versionField(version, "kind"), number: versionField(version, "number")}
+	target := commentTarget{id: versionNumber(version, "id"), kind: versionField(version, "kind"), number: versionNumber(version, "number")}
 
 	if !slices.Contains([]string{config.GitHubCommentConversation, config.GitHubCommentReview, config.GitHubCommentIssue}, target.kind) {
 		return commentTarget{}, fmt.Errorf("the comment's version names kind %q, which is no comment kind GitHub has", target.kind)
@@ -400,7 +400,7 @@ func resolvePullRequest(params config.GitHubPostParams, inputs PutInputs) (pullR
 
 	if params.From != "" {
 		version, ok := inputs.Versions[params.From]
-		if !ok || versionField(version, "number") == "" {
+		if !ok || versionNumber(version, "number") == "" {
 			return pullRequestTarget{}, fmt.Errorf("params.from: %q is not an input of this put whose version names a pull request (inputs: %s)",
 				params.From, strings.Join(inputs.Names, ", "))
 		}
@@ -411,7 +411,7 @@ func resolvePullRequest(params config.GitHubPostParams, inputs PutInputs) (pullR
 	var carrying []string
 
 	for name, version := range inputs.Versions {
-		if versionField(version, "number") != "" {
+		if versionNumber(version, "number") != "" {
 			carrying = append(carrying, name)
 		}
 	}
@@ -431,7 +431,7 @@ func resolvePullRequest(params config.GitHubPostParams, inputs PutInputs) (pullR
 // targetOf reads a version as a pull request. A comment's version names the
 // pull request it sits on and no commit, which leaves a review on the head.
 func targetOf(version map[string]any) pullRequestTarget {
-	target := pullRequestTarget{number: versionField(version, "number")}
+	target := pullRequestTarget{number: versionNumber(version, "number")}
 
 	if _, isComment := version["kind"]; !isComment {
 		target.sha = versionField(version, "sha")

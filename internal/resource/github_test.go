@@ -1470,3 +1470,49 @@ func TestGitHubCommentsCheckKeepsTheCursorAhead(t *testing.T) {
 		t.Errorf("versions %v, want the cursor %v last", versions, cursor)
 	}
 }
+
+// TestGitHubVersionNumbersMustBeDecimal: an id or number is spliced into an API path, so a version pinned with `..` or a slash in it would steer a request carrying the token at another endpoint. GitHub mints only decimals, so anything else names nothing and no request is made.
+func TestGitHubVersionNumbersMustBeDecimal(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		sent []string
+	)
+
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		sent = append(sent, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+
+		_, _ = w.Write([]byte(`{"id":1,"head":{"sha":"abc"}}`))
+	})
+	source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint}
+
+	for name, in := range map[string]func() error{
+		"comment number": func() error {
+			return githubCommentsIn(context.Background(), source, map[string]any{"id": "1", "kind": "issue", "number": ".."}, t.TempDir())
+		},
+		"comment id": func() error {
+			return githubCommentsIn(context.Background(), source, map[string]any{"id": "..", "kind": "issue", "number": "7"}, t.TempDir())
+		},
+		"pull request number": func() error {
+			return githubPRsIn(context.Background(), source, map[string]any{"number": "7/../../../user", "sha": "abc"}, t.TempDir())
+		},
+		"comment put": func() error {
+			dir := t.TempDir()
+			_ = os.WriteFile(filepath.Join(dir, "body.md"), []byte("hi"), 0o600)
+			inputs := PutInputs{Names: []string{"said"}, Versions: map[string]map[string]any{"said": {"id": "1", "kind": "issue", "number": "..", "updated": "t"}}}
+			_, err := githubCommentOut(context.Background(), source, map[string]any{"body_file": "body.md"}, inputs, dir)
+
+			return err
+		},
+	} {
+		err := in()
+		if err == nil {
+			t.Errorf("%s: in() succeeded, want a refusal", name)
+		}
+	}
+
+	if len(sent) != 0 {
+		t.Errorf("sent %q, want no request for a version naming no decimal id", sent)
+	}
+}

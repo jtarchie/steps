@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
 )
@@ -121,4 +122,14 @@ func versionField(version map[string]any, key string) string {
 	}
 
 	return fmt.Sprint(value)
+}
+
+// versionNumber is versionField for an id or number GitHub minted, "" unless it is decimal: it is spliced into an API path, so `..` or a slash would steer the request.
+func versionNumber(version map[string]any, key string) string {
+	value := versionField(version, key)
+	if value == "" || strings.Trim(value, "0123456789") != "" {
+		return ""
+	}
+
+	return value
 }

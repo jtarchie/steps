@@ -326,7 +326,7 @@ func (w commentWatch) markedDone(ctx context.Context, client *githubClient, comm
 		}
 	}
 
-	path := commentPath(w.source.Repo, versionField(version, "id"), versionField(version, "kind")) + "/reactions"
+	path := commentPath(w.source.Repo, versionNumber(version, "id"), versionField(version, "kind")) + "/reactions"
 
 	_, found, err := findOwnReaction(ctx, client, path, content, w.self)
 
@@ -385,7 +385,7 @@ func githubCommentsIn(ctx context.Context, raw, version map[string]any, destDir 
 		return fmt.Errorf("%w", err)
 	}
 
-	id, kind, number := versionField(version, "id"), versionField(version, "kind"), versionField(version, "number")
+	id, kind, number := versionNumber(version, "id"), versionField(version, "kind"), versionNumber(version, "number")
 	if id == "" || kind == "" || number == "" {
 		return fmt.Errorf("version %v names no comment", version)
 	}
