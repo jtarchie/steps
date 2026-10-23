@@ -891,6 +891,17 @@ runs arbitrary commands as this user, so unpausing grants it nothing it did not
 have, and pausing is a smaller stop than **Abort** next to it. What is *not*
 on this side is everything that changes what a pipeline IS.
 
+**What an anonymous caller can make the daemon hold is bounded.** A request
+body is capped at 1 MiB, except a `steps pipeline set` under `/api` (8 MiB)
+and a webhook delivery (bounded by the resource that reads it). An approval's
+reason and a question's answer are capped at 64 KiB each, from the browser and
+from `steps approvals`/`steps questions answer` alike. In-flight sign-ins,
+consents and authorization codes share one table of at most 1,000 entries; a
+flood of them evicts the oldest rather than growing without end. A live stream
+is authorized when it opens and re-checked every 30 seconds, so a sign-out, a
+removed account or a narrowed `access:` rule stops it without waiting for the
+run to end.
+
 ## Flags
 
 `steps web` — facts about the box, all of them:
