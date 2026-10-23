@@ -99,6 +99,11 @@ func (r *RejectCmd) Run() error {
 
 // decideApproval records a decision against a pipeline's store.
 func decideApproval(flags ReadFlags, id int64, status store.ApprovalStatus, reason string) error {
+	err := checkFreeText("a reason", reason)
+	if err != nil {
+		return err
+	}
+
 	st, cleanup, err := openRecorded(flags)
 	if err != nil {
 		return err
@@ -115,6 +120,15 @@ func decideApproval(flags ReadFlags, id int64, status store.ApprovalStatus, reas
 	}
 
 	fmt.Printf("%s: approval %d\n", status, id)
+
+	return nil
+}
+
+// checkFreeText holds a reason or an answer to the cap the browser enforces on the same field.
+func checkFreeText(what, text string) error {
+	if len(text) > store.MaxFreeTextBytes {
+		return fmt.Errorf("%s is %d bytes; at most %d KiB is recorded", what, len(text), store.MaxFreeTextBytes>>10)
+	}
 
 	return nil
 }

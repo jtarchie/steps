@@ -76,7 +76,7 @@ func (s *Server) handleDecideApproval(c *echo.Context) error {
 	}
 
 	reason := c.FormValue("reason")
-	if len(reason) > maxFreeText {
+	if len(reason) > store.MaxFreeTextBytes {
 		return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "the reason is too long")
 	}
 
@@ -129,7 +129,7 @@ func (s *Server) handleAnswerQuestion(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "an answer is required")
 	}
 
-	if len(answer) > maxFreeText {
+	if len(answer) > store.MaxFreeTextBytes {
 		return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "the answer is too long")
 	}
 

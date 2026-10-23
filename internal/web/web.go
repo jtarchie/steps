@@ -67,9 +67,6 @@ const maxUploadSize int64 = 8 << 20
 // maxBodySize bounds every other request body: net/http's form parsing would otherwise buffer 10MB per anonymous POST. /api keeps maxUploadSize and a webhook delivery is bounded by the trigger that reads it.
 const maxBodySize int64 = 1 << 20
 
-// maxFreeText bounds the one free-text value a form stores whole: an approval's reason, a question's answer.
-const maxFreeText = 64 << 10
-
 func hasOwnBodyLimit(c *echo.Context) bool {
 	return strings.HasPrefix(c.Request().URL.Path, "/api/") || strings.HasSuffix(c.Path(), "/hooks/:resource")
 }

@@ -89,16 +89,21 @@ type AnswerCmd struct {
 
 // Run answers the named question.
 func (a *AnswerCmd) Run() error {
+	answer := strings.TrimSpace(strings.Join(a.Answer, " "))
+	if answer == "" {
+		return errors.New("an answer is required: steps questions answer -p <pipeline> <id> <answer>")
+	}
+
+	err := checkFreeText("the answer", answer)
+	if err != nil {
+		return err
+	}
+
 	st, cleanup, err := openRecorded(a.ReadFlags)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-
-	answer := strings.TrimSpace(strings.Join(a.Answer, " "))
-	if answer == "" {
-		return errors.New("an answer is required: steps questions answer -p <pipeline> <id> <answer>")
-	}
 
 	err = st.AnswerQuestion(context.Background(), a.ID, answer, actor.OS(currentUser()).String())
 	if err != nil {

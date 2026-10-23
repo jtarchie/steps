@@ -35,6 +35,9 @@ type Approvals interface {
 // deadline, decides it.
 type ApprovalStatus string
 
+// MaxFreeTextBytes caps the one free-text value a person stores whole: an approval's reason, a question's answer. The browser and the CLI both refuse past it.
+const MaxFreeTextBytes = 64 << 10
+
 // The statuses an approval is recorded with.
 const (
 	ApprovalPending  ApprovalStatus = "pending"

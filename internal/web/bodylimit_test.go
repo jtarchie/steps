@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 func postBody(t *testing.T, server *Server, target, body string) *httptest.ResponseRecorder {
@@ -68,7 +70,7 @@ func TestFreeTextIsCapped(t *testing.T) {
 		t.Fatalf("RequestApproval: %v", err)
 	}
 
-	long := strings.Repeat("x", maxFreeText+1)
+	long := strings.Repeat("x", store.MaxFreeTextBytes+1)
 
 	rec := postBody(t, server, "/p/demo/approvals/"+strconv.FormatInt(id, 10), "decision=approve&reason="+long)
 	if rec.Code != http.StatusRequestEntityTooLarge {

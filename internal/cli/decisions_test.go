@@ -62,6 +62,39 @@ func TestASecondDecisionSaysWhoAlreadyDecided(t *testing.T) {
 	}
 }
 
+// The CLI holds a reason and an answer to the cap the browser does, so a pasted log cannot land as an audit row the web would have refused.
+func TestAnOversizedReasonOrAnswerIsRefused(t *testing.T) {
+	t.Parallel()
+
+	state := filepath.Join(t.TempDir(), "steps.db")
+	approval, question := pendingDecisions(t, state)
+	long := strings.Repeat("x", store.MaxFreeTextBytes+1)
+
+	for _, args := range [][]string{
+		{"approvals", "reject", strconv.FormatInt(approval, 10), "--reason", long},
+		{"questions", "answer", strconv.FormatInt(question, 10), long},
+	} {
+		err := Run(append(args, "-p", "app", "--db", state))
+		if err == nil || !strings.Contains(err.Error(), "64 KiB") {
+			t.Errorf("steps %s %s = %v; want it refused naming the cap", args[0], args[1], err)
+		}
+	}
+
+	reopened, err := sqlite.OpenStore(state, "app")
+	if err != nil {
+		t.Fatalf("reopen state store: %v", err)
+	}
+
+	defer func() { _ = reopened.Close() }()
+
+	decided, _ := reopened.ApprovalStatus(t.Context(), approval)
+	answered, _ := reopened.QuestionStatus(t.Context(), question)
+
+	if decided.Status != store.ApprovalPending || answered.Status != store.QuestionPending {
+		t.Errorf("approval %q, question %q; want both still pending", decided.Status, answered.Status)
+	}
+}
+
 func assertDecidedBy(t *testing.T, state string, approval, question int64, who string) {
 	t.Helper()
 
