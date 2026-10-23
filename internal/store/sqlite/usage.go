@@ -40,9 +40,10 @@ const usageColumns = `run_id, step_index, step_name, job_name, kind, node_hash, 
 // A hook or fix has no node, and a NULL never conflicts, so each execution of
 // one is a row of its own.
 func (s *Store) RecordAgentUsage(ctx context.Context, usage store.AgentUsage) error {
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO agent_usage (pipeline_id, `+usageColumns+`, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND pipeline_id = ?)
 		ON CONFLICT (pipeline_id, run_id, node_hash) DO UPDATE SET
 			step_index = excluded.step_index,
 			step_name = excluded.step_name,
@@ -73,12 +74,12 @@ func (s *Store) RecordAgentUsage(ctx context.Context, usage store.AgentUsage) er
 		usage.Prompt, usage.Completion, usage.Total,
 		usage.Cached, usage.Reasoning, usage.CostUSD,
 		usage.FinishReason, usage.DurationMS, usage.RawMeta,
-		now())
+		now(), usage.RunID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not record agent usage for run %q: %w", usage.RunID, err)
 	}
 
-	return nil
+	return s.requireRun(ctx, result, usage.RunID)
 }
 
 // RunTokensSpent is the total tokens already recorded against a run.

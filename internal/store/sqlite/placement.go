@@ -25,9 +25,10 @@ const placementColumns = `run_id, step_index, step_name, job_name, slot, node_ha
 // machine, and a step that ran twice against the same node ran on whichever
 // machine answered last. Summing "which machine" has no meaning.
 func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) error {
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_placements (`+placementColumns+`, pipeline_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND pipeline_id = ?)
 		ON CONFLICT(pipeline_id, run_id, slot) DO UPDATE SET
 			step_index = excluded.step_index,
 			node_hash  = excluded.node_hash,
@@ -51,12 +52,12 @@ func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) 
 		placement.GOOS, placement.GOARCH, placement.Workdir,
 		placement.UID, placement.GID,
 		placement.Image, placement.BytesSent, placement.BytesReceived,
-		s.pipelineID, now())
+		s.pipelineID, now(), placement.RunID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("recording a placement: %w", err)
 	}
 
-	return nil
+	return s.requireRun(ctx, result, placement.RunID)
 }
 
 // RunPlacements returns where every placed step of one run ran, in plan order.

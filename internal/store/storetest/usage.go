@@ -275,21 +275,6 @@ func recordSpend(ctx context.Context, t *testing.T, st store.Store, runID, jobNa
 	}
 }
 
-func onlyUsage(ctx context.Context, t *testing.T, st store.Store, runID string) store.AgentUsage {
-	t.Helper()
-
-	rows, err := st.RunUsage(ctx, runID)
-	if err != nil {
-		t.Fatalf("RunUsage: %v", err)
-	}
-
-	if len(rows) != 1 {
-		t.Fatalf("run %s reported %d usage rows, want 1: %+v", runID, len(rows), rows)
-	}
-
-	return rows[0]
-}
-
 // TestAgentUsageRecordsNodelessSpend: a hook's agent and a task's fix: agent
 // spend inside a job and have no node. Each execution is its own row — there
 // is no node to say two of them were one invocation — and every read counts

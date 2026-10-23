@@ -21,9 +21,10 @@ const usageColumns = `run_id, step_index, step_name, job_name, kind, node_hash, 
 // on conflict (every attempt was paid for) and replacing the descriptive
 // fields. A cost is unpriced only when both sides are.
 func (s *Store) RecordAgentUsage(ctx context.Context, usage store.AgentUsage) error {
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO agent_usage (pipeline_id, `+usageColumns+`, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+		WHERE EXISTS (SELECT 1 FROM runs WHERE id = $21 AND pipeline_id = $22)
 		ON CONFLICT (pipeline_id, run_id, node_hash) DO UPDATE SET
 			step_index = excluded.step_index,
 			step_name = excluded.step_name,
@@ -48,12 +49,12 @@ func (s *Store) RecordAgentUsage(ctx context.Context, usage store.AgentUsage) er
 		usage.Prompt, usage.Completion, usage.Total,
 		usage.Cached, usage.Reasoning, usage.CostUSD,
 		clean(usage.FinishReason), usage.DurationMS, clean(usage.RawMeta),
-		now())
+		now(), usage.RunID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not record agent usage for run %q: %w", usage.RunID, err)
 	}
 
-	return nil
+	return s.requireRun(ctx, result, usage.RunID)
 }
 
 // RunTokensSpent is the total tokens already recorded against a run.

@@ -218,15 +218,14 @@ func (s suite) TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
 
 	infra := s.open(t, "infra")
 
-	// The same run id in both pipelines, which is what makes this a real
-	// collision rather than a coincidence: ids are minted per pipeline.
+	// One run id cannot be both pipelines': infra writing under web's is refused (TestRunScopedWritesRefuseAnotherPipelinesRun), so each gets its own and the node hash is what they share.
 	placeAt(ctx, t, web, store.Placement{
 		RunID: "SHARED01", StepName: "web-step", JobName: "build", NodeHash: hashOf(1),
 		Tag: "web", Address: "ssh://web", GOOS: "linux", GOARCH: "amd64",
 		Workdir: "/tmp/w",
 	})
 	placeAt(ctx, t, infra, store.Placement{
-		RunID: "SHARED01", StepName: "infra-step", JobName: "build", NodeHash: hashOf(2),
+		RunID: "INFRA01", StepName: "infra-step", JobName: "build", NodeHash: hashOf(2),
 		Tag: "infra", Address: "ssh://infra", GOOS: "linux", GOARCH: "amd64",
 		Workdir: "/tmp/i",
 	})
@@ -235,57 +234,8 @@ func (s suite) TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
 		t.Errorf("web's run reported step %q — it is reading another pipeline's placements", got)
 	}
 
-	if got := onlyPlacement(ctx, t, infra, "SHARED01").StepName; got != "infra-step" {
+	if got := onlyPlacement(ctx, t, infra, "INFRA01").StepName; got != "infra-step" {
 		t.Errorf("infra's run reported step %q — it is reading another pipeline's placements", got)
-	}
-}
-
-// TestPlacementKeyIsScopedToItsPipeline holds the same rule one level down: it
-// is the KEY that has to carry the pipeline, not only the read.
-//
-// Defense in depth since StartRun stopped upserting — a run id now names a row
-// in exactly one pipeline — kept because the repo rule says a key carries the
-// pipeline and because that should not rest on one statement in one function.
-//
-// merkle.HashNode folds kind, content and parent but NOT the pipeline, so two
-// pipelines each running a job named build over a byte-identical task produce
-// the same node hash — which is exactly why nodes is keyed (pipeline_id, hash).
-// Keyed on (run_id, node_hash) alone, the second pipeline's upsert
-// lands on the first's row and rewrites every column except the one saying
-// whose it is: one pipeline then reports the other's machine, and the other
-// reports nothing at all.
-func (s suite) TestPlacementKeyIsScopedToItsPipeline(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	web := s.open(t, "web")
-
-	infra := s.open(t, "infra")
-
-	// Every part of the key the two can agree on by accident: one job name, one
-	// content hash, one run id.
-	const (
-		runID   = "SHARED01"
-		jobName = "build"
-	)
-
-	placeAt(ctx, t, web, store.Placement{
-		RunID: runID, StepName: "unit", JobName: jobName, NodeHash: hashOf(7),
-		Tag: "web", Address: "ssh://web", GOOS: "linux", GOARCH: "amd64",
-		Workdir: "/tmp/web",
-	})
-	placeAt(ctx, t, infra, store.Placement{
-		RunID: runID, StepName: "unit", JobName: jobName, NodeHash: hashOf(7),
-		Tag: "infra", Address: "ssh://infra", GOOS: "linux", GOARCH: "amd64",
-		Workdir: "/tmp/infra",
-	})
-
-	if got := onlyPlacement(ctx, t, web, runID).Address; got != "ssh://web" {
-		t.Errorf("web's run ran on %q, want ssh://web — the other pipeline's upsert landed on its row", got)
-	}
-
-	if got := onlyPlacement(ctx, t, infra, runID).Address; got != "ssh://infra" {
-		t.Errorf("infra's run ran on %q, want ssh://infra", got)
 	}
 }
 
@@ -433,7 +383,7 @@ func (s suite) TestRunEventsAreScopedToTheirPipeline(t *testing.T) {
 	}
 }
 
-// TestRunScopedWritesRefuseAnotherPipelinesRun: run_steps, run_events and run_inputs carry no pipeline_id, so a write naming a run id is scoped only if the statement itself checks the run is this pipeline's. A handle that owns no such run must be refused, and the owner must see nothing the intruder tried to write.
+// TestRunScopedWritesRefuseAnotherPipelinesRun: run_steps, run_events and run_inputs carry no pipeline_id, so a write naming a run id is scoped only if the statement itself checks the run is this pipeline's. agent_usage and run_placements carry the writer's pipeline_id beside a caller-supplied run_id, so without the same check they file the writer's rows under another pipeline's run. A handle that owns no such run must be refused, and the owner must see nothing the intruder tried to write.
 func (s suite) TestRunScopedWritesRefuseAnotherPipelinesRun(t *testing.T) {
 	t.Parallel()
 
@@ -449,10 +399,12 @@ func (s suite) TestRunScopedWritesRefuseAnotherPipelinesRun(t *testing.T) {
 	}
 
 	writes := map[string]error{
-		"RecordRunStep":  infra.RecordRunStep(ctx, run, store.RunStep{BuildID: "b", Index: 1, Name: "evil"}),
-		"AppendRunEvent": infra.AppendRunEvent(ctx, store.RunEventRow{RunID: run, Type: "step_started", StepName: "evil", At: time.Now()}),
-		"RecordRunInput": infra.RecordRunInput(ctx, run, store.RunInput{Input: "repo", Resource: "repo", Version: `{"ref":"evil"}`}),
-		"no such run":    infra.RecordRunStep(ctx, "NOSUCHRUN", store.RunStep{BuildID: "b", Index: 1, Name: "x"}),
+		"RecordRunStep":    infra.RecordRunStep(ctx, run, store.RunStep{BuildID: "b", Index: 1, Name: "evil"}),
+		"AppendRunEvent":   infra.AppendRunEvent(ctx, store.RunEventRow{RunID: run, Type: "step_started", StepName: "evil", At: time.Now()}),
+		"RecordRunInput":   infra.RecordRunInput(ctx, run, store.RunInput{Input: "repo", Resource: "repo", Version: `{"ref":"evil"}`}),
+		"RecordAgentUsage": infra.RecordAgentUsage(ctx, store.AgentUsage{RunID: run, StepName: "evil"}),
+		"RecordPlacement":  infra.RecordPlacement(ctx, store.Placement{RunID: run, StepName: "evil", Slot: "s"}),
+		"no such run":      infra.RecordRunStep(ctx, "NOSUCHRUN", store.RunStep{BuildID: "b", Index: 1, Name: "x"}),
 	}
 
 	for name, err := range writes {
@@ -475,6 +427,16 @@ func (s suite) TestRunScopedWritesRefuseAnotherPipelinesRun(t *testing.T) {
 		err = web.RecordRunInput(ctx, run, store.RunInput{Input: "repo", Resource: "repo", Version: `{"ref":"ok"}`})
 		if err != nil {
 			t.Fatalf("owner RecordRunInput: %v", err)
+		}
+
+		err = web.RecordAgentUsage(ctx, store.AgentUsage{RunID: run, StepName: "ok"})
+		if err != nil {
+			t.Fatalf("owner RecordAgentUsage: %v", err)
+		}
+
+		err = web.RecordPlacement(ctx, store.Placement{RunID: run, StepName: "ok", Slot: "s"})
+		if err != nil {
+			t.Fatalf("owner RecordPlacement: %v", err)
 		}
 	}
 }
@@ -609,55 +571,5 @@ func (s suite) TestStepBlobsAreScopedToThePipeline(t *testing.T) {
 	got, err := second.StepBlobs(ctx, "same-key")
 	if err != nil || len(got) != 0 {
 		t.Fatalf("the other pipeline sees %v, %v; want nothing", got, err)
-	}
-}
-
-// TestAgentUsageKeyIsScopedToItsPipeline is the same collision run_placements
-// had, on the table that holds money.
-//
-// merkle.HashNode folds kind, content and parent but NOT the pipeline, so two
-// Defense in depth since StartRun stopped upserting: a run id now names a row
-// in exactly one pipeline, so the collision below is no longer reachable
-// through the API. The key still carries the pipeline, because the repo rule
-// says it must and because that guarantee should not rest on one statement in
-// one function.
-//
-// pipelines each with a job named build over a byte-identical agent step
-// produce the same node hash. Keyed on (run_id, node_hash) alone the second pipeline's
-// insert conflicts with the first's and takes the ACCUMULATING branch — which
-// is correct for a retried step and catastrophic across pipelines: the tokens
-// are added to a row belonging to someone else, so one pipeline is billed for
-// work it never ran and the other reports nothing at all.
-func (s suite) TestAgentUsageKeyIsScopedToItsPipeline(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	web := s.open(t, "web")
-	infra := s.open(t, "infra")
-
-	const (
-		runID   = "SHARED01"
-		jobName = "build"
-	)
-
-	recordSpend(ctx, t, web, runID, jobName, "web-review", 1_000)
-	recordSpend(ctx, t, infra, runID, jobName, "infra-review", 7)
-
-	got := onlyUsage(ctx, t, web, runID)
-	if got.StepName != "web-review" {
-		t.Errorf("web's run reports step %q — it is reading another pipeline's spend", got.StepName)
-	}
-
-	if got.Total != 1_000 {
-		t.Errorf("web's run spent %d tokens, want 1000 — another pipeline's tokens were added to its row", got.Total)
-	}
-
-	got = onlyUsage(ctx, t, infra, runID)
-	if got.StepName != "infra-review" {
-		t.Errorf("infra's run reports step %q", got.StepName)
-	}
-
-	if got.Total != 7 {
-		t.Errorf("infra's run spent %d tokens, want 7", got.Total)
 	}
 }

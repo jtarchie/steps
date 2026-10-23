@@ -24,9 +24,10 @@ func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) 
 		instanceID = clean(*placement.InstanceID)
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_placements (`+placementColumns+`, pipeline_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+		WHERE EXISTS (SELECT 1 FROM runs WHERE id = $20 AND pipeline_id = $21)
 		ON CONFLICT (pipeline_id, run_id, slot) DO UPDATE SET
 			step_index = excluded.step_index,
 			node_hash  = excluded.node_hash,
@@ -50,12 +51,12 @@ func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) 
 		clean(placement.GOOS), clean(placement.GOARCH), clean(placement.Workdir),
 		placement.UID, placement.GID,
 		clean(placement.Image), placement.BytesSent, placement.BytesReceived,
-		s.pipelineID, now())
+		s.pipelineID, now(), placement.RunID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("recording a placement: %w", err)
 	}
 
-	return nil
+	return s.requireRun(ctx, result, placement.RunID)
 }
 
 // RunPlacements returns where every placed step of one run ran, in plan order.
