@@ -579,6 +579,11 @@ func assertContent(a *config.Assert) map[string]any {
 		content["tool_calls"] = calls
 	}
 
+	// A nudge can turn a run that would have failed into a success, so a result produced with one must not stand in for the step without it.
+	if a.Nudge {
+		content["nudge"] = true
+	}
+
 	return content
 }
 

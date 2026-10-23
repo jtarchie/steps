@@ -143,6 +143,7 @@
     "files": [
       "Files[0]"
     ],
+    "nudge": true,
     "stdout": "Stdout",
     "tool_calls": [
       {

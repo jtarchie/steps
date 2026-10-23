@@ -337,7 +337,6 @@ func keyProbes() []keyProbe {
 		}),
 		probeOf("Assert", config.Assert{ToolCalls: []config.ExpectedToolCall{{Name: "read_file"}}}, map[string]string{
 			"Execution": offTheStep, "Outcome": offTheStep,
-			"Nudge": undocumented + ", and it probably should not be: a nudge puts a message into the live conversation and makes the verdict tool refuse, so it turns a run that would have FAILED into one that succeeds — and that success is cached. Removing nudge: to prove a prompt works unaided (the reason its doc gives for it being opt-in) then serves the cached green without asking the model. An earlier reason recorded here said a nudge only acts on a failed step, which is never a cache hit; that was wrong. Reported 2026-09-19 with a recommendation to key it",
 		}, func(a config.Assert) (any, error) {
 			return assertContent(&a), nil
 		}),

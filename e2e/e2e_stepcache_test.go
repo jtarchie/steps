@@ -313,3 +313,34 @@ func TestStepCacheRerunsWhenAGrantsTermsChange(t *testing.T) {
 		})
 	}
 }
+
+// A nudge can turn a run that would have failed into a success, so a step cached under nudge: true must not stand in for the same step without it: removing the nudge to prove a prompt works unaided has to ask the model. Proven cached FIRST, so the re-run can only be the removed nudge.
+func TestStepCacheRerunsWhenTheNudgeIsRemoved(t *testing.T) {
+	dir, root := t.TempDir(), t.TempDir()
+	script := stepCacheScript()
+	fake := newFakeLLM(t, append(stepCacheScript(), script...)...)
+
+	path := stepCachePipeline(t, dir, fake.URL, root,
+		filepath.Join(dir, "publish.log"), filepath.Join(dir, "fetch.log"), filepath.Join(dir, "notify.log"), stepCacheNotes)
+
+	const (
+		messages = "      - Review the notes and summarize them.\n"
+		assert   = "    assert:\n      files: [report/summary.md]\n"
+		nudge    = "      nudge: true\n"
+	)
+
+	rewritePipeline(t, path, messages, messages+assert+nudge)
+	mustRun(t, "test", path)
+	mustRun(t, "test", path)
+
+	if got := fake.requestCount(); got != len(script) {
+		t.Fatalf("provider requests after an unchanged rerun = %d, want %d — the step was not cached, so nothing below proves anything", got, len(script))
+	}
+
+	rewritePipeline(t, path, assert+nudge, assert)
+	mustRun(t, "test", path)
+
+	if got := fake.requestCount(); got != 2*len(script) {
+		t.Errorf("provider requests after the nudge was removed = %d, want %d — the cached step was served as if it had run unaided", got, 2*len(script))
+	}
+}
