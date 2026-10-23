@@ -372,6 +372,13 @@ jobs:
 	// A placed agent records no placement row (observed: notePlacement is only called for tasks and resources), so the bytes are read off the daemon: every tree a docker+ session sends is filled into a data volume labelled with its size.
 	if filled := volumeBytesFilled(t, before); filled >= markerBytes {
 		t.Errorf("the session filled %d bytes into the worker, want fewer than the %d-byte local cache: it crossed the wire", filled, markerBytes)
+
+		// Seen only under full-gate load, twice, never alone: name what was counted so the next one says which tree it was.
+		for _, volume := range processVolumes(t) {
+			if !before[volume.Name] {
+				t.Logf("counted %s: %v", volume.Name, volume.Labels)
+			}
+		}
 	}
 }
 
