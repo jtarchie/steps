@@ -2,13 +2,14 @@ package resource
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/jtarchie/steps/internal/config"
 )
 
 // Cache memoizes ResolveVersions results within one RunJob invocation, keyed
-// by resource name (step.Get). A get step's resolved versions are a pure
+// by the step fields resolution reads (cacheKey). A get step's resolved versions are a pure
 // function of (cfg, step, pinned) — none of which change between the
 // plan-time call (merkle.PlanChains) and the run-time call (the pipeline's
 // runGetStep) within one invocation — so reusing the plan-time result for
@@ -74,7 +75,13 @@ func WithResolvedVersions(resolved func(resourceName string) []map[string]any) C
 	return func(c *Cache) { c.resolved = resolved }
 }
 
+// cacheKey is every field of the step ResolveVersions reads: two gets under one name with different pins are two resolutions.
+func cacheKey(step config.Step) string {
+	return fmt.Sprintf("%s\x00%s\x00%v\x00%q", step.Get, step.GetResourceName(), step.Version, step.Passed)
+}
+
 type cacheEntry struct {
+	get          string
 	resource     *config.Resource
 	resourceType *config.ResourceType
 	versions     []map[string]any
@@ -112,8 +119,10 @@ func (c *Cache) ResolveVersionsCached(
 		return ResolveVersions(ctx, cfg, step, pinned, nil)
 	}
 
+	key := cacheKey(step)
+
 	c.mu.Lock()
-	entry, ok := c.entries[step.Get]
+	entry, ok := c.entries[key]
 	c.mu.Unlock()
 
 	if ok {
@@ -131,14 +140,14 @@ func (c *Cache) ResolveVersionsCached(
 	}
 
 	c.mu.Lock()
-	c.entries[step.Get] = cacheEntry{resource, resourceType, versions, err, suppressed}
+	c.entries[key] = cacheEntry{step.Get, resource, resourceType, versions, err, suppressed}
 	c.mu.Unlock()
 
 	return resource, resourceType, versions, err
 }
 
-// Suppressed reports how many versions the consumed filter removed for a get
-// step already resolved through this cache.
+// Suppressed reports how many versions the consumed filter removed for the
+// gets named step.Get already resolved through this cache, whatever their pins.
 //
 // It exists so a caller seeing an empty version list can say WHICH empty it
 // is: a check that returned nothing (the source is gone, or broken) versus a
@@ -153,7 +162,15 @@ func (c *Cache) Suppressed(step config.Step) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return c.entries[step.Get].suppressed
+	total := 0
+
+	for _, entry := range c.entries {
+		if entry.get == step.Get {
+			total += entry.suppressed
+		}
+	}
+
+	return total
 }
 
 // unconsumed drops the versions this job has already fanned out over, and only
