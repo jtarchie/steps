@@ -47,6 +47,19 @@ func TestDebugLogsCarryNoSourceParamsOrOutputValues(t *testing.T) {
 		t.Fatalf("expr backend: %v", err)
 	}
 
+	mcpConfig := mcpFixtureConfig(t)
+	mcp := mcpResourceType("list_issues")
+	mcp.Config.MCP.Out = &config.MCPToolCall{Tool: "create_issue"}
+
+	_, errCheck = CheckVersions(ctx, Call{Config: mcpConfig, Type: mcp, Resource: config.Resource{Source: source}})
+	errIn = RunIn(ctx, Call{Config: mcpConfig, Type: mcp, Resource: config.Resource{Source: source}, Params: params, Dir: t.TempDir()})
+	_, errOut = RunOut(ctx, Call{Config: mcpConfig, Type: mcp, Resource: config.Resource{Source: source}, Params: params, Dir: t.TempDir()})
+
+	err = errors.Join(errCheck, errIn, errOut)
+	if err != nil {
+		t.Fatalf("mcp backend: %v", err)
+	}
+
 	// shell.exec and template.render (other packages) log the rendered command and its output; this pins the resource package's own lines.
 	var lines []string
 
