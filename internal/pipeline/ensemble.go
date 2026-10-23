@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -71,42 +70,34 @@ func runEnsembleStep(ctx context.Context, r stepRunner, i int, step config.Step,
 func runEnsembleMembers(ctx context.Context, r stepRunner, i int, step config.Step, blockHash string) []memberVote {
 	members := step.Ensemble.Agents
 	votes := make([]memberVote, len(members))
-	logs := make([]*execLog, len(members))
 
-	var wg sync.WaitGroup
-
+	// A member never admitted (the job's deadline passed) must not read as a zero-value vote: countableVotes would call it "returned no verdict", and under member_errors: ignore it would silently vanish from the tally. Stamped as an errored vote instead, which a run overwrites.
 	for index := range members {
-		wg.Add(1)
+		votes[index] = memberVote{agent: members[index].Agent, err: errMemberNotAdmitted}
+	}
 
-		go func() {
-			defer wg.Done()
-
+	fanOut(ctx, len(members), 0,
+		func(index int) bool {
+			return !deadlineStopsFanOut(ctx, r.jobName, "ensemble", "members", index, len(members))
+		},
+		func(runCtx context.Context, index int) {
 			// The vocabulary is declared once on the block and applied to
 			// every member, so the members cannot disagree about what they are
 			// voting on.
 			member := members[index]
 			member.Verdicts = step.Ensemble.EnsembleVerdictsFor()
 
-			votes[index] = memberVote{agent: member.Agent}
-
-			runCtx, memberLog := forkExecLog(ctx)
-			logs[index] = memberLog
-
 			res, err := runNonGetStep(runCtx, r, i, member, nil, blockHash)
 			votes[index].verdict, votes[index].note, votes[index].err = res.verdict, res.note, err
-		}()
-	}
-
-	wg.Wait()
-
-	for _, memberLog := range logs {
-		if memberLog != nil {
-			mergeExecLog(ctx, memberLog)
-		}
-	}
+		},
+		func(index int, err error) { votes[index].err = err },
+	)
 
 	return votes
 }
+
+// errMemberNotAdmitted marks a member the job's deadline kept from starting.
+var errMemberNotAdmitted = errors.New("not run: the job's deadline passed before this member started")
 
 // decideEnsemble turns the members' votes into one verdict.
 func decideEnsemble(

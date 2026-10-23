@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -211,9 +210,6 @@ func runAcrossCellsConcurrently(
 	ctx context.Context, r stepRunner, i int, step config.Step, cells []config.Step, plans []cellPlan, cellParent string,
 ) error {
 	var (
-		wg      sync.WaitGroup
-		slot    = newLimiter(step.MaxInFlight, len(cells))
-		logs    = make([]*execLog, len(cells))
 		results = make([]branchResult, len(cells))
 		skips   = make([]bool, len(cells))
 	)
@@ -225,52 +221,22 @@ func runAcrossCellsConcurrently(
 	cellCtx, spend := newBlockBudget(ctx, r.cfg, step, cells)
 	spend.warnIfUnbindable(ctx, r.jobName, step.MaxInFlight, len(cells))
 
-	for index := range cells {
-		// Checked in the PARENT, before a slot is taken, so the block stops
-		// admitting new cells while the ones already in flight run to
-		// completion and keep what they recorded. Checking inside the goroutine
-		// would instead race every cell that had already been admitted.
-		// Acquired in the parent, before the goroutine starts, so cells are
-		// ADMITTED in declaration order — under a limit especially, "which
-		// cells go first" is otherwise whichever goroutines the scheduler
-		// happened to run, which is nothing a pipeline author can reason about.
-		//
-		// BEFORE the ceiling check, not after. Acquiring blocks until a cell
-		// finishes and rolls its usage up, so the check that follows reads
-		// spend that includes it. Checked first instead, every admission until
-		// the limit saturates sees a total of ~0 — the cells it is deciding
-		// against are still running — so a matrix could launch max_in_flight
-		// cells before the ceiling meant anything at all.
-		slot.acquire()
-
-		if stopAdmitting(ctx, r.jobName, spend, index, len(cells)) {
-			slot.release()
-
-			break
-		}
-
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-			defer slot.release()
-			// Runs before the slot is released (defers are LIFO), so the next
-			// cell admitted in the parent reads a settled reservation and this
-			// cell's real spend rather than both at once.
+	fanOut(cellCtx, len(cells), step.MaxInFlight,
+		func(index int) bool {
+			// Checked in the PARENT, before the cell starts, so the block stops admitting new cells while the ones already in flight run to completion and keep what they recorded.
+			//
+			// fanOut acquires the slot BEFORE this ceiling check, not after. Acquiring blocks until a cell finishes and rolls its usage up, so the check reads spend that includes it. Checked first instead, every admission until the limit saturates sees a total of ~0 — the cells it is deciding against are still running — so a matrix could launch max_in_flight cells before the ceiling meant anything at all.
+			return !stopAdmitting(ctx, r.jobName, spend, index, len(cells))
+		},
+		func(runCtx context.Context, index int) {
+			// Runs before the slot is released (defers are LIFO), so the next cell admitted in the parent reads a settled reservation and this cell's real spend rather than both at once.
 			defer spend.settle()
-
-			// Cells finish in whatever order they finish, so recording as they
-			// go would make assert.execution nondeterministic. Each records
-			// into its own log, merged below in declaration order.
-			runCtx, cellLog := forkExecLog(cellCtx)
-			logs[index] = cellLog
 
 			skipped, err := runAcrossCell(runCtx, r, i, cells[index], plans[index], cellParent)
 			results[index].err, skips[index] = err, skipped
-		}()
-	}
-
-	wg.Wait()
+		},
+		func(index int, err error) { results[index].err = err },
+	)
 
 	var (
 		failures []error
@@ -278,10 +244,6 @@ func runAcrossCellsConcurrently(
 	)
 
 	for _, result := range results {
-		if logs[result.index] != nil {
-			mergeExecLog(ctx, logs[result.index])
-		}
-
 		switch {
 		case result.err != nil:
 			failures = append(failures, fmt.Errorf("cell %q: %w", result.name, result.err))

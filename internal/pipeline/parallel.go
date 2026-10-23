@@ -80,12 +80,6 @@ func runBranches(ctx context.Context, r stepRunner, i int, step config.Step, blo
 	branchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var (
-		wg   sync.WaitGroup
-		slot = newLimiter(step.InParallel.Limit, len(branches))
-		logs = make([]*execLog, len(branches))
-	)
-
 	// Identity is stamped here, in the parent, rather than inside the
 	// goroutine: under fail_fast a branch may never start, and a zero-value
 	// result would then wrongly claim index 0. Every branch now carries its
@@ -94,42 +88,15 @@ func runBranches(ctx context.Context, r stepRunner, i int, step config.Step, blo
 		results[index] = branchResult{index: index, name: executedStepName(branches[index])}
 	}
 
-	// Slots are acquired HERE, in the parent, rather than inside each
-	// goroutine. That makes branches start in declaration order — under
-	// `limit:` especially, "which two go first" is otherwise whichever
-	// goroutines the scheduler happened to run, which is nothing a pipeline
-	// author can reason about.
-	for index := range branches {
-		slot.acquire()
-
-		// Under fail_fast a branch that has not started yet never should.
-		//
-		// Nor should one the job no longer has time for: the plan walk checks
-		// the deadline between STEPS, and this whole block is one of them, so
-		// without asking here a job timeout: cannot bound a parallel fan-out
-		// at all — the same hole across: had, closed the same way and with the
-		// same helper. Asked after acquiring, so the answer reflects branches
-		// that have actually finished.
-		if branchCtx.Err() != nil || deadlineStopsFanOut(ctx, r.jobName, "in_parallel", "branches", index, len(branches)) {
-			slot.release()
-
-			break
-		}
-
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-			defer slot.release()
-
+	fanOut(branchCtx, len(branches), step.InParallel.Limit,
+		func(index int) bool {
+			// Under fail_fast a branch that has not started yet never should.
+			//
+			// Nor should one the job no longer has time for: the plan walk checks the deadline between STEPS, and this whole block is one of them, so without asking here a job timeout: cannot bound a parallel fan-out at all — the same hole across: had, closed the same way and with the same helper.
+			return branchCtx.Err() == nil && !deadlineStopsFanOut(ctx, r.jobName, "in_parallel", "branches", index, len(branches))
+		},
+		func(runCtx context.Context, index int) {
 			branch := branches[index]
-
-			// Each branch records into its own log, merged back in
-			// declaration order below — branches finish in whatever order
-			// they finish, and recording as they go would make
-			// assert.execution nondeterministic.
-			runCtx, branchLog := forkExecLog(branchCtx)
-			logs[index] = branchLog
 
 			branchRes, err := runNonGetStep(runCtx, r, i, branch, nil, blockHash)
 
@@ -150,16 +117,15 @@ func runBranches(ctx context.Context, r stepRunner, i int, step config.Step, blo
 			if err != nil && step.InParallel.FailsFast() {
 				cancel()
 			}
-		}()
-	}
+		},
+		func(index int, err error) {
+			results[index].err = err
 
-	wg.Wait()
-
-	for _, branchLog := range logs {
-		if branchLog != nil {
-			mergeExecLog(ctx, branchLog)
-		}
-	}
+			if step.InParallel.FailsFast() {
+				cancel()
+			}
+		},
+	)
 
 	return results
 }
