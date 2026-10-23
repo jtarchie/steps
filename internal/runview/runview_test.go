@@ -221,7 +221,7 @@ func stepsByID(view Transcript) map[int64]*Step {
 func TestAStepThatNeverReportedStopsRunningWhenTheRunEnds(t *testing.T) {
 	t.Parallel()
 
-	for _, status := range []store.RunStatus{"succeeded", "failed", "errored", "aborted"} {
+	for _, status := range []store.RunStatus{store.RunSucceeded, store.RunFailed, store.RunAborted} {
 		assertSettled(t, status, stepsByID(Build(store.RunRow{Status: status}, unclosed(time.Now()), nil)))
 	}
 }

@@ -94,8 +94,8 @@ func (s *Server) handleLatestRun(c *echo.Context) error {
 	// A terminal row carries its own error line, so only a live one gets the preparing-checklist.
 	var checks []followCheck
 
-	if state == "pending" || state == "running" {
-		checks, err = followChecks(ctx, readsOf(c, pipeline), s.capacity, name, state == "running", inFlight)
+	if state == store.QueuePending || state == store.QueueRunning {
+		checks, err = followChecks(ctx, readsOf(c, pipeline), s.capacity, name, state == store.QueueRunning, inFlight)
 		if err != nil {
 			return err
 		}
@@ -105,9 +105,12 @@ func (s *Server) handleLatestRun(c *echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"run": nil, "state": state, "checks": checks, "error": failErr})
 }
 
+// followWaiting is the state of a job with no queue row that counts: nothing queued, running, or ended since the page's stamp.
+const followWaiting store.QueueStatus = "waiting"
+
 // queuedState is a job's newest-row state, its running-build count, and the error that ended that row when a claim was finalized without a run for the page to forward to — a job the configuration no longer names.
-func queuedState(queue []store.QueueRow, name string, since time.Time) (string, int, string) {
-	state := "waiting"
+func queuedState(queue []store.QueueRow, name string, since time.Time) (store.QueueStatus, int, string) {
+	state := followWaiting
 	inFlight := 0
 	failErr := ""
 	decided := false
@@ -130,11 +133,11 @@ func queuedState(queue []store.QueueRow, name string, since time.Time) (string, 
 
 		switch row.Status {
 		case store.QueuePending, store.QueueRunning:
-			state = string(row.Status)
+			state = row.Status
 		case store.QueueFailed, store.QueueAborted:
 			// Credit a terminal row only to a follow page (non-zero stamp) and only when it ended at/after that stamp, never a stale failure nor a board column that just asks "is anything queued".
 			if !since.IsZero() && !row.FinishedAt.Before(since) {
-				state = string(row.Status)
+				state = row.Status
 				failErr = row.Error
 			}
 		case store.QueueSucceeded, store.QueueSkipped:

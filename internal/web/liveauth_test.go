@@ -10,13 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // liveRunServer is a signed-in daemon with a run that never finishes and one event for a stream to deliver.
-func liveRunServer(t *testing.T) (*Server, store.Accounts, store.Session) {
+func liveRunServer(t *testing.T, opts ...Option) (*Server, *Pipeline, store.Accounts, store.Session) {
 	t.Helper()
 
 	_, pipeline := testPipeline(t)
@@ -28,7 +29,7 @@ func liveRunServer(t *testing.T) (*Server, store.Accounts, store.Session) {
 
 	t.Cleanup(func() { _ = accounts.Close() })
 
-	server, err := New([]*Pipeline{pipeline}, nil, WithSessions(accounts), WithLocalUsers([]LocalUser{{Name: "alex", Hash: []byte(mustHash(t, "a"))}}))
+	server, err := New([]*Pipeline{pipeline}, nil, append([]Option{WithSessions(accounts), WithLocalUsers([]LocalUser{{Name: "alex", Hash: []byte(mustHash(t, "a"))}})}, opts...)...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -49,7 +50,7 @@ func liveRunServer(t *testing.T) (*Server, store.Accounts, store.Session) {
 		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
 	})
 
-	return server, accounts, session
+	return server, pipeline, accounts, session
 }
 
 // openLiveStream returns the stream once its first frame has arrived.
@@ -94,13 +95,41 @@ func TestARevokedSessionEndsItsLiveStream(t *testing.T) {
 
 	t.Cleanup(func() { liveRecheckInterval = previous })
 
-	server, accounts, session := liveRunServer(t)
+	server, _, accounts, session := liveRunServer(t)
 	reader := openLiveStream(t, server)
 
 	err := accounts.RevokeSession(t.Context(), session.TokenHash)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	assertStreamEndsSilently(t, reader)
+}
+
+// A set that narrows access: mid-run takes the stream from a reader the new rule leaves out, as the door would.
+func TestANarrowedAccessRuleEndsItsLiveStream(t *testing.T) {
+	previous := liveRecheckInterval
+	liveRecheckInterval = 0
+
+	t.Cleanup(func() { liveRecheckInterval = previous })
+
+	roles, err := CompileRoles([]string{`admin=false`, `viewer=true`})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server, pipeline, _, _ := liveRunServer(t, WithRoles(roles))
+	reader := openLiveStream(t, server)
+
+	narrowed := *pipeline.Config()
+	narrowed.Access = &config.Access{Viewer: `ID == "somebody else"`}
+	pipeline.SetConfig(&narrowed)
+
+	assertStreamEndsSilently(t, reader)
+}
+
+func assertStreamEndsSilently(t *testing.T, reader *bufio.Reader) {
+	t.Helper()
 
 	closed := make(chan string, 1)
 
