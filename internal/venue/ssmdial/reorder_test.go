@@ -127,3 +127,28 @@ func TestSendRefusesWhenNothingIsAcknowledged(t *testing.T) {
 		t.Fatalf("retained %d messages past the cap", len(channel.unacked))
 	}
 }
+
+// TestRetainedWritesAddUpToTheCap pins the counting: the cap is reached by what was retained, not only by a channel already full.
+func TestRetainedWritesAddUpToTheCap(t *testing.T) {
+	t.Parallel()
+
+	channel := &Channel{unacked: map[int64]*unackedMessage{}, now: time.Now}
+	chunk := maxBacklogBytes / 4
+
+	var err error
+
+	sent := 0
+	for ; sent < 5 && err == nil; sent++ {
+		message := newAgentMessage(time.Now())
+		message.messageType = msgInputStreamData
+		message.payload = make([]byte, chunk)
+
+		channel.mu.Lock()
+		err = channel.stampLocked(message, true)
+		channel.mu.Unlock()
+	}
+
+	if !errors.Is(err, ErrBacklog) || sent != 5 {
+		t.Fatalf("after %d unacknowledged writes of %d bytes: error = %v, want ErrBacklog on the fifth", sent, chunk, err)
+	}
+}
