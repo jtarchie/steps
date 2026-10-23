@@ -150,6 +150,28 @@ jobs:
 			want: `names "critik", which is not a step in this job`,
 		},
 		{
+			name: "a task reader names a sender whose file would land outside upstream/",
+			pipeline: `
+agents:
+- name: ../escape
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - agent: ../escape
+    inputs: []
+    messages:
+      - judge it
+    verdicts: [approve, revise]
+  - task: gate
+    run: "true"
+    context:
+      from:
+        ../escape: verdict
+`,
+			want: `names "../escape", which cannot be a file under upstream/`,
+		},
+		{
 			name: "names a step with no verdicts",
 			pipeline: fromAgents + `
 jobs:

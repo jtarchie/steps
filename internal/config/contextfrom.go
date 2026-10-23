@@ -16,6 +16,7 @@ package config
 import (
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -186,8 +187,9 @@ func collectFromDemands(job *Job) (map[string]FromLevel, error) {
 		for _, sender := range job.Plan[i].FromSenders() {
 			level := step.Context.From[sender]
 
-			if sender == stepName(job.Plan[i]) {
-				return nil, fmt.Errorf("%s: context from: names %q, which is this step — a step cannot read its own outcome", label, sender)
+			err := checkSender(label, job.Plan[i], sender)
+			if err != nil {
+				return nil, err
 			}
 
 			if level.RequiresNote() || demands[sender] == "" {
@@ -197,6 +199,24 @@ func collectFromDemands(job *Job) (map[string]FromLevel, error) {
 	}
 
 	return demands, nil
+}
+
+// checkSender refuses a sender reader cannot read: itself, or, for a task reader, a name whose upstream/ file would land outside it.
+func checkSender(label string, reader Step, sender string) error {
+	if sender == stepName(reader) {
+		return fmt.Errorf("%s: context from: names %q, which is this step — a step cannot read its own outcome", label, sender)
+	}
+
+	if unwrapStep(&reader).Task != "" && !isUpstreamFileName(sender) {
+		return fmt.Errorf("%s: context from: names %q, which cannot be a file under %s/", label, sender, UpstreamDir)
+	}
+
+	return nil
+}
+
+// isUpstreamFileName reports whether a task reader's delivery of sender, the file UpstreamPath(sender) the orchestrator writes, stays inside upstream/: a separator or `..` would not.
+func isUpstreamFileName(sender string) bool {
+	return filepath.IsLocal(sender) && !strings.ContainsAny(sender, `/\`)
 }
 
 // stampNoteObligations resolves each demanded sender within its job, checks it
