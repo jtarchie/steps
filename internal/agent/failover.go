@@ -41,9 +41,15 @@ import (
 // cascade that reaches a CLI candidate in agent.Fallback stops there rather
 // than skipping over it — skipping an operator's explicitly ordered entry
 // would be its own kind of surprise.
-func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (conversationResult, servedSource, error) {
+func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (_ conversationResult, _ servedSource, err error) {
+	// Attached before the span starts so the span can read the spend at its end; attachUsage is idempotent, and both paths below attach the same pointer again.
+	prepared.conv.usage = attachUsage(ctx, prepared.conv.usage)
+
+	ctx, invoked := startInvocation(ctx, prepared.ri)
+	defer func() { invoked.end(ctx, prepared.conv.usage.snapshot(), err) }()
+
 	// Here rather than at preparation, so a cached step never pays for the container its tools would have used — see preparedAgentStep.openTree. prepared is a value, so this settles the copy the conversation below actually runs from.
-	prepared, err := prepared.openTree(ctx)
+	prepared, err = prepared.openTree(ctx)
 	if err != nil {
 		return conversationResult{}, servedSource{ri: prepared.ri, llm: prepared.llm}, err
 	}

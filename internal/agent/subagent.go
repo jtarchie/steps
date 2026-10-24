@@ -252,7 +252,9 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// Its session is stable per (run, agent) with no attempt component, so
 	// repeated calls with the identical prompt keep a warm cache (see
 	// composeSessionID).
-	res, runErr := runAgentConversation(llmclient.WithRequestCounter(ctx, &llmclient.RequestCounter{}), c.llm, conv)
+	invokedCtx, invoked := startInvocation(ctx, c.ri)
+	res, runErr := runAgentConversation(llmclient.WithRequestCounter(invokedCtx, &llmclient.RequestCounter{}), c.llm, conv)
+	invoked.end(invokedCtx, conv.usage.snapshot(), runErr)
 	printAgentResponse(ctx, res)
 
 	slog.InfoContext(ctx, "agent.subagent_finish", "run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex,

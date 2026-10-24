@@ -171,6 +171,7 @@ func (n *lenientInt) UnmarshalJSON(data []byte) error {
 }
 
 type chatCompletion struct {
+	Model   lenientString `json:"model"`
 	Choices []struct {
 		FinishReason lenientString   `json:"finish_reason"`
 		Message      json.RawMessage `json:"message"`
@@ -240,6 +241,7 @@ func (m *chatModel) convertResponse(completion *chatCompletion) (*model.LLMRespo
 	return &model.LLMResponse{
 		Content:       content,
 		UsageMetadata: convertUsageMetadata(completion.Usage),
+		ModelVersion:  string(completion.Model),
 		FinishReason:  convertFinishReason(string(choice.FinishReason)),
 		TurnComplete:  true,
 	}, nil

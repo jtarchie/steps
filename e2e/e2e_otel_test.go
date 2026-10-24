@@ -465,7 +465,7 @@ func gaugeValue(metric *metricpb.Metric, want map[string]string) int64 {
 	return -1
 }
 
-// TestOTelTracesAnAgentsTurnsAndTools: each model call is a GenAI chat span under the agent's step, the HTTP request it made sits under that, each tool call is an execute_tool span, and the provider's reported tokens become both span attributes and gen_ai.client.token.usage.
+// TestOTelTracesAnAgentsTurnsAndTools: each model call is a GenAI chat span under the agent's invoke_agent span, itself under the step, the HTTP request it made sits under that, each tool call is an execute_tool span, and the provider's reported tokens become both span attributes and gen_ai.client.token.usage.
 func TestOTelTracesAnAgentsTurnsAndTools(t *testing.T) {
 	collector := newOTLPCollector(t)
 
@@ -501,7 +501,10 @@ jobs:
 
 	spans, _ := collector.snapshot()
 	step := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "agent responder")
+	invoked := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "invoke_agent responder")
 	tool := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "execute_tool write_file")
+
+	assertUnder(t, step, step, invoked)
 
 	var chats []*tracepb.Span
 
@@ -516,14 +519,14 @@ jobs:
 	}
 
 	for _, chat := range chats {
-		assertUnder(t, step, step, chat)
+		assertUnder(t, step, invoked, chat)
 
 		if !hasChild(spans, chat, tracepb.Span_SPAN_KIND_CLIENT, "HTTP POST") {
 			t.Errorf("chat span %x has no HTTP request under it", chat.GetSpanId())
 		}
 	}
 
-	assertUnder(t, step, step, tool)
+	assertUnder(t, step, invoked, tool)
 
 	if got := intAttr(chats[0], "gen_ai.usage.input_tokens") + intAttr(chats[1], "gen_ai.usage.input_tokens"); got != 120 {
 		t.Errorf("the chat spans report %d input tokens, want 120 (80 + 40)", got)

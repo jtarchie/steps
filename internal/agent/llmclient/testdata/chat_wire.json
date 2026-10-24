@@ -878,6 +878,7 @@
     "role": "model"
    },
    "finishReason": "STOP",
+   "modelVersion": "m",
    "turnComplete": true,
    "usageMetadata": {
     "cachedContentTokenCount": 3,
@@ -1015,6 +1016,7 @@
     "role": "model"
    },
    "finishReason": "STOP",
+   "modelVersion": "m",
    "turnComplete": true,
    "usageMetadata": {
     "cachedContentTokenCount": 3,

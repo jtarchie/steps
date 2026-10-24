@@ -715,6 +715,8 @@ linters:
             - "golang.org/x/oauth2"
             # otelhttp traces a remote server's requests under the tool call that made them; a no-op until internal/telemetry installs a provider.
             - "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+            # The OpenTelemetry API, never the SDK: the propagator that puts a tool call's trace in params._meta.
+            - "go.opentelemetry.io/otel"
             # goleak is test-only: stdio_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"

@@ -150,7 +150,7 @@ func (f llmFuncs) Name() string { return f.name() }
 // GenerateContent is one model call, traced as a GenAI chat span whose context the HTTP request inherits, so a retried attempt shows under the turn it belongs to.
 func (f llmFuncs) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		ctx, turn := startChat(ctx, f.name(), f.server)
+		ctx, turn := startChat(ctx, f.name(), f.server, req)
 
 		for resp, err := range f.generate(ctx, req, stream) {
 			turn.observe(resp, err)
@@ -168,26 +168,50 @@ func (f llmFuncs) GenerateContent(ctx context.Context, req *model.LLMRequest, st
 const TelemetryScope = "github.com/jtarchie/steps/internal/agent"
 
 type chatTurn struct {
-	span    trace.Span
-	model   string
-	started time.Time
-	input   int64
-	output  int64
+	span     trace.Span
+	model    string
+	provider string
+	started  time.Time
+	input    int64
+	output   int64
+	cached   int64
 	// reported is whether any response carried usage; a provider that omits it must not read as a call that cost nothing.
 	reported bool
 	failure  error
+	reasons  []string
+	// parts is the response's content, kept only when CaptureContent asked for it.
+	parts   []map[string]any
+	capture bool
 }
 
-func startChat(ctx context.Context, modelName, server string) (context.Context, *chatTurn) {
-	ctx, span := otel.Tracer(TelemetryScope).Start(ctx, "chat "+modelName,
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			attribute.String("gen_ai.operation.name", "chat"),
-			attribute.String("gen_ai.request.model", modelName),
-			attribute.String("server.address", server),
-		))
+func startChat(ctx context.Context, modelName, server string, req *model.LLMRequest) (context.Context, *chatTurn) {
+	inv := InvocationFrom(ctx)
+	inv.countInference()
 
-	return ctx, &chatTurn{span: span, model: modelName, started: time.Now()}
+	provider := providerHosts[server]
+	attrs := append([]attribute.KeyValue{
+		attribute.String("gen_ai.operation.name", "chat"),
+		attribute.String("gen_ai.request.model", modelName),
+		attribute.String("server.address", server),
+	}, inv.Attributes()...)
+
+	if provider != "" {
+		attrs = append(attrs, attribute.String("gen_ai.provider.name", provider))
+	}
+
+	turn := &chatTurn{model: modelName, provider: provider, started: time.Now(), capture: CaptureContent()}
+
+	if turn.capture && req != nil {
+		attrs = append(attrs, attribute.String("gen_ai.input.messages", inputMessages(req.Contents)))
+
+		if req.Config != nil && req.Config.SystemInstruction != nil {
+			attrs = append(attrs, attribute.String("gen_ai.system_instructions", systemInstructions(req.Config.SystemInstruction)))
+		}
+	}
+
+	ctx, turn.span = otel.Tracer(TelemetryScope).Start(ctx, "chat "+modelName, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
+
+	return ctx, turn
 }
 
 // observe takes usage only as the provider reported it, the same rule stepUsage.record keeps.
@@ -206,14 +230,19 @@ func (c *chatTurn) observe(resp *model.LLMResponse, err error) {
 		c.span.SetAttributes(attribute.String("gen_ai.response.model", resp.ModelVersion))
 	}
 
-	if resp.FinishReason != "" {
-		c.span.SetAttributes(attribute.StringSlice("gen_ai.response.finish_reasons", []string{string(resp.FinishReason)}))
+	if reason := finishReason(resp); reason != "" {
+		c.reasons = append(c.reasons, reason)
+	}
+
+	if c.capture && resp.Content != nil {
+		c.parts = append(c.parts, messageParts(resp.Content)...)
 	}
 
 	if usage := resp.UsageMetadata; usage != nil {
 		c.reported = true
 		c.input += int64(usage.PromptTokenCount)
 		c.output += int64(usage.CandidatesTokenCount)
+		c.cached += int64(usage.CachedContentTokenCount)
 	}
 }
 
@@ -224,12 +253,25 @@ func (c *chatTurn) end(ctx context.Context) {
 		attribute.String("gen_ai.request.model", c.model),
 	}
 
+	if c.provider != "" {
+		attrs = append(attrs, attribute.String("gen_ai.provider.name", c.provider))
+	}
+
+	if len(c.reasons) > 0 {
+		c.span.SetAttributes(attribute.StringSlice("gen_ai.response.finish_reasons", c.reasons))
+	}
+
+	if c.capture && c.failure == nil {
+		c.span.SetAttributes(attribute.String("gen_ai.output.messages", outputMessage(c.parts, c.lastReason())))
+	}
+
 	if c.reported {
 		c.recordTokens(ctx, meter, attrs)
 	}
 
 	if c.failure != nil {
 		c.span.SetStatus(codes.Error, c.failure.Error())
+		c.span.SetAttributes(attribute.String("error.type", "_OTHER"))
 		attrs = append(attrs, attribute.String("error.type", "_OTHER"))
 	}
 
@@ -243,8 +285,17 @@ func (c *chatTurn) end(ctx context.Context) {
 	c.span.End()
 }
 
+func (c *chatTurn) lastReason() string {
+	if len(c.reasons) == 0 {
+		return ""
+	}
+
+	return c.reasons[len(c.reasons)-1]
+}
+
 func (c *chatTurn) recordTokens(ctx context.Context, meter metric.Meter, attrs []attribute.KeyValue) {
-	c.span.SetAttributes(attribute.Int64("gen_ai.usage.input_tokens", c.input), attribute.Int64("gen_ai.usage.output_tokens", c.output))
+	c.span.SetAttributes(attribute.Int64("gen_ai.usage.input_tokens", c.input), attribute.Int64("gen_ai.usage.output_tokens", c.output),
+		attribute.Int64("gen_ai.usage.cache_read.input_tokens", c.cached))
 
 	tokens, err := meter.Int64Histogram("gen_ai.client.token.usage", metric.WithUnit("{token}"),
 		metric.WithDescription("Tokens a model call used, as the provider reported them"),

@@ -16,12 +16,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"net/http"
 	"os"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"golang.org/x/oauth2"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -124,7 +126,19 @@ func (c *sessionClient) ListTools(ctx context.Context) ([]*sdkmcp.Tool, error) {
 }
 
 func (c *sessionClient) CallTool(ctx context.Context, name string, args map[string]any) (*sdkmcp.CallToolResult, error) {
-	result, err := c.session.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: args})
+	// The trace rides params._meta, unprefixed, as the MCP semantic conventions ask: a stdio server has no headers to carry it in.
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+
+	params := &sdkmcp.CallToolParams{Name: name, Arguments: args}
+	if len(carrier) > 0 {
+		params.Meta = sdkmcp.Meta{}
+		for key, value := range carrier {
+			params.Meta[key] = value
+		}
+	}
+
+	result, err := c.session.CallTool(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: call tool %q: %w", name, err)
 	}

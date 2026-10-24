@@ -185,7 +185,9 @@ func RunFix(
 	// call, so this only needs the response body, not another "agent:" banner.
 	started := time.Now()
 
-	result, err := runOneConversation(ctx, ri, llm, conv, timeout)
+	invokedCtx, invoked := startInvocation(ctx, ri)
+	result, err := runOneConversation(invokedCtx, ri, llm, conv, timeout)
+	invoked.end(invokedCtx, conv.usage.snapshot(), err)
 	printAgentResponse(ctx, result)
 
 	saveAgentUsage(ctx, st, saveUsageArgs{

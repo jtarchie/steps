@@ -206,14 +206,18 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 		fork := env.transcript.forkRecorder()
 		fork.call(name, args)
 
+		ctx, span := startToolSpan(ctx, name, "", args)
+
 		// Rejected before the impl runs, never after: the point of a budget is
 		// bounding the side effect, which for ask_user is interrupting
 		// somebody. The refusal goes back as ordinary tool-result data, the
 		// same contract the HTTP path's executeBudgetedTool honours, so the
 		// child reacts to it instead of the attempt aborting.
 		if exhausted, budget := b.overBudget(name); exhausted {
-			refusal := fmt.Sprintf(`{"error": %q}`, fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", name, budget))
+			reason := fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", name, budget)
+			refusal := fmt.Sprintf(`{"error": %q}`, reason)
 			fork.result(name, refusal)
+			span.end(ctx, errorResult(reason))
 
 			return &sdkmcp.CallToolResult{
 				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: refusal}},
@@ -222,6 +226,7 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 		}
 
 		result := impl(ctx, args, env)
+		span.end(ctx, result)
 
 		b.capture(name, args, result)
 		fork.result(name, renderResultContent(result))

@@ -9,12 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jtarchie/steps/internal/agent/llmclient"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/genai"
 )
 
@@ -145,8 +139,7 @@ func runBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv,
 
 	start := time.Now()
 
-	ctx, span := startToolSpan(ctx, call)
-	defer span.End()
+	ctx, span := startToolSpan(ctx, call.Name, call.ID, call.Args)
 
 	response := rejection
 	if response == nil {
@@ -158,19 +151,9 @@ func runBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv,
 		"duration", time.Since(start), "error", response["error"], "exit_code", response["exit_code"],
 		"result", lazyToolResultPreview{response: response})
 
-	if failure, ok := response["error"]; ok && failure != nil {
-		span.SetStatus(codes.Error, fmt.Sprint(failure))
-	}
+	span.end(ctx, response)
 
 	return response
-}
-
-func startToolSpan(ctx context.Context, call *genai.FunctionCall) (context.Context, trace.Span) {
-	return otel.Tracer(llmclient.TelemetryScope).Start(ctx, "execute_tool "+call.Name, trace.WithAttributes(
-		attribute.String("gen_ai.operation.name", "execute_tool"),
-		attribute.String("gen_ai.tool.name", call.Name),
-		attribute.String("gen_ai.tool.call.id", call.ID),
-	))
 }
 
 // lazyToolResultPreview defers rendering a tool result until a handler
