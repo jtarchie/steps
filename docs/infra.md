@@ -455,7 +455,7 @@ jobs:
 ```
 
 - Passed to the daemon as the container's network mode, so `none`, `host`, `bridge`, or a named network all work; docker reports a typo itself at container start.
-- **Requires `image:`**, checked at load time. A host command uses the host's network, so `network: none` there would be isolation in name only.
+- **Requires `image:`**, checked at load time. A host command uses the host's network, so `network: none` there would be isolation in name only. The one exception is `network: none` beside [`sandbox: true`](#host-sandbox-sandbox), where the OS sandbox does the cutting off.
 - A value starting with `-` is rejected at load time, as `user:`'s is.
 - Settable on `resource_types:`, `tasks:`, `agents:`, and as a step override (non-empty-wins). Invalid on `get`/`put` steps. Most resource types exist *to* reach the network, so this is rarely what you want on one.
 - **Caching**: `network:` folds into the node's hash.
@@ -549,6 +549,74 @@ jobs:
 - Settable on `resource_types:`, `tasks:`, `agents:`, and as a step-level override (non-empty-wins). Invalid on `get`/`put` steps.
 - A value starting with `-` is rejected at load time.
 - **Caching**: `user:` folds into the node's hash — running as root and as an unprivileged user are genuinely different executions.
+
+## Host sandbox (`sandbox:`)
+
+A host command reaches everything the operator who started `steps` can. `image:` is the full fence, but on a laptop docker means a VM. `sandbox: true` fences a **host** command with the operating system's own sandbox instead, so a model-directed `run_shell` can only change the step's own workspace:
+
+```yaml test=infra-sandbox
+resource_types:
+- name: stamp
+  sandbox: true                  # check/in/out run fenced too
+  config:
+    check: |
+      printf '[{"n": "7"}]'
+    in: echo {{ .version.n | shellquote }} > n.txt
+
+resources:
+- name: build-number
+  type: stamp
+  source: {}
+
+tasks:
+- name: probe
+  sandbox: true
+  network: none                  # legal without image: only under sandbox:
+  inputs: [build-number]
+  outputs: [report]
+  run: |
+    uname > report/os.txt                               # reads stay open: the toolchain is wherever you installed it
+    if touch ../escaped 2>/dev/null; then exit 1; fi    # outside the workspace: refused
+    mktemp "$TMPDIR/scratch.XXXXXX" > /dev/null         # a private TMPDIR, removed with the step
+    cat build-number/n.txt
+
+agents:
+- name: reviewer
+  sandbox: true                  # its run_shell and custom tools are fenced
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools: [run_shell]
+
+jobs:
+- name: build
+  plan:
+  - get: build-number
+  - task: probe
+    assert:
+      stdout: "7"
+  - agent: reviewer
+    inputs: [report]
+    messages: ["Summarize report/os.txt."]
+  assert:
+    execution: [build-number, probe, reviewer]
+    outcome: succeeded
+```
+
+What the fence allows:
+
+- **Writes** only under the step's workspace (its caches included, since a host step's caches live there) and a private `TMPDIR` made for the step and removed after it. The shared temp directory is not writable, because every other step's workspace lives in it.
+- **Reads** everywhere except credential paths: `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.config/gcloud`, `~/.kube`, `~/.gnupg`, `~/.netrc`, `~/.docker/config.json` and `~/Library/Keychains`, each also by its real path when it is a symlink. Reads stay open because a host command needs its toolchain wherever the operator installed it.
+- **Network** stays open unless the entry also says `network: none`, which cuts the command off from everything, loopback and unix sockets included. Any other `network:` value beside `sandbox:` is a load error, because the sandbox can only cut the network off, not join one.
+
+Rules and edges:
+
+- **Darwin only for now**, built on `sandbox-exec`. Apple has marked it deprecated since macOS 10.12 and still ships it; Claude Code and Codex rely on it too. On any other OS a sandboxed step fails before its first command rather than running unfenced. The pipeline still validates there, so a pipeline is portable to the machine that can run it.
+- **`mktemp` with no template ignores `TMPDIR` on macOS** and writes to the shared per-user temp directory, which the fence refuses. Write `mktemp "$TMPDIR/name.XXXXXX"`, as above. Go, Python and Node honor `TMPDIR` on their own.
+- **A sandbox that cannot apply is an error, not a failed command.** The fence is tried once when the step starts. If `steps` itself runs inside a sandbox that forbids nesting, the step errors there rather than every command exiting nonzero and reading as the step saying no.
+- Settable on `resource_types:`, `tasks:` and `agents:` entries. There is no step-level spelling, and an inline `run:` step has no entry, so it is never sandboxed. A `when:` guard runs under its step's sandbox.
+- **Refused beside `image:`**, including a step's own `image:` over a sandboxed task: a container is already its own fence, and one `sandbox-exec` cannot reach into. **Refused on a placed step** (`tags:`, inherited or not): the fence is on this machine, and the step would run on another.
+- **A `fix:` agent runs under the failing task's sandbox**, as it does under the task's image, so a fix agent's own `sandbox: true` is a load error. A delegated sub-agent runs under its own entry's.
+- **Not fenced**, exactly as under `image:`: an agent's stdio MCP servers and a CLI agent's own process. They are host subprocesses either way.
+- **Caching**: `sandbox: true` folds into the node's hash; unset leaves every existing key as it was.
 
 ## Passing environment through (`env:`)
 

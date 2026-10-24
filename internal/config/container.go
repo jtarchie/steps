@@ -17,6 +17,7 @@ type containerSettings struct {
 	Network    string
 	Privileged bool
 	Limits     *ContainerLimits
+	Sandbox    bool
 	// Tags rides along so a rule about a step's placement reads the RESOLVED
 	// image, which is the only place a step inheriting one from the tasks:
 	// entry it references can be seen.
@@ -42,15 +43,15 @@ type entryRef struct {
 }
 
 func (rt ResourceType) containerSettings() containerSettings {
-	return containerSettings{Image: rt.Image, Env: rt.Env, User: rt.User, Network: rt.Network, Privileged: rt.Privileged, Limits: rt.Limits}
+	return containerSettings{Image: rt.Image, Env: rt.Env, User: rt.User, Network: rt.Network, Privileged: rt.Privileged, Limits: rt.Limits, Sandbox: rt.Sandbox}
 }
 
 func (a Agent) containerSettings() containerSettings {
-	return containerSettings{Image: a.Image, Env: a.Env, User: a.User, Network: a.Network, Privileged: a.Privileged, Limits: a.Limits}
+	return containerSettings{Image: a.Image, Env: a.Env, User: a.User, Network: a.Network, Privileged: a.Privileged, Limits: a.Limits, Sandbox: a.Sandbox}
 }
 
 func (t Task) containerSettings() containerSettings {
-	return containerSettings{Image: t.Image, Env: t.Env, User: t.User, Network: t.Network, Privileged: t.Privileged, Limits: t.Limits}
+	return containerSettings{Image: t.Image, Env: t.Env, User: t.User, Network: t.Network, Privileged: t.Privileged, Limits: t.Limits, Sandbox: t.Sandbox}
 }
 
 // from labels settings with the named entry they were read from.
@@ -105,6 +106,7 @@ func (c *Config) visitContainerSettings(fn func(context string, settings contain
 			// the image the step will actually run under, rather than each
 			// rule that cares having to remember to resolve it.
 			settings.Image = c.resolvedStepImage(*step)
+			settings.Sandbox = c.resolvedStepSandbox(*step)
 
 			return fn(label, settings)
 		})

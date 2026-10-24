@@ -44,6 +44,8 @@ type ResolvedTask struct {
 	// Limits caps this task's container CPU/memory. See
 	// Task.Limits/Step.Limits.
 	Limits *ContainerLimits
+	// Sandbox fences this task's host commands. Always the tasks: entry's: a step has no spelling for it, and an inline run: has no entry. See Task.Sandbox.
+	Sandbox bool
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// means no timeout. Step.Timeout overrides Task.Timeout when set.
 	Timeout string
@@ -143,7 +145,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 	return ResolvedTask{
 		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs,
 		Image: runtime.Image, Env: runtime.Env, User: runtime.User, Network: runtime.Network,
-		Privileged: runtime.Privileged, Limits: runtime.Limits, Timeout: timeout,
+		Privileged: runtime.Privileged, Limits: runtime.Limits, Sandbox: runtime.Sandbox, Timeout: timeout,
 		InputMapping: step.InputMapping, OutputMapping: step.OutputMapping, Assert: step.Assert,
 		Caches: resolveCaches(task.Caches, step),
 	}, nil
@@ -248,6 +250,8 @@ type ResolvedInvocation struct {
 	// Limits caps this step's container CPU/memory. See
 	// Agent.Limits/Step.Limits.
 	Limits *ContainerLimits
+	// Sandbox fences this agent's run_shell/custom tools on the host. From the agents: entry only; see Agent.Sandbox.
+	Sandbox bool
 	// Image, when non-empty, runs this step's run_shell/custom-tool commands
 	// in a container from this image instead of on the host. See
 	// Agent.Image/Step.Image.
@@ -377,6 +381,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		Network:              runtime.Network,
 		Privileged:           runtime.Privileged,
 		Limits:               runtime.Limits,
+		Sandbox:              runtime.Sandbox,
 		Caches:               resolveCaches(agent.Caches, step),
 	}, nil
 }

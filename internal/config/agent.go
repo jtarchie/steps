@@ -47,7 +47,7 @@ type Agent struct {
 	User string `yaml:"user,omitempty"`
 	// Network is the container network this agent's run_shell/custom-tool
 	// commands join (docker's --network); "none" cuts off egress entirely.
-	// Requires Image.
+	// Requires Image, except "none" beside Sandbox.
 	Network string `yaml:"network,omitempty"`
 	// Privileged runs this command's container with `docker run --privileged`.
 	// Mirrors Concourse's privileged: (concourse-ci.org/docs/steps/task/).
@@ -57,6 +57,8 @@ type Agent struct {
 	// Limits caps the container's CPU and memory. Mirrors Concourse's
 	// container_limits:; container-only for the same reason Privileged is.
 	Limits *ContainerLimits `yaml:"container_limits,omitempty"`
+	// Sandbox fences this entity's host commands with the OS sandbox: writes only under the step's workspace and a private TMPDIR, credential directories unreadable, and network: none becomes legal on the host. See internal/config/sandbox.go for the rules and docs/infra.md for the policy.
+	Sandbox bool `yaml:"sandbox,omitempty"`
 	// System is the persona/system message given to the model. Empty falls
 	// back to a generic CI-agent persona.
 	System string `yaml:"system,omitempty"`

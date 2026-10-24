@@ -46,7 +46,8 @@ type Task struct {
 	// defaultContainerUser. Only meaningful alongside Image.
 	User string `yaml:"user,omitempty"`
 	// Network is the container network this task's run: joins (docker's
-	// --network); "none" cuts off egress entirely. Requires Image.
+	// --network); "none" cuts off egress entirely. Requires Image, except
+	// "none" beside Sandbox.
 	Network string `yaml:"network,omitempty"`
 	// Privileged runs this command's container with `docker run --privileged`.
 	// Mirrors Concourse's privileged: (concourse-ci.org/docs/steps/task/).
@@ -56,6 +57,8 @@ type Task struct {
 	// Limits caps the container's CPU and memory. Mirrors Concourse's
 	// container_limits:; container-only for the same reason Privileged is.
 	Limits *ContainerLimits `yaml:"container_limits,omitempty"`
+	// Sandbox fences this entity's host commands with the OS sandbox: writes only under the step's workspace and a private TMPDIR, credential directories unreadable, and network: none becomes legal on the host. See internal/config/sandbox.go for the rules and docs/infra.md for the policy.
+	Sandbox bool `yaml:"sandbox,omitempty"`
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// (default) means no timeout. Inherited by task steps unless overridden.
 	Timeout string `yaml:"timeout,omitempty"`

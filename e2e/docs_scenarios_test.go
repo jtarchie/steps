@@ -240,6 +240,14 @@ var docScenarios = map[string]docScenario{
 		),
 	},
 
+	// The reviewer reads its report and tries to write beside its workspace; the refusal comes back as tool output and the step stays green.
+	"infra-sandbox": {
+		fake: scripted(
+			callsTool("run_shell", map[string]any{"command": "cat report/os.txt; touch ../escaped"}),
+			says("Darwin, and the sandbox refused the write."),
+		),
+	},
+
 	// The writer creates report/summary.md and the publish task proves the
 	// artifact flowed.
 	"agents-writer": {

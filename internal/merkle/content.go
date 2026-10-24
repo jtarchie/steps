@@ -20,6 +20,13 @@ func sortedEnv(env []string) []string {
 	return out
 }
 
+// withSandbox keys sandbox: only when set, so an unsandboxed node hashes as it did before the field existed.
+func withSandbox(sandbox bool, content map[string]any) {
+	if sandbox {
+		content["sandbox"] = true
+	}
+}
+
 // withIsolation folds the two settings that change what a containerized
 // command is ALLOWED to do into content.
 //
@@ -124,6 +131,8 @@ func withResourceTypeEnv(cfg *config.Config, resourceType config.ResourceType, e
 	if resourceType.Network != "" {
 		content["network"] = resourceType.Network
 	}
+
+	withSandbox(resourceType.Sandbox, content)
 
 	withIsolation(resourceType.Privileged, resourceType.Limits, content)
 
@@ -523,6 +532,8 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 	if rt.Network != "" {
 		content["network"] = rt.Network
 	}
+
+	withSandbox(rt.Sandbox, content)
 
 	withIsolation(rt.Privileged, rt.Limits, content)
 

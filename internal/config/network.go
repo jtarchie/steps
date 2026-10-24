@@ -63,6 +63,14 @@ func (c *Config) validateNetworkValues() error {
 func (c *Config) validateNetworkNeedsImage() error {
 	return c.visitContainerSettings(func(context string, settings containerSettings) error {
 		if settings.Network != "" && settings.Image == "" {
+			if settings.Sandbox {
+				if settings.Network == "none" {
+					return nil
+				}
+
+				return fmt.Errorf("%s: network %q on a sandboxed host command — the sandbox can only cut the network off (network: none), not join one", context, settings.Network)
+			}
+
 			return fmt.Errorf("%s: network %q requires image: — a host-executed command uses the host's network, so this would promise an isolation it cannot provide", context, settings.Network)
 		}
 

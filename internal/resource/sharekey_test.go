@@ -15,7 +15,7 @@ import (
 // not share an answer.
 var shareKeyed = map[string]bool{
 	"Image": true, "Env": true, "User": true, "Network": true,
-	"Privileged": true, "CPUShares": true, "MemoryBytes": true,
+	"Privileged": true, "CPUShares": true, "MemoryBytes": true, "Sandbox": true,
 }
 
 // shareUnkeyed are the fields left out of the key on purpose. A check never

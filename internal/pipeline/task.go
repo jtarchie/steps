@@ -239,7 +239,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 	}
 
 	runner, err := newRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
-		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
+		Privileged: rt.Privileged, Sandbox: rt.Sandbox, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
 		Worker: worker, WorkerTag: placementTag(step), Fetch: rt.Outputs, ReusedWarm: reusedWarm(ctx, step),
 		DeferFetch:   deferrable(step, rt),
 		RemoteInputs: remote,

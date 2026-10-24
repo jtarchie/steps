@@ -25,7 +25,8 @@ type ResourceType struct {
 	// Empty takes the platform default — see shell's defaultContainerUser.
 	User string `yaml:"user,omitempty"`
 	// Network is the container network check/in/out join (docker's
-	// --network); "none" cuts off egress entirely. Requires Image — and note
+	// --network); "none" cuts off egress entirely. Requires Image (except
+	// "none" beside Sandbox) — and note
 	// that most resource types exist to reach the network, so this is rarely
 	// what you want on one.
 	Network string `yaml:"network,omitempty"`
@@ -36,8 +37,10 @@ type ResourceType struct {
 	Privileged bool `yaml:"privileged,omitempty"`
 	// Limits caps the container's CPU and memory. Mirrors Concourse's
 	// container_limits:; container-only for the same reason Privileged is.
-	Limits *ContainerLimits   `yaml:"container_limits,omitempty"`
-	Config ResourceTypeConfig `yaml:"config"`
+	Limits *ContainerLimits `yaml:"container_limits,omitempty"`
+	// Sandbox fences this entity's host commands with the OS sandbox: writes only under the step's workspace and a private TMPDIR, credential directories unreadable, and network: none becomes legal on the host. See internal/config/sandbox.go for the rules and docs/infra.md for the policy.
+	Sandbox bool               `yaml:"sandbox,omitempty"`
+	Config  ResourceTypeConfig `yaml:"config"`
 }
 
 // ResourceTypeConfig holds the check/in/out shell command templates.

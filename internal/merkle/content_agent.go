@@ -347,6 +347,8 @@ func subAgentInvocationContent(cfg *config.Config, name string) (map[string]any,
 		content["network"] = ri.Network
 	}
 
+	withSandbox(ri.Sandbox, content)
+
 	withIsolation(ri.Privileged, ri.Limits, content)
 
 	return content, nil
@@ -448,6 +450,8 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 	if ri.Network != "" {
 		content["network"] = ri.Network
 	}
+
+	withSandbox(ri.Sandbox, content)
 
 	withIsolation(ri.Privileged, ri.Limits, content)
 

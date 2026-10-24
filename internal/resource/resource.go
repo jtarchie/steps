@@ -59,7 +59,7 @@ func CheckVersions(ctx context.Context, c Call) ([]map[string]any, error) {
 // runnerSpec is how every shell stage of rt runs, before the stage adds its
 // own tree: a check has none.
 func runnerSpec(rt config.ResourceType, extraEnv []string) shell.RunnerSpec {
-	return shell.RunnerSpec{Image: rt.Image, Env: config.UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
+	return shell.RunnerSpec{Image: rt.Image, Env: config.UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network, Sandbox: rt.Sandbox,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()}
 }
 

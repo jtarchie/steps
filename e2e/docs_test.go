@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -157,6 +158,11 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	// local: is a docker+ worker on this machine's daemon, so a placed example runs only where one answers; it is validated everywhere above.
 	if len(scenario.workers) > 0 {
 		testdocker.Require(t)
+	}
+
+	// sandbox: refuses at the step off darwin, so its examples run where it exists; they are validated everywhere above.
+	if runtime.GOOS != "darwin" && strings.Contains(block.Body, "sandbox: true") {
+		t.Skip("sandbox: is implemented only on darwin")
 	}
 
 	executeDocBlock(t, block, scenario, dir, path, varFlags, runFlags)

@@ -106,12 +106,14 @@ type RunnerSpec struct {
 	User string
 	// Network is the container's network mode; "none" cuts the container off
 	// from the network entirely.
-	// Empty takes docker's own default. Meaningless for host execution, which
-	// config rejects at load time rather than silently ignoring.
+	// Empty takes docker's own default. On a host command only "none" beside
+	// Sandbox means anything; config rejects every other host use at load time.
 	Network string
 	// Privileged runs the container privileged. Ignored
 	// for host execution, which config rejects at load time.
 	Privileged bool
+	// Sandbox fences a HOST command with the OS sandbox (see newHostFence); with it, Network "none" cuts the host command off too. Config refuses it beside Image and on a placed step.
+	Sandbox bool
 	// CPUShares is a relative weight, not a core
 	// count. Zero leaves it unset.
 	CPUShares int
@@ -192,7 +194,18 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 	// hands this to the CONTAINER path — a placed step with no image runs on
 	// ssh://, whose runner exports the env in the command it sends.
 	if spec.Image == "" {
-		return HostRunner{cwd: joinSubdir(spec.Cwd, spec.Subdir), extraEnv: spec.Env}, nil
+		host := HostRunner{cwd: joinSubdir(spec.Cwd, spec.Subdir), extraEnv: spec.Env}
+
+		if spec.Sandbox {
+			fence, err := newHostFence(hostSandbox, spec.Cwd, spec.Network != "none")
+			if err != nil {
+				return nil, err
+			}
+
+			host.fence = fence
+		}
+
+		return host, nil
 	}
 
 	var resolvedCwd string
@@ -559,6 +572,8 @@ type HostRunner struct {
 	// extraEnv names variables the pipeline's env: opted in beyond
 	// hostEnvAllowlist — see NewRunner.
 	extraEnv []string
+	// fence is non-nil under sandbox: true; WithLabel copies share it, so closing either removes its TMPDIR once.
+	fence *hostFence
 }
 
 // WithLabel returns a copy of h that prefixes its live-streamed output —
@@ -569,8 +584,14 @@ func (h HostRunner) WithLabel(label string) Runner {
 	return h
 }
 
-// Close satisfies Runner. Host execution holds nothing open.
-func (HostRunner) Close() error { return nil }
+// Close removes a fenced runner's private TMPDIR; an unfenced one holds nothing open.
+func (h HostRunner) Close() error {
+	if h.fence == nil {
+		return nil
+	}
+
+	return h.fence.close()
+}
 
 // hostEnvAllowlist is the fixed set of environment variable names a
 // host-executed command (resource check/in/out, task run:, an agent's
@@ -735,10 +756,27 @@ func processStarted(err error) bool {
 func (h HostRunner) Exec(ctx context.Context, cmd Command) (Result, error) {
 	slog.DebugContext(ctx, "shell.exec", "command", redact.Command(cmd.Script), "cwd", h.cwd)
 
-	proc := exec.CommandContext(ctx, "sh", "-c", cmd.Script) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
+	argv := []string{"sh", "-c", cmd.Script}
+	env := h.environ(ctx)
+
+	if h.fence != nil {
+		err := h.fence.ready(ctx)
+		if err != nil {
+			return Result{Code: -1}, err
+		}
+
+		argv, err = h.fence.box.command(h.fence.policy, argv)
+		if err != nil {
+			return Result{Code: -1}, err
+		}
+
+		env = h.fence.env(env)
+	}
+
+	proc := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	proc.WaitDelay = cancelWaitDelay
 	proc.Dir = h.cwd
-	proc.Env = h.environ(ctx)
+	proc.Env = env
 
 	if cmd.Stdin {
 		proc.Stdin = os.Stdin

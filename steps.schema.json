@@ -290,6 +290,10 @@
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
         },
+        "sandbox": {
+          "type": "boolean",
+          "description": "Fence host commands with the OS sandbox (darwin only): writes only under the step's workspace and a private TMPDIR, credential paths unreadable, and network: none becomes legal without image:. Refused beside image: and on a placed step."
+        },
         "container_limits": {
           "$ref": "#/$defs/containerLimits"
         },
@@ -758,6 +762,10 @@
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
         },
+        "sandbox": {
+          "type": "boolean",
+          "description": "Fence host commands with the OS sandbox (darwin only): writes only under the step's workspace and a private TMPDIR, credential paths unreadable, and network: none becomes legal without image:. Refused beside image: and on a placed step."
+        },
         "caches": {
           "$ref": "#/$defs/caches"
         },
@@ -1185,6 +1193,10 @@
         "privileged": {
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
+        },
+        "sandbox": {
+          "type": "boolean",
+          "description": "Fence host commands with the OS sandbox (darwin only): writes only under the step's workspace and a private TMPDIR, credential paths unreadable, and network: none becomes legal without image:. Refused beside image: and on a placed step."
         },
         "caches": {
           "$ref": "#/$defs/caches"

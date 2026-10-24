@@ -168,6 +168,10 @@ func (c *Config) validateFixAgentImages() error {
 			return fmt.Errorf("%s: fix agent %q sets image: %q, but a fix loop always runs under the failing task's image, not the fix agent's own", context, fix.Agent, agent.Image)
 		}
 
+		if agent.Sandbox {
+			return fmt.Errorf("%s: fix agent %q sets sandbox: true, but a fix loop always runs under the failing task's sandbox, not the fix agent's own — set it on the task", context, fix.Agent)
+		}
+
 		return nil
 	}
 
