@@ -32,6 +32,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 )
 
@@ -492,6 +493,9 @@ func probeModel(ctx context.Context, ri config.ResolvedInvocation, timeout time.
 
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	// Named for its agent, with no invoke_agent of its own: a probe is steps checking a source, not the agent working, and an unnamed chat span reads as an Unknown agent in Honeycomb.
+	probeCtx = llmclient.WithInvocation(probeCtx, &llmclient.Invocation{Agent: ri.AgentName, Conversation: events.RunID(ctx)})
 
 	started := time.Now()
 

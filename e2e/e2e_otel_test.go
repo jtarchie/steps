@@ -689,6 +689,8 @@ jobs:
 		t.Error("the preflight probe is not under the run it refused")
 	}
 
+	assertGenAIIdentity(t, findSpan(t, spans, tracepb.Span_SPAN_KIND_CLIENT, "chat test-model"), "locked", spanAttr(run, "cicd.pipeline.run.id"))
+
 	if got := histogramCount(collector.latest("cicd.pipeline.run.duration"), map[string]string{"cicd.pipeline.name": "build", "cicd.pipeline.result": spanAttr(run, "cicd.pipeline.result")}); got != 1 {
 		t.Errorf("the refused run was counted %d times in cicd.pipeline.run.duration, want 1", got)
 	}
