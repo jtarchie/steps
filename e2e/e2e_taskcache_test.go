@@ -375,7 +375,7 @@ jobs:
 
 		// Seen only under full-gate load, twice, never alone: name what was counted so the next one says which tree it was.
 		for _, volume := range processVolumes(t) {
-			if !before[volume.Name] {
+			if !before[volume.Name] && volume.Labels["steps.size"] != "" {
 				t.Logf("counted %s: %v", volume.Name, volume.Labels)
 			}
 		}
