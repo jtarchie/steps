@@ -16,7 +16,7 @@ import (
 
 // fixtureRepo builds a real one-commit git repository in a temp dir and
 // returns its path. Skips when git isn't installed, in the spirit of the
-// existing docker/btrfs opt-in gates: the built-in git type shells out to the
+// existing docker opt-in gates: the built-in git type shells out to the
 // real binary, so proving it works means running it.
 func fixtureRepo(t *testing.T, content string) string {
 	t.Helper()

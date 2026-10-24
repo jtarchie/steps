@@ -17,19 +17,10 @@ import (
 // corruption hygiene, not a security sandbox — a step's shell commands can
 // still reach outside the materialized directory via absolute paths.
 type WorkspaceConfig struct {
-	// Strategy is "copy" (the default; portable — uses copy-on-write when
-	// the underlying filesystem supports it, APFS clonefile on macOS,
-	// reflink on Linux, and falls back to a plain recursive copy otherwise)
-	// or "btrfs" (Linux only; instant copy-on-write via btrfs subvolume
-	// snapshots).
+	// Strategy is "copy", the only one, kept so a pipeline spelling out the default still loads. It uses copy-on-write where the filesystem offers it (APFS clonefile on macOS, reflink on Linux) and a plain recursive copy otherwise.
 	Strategy string `yaml:"strategy,omitempty"`
-	// Root is where isolated build workspaces are materialized. Optional for
-	// strategy: copy (defaults to the system temp directory); required for
-	// strategy: btrfs, since the system temp directory (often tmpfs) is
-	// commonly not itself a btrfs filesystem.
+	// Root is where isolated build workspaces are materialized; the system temp directory when unset.
 	Root string `yaml:"root,omitempty"`
-	// Options holds strategy-specific tuning; currently btrfs only.
-	Options WorkspaceOptions `yaml:"options,omitempty"`
 	// Cache, when set, opts into the cross-build resource cache: a fetched
 	// resource version is kept under Root and reused by later builds instead
 	// of being re-fetched. Off by default, deliberately — see CacheConfig.
@@ -78,49 +69,18 @@ func (w *WorkspaceConfig) CacheMaxEntries() int {
 	return w.Cache.MaxEntries
 }
 
-// WorkspaceOptions holds strategy-specific workspace tuning.
-type WorkspaceOptions struct {
-	// Compression sets a btrfs subvolume's compression property: "zstd",
-	// "lzo", "zlib", or "none". Valid only for strategy: btrfs.
-	Compression string `yaml:"compression,omitempty"`
-}
-
-var (
-	workspaceStrategies = map[string]bool{"": true, "copy": true, "btrfs": true}
-	compressionValues   = map[string]bool{"": true, "zstd": true, "lzo": true, "zlib": true, "none": true}
-)
-
-// EffectiveStrategy is the strategy a run materializes trees with: the
-// configured one, or "copy" for an absent block/field. Nil-safe, so callers
-// never branch on the block's presence.
-func (w *WorkspaceConfig) EffectiveStrategy() string {
-	if w == nil || w.Strategy == "" {
-		return "copy"
-	}
-
-	return w.Strategy
-}
-
 func (c *Config) validateWorkspace() error {
 	ws := c.Workspace
 	if ws == nil {
 		return nil
 	}
 
-	if !workspaceStrategies[ws.Strategy] {
-		return fmt.Errorf("workspace.strategy %q must be one of copy, btrfs", ws.Strategy)
-	}
-
-	if ws.Strategy == "btrfs" && ws.Root == "" {
-		return errors.New("workspace.root is required for strategy: btrfs (the system temp directory is commonly not a btrfs filesystem)")
-	}
-
-	if !compressionValues[ws.Options.Compression] {
-		return fmt.Errorf("workspace.options.compression %q must be one of zstd, lzo, zlib, none", ws.Options.Compression)
-	}
-
-	if ws.Options.Compression != "" && ws.Strategy != "btrfs" {
-		return fmt.Errorf("workspace.options.compression is only valid for strategy: btrfs, not %q", ws.EffectiveStrategy())
+	switch ws.Strategy {
+	case "", "copy":
+	case "btrfs":
+		return errors.New("workspace.strategy: btrfs was removed; omit strategy: — copy already uses copy-on-write where the filesystem offers it (reflink on btrfs and XFS, clonefile on APFS)")
+	default:
+		return fmt.Errorf("workspace.strategy %q must be copy", ws.Strategy)
 	}
 
 	return validateWorkspaceCache(ws)

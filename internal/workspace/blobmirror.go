@@ -91,9 +91,7 @@ func (c *stepCache) rehydrate(ctx context.Context, key, path string, missing []s
 
 // fetchOutput lands one output in the entry, staged and verified first.
 //
-// Unpacked into a backend-created tree rather than a plain directory, because
-// the entry's outputs are what restore later snapshots — and a btrfs snapshot
-// of a plain directory is an error. Verified by re-digesting what arrived:
+// Verified by re-digesting what arrived:
 // the key is a claim, and a corrupted or truncated blob installed unchecked
 // would serve wrong bytes under a right key for as long as the entry lives.
 func (c *stepCache) fetchOutput(ctx context.Context, path, out, digest string) bool {

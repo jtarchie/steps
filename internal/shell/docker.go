@@ -26,7 +26,7 @@ var errSessionClosed = errors.New("shell: the step's container has been closed")
 
 // dockerCleanupTimeout bounds every removal a session issues, which runs from
 // cleanup paths that must not depend on a caller's (possibly already-canceled)
-// context — mirroring internal/workspace's btrfs backend.
+// context.
 var dockerCleanupTimeout = 30 * time.Second
 
 // dockerSessionLifetime is how long a step's container stays alive on its

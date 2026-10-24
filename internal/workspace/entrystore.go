@@ -21,8 +21,7 @@ type entryStore struct {
 	// removeEntry tears down a single entry. The two caches store
 	// differently shaped ones — a resource version is a single materialized
 	// tree, a step's outputs are a plain directory holding one tree per
-	// output — and on btrfs the call that removes a subvolume is not the call
-	// that removes a plain directory containing subvolumes.
+	// output.
 	removeEntry func(dir string) error
 }
 

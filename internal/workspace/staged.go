@@ -21,7 +21,7 @@ import (
 const stagedMarker = ".steps~staged-"
 
 // stagingPath is a fresh sibling of dst: same parent, so a rename into dst
-// never crosses a filesystem (and on btrfs, a subvolume renames in place).
+// never crosses a filesystem.
 // Random rather than fixed, so concurrent writers to one parent — collecting
 // matrix cells under max_in_flight — never share one.
 func stagingPath(dst string) string {

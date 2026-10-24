@@ -16,7 +16,7 @@ import (
 // interruptedBackend is the copy backend whose materialize, while failing is
 // set, does what an interrupted cp does: creates dst and then gives up, so
 // the destination exists and holds none of the bytes. With refuses, it fails
-// before creating anything, as a refused btrfs snapshot does.
+// before creating anything.
 type interruptedBackend struct {
 	copyBackend
 

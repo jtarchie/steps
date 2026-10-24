@@ -59,10 +59,6 @@ func enumPipelines(t *testing.T) []string {
 		pipelines = append(pipelines, "agents: [{name: a, source: {model: openai/gpt-4o}, reasoning_effort: "+effort+"}]\n"+jobs)
 	}
 
-	for _, value := range schemaEnumValues(doc, "compression") {
-		pipelines = append(pipelines, "workspace: {strategy: btrfs, root: /tmp/r, options: {compression: "+value+"}}\n"+jobs)
-	}
-
 	for _, value := range schemaEnumValues(doc, "strategy") {
 		pipelines = append(pipelines, "workspace: {strategy: "+value+", root: /tmp/r}\n"+jobs)
 	}
@@ -75,7 +71,7 @@ func TestSchemaEnumsAgreeWithLoaderValidators(t *testing.T) {
 	schema := loadSchema(t)
 
 	pipelines := enumPipelines(t)
-	if len(pipelines) < 12 {
+	if len(pipelines) < 7 {
 		t.Fatalf("only %d pipelines built; the enum walk found too little", len(pipelines))
 	}
 

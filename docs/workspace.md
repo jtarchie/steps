@@ -118,36 +118,36 @@ Mapping keys must be a subset of the resolved task's declared inputs/outputs, an
 
 Optional tuning for *how* trees are materialized — not a switch that turns isolation on:
 
-```yaml noexec=btrfs
+```yaml
 workspace:
-  strategy: btrfs       # default: copy. btrfs (Linux only) snapshots instead of copying
-  root: /mnt/btrfs      # optional for copy (default: system temp); required for btrfs
-  options:
-    compression: zstd   # btrfs only: zstd | lzo | zlib | none
+  strategy: copy        # the only strategy, and the default
 
 jobs:
 - name: build
   plan:
   - task: hello
     run: echo hi
+  assert:
+    execution: [hello]
+    outcome: succeeded
 ```
 
-- Under `copy` each input is a copy; under `btrfs` it's an instant copy-on-write snapshot. Both produce the same logical view, so `strategy`/`root`/`options` are never hashed — switching backends invalidates no one's cache. The `inputs:`/`outputs:`/mapping declarations themselves **are** hashed unconditionally: they're the step's executed view, so changing them re-runs the step.
+- Each input is a copy, and a copy-on-write one where the filesystem offers it: `cp -c` (APFS clonefile) on macOS, `cp --reflink=auto` on Linux (btrfs, XFS with reflink). `strategy`/`root` are never hashed, so moving the root invalidates no one's cache. The `inputs:`/`outputs:`/mapping declarations themselves **are** hashed unconditionally: they're the step's executed view, so changing them re-runs the step.
+- **`strategy: btrfs` was removed** and is refused at load. `copy` already shares file data on a btrfs root through reflink; omit `strategy:`.
 - This is corruption hygiene, not a sandbox: shell commands can still reach outside the materialized directory via absolute paths, same as always.
 - The provider is built once per CLI invocation and validated at startup — wrong platform, wrong filesystem, missing binaries all fail fast, before any step runs.
 - **A `root:` whose filesystem cannot hold an executable bit is refused**, and measured rather than assumed: startup writes a file under the root, sets `0700`, reads the mode back, and removes it. The bit is content — the step cache hashes it — so a root on vfat or exfat (whose `fmask`/`dmask` synthesize a fixed mode), on CIFS without unix extensions, or on 9p/virtiofs under Lima or Docker Desktop would hand back trees whose scripts are no longer scripts, with the cache reading the loss as an edit and nothing reporting it. This is the same refusal a worker gets at the handshake (see [infra.md](infra.md)), for the same reason, on a directory you name rather than a machine you dial.
-- **Leftovers from a crashed run are swept at startup** (a SIGKILL'd process never removed its build directory; under btrfs those hold live subvolumes ordinary removal doesn't reclaim). The sweep only touches directories this provider created, is best-effort, and is skipped under `--keep-workspace` — that flag means "leave the files for me to look at".
-- **`outputs:` on an `across:` step collects**: each cell's capture lands under the cell's own coordinates inside the declared artifact (`findings/alpha/…`) — see [control-flow.md](control-flow.md). Requires `strategy: copy` (the default).
+- **Leftovers from a crashed run are swept at startup** (a SIGKILL'd process never removed its build directory). The sweep only touches directories this provider created, is best-effort, and is skipped under `--keep-workspace` — that flag means "leave the files for me to look at".
+- **`outputs:` on an `across:` step collects**: each cell's capture lands under the cell's own coordinates inside the declared artifact (`findings/alpha/…`) — see [control-flow.md](control-flow.md).
 - Fix agents (`fix:`) run inside the failing task's own already-materialized working directory, not a fresh one — they need the exact state the task failed in.
 
 ## Cross-build resource cache (`cache:`)
 
 Agent and `put` steps make their chains unskippable, so a real run re-fetches every `get` from scratch — the network and disk paid again every time. The cache keeps fetched versions across builds:
 
-```yaml noexec=btrfs
+```yaml noexec=root
 workspace:
-  strategy: btrfs
-  root: /mnt/btrfs
+  root: /var/lib/steps
   cache:
     resources: true
     max_entries: 50    # optional; least-recently-used evicted first
@@ -162,7 +162,7 @@ jobs:
 - **Off by default, and the reason matters.** A cached version's `in:` does **not** run again. That is correct under the resource contract — the same version materializes the same content — but a resource type whose `in:` has side effects beyond writing the directory (bumping a counter, posting a notification) would see those stop happening. Enabling the cache is you asserting your `in:` is a pure fetch.
 - **Requires `root:`.** The cache has to outlive the run that filled it; a cache under a temp directory the provider deletes would be a slower way to fetch once. Rejected at load time.
 - **Keyed on content, not plan position** — a hash of the `in:` command, source, version, and execution settings (`image:`/`env:`/`user:`/`network:`), deliberately *not* the get node's merkle hash, so two jobs fetching the same version share one entry.
-- **A hit costs a snapshot** (free on btrfs; a copy under `copy` — but still no fetch). **A failed fetch is never cached.** **A cache failure never fails a build** — anything wrong falls back to fetching. The startup sweep spares it.
+- **A hit costs a copy** (copy-on-write where the filesystem offers it), but no fetch. **A failed fetch is never cached.** **A cache failure never fails a build** — anything wrong falls back to fetching. The startup sweep spares it.
 - **The cache is a reader on this disk.** A `get` placed on a worker (`tags:`) leaves its tree there until something here reads it — and with the cache on, the cache is that something: the tree comes home to be filed. See [infra.md](infra.md#resources-on-workers).
 
 ## Step output cache (`volatile:`)
@@ -199,7 +199,7 @@ jobs:
 - **What else is never cached**, for the same reason: a step with `verdicts:` or `to:` (a decision the store records and routing keys on), one declaring `context: { from: ... }` (it reads an upstream decision the key cannot see), one with hooks (a hit fires none, like any skip), a task with `fix:`, and an `across:` cell. A `when:` guard is *not* a bar: it is evaluated first, and a step it lets through is work like any other.
 - **`volatile:` is only valid on task and agent steps**, and never on a hook — anywhere else it would read as configured while binding nothing, so it is a load error.
 - **Requires `root:`.** Same reason the resource cache does: an entry has to outlive the run that wrote it. Without one, nothing is cached and nothing is stored.
-- **A hit costs a snapshot** (free on btrfs, a copy under `copy`), never a model call. **A failed step is never cached**, and **a cache failure never fails a build** — anything wrong falls back to running the step. Entries are evicted least-recently-used.
+- **A hit costs a copy** (copy-on-write where the filesystem offers it), never a model call. **A failed step is never cached**, and **a cache failure never fails a build** — anything wrong falls back to running the step. Entries are evicted least-recently-used.
 - **The cache is a reader on this disk.** A placed step's outputs stay on its worker until something here reads them; with a durable `root:` the step cache is that something, and the outputs come home to be filed.
 
 ## Task caches (`caches:`)

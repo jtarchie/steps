@@ -142,7 +142,7 @@ func TestTaskCacheEmptyIsNotKept(t *testing.T) {
 	}
 }
 
-// TestTaskCacheSurvivesARenameAcrossFilesystems: a cache inside an input sits in that input's btrfs snapshot, where rename answers EXDEV. The copy keeps modes, which a plain os.CopyFS widens to 0o666 less umask.
+// TestTaskCacheSurvivesARenameAcrossFilesystems: a workspace root on another filesystem than the cache makes rename answer EXDEV. The copy keeps modes, which a plain os.CopyFS widens to 0o666 less umask.
 func TestTaskCacheSurvivesARenameAcrossFilesystems(t *testing.T) {
 	rename = renameRefusing(syscall.EXDEV)
 	t.Cleanup(func() { rename = os.Rename })

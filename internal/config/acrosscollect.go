@@ -129,11 +129,7 @@ func validateCollectedValues(label string, axes []acrossAxis) error {
 
 // validateAcrossOutputs enforces what a matrix that produces artifacts needs.
 //
-// strategy: copy, because collection IS the capture step: each cell's outputs
-// are materialized under its own coordinates (findings/alpha/...), which the
-// btrfs backend's snapshot capture cannot express.
-//
-// And the outputs must be declared ON THE STEP, not inherited from a tasks:
+// The outputs must be declared ON THE STEP, not inherited from a tasks:
 // entry: the step is where a reader looks to see whether a matrix collects,
 // and an inherited declaration would make N cells capture one artifact name
 // with nothing in this file saying so.
@@ -144,16 +140,6 @@ func (c *Config) validateAcrossOutputs(label string, step *Step) error {
 	}
 
 	if collectsOutputs(*step) {
-		// ponytail: btrfs captures artifacts as subvolume snapshots, which can
-		// neither land under an uncreated parent nor survive being nested
-		// inside a later snapshot (nested subvolumes come out empty) — so a
-		// collected artifact would silently lose every cell's files on the
-		// consuming side. Supporting it means teaching that backend a
-		// flattening capture; until then, refuse rather than corrupt.
-		if c.Workspace.EffectiveStrategy() != "copy" {
-			return fmt.Errorf("%s: an across: step with outputs: is not supported under workspace strategy %q; use strategy: copy", label, c.Workspace.EffectiveStrategy())
-		}
-
 		return validateCollectedNotAlsoInput(label, *step)
 	}
 

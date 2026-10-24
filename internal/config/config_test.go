@@ -55,26 +55,10 @@ jobs:
     inputs: []
     run: echo hi
 `)
-		wantLoadError(t, path, `workspace.strategy "rsync" must be one of copy, btrfs`)
+		wantLoadError(t, path, `workspace.strategy "rsync" must be copy`)
 	})
 
-	t.Run("btrfs without root", func(t *testing.T) {
-		t.Parallel()
-
-		path := writeConfig(t, `
-workspace:
-  strategy: btrfs
-jobs:
-- name: build
-  plan:
-  - task: build
-    inputs: []
-    run: echo hi
-`)
-		wantLoadError(t, path, "workspace.root is required for strategy: btrfs")
-	})
-
-	t.Run("compression on copy strategy errors", func(t *testing.T) {
+	t.Run("options: is gone with btrfs", func(t *testing.T) {
 		t.Parallel()
 
 		path := writeConfig(t, `
@@ -89,26 +73,7 @@ jobs:
     inputs: []
     run: echo hi
 `)
-		wantLoadError(t, path, "workspace.options.compression is only valid for strategy: btrfs")
-	})
-
-	t.Run("invalid compression value", func(t *testing.T) {
-		t.Parallel()
-
-		path := writeConfig(t, `
-workspace:
-  strategy: btrfs
-  root: /mnt/btrfs
-  options:
-    compression: gzip
-jobs:
-- name: build
-  plan:
-  - task: build
-    inputs: []
-    run: echo hi
-`)
-		wantLoadError(t, path, `workspace.options.compression "gzip" must be one of zstd, lzo, zlib, none`)
+		wantLoadError(t, path, "options")
 	})
 
 	t.Run("valid copy config loads cleanly", func(t *testing.T) {

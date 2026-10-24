@@ -18,16 +18,14 @@ const cacheDirName = "cache"
 // resourceCache stores fetched resource versions under root/cache/<key>, keyed
 // by the content hash of everything that determines what a fetch produces.
 //
-// The win it exists for is the one baggageclaim provides in Concourse. Within
-// a build, btrfs already makes materialization free: a get lands in an
-// artifact subvolume and every step snapshots from it. Across builds there was
-// nothing — a real run re-fetched every get from scratch, paying the network
-// and the disk again each time. With this, the second build snapshots a
-// version the first one fetched.
+// The win it exists for is the one baggageclaim provides in Concourse. Across
+// builds there was nothing — a real run re-fetched every get from scratch,
+// paying the network again each time. With this, the second build
+// materializes a version the first one fetched.
 //
 // Entries are whole directories materialized through the provider's own
-// treeBackend, so on btrfs a hit costs a subvolume snapshot (instant, no
-// copied bytes) and on copy it costs a copy but still no fetch.
+// treeBackend, so a hit costs a copy (copy-on-write where the filesystem
+// offers it) but no fetch.
 type resourceCache struct {
 	backend treeBackend
 	entries *entryStore

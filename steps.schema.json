@@ -1968,32 +1968,17 @@
     "workspace": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Tune the per-step isolation every pipeline runs under (a step sees only its declared inputs:). Absent takes every default: strategy copy under a system temp root.",
+      "description": "Tune the per-step isolation every pipeline runs under (a step sees only its declared inputs:). Absent takes every default: a system temp root.",
       "properties": {
         "strategy": {
           "enum": [
-            "copy",
-            "btrfs"
+            "copy"
           ],
-          "description": "How step trees are materialized. Default copy; btrfs is Linux-only and requires root:."
+          "description": "How step trees are materialized: copy, copy-on-write where the filesystem offers it. The only strategy and the default."
         },
         "root": {
           "type": "string",
-          "description": "Required for btrfs."
-        },
-        "options": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "compression": {
-              "enum": [
-                "zstd",
-                "lzo",
-                "zlib",
-                "none"
-              ]
-            }
-          }
+          "description": "Where step trees are materialized; a system temp directory when unset. Required by the caches, which must outlive a run."
         },
         "cache": {
           "type": "object",

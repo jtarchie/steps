@@ -2,7 +2,7 @@ package config
 
 import "fmt"
 
-// validateSandbox refuses every sandbox: the fence could not keep. It fences a process on THIS machine, so a container (already its own fence, and one sandbox-exec cannot reach into) and a placed step (running on another machine) are both load errors rather than a quiet no-op. The OS check is not here: the doc corpus validates on every OS, so an unsupported one refuses at the step instead, as strategy: btrfs does.
+// validateSandbox refuses every sandbox: the fence could not keep. It fences a process on THIS machine, so a container (already its own fence, and one sandbox-exec cannot reach into) and a placed step (running on another machine) are both load errors rather than a quiet no-op. The OS check is not here: the doc corpus validates on every OS, so an unsupported one refuses at the step instead.
 func (c *Config) validateSandbox() error {
 	err := c.visitContainerSettings(func(context string, settings containerSettings) error {
 		if settings.Sandbox && settings.Image != "" {

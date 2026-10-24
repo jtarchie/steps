@@ -8,21 +8,7 @@
 # (which strategy materializes trees, where the root lives), not a switch;
 # an absent block means strategy: copy under a system temp root.
 workspace:
-  strategy: copy   # the default, spelled out for the tour
-  # For strategy: btrfs (Linux only; instant copy-on-write via subvolume
-  # snapshots instead of copying file contents), root is required — the
-  # system temp directory is commonly tmpfs, not btrfs:
-  #
-  # workspace:
-  #   strategy: btrfs
-  #   root: /mnt/btrfs/steps
-  #   options:
-  #     compression: zstd   # zstd | lzo | zlib | none
-  #
-  # subvolume delete (used for cleanup) is unprivileged only on filesystems
-  # mounted with user_subvol_rm_allowed; steps falls back to a plain
-  # directory removal otherwise, which still reclaims the space — just
-  # without the instant subvolume-metadata cleanup.
+  strategy: copy   # the only strategy and the default, spelled out for the tour
 
 # Every agent below inherits this model, so it is named once rather than on
 # every agent. openrouter/qwen/qwen3.7-flash is a cheap tool-calling model

@@ -92,9 +92,8 @@ func (copyBackend) remove(dir string) error {
 	return nil
 }
 
-// removeTree is identical to remove for the copy backend: plain directories
-// and copied trees are all removed the same way. btrfs overrides this to
-// delete nested subvolumes first (see workspace_btrfs_linux.go).
+// removeTree is identical to remove: plain directories and copied trees are
+// all removed the same way.
 func (b copyBackend) removeTree(dir string) error {
 	return b.remove(dir)
 }

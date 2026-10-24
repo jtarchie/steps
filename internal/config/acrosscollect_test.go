@@ -115,9 +115,8 @@ func TestAcrossCollectValueRules(t *testing.T) {
 }
 
 // TestAcrossOutputsValidation covers the block-level rules: isolation is
-// required (collection IS the capture step), btrfs is refused rather than
-// silently corrupting, and the outputs must be declared on the step rather
-// than inherited from a tasks: entry.
+// required (collection IS the capture step), and the outputs must be declared
+// on the step rather than inherited from a tasks: entry.
 func TestAcrossOutputsValidation(t *testing.T) {
 	t.Parallel()
 
@@ -289,25 +288,6 @@ jobs:
     run: "true"
 `,
 			want: "",
-		},
-		{
-			name: "btrfs",
-			pipeline: `
-workspace:
-  strategy: btrfs
-  root: /var/lib/steps
-jobs:
-- name: j
-  plan:
-  - across:
-    - var: dim
-      values: [a, b]
-    task: work
-    inputs: []
-    outputs: [findings]
-    run: "true"
-`,
-			want: `not supported under workspace strategy "btrfs"`,
 		},
 		{
 			name: "outputs inherited from the tasks: entry",

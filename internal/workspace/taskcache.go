@@ -26,7 +26,7 @@ const defaultTaskCacheMaxEntries = 50
 
 const taskCacheDomain = "steps/task-cache/v1"
 
-// rename is a test seam: an EXDEV is only real across filesystems or btrfs subvolumes, neither of which a unit test can make.
+// rename is a test seam: an EXDEV is only real across filesystems, which a unit test cannot make.
 var rename = os.Rename //nolint:gochecknoglobals // test seam
 
 // TaskCacheKey names one cache: Concourse's job + step name + path, under the pipeline that owns the job.
@@ -188,7 +188,7 @@ func (b *isolatingBuild) fileBack(ctx context.Context, entry, dst string) error 
 	return move(ctx, dst, entry)
 }
 
-// move renames, or copies and removes when the two sides are different filesystems or btrfs subvolumes (a cache inside an input is inside that input's snapshot). Only EXDEV copies: any other refusal, a concurrent run's entry already in place among them, copied would merge two caches into one.
+// move renames, or copies and removes when the two sides are different filesystems. Only EXDEV copies: any other refusal, a concurrent run's entry already in place among them, copied would merge two caches into one.
 func move(ctx context.Context, src, dst string) error {
 	err := rename(src, dst)
 	if !errors.Is(err, syscall.EXDEV) {
@@ -225,7 +225,7 @@ func ClearTaskCaches(ws *config.WorkspaceConfig, keys []string) (map[string]bool
 
 	p, ok := provider.(*isolatingProvider)
 	if !ok {
-		return nil, fmt.Errorf("%w: workspace strategy %q", errUnsupportedStrategy, ws.EffectiveStrategy())
+		return nil, fmt.Errorf("%w: provider %T", errUnsupportedStrategy, provider)
 	}
 
 	found := make(map[string]bool, len(keys))

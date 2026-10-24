@@ -10,7 +10,7 @@ import (
 
 // TestMain enforces that no goroutines leak from the root package's e2e
 // tests, which drive the full CLI stack: workspaces, agent conversations,
-// resource fetches, and (opt-in) Docker/btrfs backends. A leak here usually
+// resource fetches, and (opt-in) Docker backends. A leak here usually
 // means a spawned process, watcher, or HTTP client wasn't shut down before
 // the test returned.
 //

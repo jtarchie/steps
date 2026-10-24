@@ -169,8 +169,6 @@ func (b *isolatingBuild) pull(ctx context.Context, name string, remote RemoteArt
 
 	dst := filepath.Join(b.artifacts, name)
 
-	// A backend-created tree rather than a plain directory, because on
-	// btrfs what later steps snapshot must be a subvolume.
 	err := b.backend.remove(dst)
 	if err != nil {
 		return fmt.Errorf("artifact %q: %w", name, err)

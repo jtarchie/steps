@@ -74,11 +74,11 @@ func (b Block) Mode() string {
 func NoexecReasons() []string {
 	return []string{
 		"approval",    // parks the run until a human decides
-		"btrfs",       // needs a real btrfs filesystem (Linux only)
 		"cli",         // needs a coding-agent CLI on PATH
 		"credentials", // needs real credentials for a live third-party service
 		"docker",      // needs a docker daemon and a pullable image
 		"network",     // reaches a real host over the network
+		"root",        // names a workspace root: this host may not be able to create
 		"schedule",    // fires on a slot of a clock that is not due while the test runs
 		"stdio-mcp",   // needs an MCP server binary on PATH
 	}

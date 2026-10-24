@@ -196,7 +196,7 @@ func (r *RunCmd) checkResume(ctx context.Context, st store.Store, provider works
 	}
 
 	// The row names a green build's removed tree; reusing that path
-	// recreated it outside any cleanup, and btrfs cannot recreate it.
+	// recreated it outside any cleanup.
 	if fresh {
 		provider.Reuse("")
 	}

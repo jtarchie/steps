@@ -1,0 +1,15 @@
+# strategy: btrfs was removed. copy already takes copy-on-write where the
+# filesystem offers it (reflink on btrfs and XFS, clonefile on APFS), so
+# a pipeline that named btrfs is refused by name rather than quietly run
+# under copy.
+# expect: workspace.strategy: btrfs was removed
+
+workspace:
+  strategy: btrfs
+  root: /mnt/btrfs
+
+jobs:
+- name: build
+  plan:
+  - task: t
+    run: 'true'

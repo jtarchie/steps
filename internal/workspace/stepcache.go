@@ -123,8 +123,7 @@ type stepCache struct {
 
 func newStepCache(backend treeBackend, root string, maxEntries int) (*stepCache, error) {
 	// removeTree, not remove: an entry is a plain directory that CONTAINS the
-	// backend's materialized trees, so on btrfs the nested subvolumes have to
-	// be deleted before the directory itself can be.
+	// backend's materialized trees.
 	entries, err := newEntryStore(root, stepCacheDirName, maxEntries, backend.removeTree)
 	if err != nil {
 		return nil, err

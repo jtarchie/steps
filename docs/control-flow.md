@@ -619,7 +619,6 @@ The cell's own view is unchanged — it writes `findings/report.txt` and never s
 - **A failed or `try:`-tolerated cell contributes no directory** — capture only runs on success — and the consumer walks what survived. This holds all the way down to nothing surviving: the block creates the artifact **empty** before its cells run, so a matrix whose cells all failed hands the consumer an empty directory, not a missing input.
 - **The block replaces the artifact wholesale, each run** — an earlier same-named artifact or a wider expansion's stale directories can never merge into this run's collection.
 - **The collect position is the only place a cell may declare outputs.** An output buried in a hook or a nested block would be captured at its plain name by every cell — the exact clobber collection removes — so it is a load error. So are `outputs:` on a `try:` wrapper around the matrix and a collecting matrix wrapping another `across:` step.
-- **Requires `strategy: copy` (the default);** `btrfs` is refused for now rather than silently corrupting.
 - **Declared on the step, not inherited** from a `tasks:` entry — the step is where a reader looks to see whether a matrix collects.
 - **A task cell that produces outputs is never cell-cached.** A skipped cell captures nothing, so a rerun would hand the consumer a directory with a hole where that cell's contribution was. Re-running is the only honest answer.
 

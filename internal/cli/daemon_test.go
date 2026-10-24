@@ -695,7 +695,7 @@ func TestASetCanArrivePaused(t *testing.T) {
 	}
 }
 
-// Only the first provider opened on a root sweeps it, so a root wrongly counted as swept keeps a crashed process's builds — under btrfs, subvolumes nothing else reclaims.
+// Only the first provider opened on a root sweeps it, so a root wrongly counted as swept keeps a crashed process's builds.
 func TestTheFirstSetOnARootSweepsWhatACrashLeftThere(t *testing.T) {
 	t.Parallel()
 

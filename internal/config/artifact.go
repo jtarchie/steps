@@ -12,7 +12,7 @@ import (
 // artifactNamePattern constrains input/output/resource names used to build
 // filesystem paths: this is load-bearing, not cosmetic — it rules out `..`
 // segments and separators, so a name can never escape the directory it's
-// joined under, and keeps the workspace copy/btrfs backends' shelled-out
+// joined under, and keeps the workspace copy backend's shelled-out
 // argv construction free of characters that would need escaping.
 var artifactNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`) //nolint:gochecknoglobals // static, read-only
 

@@ -86,10 +86,7 @@ func TestNilConfigDefaultsToCopyIsolation(t *testing.T) {
 	}
 }
 
-// newTestCopyProvider builds a copy-strategy isolatingProvider rooted at a
-// fresh t.TempDir(), so these tests exercise the same isolatingProvider/
-// isolatingBuild/isolatingSpace lifecycle the btrfs backend shares, without
-// requiring a btrfs filesystem to run.
+// newTestCopyProvider builds an isolatingProvider rooted at a fresh t.TempDir().
 func newTestCopyProvider(t *testing.T) Provider {
 	t.Helper()
 
@@ -116,13 +113,8 @@ func writeFile(t *testing.T, path, contents string) {
 }
 
 // The following testProvider* helpers exercise the Provider/
-// BuildWorkspace/StepSpace contract that isolatingProvider implements once
-// (workspace.go) over a pluggable treeBackend — copy or btrfs. Each is
-// called both from the copy-backed tests below (which run everywhere) and
-// from workspace_btrfs_linux_test.go's btrfs-backed tests (which only run
-// when STEPS_TEST_BTRFS_ROOT points at a real btrfs filesystem), so a
-// regression in either backend's materialize/capture/remove semantics is
-// caught the same way regardless of which one hits it first.
+// BuildWorkspace/StepSpace contract that isolatingProvider implements
+// (workspace.go).
 
 func testProviderMaterializesDeclaredInputsAndOutputs(t *testing.T, newProvider func(t *testing.T) Provider) {
 	t.Helper()
@@ -689,8 +681,7 @@ func TestValidateArtifactFlowNoOpWithoutWorkspace(t *testing.T) {
 
 // TestIsolatingProviderSweepsStaleBuilds covers the crash-recovery half of the
 // leak: a build directory is normally removed at Close, so one still present
-// at startup belongs to a process that never got there. Under btrfs those
-// directories hold live subvolumes that ordinary cleanup never reclaims.
+// at startup belongs to a process that never got there.
 func TestIsolatingProviderSweepsStaleBuilds(t *testing.T) {
 	t.Parallel()
 

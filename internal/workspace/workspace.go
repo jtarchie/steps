@@ -1,5 +1,5 @@
 // Package workspace materializes the per-step/per-build filesystem views a
-// job's steps run against: per-step directories, copied or btrfs-snapshotted,
+// job's steps run against: per-step directories, copied (copy-on-write where the filesystem offers it),
 // built from each step's declared inputs/outputs. It also statically validates
 // a job's declared artifact flow before any step runs.
 package workspace
@@ -200,14 +200,7 @@ func NewProvider(ws *config.WorkspaceConfig, keep bool) (Provider, error) {
 		ws = &config.WorkspaceConfig{}
 	}
 
-	switch ws.EffectiveStrategy() {
-	case "copy":
-		return newCopyProvider(ws, keep)
-	case "btrfs":
-		return newBtrfsProvider(ws, keep)
-	default:
-		return nil, fmt.Errorf("unknown workspace strategy %q", ws.Strategy)
-	}
+	return newCopyProvider(ws, keep)
 }
 
 // keepWorkspace reports that root is being left in place, and reports whether
@@ -285,12 +278,10 @@ func rejectSymlinkSrc(src string) error {
 	return nil
 }
 
-// treeBackend abstracts the one thing that actually differs between the
-// copy and btrfs strategies: how a directory is created empty, how one
-// directory's contents are materialized into a fresh one (a recursive copy,
-// or a CoW snapshot), and how a materialized tree is torn down.
-// isolatingProvider/Build/Space implement the shared directory-layout and
-// capture/cleanup lifecycle exactly once, over either backend.
+// treeBackend is how a directory is created empty, how one directory's
+// contents are materialized into a fresh one, and how a materialized tree is
+// torn down. copyBackend is the one implementation; tests wrap it to inject
+// an interrupted copy.
 type treeBackend interface {
 	// createEmpty creates a fresh, empty directory at dir. dir's parent must
 	// already exist.
@@ -298,19 +289,15 @@ type treeBackend interface {
 	// materialize copies or snapshots src's contents into a fresh directory
 	// at dst (dst must not already exist; dst's parent must).
 	materialize(ctx context.Context, src, dst string) error
-	// remove tears down a single tree created by createEmpty/materialize
-	// (one subvolume, for btrfs). It must not depend on ctx staying valid —
+	// remove tears down a single tree created by createEmpty/materialize.
+	// It must not depend on ctx staying valid —
 	// callers may invoke it during cleanup after ctx has already been
 	// canceled (e.g. on SIGINT), so implementations that shell out use their
 	// own bounded-lifetime context internally. remove is a no-op, not an
 	// error, if dir does not exist.
 	remove(dir string) error
-	// removeTree removes a plain directory that may *contain* materialized
-	// trees (nested subvolumes, for btrfs) — the per-step and per-build
-	// wrapper directories, which are themselves plain dirs but hold the
-	// backend's subvolumes. The btrfs backend deletes those subvolumes
-	// explicitly first, so cleanup doesn't rely on os.RemoveAll's rmdir of a
-	// subvolume, which restrictive mounts/older kernels deny. Like remove, it
+	// removeTree removes a plain directory that may contain materialized
+	// trees — the per-step and per-build wrapper directories. Like remove, it
 	// is ctx-independent and a no-op if dir does not exist.
 	removeTree(dir string) error
 }
@@ -319,8 +306,7 @@ type treeBackend interface {
 // with — the marker sweepStaleBuilds recognizes as ours to remove.
 const buildDirPrefix = "b-"
 
-// isolatingProvider is the Provider for every strategy (copy, btrfs); they
-// differ only in their treeBackend.
+// isolatingProvider is the Provider, over a treeBackend.
 type isolatingProvider struct {
 	backend  treeBackend
 	validate func() error
@@ -412,10 +398,8 @@ func (p *isolatingProvider) Probe() error {
 //
 // A build is normally torn down at Close, so anything still here belongs to a
 // process that never got to run it: a SIGKILL, a panicking host, a pulled
-// plug. Under strategy: btrfs those directories hold live subvolumes, which
-// ordinary cleanup never reclaims and which need `btrfs subvolume delete` —
-// so without this they accumulate, and the disk they hold is only recoverable
-// by hand.
+// plug. Without this they accumulate, and the disk they hold is only
+// recoverable by hand.
 //
 // Skipped entirely under --keep-workspace: that flag means "leave the files
 // for me to look at", and deleting the previous run's kept workspace at the
@@ -1045,11 +1029,8 @@ func mappedName(name string, mapping map[string]string) string {
 	return name
 }
 
-// Close removes the build's root directory. b.root itself is a plain
-// directory (created directly by NewBuild), but it holds the backend's
-// materialized subvolumes (resource/artifact/step trees), so it goes
-// through backend.removeTree — which, on btrfs, deletes those subvolumes
-// explicitly instead of relying on os.RemoveAll's rmdir of a subvolume.
+// Close removes the build's root directory and the materialized trees under
+// it, through backend.removeTree.
 func (b *isolatingBuild) Close() error {
 	// The provider prints its own kept-root line when it owns the root; a
 	// build under a user-supplied workspace.root: has none, so say it here.
