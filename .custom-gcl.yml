@@ -1,0 +1,7 @@
+version: v2.14.0
+name: custom-gcl
+destination: ./.golangci-tmp
+plugins:
+  - module: github.com/kojah/gohawk
+    import: github.com/kojah/gohawk/plugin/golangci
+    version: v0.7.0

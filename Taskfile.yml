@@ -56,8 +56,19 @@ tasks:
     cmds:
       - go mod tidy
 
+  lint:build:
+    desc: Build .golangci-tmp/custom-gcl, golangci-lint with the gohawk module plugin compiled in (.custom-gcl.yml pins both versions).
+    # Module plugins are compiled in, so a stock golangci-lint cannot load .golangci.yml at all.
+    # ponytail: rebuilds only when .custom-gcl.yml changes; after a Go upgrade that the old build toolchain cannot analyze, delete the binary.
+    sources: [.custom-gcl.yml]
+    generates: [.golangci-tmp/custom-gcl]
+    cmds:
+      - mkdir -p .golangci-tmp
+      - go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 custom
+
   lint:
-    desc: golangci-lint — ~40 linters enabled (.golangci.yml), must report 0 issues.
+    desc: golangci-lint (custom build with gohawk) — ~40 linters enabled (.golangci.yml), must report 0 issues.
+    deps: [lint:build]
     env:
       # golangci-lint serializes ALL invocations on this machine through one
       # lock at $TMPDIR/golangci-lint.lock (verified with lsof: a fixed path,
@@ -88,7 +99,7 @@ tasks:
           # `status=$?` there read 0 and this task exited 0 on every real
           # finding. Lint was not a gate at all, and a gosec finding proved it
           # by sailing through the whole sequence.
-          out=$(golangci-lint run 2>&1)
+          out=$(./.golangci-tmp/custom-gcl run 2>&1)
           status=$?
 
           if [ "$status" -eq 0 ]; then
@@ -239,7 +250,7 @@ tasks:
       - '{{.GO_TOOL}} nilaway -exclude-test-files=true -include-pkgs=github.com/jtarchie/steps ./...'
 
   install:tools:
-    desc: Build the pinned Go CLIs ahead of time (golangci-lint is separate — see CLAUDE.md). Optional — `go tool` builds each on first use and caches it — but it moves that wait out of the first `task`.
+    desc: Build the pinned Go CLIs ahead of time (golangci-lint is built by task lint:build). Optional — `go tool` builds each on first use and caches it — but it moves that wait out of the first `task`.
     cmds:
       - '{{.GO_TOOL}} -n govulncheck'
       - '{{.GO_TOOL}} -n nilaway'

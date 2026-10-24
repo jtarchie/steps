@@ -38,6 +38,7 @@ linters:
     - musttag       # JSON tags required on marshaled structs
     - recvcheck     # consistent pointer vs value receivers
     - wastedassign  # assignments whose values are never read
+    - gohawk        # ownership, lifecycle, concurrency (custom module: .custom-gcl.yml)
     - nolintlint    # stale or malformed //nolint directives
     - errchkjson    # json.Marshal returns ignored where it shouldn't be
     - loggercheck   # slog key/value mismatch and even-arg invariants
@@ -67,6 +68,10 @@ linters:
     - forbidigo     # a run's human-facing output goes through internal/events, never the process's streams
 
   settings:
+    custom:
+      gohawk:
+        type: module
+        description: Correctness-focused ownership, lifecycle, and concurrency checks.
     # A ctx in scope carries the line's pipeline/revision/run/job (events.LogHandler), so a slog call that ignores it loses them (#121).
     sloglint:
       context: scope

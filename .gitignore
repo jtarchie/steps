@@ -41,3 +41,6 @@ hack/shorts/.cache/
 
 # designer-skills scratch (briefs, tasks, review screenshots)
 /.design/
+
+# go-task source checksums (task lint:build)
+/.task/
