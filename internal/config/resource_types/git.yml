@@ -38,8 +38,14 @@ config:
   # one ref (no FETCH_HEAD, tags or background gc in a developer's clone), and
   # the prompt/ssh settings keep a poll with no terminal from hanging on one —
   # the ssh ones only when the operator chose no ssh command of their own.
+  #
+  # Every path turns prompting off, not only fetch:. An ls-remote of a private,
+  # renamed or mistyped https uri is a 401, which git answers by asking for a
+  # username on /dev/tty: under a daemon that once stopped the whole process,
+  # and in a terminal it parks a poll on a question nobody expects.
   check: |
     set -e
+    export GIT_TERMINAL_PROMPT=0
     {{- if index .source "fetch" }}
     uri={{ .source.uri | shellquote }}
     branch={{ index .source "branch" | shellquote }}
@@ -58,6 +64,10 @@ config:
     refs=$(git ls-remote "$uri" "$want")
     ref=$(printf '%s\n' "$refs" | awk -v want="$want" '$2 == want { print $1; exit }')
     {{- else }}
+    if [ -z "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git config --get core.sshCommand || true)" ]; then
+      GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=30'
+      export GIT_SSH_COMMAND
+    fi
     refs=$(git ls-remote {{ .source.uri | shellquote }} {{ index .source "branch" | default "HEAD" | shellquote }})
     # ls-remote takes a PATTERN, not a name, and prints one line per match.
     # Against a local clone `HEAD` also matches refs/remotes/origin/HEAD and
@@ -88,6 +98,11 @@ config:
   # surprise newer one.
   in: |
     set -e
+    export GIT_TERMINAL_PROMPT=0
+    if [ -z "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git config --get core.sshCommand || true)" ]; then
+      GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=30'
+      export GIT_SSH_COMMAND
+    fi
     git init -q .
     git remote add origin {{ .source.uri | shellquote }}
     git fetch -q --no-tags --depth 1 origin {{ .version.ref | shellquote }} 2>/dev/null \

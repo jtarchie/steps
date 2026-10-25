@@ -493,6 +493,50 @@ jobs:
 	}
 }
 
+// The same freeze without fetch:, which is the default and the commoner: a private, renamed or mistyped https uri answers ls-remote with a 401.
+func TestEndToEndBuiltinGitNeverPrompts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="steps"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(server.Close)
+
+	// An empty global config, so no host keychain helper can answer for (or pop a dialog about) the test server.
+	t.Setenv("HOME", t.TempDir())
+
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+resources:
+- name: repo
+  type: git
+  source:
+    uri: `+server.URL+`/x.git
+    branch: main
+jobs:
+- name: build
+  plan:
+  - get: repo
+`)
+
+	logs := captureStderr(t)
+	done := make(chan error, 1)
+
+	go func() { done <- cli.Run([]string{path}) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected the check to fail against a remote that demands credentials")
+		}
+
+		if got := logs(); !strings.Contains(got, "terminal prompts disabled") {
+			t.Errorf("stderr lacks git's \"terminal prompts disabled\" — anything else means git tried to prompt:\n%s", got)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the check hung instead of failing")
+	}
+}
+
 // The poll-safe ssh defaults are a fallback, not an override: an operator who
 // names their own GIT_SSH_COMMAND (a key, a jump host) through the resource's
 // env: must have it used, or fetch: fails auth that plain git gets right.
