@@ -176,8 +176,9 @@ func branchOutputs(step *Step) []string {
 		return outputs
 	}
 
+	// The plan's names, not the task's: output_mapping renames what a branch captures, so two branches declaring one name and mapping it apart write two artifacts, as Concourse reads them.
 	if step.InParallel == nil {
-		return step.Outputs
+		return CollectedArtifacts(*step)
 	}
 
 	var outputs []string

@@ -210,3 +210,36 @@ jobs:
 		t.Fatalf("params.in_parallel = %#v, want the list as written", cfg.Jobs[0].Plan[0].Params["in_parallel"])
 	}
 }
+
+// TestParallelOutputsComparePlanNames: output_mapping renames what a branch captures, so two branches whose task declares the same name are no race once mapped apart — Concourse accepts it — and still one when the mapping brings two names together.
+func TestParallelOutputsComparePlanNames(t *testing.T) {
+	t.Parallel()
+
+	pipeline := func(second string) string {
+		return `
+jobs:
+- name: j
+  plan:
+  - in_parallel:
+      steps:
+      - task: one
+        outputs: [payload]
+        output_mapping: {payload: payload-one}
+        run: "true"
+      - task: two
+        outputs: [` + second + `]
+        output_mapping: {` + second + `: payload-` + map[string]string{"payload": "two", "other": "one"}[second] + `}
+        run: "true"
+`
+	}
+
+	_, err := LoadConfig(writeConfig(t, pipeline("payload")))
+	if err != nil {
+		t.Errorf("LoadConfig refused branches mapped to different plan names: %v", err)
+	}
+
+	_, err = LoadConfig(writeConfig(t, pipeline("other")))
+	if err == nil || !strings.Contains(err.Error(), `"payload-one" is produced by more than one branch`) {
+		t.Errorf("error = %v, want the duplicate rejection naming the plan name both branches map to", err)
+	}
+}

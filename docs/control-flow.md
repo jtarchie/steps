@@ -438,7 +438,7 @@ jobs:
 - **Classification follows the worst branch.** An errored branch (infrastructure) outranks a failed one (the step said no), so `on_error` fires rather than `on_failure`.
 - **Branches start in declaration order** and, with `limit:`, are admitted in that order.
 - **`assert.execution` stays deterministic.** Branch names are recorded in declaration order, not completion order. The block itself records nothing — it is a container.
-- **A branch cannot consume a sibling's output.** Concurrent branches have no order between them, so that would be a race; the plan-time answer is "that artifact is not available here" rather than "sometimes". Everything the branches produce IS available to the steps after the block. Two branches declaring the same output name is a load error, including across nested blocks.
+- **A branch cannot consume a sibling's output.** Concurrent branches have no order between them, so that would be a race; the plan-time answer is "that artifact is not available here" rather than "sometimes". Everything the branches produce IS available to the steps after the block. Two branches producing the same artifact is a load error, including across nested blocks. The name compared is the plan's, after `output_mapping:`, so branches running one task shape can map its output apart — Concourse reads it the same way (example below).
 - **The block itself takes no operation fields**, same as `do:`.
 - **`limit:` and `fail_fast:` are hashed**, unlike `attempts:`/`timeout:`/`budget:`. They are not "how hard to try": they change which steps run at all, so a cached result from one setting must not satisfy the other.
 - **A block caches like the steps inside it.** Its hash folds in every branch, so when every branch could be cached on its own — tasks without `fix:`, nested blocks of the same — a build whose chain already succeeded skips the block like a task. One uncacheable branch (a `put:`, an agent, a `get:`, whose version is not in the block's hash) makes the whole chain re-run, and the run says which: `note: in_parallel makes this chain uncacheable (in_parallel block: put step)`. The same holds for `do:`, `race:` and `ensemble:`; `try:` and `across:` never cache.
@@ -461,6 +461,31 @@ jobs:
   assert:
     execution: [lint, test, vet]   # every branch ran to completion
     outcome: failed                # and the one red branch still failed the job
+```
+
+Branches that run one task shape map its output apart, so the block writes two artifacts rather than racing for one:
+
+```yaml
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+    - task: linux
+      outputs: [bin]
+      output_mapping: { bin: bin-linux }   # the same task-config name in both branches...
+      run: echo linux > bin/os
+    - task: darwin
+      outputs: [bin]
+      output_mapping: { bin: bin-darwin }  # ...captured as two artifacts, so no race
+      run: echo darwin > bin/os
+  - task: package
+    inputs: [bin-linux, bin-darwin]
+    run: echo "$(cat bin-linux/os)+$(cat bin-darwin/os)"
+    assert:
+      stdout: linux+darwin
+  assert:
+    execution: [linux, darwin, package]
+    outcome: succeeded
 ```
 
 ## `race:` — first success wins
