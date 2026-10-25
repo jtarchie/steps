@@ -384,11 +384,11 @@ func indent(script, by string) string {
 func benchPipeline(env benchEnv, nonce string) string {
 	p := env.payload
 	cache := max(p/16, 1<<20)
-	// curl signs S3 requests itself (--aws-sigv4), so the type needs no SDK or CLI installed per call. Temp files rather than pipes: the image's sh is dash, and a failed curl in a pipe would leave tar to report a short read. A custom endpoint is addressed path-style, as SeaweedFS needs; AWS virtual-hosted.
+	// curl signs S3 requests itself (--aws-sigv4), so the type needs no SDK or CLI installed per call. Temp files rather than pipes: the image's sh is dash, and a failed curl in a pipe would leave tar to report a short read. A custom endpoint is addressed path-style, as SeaweedFS needs; AWS virtual-hosted. Retried, as the aws CLI retries: a 256 MiB PUT from one cloud to another was measured dropping with an empty reply.
 	s3setup := `set -e
       region={{ .source.region | shellquote }}; bucket={{ .source.bucket | shellquote }}; endpoint={{ .source.endpoint | shellquote }}
       if [ -n "$endpoint" ]; then base="$endpoint/$bucket"; else base="https://$bucket.s3.$region.amazonaws.com"; fi
-      s3() { curl -sSf --aws-sigv4 "aws:amz:$region:s3" --user {{ .source.key_id | shellquote }}:{{ .source.secret | shellquote }} -H 'x-amz-content-sha256: UNSIGNED-PAYLOAD' "$@"; }`
+      s3() { curl -sSf --retry 5 --retry-all-errors --retry-delay 2 --aws-sigv4 "aws:amz:$region:s3" --user {{ .source.key_id | shellquote }}:{{ .source.secret | shellquote }} -H 'x-amz-content-sha256: UNSIGNED-PAYLOAD' "$@"; }`
 
 	source := func(from string) string {
 		return fmt.Sprintf(`{bucket: %s, region: %s, endpoint: "((s3_endpoint))", key_id: "((s3_key_id))", secret: "((s3_secret))", prefix: steps-bench/%s/%s/}`,

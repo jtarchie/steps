@@ -158,15 +158,17 @@ func (r plusRunner) reclaimed() (string, bool) {
 
 // around runs one command and then brings the outputs home, even after a nonzero exit, because the local tree must reflect the worker the moment a Run* returns (an assert: reads it).
 func (r plusRunner) around(ctx context.Context, run func(shell.Runner) error) (err error) {
-	defer func() {
-		reason, reclaimed := r.reclaimed()
-		err = asEvictionOf(err, reason, reclaimed)
-	}()
+	// The cloud is asked only about a session that was up: a first connection refused (a host key, a Windows instance) is the setup's answer, not a machine taken.
+	up := r.s.isUp()
+
+	defer func() { err = r.s.evictionOf(ctx, err, up) }()
 
 	inner, err := r.s.ensure(ctx)
 	if err != nil {
 		return err
 	}
+
+	up = true
 
 	if r.label != "" {
 		inner = inner.WithLabel(r.label)
@@ -220,6 +222,13 @@ func (s *plusSession) ensure(ctx context.Context) (shell.Runner, error) {
 	}
 
 	return s.inner, nil
+}
+
+func (s *plusSession) isUp() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.inner != nil
 }
 
 func (s *plusSession) daemonName() string { return s.worker.Address() + ":" + s.socket }
