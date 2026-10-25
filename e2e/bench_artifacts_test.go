@@ -25,6 +25,8 @@ import (
 const (
 	// benchImage is multi-arch, from ECR so a worker pulling it meets no Docker Hub rate limit.
 	benchImage = "public.ecr.aws/docker/library/alpine:3.20"
+	// benchCurlImage carries a curl that signs S3 requests, multi-arch and with no entrypoint, from ECR's mirror of Docker Hub.
+	benchCurlImage = "public.ecr.aws/docker/library/buildpack-deps:bookworm-curl"
 	// benchImageDigest is benchImage's index digest, the version the image-from-an-artifact get reports.
 	benchImageDigest = "sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 	benchWritten     = 1 << 20
@@ -382,11 +384,11 @@ func indent(script, by string) string {
 func benchPipeline(env benchEnv, nonce string) string {
 	p := env.payload
 	cache := max(p/16, 1<<20)
-	s3setup := `set -eo pipefail
-      apk add -q --no-cache aws-cli >&2
-      export AWS_ACCESS_KEY_ID={{ .source.key_id | shellquote }} AWS_SECRET_ACCESS_KEY={{ .source.secret | shellquote }} AWS_DEFAULT_REGION={{ .source.region | shellquote }}
-      endpoint={{ .source.endpoint | shellquote }}; [ -z "$endpoint" ] || export AWS_ENDPOINT_URL="$endpoint"
-      bucket={{ .source.bucket | shellquote }}`
+	// curl signs S3 requests itself (--aws-sigv4), so the type needs no SDK or CLI installed per call. Temp files rather than pipes: the image's sh is dash, and a failed curl in a pipe would leave tar to report a short read. A custom endpoint is addressed path-style, as SeaweedFS needs; AWS virtual-hosted.
+	s3setup := `set -e
+      region={{ .source.region | shellquote }}; bucket={{ .source.bucket | shellquote }}; endpoint={{ .source.endpoint | shellquote }}
+      if [ -n "$endpoint" ]; then base="$endpoint/$bucket"; else base="https://$bucket.s3.$region.amazonaws.com"; fi
+      s3() { curl -sSf --aws-sigv4 "aws:amz:$region:s3" --user {{ .source.key_id | shellquote }}:{{ .source.secret | shellquote }} -H 'x-amz-content-sha256: UNSIGNED-PAYLOAD' "$@"; }`
 
 	source := func(from string) string {
 		return fmt.Sprintf(`{bucket: %s, region: %s, endpoint: "((s3_endpoint))", key_id: "((s3_key_id))", secret: "((s3_secret))", prefix: steps-bench/%s/%s/}`,
@@ -433,18 +435,23 @@ func benchPipeline(env benchEnv, nonce string) string {
 
 	return `resource_types:
 - name: s3tree
-  image: ` + benchImage + `
+  image: ` + benchCurlImage + `
   config:
     check: |
       ` + s3setup + `
-      aws s3api list-objects-v2 --bucket "$bucket" --prefix {{ .source.prefix | shellquote }} --query 'sort_by(Contents || ` + "`[]`" + `, &LastModified)[].{key: Key}' --output json
+      prefix=$(printf '%s' {{ .source.prefix | shellquote }} | sed 's|/|%2F|g')
+      listing=$(s3 "$base/?list-type=2&prefix=$prefix")
+      keys=$(printf '%s' "$listing" | grep -o '<Key>[^<]*</Key>' | sed 's|<Key>\(.*\)</Key>|{"key":"\1"}|' | paste -sd, -) || keys=
+      printf '[%s]' "$keys"
     in: |
       ` + s3setup + `
-      aws s3 cp --quiet "s3://$bucket/"{{ .version.key | shellquote }} - | tar -xf -
+      s3 -o /tmp/tree.tar "$base/"{{ .version.key | shellquote }}
+      tar -xf /tmp/tree.tar && rm /tmp/tree.tar
     out: |
       ` + s3setup + `
       key={{ .source.prefix | shellquote }}tree.tar
-      tar -cf - -C {{ .params.from | shellquote }} . | aws s3 cp --quiet - "s3://$bucket/$key"
+      tar -cf /tmp/tree.tar -C {{ .params.from | shellquote }} .
+      s3 -T /tmp/tree.tar "$base/$key" >/dev/null
       printf '{"key":"%s"}' "$key"
 - name: digest
   image: ` + benchImage + `
