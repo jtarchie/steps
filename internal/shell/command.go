@@ -64,20 +64,22 @@ type Result struct {
 	Code           int
 }
 
-// Run streams both streams live with stdin attached; any nonzero exit is an
-// error.
+// Run streams both streams live with stdin attached unless ctx is headless (a
+// daemon's stdin is the terminal that launched it, and a read of that from a
+// background process group stops the whole daemon); any nonzero exit is an error.
 func Run(ctx context.Context, r Runner, script string) error {
-	_, err := r.Exec(ctx, Command{Script: script, Stdin: true, Stream: StreamBoth})
+	_, err := r.Exec(ctx, Command{Script: script, Stdin: !events.Headless(ctx), Stream: StreamBoth})
 
 	return err //nolint:wrapcheck // the runner's error is the command's
 }
 
-// RunCapture returns stdout while streaming stderr live, stdin attached; any
+// RunCapture returns stdout while streaming stderr live, stdin attached as Run
+// attaches it; any
 // nonzero exit is an error. The captured output is logged at debug on both
 // outcomes, so a failing check/out command's output is not lost to the terse
 // "exit status N".
 func RunCapture(ctx context.Context, r Runner, script string) ([]byte, error) {
-	res, err := r.Exec(ctx, Command{Script: script, Stdin: true, Stream: StreamStderr, Capture: true})
+	res, err := r.Exec(ctx, Command{Script: script, Stdin: !events.Headless(ctx), Stream: StreamStderr, Capture: true})
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the runner's error is the command's
 	}

@@ -474,3 +474,66 @@ func TestCloseRunnerLogsOnlyAFailure(t *testing.T) {
 		t.Errorf("logs = %q, want the failed close named", logs.String())
 	}
 }
+
+// A daemon's stdin is whatever terminal launched it, usually as a background
+// process group: a script handed that stdin parks a read on it (the docker
+// runner's copy goroutine outlives the command), and the kernel stops the whole
+// daemon with SIGTTIN. Swaps the process-global os.Stdin, so never parallel.
+//
+//nolint:paralleltest // replaces os.Stdin
+func TestRunAttachesStdinOnlyWhenSomebodyIsThere(t *testing.T) {
+	stdinCarrying := func(t *testing.T) {
+		t.Helper()
+
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, _ = w.WriteString("typed at the terminal\n")
+		_ = w.Close()
+
+		saved := os.Stdin
+		os.Stdin = r
+
+		t.Cleanup(func() {
+			os.Stdin = saved
+			_ = r.Close()
+		})
+	}
+
+	t.Run("a run with a terminal passes it through", func(t *testing.T) {
+		stdinCarrying(t)
+
+		out, err := RunCapture(context.Background(), HostRunner{cwd: t.TempDir()}, "cat")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if string(out) != "typed at the terminal\n" {
+			t.Errorf("stdout = %q, want the terminal's line", out)
+		}
+	})
+
+	t.Run("a headless run reads end of file", func(t *testing.T) {
+		stdinCarrying(t)
+
+		ctx := events.WithOutput(context.Background(), events.Output{Headless: true})
+
+		out, err := RunCapture(ctx, HostRunner{cwd: t.TempDir()}, "cat")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(out) != 0 {
+			t.Errorf("stdout = %q, want nothing: a daemon's stdin is not the script's", out)
+		}
+
+		stdinCarrying(t)
+
+		err = Run(ctx, HostRunner{cwd: t.TempDir()}, `test "$(cat)" = ""`)
+		if err != nil {
+			t.Errorf("Run under a headless ctx read stdin: %v", err)
+		}
+	})
+}
