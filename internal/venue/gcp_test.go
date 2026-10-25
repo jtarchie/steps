@@ -64,6 +64,8 @@ type fakeGCE struct {
 	running []ownedInstance
 	// calls is every mutating call in order, as "verb name".
 	calls []string
+	// reclaimOp is what Reclaimed answers: an operation taking the instance away.
+	reclaimOp string
 }
 
 func (f *fakeGCE) Owner(_ context.Context, _, _, name string) (ownedInstance, error) {
@@ -1589,4 +1591,11 @@ func TestGCELaunchLabelsTheInstanceItCreates(t *testing.T) {
 			t.Errorf("label %s=%s breaks GCE's rules, which refuse the whole insert", key, value)
 		}
 	}
+}
+
+func (f *fakeGCE) Reclaimed(context.Context, string, string, string, time.Time) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.reclaimOp, nil
 }

@@ -1,6 +1,9 @@
 package venue
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // gceFuncs holds gceClient's method values: gceClient in an interface keeps all of compute/v1 linked (~7MB) via its service field.
 type gceFuncs struct {
@@ -14,6 +17,7 @@ type gceFuncs struct {
 	owner      func(ctx context.Context, project, zone, name string) (ownedInstance, error)
 	setOwner   func(ctx context.Context, project, zone, name, value string) error
 	listOwned  func(ctx context.Context, project, zone string) ([]ownedInstance, error)
+	reclaimed  func(ctx context.Context, project, zone, name string, since time.Time) (string, error)
 }
 
 func newGCEFuncs(client *gceClient) gceFuncs {
@@ -28,6 +32,7 @@ func newGCEFuncs(client *gceClient) gceFuncs {
 		owner:      client.Owner,
 		setOwner:   client.SetOwner,
 		listOwned:  client.ListOwned,
+		reclaimed:  client.Reclaimed,
 	}
 }
 
@@ -69,4 +74,8 @@ func (f gceFuncs) SetOwner(ctx context.Context, project, zone, name, value strin
 
 func (f gceFuncs) ListOwned(ctx context.Context, project, zone string) ([]ownedInstance, error) {
 	return f.listOwned(ctx, project, zone)
+}
+
+func (f gceFuncs) Reclaimed(ctx context.Context, project, zone, name string, since time.Time) (string, error) {
+	return f.reclaimed(ctx, project, zone, name, since)
 }

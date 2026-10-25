@@ -18,6 +18,8 @@ import (
 var (
 	goneWindow = 20 * time.Second
 	goneEvery  = 4 * time.Second
+	// gceReclaimLookback is how far back a reclaim operation still speaks for this drop: a simulated event was logged 30 seconds before the connection it ended dropped, and a real preemption's notice is about as long.
+	gceReclaimLookback = 10 * time.Minute
 )
 
 // evictionOf classifies a command's error: an eviction when the worker heard its own reclaim notice or, for a session that was up, its cloud says the machine is going away. Either is remembered as the session's reclaim, so the lease lets the machine go.
@@ -82,6 +84,12 @@ func gceGoneAway(ctx context.Context, worker Worker) (string, bool) {
 	project, zone, err := gcpLocation(ctx, worker)
 	if err != nil {
 		return "", false
+	}
+
+	// The operations log first: it names a reclaim at once, while the instance can read RUNNING for minutes after its guest went quiet.
+	operation, err := api.Reclaimed(ctx, project, zone, worker.Instance, time.Now().Add(-gceReclaimLookback))
+	if err == nil && operation != "" {
+		return "GCE recorded " + operation + " on the instance", true
 	}
 
 	status, err := api.Status(ctx, project, zone, worker.Instance)

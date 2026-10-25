@@ -25,7 +25,12 @@ func shrinkGoneWaits(t *testing.T) {
 func goneGCPWorker(t *testing.T, statuses ...string) Worker {
 	t.Helper()
 
-	fake := &fakeGCE{statuses: statuses}
+	return goneGCPWorkerWith(t, &fakeGCE{statuses: statuses})
+}
+
+func goneGCPWorkerWith(t *testing.T, fake *fakeGCE) Worker {
+	t.Helper()
+
 	previous := gceFor
 	gceFor = func(context.Context, Worker) (gceAPI, error) { return fake, nil }
 
@@ -82,9 +87,13 @@ func TestGoneAwayReadsTheCloudsAnswer(t *testing.T) {
 		"gce deleted":              {func(t *testing.T) Worker { return goneGCPWorker(t, "notfound") }, true},
 		"gce terminated":           {func(t *testing.T) Worker { return goneGCPWorker(t, "TERMINATED") }, true},
 		"gce healthy":              {func(t *testing.T) Worker { return goneGCPWorker(t, "RUNNING") }, false},
-		"ec2 shutting down":        {func(t *testing.T) Worker { return goneAWSWorker(t, ec2types.InstanceStateNameShuttingDown) }, true},
-		"ec2 terminated and gone":  {func(t *testing.T) Worker { return goneAWSWorker(t, "") }, true},
-		"ec2 healthy":              {func(t *testing.T) Worker { return goneAWSWorker(t, ec2types.InstanceStateNameRunning) }, false},
+		// Measured: after simulateMaintenanceEvent the instance read RUNNING for 2.5 minutes, its guest unreachable after 30 seconds; only the operations log said so.
+		"gce running but logged a reclaim": {func(t *testing.T) Worker {
+			return goneGCPWorkerWith(t, &fakeGCE{reclaimOp: "simulateMaintenanceEvent"})
+		}, true},
+		"ec2 shutting down":       {func(t *testing.T) Worker { return goneAWSWorker(t, ec2types.InstanceStateNameShuttingDown) }, true},
+		"ec2 terminated and gone": {func(t *testing.T) Worker { return goneAWSWorker(t, "") }, true},
+		"ec2 healthy":             {func(t *testing.T) Worker { return goneAWSWorker(t, ec2types.InstanceStateNameRunning) }, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			reason, gone := goneAway(context.Background(), c.worker(t))

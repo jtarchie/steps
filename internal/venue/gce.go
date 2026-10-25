@@ -63,6 +63,18 @@ type gceAPI interface {
 	SetOwner(ctx context.Context, project, zone, name, value string) error
 	// ListOwned is every instance in the zone on its way up or running and carrying a steps-owner label.
 	ListOwned(ctx context.Context, project, zone string) ([]ownedInstance, error)
+	// Reclaimed is the newest operation since since that takes the instance away (a preemption, a host error, a maintenance termination, or a simulated one), empty when there is none.
+	Reclaimed(ctx context.Context, project, zone, name string, since time.Time) (string, error)
+}
+
+// reclaimOperations are the operation types GCE records against an instance it is taking away. The operations log is the control plane's first word on it: a simulated maintenance event left the instance RUNNING for 2.5 minutes after the guest stopped answering (measured 2026-10-25), with its operation logged within a second.
+//
+//nolint:gochecknoglobals // a fact about the API, not state
+var reclaimOperations = map[string]bool{
+	"compute.instances.preempted":                  true,
+	"compute.instances.hostError":                  true,
+	"compute.instances.terminateOnHostMaintenance": true,
+	"simulateMaintenanceEvent":                     true,
 }
 
 // errGCENotFound is an instance the API says does not exist — which for a
@@ -373,6 +385,28 @@ func (c *gceClient) SetOwner(ctx context.Context, project, zone, name, value str
 var sweepable = map[string]bool{"PROVISIONING": true, "STAGING": true, "RUNNING": true} //nolint:gochecknoglobals // a constant set
 
 // ListOwned filters client-side: the list filter's grammar for OR and for a hyphenated label key is the part no test here can check.
+func (c *gceClient) Reclaimed(ctx context.Context, project, zone, name string, since time.Time) (string, error) {
+	link := "https://www.googleapis.com/compute/v1/projects/" + project + "/zones/" + zone + "/instances/" + name
+
+	var found string
+
+	err := c.service.ZoneOperations.List(project, zone).Filter(`targetLink = "`+link+`"`).Pages(ctx, func(page *compute.OperationList) error {
+		for _, op := range page.Items {
+			at, err := time.Parse(time.RFC3339, op.InsertTime)
+			if err == nil && !at.Before(since) && reclaimOperations[op.OperationType] {
+				found = op.OperationType
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing operations on %s: %w", name, err)
+	}
+
+	return found, nil
+}
+
 func (c *gceClient) ListOwned(ctx context.Context, project, zone string) ([]ownedInstance, error) {
 	var owned []ownedInstance
 
