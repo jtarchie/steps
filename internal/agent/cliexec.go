@@ -74,10 +74,12 @@ func execCLI(
 		return cliRunResult{}, fmt.Errorf("cli stdout: %w", err)
 	}
 
-	err = cmd.Start()
+	release, err := shell.Start(runCtx, cmd)
 	if err != nil {
 		return cliRunResult{}, fmt.Errorf("agent %q: starting %s: %w", prepared.ri.AgentName, binary, err)
 	}
+
+	defer release()
 
 	// Parsed as it arrives, not buffered whole: a step that times out
 	// mid-conversation still has the trajectory of what it managed to do.

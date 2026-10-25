@@ -785,7 +785,13 @@ func (h HostRunner) Exec(ctx context.Context, cmd Command) (Result, error) {
 	out := cmd.Output(ctx, h.label)
 	proc.Stdout, proc.Stderr = out.Stdout, out.Stderr
 
-	runErr := proc.Run()
+	release, runErr := Start(ctx, proc)
+	if runErr == nil {
+		runErr = proc.Wait()
+
+		release()
+	}
+
 	out.Flush()
 
 	res := out.Result(exitCodeOf(runErr))
@@ -851,8 +857,8 @@ func RunShellCaptureFull(ctx context.Context, command, cwd string) (stdout, stde
 // A cancelled step would then take as long as whatever it started, which
 // defeats every feature built on cancellation: fail_fast, race:, and Ctrl-C.
 //
-// ponytail: the complete fix is a process group per command (Setpgid, then
-// kill the negative pid), which reaps grandchildren too. That is unix-only and
-// wants build-tagged files; this bounds the damage portably in one line until
-// something needs the difference between "2 seconds late" and "immediate".
+// A headless command gets a session of its own and a cancel that kills the
+// whole group (see Start), so this is a backstop there. An interactive one
+// keeps the terminal's foreground group so its prompts work, and this bound
+// is all it has.
 const cancelWaitDelay = 2 * time.Second
