@@ -15,6 +15,7 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/scheduler"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/telemetry"
 	"github.com/jtarchie/steps/internal/web"
@@ -323,6 +324,9 @@ func (w *WebCmd) Run() error {
 
 	// A daemon's runs are read in the browser, from their record: its terminal is log lines, so a step's bytes, a note's fallback and a prompt reach nobody here.
 	ctx = events.WithOutput(ctx, events.Output{Headless: true})
+
+	// A daemon is often a background group on the terminal that launched it, where a stray tty read or write would stop it whole; ignored, those get EIO instead.
+	shell.IgnoreTerminalStops()
 
 	ctx, base, err := w.ExecFlags.Apply(ctx)
 	if err != nil {

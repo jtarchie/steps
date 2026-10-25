@@ -17,6 +17,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/lmittmann/tint"
@@ -24,6 +25,7 @@ import (
 	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/telemetry"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -382,29 +384,59 @@ func selectJob(cfg *config.Config, name string) (*config.Job, error) {
 }
 
 // withSignalCancel derives a context from parent that is canceled on
-// SIGINT/SIGTERM, and returns it along with its cancel func.
+// SIGINT/SIGTERM, and returns it along with its cancel func. A second signal
+// is the operator saying "now": see exitNow.
 func withSignalCancel(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		select {
-		case sig := <-sigs:
-			slog.WarnContext(ctx, "signal.received", "signal", sig.String())
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	stopped := make(chan struct{})
 
-	// Untrapping on the way out is what keeps a SECOND ^C working. A command
-	// whose shutdown waits for something slow — `steps web` now waits for its
-	// drain and poll loops — would otherwise swallow every further signal
-	// into a channel nobody reads, and could only be killed with SIGKILL.
+	go watchSignals(ctx, sigs, stopped, cancel, exitNow)
+
 	// Once, since callers defer this and may also call it early themselves.
 	return ctx, sync.OnceFunc(func() {
 		signal.Stop(sigs)
+		close(stopped)
 		cancel()
 	})
+}
+
+// watchSignals cancels on the first signal and hands the second to now. The
+// shutdown the first one starts can wait a long time (an abort hook's grace, a
+// non-interruptible job's), and a second ^C swallowed meanwhile left SIGKILL
+// as the only way out, which orphans every child.
+func watchSignals(ctx context.Context, sigs <-chan os.Signal, stopped <-chan struct{}, cancel func(), now func(os.Signal)) {
+	select {
+	case sig := <-sigs:
+		slog.WarnContext(ctx, "signal.received", "signal", sig.String())
+		cancel()
+	case <-stopped:
+		return
+	}
+
+	select {
+	case sig := <-sigs:
+		slog.WarnContext(ctx, "signal.received_again", "signal", sig.String(), "action", "killing every child and exiting now")
+		now(sig)
+	case <-stopped:
+	}
+}
+
+// exitNow kills every child session and dies of sig, so a supervisor reads the
+// exit as the signal it sent rather than as an error code this process chose.
+func exitNow(sig os.Signal) {
+	shell.KillAll()
+	signal.Reset(sig)
+
+	self, err := os.FindProcess(os.Getpid())
+	if err == nil {
+		_ = self.Signal(sig)
+	}
+
+	// Unreachable where sig's default action is to terminate; a backstop elsewhere.
+	time.Sleep(time.Second)
+	os.Exit(1)
 }

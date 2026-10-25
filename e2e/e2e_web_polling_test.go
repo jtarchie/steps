@@ -15,9 +15,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -810,4 +812,80 @@ func waitForLogLine(t *testing.T, logs func() string, msg, key, value string) {
 	}
 
 	t.Fatalf("no %s line with %s=%s: %s", msg, key, value, logs())
+}
+
+// A daemon launched as a background group on a terminal froze whole (state T) the first time anything in its group read that tty; both halves of the guard are checked through a real task.
+func TestDaemonChildrenCannotStopIt(t *testing.T) {
+	signal.Reset(syscall.SIGTTIN, syscall.SIGTTOU)
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "pgid")
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: group
+    inputs: []
+    run: ps -o pgid= -p $$ > `+marker+`.tmp && mv `+marker+`.tmp `+marker+`
+`)
+	name := cli.PipelineName(path)
+
+	served := startWebFor(t, path, "--interval", "1h")
+	defer served.stopIfRunning(t)
+
+	if !signal.Ignored(syscall.SIGTTIN) || !signal.Ignored(syscall.SIGTTOU) {
+		t.Error("steps web left SIGTTIN/SIGTTOU at their default, which stops it on a tty read or write from the background")
+	}
+
+	served.trigger(t, name, "build")
+	waitForFile(t, marker)
+
+	raw, err := os.ReadFile(marker) //nolint:gosec // a path this test made
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if pgid := strings.TrimSpace(string(raw)); pgid == "" || pgid == strconv.Itoa(syscall.Getpgrp()) {
+		t.Errorf("a daemon task ran in group %q, the daemon's own: its tty read would stop the daemon", pgid)
+	}
+}
+
+// The CLI agent is the daemon's other long-lived host child, and the one the work laptop runs for an hour at a time.
+func TestDaemonCLIAgentCannotStopIt(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "pgid")
+	writeFakeClaude(t, "ps -o pgid= -p $$ > "+marker+".tmp && mv "+marker+".tmp "+marker+"\necho '"+cliInitEvent()+"'\necho '"+cliResultEvent("done", 1)+"'")
+	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: responder
+  source:
+    model: "@claude/sonnet"
+
+jobs:
+- name: build
+  plan:
+  - agent: responder
+    inputs: []
+    messages: [Say done.]
+`)
+	name := cli.PipelineName(path)
+
+	served := startWebFor(t, path, "--interval", "1h")
+	defer served.stopIfRunning(t)
+
+	served.trigger(t, name, "build")
+	waitForFile(t, marker)
+
+	raw, err := os.ReadFile(marker) //nolint:gosec // a path this test made
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if pgid := strings.TrimSpace(string(raw)); pgid == "" || pgid == strconv.Itoa(syscall.Getpgrp()) {
+		t.Errorf("a daemon's CLI agent ran in group %q, the daemon's own: its tty read would stop the daemon", pgid)
+	}
 }

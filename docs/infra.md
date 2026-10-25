@@ -1113,6 +1113,7 @@ assert:
 
 - **The default is to wait**, matching Concourse. Half-applying a deploy because someone restarted the daemon is the failure this exists to prevent.
 - **The wait is bounded** (10 minutes). A job needing longer should carry its own `timeout:`, which still applies. The daemon logs `web.job.shutdown_wait` for each build it is waiting on; one still running when the grace ends is cancelled and re-queued like an interruptible one.
+- **A second SIGINT or SIGTERM ends the wait.** Every process the daemon started is killed and it exits by that signal; the builds it was waiting on are left `running` and [resume](workspace.md#a-daemon-restart-resumes-the-build-it-interrupted) at the next startup, as after a crash.
 - **`interruptible: true`** is cancelled the moment the daemon is told to stop. Its queue row stays `running`, so the next startup [resumes it](workspace.md#a-daemon-restart-resumes-the-build-it-interrupted): the steps it finished are skipped, and only the one cut off runs again.
 - **Only a shutdown waits.** Destroying a pipeline cancels its running build at once, whatever this field says, and so does renaming one — which re-queues the build under the new name.
 - **This affects `steps web` only.** `steps run` is a person at a terminal, and ctrl-C there is always immediate.

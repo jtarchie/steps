@@ -186,6 +186,12 @@ linters:
             # package that imports it: the CLI starts it, and hands its HTTP and
             # log wrappers to web and the daemon client.
             - "github.com/jtarchie/steps/internal/telemetry"
+            # shell owns the processes steps starts and cli owns its signals: a
+            # second ^C kills every child session (shell.KillAll), and steps web
+            # ignores the terminal stop signals its children inherit
+            # (shell.IgnoreTerminalStops). Process lifecycle, not execution:
+            # running a command still goes through pipeline.
+            - "github.com/jtarchie/steps/internal/shell"
         # telemetry installs the OpenTelemetry SDK from the OTEL_* environment.
         # Only internal/cli imports it, so the SDK never becomes an edge of the
         # execution packages: they reach the global provider through the
