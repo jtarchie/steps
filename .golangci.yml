@@ -3,7 +3,8 @@
 version: "2"
 
 run:
-  timeout: 5m
+  # 10m, not 5m: the release gate lints with a cold cache on a shared box, and timed out there at 5m.
+  timeout: 10m
 
 linters:
   default: none

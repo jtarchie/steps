@@ -125,7 +125,8 @@ tasks:
     export GOFLAGS='-skip=^(TestProbeRefusesAnImageWithoutTheFileUtilities|TestSSHWorkerCancelKillsACommandIgnoringTERM|TestSSHWorkerCancelGivesTERMItsGrace|TestKeepWorkspaceKeepsSpilledToolOutput)$'
     export STEPS_TESTSHARD_SKIP='^(TestProbeRefusesAnImageWithoutTheFileUtilities|TestSSHWorkerCancelKillsACommandIgnoringTERM|TestSSHWorkerCancelGivesTERMItsGrace|TestKeepWorkspaceKeepsSpilledToolOutput)$'   # the same names for the sharded packages, which go test -skip does not reach
     cd "$1/repo"
-    task
+    # `task fmt` minus its stamp: seal refuses a run under STEPS_TESTSHARD_SKIP by design, and nothing here commits. Keep in step with the Taskfile's fmt list.
+    task lint kindswitch vuln nilaway test build
     INNER
     su tester -c "sh /tmp/asuser.sh $PWD"
 

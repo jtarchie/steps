@@ -16,8 +16,8 @@ func repo(t *testing.T) string {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	// A hook run inherits these from git; a test must not inherit them from whoever ran the tests.
-	for _, name := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE"} {
+	// A hook run inherits the GIT_ ones from git, and the release gate exports the skip; a test must inherit neither from whoever ran it.
+	for _, name := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "STEPS_TESTSHARD_SKIP"} {
 		t.Setenv(name, "")
 
 		_ = os.Unsetenv(name)
