@@ -14,7 +14,7 @@ import (
 const placementColumns = `run_id, step_index, step_name, job_name, slot, node_hash,
 	tag, address, instance_id,
 	goos, goarch, workdir, uid, gid,
-	image, bytes_sent, bytes_received`
+	image, bytes_sent, bytes_received, volume_bytes`
 
 // RecordPlacement stores where one placed step ran, replacing on conflict: a
 // placement describes a machine, and the last one to answer is the one.
@@ -26,8 +26,8 @@ func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) 
 
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_placements (`+placementColumns+`, pipeline_id, created_at)
-		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
-		WHERE EXISTS (SELECT 1 FROM runs WHERE id = $20 AND pipeline_id = $21)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+		WHERE EXISTS (SELECT 1 FROM runs WHERE id = $21 AND pipeline_id = $22)
 		ON CONFLICT (pipeline_id, run_id, slot) DO UPDATE SET
 			step_index = excluded.step_index,
 			node_hash  = excluded.node_hash,
@@ -44,13 +44,14 @@ func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) 
 			image      = excluded.image,
 			bytes_sent = excluded.bytes_sent,
 			bytes_received = excluded.bytes_received,
+			volume_bytes = excluded.volume_bytes,
 			created_at = excluded.created_at`,
 		placement.RunID, placement.StepIndex, clean(placement.StepName), placement.JobName,
 		placement.Slot, nullable(placement.NodeHash),
 		clean(placement.Tag), clean(placement.Address), instanceID,
 		clean(placement.GOOS), clean(placement.GOARCH), clean(placement.Workdir),
 		placement.UID, placement.GID,
-		clean(placement.Image), placement.BytesSent, placement.BytesReceived,
+		clean(placement.Image), placement.BytesSent, placement.BytesReceived, placement.VolumeBytes,
 		s.pipelineID, now(), placement.RunID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("recording a placement: %w", err)
@@ -77,7 +78,7 @@ func (s *Store) RunPlacements(ctx context.Context, runID string) ([]store.Placem
 			&placement.Tag, &placement.Address, &placement.InstanceID,
 			&placement.GOOS, &placement.GOARCH, &placement.Workdir,
 			&placement.UID, &placement.GID,
-			&placement.Image, &placement.BytesSent, &placement.BytesReceived)
+			&placement.Image, &placement.BytesSent, &placement.BytesReceived, &placement.VolumeBytes)
 		placement.NodeHash = nodeHash.String
 
 		return placement, err //nolint:wrapcheck // collect wraps with the thing being read

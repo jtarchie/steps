@@ -59,10 +59,10 @@ func TestMain(m *testing.M) {
 	}
 
 	// The cloud SDKs' pooled keep-alive connections, and only when the
-	// real-AWS or real-GCP tests are the ones running — see
-	// internal/venue/ssmdial for the full note. Every other run keeps the
-	// strict check.
-	if os.Getenv("STEPS_TEST_AWS_INSTANCE") != "" || os.Getenv("STEPS_TEST_GCP_INSTANCE") != "" {
+	// real-AWS or real-GCP tests are the ones running, or the artifact bench's
+	// S3 client is — see internal/venue/ssmdial for the full note. Every other
+	// run keeps the strict check.
+	if os.Getenv("STEPS_TEST_AWS_INSTANCE") != "" || os.Getenv("STEPS_TEST_GCP_INSTANCE") != "" || os.Getenv("STEPS_BENCH_ARTIFACTS") != "" {
 		options = append(options,
 			goleak.IgnoreTopFunction("net/http.(*persistConn).readLoop"),
 			goleak.IgnoreTopFunction("net/http.(*persistConn).writeLoop"),

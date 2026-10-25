@@ -121,6 +121,15 @@ func TestPlacementStatesWhatTheWorkerCouldNotSay(t *testing.T) {
 	if got := silent.Identity(); got != "" {
 		t.Errorf("Identity with no answer = %q, want nothing — an invented 0:0 reads as root", got)
 	}
+
+	if got := silent.Disk(); got != "-" {
+		t.Errorf("Disk with nothing weighed = %q, want - — an unweighed worker is not an empty one", got)
+	}
+
+	var none int64
+	if got := (PlacementView{Placement: store.Placement{VolumeBytes: &none}}).Disk(); got != "0 B" {
+		t.Errorf("Disk of a measured zero = %q, want 0 B", got)
+	}
 }
 
 // TestPlacementRendersTheBareCases: an ssh:// worker running a step on the

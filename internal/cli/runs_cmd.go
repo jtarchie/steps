@@ -689,15 +689,15 @@ func (r *RunsWhereCmd) printPlacements(ctx context.Context, st placementReader) 
 		return nil
 	}
 
-	fmt.Printf("%-24s  %-12s  %-13s  %9s  %9s  %-11s  %s\n",
-		"STEP", "TAG", "PLATFORM", "SENT", "RECEIVED", "IDENTITY", "MACHINE")
+	fmt.Printf("%-24s  %-12s  %-13s  %9s  %9s  %9s  %-11s  %s\n",
+		"STEP", "TAG", "PLATFORM", "SENT", "RECEIVED", "DISK", "IDENTITY", "MACHINE")
 
 	for _, placed := range placements {
 		view := web.PlacementView{Placement: placed}
 
-		fmt.Printf("%-24s  %-12s  %-13s  %9s  %9s  %-11s  %s\n",
+		fmt.Printf("%-24s  %-12s  %-13s  %9s  %9s  %9s  %-11s  %s\n",
 			truncateName(placed.StepName, 24), truncateName(placed.Tag, 12),
-			view.Platform(), view.Sent(), view.Received(), cmp.Or(view.Identity(), "-"), view.Machine())
+			view.Platform(), view.Sent(), view.Received(), view.Disk(), cmp.Or(view.Identity(), "-"), view.Machine())
 	}
 
 	return nil

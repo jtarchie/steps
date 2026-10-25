@@ -348,6 +348,15 @@ func (p PlacementView) Sent() string { return FormatBinaryBytes(p.BytesSent) }
 // wanting the bytes, not of the step having made them.
 func (p PlacementView) Received() string { return FormatBinaryBytes(p.BytesReceived) }
 
+// Disk is what the step's own volumes held on the worker, "-" where nothing weighed them: a worker that keeps no volumes is not one whose step wrote nothing.
+func (p PlacementView) Disk() string {
+	if p.VolumeBytes == nil {
+		return "-"
+	}
+
+	return FormatBinaryBytes(*p.VolumeBytes)
+}
+
 // Identity is who the step ran as, blank when the worker did not say — never an
 // invented 0, which would read as root.
 func (p PlacementView) Identity() string {

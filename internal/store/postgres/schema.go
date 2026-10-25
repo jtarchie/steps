@@ -8,6 +8,8 @@ package postgres
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was DROP SCHEMA.
 //
+// 17 added run_placements.volume_bytes, as sqlite's 31 did.
+//
 // 16 added credentials, as sqlite's 30 did.
 //
 // 15 dropped run_placements.fstype and fs_free, as sqlite's 29 did.
@@ -18,7 +20,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 16
+const schemaVersion = 17
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -405,6 +407,7 @@ CREATE TABLE IF NOT EXISTS run_placements (
     image         TEXT NOT NULL,
     bytes_sent    BIGINT NOT NULL,
     bytes_received BIGINT NOT NULL,
+    volume_bytes  BIGINT,
     created_at    TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (pipeline_id, run_id, slot),
     FOREIGN KEY (pipeline_id, node_hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE

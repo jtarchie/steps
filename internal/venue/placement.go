@@ -33,6 +33,8 @@ type Placement struct {
 	// or out of the store. Zero is honest here too — a step that produced
 	// nothing, or one whose outputs never had to come home.
 	BytesReceived int64
+	// VolumeBytes is what the step's own volumes held on the worker after its last command, weighed there: never the cached trees it overlaid. Nil on a worker that keeps no volumes, or for a step that held no output, whose digest run is what carries the weighing.
+	VolumeBytes *int64
 }
 
 // PlacementOf describes the machine a runner used, once it has described

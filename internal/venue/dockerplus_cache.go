@@ -28,7 +28,11 @@ const (
 	upperLabel  = "steps.upper"
 	ovlLabel    = "steps.ovl"
 	aliasPrefix = "steps-a-"
-	holderMount = "/d"
+	// overlayPrefix names a step's copy-on-write view of a cached tree; mounting one shows the tree under it.
+	overlayPrefix = "steps-in-"
+	holderMount   = "/d"
+	// weighMount is where a step's own volumes are mounted to be weighed together.
+	weighMount = "/w"
 )
 
 var (
@@ -104,7 +108,12 @@ func (s *plusSession) fill(ctx context.Context, digest string, pack func(io.Writ
 		return dockerapi.Volume{}, err
 	}
 
-	return s.publish(ctx, digest, data, size)
+	kept, err := s.publish(ctx, digest, data, size)
+	if err == nil && kept.Name == data.Name {
+		s.filled = append(s.filled, data.Name)
+	}
+
+	return kept, err
 }
 
 // pour reports the bytes it sent, which is what the entry is weighed at for eviction.
@@ -168,41 +177,64 @@ func (s *plusSession) digestOf(ctx context.Context, volume string) (string, erro
 	return digest, err
 }
 
-// measure runs treedigest's script against a volume on the worker, read-only and with no network, and weighs it in the same run.
-func (s *plusSession) measure(ctx context.Context, volume string) (string, int64, error) {
-	return s.runDigest(ctx, volume, ` && du -sk `+holderMount)
+// measure runs treedigest's script against a volume on the worker, read-only and with no network, and weighs it in the same run. With weighSession it also weighs the step's own volumes, in the container it was starting anyway.
+func (s *plusSession) measure(ctx context.Context, volume string, weighSession bool) (string, int64, error) {
+	if !weighSession {
+		digest, weights, err := s.runDigest(ctx, volume, ` && du -sk `+holderMount)
+		if err != nil {
+			return "", 0, err
+		}
+
+		return digest, weights[0], nil
+	}
+
+	digest, weights, err := s.runDigest(ctx, volume, ` && du -sk `+holderMount+` && du -sk `+weighMount, s.weighMounts()...)
+	if err != nil {
+		return "", 0, err
+	}
+
+	s.volumeBytes.Store(&weights[1])
+
+	return digest, weights[0], nil
 }
 
-func (s *plusSession) runDigest(ctx context.Context, volume, weigh string) (string, int64, error) {
+// runDigest answers the digest and, in order, each du the weigh script printed, in bytes.
+func (s *plusSession) runDigest(ctx context.Context, volume, weigh string, extra ...dockerapi.Bind) (string, []int64, error) {
 	code, stdout, stderr, err := s.docker.RunOnce(ctx, dockerapi.ContainerSpec{
 		Image:   treedigest.Image,
 		Cmd:     []string{"sh", "-c", `sh -c "$1" sh ` + holderMount + weigh, "sh", treedigest.Script},
 		Name:    "steps-digest-" + randomSuffix(),
 		Labels:  shell.OwnershipLabels(),
 		Network: "none",
-		Mounts:  []dockerapi.Bind{volumeMount(volume, holderMount, true)},
+		Mounts:  append([]dockerapi.Bind{volumeMount(volume, holderMount, true)}, extra...),
 	})
 	if err != nil {
-		return "", 0, fmt.Errorf("%w", err)
+		return "", nil, fmt.Errorf("%w", err)
 	}
 
-	digest, weight, _ := strings.Cut(stdout, "\n")
-	fields := strings.Fields(weight)
+	digest, rest, _ := strings.Cut(stdout, "\n")
+	lines := strings.Split(strings.TrimSpace(rest), "\n")
 
-	if code != 0 || (weigh != "" && len(fields) == 0) {
-		return "", 0, fmt.Errorf("%w (exit %d): %s", errDigestRunFailed, code, stderr)
+	if code != 0 || (weigh != "" && len(lines) != strings.Count(weigh, "du -sk")) {
+		return "", nil, fmt.Errorf("%w (exit %d): %s", errDigestRunFailed, code, stderr)
 	}
 
 	if weigh == "" {
-		return digest, 0, nil
+		return digest, []int64{}, nil
 	}
 
-	kib, err := strconv.ParseInt(fields[0], 10, 64)
-	if err != nil {
-		return "", 0, fmt.Errorf("%w: du said %q", errDigestRunFailed, weight)
+	weights := make([]int64, 0, len(lines))
+
+	for _, line := range lines {
+		kib, err := strconv.ParseInt(strings.Fields(line)[0], 10, 64)
+		if err != nil {
+			return "", nil, fmt.Errorf("%w: du said %q", errDigestRunFailed, line)
+		}
+
+		weights = append(weights, kib*1024)
 	}
 
-	return digest, kib * 1024, nil
+	return digest, weights, nil
 }
 
 // overlay gives the step a copy-on-write view of data, so its writes land in a volume of its own and the cached tree stays as it was.
@@ -223,7 +255,7 @@ func (s *plusSession) overlay(ctx context.Context, data dockerapi.Volume) (strin
 	labels[upperLabel] = upper.Name
 	labels[ovlLabel] = work.Name
 
-	child, err := s.docker.CreateVolume(ctx, "steps-in-"+randomSuffix(), labels,
+	child, err := s.docker.CreateVolume(ctx, overlayPrefix+randomSuffix(), labels,
 		dockerapi.OverlayOptions(data.Mountpoint, upper.Mountpoint, work.Mountpoint))
 	if err != nil {
 		return "", fmt.Errorf("%w", err)

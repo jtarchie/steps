@@ -26,6 +26,7 @@ ALTER TABLE run_placements DROP COLUMN fs_free;`),
     sealed      BLOB NOT NULL,
     PRIMARY KEY (pipeline_id, name)
 );`),
+	execStep(`ALTER TABLE run_placements ADD COLUMN volume_bytes INTEGER;`),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {

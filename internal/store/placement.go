@@ -50,4 +50,6 @@ type Placement struct {
 	// the pair is what says whether a produced tree ever had to leave the
 	// worker at all.
 	BytesReceived int64
+	// VolumeBytes is what the step's own volumes held on the worker when it ended: its outputs, its overlays' upper layers, and any tree poured into the worker's cache for it — never a cached tree it only read. Nil where nothing weighed them — a worker that keeps no volumes (ssh://), a step that held no output there (the weighing rides in that output's digest run) — which is not the same answer as zero.
+	VolumeBytes *int64
 }

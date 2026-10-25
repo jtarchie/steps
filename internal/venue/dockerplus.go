@@ -18,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,6 +84,10 @@ type plusSession struct {
 	heldSizes map[string]int64
 
 	sent, received atomic.Int64
+	// filled are cache entries poured for this step, which outlive it and so are disk it cost the worker.
+	filled []string
+	// volumeBytes is weighed with the last held output, after each command; nil for a step that held none, since weighing alone would cost a container of its own.
+	volumeBytes atomic.Pointer[int64]
 }
 
 // newPlusSession picks how the worker's sshd is reached, and for a machine steps provisioned, how it hears of its own reclamation.
@@ -585,10 +590,10 @@ func (s *plusSession) fetch(ctx context.Context) error {
 func (s *plusSession) fetchDeclared(ctx context.Context, names ...string) error {
 	held, sizes := map[string]string{}, map[string]int64{}
 
-	for _, name := range names {
+	for i, name := range names {
 		// Digested now, so HeldOf can answer; published only at close, once nothing writes the volume.
 		if volume, ok := s.outputs[name]; ok && s.spec.DeferFetch {
-			digest, size, err := s.measure(ctx, volume)
+			digest, size, err := s.measure(ctx, volume, i == len(names)-1)
 			if err != nil {
 				return fmt.Errorf("holding output %q: %w", name, err)
 			}
@@ -714,6 +719,7 @@ func (s *plusSession) placement() (Placement, bool) {
 		Image:         s.spec.Image,
 		BytesSent:     s.sent.Load(),
 		BytesReceived: s.received.Load(),
+		VolumeBytes:   s.volumeBytes.Load(),
 	}, true
 }
 
@@ -783,6 +789,19 @@ func (s *plusSession) publishHeld(ctx context.Context) []error {
 	}
 
 	return errs
+}
+
+// weighMounts are the step's own volumes, read-only under weighMount. An overlay is weighed through its upper and work volumes, never mounted itself, whose merged view would count the cached tree it reads.
+func (s *plusSession) weighMounts() []dockerapi.Bind {
+	var mounts []dockerapi.Bind
+
+	for _, name := range slices.Concat(s.volumes, s.filled) {
+		if !strings.HasPrefix(name, overlayPrefix) {
+			mounts = append(mounts, volumeMount(name, path.Join(weighMount, strconv.Itoa(len(mounts))), true))
+		}
+	}
+
+	return mounts
 }
 
 // removeOwned drops what only this session used: the holder, and every volume not now named by a digest. Newest first, so an overlay goes before its upper.

@@ -655,6 +655,7 @@ func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink
 		Image:         placement.Image,
 		BytesSent:     placement.BytesSent,
 		BytesReceived: placement.BytesReceived,
+		VolumeBytes:   placement.VolumeBytes,
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "job.placement_unrecorded", "job", runner.jobName, "step", name, "error", err)

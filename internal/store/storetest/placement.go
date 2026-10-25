@@ -53,6 +53,7 @@ func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 
 	instance := "i-0123456789abcdef0"
 	root := 0
+	var empty int64
 
 	placeAt(ctx, t, st, store.Placement{
 		RunID: "AAAA1111", StepIndex: 0, StepName: "on-ec2", JobName: "build",
@@ -60,6 +61,7 @@ func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 		InstanceID: &instance, GOOS: "linux", GOARCH: "arm64",
 		Workdir: "/var/tmp/steps/work",
 		UID:     &root, GID: &root, Image: "golang:1.25", BytesSent: 4096, BytesReceived: 8192,
+		VolumeBytes: &empty,
 	})
 
 	// A machine steps did not acquire, run by a user the worker did not name.
@@ -88,6 +90,14 @@ func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 
 	if onSSH.UID != nil {
 		t.Errorf("uid = %d for a worker that did not say, want nothing — an invented 0 reads as root", *onSSH.UID)
+	}
+
+	if onEC2.VolumeBytes == nil || *onEC2.VolumeBytes != 0 {
+		t.Errorf("volume_bytes = %v, want a measured 0 — a step that wrote nothing is not one nobody weighed", onEC2.VolumeBytes)
+	}
+
+	if onSSH.VolumeBytes != nil {
+		t.Errorf("volume_bytes = %d for a worker that keeps no volumes, want nothing", *onSSH.VolumeBytes)
 	}
 }
 
@@ -119,12 +129,13 @@ func (s suite) TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T)
 
 	reclaimed := "i-000000000000000aa"
 	replaced := "i-000000000000000bb"
+	first, second := int64(10), int64(20)
 
 	placeAt(ctx, t, st, store.Placement{
 		RunID: "EVICTED1", StepIndex: 0, StepName: "unit", JobName: "build", NodeHash: hashOf(1),
 		Tag: "spot", Address: "aws://" + reclaimed, InstanceID: &reclaimed,
 		GOOS: "linux", GOARCH: "arm64", Workdir: "/var/tmp/a",
-		Image: "golang:1.25", BytesSent: 1_000,
+		Image: "golang:1.25", BytesSent: 1_000, VolumeBytes: &first,
 	})
 
 	err := st.RecordPlacement(ctx, store.Placement{
@@ -132,7 +143,7 @@ func (s suite) TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T)
 		NodeHash: hashOf(1), Slot: hashOf(1),
 		Tag: "spot", Address: "aws://" + replaced, InstanceID: &replaced,
 		GOOS: "linux", GOARCH: "arm64", Workdir: "/var/tmp/b",
-		Image: "golang:1.25", BytesSent: 2_000, BytesReceived: 3_000,
+		Image: "golang:1.25", BytesSent: 2_000, BytesReceived: 3_000, VolumeBytes: &second,
 	})
 	if err != nil {
 		t.Fatalf("RecordPlacement of the re-placement: %v", err)
@@ -151,9 +162,9 @@ func (s suite) TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T)
 
 	// The whole description has to move together, or the row reports a machine
 	// that never existed: B's address with A's workdir.
-	if got.Workdir != "/var/tmp/b" || got.BytesSent != 2_000 || got.BytesReceived != 3_000 {
-		t.Errorf("workdir/bytes_sent/bytes_received = %q/%d/%d, want /var/tmp/b/2000/3000",
-			got.Workdir, got.BytesSent, got.BytesReceived)
+	if got.Workdir != "/var/tmp/b" || got.BytesSent != 2_000 || got.BytesReceived != 3_000 || derefOr(got.VolumeBytes, 0) != second {
+		t.Errorf("workdir/bytes_sent/bytes_received/volume_bytes = %q/%d/%d/%d, want /var/tmp/b/2000/3000/20",
+			got.Workdir, got.BytesSent, got.BytesReceived, derefOr(got.VolumeBytes, 0))
 	}
 }
 
@@ -202,7 +213,7 @@ func (s suite) TestPlacementsReadBackInPlanOrder(t *testing.T) {
 
 // derefOr renders a pointer column for a failure message, where nil is a real
 // answer rather than a bug — see Placement.
-func derefOr(value *string, absent string) string {
+func derefOr[T any](value *T, absent T) T {
 	if value == nil {
 		return absent
 	}

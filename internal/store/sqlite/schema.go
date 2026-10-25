@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 31 added run_placements.volume_bytes, what a placed step's own volumes held on its worker.
+//
 // 30 added credentials, sealed secrets a pipeline keeps (mcp oauth logins).
 //
 // 29 dropped run_placements.fstype and fs_free: nothing has measured the
@@ -92,7 +94,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 30
+const schemaVersion = 31
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -905,6 +907,8 @@ CREATE TABLE IF NOT EXISTS run_placements (
     image         TEXT NOT NULL,
     bytes_sent    INTEGER NOT NULL,
     bytes_received INTEGER NOT NULL,
+    -- NULL where the worker keeps no volumes or could not weigh them: zero is a measurement.
+    volume_bytes  INTEGER,
     created_at    TEXT NOT NULL,
     PRIMARY KEY (pipeline_id, run_id, slot),
     FOREIGN KEY (pipeline_id, node_hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE

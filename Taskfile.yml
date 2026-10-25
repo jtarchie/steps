@@ -181,6 +181,11 @@ tasks:
     cmds:
       - STEPS_LOADTEST=1 go test ./e2e -run TestLoadtestConcurrentJobs -count=1 -v -timeout 30m
 
+  bench:artifacts:
+    desc: "Opt-in, and it costs money: every way a tree moves between steps, jobs and machines (overlay, relay, S3 bucket, cache hit, task cache, artifact store, drain), each held to a byte and disk budget, printed as one table row per hop. Not part of `task`. Machines come from `hack/aws-fixture.sh up` and `hack/gcp-fixture.sh up` (export what they print), and a cloud with no fixture falls back to a local: worker; with no STEPS_TEST_AWS_BUCKET it runs against a SeaweedFS on this machine's docker. Against a real bucket the workers need long-lived keys: eval \"$(aws configure export-credentials --profile cli --format env)\". PAYLOAD=256M (default) sizes the tree."
+    cmds:
+      - STEPS_BENCH_ARTIFACTS=1 go test ./e2e -run TestBenchArtifacts -count=1 -v -timeout 3h
+
   cover-diff:
     desc: "Advisory: which changed lines (vs BASE, default HEAD) did no test execute. Born from a measured failure: a whole eviction layer landed uncovered and its deletion shipped green. Run before committing; triage every line it names — add the test, or know exactly why not."
     cmds:
