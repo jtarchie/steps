@@ -590,10 +590,19 @@ func (s *plusSession) fetch(ctx context.Context) error {
 func (s *plusSession) fetchDeclared(ctx context.Context, names ...string) error {
 	held, sizes := map[string]string{}, map[string]int64{}
 
+	// The weighing rides in the last held output's digest run, whichever name that is: an output fetched home has no run to ride in.
+	last := -1
+
+	for i, name := range names {
+		if _, ok := s.outputs[name]; ok {
+			last = i
+		}
+	}
+
 	for i, name := range names {
 		// Digested now, so HeldOf can answer; published only at close, once nothing writes the volume.
 		if volume, ok := s.outputs[name]; ok && s.spec.DeferFetch {
-			digest, size, err := s.measure(ctx, volume, i == len(names)-1)
+			digest, size, err := s.measure(ctx, volume, i == last)
 			if err != nil {
 				return fmt.Errorf("holding output %q: %w", name, err)
 			}

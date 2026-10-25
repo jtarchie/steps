@@ -79,3 +79,33 @@ jobs:
 	within("here", written, written+diskSlack)
 	within("there", diskPayload+written, diskPayload+written+diskSlack)
 }
+
+// TestEndToEndPlacedStepIsWeighedWhenItsLastOutputComesHome: an output this machine already had is fetched back rather than held, so the weighing rides on whichever output was held, not on the last one named.
+func TestEndToEndPlacedStepIsWeighedWhenItsLastOutputComesHome(t *testing.T) {
+	requireDockerE2E(t)
+
+	const written = 256 << 10
+
+	_, _, workers := twoWorkers(t)
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: notes
+    outputs: [notes]
+    run: echo first > notes/log.txt
+  - task: both
+    tags: [a]
+    image: `+dockerE2EImage+`
+    inputs: [notes]
+    outputs: [out, notes]
+    run: head -c `+strconv.Itoa(written)+` /dev/urandom > out/note.bin && echo second >> notes/log.txt
+`)
+
+	mustRun(t, append([]string{path}, workers...)...)
+
+	both := placementNamed(t, runPlacements(t, path), "both")
+	if both.VolumeBytes == nil || *both.VolumeBytes < written {
+		t.Errorf("both: volume bytes = %v, want at least the %d bytes it wrote to the output it held", both.VolumeBytes, written)
+	}
+}

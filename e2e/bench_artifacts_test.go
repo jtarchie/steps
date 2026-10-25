@@ -32,7 +32,7 @@ const (
 	benchOverhead = 1 << 20
 	// benchDiskSlack is the issue's budget past what a step wrote: empty volumes, overlay work dirs, du's rounding.
 	benchDiskSlack = 4 << 20
-	// benchS3Mock stands in for S3 when no bucket is named: MinIO no longer publishes images, and adobe/s3mock drops the aws CLI's streamed uploads.
+	// benchS3Mock stands in for S3 when no bucket is named: MinIO no longer publishes images, and adobe/s3mock drops the aws CLI's streamed uploads. Its volumes are sized down from the 30GB default, which it refuses to grow into on a docker disk with less than that free.
 	benchS3Mock = "chrislusf/seaweedfs:3.93"
 )
 
@@ -185,7 +185,7 @@ func startS3Mock(t *testing.T) benchS3 {
 	testdocker.Require(t)
 
 	name := "steps-bench-s3-" + strings.ToLower(rand.Text()[:8])
-	benchCommand(t, "docker", "run", "-d", "--rm", "--name", name, "-p", "127.0.0.1::8333", benchS3Mock, "server", "-s3", "-dir=/data")
+	benchCommand(t, "docker", "run", "-d", "--rm", "--name", name, "-p", "127.0.0.1::8333", benchS3Mock, "server", "-s3", "-dir=/data", "-master.volumeSizeLimitMB=128")
 
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
