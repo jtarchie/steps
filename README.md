@@ -172,3 +172,5 @@ Exit codes: `0` success, `1` a step failed, `2` the pipeline could not be run (c
 go build -v     # Go 1.27+
 task            # the whole validation sequence: fmt, lint, test (-race), build, vuln
 ```
+
+Tests against real AWS, GCP and DigitalOcean machines are opt-in. [hack/README.md](hack/README.md) has the commands to set up credentials and bring the fixtures up and down.
