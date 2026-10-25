@@ -121,6 +121,13 @@ func benchEnvironment(t *testing.T) benchEnv {
 
 	bucket := cmp.Or(os.Getenv("STEPS_BENCH_BUCKET"), os.Getenv("STEPS_TEST_AWS_BUCKET"))
 	if bucket == "" {
+		// The stand-in listens on this machine's docker bridge, which a cloud worker cannot reach.
+		for tag, worker := range env.workers {
+			if !strings.HasPrefix(worker, "local:") {
+				t.Fatalf("%s is %s, which cannot reach a bucket on this machine: name one with STEPS_BENCH_BUCKET or STEPS_TEST_AWS_BUCKET", tag, worker)
+			}
+		}
+
 		env.s3 = startS3Mock(t)
 
 		return env
