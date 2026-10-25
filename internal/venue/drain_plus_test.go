@@ -202,3 +202,82 @@ func TestADrainLoopLetsGoOfTheSessionWhenItsClientHangsUp(t *testing.T) {
 		t.Errorf("the session's output stayed open %s after its client hung up; want it let go well inside the %ds poll", held.Round(time.Second), drainPoll)
 	}
 }
+
+// gcpMaintenanceRunner is a gcp:// session whose metadata server reports preempted FALSE and the maintenance event set, once the session is open.
+func gcpMaintenanceRunner(t *testing.T) (shell.Runner, *atomic.Value) {
+	t.Helper()
+	shrinkGCPWaits(t)
+
+	var event atomic.Value
+
+	event.Store("NONE")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Metadata-Flavor") != "Google" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		switch r.URL.Path {
+		case "/computeMetadata/v1/instance/preempted":
+			_, _ = w.Write([]byte("FALSE"))
+		case "/computeMetadata/v1/instance/maintenance-event":
+			_, _ = w.Write([]byte(event.Load().(string)))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	previousBase, previousPoll := gcpMetadataBase, drainPoll
+	gcpMetadataBase, drainPoll = server.URL, 0
+
+	t.Cleanup(func() { gcpMetadataBase, drainPoll = previousBase, previousPoll })
+
+	sshd := newGCPSSHD(t)
+	seamGCP(t, &fakeGCE{}, sshd)
+
+	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
+
+	err := shell.Run(context.Background(), runner, "true")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return runner, &event
+}
+
+// instances.simulateMaintenanceEvent on a spot VM never touches preempted (measured, steps#225's bench): it announces the termination through maintenance-event, and missing it left a reclaimed worker's step erroring instead of being re-placed.
+func TestGCPWorkerHearsAMaintenanceTermination(t *testing.T) {
+	runner, event := gcpMaintenanceRunner(t)
+
+	event.Store("TERMINATE_ON_HOST_MAINTENANCE")
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, reclaimed := ReclaimedBy(runner); reclaimed {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("the maintenance termination never reached the runner")
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// A live migration pauses the machine and it survives; read as a reclamation, routine host maintenance would throw away a healthy worker.
+func TestGCPWorkerKeepsAMachineThatMigrates(t *testing.T) {
+	runner, event := gcpMaintenanceRunner(t)
+
+	event.Store("MIGRATE_ON_HOST_MAINTENANCE")
+
+	// With drainPoll zero the loop asks many times a second, so two seconds is many chances to misread it.
+	time.Sleep(2 * time.Second)
+
+	if reason, reclaimed := ReclaimedBy(runner); reclaimed {
+		t.Fatalf("a live migration was read as a reclamation: %s", reason)
+	}
+}

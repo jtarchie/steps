@@ -33,10 +33,13 @@ func awsDrainScript() string {
 		`sleep ` + strconv.Itoa(drainPoll) + ` >/dev/null; done`)
 }
 
-// gcpDrainScript polls the preempted flag rather than long-polling it: wait_for_change without the last etag misses a flip between two requests until the next timeout, longer than GCE's default thirty-second notice.
+// gcpDrainScript polls rather than long-polling: wait_for_change without the last etag misses a flip between two requests until the next timeout, longer than GCE's default thirty-second notice. Two keys, as the shim read them: preempted for a market preemption, and maintenance-event for a termination, which is how simulateMaintenanceEvent announces itself on a spot VM without ever touching preempted. A MIGRATE event is a machine the worker keeps, so it is no notice.
 func gcpDrainScript() string {
+	metadata := `curl -sf -m 2 -H 'Metadata-Flavor: Google' `
+
 	return untilHangup(`while :; do ` +
-		`p=$(curl -sf -m 2 -H 'Metadata-Flavor: Google' ` + shellQuote(gcpMetadataBase+"/computeMetadata/v1/instance/preempted") + `) && [ "$p" = TRUE ] && { echo preempted; exit 0; }; ` +
+		`p=$(` + metadata + shellQuote(gcpMetadataBase+"/computeMetadata/v1/instance/preempted") + `) && [ "$p" = TRUE ] && { echo preempted; exit 0; }; ` +
+		`m=$(` + metadata + shellQuote(gcpMetadataBase+"/computeMetadata/v1/instance/maintenance-event") + `) && [ "$m" = TERMINATE_ON_HOST_MAINTENANCE ] && { echo "maintenance $m"; exit 0; }; ` +
 		`sleep ` + strconv.Itoa(drainPoll) + ` >/dev/null; done`)
 }
 
