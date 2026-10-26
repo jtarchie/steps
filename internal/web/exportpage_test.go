@@ -248,3 +248,54 @@ func TestTheExportPageShowsOnlyAgentActivity(t *testing.T) {
 		t.Errorf("the export page should list the agent's call and not a job's trigger:\n%s", page)
 	}
 }
+
+// TestAnAppThatCannotReachTheAddressIsNotOffered: Claude and ChatGPT connect from their vendors' servers, so on an address only this machine or this network answers, their steps would fail inside the app with nothing pointing back here.
+func TestAnAppThatCannotReachTheAddressIsNotOffered(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		external        string
+		claude, chatgpt bool
+	}{
+		{"http://127.0.0.1:8088", false, false},
+		{"http://localhost:8088", false, false},
+		{"https://10.0.0.5", false, false},
+		{"http://steps.example", true, false},
+		{"https://steps.example", true, true},
+	} {
+		t.Run(tc.external, func(t *testing.T) {
+			t.Parallel()
+
+			server, _ := exportServer(t, WithExternalURL(tc.external))
+			page := html.UnescapeString(serve(t, server, http.MethodGet, "/p/ops/mcp/exports/support", "", "alex").Body.String())
+
+			assertTabOffered(t, page, tc.external, "claude", tc.claude)
+			assertTabOffered(t, page, tc.external, "chatgpt", tc.chatgpt)
+
+			if blocked := !tc.claude || !tc.chatgpt; blocked != strings.Contains(page, "--external-url") {
+				t.Errorf("on %s the page should name --external-url exactly when a tab is disabled", tc.external)
+			}
+
+			if tc.claude && !strings.Contains(page, "must be reachable from the internet") {
+				t.Errorf("on %s Claude is offered without saying the address must be public", tc.external)
+			}
+		})
+	}
+}
+
+func assertTabOffered(t *testing.T, page, external, slug string, offered bool) {
+	t.Helper()
+
+	radio := regexp.MustCompile(`<input class="visually-hidden connect-radio" type="radio" name="connect-app" id="app-` + slug + `"([^>]*)>`).FindStringSubmatch(page)
+	if radio == nil {
+		t.Fatalf("no %s tab", slug)
+	}
+
+	if disabled := strings.Contains(radio[1], "disabled"); disabled == offered {
+		t.Errorf("%s on %s: disabled=%v, want %v", slug, external, disabled, !offered)
+	}
+
+	if !offered && (!strings.Contains(radio[1], `aria-describedby="blocked-`+slug+`"`) || !regexp.MustCompile(`<p id="blocked-`+slug+`">[^<]+</p>`).MatchString(page)) {
+		t.Errorf("%s on %s is disabled without saying why", slug, external)
+	}
+}

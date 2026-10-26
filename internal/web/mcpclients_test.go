@@ -46,3 +46,13 @@ func showsAddress(t *testing.T, client connectClient, address string) bool {
 
 	return mentions
 }
+
+// TestAnAddressThatDoesNotParseIsNotOffered: --external-url is validated before the daemon starts, so this is a fallback; it fails closed, since an address nobody can read is not one a vendor can reach.
+func TestAnAddressThatDoesNotParseIsNotOffered(t *testing.T) {
+	t.Parallel()
+
+	clients := []connectClient{{Name: "Claude", Vendor: "Anthropic"}}
+	if fix := judgeReach(clients, "http://[::1"); fix == "" || clients[0].Blocked == "" {
+		t.Errorf("an unparseable address offered Claude: fix=%q blocked=%q", fix, clients[0].Blocked)
+	}
+}

@@ -311,6 +311,8 @@ A pipeline's **mcp** tab lists its exports under its servers — what it shares 
 
 An export's address is `<external-url>/mcp/x/<pipeline>/<export>`. Give it to an agent that speaks MCP over HTTP with OAuth — Claude, Claude Code, Cursor — and it does the rest: it finds the daemon's sign-in through the address's [protected-resource metadata](https://www.rfc-editor.org/rfc/rfc9728), registers itself, and sends you to the daemon to sign in and agree.
 
+**Claude and ChatGPT connect from their vendors' servers, not your machine**, so the address must be reachable from the internet — and, for ChatGPT, `https`. On a daemon whose `--external-url` is this machine or a private network address, the export's page shows their tabs disabled and says why; Claude Code, Cursor and the other desktop tools only need the address to answer from where you sit.
+
 The daemon asks every time, on a page that says plainly what is being agreed to:
 
 - **the client's name, marked unverified** — it is whatever the agent called itself when it registered, and anybody can register;

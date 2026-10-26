@@ -26,10 +26,11 @@
   {{range $g, $group := .Connect}}
   <span class="connect-group">{{$group.Name}} <span class="dim">· {{$group.Hint}}</span></span>
   {{range $c, $client := $group.Clients}}
-  <input class="visually-hidden connect-radio" type="radio" name="connect-app" id="app-{{$client.Slug}}"{{if and (eq $g 0) (eq $c 0)}} checked{{end}}>
+  <input class="visually-hidden connect-radio" type="radio" name="connect-app" id="app-{{$client.Slug}}"{{if and (eq $g 0) (eq $c 0)}} checked{{end}}{{if $client.Blocked}} disabled aria-describedby="blocked-{{$client.Slug}}"{{end}}>
   <label class="connect-tab" for="app-{{$client.Slug}}">{{$client.Name}}</label>
   <div class="connect-panel" id="panel-{{$client.Slug}}">
     {{with $client.Caveat}}<p class="connect-caveat">{{.}}</p>{{end}}
+    {{with $client.Reach}}<p class="connect-caveat">{{.}}</p>{{end}}
     <ol class="connect-steps">
       {{range $client.Steps}}
       <li>
@@ -43,6 +44,7 @@
     </ol>
   </div>
   {{end}}
+  {{with $group.Fix}}<div class="connect-blocked">{{range $group.Clients}}{{if .Blocked}}<p id="blocked-{{.Slug}}">{{.Blocked}}</p>{{end}}{{end}}<p>{{.}}</p></div>{{end}}
   {{end}}
 </fieldset>
 <p class="faint mcp-note">The app sends you here to sign in and agree; nothing is shared until you do.</p>

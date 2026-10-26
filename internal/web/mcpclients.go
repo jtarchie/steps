@@ -2,13 +2,15 @@ package web
 
 // How each app takes an export's address, as data the export page renders without knowing which app it is looking at.
 //
-// The step that loses people is never the address — it is which menu the address goes in — so the menu paths are the content, in each app's own words. They are perishable: every app reshuffles its settings eventually, and they are all here so re-verifying is reading one list. Ported from knowhere's setup page, whose paths were verified 2026-08-11 against each vendor's own documentation.
+// The step that loses people is never the address — it is which menu the address goes in — so the menu paths are the content, in each app's own words. They are perishable: every app reshuffles its settings eventually, and they are all here so re-verifying is reading one list. Ported from knowhere's setup page, whose paths were verified 2026-08-11 against each vendor's own documentation; Claude, ChatGPT and Zed re-verified 2026-10-26.
 
 import (
 	"encoding/base64"
 	"encoding/json"
 	"html/template"
+	"net"
 	"net/url"
+	"strings"
 )
 
 // connectStep is one numbered instruction: a menu path, a sentence, a button, a block to copy, or a combination.
@@ -30,6 +32,14 @@ type connectClient struct {
 	// Caveat is a plan or permission requirement, shown above step one, so a reader meets the wall before following four steps into it.
 	Caveat string
 	Steps  []connectStep
+
+	// Vendor is whose servers make the connection, for an app that does not connect from the reader's machine; empty for one that does.
+	Vendor string
+	// NeedsHTTPS is a vendor that refuses a plain http address.
+	NeedsHTTPS bool
+	// Reach is what the address must be for this app, shown above its steps; Blocked is why it cannot be, which draws the tab disabled.
+	Reach   string
+	Blocked string
 }
 
 // connectGroup sorts the tabs by where the app connects from, which is what decides whether the address can work for it at all.
@@ -37,6 +47,8 @@ type connectGroup struct {
 	Name    string
 	Hint    string
 	Clients []connectClient
+	// Fix is how to make a blocked tab work, said once however many are blocked.
+	Fix string
 }
 
 // connectTryIt is the last step of every tab. Success has to be something the reader sees happen — an answer coming back — and listing the tools is a question every export can answer.
@@ -170,15 +182,15 @@ func connectGroups(name, address string) []connectGroup {
 			{
 				Slug: "zed",
 				Name: "Zed",
-				// Zed speaks stdio only, so the address has to be bridged; saying so is cheaper than letting it fail silently.
-				Caveat: "Zed only talks to servers running on your own machine, so this one needs a small bridge. It requires Node.js.",
+				// https://zed.dev/docs/ai/mcp
 				Steps: []connectStep{
 					{
 						Title:   "Add this to Zed's settings.json",
 						Menu:    []string{"Zed", "Settings", "Open Settings"},
-						Snippet: configBlock("context_servers", name, map[string]any{"source": "custom", "command": "npx", "args": []string{"-y", "mcp-remote", address}}),
+						Body:    "Merge it into the context_servers block if you already have one. Leave out any headers: without them, Zed signs in with OAuth.",
+						Snippet: configBlock("context_servers", name, map[string]any{"url": address}),
 					},
-					{Title: "Check that it started", Menu: []string{"Settings", "AI", "MCP Servers"}, Body: "The dot next to " + name + " turns green. " + signIn},
+					{Title: "Check that it started, then sign in", Menu: []string{"Settings", "AI", "MCP Servers"}, Body: "Zed asks you to authenticate the first time it connects. " + signIn},
 				},
 			},
 			{
@@ -203,16 +215,17 @@ func connectGroups(name, address string) []connectGroup {
 				Slug: "claude",
 				Name: "Claude",
 				// https://support.claude.com/en/articles/11175166
-				Caveat: "Custom connectors need a paid Claude plan (Pro, Max, Team or Enterprise).",
+				Caveat: "A Free plan allows one custom connector. On Team and Enterprise, an owner adds it under Organization settings → Connectors.",
+				Vendor: "Anthropic",
 				Steps: []connectStep{
 					{
 						Title:     "Open Claude's connector settings",
-						Menu:      []string{"Settings", "Connectors"},
+						Menu:      []string{"Customize", "Connectors"},
 						Body:      "In the Claude app, or on claude.ai in a browser.",
 						Link:      "https://claude.ai/settings/connectors?modal=add-custom-connector",
 						LinkLabel: "Open Claude connector settings",
 					},
-					{Title: "Choose to add a custom connector", Menu: []string{"Add", "Add custom connector"}, Body: "Name it " + name + "."},
+					{Title: "Choose to add a custom connector", Menu: []string{"+ Add", "Add custom connector"}, Body: "Name it " + name + "."},
 					{Title: "Paste this address into the URL box", Body: "Then press Add. Leave the advanced settings alone — there is no key to enter.", Snippet: address},
 					{Title: "Agree when the window opens", Body: signIn},
 				},
@@ -220,13 +233,20 @@ func connectGroups(name, address string) []connectGroup {
 			{
 				Slug: "chatgpt",
 				Name: "ChatGPT",
-				// https://help.openai.com/en/articles/12584461
-				Caveat: "Needs ChatGPT Plus or Pro. On a work or school account, an admin may have to allow custom connectors first.",
+				// https://developers.openai.com/plugins/deploy/connect-chatgpt
+				Caveat:     "Account and workspace policies decide who may add a custom MCP server; on a work account an admin may have to allow it first.",
+				Vendor:     "OpenAI",
+				NeedsHTTPS: true,
 				Steps: []connectStep{
-					{Title: "Turn on developer mode", Menu: []string{"Settings", "Apps", "Advanced settings", "Developer mode"}, Body: "This is what lets ChatGPT talk to a server that is not in its own directory."},
-					{Title: "Start a new connector", Menu: []string{"Settings", "Connectors", "Create"}, Body: "Name it " + name + ". For authentication, choose OAuth."},
-					{Title: "Paste this address into the MCP server URL box", Snippet: address},
-					{Title: "Agree when it asks", Body: "ChatGPT registers itself on its own. " + signIn},
+					{
+						Title:     "Open ChatGPT's plugins",
+						Menu:      []string{"+", "Add custom MCP server"},
+						Body:      "Name it " + name + ".",
+						Link:      "https://chatgpt.com/plugins",
+						LinkLabel: "Open ChatGPT plugins",
+					},
+					{Title: "Paste this address under Connection", Body: "Choose the endpoint URL, not Tunnel. For authentication, choose OAuth.", Snippet: address},
+					{Title: "Create it, then agree when it asks", Body: "ChatGPT registers itself on its own. " + signIn},
 				},
 			},
 		},
@@ -237,7 +257,53 @@ func connectGroups(name, address string) []connectGroup {
 		for c := range groups[g].Clients {
 			groups[g].Clients[c].Steps = append(groups[g].Clients[c].Steps, tryIt)
 		}
+
+		groups[g].Fix = judgeReach(groups[g].Clients, address)
 	}
 
 	return groups
+}
+
+// judgeReach says, for each app whose vendor makes the connection, whether that vendor can reach address, and returns how to fix it when one cannot. A private hostname looks like a public one from here, so a public-looking address gets a warning rather than a pass.
+func judgeReach(clients []connectClient, address string) string {
+	parsed, err := url.Parse(address)
+	if err != nil {
+		parsed = &url.URL{}
+	}
+
+	host := parsed.Hostname()
+	private := privateHost(host)
+	fix := ""
+
+	for i := range clients {
+		client := &clients[i]
+
+		switch {
+		case client.Vendor == "":
+			continue
+		case private:
+			client.Blocked = client.Name + " connects from " + client.Vendor + "'s servers, which cannot reach " + host + "."
+		case client.NeedsHTTPS && parsed.Scheme != "https":
+			client.Blocked = client.Name + " only connects to an https address."
+		default:
+			client.Reach = client.Vendor + "'s servers make this connection, not your machine, so " + host + " must be reachable from the internet."
+
+			continue
+		}
+
+		fix = "To offer these, start steps web with --external-url set to an https address reachable from the internet."
+	}
+
+	return fix
+}
+
+// privateHost is a host no vendor's servers could reach: this machine, or an address reserved for a private network.
+func privateHost(host string) bool {
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
 }
