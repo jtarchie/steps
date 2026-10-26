@@ -23,7 +23,6 @@
 <h2 class="eyebrow" id="connect-head">connect your app</h2>
 <fieldset class="connect-tabs">
   <legend class="visually-hidden">Which app are you using?</legend>
-  {{$tryIt := .TryIt}}
   {{range $g, $group := .Connect}}
   <span class="connect-group">{{$group.Name}} <span class="dim">· {{$group.Hint}}</span></span>
   {{range $c, $client := $group.Clients}}
@@ -41,11 +40,6 @@
         {{with .Snippet}}{{template "connectsnippet" .}}{{end}}
       </li>
       {{end}}
-      <li>
-        <h3>Ask it something</h3>
-        <p>If an answer comes back, it is working.</p>
-        {{template "connectsnippet" $tryIt}}
-      </li>
     </ol>
   </div>
   {{end}}

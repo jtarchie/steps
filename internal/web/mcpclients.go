@@ -17,7 +17,7 @@ type connectStep struct {
 	// Menu is the click path, one label per element, kept apart so the separator stays the template's and the labels stay verbatim.
 	Menu []string
 	Body string
-	// Link is a template.URL because the cursor: and vscode: schemes would otherwise be filtered to #ZgotmplZ. Nothing else in this file may be one.
+	// Link is a template.URL because the cursor: and vscode: schemes would otherwise be filtered to #ZgotmplZ, so every value given it is trusted: a constant, or one of the deep-link builders below.
 	Link      template.URL
 	LinkLabel string
 	Snippet   string
@@ -40,8 +40,8 @@ type connectGroup struct {
 }
 
 // connectTryIt is the last step of every tab. Success has to be something the reader sees happen — an answer coming back — and listing the tools is a question every export can answer.
-func connectTryIt(name string) string {
-	return "Using " + name + ", list the tools you have."
+func connectTryIt(name string) connectStep {
+	return connectStep{Title: "Ask it something", Body: "If an answer comes back, it is working.", Snippet: "Using " + name + ", list the tools you have."}
 }
 
 // cursorDeepLink is Cursor's one-click install: the config object it would otherwise be hand-fed, base64'd whole. https://cursor.com/docs/mcp
@@ -70,7 +70,7 @@ func configBlock(container, name string, entry map[string]any) string {
 func connectGroups(name, address string) []connectGroup {
 	signIn := "Sign in to steps if it asks, then press Allow on the page that names " + name + "."
 
-	return []connectGroup{{
+	groups := []connectGroup{{
 		Name: "From your machine",
 		Hint: "terminal or editor",
 		Clients: []connectClient{
@@ -187,7 +187,7 @@ func connectGroups(name, address string) []connectGroup {
 				Steps: []connectStep{
 					{
 						Title:   "Add this entry to your app's MCP config",
-						Body:    "Most apps read a block like this one — Claude Desktop's claude_desktop_config.json, a project's .mcp.json. Restart the app afterwards.",
+						Body:    "Most apps read a block like this one — a project's .mcp.json, for one. Restart the app afterwards.",
 						Snippet: configBlock("mcpServers", name, map[string]any{"type": "http", "url": address}),
 					},
 					{Title: "Or, if it only asks for an address", Snippet: address},
@@ -231,4 +231,13 @@ func connectGroups(name, address string) []connectGroup {
 			},
 		},
 	}}
+
+	tryIt := connectTryIt(name)
+	for g := range groups {
+		for c := range groups[g].Clients {
+			groups[g].Clients[c].Steps = append(groups[g].Clients[c].Steps, tryIt)
+		}
+	}
+
+	return groups
 }

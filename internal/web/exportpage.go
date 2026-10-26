@@ -130,7 +130,6 @@ func (s *Server) handleExportPage(c *echo.Context) error {
 		"Export":  row,
 		"Address": address,
 		"Connect": connectGroups(export.Name, address),
-		"TryIt":   connectTryIt(export.Name),
 		"Serving": s.exporter != nil,
 		"Recent":  rows,
 		"LogURL":  "/activity?" + url.Values{"pipeline": {pipeline.Slug}, "target": {export.Name}}.Encode(),
