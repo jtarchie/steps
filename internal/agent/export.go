@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -58,7 +59,7 @@ func NewExportServer(ctx context.Context, cfg *config.Config, export config.MCPE
 		return nil, fmt.Errorf("export %q: %w", export.Name, err)
 	}
 
-	calls := callSpace{export: export, kinds: callKinds(export.Tools)}
+	calls := callSpace{export: export, kinds: callKinds(export.Tools), env: callEnv(export.Tools)}
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: cfg.Name + "/" + export.Name, Version: "v1"}, nil)
 	served := &ExportServer{closers: closers}
 
@@ -145,10 +146,37 @@ func callKinds(specs []config.ToolSpec) map[string]callKind {
 	return kinds
 }
 
+func callEnv(specs []config.ToolSpec) map[string][]string {
+	env := map[string][]string{}
+
+	for _, spec := range specs {
+		if len(spec.Env) > 0 {
+			env[spec.Name] = spec.Env
+		}
+	}
+
+	return env
+}
+
 // callSpace makes what one call works in: nothing for an upstream call, a directory removed afterwards for the rest, and for a command the runner that places it. Nothing lives past the call, so two callers never share a file.
 type callSpace struct {
 	export config.MCPExport
 	kinds  map[string]callKind
+	// env is each command's env: — what its runner passes through, and what is masked in what it returns.
+	env map[string][]string
+}
+
+// secrets are the values of tool's env: as they are now, the ones its result must not carry.
+func (c callSpace) secrets(tool string) []string {
+	var values []string
+
+	for _, name := range c.env[tool] {
+		if value := os.Getenv(name); value != "" {
+			values = append(values, value)
+		}
+	}
+
+	return values
 }
 
 func (c callSpace) open(tool string) (toolEnv, func(), error) {
@@ -168,7 +196,7 @@ func (c callSpace) open(tool string) (toolEnv, func(), error) {
 		return toolEnv{dir: dir}, remove, nil
 	}
 
-	runner, err := shell.NewRunner(containerSpec(c.export.Image, dir, nil, c.export.User, c.export.Network, c.export.Privileged, c.export.Limits, false))
+	runner, err := shell.NewRunner(containerSpec(c.export.Image, dir, c.env[tool], c.export.User, c.export.Network, c.export.Privileged, c.export.Limits, false))
 	if err != nil {
 		remove()
 
@@ -219,7 +247,7 @@ func exportHandler(name string, impl toolImpl, calls callSpace, hooks ExportHook
 
 		defer done()
 
-		result := impl(ctx, args, env)
+		result, _ := maskValues(impl(ctx, args, env), calls.secrets(name)).(map[string]any)
 		ok := requiredCallSucceeded(result)
 
 		if hooks.After != nil {
@@ -233,6 +261,41 @@ func exportHandler(name string, impl toolImpl, calls callSpace, hooks ExportHook
 		}
 
 		return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: string(payload)}}, IsError: !ok}, nil
+	}
+}
+
+// secretMask stands in for an env: value in what a caller receives.
+const secretMask = "***"
+
+// maskValues replaces every occurrence of a secret in v's strings, before v is encoded: in the encoded JSON a value holding a quote or a < is escaped, and an exact match there would miss it. Exact text only: a value the command transformed (base64 in a Basic auth header, URL-encoded) passes.
+func maskValues(v any, secrets []string) any {
+	if len(secrets) == 0 {
+		return v
+	}
+
+	switch typed := v.(type) {
+	case string:
+		for _, secret := range secrets {
+			typed = strings.ReplaceAll(typed, secret, secretMask)
+		}
+
+		return typed
+	case map[string]any:
+		masked := make(map[string]any, len(typed))
+		for key, value := range typed {
+			masked[key] = maskValues(value, secrets)
+		}
+
+		return masked
+	case []any:
+		masked := make([]any, len(typed))
+		for i, value := range typed {
+			masked[i] = maskValues(value, secrets)
+		}
+
+		return masked
+	default:
+		return v
 	}
 }
 

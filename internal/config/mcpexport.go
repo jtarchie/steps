@@ -200,7 +200,9 @@ func validateExportedNarrowing(spec ToolSpec) error {
 		return errors.New("max_calls: counts within one conversation, which an export does not have; use the export's rate: instead")
 	case spec.Required:
 		return errors.New("required: aborts a step, which an export does not have")
+	case spec.Env != nil && !isCustomTool(spec):
+		return errors.New("env: is the environment of a custom run: tool's command; an MCP grant authenticates through its mcp_servers: entry and a sub-agent through its agent")
 	}
 
-	return nil
+	return checkEnvNames("command", spec.Env)
 }

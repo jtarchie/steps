@@ -318,8 +318,10 @@ func keyProbes() []keyProbe {
 		return out
 	}
 
+	toolEnv := "source: config.ToolSpec.Env — refused at load on every grant and selection (validateToolEnvShape); only an mcp_exports: command carries one, and an export is never hashed"
+
 	unusedByGrant := func(fields ...string) map[string]string {
-		out := map[string]string{"Timeout": operational}
+		out := map[string]string{"Timeout": operational, "Env": toolEnv}
 
 		for _, field := range fields {
 			out[field] = otherForm
@@ -361,7 +363,7 @@ func keyProbes() []keyProbe {
 		grant("mcp", config.ToolSpec{MCP: "github"}, unusedByGrant("Allow", "AnsweredBy", "Builtin", "Default", "Name", "OptionsRequired", "Run")).leaving("Agent"),
 		// ask_user is granted so that max_questions:, which is keyed only for an agent that can ask, is probed rather than skipped.
 		probeOf("Agent", config.Agent{Name: "reviewer", Source: source, Tools: []config.ToolSpec{{Builtin: "ask_user"}}}, with(agentSilent, map[string]string{
-			"Tools[0].Timeout": operational, "Tools[0].MCPTool": otherForm, "Tools[0].MCPTools": otherForm,
+			"Tools[0].Timeout": operational, "Tools[0].Env": toolEnv, "Tools[0].MCPTool": otherForm, "Tools[0].MCPTools": otherForm,
 		}), func(a config.Agent) (any, error) { return agentContent(a) }).leaving("Tools[0].Agent", "Tools[0].MCP").choosing(agentEnums),
 		probeOf("Agent/cli", config.Agent{Name: "reviewer", Source: config.AgentSource{Model: "@claude/sonnet"}}, func() map[string]string {
 			// Everything a hosted agent leaves out, MINUS settings: — the one field that exists only here, and must move the key.

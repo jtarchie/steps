@@ -241,6 +241,43 @@ mcp_exports:
 	}
 }
 
+// A command sees only the variables it names, and their values never reach the caller: not on stdout, not on stderr, not escaped into the JSON result.
+func TestAnExportedCommandSeesOnlyTheVariablesItNamesAndGetsThemBackMasked(t *testing.T) {
+	const value = `tok<5ecret>&"q`
+
+	t.Setenv("EXPORT_TOKEN", value)
+	t.Setenv("EXPORT_OTHER", "other-value")
+
+	served := serveOps(t, `
+mcp_exports:
+- name: shell
+  access: "true"
+  tools:
+  - name: authed
+    description: Uses the token
+    env: [EXPORT_TOKEN]
+    run: 'echo token=$EXPORT_TOKEN; echo other=${EXPORT_OTHER:-unset}; echo bearer $EXPORT_TOKEN >&2; exit 3'
+  - name: plain
+    description: Names nothing
+    run: 'echo token=${EXPORT_TOKEN:-unset}'
+`)
+
+	session := served.connect(t, "shell")
+
+	authed := textOf(callTool(t, session, "authed", nil))
+	if strings.Contains(authed, "5ecret") || strings.Count(authed, "***") != 2 {
+		t.Errorf("the token reached the caller, or was not masked where it was printed: %s", authed)
+	}
+
+	if !strings.Contains(authed, "other=unset") {
+		t.Errorf("a variable the tool did not name reached its command: %s", authed)
+	}
+
+	if plain := textOf(callTool(t, session, "plain", nil)); !strings.Contains(plain, "token=unset") {
+		t.Errorf("a tool that names nothing saw another tool's variable: %s", plain)
+	}
+}
+
 // A caller's value that would reach the shell as syntax is refused where the pipeline is set, where somebody reads the reason — not discovered by a caller.
 func TestAnExportedCommandThatLeavesAValueUnquotedIsRefusedAtSet(t *testing.T) {
 	dir := t.TempDir()

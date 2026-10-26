@@ -105,6 +105,11 @@ func (c *Config) checkToolCallGuardSpecs(context string, pos toolPosition, specs
 			return err
 		}
 
+		err = validateToolEnvShape(context, spec)
+		if err != nil {
+			return err
+		}
+
 		err = validateWebFetchAllowShape(context, pos, spec)
 		if err != nil {
 			return err
@@ -296,4 +301,13 @@ func validateToolTimeoutShape(context string, pos toolPosition, spec ToolSpec) e
 	}
 
 	return nil
+}
+
+// validateToolEnvShape refuses env: on a tool an agent grants or a step selects: the agent's own env: is what that tool's command sees, and a second list here would read as a narrowing it is not.
+func validateToolEnvShape(context string, spec ToolSpec) error {
+	if spec.Env == nil {
+		return nil
+	}
+
+	return fmt.Errorf("%s: tool %q: env: on a tool is for an mcp_exports: command; name the variables in the agent's own env: list", context, ToolSpecName(spec))
 }

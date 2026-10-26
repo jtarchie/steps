@@ -42,6 +42,10 @@ func TestAnExportRefusesWhatItCannotServe(t *testing.T) {
 		"- {name: a, access: 'true', tools: []}":                                                                   "nothing to connect to",
 		"- {name: a, access: 'true', tools: [{mcp: github}]}\n- {name: a, access: 'true', tools: [{mcp: github}]}": "declared twice",
 		"- {name: 'a b', access: 'true', tools: [{mcp: github}]}":                                                  "name:",
+		"- {name: a, access: 'true', tools: [{mcp: github, tool: x, env: [K]}]}":                                   "custom run: tool's command",
+		"- {name: a, access: 'true', tools: [{agent: oncall, env: [K]}]}":                                          "custom run: tool's command",
+		"- {name: a, access: 'true', tools: [{name: t, run: 'echo hi', description: d, env: ['K=v']}]}":            "NAME, not a KEY=VALUE",
+		"- {name: a, access: 'true', tools: [{name: t, run: 'echo hi', description: d, env: [STEPS_RUN_ID]}]}":     "set by steps",
 	} {
 		_, err := Parse([]byte(exportBase+export), "test", nil)
 		if err == nil || !strings.Contains(err.Error(), want) {
@@ -56,6 +60,26 @@ func TestAnExportOfCommandsLoadsWithItsContainer(t *testing.T) {
 	cfg, err := Parse([]byte(exportBase+"- {name: shell, access: 'true', image: alpine:3, user: nobody, network: none, container_limits: {memory: 1000000}, tools: [{name: say, description: d, run: 'echo {{ .args.x | shellquote }}', args: {y: z}, max_output_bytes: 100, timeout: 5s}]}"), "test", nil)
 	if err != nil || cfg.MCPExports[0].Image != "alpine:3" || cfg.MCPExports[0].Limits == nil {
 		t.Fatalf("Parse = %+v, %v; want the export loaded with its container", cfg, err)
+	}
+}
+
+// env: on a tool exists for an export's command, whose environment nothing else sets; an agent's tools already share its env:.
+func TestEnvOnAToolOutsideAnExportIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for name, pipeline := range map[string]string{
+		"agent grant": "agents:\n- name: a\n  source: { model: openrouter/x, api_key_env: K }\n  tools: [{name: t, description: d, run: 'echo hi', env: [K]}]\njobs:\n- name: j\n  plan:\n  - agent: a\n    messages: [hi]\n",
+		"inline step": "agents:\n- name: a\n  source: { model: openrouter/x, api_key_env: K }\njobs:\n- name: j\n  plan:\n  - agent: a\n    messages: [hi]\n    tools: [{name: t, description: d, run: 'echo hi', env: [K]}]\n",
+	} {
+		_, err := Parse([]byte(pipeline), "test", nil)
+		if err == nil || !strings.Contains(err.Error(), "agent's own env:") {
+			t.Errorf("%s: Parse = %v, want env: on a tool refused, pointing at the agent's env:", name, err)
+		}
+	}
+
+	cfg, err := Parse([]byte(exportBase+"- {name: shell, access: 'true', tools: [{name: t, description: d, run: 'echo hi', env: [LEVER_API_KEY]}]}"), "test", nil)
+	if err != nil || len(cfg.MCPExports[0].Tools[0].Env) != 1 {
+		t.Fatalf("Parse = %v; want an exported command's env: loaded", err)
 	}
 }
 
