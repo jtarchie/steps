@@ -1,8 +1,10 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 
 	"github.com/jtarchie/steps/internal/events"
@@ -107,18 +109,25 @@ func (s *Server) handleRun(c *echo.Context) error {
 		}
 	}
 
+	approvals, questions, err := parkedOn(ctx, pipeline.Store, view.Run.ID)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
 	nav := s.nav(c)
 	nav.Mark = runMark(view.Run)
 	nav.MarkURL = "/p/" + pipeline.Slug + "/runs/" + view.Run.ID + "/mark"
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "run", map[string]any{
-		"Nav":   nav,
-		"Run":   view,
-		"Strip": strip,
-		"Job":   job,
-		"Bar":   runBar(pipeline, view.Run, jobErr == nil),
-		"Title": runTitle(view.Run),
+		"Nav":       nav,
+		"Run":       view,
+		"Strip":     strip,
+		"Job":       job,
+		"Approvals": approvals,
+		"Questions": questions,
+		"Bar":       runBar(pipeline, view.Run, jobErr == nil),
+		"Title":     runTitle(view.Run),
 		"Crumbs": []crumb{
 			{Label: "jobs", URL: "/p/" + pipeline.Slug},
 			{Label: view.Run.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + view.Run.JobName + "/detail"},
@@ -265,4 +274,22 @@ func (s *Server) handleNode(c *echo.Context) error {
 		"Runs":       runs,
 		"Transcript": transcriptEvents(transcript, hasTranscript),
 	})
+}
+
+// parkedOn is what this run is parked on a person for. The pending lists are a pipeline's whole backlog, uncapped and short, so filtering them here costs less than a run-scoped query in both drivers.
+func parkedOn(ctx context.Context, st store.Store, runID string) ([]store.Approval, []store.Question, error) {
+	approvals, err := st.Approvals(ctx, true, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("pending approvals: %w", err)
+	}
+
+	questions, err := st.Questions(ctx, true, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("pending questions: %w", err)
+	}
+
+	approvals = slices.DeleteFunc(approvals, func(a store.Approval) bool { return a.RunID != runID })
+	questions = slices.DeleteFunc(questions, func(q store.Question) bool { return q.RunID != runID })
+
+	return approvals, questions, nil
 }

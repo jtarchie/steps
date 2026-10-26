@@ -760,6 +760,9 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 .log .err { color: var(--red); }
 .log.notice.warn { color: var(--yellow); }
 .runnotes { margin: 8px 0; }
+/* What the run is parked on, ahead of the transcript: yellow is the hue the attention list already gives "waiting on a person". */
+.waiting:not(:empty) { margin: 12px 0; }
+.waiting .approval { border-left: 3px solid var(--yellow); margin-bottom: 8px; }
 
 .turn { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--line-soft); }
 .turn:last-of-type { border-bottom: 0; }

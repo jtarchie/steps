@@ -132,6 +132,55 @@
      foreground and anything automatic in the dim tone around it; a name
      nothing verified says so in words, never in color alone. The stored form
      rides in the title for a reader who needs the exact id. */}}
+{{/* An approval and a question are drawn here, once, because the tab lists them and the run parked on one offers it too; return sends the person back to whichever page they decided from. */}}
+{{define "approvalcard"}}{{$nav := .Nav}}{{with .Item}}<div class="approval {{if ne .Status "pending"}}decided{{end}}">
+  <div class="meta"><a href="/p/{{$nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · requested {{agoTag .RequestedAt}}{{if not .DecidedAt.IsZero}} · decided {{agoTag .DecidedAt}}{{with .DecidedBy}} by {{template "actor" .}}{{end}}{{end}}</div>
+  <div class="msg">{{.Message}}</div>
+  {{if eq .Status "pending"}}
+    {{if $nav.ViewOnly}}
+    <div class="meta">Deciding needs the operator role.</div>
+    {{else if $nav.ReadOnly}}
+    <div class="meta">This server is read-only. Decide with <code>steps approvals approve {{.ID}} -p {{$nav.Current}}</code>.</div>
+    {{else}}
+    <form class="decide" method="post" action="/p/{{$nav.Current}}/approvals/{{.ID}}">
+      <input type="hidden" name="return" value="{{$nav.URL}}">
+      <input type="text" name="reason" placeholder="reason (recorded)" aria-label="Decision reason">
+      <button class="btn primary" type="submit" name="decision" value="approve">Approve</button>
+      <button class="btn danger" type="submit" name="decision" value="reject">Reject</button>
+    </form>
+    {{end}}
+  {{else}}
+  <div class="meta"><span class="stamp st st-{{if eq .Status "approved"}}passed{{else}}failed{{end}}">{{.Status}}</span>{{if .Reason}} — "{{.Reason}}"{{end}}</div>
+  {{end}}
+</div>{{end}}{{end}}
+{{define "questioncard"}}{{$nav := .Nav}}{{with .Item}}<div class="approval {{if ne .Status "pending"}}decided{{end}}">
+  <div class="meta"><a href="/p/{{$nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · {{.AgentName}} · asked {{agoTag .AskedAt}}{{if not .AnsweredAt.IsZero}} · answered {{agoTag .AnsweredAt}}{{with .AnsweredBy}} by {{template "actor" .}}{{end}}{{end}}</div>
+  <div class="msg">{{.Question}}</div>
+  {{if eq .Status "pending"}}
+    {{if $nav.ViewOnly}}
+    <div class="meta">Answering needs the operator role.</div>
+    {{else if $nav.ReadOnly}}
+    <div class="meta">This server is read-only. Answer with <code>steps questions answer {{.ID}} &lt;answer&gt; -p {{$nav.Current}}</code>.</div>
+    {{else}}
+    <!-- The free-text field and its own submit come FIRST, and the ordering is
+         load-bearing: pressing Enter in a text input submits the form with its
+         DEFAULT button, which is the first submit button in tree order. With
+         the option buttons first, typing an answer and pressing Enter — the
+         universal form gesture — silently submitted the first OPTION instead
+         of what was typed. -->
+    <form class="decide" method="post" action="/p/{{$nav.Current}}/questions/{{.ID}}">
+      <input type="hidden" name="return" value="{{$nav.URL}}">
+      <input type="text" name="answer_text" placeholder="{{if .OptionsRequired}}one of the options below{{else}}answer in your own words{{end}}" aria-label="Answer">
+      <button class="btn primary" type="submit">Answer</button>
+      {{range .Options}}
+      <button class="btn" type="submit" name="answer" value="{{.}}">{{.}}</button>
+      {{end}}
+    </form>
+    {{end}}
+  {{else}}
+  <div class="meta"><span class="stamp st st-{{if eq .Status "answered"}}passed{{else}}failed{{end}}">{{.Status}}</span>{{if .Answer}} — "{{.Answer}}"{{end}}</div>
+  {{end}}
+</div>{{end}}{{end}}
 {{define "actor"}}{{if .}}{{$a := actorOf .}}<span class="actor{{if or $a.Automatic $a.Unverified}} quiet{{end}}" title="{{.}}">{{$a.Label}}</span>{{end}}{{end}}
 
 {{/* The way back up from a detail page. A crumb with a URL links; the last

@@ -279,6 +279,36 @@ func (s suite) TestAResumedStepKeepsItsApproval(t *testing.T) {
 	}
 }
 
+// TestAnApprovalNamesItsRun: a run page offers the approvals its run is parked on, found by the run each one names; one asked with no run names none.
+func (s suite) TestAnApprovalNamesItsRun(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	startRuns(t, st, "RUN1")
+
+	id, err := st.RequestApprovalFor(ctx, "RUN1", "step-a", "deploy", "ship it?")
+	if err != nil {
+		t.Fatalf("RequestApprovalFor: %v", err)
+	}
+
+	_, err = st.RequestApproval(ctx, "deploy", "no run?")
+	if err != nil {
+		t.Fatalf("RequestApproval: %v", err)
+	}
+
+	got, err := st.ApprovalStatus(ctx, id)
+	if err != nil || got.RunID != "RUN1" {
+		t.Errorf("approval %d reads back run %q (%v), want RUN1", id, got.RunID, err)
+	}
+
+	pending, err := st.Approvals(ctx, true, 0)
+	if err != nil || len(pending) != 2 || pending[0].RunID != "RUN1" || pending[1].RunID != "" {
+		t.Errorf("pending = %+v (%v), want RUN1's then one naming no run", pending, err)
+	}
+}
+
 // TestAGrantedApprovalStandsForTheResumedStep: somebody may approve while the daemon is down, and the step that resumes must find that approval rather than ask again. A refusal or an expiry is not carried over: a retry asks a person afresh.
 func (s suite) TestAGrantedApprovalStandsForTheResumedStep(t *testing.T) {
 	t.Parallel()

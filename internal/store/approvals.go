@@ -52,7 +52,9 @@ const (
 // rejection was a rejection, are exactly the facts someone needs to
 // reconstruct later — and they must not depend on external chat history.
 type Approval struct {
-	ID          int64
+	ID int64
+	// RunID is the run parked on this approval; empty for one requested with no run, which no run page offers.
+	RunID       string
 	JobName     string
 	Message     string
 	Status      ApprovalStatus
