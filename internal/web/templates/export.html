@@ -1,7 +1,7 @@
 {{define "page"}}
 {{$e := .Export}}
 <h1 class="prompt"><b>steps mcp {{$e.Name}}</b></h1>
-<div id="export-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#export-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph">
+<div id="export-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#export-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph, #export-activity:outerMorph">
 <dl class="consent-facts export-facts">
   <dt>address</dt>
   <dd><code id="export-address">{{.Address}}</code> <button class="btn copybtn" type="button" data-copy="{{.Address}}" aria-describedby="export-address">copy</button><span class="visually-hidden" aria-live="polite" data-copied></span></dd>
@@ -16,16 +16,45 @@
 </dl>
 {{if not .Serving}}<p class="faint mcp-note">Not served here: exports are served only by a daemon people sign in to, and not by a read-only one.</p>{{end}}
 
-<details class="jsonbox connect-how">
-  <summary>how to connect</summary>
-  <dl class="consent-facts">
-    <dt>Claude Code</dt><dd><code>claude mcp add --transport http {{$e.Name}} {{.Address}}</code></dd>
-    <dt>Claude</dt><dd>Settings → Connectors → Add custom connector, with the address above</dd>
-    <dt>Cursor</dt><dd><code>{"mcpServers": {"{{$e.Name}}": {"url": "{{.Address}}"}}}</code> in <code>.cursor/mcp.json</code></dd>
-  </dl>
-  <p class="faint mcp-note">The agent sends you here to sign in and agree; nothing is shared until you do.</p>
-</details>
+</div>
 
+{{/* Outside every refreshed region: which tab is open is the reader's, and a morph would hand it back to the server's default. */}}
+<section class="connect" aria-labelledby="connect-head">
+<h2 class="eyebrow" id="connect-head">connect your app</h2>
+<fieldset class="connect-tabs">
+  <legend class="visually-hidden">Which app are you using?</legend>
+  {{$tryIt := .TryIt}}
+  {{range $g, $group := .Connect}}
+  <span class="connect-group">{{$group.Name}} <span class="dim">· {{$group.Hint}}</span></span>
+  {{range $c, $client := $group.Clients}}
+  <input class="visually-hidden connect-radio" type="radio" name="connect-app" id="app-{{$client.Slug}}"{{if and (eq $g 0) (eq $c 0)}} checked{{end}}>
+  <label class="connect-tab" for="app-{{$client.Slug}}">{{$client.Name}}</label>
+  <div class="connect-panel" id="panel-{{$client.Slug}}">
+    {{with $client.Caveat}}<p class="connect-caveat">{{.}}</p>{{end}}
+    <ol class="connect-steps">
+      {{range $client.Steps}}
+      <li>
+        <h3>{{.Title}}</h3>
+        {{with .Menu}}<p class="connect-menu">{{range $i, $label := .}}{{if $i}} <span aria-hidden="true">→</span> {{end}}<strong>{{$label}}</strong>{{end}}</p>{{end}}
+        {{with .Body}}<p>{{.}}</p>{{end}}
+        {{if .Link}}<p><a class="btn" href="{{.Link}}">{{.LinkLabel}}</a></p>{{end}}
+        {{with .Snippet}}{{template "connectsnippet" .}}{{end}}
+      </li>
+      {{end}}
+      <li>
+        <h3>Ask it something</h3>
+        <p>If an answer comes back, it is working.</p>
+        {{template "connectsnippet" $tryIt}}
+      </li>
+    </ol>
+  </div>
+  {{end}}
+  {{end}}
+</fieldset>
+<p class="faint mcp-note">The app sends you here to sign in and agree; nothing is shared until you do.</p>
+</section>
+
+<div id="export-activity">
 <h2 class="eyebrow">tools <span class="unbold">{{len $e.Tools}}</span></h2>
 <div class="tablewrap">
   <table class="consent-tools">
@@ -67,3 +96,5 @@
 <p class="faint mcp-note">Defined in the pipeline file; change it with <code>steps pipeline set</code>.</p>
 </div>
 {{end}}
+
+{{define "connectsnippet"}}<div class="connect-snippet"><pre>{{.}}</pre><button class="btn copybtn" type="button" data-copy="{{.}}" data-copy-said="copied">copy</button><span class="visually-hidden" aria-live="polite" data-copied></span></div>{{end}}

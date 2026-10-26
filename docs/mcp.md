@@ -305,7 +305,7 @@ jobs:
 
 ### Where an export is seen
 
-A pipeline's **mcp** tab lists its exports under its servers — what it shares beside what it connects to — with how many tools each offers, how many people and agents are connected, and how many calls came in today. Each export has a page of its own: its address with a copy button, how to give it to Claude Code, Claude or Cursor, its access rule as written, every tool with its fixed arguments and time limit, and its most recent calls. Nothing on it is editable: the pipeline file is where an export changes.
+A pipeline's **mcp** tab lists its exports under its servers — what it shares beside what it connects to — with how many tools each offers, how many people and agents are connected, and how many calls came in today. Each export has a page of its own: its address with a copy button, its access rule as written, step-by-step setup for each app that can connect — Claude Code, Cursor, VS Code, Codex, Gemini CLI, Windsurf, Zed, Claude and ChatGPT, with a one-click install where the app has one — every tool with its fixed arguments and time limit, and its most recent calls. Nothing on it is editable: the pipeline file is where an export changes.
 
 ### Connecting an agent
 

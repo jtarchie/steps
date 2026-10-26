@@ -1,8 +1,12 @@
 package web
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"html"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +44,7 @@ func TestTheExportPageSaysHowToConnectAndWhatItOffers(t *testing.T) {
 
 	for _, want := range []string{
 		`data-copy="https://steps.example/mcp/x/ops/support"`,
-		`claude mcp add --transport http support https://steps.example/mcp/x/ops/support`,
+		`claude mcp add --transport http --scope user support https://steps.example/mcp/x/ops/support`,
 		`<code>UserID == "alex"</code>`,
 		`<code>owner=acme</code>`,
 		`20s limit`,
@@ -54,6 +58,146 @@ func TestTheExportPageSaysHowToConnectAndWhatItOffers(t *testing.T) {
 
 	if code := serve(t, server, http.MethodGet, "/p/ops/mcp/exports/nothing", "", "alex").Code; code != http.StatusNotFound {
 		t.Errorf("an export that does not exist = %d, want 404", code)
+	}
+}
+
+// TestTheExportPageWalksEachAppThroughConnecting: what a reader copies out of the page — a command, a one-click link, a config block — carries THIS export's address and name, because a wrong one fails inside another application with nothing pointing back here.
+func TestTheExportPageWalksEachAppThroughConnecting(t *testing.T) {
+	t.Parallel()
+
+	server, _ := exportServer(t)
+
+	const address = "https://steps.example/mcp/x/ops/support"
+
+	body := serve(t, server, http.MethodGet, "/p/ops/mcp/exports/support", "", "alex").Body.String()
+	page := html.UnescapeString(body)
+
+	for _, want := range []string{
+		"claude mcp add --transport http --scope user support " + address,
+		"codex mcp add support --url " + address,
+		"Using support, list the tools you have.",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the export page does not carry %q", want)
+		}
+	}
+
+	assertCursorLink(t, page, address)
+	assertVSCodeLink(t, page, address)
+	assertConfigBlocks(t, body, address)
+	assertTabsAreRadioLabelPanel(t, body, address)
+}
+
+func assertCursorLink(t *testing.T, page, address string) {
+	t.Helper()
+
+	cursor := regexp.MustCompile(`href="(cursor://[^"]+)"`).FindStringSubmatch(page)
+	if cursor == nil {
+		t.Fatal("the export page has no one-click Cursor link")
+	}
+
+	_, encoded, _ := strings.Cut(cursor[1], "config=")
+
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("the Cursor link's config is not base64: %v", err)
+	}
+
+	var cursorConfig map[string]string
+
+	err = json.Unmarshal(raw, &cursorConfig)
+	if err != nil || cursorConfig["url"] != address || !strings.Contains(cursor[1], "name=support&") {
+		t.Errorf("the Cursor link installs %s as %q, want %s as support", raw, cursor[1], address)
+	}
+}
+
+func assertVSCodeLink(t *testing.T, page, address string) {
+	t.Helper()
+
+	vscode := regexp.MustCompile(`href="vscode:mcp/install\?([^"]+)"`).FindStringSubmatch(page)
+	if vscode == nil {
+		t.Fatal("the export page has no one-click VS Code link")
+	}
+
+	query, err := url.QueryUnescape(vscode[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var vscodeConfig map[string]string
+
+	err = json.Unmarshal([]byte(query), &vscodeConfig)
+	if err != nil || vscodeConfig["url"] != address || vscodeConfig["name"] != "support" {
+		t.Errorf("the VS Code link installs %s, want %s as support", query, address)
+	}
+}
+
+func assertConfigBlocks(t *testing.T, body, address string) {
+	t.Helper()
+
+	blocks := 0
+
+	for _, pre := range regexp.MustCompile(`(?s)<pre[^>]*>(.*?)</pre>`).FindAllStringSubmatch(body, -1) {
+		snippet := html.UnescapeString(pre[1])
+		if !strings.HasPrefix(snippet, "{") {
+			continue
+		}
+
+		blocks++
+
+		var parsed map[string]map[string]any
+
+		err := json.Unmarshal([]byte(snippet), &parsed)
+		if err != nil {
+			t.Errorf("a config block does not parse: %v\n%s", err, snippet)
+
+			continue
+		}
+
+		for _, servers := range parsed {
+			if _, ok := servers["support"]; !ok || !strings.Contains(snippet, address) {
+				t.Errorf("a config block does not name support at %s:\n%s", address, snippet)
+			}
+		}
+	}
+
+	if blocks == 0 {
+		t.Error("the export page has no config block to paste")
+	}
+}
+
+// assertTabsAreRadioLabelPanel: the tabs are CSS alone, so the markup's shape IS the behaviour — every panel starts hidden, and only a checked radio followed by its label and its panel reveals one.
+func assertTabsAreRadioLabelPanel(t *testing.T, body, address string) {
+	t.Helper()
+
+	tabs := regexp.MustCompile(`<input class="visually-hidden connect-radio" type="radio" name="connect-app" id="app-([a-z-]+)"( checked)?>\s*<label class="connect-tab" for="app-([a-z-]+)">[^<]+</label>\s*<div class="connect-panel"`).FindAllStringSubmatch(body, -1)
+
+	clients, checked := 0, 0
+	for _, group := range connectGroups("support", address) {
+		clients += len(group.Clients)
+	}
+
+	for _, tab := range tabs {
+		if tab[1] != tab[3] {
+			t.Errorf("the radio app-%s is labelled for app-%s", tab[1], tab[3])
+		}
+
+		if tab[2] != "" {
+			checked++
+		}
+	}
+
+	if len(tabs) != clients || checked != 1 {
+		t.Errorf("%d of %d tabs are radio, label, panel in that order, %d checked; want all, one checked", len(tabs), clients, checked)
+	}
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(css), ".connect-radio:checked + .connect-tab + .connect-panel { display: block; }") {
+		t.Error("app.css no longer reveals the panel after a checked radio and its label")
 	}
 }
 

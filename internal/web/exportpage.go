@@ -107,6 +107,7 @@ func (s *Server) handleExportPage(c *echo.Context) error {
 
 	ctx := c.Request().Context()
 	row := s.exportRowFor(ctx, pipeline, export)
+	address := s.resourceURL(pipeline.Slug, export.Name)
 
 	recent, err := pipeline.Store.Reader().Activity(ctx, store.ActivityFilter{Pipeline: pipeline.Slug, Actions: exportActions, Target: export.Name, Limit: recentExportCalls})
 	if err != nil {
@@ -127,7 +128,9 @@ func (s *Server) handleExportPage(c *echo.Context) error {
 		"Title":   export.Name + " · mcp",
 		"Crumbs":  []crumb{{Label: "mcp", URL: "/p/" + pipeline.Slug + "/mcp"}, {Label: export.Name}},
 		"Export":  row,
-		"Address": s.resourceURL(pipeline.Slug, export.Name),
+		"Address": address,
+		"Connect": connectGroups(export.Name, address),
+		"TryIt":   connectTryIt(export.Name),
 		"Serving": s.exporter != nil,
 		"Recent":  rows,
 		"LogURL":  "/activity?" + url.Values{"pipeline": {pipeline.Slug}, "target": {export.Name}}.Encode(),

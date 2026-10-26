@@ -47,7 +47,7 @@
     navigator.clipboard.writeText(button.getAttribute('data-copy')).then(function () {
       var said = button.parentElement.querySelector('[data-copied]');
       button.textContent = 'copied';
-      if (said) said.textContent = 'address copied';
+      if (said) said.textContent = button.getAttribute('data-copy-said') || 'address copied';
       setTimeout(function () { button.textContent = 'copy'; if (said) said.textContent = ''; }, 2000);
     });
   });
