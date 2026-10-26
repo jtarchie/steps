@@ -618,7 +618,7 @@ func TestResultBoxFetchesItsBodyOnEveryOpen(t *testing.T) {
 	_, body := get(t, server, "/p/demo/runs/run-box")
 	box := elementAt(t, body, `class="jsonbox" hx-get=`)
 
-	for _, want := range []string{`hx-trigger="toggle[this.open]"`, `hx-target="#result-`, `hx-swap="innerHTML"`, `<pre class="json" id="result-`} {
+	for _, want := range []string{`hx-trigger="toggle[this.open]"`, `hx-target="#turn-`, `hx-swap="innerHTML"`, `<pre class="json" id="turn-`} {
 		if !strings.Contains(box, want) {
 			t.Errorf("the result box is missing %s:\n%s", want, box)
 		}

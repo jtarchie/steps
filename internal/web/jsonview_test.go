@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -382,11 +383,11 @@ func TestThousandsMatchesTheCLI(t *testing.T) {
 	}
 }
 
-// TestResultValueAgreesWithJSONValue: the run page decides a result's fold and
+// TestLazyValueAgreesWithJSONValue: the run page decides a result's fold and
 // summary from a shallow parse, which unwraps no nested document. That is
 // only sound if it reaches jsonValue's answer on every shape — the short
 // string holding a document is the one the shallow parse alone gets wrong.
-func TestResultValueAgreesWithJSONValue(t *testing.T) {
+func TestLazyValueAgreesWithJSONValue(t *testing.T) {
 	t.Parallel()
 
 	nested := `{"n":0}`
@@ -420,30 +421,30 @@ func TestResultValueAgreesWithJSONValue(t *testing.T) {
 		nested,
 		"  ",
 	} {
-		assertResultValueAgrees(t, raw)
+		assertLazyValueAgrees(t, raw)
 	}
 }
 
-func assertResultValueAgrees(t *testing.T, raw string) {
+func assertLazyValueAgrees(t *testing.T, raw string) {
 	t.Helper()
 
-	want, got := jsonValue(raw), resultValue("/src", 7, raw)
+	want, got := jsonValue(raw), lazyValue("/src", 7, raw)
 
 	if got.Summary != want.Summary || got.Inline != want.Inline || got.Empty != want.Empty {
-		t.Errorf("resultValue(%.40q) = {%q inline=%v empty=%v}, jsonValue says {%q inline=%v empty=%v}",
+		t.Errorf("lazyValue(%.40q) = {%q inline=%v empty=%v}, jsonValue says {%q inline=%v empty=%v}",
 			raw, got.Summary, got.Inline, got.Empty, want.Summary, want.Inline, want.Empty)
 	}
 
 	if got.Inline {
 		if got.HTML != want.HTML || got.Src != "" {
-			t.Errorf("resultValue(%.40q) drew an inline result differently: %q, src %q", raw, got.HTML, got.Src)
+			t.Errorf("lazyValue(%.40q) drew an inline result differently: %q, src %q", raw, got.HTML, got.Src)
 		}
 
 		return
 	}
 
-	if got.HTML != "" || got.Src != "/src" || got.Target != "result-7" {
-		t.Errorf("resultValue(%.40q) folded without deferring its body: html %d bytes, src %q, target %q",
+	if got.HTML != "" || got.Src != "/src" || got.Target != "turn-7" {
+		t.Errorf("lazyValue(%.40q) folded without deferring its body: html %d bytes, src %q, target %q",
 			raw, len(got.HTML), got.Src, got.Target)
 	}
 }
@@ -578,6 +579,55 @@ func TestFormatBytesChangesUnitAtAThousand(t *testing.T) {
 	} {
 		if got := formatBytes(size); got != want {
 			t.Errorf("formatBytes(%d) = %q, want %q", size, got, want)
+		}
+	}
+}
+
+// TestMessageValueFoldsOnlyALongMessage: a message up to messageFoldBytes is
+// drawn on its row as it always was; one byte more is a box whose body is
+// fetched on open, because highlighting it is what the page was waiting on.
+func TestMessageValueFoldsOnlyALongMessage(t *testing.T) {
+	t.Parallel()
+
+	short := strings.Repeat("a", messageFoldBytes)
+
+	got := messageValue("/src", 7, short)
+	if got.Src != "" || got.HTML != highlightMessage(short) {
+		t.Errorf("a %d-byte message folded: src %q, html %d bytes", len(short), got.Src, len(got.HTML))
+	}
+
+	long := short + "\nb"
+
+	got = messageValue("/src", 7, long)
+	if got.HTML != "" || got.Src != "/src" || got.Target != "turn-7" || got.Summary != plainSummary(long, long) {
+		t.Errorf("a %d-byte message drew its body: %+v", len(long), got)
+	}
+
+	// Nothing to read is not a box that opens onto nothing.
+	blank := strings.Repeat(" \n", messageFoldBytes)
+	if got := messageValue("/src", 7, blank); got.Src != "" {
+		t.Errorf("a blank %d-byte message folded behind %q", len(blank), got.Summary)
+	}
+}
+
+// TestAFoldedMessageOpensAsAMessage: a long message's body lands in the
+// box's <pre>, whose own style is a payload's — dim and never wrapped — so
+// a prompt that was wrapped, full-colour prose on its row would open as one
+// sideways-scrolling line per paragraph.
+func TestAFoldedMessageOpensAsAMessage(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatalf("read app.css: %v", err)
+	}
+
+	sheet := regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(string(css), "")
+
+	for _, role := range []string{"system", "user"} {
+		rule := regexp.MustCompile(`(?m)^[^{}]*\.turn\.` + role + ` \.what pre\.json\b[^{}]*\{([^}]*)\}`).FindStringSubmatch(sheet)
+		if rule == nil || !strings.Contains(rule[1], "white-space: pre-wrap") || !strings.Contains(rule[1], "color: var(--fg)") {
+			t.Errorf("a folded %s message opens unwrapped or dimmed: want .turn.%s .what pre.json { white-space: pre-wrap; color: var(--fg); }", role, role)
 		}
 	}
 }

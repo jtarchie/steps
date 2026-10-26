@@ -16,14 +16,14 @@ const turnRoute = "/p/:pipeline/runs/:run/turns/:seq"
 
 const eventsRoute = "/p/:pipeline/runs/:run/events"
 
-// handleTurn renders one tool result's body, which the run page draws only as
-// a summary until it is opened (resultValue). htmx gets the <pre>'s inner
-// HTML; the link a reader follows with JavaScript off gets a styled page.
+// handleTurn renders one turn's body, which the run page draws only as a
+// summary until it is opened (lazyValue, messageValue). htmx gets the <pre>'s
+// inner HTML; the link a reader follows with JavaScript off gets a styled page.
 func (s *Server) handleTurn(c *echo.Context) error {
 	// One URL, two bodies: a cache must not hand the link the fragment.
 	c.Response().Header().Add("Vary", "HX-Request")
 
-	gone := echo.NewHTTPError(http.StatusNotFound, "this result is no longer recorded")
+	gone := echo.NewHTTPError(http.StatusNotFound, "this turn is no longer recorded")
 
 	seq, err := strconv.ParseInt(c.Param("seq"), 10, 64)
 	if err != nil || seq < 1 {
@@ -35,13 +35,22 @@ func (s *Server) handleTurn(c *echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	// Seq is global, so the next row of THIS run may be a later one; and only
-	// a result is drawn lazily, so nothing else is served here.
-	if len(rows) == 0 || rows[0].Seq != seq || rows[0].Type != events.TypeAgentResult {
+	// Seq is global, so the next row of THIS run may be a later one.
+	if len(rows) == 0 || rows[0].Seq != seq {
 		return gone
 	}
 
-	body := string(jsonValue(rows[0].Detail).HTML)
+	var body string
+
+	// Only what the page draws lazily is served here.
+	switch rows[0].Type {
+	case events.TypeAgentCall, events.TypeAgentResult:
+		body = string(jsonValue(rows[0].Detail).HTML)
+	case events.TypeAgentSystem, events.TypeAgentUser:
+		body = string(highlightMessage(rows[0].Text))
+	default:
+		return gone
+	}
 
 	if c.Request().Header.Get("HX-Request") == "" {
 		body = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/static/app.css"><pre class="json">` + body + `</pre>`

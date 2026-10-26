@@ -170,30 +170,37 @@ func TestStreamBytesGrowLinearlyWithChildren(t *testing.T) {
 	}
 }
 
-// resultRun records one agent step that got `results` tool results of about
-// `size` bytes each, every one carrying a marker of its own, and returns the
+// turnRun records one agent step that got `turns` turns of the given type,
+// each about `size` bytes and carrying a marker of its own, and returns the
 // page and the stream a watcher who connected after the first event gets.
-func resultRun(t *testing.T, results, size int) (string, string) {
+func turnRun(t *testing.T, kind string, turns, size int) (string, string) {
 	t.Helper()
 
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
-	runID := fmt.Sprintf("run-results-%d", size)
+	runID := fmt.Sprintf("run-%s-%d", kind, size)
 
 	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	rows := make([]store.RunEventRow, 0, 1+results)
+	rows := make([]store.RunEventRow, 0, 1+turns)
 	rows = append(rows, store.RunEventRow{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 1})
 
 	line := strings.Repeat("x", 63) + `\n`
-	for i := range results {
-		rows = append(rows, store.RunEventRow{
-			Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", StepID: 1, Name: "read_file",
-			Detail: fmt.Sprintf(`{"content":"RESULT-MARKER-%d\n%s"}`, i, strings.Repeat(line, size/len(line))),
-		})
+	for i := range turns {
+		row := store.RunEventRow{Type: kind, StepIndex: 0, StepName: "review", StepID: 1, Name: "read_file"}
+		body := fmt.Sprintf(`TURN-MARKER-%d\n%s`, i, strings.Repeat(line, size/len(line)))
+
+		if kind == events.TypeAgentUser {
+			row.Name = ""
+			row.Text = strings.ReplaceAll(body, `\n`, "\n")
+		} else {
+			row.Detail = `{"content":"` + body + `"}`
+		}
+
+		rows = append(rows, row)
 	}
 
 	appendEvents(t, pipeline.Store, runID, rows)
@@ -208,35 +215,39 @@ func resultRun(t *testing.T, results, size int) (string, string) {
 	return page, sseHTML(streamOf(t, server, "/p/demo/runs/"+runID+"/events?after=1"))
 }
 
-// TestRunPageBytesDoNotGrowWithResultSize is #171: every tool result's body
-// was drawn up front, collapsed, so a long review's page was megabytes of
-// markup nobody opened. The page and the stream now carry a summary and a URL
-// per result, and a result sixteen times bigger costs them nothing.
-func TestRunPageBytesDoNotGrowWithResultSize(t *testing.T) {
+// TestRunPageBytesDoNotGrowWithTurnSize is #171: every tool result's body was
+// drawn up front, collapsed, so a long review's page was megabytes of markup
+// nobody opened. Calls and long messages are the same cost — a run of 16 kB
+// prompts and write_file calls spent seconds highlighting them — so the page
+// and the stream carry a summary and a URL per turn, and a turn sixteen times
+// bigger costs them nothing.
+func TestRunPageBytesDoNotGrowWithTurnSize(t *testing.T) {
 	shrinkRunEventLimit(t, 5000, 1)
 
-	const results = 50
+	const turns = 50
 
-	smallPage, smallStream := resultRun(t, results, 1000)
-	bigPage, bigStream := resultRun(t, results, 16000)
+	for _, kind := range []string{events.TypeAgentResult, events.TypeAgentCall, events.TypeAgentUser} {
+		smallPage, smallStream := turnRun(t, kind, turns, 4000)
+		bigPage, bigStream := turnRun(t, kind, turns, 64000)
 
-	for _, drawn := range []struct {
-		what       string
-		small, big string
-	}{{"page", smallPage, bigPage}, {"stream", smallStream, bigStream}} {
-		t.Logf("%s: 1 kB results=%d bytes, 16 kB results=%d bytes", drawn.what, len(drawn.small), len(drawn.big))
+		for _, drawn := range []struct {
+			what       string
+			small, big string
+		}{{"page", smallPage, bigPage}, {"stream", smallStream, bigStream}} {
+			t.Logf("%s %s: 4 kB turns=%d bytes, 64 kB turns=%d bytes", kind, drawn.what, len(drawn.small), len(drawn.big))
 
-		if strings.Contains(drawn.big, "RESULT-MARKER-") {
-			t.Errorf("the %s carries a result's body", drawn.what)
-		}
+			if strings.Contains(drawn.big, "TURN-MARKER-") {
+				t.Errorf("the %s carries a %s's body", drawn.what, kind)
+			}
 
-		// Drawing no box at all would pass the ratio too.
-		if got := len(resultSrcs(drawn.big)); got != results {
-			t.Errorf("the %s points %d boxes at a body, want %d", drawn.what, got, results)
-		}
+			// Drawing no box at all would pass the ratio too.
+			if got := len(resultSrcs(drawn.big)); got != turns {
+				t.Errorf("the %s points %d %s boxes at a body, want %d", drawn.what, got, kind, turns)
+			}
 
-		if ratio := float64(len(drawn.big)) / float64(len(drawn.small)); ratio > 1.02 {
-			t.Errorf("results 16x bigger made the %s %.2fx bigger", drawn.what, ratio)
+			if ratio := float64(len(drawn.big)) / float64(len(drawn.small)); ratio > 1.02 {
+				t.Errorf("%s turns 16x bigger made the %s %.2fx bigger", kind, drawn.what, ratio)
+			}
 		}
 	}
 }

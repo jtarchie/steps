@@ -227,8 +227,9 @@ func templateFuncs() template.FuncMap {
 		// jsonview.go. jsonValue folds a bulky payload behind a summary for a
 		// transcript row; jsonPre is the same rendering for a page that gives
 		// it a <pre> of its own.
-		"jsonValue":   jsonValue,
-		"resultValue": resultValue,
+		"jsonValue":    jsonValue,
+		"lazyValue":    lazyValue,
+		"messageValue": messageValue,
 		// hx-get is a plain attribute to html/template: HTML-escaped, never
 		// URL-encoded, so a name's `#` or `?` would end the path early.
 		"pathseg": url.PathEscape,

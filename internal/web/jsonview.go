@@ -490,15 +490,11 @@ type jsonView struct {
 	Target string
 }
 
-// resultValue is jsonValue for a tool result, whose folded body is fetched
-// from src only when a reader opens it: results are nearly all of a long
+// lazyValue is jsonValue for a tool call or result, whose folded body is
+// fetched from src only when a reader opens it: they are nearly all of a long
 // agent run's page, and nearly none of them are ever opened. Summary and
 // Inline match jsonValue's; the block rendering and highlighting are skipped.
-func resultValue(src string, seq int64, raw string) jsonView {
-	lazy := func(summary string) jsonView {
-		return jsonView{Summary: summary, Src: src, Target: fmt.Sprintf("result-%d", seq)}
-	}
-
+func lazyValue(src string, seq int64, raw string) jsonView {
 	if strings.TrimSpace(raw) == "" {
 		return jsonValue(raw)
 	}
@@ -513,21 +509,40 @@ func resultValue(src string, seq int64, raw string) jsonView {
 			return plainView(raw)
 		}
 
-		return lazy(plainSummary(text, raw))
+		return deferredView(src, seq, plainSummary(text, raw))
 	}
 
 	if !node.inlineable() {
-		return lazy(jsonSummary(node, raw))
+		return deferredView(src, seq, jsonSummary(node, raw))
 	}
 
 	// Shallow says inline, but a short string may hold a document the full
 	// parse unfolds into a block.
 	view := jsonValue(raw)
 	if !view.Inline {
-		return lazy(view.Summary)
+		return deferredView(src, seq, view.Summary)
 	}
 
 	return view
+}
+
+// messageFoldBytes is the longest system or user message drawn on its row.
+// A task prompt is routinely 16 kB, re-sent on every turn of a long run, and
+// highlighting those was most of what the page waited on.
+const messageFoldBytes = 2000
+
+// messageValue is highlightMessage for a run page row: drawn in full when it
+// is short, otherwise folded behind a summary whose body is fetched on open.
+func messageValue(src string, seq int64, text string) jsonView {
+	if len(text) <= messageFoldBytes || strings.TrimSpace(text) == "" {
+		return jsonView{HTML: highlightMessage(text)}
+	}
+
+	return deferredView(src, seq, plainSummary(strings.TrimRight(text, "\n"), text))
+}
+
+func deferredView(src string, seq int64, summary string) jsonView {
+	return jsonView{Summary: summary, Src: src, Target: fmt.Sprintf("turn-%d", seq)}
 }
 
 // jsonValue renders a payload for a transcript row: inline when it is small,

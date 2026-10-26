@@ -784,8 +784,11 @@ func (t Turn) IsMessage() bool {
 // drawn as a boundary, since from there on the summary is what the model had.
 func (t Turn) IsCompaction() bool { return t.Type == events.TypeAgentCompaction }
 
-// IsResult reports a tool's answer, the turn the run page draws lazily.
-func (t Turn) IsResult() bool { return t.Type == events.TypeAgentResult }
+// IsLazy reports a tool call or its answer, the turns whose payload the run
+// page fetches only when a reader opens it.
+func (t Turn) IsLazy() bool {
+	return t.Type == events.TypeAgentCall || t.Type == events.TypeAgentResult
+}
 
 // IsModelText reports the model's own running commentary or final answer.
 func (t Turn) IsModelText() bool { return t.Type == events.TypeAgentText }

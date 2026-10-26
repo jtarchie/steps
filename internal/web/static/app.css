@@ -786,6 +786,9 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
    reader is here to read. */
 .turn.model .what .say { color: var(--fg); }
 .turn.system .what .say, .turn.user .what .say { color: var(--fg); }
+/* A long message is folded, and opens into a <pre>; it is still a message,
+   read the way the row drew it before it was folded. */
+.turn.system .what pre.json, .turn.user .what pre.json { white-space: pre-wrap; color: var(--fg); }
 .turn.compaction { border-top: 1px dashed var(--line); }
 .turn.compaction .who { color: var(--faint); }
 .turn.compaction summary { cursor: pointer; }

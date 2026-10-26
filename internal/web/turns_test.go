@@ -2,7 +2,8 @@ package web
 
 // A tool result's body is fetched when its box is opened, not drawn with the
 // page (#171): results are nearly all of a long agent run's page, and nearly
-// none of them are ever opened.
+// none of them are ever opened. A tool call and a long message are the same
+// cost, so they are fetched the same way.
 
 import (
 	"fmt"
@@ -67,8 +68,9 @@ func seqsOf(t *testing.T, st store.Store, runID string) map[string][]int64 {
 }
 
 // TestTurnFragmentIsWhatThePageUsedToDraw: opening a box shows exactly what
-// the page drew inline before bodies were fetched — for a document and for
-// plain text, which takes the other highlighting path.
+// the page drew inline before bodies were fetched — for a result that is a
+// document and one that is plain text, which takes the other highlighting
+// path, for a call, and for a message, which is highlighted as a message.
 func TestTurnFragmentIsWhatThePageUsedToDraw(t *testing.T) {
 	t.Parallel()
 
@@ -76,6 +78,8 @@ func TestTurnFragmentIsWhatThePageUsedToDraw(t *testing.T) {
 	ctx := t.Context()
 
 	plain := strings.Repeat("a line of a command's output\n", 40)
+	args := `{"path":"main.go","content":"package main\n\nfunc main() {}\n"}`
+	prompt := strings.Repeat("Review this diff for correctness.\n", messageFoldBytes/20)
 
 	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-frag", JobName: "build"})
 	if err != nil {
@@ -84,6 +88,8 @@ func TestTurnFragmentIsWhatThePageUsedToDraw(t *testing.T) {
 
 	appendEvents(t, pipeline.Store, "run-frag", []store.RunEventRow{
 		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
+		{Type: events.TypeAgentUser, StepIndex: 0, StepName: "review", Text: prompt},
+		{Type: events.TypeAgentCall, StepIndex: 0, StepName: "review", Name: "write_file", Detail: args},
 		{Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", Name: "read_file", Detail: bulkyResult},
 		{Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", Name: "run", Detail: plain},
 		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", Status: "succeeded"},
@@ -96,14 +102,19 @@ func TestTurnFragmentIsWhatThePageUsedToDraw(t *testing.T) {
 
 	_, page := get(t, server, "/p/demo/runs/run-frag")
 
-	srcs := resultSrcs(page)
-	if len(srcs) != 2 {
-		t.Fatalf("page carries %d result URLs, want 2: %v", len(srcs), srcs)
+	wants := []string{
+		string(highlightMessage(prompt)),
+		string(jsonValue(args).HTML),
+		string(jsonValue(bulkyResult).HTML),
+		string(jsonValue(plain).HTML),
 	}
 
-	for i, detail := range []string{bulkyResult, plain} {
-		want := string(jsonValue(detail).HTML)
+	srcs := resultSrcs(page)
+	if len(srcs) != len(wants) {
+		t.Fatalf("page carries %d body URLs, want %d: %v", len(srcs), len(wants), srcs)
+	}
 
+	for i, want := range wants {
 		code, body := getHX(t, server, srcs[i])
 		if code != http.StatusOK || body != want {
 			t.Errorf("GET %s = %d, not the body the page used to draw.\ngot:\n%s\nwant:\n%s", srcs[i], code, body, want)
@@ -118,11 +129,11 @@ func TestTurnFragmentIsWhatThePageUsedToDraw(t *testing.T) {
 	}
 }
 
-// TestTurnFragmentAnswersOnlyForAResultOfThisRun: the route serves a result
-// the page drew lazily and nothing else, and says so as one line of text — a
+// TestTurnFragmentAnswersOnlyForATurnOfThisRun: the route serves a turn the
+// page draws lazily and nothing else, and says so as one line of text — a
 // failed fetch lands inside the box, where handleError's page would nest the
 // nav and its scripts in a <pre>.
-func TestTurnFragmentAnswersOnlyForAResultOfThisRun(t *testing.T) {
+func TestTurnFragmentAnswersOnlyForATurnOfThisRun(t *testing.T) {
 	t.Parallel()
 
 	server, pipelines := testPipelines(t, "alpha", "beta")
@@ -142,6 +153,7 @@ func TestTurnFragmentAnswersOnlyForAResultOfThisRun(t *testing.T) {
 			{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
 			{Type: events.TypeAgentCall, StepIndex: 0, StepName: "review", Name: "read_file", Detail: `{"path":"main.go"}`},
 			{Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", Name: "read_file", Detail: bulkyResult},
+			{Type: events.TypeAgentText, StepIndex: 0, StepName: "review", Text: "Done."},
 		}
 
 		// run-a2's first row is a result, so an earlier run's seq asked of
@@ -167,7 +179,7 @@ func TestTurnFragmentAnswersOnlyForAResultOfThisRun(t *testing.T) {
 		{"a seq from another run", fmt.Sprintf("/p/alpha/runs/run-a1/turns/%d", a2[events.TypeAgentResult][0])},
 		{"a seq from an earlier run", fmt.Sprintf("/p/alpha/runs/run-a2/turns/%d", result)},
 		{"a run from another pipeline", fmt.Sprintf("/p/alpha/runs/run-b1/turns/%d", b1[events.TypeAgentResult][0])},
-		{"a seq that is not a result", fmt.Sprintf("/p/alpha/runs/run-a1/turns/%d", a1[events.TypeAgentCall][0])},
+		{"a seq the page never draws lazily", fmt.Sprintf("/p/alpha/runs/run-a1/turns/%d", a1[events.TypeAgentText][0])},
 		{"a seq past the end", fmt.Sprintf("/p/alpha/runs/run-a1/turns/%d", b1[events.TypeAgentResult][0]+100)},
 		{"not a number", "/p/alpha/runs/run-a1/turns/abc"},
 		{"zero", "/p/alpha/runs/run-a1/turns/0"},
