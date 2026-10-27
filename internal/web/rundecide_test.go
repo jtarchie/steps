@@ -83,6 +83,34 @@ func TestARunPageAsksWhatItsRunWaitsOn(t *testing.T) {
 	}
 }
 
+// TestAFinishedRunWaitsOnNobody: an aborted run leaves its approval pending, and its page must not offer a decision nothing will act on, nor name an empty region.
+func TestAFinishedRunWaitsOnNobody(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+	parkTwoRuns(t, pipeline)
+
+	err := pipeline.Store.FinishRun(context.Background(), "run-1", store.RunAborted)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	server, err := New([]*Pipeline{pipeline}, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-1")
+
+	if waiting := markupBetween(t, body, `id="run-waiting"`, `class="transcripthead"`); strings.Contains(waiting, "Ship this build?") || strings.Contains(waiting, "major or a minor bump") {
+		t.Error("an aborted run's page offers the decision it was parked on")
+	}
+
+	if !strings.Contains(body, `<section class="parked" id="run-waiting"></section>`) {
+		t.Error("an empty waiting region is drawn with a name, or not drawn")
+	}
+}
+
 // TestADecisionReturnsToThePageItWasMadeOn: deciding from a run page lands back on the run, a decided approval leaves it, and a return pointing off this server falls back to the tab.
 func TestADecisionReturnsToThePageItWasMadeOn(t *testing.T) {
 	t.Parallel()

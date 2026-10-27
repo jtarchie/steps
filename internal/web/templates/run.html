@@ -59,8 +59,8 @@
      404 at the end of a triage. */}}
 {{template "mcphint" $}}
 {{end}}
-{{/* Always drawn, empty or not: the strip's poll swaps it by id, and an approval asked after the page opened has nowhere to land otherwise. */}}
-<section class="parked" id="run-waiting" aria-label="Waiting on you">{{range .Approvals}}{{template "approvalcard" (waitctx $.Nav .)}}{{end}}{{range .Questions}}{{template "questioncard" (waitctx $.Nav .)}}{{end}}</section>
+{{/* Always drawn, empty or not: the strip's poll swaps it by id, and an approval asked after the page opened has nowhere to land otherwise. Named only when it holds something, or every run page lists an empty landmark. */}}
+<section class="parked" id="run-waiting"{{if or .Approvals .Questions}} aria-label="Waiting on you"{{end}}>{{range .Approvals}}{{template "approvalcard" (waitctx $.Nav .)}}{{end}}{{range .Questions}}{{template "questioncard" (waitctx $.Nav .)}}{{end}}</section>
 {{if $run.Notes}}<div class="runnotes">{{range $run.Notes}}{{template "notice" .}}{{end}}</div>{{end}}
 
 {{if $run.Run.Replayed}}

@@ -660,14 +660,13 @@ func newTurnCtx(page map[string]any, step *stepView, turn runview.Turn) turnCtx 
 	return turnCtx{Turn: turn, Page: page, Slow: step.Slow(turn.Took)}
 }
 
-// stepCtx is what the recursive step template is invoked with: the page it is
-// being drawn on, and the step to draw.
 // waitCtx is one approval or question and the page drawing it, for the cards both the tabs and a run page draw.
 type waitCtx struct {
 	Nav  navData
 	Item any
 }
 
+// stepCtx is what the recursive step template is invoked with: the page it is being drawn on, and the step to draw.
 type stepCtx struct {
 	Page map[string]any
 	Step *stepView

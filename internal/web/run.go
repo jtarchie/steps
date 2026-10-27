@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 
 	"github.com/jtarchie/steps/internal/events"
@@ -109,7 +108,7 @@ func (s *Server) handleRun(c *echo.Context) error {
 		}
 	}
 
-	approvals, questions, err := parkedOn(ctx, pipeline.Store, view.Run.ID)
+	approvals, questions, err := parkedOn(ctx, readsOf(c, pipeline), view.Run)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
@@ -276,20 +275,38 @@ func (s *Server) handleNode(c *echo.Context) error {
 	})
 }
 
-// parkedOn is what this run is parked on a person for. The pending lists are a pipeline's whole backlog, uncapped and short, so filtering them here costs less than a run-scoped query in both drivers.
-func parkedOn(ctx context.Context, st store.Store, runID string) ([]store.Approval, []store.Question, error) {
-	approvals, err := st.Approvals(ctx, true, 0)
+// parkedOn is what this run is parked on a person for: the attention list already read the pipeline's pending backlog this request, so filtering that costs no query. It filters into fresh slices because the read is shared. Only a running run waits: an abort or a failed sibling leaves its approval pending, and nobody would act on that decision.
+func parkedOn(ctx context.Context, reads *pipelineReads, run store.RunRow) ([]store.Approval, []store.Question, error) {
+	if run.Status != store.RunRunning {
+		return nil, nil, nil
+	}
+
+	pendingApprovals, err := reads.PendingApprovals(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("pending approvals: %w", err)
 	}
 
-	questions, err := st.Questions(ctx, true, 0)
+	pendingQuestions, err := reads.PendingQuestions(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("pending questions: %w", err)
 	}
 
-	approvals = slices.DeleteFunc(approvals, func(a store.Approval) bool { return a.RunID != runID })
-	questions = slices.DeleteFunc(questions, func(q store.Question) bool { return q.RunID != runID })
+	var (
+		approvals []store.Approval
+		questions []store.Question
+	)
+
+	for _, a := range pendingApprovals {
+		if a.RunID == run.ID {
+			approvals = append(approvals, a)
+		}
+	}
+
+	for _, q := range pendingQuestions {
+		if q.RunID == run.ID {
+			questions = append(questions, q)
+		}
+	}
 
 	return approvals, questions, nil
 }
