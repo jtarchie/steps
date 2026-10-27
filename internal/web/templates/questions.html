@@ -4,33 +4,7 @@
 <div id="questions-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#questions-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
 
 {{range .Questions}}
-<div class="approval {{if ne .Status "pending"}}decided{{end}}">
-  <div class="meta"><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · {{.AgentName}} · asked {{agoTag .AskedAt}}{{if not .AnsweredAt.IsZero}} · answered {{agoTag .AnsweredAt}}{{with .AnsweredBy}} by {{template "actor" .}}{{end}}{{end}}</div>
-  <div class="msg">{{.Question}}</div>
-  {{if eq .Status "pending"}}
-    {{if $.Nav.ViewOnly}}
-    <div class="meta">Answering needs the operator role.</div>
-    {{else if $.Nav.ReadOnly}}
-    <div class="meta">This server is read-only. Answer with <code>steps questions answer {{.ID}} &lt;answer&gt; -p {{$.Nav.Current}}</code>.</div>
-    {{else}}
-    <!-- The free-text field and its own submit come FIRST, and the ordering is
-         load-bearing: pressing Enter in a text input submits the form with its
-         DEFAULT button, which is the first submit button in tree order. With
-         the option buttons first, typing an answer and pressing Enter — the
-         universal form gesture — silently submitted the first OPTION instead
-         of what was typed. -->
-    <form class="decide" method="post" action="/p/{{$.Nav.Current}}/questions/{{.ID}}">
-      <input type="text" name="answer_text" placeholder="{{if .OptionsRequired}}one of the options below{{else}}answer in your own words{{end}}" aria-label="Answer">
-      <button class="btn primary" type="submit">Answer</button>
-      {{range .Options}}
-      <button class="btn" type="submit" name="answer" value="{{.}}">{{.}}</button>
-      {{end}}
-    </form>
-    {{end}}
-  {{else}}
-  <div class="meta"><span class="stamp st st-{{if eq .Status "answered"}}passed{{else}}failed{{end}}">{{.Status}}</span>{{if .Answer}} — "{{.Answer}}"{{end}}</div>
-  {{end}}
-</div>
+{{template "questioncard" (waitctx $.Nav .)}}
 {{else}}
 <p class="faint">No questions asked yet.</p>
 {{end}}

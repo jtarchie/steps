@@ -38,7 +38,7 @@
      so a screen reader says how many before reading the first. Each chip
      speaks its status and time as words; the glyph and abbreviation are for
      the eye. */}}
-<nav class="runstrip" id="run-strip" aria-label="Runs of {{$run.Run.JobName}}" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#run-strip" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
+<nav class="runstrip" id="run-strip" aria-label="Runs of {{$run.Run.JobName}}" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#run-strip" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph,#run-waiting:outerMorph">
   <ol class="striplist" id="strip-runs" role="list">
   {{if .Strip.Queued}}<li><a class="st st-queued" id="strip-queued" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/follow?since={{.Strip.QueuedSince}}">queued</a></li>{{end}}
   {{range .Strip.Runs}}<li><a class="st st-{{statusWord .Status}}" id="strip-{{short .ID}}" href="/p/{{$.Nav.Current}}/runs/{{.ID}}"{{if eq .ID $run.Run.ID}} aria-current="page"{{end}} title="[{{short .ID}}] · {{.Duration}}"><span class="visually-hidden">{{statusWord .Status}}, </span>{{if eq .ID $run.Run.ID}}<span class="hash">{{short .ID}}</span> {{end}}{{agoCompact .StartedAt}}</a></li>
@@ -59,6 +59,8 @@
      404 at the end of a triage. */}}
 {{template "mcphint" $}}
 {{end}}
+{{/* Always drawn, empty or not: the strip's poll swaps it by id, and an approval asked after the page opened has nowhere to land otherwise. Named only when it holds something, or every run page lists an empty landmark. */}}
+<section class="parked" id="run-waiting"{{if or .Approvals .Questions}} aria-label="Waiting on you"{{end}}>{{range .Approvals}}{{template "approvalcard" (waitctx $.Nav .)}}{{end}}{{range .Questions}}{{template "questioncard" (waitctx $.Nav .)}}{{end}}</section>
 {{if $run.Notes}}<div class="runnotes">{{range $run.Notes}}{{template "notice" .}}{{end}}</div>{{end}}
 
 {{if $run.Run.Replayed}}

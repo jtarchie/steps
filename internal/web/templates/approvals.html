@@ -4,25 +4,7 @@
 <div id="approvals-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#approvals-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
 
 {{range .Approvals}}
-<div class="approval {{if ne .Status "pending"}}decided{{end}}">
-  <div class="meta"><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · requested {{agoTag .RequestedAt}}{{if not .DecidedAt.IsZero}} · decided {{agoTag .DecidedAt}}{{with .DecidedBy}} by {{template "actor" .}}{{end}}{{end}}</div>
-  <div class="msg">{{.Message}}</div>
-  {{if eq .Status "pending"}}
-    {{if $.Nav.ViewOnly}}
-    <div class="meta">Deciding needs the operator role.</div>
-    {{else if $.Nav.ReadOnly}}
-    <div class="meta">This server is read-only. Decide with <code>steps approvals approve {{.ID}} -p {{$.Nav.Current}}</code>.</div>
-    {{else}}
-    <form class="decide" method="post" action="/p/{{$.Nav.Current}}/approvals/{{.ID}}">
-      <input type="text" name="reason" placeholder="reason (recorded)" aria-label="Decision reason">
-      <button class="btn primary" type="submit" name="decision" value="approve">Approve</button>
-      <button class="btn danger" type="submit" name="decision" value="reject">Reject</button>
-    </form>
-    {{end}}
-  {{else}}
-  <div class="meta"><span class="stamp st st-{{if eq .Status "approved"}}passed{{else}}failed{{end}}">{{.Status}}</span>{{if .Reason}} — "{{.Reason}}"{{end}}</div>
-  {{end}}
-</div>
+{{template "approvalcard" (waitctx $.Nav .)}}
 {{else}}
 <p class="faint">No approvals requested yet.</p>
 {{end}}

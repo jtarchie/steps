@@ -271,6 +271,7 @@ func templateFuncs() template.FuncMap {
 			return stepCtx{Page: page, Step: step}
 		},
 		"turnctx": newTurnCtx,
+		"waitctx": func(nav navData, item any) waitCtx { return waitCtx{Nav: nav, Item: item} },
 		"pendingctx": func(step *stepView) turnCtx {
 			pending := newTurnCtx(nil, step, step.Unanswered())
 			pending.Pending = true

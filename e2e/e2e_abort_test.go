@@ -5,7 +5,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -235,27 +234,9 @@ func containerRunsSleep(t *testing.T, seconds string) bool {
 func (w *webProcess) post(t *testing.T, path string) int {
 	t.Helper()
 
-	client := &http.Client{
-		Timeout:       5 * time.Second,
-		Transport:     &http.Transport{DisableKeepAlives: true},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	code, _ := postForm(t, w.addr, path, nil)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+w.addr+path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("POST %s: %v", path, err)
-	}
-
-	defer func() { _ = resp.Body.Close() }()
-
-	_, _ = io.Copy(io.Discard, resp.Body)
-
-	return resp.StatusCode
+	return code
 }
 
 func readTrimmed(t *testing.T, path string) string {

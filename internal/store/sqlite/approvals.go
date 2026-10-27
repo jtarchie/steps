@@ -83,7 +83,7 @@ func (s *Store) DecideApproval(ctx context.Context, id int64, status store.Appro
 // ApprovalStatus reads one approval's current state.
 func (s *Store) ApprovalStatus(ctx context.Context, id int64) (store.Approval, error) {
 	approval, err := scanApproval(s.reads.QueryRowContext(ctx, `
-		SELECT id, job_name, message, status, requested_at,
+		SELECT id, COALESCE(run_id, ''), job_name, message, status, requested_at,
 		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
 		FROM approvals WHERE id = ? AND pipeline_id = ?
 	`, id, s.pipelineID))
@@ -109,7 +109,7 @@ func (s *Store) Approvals(ctx context.Context, pendingOnly bool, limit int) ([]s
 	}
 
 	return collect(ctx, s.reads, what, `
-		SELECT id, job_name, message, status, requested_at,
+		SELECT id, COALESCE(run_id, ''), job_name, message, status, requested_at,
 		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
 		FROM approvals WHERE pipeline_id = ? `+where+`
 		ORDER BY `+order+` LIMIT ?
@@ -124,7 +124,7 @@ func scanApproval(row rowScanner) (store.Approval, error) {
 		requested, decided string
 	)
 
-	err := row.Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.Status,
+	err := row.Scan(&approval.ID, &approval.RunID, &approval.JobName, &approval.Message, &approval.Status,
 		&requested, &decided, &approval.DecidedBy, &approval.Reason)
 	approval.RequestedAt, approval.DecidedAt = parseTimestamp(requested), parseTimestamp(decided)
 

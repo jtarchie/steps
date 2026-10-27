@@ -99,7 +99,7 @@ func (s *Server) handleDecideApproval(c *echo.Context) error {
 	}
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim
-	return c.Redirect(http.StatusSeeOther, "/p/"+pipeline.Slug+"/approvals")
+	return c.Redirect(http.StatusSeeOther, returnTo(c, "/p/"+pipeline.Slug+"/approvals"))
 }
 
 // handleAnswerQuestion records an answer, through the same row `steps questions answer`
@@ -153,7 +153,7 @@ func (s *Server) handleAnswerQuestion(c *echo.Context) error {
 	}
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim
-	return c.Redirect(http.StatusSeeOther, "/p/"+pipeline.Slug+"/questions")
+	return c.Redirect(http.StatusSeeOther, returnTo(c, "/p/"+pipeline.Slug+"/questions"))
 }
 
 // decidedBy is who a decision made in the browser is recorded under: the signed-in person, or "web" on a server nobody signs in to, which is all that is known there.

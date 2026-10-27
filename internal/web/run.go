@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -107,18 +108,25 @@ func (s *Server) handleRun(c *echo.Context) error {
 		}
 	}
 
+	approvals, questions, err := parkedOn(ctx, readsOf(c, pipeline), view.Run)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
 	nav := s.nav(c)
 	nav.Mark = runMark(view.Run)
 	nav.MarkURL = "/p/" + pipeline.Slug + "/runs/" + view.Run.ID + "/mark"
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "run", map[string]any{
-		"Nav":   nav,
-		"Run":   view,
-		"Strip": strip,
-		"Job":   job,
-		"Bar":   runBar(pipeline, view.Run, jobErr == nil),
-		"Title": runTitle(view.Run),
+		"Nav":       nav,
+		"Run":       view,
+		"Strip":     strip,
+		"Job":       job,
+		"Approvals": approvals,
+		"Questions": questions,
+		"Bar":       runBar(pipeline, view.Run, jobErr == nil),
+		"Title":     runTitle(view.Run),
 		"Crumbs": []crumb{
 			{Label: "jobs", URL: "/p/" + pipeline.Slug},
 			{Label: view.Run.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + view.Run.JobName + "/detail"},
@@ -265,4 +273,40 @@ func (s *Server) handleNode(c *echo.Context) error {
 		"Runs":       runs,
 		"Transcript": transcriptEvents(transcript, hasTranscript),
 	})
+}
+
+// parkedOn is what this run is parked on a person for: the attention list already read the pipeline's pending backlog this request, so filtering that costs no query. It filters into fresh slices because the read is shared. Only a running run waits: an abort or a failed sibling leaves its approval pending, and nobody would act on that decision.
+func parkedOn(ctx context.Context, reads *pipelineReads, run store.RunRow) ([]store.Approval, []store.Question, error) {
+	if run.Status != store.RunRunning {
+		return nil, nil, nil
+	}
+
+	pendingApprovals, err := reads.PendingApprovals(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("pending approvals: %w", err)
+	}
+
+	pendingQuestions, err := reads.PendingQuestions(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("pending questions: %w", err)
+	}
+
+	var (
+		approvals []store.Approval
+		questions []store.Question
+	)
+
+	for _, a := range pendingApprovals {
+		if a.RunID == run.ID {
+			approvals = append(approvals, a)
+		}
+	}
+
+	for _, q := range pendingQuestions {
+		if q.RunID == run.ID {
+			questions = append(questions, q)
+		}
+	}
+
+	return approvals, questions, nil
 }

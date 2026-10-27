@@ -79,7 +79,7 @@ func (s *Store) DecideApproval(ctx context.Context, id int64, status store.Appro
 	return nil
 }
 
-const approvalColumns = `id, job_name, message, status, requested_at, decided_at,
+const approvalColumns = `id, COALESCE(run_id, ''), job_name, message, status, requested_at, decided_at,
 		       COALESCE(decided_by, ''), COALESCE(reason, '')`
 
 // scanApproval keeps whole seconds, the resolution the sqlite driver stores
@@ -91,7 +91,7 @@ func scanApproval(row rowScanner) (store.Approval, error) {
 		decided   sql.NullTime
 	)
 
-	err := row.Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.Status,
+	err := row.Scan(&approval.ID, &approval.RunID, &approval.JobName, &approval.Message, &approval.Status,
 		&requested, &decided, &approval.DecidedBy, &approval.Reason)
 
 	approval.RequestedAt = requested.UTC().Truncate(time.Second)
