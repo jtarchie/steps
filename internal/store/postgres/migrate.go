@@ -21,6 +21,7 @@ var migrations = []string{
     PRIMARY KEY (pipeline_id, name)
 )`,
 	`ALTER TABLE run_placements ADD COLUMN volume_bytes BIGINT`,
+	`ALTER TABLE run_steps ADD COLUMN hash TEXT NOT NULL DEFAULT ''`,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

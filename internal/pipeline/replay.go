@@ -159,7 +159,7 @@ func refuseReplayAcrossGet(job *config.Job, from int, fromStep string) error {
 // replay's own id, which is the build its walk asks about.
 func replayDoneSteps(
 	ctx context.Context, st store.Runs, sourceRunID, replayID string, job *config.Job, from int,
-) (map[doneKey]string, error) {
+) (map[doneKey]doneStep, error) {
 	steps, err := st.CompletedRunSteps(ctx, sourceRunID)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // CompletedRunSteps already names the run
@@ -173,7 +173,7 @@ func replayDoneSteps(
 		}
 	}
 
-	done := make(map[doneKey]string, from)
+	done := make(map[doneKey]doneStep, from)
 
 	for i := range from {
 		name := executedStepName(job.Plan[i])
@@ -185,7 +185,8 @@ func replayDoneSteps(
 				sourceRunID, i, name)
 		}
 
-		done[doneKey{replayID, i}] = name
+		// No hash, deliberately: chained from the source run's nodes, the steps after the replay point would hash as they did there and replay nothing.
+		done[doneKey{replayID, i}] = doneStep{name: name}
 	}
 
 	return done, nil

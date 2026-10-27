@@ -74,6 +74,8 @@ type RunStep struct {
 	BuildID string
 	Index   int
 	Name    string
+	// Hash is the node the step left for the next one to chain from, so a resume that skips it hashes what follows exactly as the first attempt did; empty for a step that made none (a when: guard) or one recorded before it was kept.
+	Hash string
 }
 
 // RunRow is one run invocation as the history views read it: the resume

@@ -40,7 +40,7 @@ func recordedRun() []store.RunInput {
 	}
 }
 
-func resumeRecorded(done map[doneKey]string, inputs []store.RunInput, history *resourceHistory) (setResolution, error) {
+func resumeRecorded(done map[doneKey]doneStep, inputs []store.RunInput, history *resourceHistory) (setResolution, error) {
 	ctx := withResume(context.Background(), &resumeState{id: "R", resuming: true, done: done})
 	fresh := setResolution{everyInputs: []everyInput{{input: "ticks", resource: "ticks"}}}
 
@@ -54,7 +54,7 @@ func resumeRecorded(done map[doneKey]string, inputs []store.RunInput, history *r
 func TestResumeInputSetsRebuildsTheRecordedBuild(t *testing.T) {
 	t.Parallel()
 
-	got, err := resumeRecorded(map[doneKey]string{{"R#0", 0}: "fragile"}, recordedRun(), ticksHistory("one", "two", "three"))
+	got, err := resumeRecorded(map[doneKey]doneStep{{"R#0", 0}: {name: "fragile"}}, recordedRun(), ticksHistory("one", "two", "three"))
 	if err != nil {
 		t.Fatalf("a recorded run was refused: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestResumeInputSetsRebuildsTheRecordedBuild(t *testing.T) {
 func TestResumeInputSetsResolvesAfreshBeforeTheFirstBuild(t *testing.T) {
 	t.Parallel()
 
-	got, err := resumeRecorded(map[doneKey]string{{"R", 0}: "prep"}, nil, ticksHistory("one"))
+	got, err := resumeRecorded(map[doneKey]doneStep{{"R", 0}: {name: "prep"}}, nil, ticksHistory("one"))
 	if err != nil || got.recorded || got.sets != nil {
 		t.Errorf("want the fresh resolution back, got %v, %v", got, err)
 	}
@@ -82,7 +82,7 @@ func TestResumeInputSetsResolvesAfreshBeforeTheFirstBuild(t *testing.T) {
 func TestResumeInputSetsRefusesABuildWithStepsButNoRecord(t *testing.T) {
 	t.Parallel()
 
-	_, err := resumeRecorded(map[doneKey]string{{"R#0", 0}: "fragile"}, nil, ticksHistory("one", "two"))
+	_, err := resumeRecorded(map[doneKey]doneStep{{"R#0", 0}: {name: "fragile"}}, nil, ticksHistory("one", "two"))
 	if err == nil || !strings.Contains(err.Error(), "not recorded") {
 		t.Errorf("want a refusal naming the missing record, got %v", err)
 	}
@@ -101,7 +101,7 @@ func TestResumeInputSetsRefusesAPrunedVersion(t *testing.T) {
 func TestProgressedPast(t *testing.T) {
 	t.Parallel()
 
-	done := map[doneKey]string{{"R#0", 2}: "change"}
+	done := map[doneKey]doneStep{{"R#0", 2}: {name: "change"}}
 
 	for name, tc := range map[string]struct {
 		state *resumeState
@@ -125,7 +125,7 @@ func TestProgressedPast(t *testing.T) {
 func TestBuildFinished(t *testing.T) {
 	t.Parallel()
 
-	done := map[doneKey]string{{"R#0", 1}: "change", {"R", 2}: "prep"}
+	done := map[doneKey]doneStep{{"R#0", 1}: {name: "change"}, {"R", 2}: {name: "prep"}}
 
 	for name, tc := range map[string]struct {
 		needed []int
@@ -148,12 +148,12 @@ func TestRefuseMissingWorkspaceOnlyWhenSomethingWasKept(t *testing.T) {
 
 	present := t.TempDir()
 	gone := filepath.Join(present, "gone")
-	kept := map[doneKey]string{{"R#0", 1}: "change"}
-	elsewhere := map[doneKey]string{{"R#1", 1}: "change"}
+	kept := map[doneKey]doneStep{{"R#0", 1}: {name: "change"}}
+	elsewhere := map[doneKey]doneStep{{"R#1", 1}: {name: "change"}}
 
 	for name, tc := range map[string]struct {
 		root    string
-		done    map[doneKey]string
+		done    map[doneKey]doneStep
 		refused bool
 	}{
 		"kept, tree gone":              {gone, kept, true},

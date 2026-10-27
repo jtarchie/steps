@@ -174,7 +174,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 		w.visits[w.index]++
 	}
 
-	recordCompletedStep(ctx, w.st, w.build, w.index, step, err)
+	recordCompletedStep(ctx, w.st, w.build, w.index, step, chainedHash(res), err)
 
 	nextIndex, _, err, exhaustedErr := applyRouting(ctx, steps, w.index, step, res.disposition, res.verdict, err, w.visits)
 	if exhaustedErr != nil {
@@ -202,8 +202,8 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 
 	w.chainUnskippable = unskippable
 
-	if res.disposition != stepGuardSkipped && res.hash != "" {
-		w.parentHash = res.hash
+	if hash := chainedHash(res); hash != "" {
+		w.parentHash = hash
 	}
 
 	w.index = nextIndex
@@ -216,9 +216,16 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
 	resume := resumeFrom(ctx)
 
-	name, done := resume.alreadyDone(w.build, w.index)
+	finished, done := resume.alreadyDone(w.build, w.index)
 	if !done || resume == nil {
 		return false
+	}
+
+	name := finished.name
+
+	// What running it would have done to the chain: skipped without it, every step after hashed against the wrong parent, and an approval asked again (steps#230).
+	if finished.hash != "" {
+		w.parentHash = finished.hash
 	}
 
 	notef(ctx, "skip: %s (already succeeded)", name)
@@ -278,13 +285,22 @@ func recordStepOutcome(ctx context.Context, step config.Step, out agentOutcome) 
 	agent.RecordOutcome(ctx, executedStepName(step), agent.Upstream{Verdict: out.verdict, Note: out.note, Response: out.response})
 }
 
+// chainedHash is the node a step leaves for the next one to chain from: none for a when: guard that skipped it.
+func chainedHash(res stepResult) string {
+	if res.disposition == stepGuardSkipped {
+		return ""
+	}
+
+	return res.hash
+}
+
 // recordCompletedStep marks a plan step as one a resume will not repeat.
 //
 // On success only: a failed step is exactly the one a resume must run again.
 // And on PLAN steps only — the concurrent block runners call runNonGetStep
 // with the enclosing block's index, so recording from there marked a whole
 // block done the moment any one branch succeeded.
-func recordCompletedStep(ctx context.Context, st store.Runs, build string, i int, step config.Step, err error) {
+func recordCompletedStep(ctx context.Context, st store.Runs, build string, i int, step config.Step, hash string, err error) {
 	if err != nil {
 		return
 	}
@@ -294,7 +310,7 @@ func recordCompletedStep(ctx context.Context, st store.Runs, build string, i int
 		return
 	}
 
-	bestEffort(ctx, "RecordRunStep", st.RecordRunStep(context.WithoutCancel(ctx), resume.id, store.RunStep{BuildID: build, Index: i, Name: executedStepName(step)}))
+	bestEffort(ctx, "RecordRunStep", st.RecordRunStep(context.WithoutCancel(ctx), resume.id, store.RunStep{BuildID: build, Index: i, Name: executedStepName(step), Hash: hash}))
 }
 
 // runNonGetStep runs a non-get step and dispatches its hooks around the

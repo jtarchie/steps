@@ -123,10 +123,10 @@ func (s *Store) RecordRunStep(ctx context.Context, runID string, step store.RunS
 	buildID, index, name := step.BuildID, step.Index, step.Name
 
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO run_steps (run_id, build_id, step_index, step_name)
-		SELECT $1, $2, $3, $4 WHERE EXISTS (SELECT 1 FROM runs WHERE id = $5 AND pipeline_id = $6)
+		INSERT INTO run_steps (run_id, build_id, step_index, step_name, hash)
+		SELECT $1, $2, $3, $4, $5 WHERE EXISTS (SELECT 1 FROM runs WHERE id = $6 AND pipeline_id = $7)
 		ON CONFLICT (run_id, build_id, step_index) DO NOTHING
-	`, runID, buildID, index, name, runID, s.pipelineID)
+	`, runID, buildID, index, name, step.Hash, runID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not record step %d of build %q: %w", index, buildID, err)
 	}
@@ -185,14 +185,14 @@ func (s *Store) RecordRunRerun(ctx context.Context, runID, originalID string) er
 // they finished.
 func (s *Store) CompletedRunSteps(ctx context.Context, runID string) ([]store.RunStep, error) {
 	return collect(ctx, s.db, "the steps of run "+runID,
-		`SELECT s.build_id, s.step_index, s.step_name FROM run_steps s
+		`SELECT s.build_id, s.step_index, s.step_name, s.hash FROM run_steps s
 		 JOIN runs r ON r.id = s.run_id
 		 WHERE s.run_id = $1 AND r.pipeline_id = $2
 		 ORDER BY s.seq`,
 		[]any{runID, s.pipelineID}, func(rows *sql.Rows) (store.RunStep, error) {
 			var one store.RunStep
 
-			return one, rows.Scan(&one.BuildID, &one.Index, &one.Name)
+			return one, rows.Scan(&one.BuildID, &one.Index, &one.Name, &one.Hash)
 		})
 }
 

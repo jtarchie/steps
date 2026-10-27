@@ -26,7 +26,7 @@ type resumeState struct {
 	id string
 	// done names the steps a previous attempt of this run already
 	// completed, by the build they ran in and their index within it.
-	done map[doneKey]string
+	done map[doneKey]doneStep
 	// resuming is true when this run continues a previous one.
 	resuming bool
 	// refetch is set when the build of the run being resumed finished, so
@@ -50,11 +50,17 @@ type doneKey struct {
 	index int
 }
 
+// doneStep is a step a previous attempt finished: its name, and the node it left for the next step to chain from (empty when it made none, or was recorded before hashes were kept).
+type doneStep struct {
+	name string
+	hash string
+}
+
 // foldRunSteps indexes a run's recorded steps for alreadyDone.
-func foldRunSteps(steps []store.RunStep) map[doneKey]string {
-	done := make(map[doneKey]string, len(steps))
+func foldRunSteps(steps []store.RunStep) map[doneKey]doneStep {
+	done := make(map[doneKey]doneStep, len(steps))
 	for _, step := range steps {
-		done[doneKey{step.BuildID, step.Index}] = step.Name
+		done[doneKey{step.BuildID, step.Index}] = doneStep{name: step.Name, hash: step.Hash}
 	}
 
 	return done
@@ -72,14 +78,14 @@ func resumeFrom(ctx context.Context) *resumeState {
 
 // alreadyDone reports whether a previous attempt of this run finished a step
 // of one build.
-func (r *resumeState) alreadyDone(build string, index int) (string, bool) {
+func (r *resumeState) alreadyDone(build string, index int) (doneStep, bool) {
 	if r == nil || !r.resuming {
-		return "", false
+		return doneStep{}, false
 	}
 
-	name, ok := r.done[doneKey{build, index}]
+	step, ok := r.done[doneKey{build, index}]
 
-	return name, ok
+	return step, ok
 }
 
 // progressedPast reports whether a previous attempt of this run completed a
@@ -171,7 +177,7 @@ func remainderSteps(job *config.Job) []int {
 }
 
 // buildFinished reports whether every needed step of build is recorded done.
-func buildFinished(done map[doneKey]string, build string, needed []int) bool {
+func buildFinished(done map[doneKey]doneStep, build string, needed []int) bool {
 	for _, i := range needed {
 		if _, ok := done[doneKey{build, i}]; !ok {
 			return false
@@ -183,7 +189,7 @@ func buildFinished(done map[doneKey]string, build string, needed []int) bool {
 
 // refuseMissingWorkspace refuses a resume that would keep artifacts from a
 // tree that is no longer there.
-func refuseMissingWorkspace(runID, root string, done map[doneKey]string, build string) error {
+func refuseMissingWorkspace(runID, root string, done map[doneKey]doneStep, build string) error {
 	kept := false
 
 	for key := range done {
@@ -231,7 +237,7 @@ func NewRunID() string {
 
 // newRunState is a fresh run under id.
 func newRunState(id string) *resumeState {
-	return &resumeState{id: id, done: map[doneKey]string{}}
+	return &resumeState{id: id, done: map[doneKey]doneStep{}}
 }
 
 // runLookup is a run read that can also name the pipeline it read: Meta beside

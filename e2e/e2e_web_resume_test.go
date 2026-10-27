@@ -159,6 +159,19 @@ func assertStepIDsUnique(t *testing.T, state, name, runID string) {
 
 // A restart while a run waits on an approval resumes the run onto the approval it already made. It used to ask again, leaving one more pending approval per restart that nothing waited on, so deciding the old one did nothing and the run stayed parked.
 func TestARestartKeepsTheApprovalARunWaitsOn(t *testing.T) {
+	restartKeepsTheApproval(t, "")
+}
+
+// The same, behind a step the resume skips: skipping it left the next step's parent hash unset, so the approval hashed differently and asked again (steps#230).
+func TestARestartKeepsTheApprovalBehindAFinishedStep(t *testing.T) {
+	restartKeepsTheApproval(t, `
+  - task: draft
+    run: echo drafted`)
+}
+
+func restartKeepsTheApproval(t *testing.T, before string) {
+	t.Helper()
+
 	dir := t.TempDir()
 	done := filepath.Join(dir, "done")
 
@@ -171,7 +184,7 @@ workspace:
 jobs:
 - name: deploy
   interruptible: true
-  plan:
+  plan:`+before+`
   - approval:
       message: ship it?
       timeout: 1h

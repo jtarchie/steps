@@ -191,10 +191,10 @@ func (s *Store) RecordRunStep(ctx context.Context, runID string, step store.RunS
 	buildID, index, name := step.BuildID, step.Index, step.Name
 
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO run_steps (run_id, build_id, step_index, step_name)
-		SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND pipeline_id = ?)
+		INSERT INTO run_steps (run_id, build_id, step_index, step_name, hash)
+		SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND pipeline_id = ?)
 		ON CONFLICT (run_id, build_id, step_index) DO NOTHING
-	`, runID, buildID, index, name, runID, s.pipelineID)
+	`, runID, buildID, index, name, step.Hash, runID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not record step %d of build %q: %w", index, buildID, err)
 	}
@@ -263,14 +263,14 @@ func (s *Store) CompletedRunSteps(ctx context.Context, runID string) ([]store.Ru
 	// here would hand one run another's completed steps and --resume would
 	// skip work it never did.
 	return collect(ctx, s.reads, "the steps of run "+runID,
-		`SELECT s.build_id, s.step_index, s.step_name FROM run_steps s
+		`SELECT s.build_id, s.step_index, s.step_name, s.hash FROM run_steps s
 		 JOIN runs r ON r.id = s.run_id
 		 WHERE s.run_id = ? AND r.pipeline_id = ?
 		 ORDER BY s.rowid`,
 		[]any{runID, s.pipelineID}, func(rows *sql.Rows) (store.RunStep, error) {
 			var one store.RunStep
 
-			return one, rows.Scan(&one.BuildID, &one.Index, &one.Name)
+			return one, rows.Scan(&one.BuildID, &one.Index, &one.Name, &one.Hash)
 		})
 }
 

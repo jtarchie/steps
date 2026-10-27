@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 32 added run_steps.hash, the node a finished step left, so a resume that skips it chains what follows from the same parent (steps#230).
+//
 // 31 added run_placements.volume_bytes, what a placed step's own volumes held on its worker.
 //
 // 30 added credentials, sealed secrets a pipeline keeps (mcp oauth logins).
@@ -94,7 +96,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 31
+const schemaVersion = 32
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -559,6 +561,7 @@ CREATE TABLE IF NOT EXISTS run_steps (
     build_id   TEXT NOT NULL,
     step_index INTEGER NOT NULL,
     step_name  TEXT NOT NULL,
+    hash       TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (run_id, build_id, step_index)
 );
 
