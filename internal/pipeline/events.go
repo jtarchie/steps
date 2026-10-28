@@ -367,7 +367,7 @@ func skipReason(disposition stepDisposition) string {
 		return "same inputs as an earlier run — outputs reused"
 	case stepGuardSkipped:
 		return "when: guard was false"
-	case stepRan:
+	case stepRan, stepResumed:
 		return ""
 	}
 

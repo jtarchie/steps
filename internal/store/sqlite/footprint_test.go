@@ -783,6 +783,12 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 	if declaresForeignKey(ctx, t, st, "agent_usage", "step_id") {
 		t.Error("agent_usage.step_id declares a foreign key; run_events.step_id is not unique, so there is no key to point at")
 	}
+
+	// The fifth, for job_runs.root_hash's reasons: a block's hash has no node, and a resume record must outlive the node it names.
+	if declaresForeignKey(ctx, t, st, "run_steps", "hash") {
+		t.Error("run_steps.hash declares a foreign key; a do:/in_parallel: block leaves a hash no node describes, " +
+			"and cascading off node retention would re-run a step the resume knew had succeeded")
+	}
 }
 
 func hasForeignKey(ctx context.Context, t *testing.T, st *Store, table, column, target, onDelete string) bool {

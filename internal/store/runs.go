@@ -74,7 +74,7 @@ type RunStep struct {
 	BuildID string
 	Index   int
 	Name    string
-	// Hash is the node the step left for the next one to chain from, so a resume that skips it hashes what follows exactly as the first attempt did; empty for a step that made none (a when: guard) or one recorded before it was kept.
+	// Hash is the node the step left for the next one to chain from, so a resume that skips it hashes what follows exactly as the first attempt did; a step visited again by a route keeps its LAST visit's, the one the walk moved on from. Empty for a step recorded before it was kept.
 	Hash string
 }
 

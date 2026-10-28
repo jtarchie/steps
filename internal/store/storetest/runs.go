@@ -251,8 +251,9 @@ func (s suite) TestRunStepsAreKeptPerWalk(t *testing.T) {
 	// The build's step first, so completion order and build-id order disagree.
 	for _, step := range []store.RunStep{
 		{BuildID: run + "#0", Index: 0, Name: "compile"},
-		{BuildID: run, Index: 0, Name: "prep", Hash: "prephash"},
+		{BuildID: run, Index: 0, Name: "prep", Hash: "firstvisit"},
 		{BuildID: run + "#0", Index: 0, Name: "compile"},
+		{BuildID: run, Index: 0, Name: "prep", Hash: "prephash"},
 	} {
 		err = web.RecordRunStep(ctx, run, step)
 		if err != nil {
@@ -265,7 +266,7 @@ func (s suite) TestRunStepsAreKeptPerWalk(t *testing.T) {
 		t.Fatalf("CompletedRunSteps: %v", err)
 	}
 
-	// The hash comes back with its step: a resume chains what follows from it.
+	// The hash comes back with its step, from its LAST visit: a resume chains what follows from it, and a route that sent the walk back through it moved on from that one.
 	want := []store.RunStep{
 		{BuildID: run + "#0", Index: 0, Name: "compile"},
 		{BuildID: run, Index: 0, Name: "prep", Hash: "prephash"},

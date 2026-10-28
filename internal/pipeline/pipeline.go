@@ -64,6 +64,8 @@ const (
 	// advances to the step's node exactly as if it had run, because as far as
 	// everything downstream can observe, it did.
 	stepCacheHit
+	// stepResumed: a previous attempt of this run already finished the step, so it is not run again; parentHash advances to the node that attempt left.
+	stepResumed
 )
 
 // stepResult is what running one step produced: the node hash the next step

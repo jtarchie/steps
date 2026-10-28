@@ -160,21 +160,23 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 	// Recorded from there, one succeeding branch marked the whole block done,
 	// and a resume skipped the block including the branch that had failed,
 	// exiting 0 having re-attempted nothing.
-	if w.skipCompleted(ctx, step) {
-		return false, nil
+	res, resumed := w.skipCompleted(ctx, step)
+
+	var err error
+
+	if !resumed {
+		res, err = runNonGetStep(ctx, w.stepRunner, w.index, step, w.skippable, w.parentHash)
+
+		// A cache hit counts as a visit for the same reason it advances
+		// parentHash: the step produced its result. (No cacheable step routes, so
+		// nothing reads this count today — but a visit that means "the plan moved
+		// through here" must not depend on whether the work was paid for twice.)
+		if res.disposition == stepRan || res.disposition == stepCacheHit {
+			w.visits[w.index]++
+		}
+
+		recordCompletedStep(ctx, w.st, w.build, w.index, step, res.hash, err)
 	}
-
-	res, err := runNonGetStep(ctx, w.stepRunner, w.index, step, w.skippable, w.parentHash)
-
-	// A cache hit counts as a visit for the same reason it advances
-	// parentHash: the step produced its result. (No cacheable step routes, so
-	// nothing reads this count today — but a visit that means "the plan moved
-	// through here" must not depend on whether the work was paid for twice.)
-	if res.disposition == stepRan || res.disposition == stepCacheHit {
-		w.visits[w.index]++
-	}
-
-	recordCompletedStep(ctx, w.st, w.build, w.index, step, chainedHash(res), err)
 
 	nextIndex, _, err, exhaustedErr := applyRouting(ctx, steps, w.index, step, res.disposition, res.verdict, err, w.visits)
 	if exhaustedErr != nil {
@@ -202,8 +204,8 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 
 	w.chainUnskippable = unskippable
 
-	if hash := chainedHash(res); hash != "" {
-		w.parentHash = hash
+	if res.hash != "" {
+		w.parentHash = res.hash
 	}
 
 	w.index = nextIndex
@@ -212,21 +214,16 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 }
 
 // skipCompleted skips a plan step a previous attempt of this run already
-// finished, advancing the index. It reports whether it skipped.
-func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
+// finished. It reports whether it skipped, and the result that attempt left, for runStep to carry on from as though the step had just run.
+func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) (stepResult, bool) {
 	resume := resumeFrom(ctx)
 
 	finished, done := resume.alreadyDone(w.build, w.index)
 	if !done || resume == nil {
-		return false
+		return stepResult{}, false
 	}
 
 	name := finished.name
-
-	// What running it would have done to the chain: skipped without it, every step after hashed against the wrong parent, and an approval asked again (steps#230).
-	if finished.hash != "" {
-		w.parentHash = finished.hash
-	}
 
 	notef(ctx, "skip: %s (already succeeded)", name)
 	slog.InfoContext(ctx, "job.skip", "index", w.index, "build", w.build, "reason", "resume", "step", name)
@@ -241,9 +238,7 @@ func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
 		slog.WarnContext(ctx, "job.resume_put_unrecorded", "put", step.Put, "job", w.jobName)
 	}
 
-	w.index++
-
-	return true
+	return stepResult{hash: finished.hash, disposition: stepResumed}, true
 }
 
 // reportChainSkipped announces the steps a chain-skip swallowed. firstIndex is
@@ -283,15 +278,6 @@ func recordStepOutcome(ctx context.Context, step config.Step, out agentOutcome) 
 	}
 
 	agent.RecordOutcome(ctx, executedStepName(step), agent.Upstream{Verdict: out.verdict, Note: out.note, Response: out.response})
-}
-
-// chainedHash is the node a step leaves for the next one to chain from: none for a when: guard that skipped it.
-func chainedHash(res stepResult) string {
-	if res.disposition == stepGuardSkipped {
-		return ""
-	}
-
-	return res.hash
 }
 
 // recordCompletedStep marks a plan step as one a resume will not repeat.

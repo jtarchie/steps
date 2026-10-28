@@ -67,6 +67,45 @@ jobs:
 	}
 }
 
+// TestResumeKeepsAChainItSkippedThroughUncacheable: a resume that skips a when:-guarded step still owes the chain its uncacheability, or the resumed run files the chain in the skip index and the next run skips work it was told never to cache.
+func TestResumeKeepsAChainItSkippedThroughUncacheable(t *testing.T) {
+	dir := t.TempDir()
+	flag := filepath.Join(dir, "fixed")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: publish
+  plan:
+  - task: stamp
+    when: "true"
+    run: date
+  - task: fragile
+    run: test -f %[1]s
+`, flag))
+
+	out := captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--job", "publish"})
+		if err == nil {
+			t.Fatal("expected the fragile step to fail")
+		}
+	})
+
+	before := len(storeJobRuns(t, path))
+
+	writePipelineFile(t, flag, "")
+
+	captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--resume", resumeID(t, out)})
+		if err != nil {
+			t.Fatalf("resume failed: %v", err)
+		}
+	})
+
+	if runs := storeJobRuns(t, path); len(runs) != before {
+		t.Errorf("job_runs = %+v, want no chain recorded through the guarded step the resume skipped", runs)
+	}
+}
+
 // TestResumeKeepsTheWorkspace verifies the artifacts of the finished steps
 // survive into the resumed run. Without that, "resume" would mean running the
 // remaining steps against empty inputs and calling it a recovery.

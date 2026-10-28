@@ -84,6 +84,36 @@ jobs:
 	}
 }
 
+// TestReplayRerunsAnUnchangedStep: a replay is asked for to run the step again, so the steps it skips must not chain it onto the source run's nodes, where an unchanged step would find its own success and replay nothing.
+func TestReplayRerunsAnUnchangedStep(t *testing.T) {
+	dir := t.TempDir()
+	again := filepath.Join(dir, "again.log")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: publish
+  plan:
+  - task: first
+    run: echo first
+  - task: again
+    run: echo ran >> %[1]s
+`, again))
+
+	err := cli.Run([]string{"run", path, "--job", "publish", "--keep-workspace"})
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	captureStdout(t, func() {
+		err = cli.Run([]string{"run", path, "--job", "publish", "--replay", runIDFromStore(t, path), "--from", "again"})
+		if err != nil {
+			t.Fatalf("replay: %v", err)
+		}
+	})
+
+	assertLineCount(t, again, 2)
+}
+
 // TestReplayForksRatherThanMutating pins the choice not to re-enter the source
 // run: the run being compared against has to still be there afterwards, or
 // measuring a prompt change destroys its own baseline.

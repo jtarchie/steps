@@ -561,6 +561,10 @@ CREATE TABLE IF NOT EXISTS run_steps (
     build_id   TEXT NOT NULL,
     step_index INTEGER NOT NULL,
     step_name  TEXT NOT NULL,
+    -- Names a node and deliberately does not reference one, as job_runs.root_hash
+    -- does not: a do: or in_parallel: block leaves a hash no node row describes,
+    -- a row recorded before the column existed holds '', and cascading a resume
+    -- record away when retention reaps its node would re-run a step that succeeded.
     hash       TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (run_id, build_id, step_index)
 );

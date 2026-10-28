@@ -188,15 +188,13 @@ func (s *Store) FinishRun(ctx context.Context, id string, status store.RunStatus
 // RecordRunStep marks one step of one build of a run as done, so a resume
 // skips it.
 func (s *Store) RecordRunStep(ctx context.Context, runID string, step store.RunStep) error {
-	buildID, index, name := step.BuildID, step.Index, step.Name
-
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_steps (run_id, build_id, step_index, step_name, hash)
 		SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND pipeline_id = ?)
-		ON CONFLICT (run_id, build_id, step_index) DO NOTHING
-	`, runID, buildID, index, name, step.Hash, runID, s.pipelineID)
+		ON CONFLICT (run_id, build_id, step_index) DO UPDATE SET hash = excluded.hash
+	`, runID, step.BuildID, step.Index, step.Name, step.Hash, runID, s.pipelineID)
 	if err != nil {
-		return fmt.Errorf("could not record step %d of build %q: %w", index, buildID, err)
+		return fmt.Errorf("could not record step %d of build %q: %w", step.Index, step.BuildID, err)
 	}
 
 	return s.requireRun(ctx, result, runID)
