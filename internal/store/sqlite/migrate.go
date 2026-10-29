@@ -28,6 +28,20 @@ ALTER TABLE run_placements DROP COLUMN fs_free;`),
 );`),
 	execStep(`ALTER TABLE run_placements ADD COLUMN volume_bytes INTEGER;`),
 	execStep(`ALTER TABLE run_steps ADD COLUMN hash TEXT NOT NULL DEFAULT '';`),
+	execStep(`CREATE TABLE run_steps_v33 (
+    run_id     TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    build_id   TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    step_name  TEXT NOT NULL,
+    hash       TEXT NOT NULL DEFAULT '',
+    visit      INTEGER NOT NULL DEFAULT 1,
+    outcome    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (run_id, build_id, step_index, visit)
+);
+INSERT INTO run_steps_v33 (run_id, build_id, step_index, step_name, hash)
+    SELECT run_id, build_id, step_index, step_name, hash FROM run_steps ORDER BY rowid;
+DROP TABLE run_steps;
+ALTER TABLE run_steps_v33 RENAME TO run_steps;`),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {

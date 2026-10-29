@@ -100,7 +100,8 @@ func resolveTransition(ctx context.Context, steps []config.Step, i int, step con
 // failure) instead of routing. routedKey is non-empty only when the step
 // actually routed; the walk discards it, and only tests read it.
 func applyRouting(ctx context.Context, steps []config.Step, i int, step config.Step, disposition stepDisposition, verdict string, stepErr error, visits map[int]int) (nextIndex int, routedKey string, consumedErr, exhaustedErr error) {
-	if !step.Routes() || disposition != stepRan {
+	replayed := disposition == stepResumed && verdict != ""
+	if !step.Routes() || (disposition != stepRan && !replayed) {
 		return i + 1, "", stepErr, nil
 	}
 
@@ -110,7 +111,7 @@ func applyRouting(ctx context.Context, steps []config.Step, i int, step config.S
 	}
 
 	if routed {
-		reportRoute(ctx, steps, i, step, target, key, visits)
+		reportRoute(ctx, steps, i, step, target, key, visits, replayed)
 
 		return target, key, nil, nil // consume the outcome — the job does not also fail
 	}
@@ -128,7 +129,7 @@ func applyRouting(ctx context.Context, steps []config.Step, i int, step config.S
 // many times this step may execute (see resolveTransition), so its own count
 // against its own bound is the number that says how close the loop is to
 // exhausting.
-func reportRoute(ctx context.Context, steps []config.Step, i int, step config.Step, target int, key string, visits map[int]int) {
+func reportRoute(ctx context.Context, steps []config.Step, i int, step config.Step, target int, key string, visits map[int]int, replayed bool) {
 	from, to := executedStepName(step), routeTargetName(steps, target)
 
 	progress := fmt.Sprintf("visit %d", visits[i])
@@ -136,8 +137,12 @@ func reportRoute(ctx context.Context, steps []config.Step, i int, step config.St
 		progress = fmt.Sprintf("visit %d/%d", visits[i], step.MaxVisits)
 	}
 
+	if replayed {
+		progress += ", replayed"
+	}
+
 	notef(ctx, "route: %s --%s--> %s (%s)", from, key, to, progress)
-	slog.InfoContext(ctx, "job.route", "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits)
+	slog.InfoContext(ctx, "job.route", "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits, "replayed", replayed)
 }
 
 // foldStepUnskippable ORs step's own unskippability into chainUnskippable in

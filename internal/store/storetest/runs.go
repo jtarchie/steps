@@ -248,12 +248,12 @@ func (s suite) TestRunStepsAreKeptPerWalk(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	// The build's step first, so completion order and build-id order disagree.
+	// The build's step first, so completion order and build-id order disagree; prep's second visit is a route sending the walk back through it, and compile's repeat is the same visit recorded twice.
 	for _, step := range []store.RunStep{
-		{BuildID: run + "#0", Index: 0, Name: "compile"},
-		{BuildID: run, Index: 0, Name: "prep", Hash: "firstvisit"},
-		{BuildID: run + "#0", Index: 0, Name: "compile"},
-		{BuildID: run, Index: 0, Name: "prep", Hash: "prephash"},
+		{BuildID: run + "#0", Index: 0, Visit: 1, Name: "compile"},
+		{BuildID: run, Index: 0, Visit: 1, Name: "prep", Hash: "firstvisit", Outcome: "failure"},
+		{BuildID: run + "#0", Index: 0, Visit: 1, Name: "compile", Outcome: "success"},
+		{BuildID: run, Index: 0, Visit: 2, Name: "prep", Hash: "prephash", Outcome: "success"},
 	} {
 		err = web.RecordRunStep(ctx, run, step)
 		if err != nil {
@@ -266,10 +266,11 @@ func (s suite) TestRunStepsAreKeptPerWalk(t *testing.T) {
 		t.Fatalf("CompletedRunSteps: %v", err)
 	}
 
-	// The hash comes back with its step, from its LAST visit: a resume chains what follows from it, and a route that sent the walk back through it moved on from that one.
+	// Every visit comes back with its own hash and outcome, in the order they were recorded: a resume replays each pass, routing on what it produced, and the last one is where the walk moved on from.
 	want := []store.RunStep{
-		{BuildID: run + "#0", Index: 0, Name: "compile"},
-		{BuildID: run, Index: 0, Name: "prep", Hash: "prephash"},
+		{BuildID: run + "#0", Index: 0, Visit: 1, Name: "compile", Outcome: "success"},
+		{BuildID: run, Index: 0, Visit: 1, Name: "prep", Hash: "firstvisit", Outcome: "failure"},
+		{BuildID: run, Index: 0, Visit: 2, Name: "prep", Hash: "prephash", Outcome: "success"},
 	}
 
 	if len(got) != len(want) {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
@@ -54,7 +55,7 @@ func resumeRecorded(done map[doneKey]doneStep, inputs []store.RunInput, history 
 func TestResumeInputSetsRebuildsTheRecordedBuild(t *testing.T) {
 	t.Parallel()
 
-	got, err := resumeRecorded(map[doneKey]doneStep{{"R#0", 0}: {name: "fragile"}}, recordedRun(), ticksHistory("one", "two", "three"))
+	got, err := resumeRecorded(map[doneKey]doneStep{{"R#0", 0, 1}: {name: "fragile"}}, recordedRun(), ticksHistory("one", "two", "three"))
 	if err != nil {
 		t.Fatalf("a recorded run was refused: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestResumeInputSetsRebuildsTheRecordedBuild(t *testing.T) {
 func TestResumeInputSetsResolvesAfreshBeforeTheFirstBuild(t *testing.T) {
 	t.Parallel()
 
-	got, err := resumeRecorded(map[doneKey]doneStep{{"R", 0}: {name: "prep"}}, nil, ticksHistory("one"))
+	got, err := resumeRecorded(map[doneKey]doneStep{{"R", 0, 1}: {name: "prep"}}, nil, ticksHistory("one"))
 	if err != nil || got.recorded || got.sets != nil {
 		t.Errorf("want the fresh resolution back, got %v, %v", got, err)
 	}
@@ -82,7 +83,7 @@ func TestResumeInputSetsResolvesAfreshBeforeTheFirstBuild(t *testing.T) {
 func TestResumeInputSetsRefusesABuildWithStepsButNoRecord(t *testing.T) {
 	t.Parallel()
 
-	_, err := resumeRecorded(map[doneKey]doneStep{{"R#0", 0}: {name: "fragile"}}, nil, ticksHistory("one", "two"))
+	_, err := resumeRecorded(map[doneKey]doneStep{{"R#0", 0, 1}: {name: "fragile"}}, nil, ticksHistory("one", "two"))
 	if err == nil || !strings.Contains(err.Error(), "not recorded") {
 		t.Errorf("want a refusal naming the missing record, got %v", err)
 	}
@@ -101,7 +102,7 @@ func TestResumeInputSetsRefusesAPrunedVersion(t *testing.T) {
 func TestProgressedPast(t *testing.T) {
 	t.Parallel()
 
-	done := map[doneKey]doneStep{{"R#0", 2}: {name: "change"}}
+	done := map[doneKey]doneStep{{"R#0", 2, 1}: {name: "change"}}
 
 	for name, tc := range map[string]struct {
 		state *resumeState
@@ -122,21 +123,32 @@ func TestProgressedPast(t *testing.T) {
 	}
 }
 
+// TestBuildFinished: finished is what replaying the recorded passes says, so a route that jumped past a step, or a loop, reads as the walk took it rather than as unvisited indices.
 func TestBuildFinished(t *testing.T) {
 	t.Parallel()
 
-	done := map[doneKey]doneStep{{"R#0", 1}: {name: "change"}, {"R", 2}: {name: "prep"}}
+	task := func(name string) config.Step { return config.Step{Task: name} }
+	routed := func(name, key, target string) config.Step {
+		return config.Step{Task: name, To: map[string]string{key: target}}
+	}
 
 	for name, tc := range map[string]struct {
-		needed []int
-		want   bool
+		done  map[doneKey]doneStep
+		steps []config.Step
+		want  bool
 	}{
-		"every needed step":                 {[]int{1}, true},
-		"a step left":                       {[]int{1, 2}, false},
-		"the same index before the get":     {[]int{2}, false},
-		"a plan with nothing after the get": {nil, true},
+		"every step":                             {map[doneKey]doneStep{{"R#0", 0, 1}: {}, {"R#0", 1, 1}: {}}, []config.Step{task("a"), task("b")}, true},
+		"a step left":                            {map[doneKey]doneStep{{"R#0", 0, 1}: {}}, []config.Step{task("a"), task("b")}, false},
+		"the same index before the get":          {map[doneKey]doneStep{{"R", 0, 1}: {}}, []config.Step{task("a")}, false},
+		"a plan with nothing after the get":      {nil, nil, true},
+		"an in-place get is stepped over":        {map[doneKey]doneStep{{"R#0", 1, 1}: {}}, []config.Step{{Get: "more"}, task("b")}, true},
+		"a route jumped past a step":             {map[doneKey]doneStep{{"R#0", 0, 1}: {outcome: "success"}, {"R#0", 2, 1}: {outcome: "success"}}, []config.Step{routed("a", "success", "c"), task("b"), task("c")}, true},
+		"a route whose target is unvisited":      {map[doneKey]doneStep{{"R#0", 0, 1}: {outcome: "success"}}, []config.Step{routed("a", "success", "c"), task("b"), task("c")}, false},
+		"a loop with every pass":                 {map[doneKey]doneStep{{"R#0", 0, 1}: {outcome: "success"}, {"R#0", 1, 1}: {outcome: "failure"}, {"R#0", 0, 2}: {outcome: "success"}, {"R#0", 1, 2}: {outcome: "success"}}, []config.Step{task("bump"), routed("check", "failure", "bump")}, true},
+		"a loop interrupted on its second pass":  {map[doneKey]doneStep{{"R#0", 0, 1}: {outcome: "success"}, {"R#0", 1, 1}: {outcome: "failure"}, {"R#0", 0, 2}: {outcome: "success"}}, []config.Step{task("bump"), routed("check", "failure", "bump")}, false},
+		"a row without an outcome falls through": {map[doneKey]doneStep{{"R#0", 0, 1}: {}, {"R#0", 1, 1}: {}, {"R#0", 2, 1}: {}}, []config.Step{routed("a", "success", "c"), task("b"), task("c")}, true},
 	} {
-		if got := buildFinished(done, "R#0", tc.needed); got != tc.want {
+		if got := buildFinished(tc.done, "R#0", tc.steps); got != tc.want {
 			t.Errorf("%s: buildFinished = %v, want %v", name, got, tc.want)
 		}
 	}
@@ -148,8 +160,8 @@ func TestRefuseMissingWorkspaceOnlyWhenSomethingWasKept(t *testing.T) {
 
 	present := t.TempDir()
 	gone := filepath.Join(present, "gone")
-	kept := map[doneKey]doneStep{{"R#0", 1}: {name: "change"}}
-	elsewhere := map[doneKey]doneStep{{"R#1", 1}: {name: "change"}}
+	kept := map[doneKey]doneStep{{"R#0", 1, 1}: {name: "change"}}
+	elsewhere := map[doneKey]doneStep{{"R#1", 1, 1}: {name: "change"}}
 
 	for name, tc := range map[string]struct {
 		root    string

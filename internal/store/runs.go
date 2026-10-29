@@ -18,7 +18,7 @@ type Runs interface {
 	// ResumableRuns is every run of this pipeline still recorded running, or that a queue row still waits to resume (a restart before its resume started): at startup, the ones a restart may resume, whose workspaces must survive the stale-build sweep.
 	ResumableRuns(ctx context.Context) ([]RunRow, error)
 	FinishRun(ctx context.Context, id string, status RunStatus) error
-	// RecordRunStep marks a step of a run done. buildID is "<run>#0" inside
+	// RecordRunStep marks one pass of a step of a run done. buildID is "<run>#0" inside
 	// the build a get triggers and the bare run id before it.
 	RecordRunStep(ctx context.Context, runID string, step RunStep) error
 	RecordRunParent(ctx context.Context, runID, parentID string) error
@@ -73,8 +73,12 @@ type NewRun struct {
 type RunStep struct {
 	BuildID string
 	Index   int
-	Name    string
-	// Hash is the node the step left for the next one to chain from, so a resume that skips it hashes what follows exactly as the first attempt did; a step visited again by a route keeps its LAST visit's, the one the walk moved on from. Empty for a step recorded before it was kept.
+	// Visit is which pass of the walk through Index this is, from 1: a to: route that sends the walk back through a step records a row per pass, so a resume replays each pass as it happened rather than the last one only.
+	Visit int
+	Name  string
+	// Outcome is the routing key the pass produced (success, failure, or an agent's verdict), empty for a pass that executed nothing (a when: guard skipped it, or it predates this column). A resume routes on it and counts it toward max_visits, which the walk cannot re-derive without running the step.
+	Outcome string
+	// Hash is the node the step left for the next one to chain from, so a resume that skips it hashes what follows exactly as the first attempt did. Empty for a step recorded before it was kept.
 	Hash string
 }
 

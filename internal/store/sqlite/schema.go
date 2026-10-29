@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 33 rekeyed run_steps per visit and added outcome, so a resume replays the route each pass took (steps#231). Rows from before carry visit 1 and no outcome: a resume skips them without routing on them, as it always did.
+//
 // 32 added run_steps.hash, the node a finished step left, so a resume that skips it chains what follows from the same parent (steps#230).
 //
 // 31 added run_placements.volume_bytes, what a placed step's own volumes held on its worker.
@@ -96,7 +98,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 32
+const schemaVersion = 33
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -566,7 +568,10 @@ CREATE TABLE IF NOT EXISTS run_steps (
     -- a row recorded before the column existed holds '', and cascading a resume
     -- record away when retention reaps its node would re-run a step that succeeded.
     hash       TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (run_id, build_id, step_index)
+    -- One row per pass of the walk through the step: a backward to: route visits it again, and a resume replays the passes in order (steps#231).
+    visit      INTEGER NOT NULL DEFAULT 1,
+    outcome    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (run_id, build_id, step_index, visit)
 );
 
 -- Human decisions on approval: steps. The row IS the audit trail; it must not

@@ -24,8 +24,8 @@ import (
 type resumeState struct {
 	// id identifies this run, printed on failure so it can be resumed.
 	id string
-	// done names the steps a previous attempt of this run already
-	// completed, by the build they ran in and their index within it.
+	// done names the passes a previous attempt of this run already
+	// completed, by the build they ran in, their index within it, and which pass through that index.
 	done map[doneKey]doneStep
 	// resuming is true when this run continues a previous one.
 	resuming bool
@@ -48,19 +48,22 @@ type resumeKey struct{}
 type doneKey struct {
 	build string
 	index int
+	// visit is which pass through index, from 1: a backward route records one row per pass, and a resume replays them in order.
+	visit int
 }
 
-// doneStep is a step a previous attempt finished: its name, and the node it left for the next step to chain from (empty when it made none, or was recorded before hashes were kept).
+// doneStep is a step a previous attempt finished: its name, the node it left for the next step to chain from (empty when it made none, or was recorded before hashes were kept), and the routing key it produced (empty when it executed nothing, or was recorded before outcomes were kept).
 type doneStep struct {
-	name string
-	hash string
+	name    string
+	hash    string
+	outcome string
 }
 
 // foldRunSteps indexes a run's recorded steps for alreadyDone.
 func foldRunSteps(steps []store.RunStep) map[doneKey]doneStep {
 	done := make(map[doneKey]doneStep, len(steps))
 	for _, step := range steps {
-		done[doneKey{step.BuildID, step.Index}] = doneStep{name: step.Name, hash: step.Hash}
+		done[doneKey{step.BuildID, step.Index, step.Visit}] = doneStep{name: step.Name, hash: step.Hash, outcome: step.Outcome}
 	}
 
 	return done
@@ -76,14 +79,14 @@ func resumeFrom(ctx context.Context) *resumeState {
 	return state
 }
 
-// alreadyDone reports whether a previous attempt of this run finished a step
-// of one build.
-func (r *resumeState) alreadyDone(build string, index int) (doneStep, bool) {
+// alreadyDone reports whether a previous attempt of this run finished the
+// visit-th pass through a step of one build.
+func (r *resumeState) alreadyDone(build string, index, visit int) (doneStep, bool) {
 	if r == nil || !r.resuming {
 		return doneStep{}, false
 	}
 
-	step, ok := r.done[doneKey{build, index}]
+	step, ok := r.done[doneKey{build, index, visit}]
 
 	return step, ok
 }
@@ -120,9 +123,8 @@ type resumeFacets interface {
 // and the gets fetch again into a new tree rather than the removed one the
 // row still names.
 //
-// It can refuse falsely, loudly: a to: jump, a tolerated try: failure or a
-// chain skip (a cache hit records only the step it hit on) leaves a step
-// unrecorded, so a finished build reads as unfinished.
+// It can refuse falsely, loudly: a chain skip (a cache hit records only the
+// step it hit on) leaves a step unrecorded, so a finished build reads as unfinished.
 func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *config.Job) (bool, error) {
 	run, err := findRun(ctx, st, runID)
 	if err != nil {
@@ -153,38 +155,63 @@ func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *con
 	return false, refuseMissingWorkspace(runID, run.Workspace, done, build)
 }
 
-// remainderSteps is the indices a triggered build records, relative to the
-// remainder after the plan's first get, that finish it: every step but the
-// gets, which record nothing.
-func remainderSteps(job *config.Job) []int {
+// remainderSteps is the plan a triggered build records against: the remainder
+// after the plan's first get, indexed from zero again.
+func remainderSteps(job *config.Job) []config.Step {
 	for first, step := range job.Plan {
-		if step.Get == "" {
-			continue
+		if step.Get != "" {
+			return job.Plan[first+1:]
 		}
-
-		var needed []int
-
-		for i, rest := range job.Plan[first+1:] {
-			if rest.Get == "" {
-				needed = append(needed, i)
-			}
-		}
-
-		return needed
 	}
 
 	return nil
 }
 
-// buildFinished reports whether every needed step of build is recorded done.
-func buildFinished(done map[doneKey]doneStep, build string, needed []int) bool {
-	for _, i := range needed {
-		if _, ok := done[doneKey{build, i}]; !ok {
+// buildFinished reports whether the passes recorded for build walk off the end of steps when replayed the way the walk replays them: each pass routes on the outcome it recorded, so a to: jump that left a step unvisited does not read as unfinished work. A get records nothing and is stepped over.
+func buildFinished(done map[doneKey]doneStep, build string, steps []config.Step) bool {
+	passes := map[int]int{}
+
+	for i := 0; i >= 0 && i < len(steps); {
+		step := steps[i]
+		if step.Get != "" {
+			i++
+
+			continue
+		}
+
+		passes[i]++
+
+		finished, ok := done[doneKey{build, i, passes[i]}]
+		if !ok {
 			return false
 		}
+
+		i = replayedNext(steps, i, step, finished.outcome)
 	}
 
 	return true
+}
+
+// replayedNext is where the walk went after step i produced outcome, by the plan's routes: i+1 unless outcome names a target.
+func replayedNext(steps []config.Step, i int, step config.Step, outcome string) int {
+	if outcome == "" || !step.Routes() {
+		return i + 1
+	}
+
+	target, ok := step.RouteFor(outcome)
+	if !ok {
+		return i + 1
+	}
+
+	if target == config.RouteTargetNext {
+		return i + 1
+	}
+
+	if index, found := indexOfStep(steps, target); found {
+		return index
+	}
+
+	return i + 1
 }
 
 // refuseMissingWorkspace refuses a resume that would keep artifacts from a

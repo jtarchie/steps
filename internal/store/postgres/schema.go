@@ -8,6 +8,8 @@ package postgres
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was DROP SCHEMA.
 //
+// 19 rekeyed run_steps per visit and added outcome, as sqlite's 33 did.
+//
 // 18 added run_steps.hash, as sqlite's 32 did.
 //
 // 17 added run_placements.volume_bytes, as sqlite's 31 did.
@@ -22,7 +24,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 18
+const schemaVersion = 19
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -244,7 +246,9 @@ CREATE TABLE IF NOT EXISTS run_steps (
     step_index INTEGER NOT NULL,
     step_name  TEXT NOT NULL,
     hash       TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (run_id, build_id, step_index)
+    visit      INTEGER NOT NULL DEFAULT 1,
+    outcome    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (run_id, build_id, step_index, visit)
 );
 
 CREATE TABLE IF NOT EXISTS approvals (

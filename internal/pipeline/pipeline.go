@@ -82,8 +82,9 @@ type stepResult struct {
 	// parent's node as a step's own.
 	nodeHash    string
 	disposition stepDisposition
-	verdict     string
-	note        string
+	// verdict is the agent's verdict, or for a replayed pass (stepResumed) the routing key that pass recorded, success and failure included.
+	verdict string
+	note    string
 	// stepID is the display-tree id the step ran under, for a caller that says something about it after it returned (a tolerated try:).
 	stepID int64
 }

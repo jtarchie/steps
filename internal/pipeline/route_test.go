@@ -372,7 +372,7 @@ func TestReportRouteShowsTheVisitCapOnlyWhenSet(t *testing.T) {
 		step := config.Step{Task: "a", To: map[string]string{"success": "c"}, MaxVisits: maxVisits}
 
 		out := captureStdout(t, func() {
-			reportRoute(context.Background(), steps, 0, step, 2, "success", map[int]int{0: 1})
+			reportRoute(context.Background(), steps, 0, step, 2, "success", map[int]int{0: 1}, false)
 		})
 		if !strings.Contains(out, "route: a --success--> c "+want) {
 			t.Errorf("max_visits %d: route line %q, want it to end %q", maxVisits, out, want)

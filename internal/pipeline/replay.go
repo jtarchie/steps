@@ -186,7 +186,7 @@ func replayDoneSteps(
 		}
 
 		// No hash, deliberately: chained from the source run's nodes, the steps after the replay point would hash as they did there and replay nothing.
-		done[doneKey{replayID, i}] = doneStep{name: name}
+		done[doneKey{replayID, i, 1}] = doneStep{name: name}
 	}
 
 	return done, nil

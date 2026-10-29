@@ -55,6 +55,8 @@ type planWalk struct {
 	parentHash       string
 	chainUnskippable bool
 
+	// passes counts how many times the walk has recorded each step index, guard skips included: a resume replays the recorded passes in that order, and this is how it knows which one comes next.
+	passes map[int]int
 	// visits counts how many times each step index has executed this walk,
 	// bounding a to:-driven backward loop. Per-walk, so each triggered build
 	// (and each version under get: version: every) gets its own max_visits
@@ -69,7 +71,7 @@ type planWalk struct {
 // looked up in skippable; whether its chain could be skipped at all is
 // merkle.UncacheableReason's call.
 func runSteps(ctx context.Context, w planWalk, steps []config.Step) error {
-	w.index, w.visits = 0, map[int]int{}
+	w.index, w.visits, w.passes = 0, map[int]int{}, map[int]int{}
 
 	// A manual index loop (not range) so a to: transition can set the next
 	// index — forward to skip ahead, or backward to loop.
@@ -166,17 +168,13 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 
 	if !resumed {
 		res, err = runNonGetStep(ctx, w.stepRunner, w.index, step, w.skippable, w.parentHash)
-
-		// A cache hit counts as a visit for the same reason it advances
-		// parentHash: the step produced its result. (No cacheable step routes, so
-		// nothing reads this count today — but a visit that means "the plan moved
-		// through here" must not depend on whether the work was paid for twice.)
-		if res.disposition == stepRan || res.disposition == stepCacheHit {
-			w.visits[w.index]++
-		}
-
-		recordCompletedStep(ctx, w.st, w.build, w.index, step, res.hash, err)
 	}
+
+	if spendsVisit(res) {
+		w.visits[w.index]++
+	}
+
+	outcome := recordableOutcome(ctx, res, err)
 
 	nextIndex, _, err, exhaustedErr := applyRouting(ctx, steps, w.index, step, res.disposition, res.verdict, err, w.visits)
 	if exhaustedErr != nil {
@@ -188,6 +186,11 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 	err = tolerateTryFailure(ctx, w.jobName, step, res.stepID, err)
 	if err != nil {
 		return true, err
+	}
+
+	// After routing and toleration, which are what decide whether a failure was the end of this run or a pass the plan carried on from: recorded earlier, a to: failure route's step was re-run on resume.
+	if !resumed {
+		recordCompletedStep(ctx, w.st, w.build, w.index, w.passes[w.index], step, res.hash, outcome)
 	}
 
 	if res.disposition == stepChainSkipped {
@@ -218,7 +221,9 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) (stepResult, bool) {
 	resume := resumeFrom(ctx)
 
-	finished, done := resume.alreadyDone(w.build, w.index)
+	w.passes[w.index]++
+
+	finished, done := resume.alreadyDone(w.build, w.index, w.passes[w.index])
 	if !done || resume == nil {
 		return stepResult{}, false
 	}
@@ -238,7 +243,37 @@ func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) (stepRes
 		slog.WarnContext(ctx, "job.resume_put_unrecorded", "put", step.Put, "job", w.jobName)
 	}
 
-	return stepResult{hash: finished.hash, disposition: stepResumed}, true
+	return stepResult{hash: finished.hash, disposition: stepResumed, verdict: finished.outcome}, true
+}
+
+// spendsVisit reports whether res counts against max_visits. A cache hit
+// counts for the same reason it advances parentHash: the step produced its
+// result. (No cacheable step routes, so nothing reads this count today — but a
+// visit that means "the plan moved through here" must not depend on whether
+// the work was paid for twice.) A replayed pass counts when it recorded an
+// outcome, so a loop resumes with the budget it had left rather than a fresh one.
+func spendsVisit(res stepResult) bool {
+	switch res.disposition {
+	case stepRan, stepCacheHit:
+		return true
+	case stepResumed:
+		return res.verdict != ""
+	case stepChainSkipped, stepGuardSkipped:
+		return false
+	}
+
+	return false
+}
+
+// recordableOutcome is the routing key a pass that executed produced, for its resume record; empty for a pass that executed nothing, which routes on nothing and spends no visit when replayed.
+func recordableOutcome(ctx context.Context, res stepResult, err error) string {
+	if res.disposition != stepRan && res.disposition != stepCacheHit {
+		return ""
+	}
+
+	key, _ := outcomeKey(ctx, err, res.verdict)
+
+	return key
 }
 
 // reportChainSkipped announces the steps a chain-skip swallowed. firstIndex is
@@ -280,23 +315,19 @@ func recordStepOutcome(ctx context.Context, step config.Step, out agentOutcome) 
 	agent.RecordOutcome(ctx, executedStepName(step), agent.Upstream{Verdict: out.verdict, Note: out.note, Response: out.response})
 }
 
-// recordCompletedStep marks a plan step as one a resume will not repeat.
+// recordCompletedStep marks one pass of a plan step as one a resume will not repeat.
 //
-// On success only: a failed step is exactly the one a resume must run again.
+// Only a pass the plan carried on from: a failure that ended the run is exactly the one a resume must run again, while one a to: route or a try: consumed is recorded with that outcome so the resume carries on the same way.
 // And on PLAN steps only — the concurrent block runners call runNonGetStep
 // with the enclosing block's index, so recording from there marked a whole
 // block done the moment any one branch succeeded.
-func recordCompletedStep(ctx context.Context, st store.Runs, build string, i int, step config.Step, hash string, err error) {
-	if err != nil {
-		return
-	}
-
+func recordCompletedStep(ctx context.Context, st store.Runs, build string, i, visit int, step config.Step, hash, outcome string) {
 	resume := resumeFrom(ctx)
 	if resume == nil {
 		return
 	}
 
-	bestEffort(ctx, "RecordRunStep", st.RecordRunStep(context.WithoutCancel(ctx), resume.id, store.RunStep{BuildID: build, Index: i, Name: executedStepName(step), Hash: hash}))
+	bestEffort(ctx, "RecordRunStep", st.RecordRunStep(context.WithoutCancel(ctx), resume.id, store.RunStep{BuildID: build, Index: i, Visit: visit, Name: executedStepName(step), Hash: hash, Outcome: outcome}))
 }
 
 // runNonGetStep runs a non-get step and dispatches its hooks around the
