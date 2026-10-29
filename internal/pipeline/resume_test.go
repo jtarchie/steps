@@ -146,6 +146,7 @@ func TestBuildFinished(t *testing.T) {
 		"a route whose target is unvisited":      {map[doneKey]doneStep{{"R#0", 0, 1}: {outcome: "success"}}, []config.Step{routed("a", "success", "c"), task("b"), task("c")}, false},
 		"a loop with every pass":                 {map[doneKey]doneStep{{"R#0", 0, 1}: {outcome: "success"}, {"R#0", 1, 1}: {outcome: "failure"}, {"R#0", 0, 2}: {outcome: "success"}, {"R#0", 1, 2}: {outcome: "success"}}, []config.Step{task("bump"), routed("check", "failure", "bump")}, true},
 		"a loop interrupted on its second pass":  {map[doneKey]doneStep{{"R#0", 0, 1}: {outcome: "success"}, {"R#0", 1, 1}: {outcome: "failure"}, {"R#0", 0, 2}: {outcome: "success"}}, []config.Step{task("bump"), routed("check", "failure", "bump")}, false},
+		"a next route carries on in order":       {map[doneKey]doneStep{{"R#0", 0, 1}: {outcome: "failure"}, {"R#0", 1, 1}: {outcome: "success"}}, []config.Step{routed("flaky", "failure", config.RouteTargetNext), task("b")}, true},
 		"a row without an outcome falls through": {map[doneKey]doneStep{{"R#0", 0, 1}: {}, {"R#0", 1, 1}: {}, {"R#0", 2, 1}: {}}, []config.Step{routed("a", "success", "c"), task("b"), task("c")}, true},
 	} {
 		if got := buildFinished(tc.done, "R#0", tc.steps); got != tc.want {
