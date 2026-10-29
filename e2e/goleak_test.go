@@ -25,7 +25,7 @@ import (
 // runs a shared background clock that exits on its own about a second after
 // the last match, with no handle to close it sooner. It reaches this package
 // through the /p/:pipeline/config/:sha page, which highlights a recorded
-// configuration. Re-verified against regexp2 v2.8.4: runClock still loops only
+// configuration. Re-verified against regexp2 v2.12.0: runClock still loops only
 // while current <= clockEnd and clears running on the way out (fastclock.go).
 func TestMain(m *testing.M) {
 	// Process-wide rather than a t.Setenv per test, because t.Setenv is what
