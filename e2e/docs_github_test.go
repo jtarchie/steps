@@ -46,6 +46,14 @@ func docPR() fakePR {
 	}
 }
 
+// unlabeledDocPR is docPR's twin as #43, without its ready-for-review label.
+func unlabeledDocPR() fakePR {
+	pr := docPR()
+	pr.Number, pr.SHA, pr.Labels = 43, "4343434343434343434343434343434343434343", nil
+
+	return pr
+}
+
 var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals // read-only fixture table, like docMCPFixtures
 	"review": {
 		prs: []fakePR{docPR(), {Number: 41, SHA: "4141414141414141414141414141414141414141", Author: "bob", Base: "main", Draft: true, Reviewers: []string{"octocat"}, Labels: []string{"ready-for-review"}}},
@@ -60,18 +68,21 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 	},
 	"assigned": {prs: []fakePR{docPR()}},
 	"comment-command": {
-		prs: []fakePR{docPR()},
+		prs: []fakePR{docPR(), unlabeledDocPR()},
 		comments: []fakeComment{
-			{ID: 501, Number: 42, Kind: "conversation", Author: "alice", Body: "/steps review please", Updated: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)},
+			// The one command every filter passes is carol's, the second author listed: the list taken as its first entry alone finds nothing.
+			{ID: 501, Number: 42, Kind: "conversation", Author: "carol", Body: "/steps review please", Updated: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)},
 			{ID: 502, Number: 42, Kind: "conversation", Author: "bob", Body: "/steps review please", Updated: time.Date(2026, 9, 27, 9, 1, 0, 0, time.UTC)},
 			{ID: 503, Number: 42, Kind: "review", Author: "alice", Body: "thanks", Updated: time.Date(2026, 9, 27, 9, 2, 0, 0, time.UTC)},
+			// A command on a pull request without the filter label: without labels: it is built too.
+			{ID: 504, Number: 43, Kind: "conversation", Author: "alice", Body: "/steps review please", Updated: time.Date(2026, 9, 27, 9, 3, 0, 0, time.UTC)},
 		},
 		check: func(t *testing.T, fake *fakeGitHub) {
 			t.Helper()
 
 			reviews := fake.reviewsOn(42)
-			if len(reviews) != 1 || reviews[0].State != "PENDING" || !strings.HasPrefix(reviews[0].Body, "asked by alice on #42") {
-				t.Errorf("reviews on #42 = %+v, want one pending draft answering alice", reviews)
+			if len(reviews) != 1 || reviews[0].State != "PENDING" || !strings.HasPrefix(reviews[0].Body, "asked by carol on #42") {
+				t.Errorf("reviews on #42 = %+v, want one pending draft answering carol", reviews)
 			}
 		},
 	},

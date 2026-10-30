@@ -1133,6 +1133,95 @@ func TestGitHubCommentsSkipReactedRefusesHalfAnAnswer(t *testing.T) {
 	}
 }
 
+// TestGitHubCommentsLabelsReadEachParentOnce: a comment is reported only when its issue or pull request carries every filter label, in any case; each parent is read once a check, and only for a comment author and body already passed; a comment the labels refuse has no reactions listed.
+func TestGitHubCommentsLabelsReadEachParentOnce(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		read []string
+	)
+
+	comment := func(id, number int, author string) string {
+		return `{"id":` + strconv.Itoa(id) + `,"body":"/go","updated_at":"2026-09-27T00:00:0` + strconv.Itoa(id) + `Z","user":{"login":"` + author + `"},"html_url":"https://x/pull/` + strconv.Itoa(number) + `#c","issue_url":"https://x/issues/` + strconv.Itoa(number) + `","reactions":{"rocket":1}}`
+	}
+
+	parents := map[string]string{
+		"/repos/acme/app/issues/7": `{"labels":[{"name":"Factory"},{"name":"approved"}]}`,
+		"/repos/acme/app/issues/8": `{"labels":[{"name":"factory"}]}`,
+	}
+
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if parent, ok := parents[r.URL.Path]; ok {
+			read = append(read, r.URL.Path)
+			_, _ = w.Write([]byte(parent))
+
+			return
+		}
+
+		switch r.URL.Path {
+		case "/user":
+			_, _ = w.Write([]byte(`{"login":"octocat"}`))
+		case "/repos/acme/app/issues/comments":
+			_, _ = w.Write([]byte("[" + comment(1, 7, "alice") + "," + comment(2, 7, "alice") + "," + comment(3, 8, "alice") + "," + comment(4, 9, "bob") + "]"))
+		case "/repos/acme/app/issues/comments/1/reactions", "/repos/acme/app/issues/comments/2/reactions":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			t.Errorf("unexpected %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	versions, err := githubCommentsCheck(context.Background(), map[string]any{
+		"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint,
+		"author": "alice", "kinds": []any{"conversation"}, "labels": []any{"factory", "Approved"}, "skip_reacted": "rocket",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ids := make([]string, 0, len(versions))
+	for _, version := range versions {
+		ids = append(ids, versionField(version, "id"))
+	}
+
+	if strings.Join(ids, ",") != "1,2" {
+		t.Errorf("reported %v, want 1 and 2 on #7, which carries both labels; not 3 on #8, which carries one", ids)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	slices.Sort(read)
+
+	if strings.Join(read, " ") != "/repos/acme/app/issues/7 /repos/acme/app/issues/8" {
+		t.Errorf("read %v, want #7 and #8 once each, and bob's #9 never", read)
+	}
+}
+
+// TestGitHubCommentsLabelsRefuseHalfAnAnswer: a parent read that fails fails the check, since reporting a comment the filter would have refused starts work nobody asked for.
+func TestGitHubCommentsLabelsRefuseHalfAnAnswer(t *testing.T) {
+	noBackoff(t)
+
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/acme/app/issues/comments" {
+			_, _ = w.Write([]byte(`[{"id":2,"body":"/go","updated_at":"2026-09-27T00:00:02Z","user":{"login":"alice"},"html_url":"https://x/pull/7#c","issue_url":"https://x/issues/7"}]`))
+
+			return
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	versions, err := githubCommentsCheck(context.Background(), map[string]any{
+		"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "kinds": []any{"conversation"}, "labels": []any{"factory"},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "/issues/7") {
+		t.Errorf("versions %v, err = %v; want the failed read of #7 named", versions, err)
+	}
+}
+
 // TestGitHubCommentsAuthorMeIsTheTokensUser: @me is resolved once, to the
 // login the token answers to, whether or not skip_reacted needed it too.
 func TestGitHubCommentsAuthorMeIsTheTokensUser(t *testing.T) {
@@ -1157,6 +1246,13 @@ func TestGitHubCommentsAuthorMeIsTheTokensUser(t *testing.T) {
 		if err != nil || len(versions) != 1 || versions[0]["id"] != "2" {
 			t.Errorf("skip_reacted %q: %v, %v; want only octocat's comment", skip, versions, err)
 		}
+	}
+
+	versions, err := githubCommentsCheck(context.Background(), map[string]any{
+		"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "author": []any{"bob", "@me"}, "kinds": []any{"conversation"},
+	}, nil)
+	if err != nil || len(versions) != 1 || versions[0]["id"] != "2" {
+		t.Errorf("author [bob, @me]: %v, %v; want octocat's comment, @me resolved inside the list", versions, err)
 	}
 }
 

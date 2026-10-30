@@ -535,9 +535,15 @@
           "description": "The REST API base, https://api.github.com when unset; https://<host>/api/v3 for GitHub Enterprise Server."
         },
         "author": {
-          "type": "string",
-          "pattern": "^(@me|[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\\[bot\\])?)$",
-          "description": "Who wrote the comment, compared without regard to case; @me is the token's own user."
+          "oneOf": [
+            { "type": "string", "pattern": "^(@me|[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\\[bot\\])?)$" },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "pattern": "^(@me|[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\\[bot\\])?)$" }
+            }
+          ],
+          "description": "Who wrote the comment: one login, or a list of them any of which may have. Compared without regard to case; @me is the token's own user."
         },
         "body": {
           "type": "string",
@@ -555,6 +561,11 @@
         "skip_reacted": {
           "enum": ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"],
           "description": "A reaction that, left by the token's own user, marks a comment done: check does not report it. It lives on GitHub, so it outlasts a wiped state database. Quote \"+1\" and \"-1\"."
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "\\S" },
+          "description": "Labels that must all be on the issue or pull request a comment sits on, compared without regard to case. A comment refused for its labels is not reported later because the label went on after the check passed it."
         }
       }
     },
