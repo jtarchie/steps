@@ -66,14 +66,19 @@ func TestWatchGitHubCommentsLabelsNarrowToLabeledParents(t *testing.T) {
 	fixture.watch(t)
 	fixture.assertDid(t, "201:7:conversation", "203:12:issue", "205:7:review")
 
+	// Inside the look-back, a label going on lets the next check list the refused command again and report it.
+	fake.relabel(13, "approved")
+	fixture.watch(t)
+	fixture.assertDid(t, "201:7:conversation", "203:12:issue", "205:7:review", "204:13:issue")
+
 	fake.addComment(command(206, 7, "conversation", 10*time.Minute))
 	fixture.watch(t)
-	fixture.assertDid(t, "201:7:conversation", "203:12:issue", "205:7:review", "206:7:conversation")
+	fixture.assertDid(t, "201:7:conversation", "203:12:issue", "205:7:review", "204:13:issue", "206:7:conversation")
 
 	fake.setPR(8, func(pr *fakePR) { pr.Labels = append(pr.Labels, "approved") })
 	fake.addComment(command(207, 8, "conversation", 11*time.Minute))
 	fixture.watch(t)
-	fixture.assertDid(t, "201:7:conversation", "203:12:issue", "205:7:review", "206:7:conversation", "207:8:conversation")
+	fixture.assertDid(t, "201:7:conversation", "203:12:issue", "205:7:review", "204:13:issue", "206:7:conversation", "207:8:conversation")
 }
 
 // TestWatchGitHubCommentsAuthorListTakesAnyOfThem: author: as a list builds a command from any login on it, in any case, and from nobody else.
