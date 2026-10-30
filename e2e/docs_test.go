@@ -690,6 +690,12 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"GitHubReactionParams": reflect.TypeOf(config.GitHubReactionParams{}),
 		"GitHubLabelParams":    reflect.TypeOf(config.GitHubLabelParams{}),
 		"GitHubIssueParams":    reflect.TypeOf(config.GitHubIssueParams{}),
+		"GitSource":            reflect.TypeOf(config.GitSource{}),
+		"SlackMentionsSource":  reflect.TypeOf(config.SlackMentionsSource{}),
+		"SlackReplySource":     reflect.TypeOf(config.SlackReplySource{}),
+		"SlackReactionSource":  reflect.TypeOf(config.SlackReactionSource{}),
+		"SlackReplyParams":     reflect.TypeOf(config.SlackReplyParams{}),
+		"SlackReactionParams":  reflect.TypeOf(config.SlackReactionParams{}),
 	}
 }
 
@@ -791,20 +797,12 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 		resource, _ := entry.(map[string]any)
 		source, _ := resource["source"].(map[string]any)
 
-		switch resource["type"] {
-		case config.WebhookType:
-			record(used, "WebhookSource", source)
+		if def, native := sourceDefs[resource["type"]]; native {
+			record(used, def, source)
+		}
+
+		if resource["type"] == config.WebhookType {
 			record(used, "WebhookSignature", source["signature"])
-		case config.CronType:
-			record(used, "CronSource", source)
-		case config.GitHubPRsType:
-			record(used, "GitHubPRsSource", source)
-		case config.GitHubCommentsType:
-			record(used, "GitHubCommentsSource", source)
-		case config.GitHubIssuesType:
-			record(used, "GitHubIssuesSource", source)
-		case config.GitHubPRCommentType, config.GitHubPRReviewType, config.GitHubReactionType, config.GitHubLabelType, config.GitHubIssueType:
-			record(used, "GitHubPostSource", source)
 		}
 	})
 
@@ -824,6 +822,24 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 	})
 }
 
+// sourceDefs is the source: shape of each native type.
+var sourceDefs = map[any]string{ //nolint:gochecknoglobals // read-only table
+	config.WebhookType:         "WebhookSource",
+	config.CronType:            "CronSource",
+	config.GitHubPRsType:       "GitHubPRsSource",
+	config.GitHubCommentsType:  "GitHubCommentsSource",
+	config.GitHubIssuesType:    "GitHubIssuesSource",
+	config.GitHubPRCommentType: "GitHubPostSource",
+	config.GitHubPRReviewType:  "GitHubPostSource",
+	config.GitHubReactionType:  "GitHubPostSource",
+	config.GitHubLabelType:     "GitHubPostSource",
+	config.GitHubIssueType:     "GitHubPostSource",
+	"git":                      "GitSource",
+	"slack-mentions":           "SlackMentionsSource",
+	"slack-reply":              "SlackReplySource",
+	"slack-reaction":           "SlackReactionSource",
+}
+
 // githubParamDefs is the params: shape of a put to each github-* publishing type.
 var githubParamDefs = map[any]string{ //nolint:gochecknoglobals // read-only table
 	config.GitHubPRCommentType: "GitHubPostParams",
@@ -831,6 +847,8 @@ var githubParamDefs = map[any]string{ //nolint:gochecknoglobals // read-only tab
 	config.GitHubReactionType:  "GitHubReactionParams",
 	config.GitHubLabelType:     "GitHubLabelParams",
 	config.GitHubIssueType:     "GitHubIssueParams",
+	"slack-reply":              "SlackReplyParams",
+	"slack-reaction":           "SlackReactionParams",
 }
 
 // collectGitHubParamKeys records the params: of every put to a github-*

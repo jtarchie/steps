@@ -1,6 +1,6 @@
 # A webhook source: is decoded strictly: a misspelled key is a load error, not
 # a setting nobody applies.
-# expect: field secret not found
+# expect: source: unknown key "secret"
 
 resources:
 - name: push

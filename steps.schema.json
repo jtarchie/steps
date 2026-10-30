@@ -67,6 +67,25 @@
       "$ref": "#/$defs/access"
     }
   },
+  "$comment": "A built-in git or slack-* type's source: is closed only while the pipeline declares no type of the same name, which replaces the built-in.",
+  "allOf": [
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "git"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "git"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/gitSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "slack-mentions"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "slack-mentions"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/slackMentionsSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "slack-reply"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "slack-reply"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/slackReplySource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "slack-reaction"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "slack-reaction"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/slackReactionSource"}}}}}}}
+    }
+  ],
   "$defs": {
     "rule": {
       "type": "object",
@@ -623,6 +642,99 @@
         "endpoint": {
           "type": "string",
           "description": "The REST API base, https://api.github.com when unset; https://<host>/api/v3 for GitHub Enterprise Server."
+        }
+      }
+    },
+    "gitSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uri"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "description": "The repository: a URL, an scp-style host:path, or an absolute path to a local clone."
+        },
+        "branch": {
+          "type": "string",
+          "description": "The branch whose head is the version; the remote's default branch when unset."
+        },
+        "fetch": {
+          "type": "boolean",
+          "description": "Fetch branch from a local clone's remote before each check, so the version is the remote's head rather than whatever the clone last fetched. Local absolute uri only, and needs branch."
+        }
+      }
+    },
+    "slackMentionsSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the token, SLACK_BOT_TOKEN when unset. The variable NAME, never the token; a resource naming another also lists it in its own env:."
+        },
+        "base_url": {
+          "type": "string",
+          "description": "The API root, https://slack.com when unset; exists so a test can point the type at a fake."
+        },
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Channel ids to watch; every channel the bot is in when unset or empty."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Page size of each history call, 200 when unset."
+        }
+      }
+    },
+    "slackReplySource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the token, SLACK_BOT_TOKEN when unset. The variable NAME, never the token; a resource naming another also lists it in its own env:."
+        },
+        "base_url": {
+          "type": "string",
+          "description": "The API root, https://slack.com when unset; exists so a test can point the type at a fake."
+        }
+      }
+    },
+    "slackReactionSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the token, SLACK_BOT_TOKEN when unset. The variable NAME, never the token; a resource naming another also lists it in its own env:."
+        },
+        "base_url": {
+          "type": "string",
+          "description": "The API root, https://slack.com when unset; exists so a test can point the type at a fake."
+        },
+        "emoji": {
+          "type": "string",
+          "description": "The emoji to watch for, no colons. Required to get; a resource without it only marks."
+        },
+        "done": {
+          "type": "string",
+          "description": "Your own emoji that marks a message answered, dropping it from the check."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "reactions.list page size, 100 when unset."
+        },
+        "pages": {
+          "type": "integer",
+          "description": "How many pages a check reads, 5 when unset."
         }
       }
     },

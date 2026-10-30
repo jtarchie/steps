@@ -118,6 +118,14 @@ func TestSchemaRejectsInvalidPipelines(t *testing.T) {
 			name:     "inputs scalar that is not all",
 			pipeline: "jobs: [{name: j, plan: [{task: t, run: 'true', inputs: repo}]}]\n",
 		},
+		{
+			name:     "built-in git source key it does not read",
+			pipeline: "resources: [{name: r, type: git, source: {uri: /x, fecth: true}}]\njobs: [{name: j, plan: [{get: r}]}]\n",
+		},
+		{
+			name:     "built-in slack source key it does not read",
+			pipeline: "resources: [{name: m, type: slack-mentions, source: {chanels: [C1]}}]\njobs: [{name: j, plan: [{get: m}]}]\n",
+		},
 	}
 
 	for _, test := range tests {
@@ -129,6 +137,36 @@ func TestSchemaRejectsInvalidPipelines(t *testing.T) {
 				t.Errorf("schema accepted an invalid pipeline:\n%s", test.pipeline)
 			}
 		})
+	}
+}
+
+// A pipeline that declares a type under a built-in's name replaces the built-in, so its source: is the type's own business, in the schema as in the loader.
+func TestSchemaLeavesAReplacedBuiltinOpen(t *testing.T) {
+	schema := loadSchema(t)
+
+	path := writePipeline(t, t.TempDir(), `
+resource_types:
+- name: git
+  config:
+    check: echo '[{"ref":"one"}]'
+    in: "true"
+resources:
+- name: r
+  type: git
+  source: {depth: 1}
+jobs:
+- name: j
+  plan: [{get: r}]
+`)
+
+	err := schema.Validate(yamlAsJSONValue(t, path))
+	if err != nil {
+		t.Errorf("schema refused a source: for a pipeline's own git type: %v", err)
+	}
+
+	_, err = config.LoadConfig(path)
+	if err != nil {
+		t.Errorf("loader refused a source: for a pipeline's own git type: %v", err)
 	}
 }
 
@@ -168,6 +206,10 @@ func schemaDefsByType() map[string]reflect.Type {
 		"githubCommentsSource": reflect.TypeOf(config.GitHubCommentsSource{}),
 		"githubIssuesSource":   reflect.TypeOf(config.GitHubIssuesSource{}),
 		"githubPostSource":     reflect.TypeOf(config.GitHubPostSource{}),
+		"gitSource":            reflect.TypeOf(config.GitSource{}),
+		"slackMentionsSource":  reflect.TypeOf(config.SlackMentionsSource{}),
+		"slackReplySource":     reflect.TypeOf(config.SlackReplySource{}),
+		"slackReactionSource":  reflect.TypeOf(config.SlackReactionSource{}),
 	}
 }
 

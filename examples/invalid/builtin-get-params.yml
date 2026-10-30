@@ -1,0 +1,16 @@
+# No built-in type's get reads params:; what a get fetches is set on the resource's source:, so a get's params: are refused rather than ignored.
+# expect: get "tick": a cron get takes no params
+
+resources:
+- name: tick
+  type: cron
+  source:
+    expression: "@hourly"
+
+jobs:
+- name: tock
+  plan:
+  - get: tick
+    trigger: true
+    params:
+      depth: 1

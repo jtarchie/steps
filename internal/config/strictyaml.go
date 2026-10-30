@@ -9,6 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"reflect"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -36,6 +39,14 @@ func strictUnmarshal(data []byte, out any) error {
 
 // decodeSource types a resource's source: map strictly, so a misspelled key is a load error rather than a setting nobody reads. The built-in Go-backed types (webhook, cron) each have a typed source; this is the one door they decode through.
 func decodeSource(raw map[string]any, out any) error {
+	allowed := yamlKeys(out)
+
+	for _, key := range slices.Sorted(maps.Keys(raw)) {
+		if !slices.Contains(allowed, key) {
+			return fmt.Errorf("source: unknown key %q%s (valid: %s)", key, suggestion(key, allowed), strings.Join(allowed, ", "))
+		}
+	}
+
 	data, err := yaml.Marshal(raw)
 	if err != nil {
 		return fmt.Errorf("source: %w", err)
@@ -47,6 +58,39 @@ func decodeSource(raw map[string]any, out any) error {
 	}
 
 	return nil
+}
+
+// decodeParams is decodeSource for a put's params:.
+func decodeParams(raw map[string]any, out any) error {
+	if raw == nil {
+		raw = map[string]any{}
+	}
+
+	err := decodeSource(raw, out)
+	if err != nil {
+		return errors.New(strings.Replace(err.Error(), "source:", "params:", 1))
+	}
+
+	return nil
+}
+
+// yamlKeys is every key the struct out points to decodes, in field order: the closed key set of a built-in type's source: or params:.
+func yamlKeys(out any) []string {
+	structType := reflect.TypeOf(out)
+	for structType.Kind() == reflect.Pointer {
+		structType = structType.Elem()
+	}
+
+	keys := make([]string, 0, structType.NumField())
+
+	for field := range structType.Fields() {
+		name, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+		if name != "" && name != "-" {
+			keys = append(keys, name)
+		}
+	}
+
+	return keys
 }
 
 // rejectUnknownKeys fails when node, a mapping, carries a key outside allowed.

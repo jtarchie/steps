@@ -12,22 +12,19 @@ import (
 	"strings"
 )
 
-// gitSourceKeys is every source: key the built-in git type reads. Anything
-// else is refused: source: is free-form, so `fecth: true` would otherwise load
-// and reproduce the silent staleness fetch: exists to prevent. Concourse's git
-// resource ignores unknown keys; this is a deliberate divergence.
-var gitSourceKeys = []string{"uri", "branch", "fetch"} //nolint:gochecknoglobals // read-only table
+// GitSource is the built-in git type's source:. Anything else is refused: source: is free-form, so `fecth: true` would otherwise load and reproduce the silent staleness fetch: exists to prevent. Concourse's git resource ignores unknown keys; this is a deliberate divergence. validateGitSource checks it by hand rather than through decodeSource, to say why a quoted "false" is refused.
+type GitSource struct {
+	URI    string `yaml:"uri"`
+	Branch string `yaml:"branch,omitempty"`
+	Fetch  bool   `yaml:"fetch,omitempty"`
+}
+
+// gitType is the built-in git type.
+const gitType = "git"
 
 func (c *Config) validateGitResources() error {
-	builtin, err := ReadBuiltinResourceType("git")
-	if err != nil {
-		return err
-	}
-
 	for _, resource := range c.Resources {
-		index := c.findResourceTypeIndex(resource.Type)
-		// Content identity: a user type named git runs its own commands, so only the built-in's check: gets the built-in's rules.
-		if index < 0 || c.ResourceTypes[index].Config.Check != builtin.Config.Check {
+		if c.nativeType(resource.Type) != gitType {
 			continue
 		}
 
@@ -41,12 +38,12 @@ func (c *Config) validateGitResources() error {
 }
 
 func validateGitSource(name string, source map[string]any) error {
-	keys := slices.Sorted(maps.Keys(source))
+	allowed := yamlKeys(GitSource{})
 
-	for _, key := range keys {
-		if !slices.Contains(gitSourceKeys, key) {
+	for _, key := range slices.Sorted(maps.Keys(source)) {
+		if !slices.Contains(allowed, key) {
 			return fmt.Errorf("resource %q: the git type has no source.%s%s (it reads %s)",
-				name, key, suggestion(key, gitSourceKeys), strings.Join(gitSourceKeys, ", "))
+				name, key, suggestion(key, allowed), strings.Join(allowed, ", "))
 		}
 	}
 

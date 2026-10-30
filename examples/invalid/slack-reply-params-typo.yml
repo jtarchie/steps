@@ -1,0 +1,20 @@
+# A built-in type's put params: are closed too: slack-reply reads only params.from, so a stray key is refused rather than posted without.
+# expect: put "reply": params: unknown key "fromm" (did you mean "from"?)
+
+resources:
+- name: mentions
+  type: slack-mentions
+  source: {}
+- name: reply
+  type: slack-reply
+  source: {}
+
+jobs:
+- name: answer
+  plan:
+  - get: mentions
+    trigger: true
+  - put: reply
+    inputs: [mentions]
+    params:
+      fromm: mentions

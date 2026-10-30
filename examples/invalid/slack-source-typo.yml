@@ -1,0 +1,14 @@
+# A built-in type's source: is closed: slack-mentions reads token_env, base_url, channels and limit, so a misspelt key is refused rather than watching every channel.
+# expect: resource "mentions" (slack-mentions): source: unknown key "chanels" (did you mean "channels"?)
+
+resources:
+- name: mentions
+  type: slack-mentions
+  source:
+    chanels: [C123]
+
+jobs:
+- name: answer
+  plan:
+  - get: mentions
+    trigger: true

@@ -8,7 +8,7 @@ Every example on this page (and every other page) is a complete pipeline, verifi
 resources:
 - name: repo          # the artifact directory a get creates, and the name steps use
   type: git           # which resource type
-  source:             # configuration for that type — free-form, type-specific
+  source:             # configuration for that type — type-specific; a built-in refuses keys it does not read
     uri: https://github.com/jtarchie/ci.git
     branch: main
 
@@ -23,6 +23,8 @@ jobs:
 
 `git` ships with steps, so that pipeline needs no `resource_types:` block; neither do [the GitHub types](#the-built-in-github-types), Slack's, `cron` and [`webhook`](webhooks.md). For anything else, you write the type yourself.
 
+**A built-in type's `source:` and `params:` are closed.** steps owns every built-in's code, so it knows each key the type reads, and `steps validate` refuses the rest: a misspelled `chanels:` or a Concourse habit like `params: {depth: 1}` on a get is a load error naming the key and the ones the type does read, not a setting nobody applies. No built-in's get takes `params:`; what it fetches is set on `source:`. Values are typed as well, so `limit: "200"` is refused where `limit: 200` loads. A type you write keeps Concourse's rule, where `source:` and `params:` are the type's own business and steps passes them through unread — and so does a pipeline that declares its own type under a built-in's name (`git`, `slack-*`), which replaces the built-in.
+
 ## The built-in `git` type
 
 | `source:` field | required | meaning |
@@ -32,6 +34,25 @@ jobs:
 | `fetch` | no | `true` refreshes a local-path `uri` before each check; default `false` |
 
 A local-path `uri` costs no network clone — the right call for a large repository — but the check reads that clone's refs as they are, so the version is whatever the clone last fetched, however long ago that was. `fetch: true` fixes that: each check first fetches `branch` from the clone's remote (`branch.<name>.remote`, else `origin`) into `refs/remotes/<remote>/<branch>` and reports that ref, so the version is the remote's head. It moves exactly that one ref — never the working tree, a local branch, tags or `FETCH_HEAD` — so a developer's own `main` sitting behind changes nothing. It needs an absolute path and a `branch:` (both checked at load; a remote `uri` is refused, being fresh already), git 2.29 or newer, a clone owned by the user running steps, and auth that never prompts (an ssh agent, a credential helper) — a poll has no terminal, so a prompt fails the fetch instead of waiting. A failed fetch fails the check, so `steps web` reports no version rather than a stale one; like any failing check, it holds back only this resource until a later check succeeds, and the pipeline's other resources keep triggering. Turning `fetch:` on changes which commit is reported, and `source:` is part of the cache key, so expect one fresh build. The built-in type refuses any other `source:` key, so a misspelled `fecth:` is a load error rather than a flag nobody reads.
+
+```yaml noexec=network
+resources:
+- name: repo
+  type: git
+  source:
+    uri: /srv/clones/steps   # an absolute path to a local clone
+    branch: main
+    fetch: true              # report the remote's main, not whatever the clone last fetched
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+    trigger: true
+  - task: compile
+    inputs: [repo]
+    run: cd repo && go build ./...
+```
 
 It fetches the exact commit the plan pinned, shallowly, so a branch that moves mid-run still gives you the version that was planned. It has **no `out:`** — `put: repo` against it is a load error, because what "publish" means (which branch, which credentials, force or not) is a decision only you can make. Write your own type for that.
 
@@ -52,10 +73,13 @@ resources:
   source:
     channels: []   # optional; [] (the default) is every channel the bot is in
     limit: 200      # optional; per-channel messages fetched per check, default 200
+    token_env: SLACK_BOT_TOKEN    # optional; the default
+    base_url: https://slack.com   # optional; the default — a test points it at a fake
 
 - name: reply
   type: slack-reply
-  source: {}
+  source:
+    base_url: https://slack.com   # optional; the default
 
 - name: reaction
   type: slack-reaction
@@ -90,6 +114,7 @@ jobs:
       params: {add: x, remove: eyes}
   - put: reply
     inputs: [mentions, answer] # the reply type picks the mention's thread_ts
+    params: {from: mentions}   # optional with one fetched input; names it when there are several
   - put: answered              # ✅, and the 👀 goes away in the same publish
     resource: reaction
     inputs: [mentions]
@@ -156,6 +181,9 @@ resources:
     token_env: SLACK_USER_TOKEN   # a user token: whose reactions count
     emoji: robot_face             # the ask
     done: white_check_mark        # your own ✅ = answered, never reported again
+    limit: 100                    # optional; reactions.list page size, default 100
+    pages: 5                      # optional; pages a check reads, default 5
+    base_url: https://slack.com   # optional; the default
 
 - name: reply
   type: slack-reply
@@ -181,7 +209,7 @@ jobs:
     inputs: [tagged, answer]
   - put: mark
     inputs: [tagged]
-    params: {add: white_check_mark}
+    params: {add: white_check_mark, from: tagged}
 ```
 
 **The token decides whose reactions count.** Slack's `reactions.list` lists the reactions the token's own user made, and nothing else. A user token (`xoxp-`, with `reactions:read`) makes the watch "messages I reacted to"; the default bot token watches only reactions the bot itself left. Watching anybody's reaction is the Events API's `reaction_added`, a [webhook](webhooks.md), not a poll.

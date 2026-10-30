@@ -1018,7 +1018,7 @@ jobs:
 - name: mark
   plan:
   - put: reaction
-    params: {ad: eyes}
+    params: {}
 `), 0o600)
 	if err != nil {
 		t.Fatal(err)

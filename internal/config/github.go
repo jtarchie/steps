@@ -570,19 +570,6 @@ func validateGitHubLabels(params GitHubLabelParams) error {
 	return nil
 }
 
-func decodeParams(raw map[string]any, out any) error {
-	if raw == nil {
-		raw = map[string]any{}
-	}
-
-	err := decodeSource(raw, out)
-	if err != nil {
-		return errors.New(strings.Replace(err.Error(), "source:", "params:", 1))
-	}
-
-	return nil
-}
-
 func validateGitHubPost(params GitHubPostParams) error {
 	if params.BodyFile == "" {
 		return errors.New("params.body_file is required: the file, inside the put's inputs, whose text is posted")
@@ -684,8 +671,7 @@ func (c *Config) validateGitHubResource(resource Resource) error {
 	return nil
 }
 
-// validateGitHubSteps checks each get's and put's params: against the type
-// it reaches: a find takes none, a post takes its own.
+// validateGitHubSteps checks each put's params: against the publishing type it reaches; a get's are validateNativeGets'.
 func (c *Config) validateGitHubSteps() error {
 	for i := range c.Jobs {
 		comments := c.githubCommentGets(c.Jobs[i])
@@ -837,10 +823,6 @@ func (c *Config) checkGitHubStep(label string, step *Step, comments, gets []stri
 	kind := c.githubKind(resource.Type)
 	if kind == "" {
 		return nil
-	}
-
-	if stepKind, _ := step.Kind(); stepKind == StepKindGet && len(step.Params) > 0 {
-		return fmt.Errorf("%s: get %q: a %s get takes no params; what it fetches is set on the resource's source instead", label, step.Get, kind)
 	}
 
 	err = checkGitHubPut(kind, step, comments, gets)

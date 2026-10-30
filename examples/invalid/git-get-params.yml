@@ -1,0 +1,16 @@
+# The built-in git type's get reads no params:; a Concourse git resource's depth: or submodules: does nothing here, so it is refused.
+# expect: get "repo": a git get takes no params
+
+resources:
+- name: repo
+  type: git
+  source:
+    uri: https://github.com/jtarchie/steps
+    branch: main
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+    params:
+      depth: 1
