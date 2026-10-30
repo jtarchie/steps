@@ -53,6 +53,13 @@ func TestEndToEndGitHubLabelSwapsState(t *testing.T) {
 			t.Errorf("labels on #12 = %v, want %v", got, want)
 		}
 	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if fake.requests != 8 {
+		t.Errorf("GitHub saw %d requests, want 8: one add and three removes per run, so the second run really replayed against a board already as asked", fake.requests)
+	}
 }
 
 // TestEndToEndGitHubLabelLeavesBothOnARefusal: add goes before remove, so a put whose remove is refused leaves the issue with both states rather than neither, and fails naming GitHub's status, its words and the route.
@@ -109,5 +116,19 @@ func TestValidateGitHubLabelRefusals(t *testing.T) {
 	err := cli.Run([]string{"validate", writePipeline(t, t.TempDir(), get)})
 	if err == nil || !strings.Contains(err.Error(), "only publishes") {
 		t.Errorf("validate = %v, want a get of a github-label refused", err)
+	}
+
+	noInputs := strings.Replace(labelPipeline(fake, "\n      add: [x]"), "    inputs: [issue]\n", "", 1)
+
+	err = cli.Run([]string{"validate", writePipeline(t, t.TempDir(), noInputs)})
+	if err == nil || !strings.Contains(err.Error(), "no get among its inputs names the issue or pull request") {
+		t.Errorf("validate = %v, want a put with nothing naming its issue refused", err)
+	}
+
+	byNumber := strings.Replace(labelPipeline(fake, "\n      add: [x]\n      number: '12'"), "    inputs: [issue]\n", "", 1)
+
+	err = cli.Run([]string{"validate", writePipeline(t, t.TempDir(), byNumber)})
+	if err != nil {
+		t.Errorf("validate = %v, want a put naming its issue by number to load with no inputs", err)
 	}
 }
