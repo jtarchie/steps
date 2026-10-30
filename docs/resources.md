@@ -313,6 +313,7 @@ resources:
     repo: acme/app
     author: alice
     body: '^/steps\s+review\b'
+    labels: [ready-for-review]       # only on pull requests carrying it
     kinds: [conversation, review]    # the default; add issue for comments on issues
     checkout: true                   # the default: the pull request's tree comes with it
     token_env: GH_TOKEN              # the default
@@ -355,6 +356,7 @@ jobs:
 | `body` | no | an [RE2](https://github.com/google/re2/wiki/Syntax) pattern the text must contain a match for; `^` anchors it to the start |
 | `kinds` | no | `conversation` (a pull request's timeline), `review` (inline, on a line of its diff), `issue` (an issue's timeline); default the first two |
 | `checkout` | no | `false` skips the pull request's tree; default `true`. An issue has no tree |
+| `labels` | no | labels that must all be on the issue or pull request the comment sits on, compared without regard to case as GitHub compares label names |
 | `skip_reacted` | no | a reaction (`+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes`) that, left by the token's own user, marks a comment done: it is not reported |
 | `token_env`, `endpoint` | no | as for `github-prs` |
 
@@ -371,6 +373,10 @@ A pipeline that comments as the same user it watches must make sure what it post
 It stays cheap. A comment is looked at only after it has passed `author` and `body`, and only when GitHub's own summary on it counts at least one of that reaction; only then are its reactions of that kind listed, to see whose they are, as a conditional request like every other page. A lookup that fails fails the check, since reporting a done comment as new is exactly what the field is there to prevent. While every comment on a cursorless first page carries the mark, the check reports nothing and so keeps no cursor, and each poll reads that page again until a new command arrives.
 
 **A reaction does not change a comment's `updated`.** Adding the mark makes no new version, so marking a comment never triggers the job again. Removing it does not bring the comment back by itself either: with a cursor, the check asks only for comments written since five minutes before the newest version it reported, so an older comment is not among them, and one inside those five minutes is already in version history. It is work again when it is edited, which is a new version anyway, or when a check with no cursor finds it on its first page.
+
+**`labels` narrows the trigger to the issues and pull requests that carry them**, which is how a pipeline answers `/factory fix` on its own pull requests and nowhere else. On an issue, the issue's own labels are the ones that count. A comment does not say how its issue or pull request is labeled, so the check reads each one a comment sits on, once a check however many comments it holds, and only for a comment that has already passed `author` and `body`. It does so before `skip_reacted` looks, so a comment the labels refuse never has its reactions listed. The read is a conditional request like every other page. A read that fails fails the check, since reporting a comment the filter would have refused starts work nobody asked for.
+
+**A command written before its issue or pull request carried the labels stays refused.** A command is an instruction given at a moment, and at that moment it did not qualify, so labeling afterwards does not reach back. The check keeps no list of what it refused: a label that goes on within the five-minute look-back lets the next check report the comment, since it is listed again; after that, the comment is work again only when it is edited, or when a check with no cursor finds it on its first page. To act on an older command once the label is on, write it again.
 
 ### `github-issues`: a labeled issue as a trigger
 

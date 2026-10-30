@@ -555,6 +555,11 @@
         "skip_reacted": {
           "enum": ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"],
           "description": "A reaction that, left by the token's own user, marks a comment done: check does not report it. It lives on GitHub, so it outlasts a wiped state database. Quote \"+1\" and \"-1\"."
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "\\S" },
+          "description": "Labels that must all be on the issue or pull request a comment sits on, compared without regard to case. A comment refused for its labels is not reported later because the label went on after the check passed it."
         }
       }
     },

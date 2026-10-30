@@ -55,15 +55,15 @@ func githubCommentsCheck(ctx context.Context, raw, cursor map[string]any) ([]map
 
 	var versions []map[string]any
 
+	labeled := map[string]bool{}
+
 	for _, match := range found {
-		// After the filters, so only a comment that would otherwise be work
-		// costs a request.
-		done, err := watch.markedDone(ctx, client, match.comment, match.version)
+		wanted, err := watch.wanted(ctx, client, match, labeled)
 		if err != nil {
 			return nil, err
 		}
 
-		if !done {
+		if wanted {
 			versions = append(versions, match.version)
 		}
 	}
@@ -76,6 +76,18 @@ func githubCommentsCheck(ctx context.Context, raw, cursor map[string]any) ([]map
 	}
 
 	return versions, nil
+}
+
+// wanted is the filters that cost a request, run after author and body so only a comment that would otherwise be work pays: labels before skip_reacted, because one read answers for every comment on its issue and a comment it refuses needs no reactions listed.
+func (w commentWatch) wanted(ctx context.Context, client *githubClient, match commentMatch, labeled map[string]bool) (bool, error) {
+	ok, err := w.onLabeled(ctx, client, match.version, labeled)
+	if err != nil || !ok {
+		return false, err
+	}
+
+	done, err := w.markedDone(ctx, client, match.comment, match.version)
+
+	return !done, err
 }
 
 type commentMatch struct {
@@ -308,6 +320,45 @@ func (w commentWatch) match(comment githubComment, review bool) (map[string]any,
 		"number":  number,
 		"updated": comment.Updated,
 	}, true
+}
+
+// onLabeled reports whether the issue or pull request a comment sits on carries every filter label. The comment listings do not say, so its issue is read, once a check: GitHub's issue route answers for a pull request too, and seen keeps the answer for the next comment on it.
+func (w commentWatch) onLabeled(ctx context.Context, client *githubClient, version map[string]any, seen map[string]bool) (bool, error) {
+	if len(w.source.Labels) == 0 {
+		return true, nil
+	}
+
+	number := versionNumber(version, "number")
+	if number == "" {
+		return false, fmt.Errorf("github: comment %s names no issue or pull request to read the labels of", versionField(version, "id"))
+	}
+
+	if ok, read := seen[number]; read {
+		return ok, nil
+	}
+
+	var issue struct {
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+	}
+
+	_, err := client.getJSON(ctx, "/repos/"+w.source.Repo+"/issues/"+number, &issue)
+	if err != nil {
+		return false, err
+	}
+
+	have := make([]string, 0, len(issue.Labels))
+	for _, label := range issue.Labels {
+		have = append(have, label.Name)
+	}
+
+	ok := !slices.ContainsFunc(w.source.Labels, func(want string) bool {
+		return !slices.ContainsFunc(have, func(name string) bool { return strings.EqualFold(name, want) })
+	})
+	seen[number] = ok
+
+	return ok, nil
 }
 
 // markedDone reports whether the token's own user left skip_reacted on a

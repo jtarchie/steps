@@ -151,6 +151,8 @@ type GitHubCommentsSource struct {
 	// it outlasts a wiped state database, whose first check would otherwise
 	// report a page of commands already answered.
 	SkipReacted string `yaml:"skip_reacted,omitempty"`
+	// Labels must all be on the issue or pull request a comment sits on, compared without regard to case as GitHub compares label names.
+	Labels []string `yaml:"labels,omitempty"`
 }
 
 // Connection is where this resource talks to.
@@ -363,6 +365,10 @@ func ParseGitHubCommentsSource(raw map[string]any) (GitHubCommentsSource, *regex
 	pattern, err := regexp.Compile(source.Body)
 	if err != nil {
 		return source, nil, fmt.Errorf("source.body: %w", err)
+	}
+
+	if slices.ContainsFunc(source.Labels, func(label string) bool { return strings.TrimSpace(label) == "" }) {
+		return source, nil, errors.New("source.labels: a blank label is on no issue, so nothing would match; remove it")
 	}
 
 	return source, pattern, validateGitHubReaction("source.skip_reacted", source.SkipReacted)

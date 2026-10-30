@@ -150,6 +150,8 @@ jobs:
 		"skip_reacted not a reaction": {"    skip_reacted: white_check_mark", `source.skip_reacted: "white_check_mark" is not a GitHub reaction`},
 		"skip_reacted unquoted -1":    {"    skip_reacted: -1", "quote it"},
 		"enterprise endpoint loads":   {"    endpoint: https://x.example/api/v3", ""},
+		"labels load":                 {"    labels: [factory, 'needs \"review\"']", ""},
+		"blank label":                 {"    labels: [factory, ' ']", "source.labels: a blank label"},
 	} {
 		_, err := LoadConfig(writeConfig(t, pipeline(tc.source)))
 
