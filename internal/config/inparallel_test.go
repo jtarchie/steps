@@ -97,10 +97,10 @@ jobs:
       - in_parallel:
         - task: b
           run: "true"
-  on_success:
-    in_parallel:
-    - task: c
-      run: "true"
+  - try:
+      in_parallel:
+      - task: c
+        run: "true"
 `)
 
 	cfg, err := LoadConfig(path)
@@ -123,8 +123,8 @@ func assertBareLists(t *testing.T, job Job) {
 		t.Errorf("nested in_parallel branches = %q, want b", got)
 	}
 
-	if hook := job.Hooks.OnSuccess; hook == nil || branchNames(hook.InParallel) != "c" {
-		t.Errorf("on_success in_parallel = %+v, want task c", hook)
+	if wrapped := job.Plan[1].Try; wrapped == nil || branchNames(wrapped.InParallel) != "c" {
+		t.Errorf("try in_parallel = %+v, want task c", wrapped)
 	}
 
 	// The step's line still points at the step, not at the rewritten document.

@@ -4,6 +4,7 @@ package config
 // ensure) a job or step can carry, and what a hook step may not do.
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -99,14 +100,34 @@ func validateHookTree(parentLabel string, hooks Hooks, noArtifacts bool) error {
 }
 
 func validateHookStep(label string, step *Step) error {
-	kind, ok := step.Kind()
-	if !ok {
-		return fmt.Errorf("%s: unrecognized hook step (must be task, put, agent, or try)", label)
-	}
-
-	if kind == StepKindGet {
-		return fmt.Errorf("%s: get is not valid in a hook; hooks must be task, put, agent, or try steps", label)
+	err := hookBodyRefusal(step)
+	if err != nil {
+		return fmt.Errorf("%s: %w", label, err)
 	}
 
 	return nil
+}
+
+// hookBodyRefusal admits exactly what the hook runner (internal/pipeline runHookStep) executes, so a hook that loads is a hook that runs.
+func hookBodyRefusal(step *Step) error {
+	kind, ok := step.Kind()
+	if !ok {
+		return errors.New("unrecognized hook step (must be task, put, agent, or try)")
+	}
+
+	switch kind { //nolint:exhaustive // default refuses every kind the runner does
+	case StepKindTask, StepKindPut, StepKindAgent:
+		return nil
+	case StepKindTry:
+		err := hookBodyRefusal(step.Try)
+		if err != nil {
+			return fmt.Errorf("try: wraps %w", err)
+		}
+
+		return nil
+	case StepKindGet:
+		return errors.New("get is not valid in a hook; hooks must be task, put, agent, or try steps")
+	default:
+		return fmt.Errorf("%s: is not valid in a hook; a hook runs one step, so it must be task, put, agent, or try", kind)
+	}
 }

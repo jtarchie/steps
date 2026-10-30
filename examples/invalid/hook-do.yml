@@ -1,0 +1,14 @@
+# A hook runs one step: a task, put or agent, or a try: around one. A do: here loaded and then refused when the run reached it, so the hook never ran.
+# expect: on_failure hook): do: is not valid in a hook
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "false"
+    on_failure:
+      do:
+      - task: say-why
+        run: echo it failed
+      - task: page
+        run: echo paging

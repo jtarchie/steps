@@ -12,7 +12,7 @@ On a failing step with both a hook and a route: the hook fires first (react), th
 
 ## Hooks (`on_success`/`on_failure`/`on_error`/`on_abort`/`ensure`)
 
-Any plan step, or the whole job, can carry hooks. A hook is itself a full step (task/put/agent, or a `try:` around one — never `get`), so it can `run:` a command, `put:` a resource, or invoke an `agent:`, and may recursively carry its own hooks.
+Any plan step, or the whole job, can carry hooks. A hook is itself a full step (task/put/agent, or a `try:` around one — never `get`, and never a block like `do:`, which is refused at load), so it can `run:` a command, `put:` a resource, or invoke an `agent:`, and may recursively carry its own hooks.
 
 ```yaml
 jobs:

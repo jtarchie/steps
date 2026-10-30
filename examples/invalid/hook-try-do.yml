@@ -1,0 +1,13 @@
+# A try: around a hook is checked through to the step it wraps: a do: inside one loaded, then failed at run time inside the try:, which tolerated it, so the hook silently did nothing.
+# expect: ensure hook): try: wraps in_parallel: is not valid in a hook
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: echo ok
+  ensure:
+    try:
+      in_parallel:
+      - task: tidy
+        run: echo tidying
