@@ -54,6 +54,51 @@ jobs:
 	}
 }
 
+// TestEndToEndAcrossPutCellsReadTheirOwnParams: one put per item, each told by its params which file is its own; the label sits in a list so a top-level-only render fails it.
+func TestEndToEndAcrossPutCellsReadTheirOwnParams(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "published.log")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+resource_types:
+- name: board
+  config:
+    check: printf '[]'
+    out: |
+      printf '%%s %%s\n' "$(cat {{ .params.files.title | shellquote }})" {{ index .params.labels 0 | shellquote }} >> {{ .source.log | shellquote }}
+resources:
+- name: board
+  type: board
+  source:
+    log: %[1]s
+jobs:
+- name: fan
+  plan:
+  - task: plan
+    inputs: []
+    outputs: [children]
+    run: |
+      printf '["alpha","beta"]' > children/items.json
+      echo "Alpha title" > children/alpha.title
+      echo "Beta title" > children/beta.title
+  - across:
+    - var: child
+      from_file: children/items.json
+    put: board
+    inputs: [children]
+    params:
+      files:
+        title: children/{{ .vars.child }}.title
+      labels: ["{{ .vars.child }}"]
+`, log))
+
+	mustRun(t, path)
+
+	if got := readFileString(t, log); got != "Alpha title alpha\nBeta title beta\n" {
+		t.Errorf("published %q, want each cell's own title and label, alpha then beta", got)
+	}
+}
+
 // TestEndToEndAcrossFromFileProducerAlwaysReruns is the cache property the
 // design leans on, checked end to end rather than argued.
 //

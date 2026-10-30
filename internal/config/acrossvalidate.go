@@ -199,24 +199,37 @@ func validateAcrossTemplates(label string, step Step) error {
 	// A try: cell keeps every renderable field on the step it wraps, so that is
 	// where the templates are — the same unwrap renderCell does.
 	cell := step
+	inner := unwrapStep(&cell)
 
-	for _, field := range renderableFields(unwrapStep(&cell)) {
-		if !strings.Contains(*field.value, "{{") {
-			continue
-		}
-
-		parsed, err := newAcrossTemplate().Option("missingkey=error").Parse(*field.value)
-		if err != nil {
-			return fmt.Errorf("%s: across %s: could not parse the template: %w", label, field.name, err)
-		}
-
-		err = checkAxisReferences(label, field.name, parsed.Tree, declared)
+	for _, field := range renderableFields(inner) {
+		err := checkAcrossTemplate(label, field.name, *field.value, declared)
 		if err != nil {
 			return err
 		}
 	}
 
-	return nil
+	if inner.Put == "" {
+		return nil
+	}
+
+	_, err := mapStringLeaves("params", inner.Params, func(name, leaf string) (string, error) {
+		return leaf, checkAcrossTemplate(label, name, leaf, declared)
+	})
+
+	return err
+}
+
+func checkAcrossTemplate(label, field, value string, declared map[string]bool) error {
+	if !strings.Contains(value, "{{") {
+		return nil
+	}
+
+	parsed, err := newAcrossTemplate().Option("missingkey=error").Parse(value)
+	if err != nil {
+		return fmt.Errorf("%s: across %s: could not parse the template: %w", label, field, err)
+	}
+
+	return checkAxisReferences(label, field, parsed.Tree, declared)
 }
 
 // checkAxisReferences rejects a `{{ .vars.x }}` naming an axis the matrix does

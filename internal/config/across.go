@@ -383,6 +383,23 @@ func renderCell(label string, cell *Step, combo acrossCombo, parsed templateCach
 		*field.value = rendered
 	}
 
+	if cell.Put != "" {
+		// Rebuilt rather than edited in place: every cell shares the one params map ExpandAcross copied by assignment.
+		rendered, err := mapStringLeaves("params", cell.Params, func(name, leaf string) (string, error) {
+			out, renderErr := renderVars(leaf, combo, parsed)
+			if renderErr != nil {
+				return "", fmt.Errorf("%s: across %s: %w", label, name, renderErr)
+			}
+
+			return out, nil
+		})
+		if err != nil {
+			return err
+		}
+
+		cell.Params, _ = rendered.(map[string]any)
+	}
+
 	nameCell(cell, templateName, combo.vars)
 
 	// The cell's coordinates as a capture path, stamped whether or not the
@@ -472,6 +489,46 @@ func coordinates(vars map[string]string) string {
 // templateCache holds each distinct field template parsed once per matrix,
 // keyed by its source text: every cell renders the same templates.
 type templateCache map[string]*template.Template
+
+// mapStringLeaves names each leaf by its path (params.labels[0]) so an error points at the entry with the mistake, and sorts keys so it is the same error every load.
+func mapStringLeaves(name string, value any, fn func(name, leaf string) (string, error)) (any, error) {
+	switch typed := value.(type) {
+	case string:
+		return fn(name, typed)
+	case map[string]any:
+		if typed == nil {
+			return typed, nil
+		}
+
+		out := make(map[string]any, len(typed))
+
+		for _, key := range slices.Sorted(maps.Keys(typed)) {
+			nested, err := mapStringLeaves(name+"."+key, typed[key], fn)
+			if err != nil {
+				return nil, err
+			}
+
+			out[key] = nested
+		}
+
+		return out, nil
+	case []any:
+		out := make([]any, len(typed))
+
+		for i, item := range typed {
+			nested, err := mapStringLeaves(fmt.Sprintf("%s[%d]", name, i), item, fn)
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = nested
+		}
+
+		return out, nil
+	default:
+		return value, nil
+	}
+}
 
 // renderVars applies `{{ .vars.<name> }}` substitution to one field.
 func renderVars(value string, combo acrossCombo, cache templateCache) (string, error) {

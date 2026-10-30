@@ -556,7 +556,7 @@ jobs:
     outcome: succeeded
 ```
 
-`across:` is a **modifier**, not a container: the step it sits on is still a task (or a put, or an agent), it just runs once per cell. `{{ .vars.<name> }}` substitutes into the command, the image, the prompt, the working directory, the step's own name, and each entry of an agent step's `context_paths:` — so a fan-out cell can be *handed* the file it was assigned rather than told to go find it.
+`across:` is a **modifier**, not a container: the step it sits on is still a task (or a put, or an agent), it just runs once per cell. `{{ .vars.<name> }}` substitutes into the command, the image, the prompt, the working directory, the step's own name, each entry of an agent step's `context_paths:`, and every string in a put's `params:` — so a fan-out cell can be *handed* the file it was assigned rather than told to go find it.
 
 ### The headline: per-cell caching
 
@@ -610,6 +610,51 @@ This is "the step plans, the pipeline executes": one step produces a work list, 
 - **At most 1000 items per axis, and 1000 cells per matrix**, and the file itself is capped at 1 MiB. Nobody reviewed the length of an array a model wrote, and an unbounded one turns an upstream typo into an unbounded bill. The cell cap is the product of every axis, static ones included, so two file axes of 40 items each are refused before any cell runs.
 - **The path is confined at load**: absolute paths and any `..` that climbs out of the workspace are load errors.
 - **Planning**: a static matrix expands at load, so `steps plan` shows every cell. A file matrix can't — its width isn't knowable until the producing step runs — so it hashes its *declaration* at plan time, and its templates are still checked at load. A chain through any `across:` block is unskippable, which here is load-bearing: **the producing step re-runs every run**, so the file the axis reads is always the file this run wrote. The cells themselves still hash and cache individually.
+
+### One put per item
+
+A put is a cell like any other, and every string in its `params:` renders with the cell's vars, nested maps and lists included. That is how a pipeline publishes one thing per item a step decided on: the step writes one file per item, and each cell's params name its own:
+
+```yaml
+resource_types:
+- name: tracker
+  config:
+    check: printf '[]'
+    out: |
+      set -e
+      title=$(cat {{ .params.title_file | shellquote }})   # a path that did not render fails the put
+      echo "filing: $title" >&2
+
+resources:
+- name: issues
+  type: tracker
+  source: {}
+
+jobs:
+- name: file-children
+  plan:
+  - task: split
+    outputs: [children]
+    run: |
+      printf '["login","search"]' > children/items.json
+      echo "Fix the login page" > children/login.title
+      echo "Speed up search" > children/search.title
+  - across:
+    - var: child
+      from_file: children/items.json
+    put: issues
+    inputs: [children]
+    params:
+      title_file: children/{{ .vars.child }}.title    # each cell reads its own
+  assert:
+    execution:
+    - split
+    - issues [child=login]
+    - issues [child=search]
+    outcome: succeeded
+```
+
+**Concourse does not allow this**: its `across:` refuses a `put` step. steps allows it because publishing per item is exactly the fan-out a planning step exists to feed, and a put cell is never skipped, so each one publishes. A `get:`'s params are not rendered.
 
 ### Collected outputs: `outputs:` on the matrix
 

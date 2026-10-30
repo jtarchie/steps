@@ -214,6 +214,62 @@ func TestAcrossContextPathsDoNotAliasBetweenCells(t *testing.T) {
 	}
 }
 
+// TestAcrossRendersPutParams: every string leaf renders per cell; other leaves and the source step stay as written.
+func TestAcrossRendersPutParams(t *testing.T) {
+	t.Parallel()
+
+	step := Step{
+		Across: []AcrossVar{{Var: "child", Values: []string{"a", "b"}}},
+		Put:    "issue",
+		Params: map[string]any{
+			"title_file": "children/{{ .vars.child }}.title",
+			"labels":     []any{"factory", "{{ .vars.child }}"},
+			"nested":     map[string]any{"body": "children/{{ .vars.child }}.md", "draft": true},
+		},
+	}
+
+	cells, err := ExpandAcross(`job "j" step 0`, step)
+	if err != nil {
+		t.Fatalf("ExpandAcross: %v", err)
+	}
+
+	for i, want := range []string{"a", "b"} {
+		params := cells[i].Params
+		labels, _ := params["labels"].([]any)
+		nested, _ := params["nested"].(map[string]any)
+
+		if params["title_file"] != "children/"+want+".title" || len(labels) != 2 || labels[0] != "factory" || labels[1] != want ||
+			nested["body"] != "children/"+want+".md" || nested["draft"] != true {
+			t.Errorf("cell %d params = %#v, want every string leaf rendered for %s and draft left true", i, params, want)
+		}
+	}
+
+	if step.Params["title_file"] != "children/{{ .vars.child }}.title" {
+		t.Errorf("source step params = %#v, want the template untouched", step.Params)
+	}
+}
+
+// TestAcrossPutParamsEdges: no params stays nil so the put's hash does not move, and a misspelled var names the entry it sits in.
+func TestAcrossPutParamsEdges(t *testing.T) {
+	t.Parallel()
+
+	axes := []AcrossVar{{Var: "child", Values: []string{"a", "b"}}}
+
+	bare, err := ExpandAcross(`job "j" step 0`, Step{Across: axes, Put: "issue"})
+	if err != nil {
+		t.Fatalf("ExpandAcross: %v", err)
+	}
+
+	if bare[0].Params != nil {
+		t.Errorf("a put with no params expanded to %#v, want nil params", bare[0].Params)
+	}
+
+	_, err = ExpandAcross(`job "j" step 0`, Step{Across: axes, Put: "issue", Params: map[string]any{"labels": []any{"{{ .vars.chlid }}"}}})
+	if err == nil || !strings.Contains(err.Error(), "params.labels[0]") {
+		t.Errorf("error = %v, want it to name the offending params entry", err)
+	}
+}
+
 // TestAcrossContextPathTemplateErrors proves a context path is checked exactly
 // like a prompt is — as a side effect of expanding the matrix.
 func TestAcrossContextPathTemplateErrors(t *testing.T) {

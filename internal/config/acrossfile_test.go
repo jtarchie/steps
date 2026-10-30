@@ -236,6 +236,14 @@ func TestAcrossFromFileTemplatesAreCheckedAtLoad(t *testing.T) {
 		}
 	}
 
+	filePut := func(params map[string]any) Step {
+		return Step{
+			Across: []AcrossVar{{Var: "item", FromFile: "findings/items.json"}},
+			Put:    "board",
+			Params: params,
+		}
+	}
+
 	cases := []struct {
 		name    string
 		step    Step
@@ -266,6 +274,25 @@ func TestAcrossFromFileTemplatesAreCheckedAtLoad(t *testing.T) {
 			},
 			wantErr: "could not parse the template",
 		},
+		{
+			name:    "var no axis declares in a put's nested params",
+			step:    filePut(map[string]any{"files": map[string]any{"title": "t/{{ .vars.itme }}"}}),
+			wantErr: "params.files.title: {{ .vars.itme }} names no axis",
+		},
+		{
+			name:    "unclosed brace in a put's list params",
+			step:    filePut(map[string]any{"labels": []any{"ok", "{{ .vars.item }"}}),
+			wantErr: "params.labels[1]: could not parse the template",
+		},
+		{
+			name: "put params through a try: wrapper",
+			step: Step{
+				Across: []AcrossVar{{Var: "item", FromFile: "findings/items.json"}},
+				Try:    &Step{Put: "board", Params: map[string]any{"title": "{{ .vars.itme }}"}},
+			},
+			wantErr: "names no axis",
+		},
+		{name: "a declared var in put params is fine", step: filePut(map[string]any{"title": "{{ .vars.item }}", "count": 3})},
 		{name: "a declared var is fine", step: fileStep("echo {{ .vars.item }}")},
 		{name: "no template at all", step: fileStep("true")},
 	}
