@@ -6,6 +6,7 @@ package e2e
 // GitHub Enterprise Server user writes by hand.
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,8 @@ type docGitHubFixture struct {
 	prs      []fakePR
 	comments []fakeComment
 	check    func(t *testing.T, fake *fakeGitHub)
+	// labeledIssues are issues by number, with the labels each carries.
+	labeledIssues map[int][]string
 }
 
 // docGitHubLogin is the token's own user on every fake, so a fixture can
@@ -114,6 +117,21 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 			}
 		},
 	},
+	"label": {
+		prs:           []fakePR{func() fakePR { pr := docPR(); pr.Labels = []string{"ready-for-review", "factory:queued"}; return pr }()},
+		labeledIssues: map[int][]string{12: {"release"}},
+		check: func(t *testing.T, fake *fakeGitHub) {
+			t.Helper()
+
+			if got, want := fake.labelsOn(42), []string{"ready-for-review", "factory:building"}; !slices.Equal(got, want) {
+				t.Errorf("labels on #42 = %v, want %v: queued swapped for building, the filter label kept", got, want)
+			}
+
+			if got, want := fake.labelsOn(12), []string{"release", "has-builds"}; !slices.Equal(got, want) {
+				t.Errorf("labels on #12 = %v, want %v", got, want)
+			}
+		},
+	},
 	"post-fixed": {
 		prs: []fakePR{docPR()},
 		check: func(t *testing.T, fake *fakeGitHub) {
@@ -134,6 +152,25 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 	},
 }
 
+func (fixture docGitHubFixture) serve(t *testing.T) *fakeGitHub {
+	t.Helper()
+
+	fake := newFakeGitHub(t)
+	for _, pr := range fixture.prs {
+		fake.addPR(pr)
+	}
+
+	for _, comment := range fixture.comments {
+		fake.addComment(comment)
+	}
+
+	for number, labels := range fixture.labeledIssues {
+		fake.addLabeledIssue(number, labels...)
+	}
+
+	return fake
+}
+
 // injectDocGitHubFixture starts the github= fixture a block's fence names
 // and points every github-* resource at it, leaving body untouched when the
 // fence names none.
@@ -150,14 +187,7 @@ func injectDocGitHubFixture(t *testing.T, block docs.Block, body string) (string
 		t.Fatalf("fence names github=%s but docs_github_test.go has no such fixture", id)
 	}
 
-	fake := newFakeGitHub(t)
-	for _, pr := range fixture.prs {
-		fake.addPR(pr)
-	}
-
-	for _, comment := range fixture.comments {
-		fake.addComment(comment)
-	}
+	fake := fixture.serve(t)
 
 	var doc map[string]any
 

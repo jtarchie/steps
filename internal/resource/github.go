@@ -1,7 +1,7 @@
 package resource
 
 // The github-* built-ins' check, in and out (see config/github.go for what
-// each type is and why there are five).
+// each type is and why there are six).
 
 import (
 	"context"
@@ -53,6 +53,7 @@ var githubTypes = map[string]githubStages{
 	config.GitHubPRCommentType: {out: githubCommentOut},
 	config.GitHubPRReviewType:  {out: githubReviewOut},
 	config.GitHubReactionType:  {out: githubReactionOut},
+	config.GitHubLabelType:     {out: githubLabelOut},
 }
 
 type githubBackend struct{}

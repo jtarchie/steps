@@ -123,12 +123,16 @@ type fakeGitHub struct {
 	refuseReactions bool
 	// refuseReplies does the same for every reply in a review thread.
 	refuseReplies bool
+	// issueLabels is each issue's labels by number; an issue absent from it does not exist. A pull request's live on its fakePR.
+	issueLabels map[int][]string
+	// refuseLabelRemoval answers every label removal as a token without write access is answered.
+	refuseLabelRemoval bool
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
 	t.Helper()
 
-	fake := &fakeGitHub{t: t, repo: fakeRepo, login: docGitHubLogin, reviews: map[int][]fakeReview{}, nextID: 9000}
+	fake := &fakeGitHub{t: t, repo: fakeRepo, login: docGitHubLogin, reviews: map[int][]fakeReview{}, nextID: 9000, issueLabels: map[int][]string{}}
 	fake.server = httptest.NewServer(fake.routes())
 	t.Cleanup(fake.server.Close)
 
@@ -322,6 +326,11 @@ func (f *fakeGitHub) routes() http.Handler {
 			f.deleteReaction(w, id(r), int64(atoi(r.PathValue("reaction"))), kinds)
 		})
 	}
+
+	handle("POST "+repo+"/issues/{number}/labels", func(w http.ResponseWriter, r *http.Request) { f.addLabels(w, r, atoi(r.PathValue("number"))) })
+	handle("DELETE "+repo+"/issues/{number}/labels/{label}", func(w http.ResponseWriter, r *http.Request) {
+		f.removeLabel(w, atoi(r.PathValue("number")), r.PathValue("label"))
+	})
 
 	handle("GET "+repo+"/compare/{basehead...}", func(w http.ResponseWriter, r *http.Request) { f.serveCompare(w, r, r.PathValue("basehead")) })
 	// GitHub answers a tarball with a redirect to codeload; following one is part of the contract. Under the repo prefix, so the one auth check covers it.
@@ -980,6 +989,114 @@ func (f *fakeGitHub) deleteReview(w http.ResponseWriter, number int, id int64) {
 	f.reviews[number] = kept
 
 	respondJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
+func (f *fakeGitHub) addLabeledIssue(number int, labels ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.issueLabels[number] = labels
+}
+
+// labelsOn is an issue's or a pull request's labels, in the order they were put on.
+func (f *fakeGitHub) labelsOn(number int) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	labels, _ := f.labels(number)
+
+	return labels
+}
+
+// labels is the label set of the issue or pull request number names, since GitHub files a pull request's labels as its issue's.
+func (f *fakeGitHub) labels(number int) ([]string, bool) {
+	if pr, ok := f.pr(number); ok {
+		return slices.Clone(pr.Labels), true
+	}
+
+	labels, ok := f.issueLabels[number]
+
+	return slices.Clone(labels), ok
+}
+
+func (f *fakeGitHub) setLabels(number int, labels []string) {
+	for i := range f.prs {
+		if f.prs[i].Number == number {
+			f.prs[i].Labels = labels
+
+			return
+		}
+	}
+
+	f.issueLabels[number] = labels
+}
+
+func labelList(labels []string) []map[string]any {
+	out := make([]map[string]any, 0, len(labels))
+	for _, label := range labels {
+		out = append(out, map[string]any{"name": label})
+	}
+
+	return out
+}
+
+// addLabels answers as GitHub does: 200 with every label now on the issue, the new ones added to the old, a name it already carries (in any case) not added twice, and a label the repository has never had created on the way.
+func (f *fakeGitHub) addLabels(w http.ResponseWriter, r *http.Request, number int) {
+	labels, ok := f.labels(number)
+	if !ok {
+		respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
+
+		return
+	}
+
+	var body struct {
+		Labels []string `json:"labels"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil || len(body.Labels) == 0 {
+		respondJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "Validation Failed"})
+
+		return
+	}
+
+	updated := labels
+
+	for _, label := range body.Labels {
+		if !slices.ContainsFunc(updated, func(have string) bool { return strings.EqualFold(have, label) }) {
+			updated = append(updated, label)
+		}
+	}
+
+	f.setLabels(number, updated)
+	respondJSON(w, http.StatusOK, labelList(updated))
+}
+
+// removeLabel answers as GitHub does: 200 with the labels left, and 404 both for an issue that is not there and for a label that is not on it, told apart only by the message.
+func (f *fakeGitHub) removeLabel(w http.ResponseWriter, number int, name string) {
+	labels, ok := f.labels(number)
+	if !ok {
+		respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
+
+		return
+	}
+
+	if f.refuseLabelRemoval {
+		respondJSON(w, http.StatusForbidden, map[string]any{"message": "Resource not accessible by personal access token"})
+
+		return
+	}
+
+	at := slices.IndexFunc(labels, func(have string) bool { return strings.EqualFold(have, name) })
+	if at < 0 {
+		respondJSON(w, http.StatusNotFound, map[string]any{"message": "Label does not exist"})
+
+		return
+	}
+
+	left := slices.Delete(labels, at, at+1)
+	f.setLabels(number, left)
+	respondJSON(w, http.StatusOK, labelList(left))
 }
 
 func respondJSON(w http.ResponseWriter, status int, body any) {

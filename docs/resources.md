@@ -196,11 +196,11 @@ Besides `version.json`, `thread.json` and `user` (who wrote the reacted message)
 
 ## The built-in GitHub types
 
-Five built-ins, split by what they do, the way the Slack ones are. `github-prs` and `github-comments` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review` and `github-reaction` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
+Six built-ins, split by what they do, the way the Slack ones are. `github-prs` and `github-comments` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction` and `github-label` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
 
-steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the five can be placed with `tags:` themselves, as for every type that runs inside this process.
+steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the six can be placed with `tags:` themselves, as for every type that runs inside this process.
 
-All five read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
+All six read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
 
 ### `github-prs`: open pull requests
 
@@ -529,6 +529,65 @@ At least one of `add` and `remove` is required, and the set is GitHub's, not Sla
 **`add` goes before `remove`**, so a swap from `eyes` to `rocket` that fails halfway leaves both marks rather than neither, and a comment with no mark reads as one nobody picked up. **`remove` touches only the token user's own reaction**: the put lists that reaction on the comment, finds the one the token's user left, and deletes that one by id, so somebody else's `eyes` stays where they put it. **Marking twice is not an error.** GitHub answers an add that is already there with the reaction that is, and a remove finds nothing when it is already gone; both are the comment in the state asked for, which a replay or a resume always finds, the way `slack-reaction` reads `already_reacted`. Any other answer fails the put with GitHub's status, its words and the route.
 
 A put's version is `{comment, add, remove}`, recorded in the reaction resource's own history and never in the comments one, which is why a mark cannot trigger anything.
+
+### `github-label`: state labels on an issue or pull request
+
+A label is how a pipeline shows where a piece of work is, so the issue list doubles as a board: `factory:queued`, then `factory:building`, then done. `github-label` puts labels on, takes them off, or both in one put, on the issue or pull request an input names:
+
+```yaml github=label
+resources:
+- name: pr
+  type: github-prs
+  source:
+    repo: acme/app
+    labels: [ready-for-review]
+    checkout: false
+- name: state
+  type: github-label
+  source:
+    repo: acme/app
+
+jobs:
+- name: build
+  plan:
+  - get: pr
+    trigger: true
+    version: every
+  - put: claimed
+    resource: state
+    inputs: [pr]
+    params:
+      add: [factory:building]
+      remove: [factory:queued, factory:failed]   # failed is not on it: already gone is success
+      from: pr                                   # optional here: pr is the only input naming one
+  - task: work
+    inputs: [pr]
+    run: |
+      echo "building #$(cat pr/pr.number)"
+    assert:
+      stdout: "building #42"
+  - put: tracker
+    resource: state
+    params:
+      number: "12"                               # the release issue, which no input names
+      add: [has-builds]
+  assert:
+    execution: [pr, claimed, work, tracker]
+    outcome: succeeded
+```
+
+| `params:` field | meaning |
+|---|---|
+| `add` | a list of labels to put on; one the repository does not have yet, GitHub creates |
+| `remove` | a list of labels to take off |
+| `from` | the get whose version names the issue or pull request, when more than one input names one |
+| `number` | the issue or pull request, when no input names it; not with `from` |
+
+At least one of `add` and `remove` is required, and both are lists even for one label: a state change can take off several. A label in both is a load error, compared without regard to case as GitHub compares label names, since the remove would take the add straight back off. **Any input whose version carries a `number` names the issue or pull request**: a `github-prs` or `github-comments` get, or a type of your own whose versions do. A put with no get among its inputs and no `number` is refused at load, as is a `from` naming something that is not a get among them.
+
+**`add` goes before `remove`**, so a swap from `factory:queued` to `factory:building` that fails halfway leaves both labels rather than neither, and an issue with no state label has fallen off the board. **Adding a label the repository has never had creates it**, in GitHub's default color: GitHub does that, and steps does not fight it, so a misspelt state shows up as a new label on the repository's label page rather than as an error. **Removing a label that is not there is not an error**: it is the issue in the state asked for, which a replay or a resume always finds. GitHub answers that with a 404 saying `Label does not exist`, and it answers an issue or repository that is not there with a 404 too, saying `Not Found`; the message is all that tells them apart, so only the first counts as success. Every label anybody else put on stays where it is. Any other answer fails the put with GitHub's status, its words and the route.
+
+A put's version is `{number, add, remove}`, each list joined with commas, and a side the put did not ask for left out, as for `github-reaction`. It lands in the label resource's own history, so a label put cannot trigger anything by itself.
 
 ## The built-in `cron` type
 

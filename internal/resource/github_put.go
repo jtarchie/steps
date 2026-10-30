@@ -309,6 +309,90 @@ func removeOwnReaction(ctx context.Context, client *githubClient, path, content 
 	return nil
 }
 
+func githubLabelOut(ctx context.Context, raw, rawParams map[string]any, inputs PutInputs, _ string) (map[string]any, error) {
+	source, err := config.ParseGitHubPostSource(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	params, err := config.ParseGitHubLabelParams(rawParams)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	target, err := resolvePullRequest(params.Post(), inputs)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := newGitHubClient(source.Connection())
+	if err != nil {
+		return nil, err
+	}
+
+	labels := "/repos/" + source.Repo + "/issues/" + target.number + "/labels"
+	version := map[string]any{"number": target.number}
+
+	// Add first: a swap that failed halfway leaves both states rather than neither, and an issue with no state label has fallen off the board.
+	if len(params.Add) > 0 {
+		err = addLabels(ctx, client, labels, params.Add)
+		if err != nil {
+			return nil, err
+		}
+
+		version["add"] = strings.Join(params.Add, ", ")
+	}
+
+	for _, name := range params.Remove {
+		err = removeLabel(ctx, client, labels+"/"+url.PathEscape(name))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if len(params.Remove) > 0 {
+		version["remove"] = strings.Join(params.Remove, ", ")
+	}
+
+	return version, nil
+}
+
+// addLabels puts labels on beside the ones already there. One already on is no error, so a replay passes.
+func addLabels(ctx context.Context, client *githubClient, path string, labels []string) error {
+	reply, err := client.send(ctx, http.MethodPost, client.api+path, githubJSON, map[string]any{"labels": labels})
+	if err != nil {
+		return err
+	}
+
+	if reply.status != http.StatusOK {
+		return githubFailure(http.MethodPost, path, reply)
+	}
+
+	return nil
+}
+
+// removeLabel takes one label off. GitHub answers 404 both when the label is not on the issue, which is the world as asked and what a replay always finds, and when the issue or repository is not there, which is not; only the message tells them apart.
+func removeLabel(ctx context.Context, client *githubClient, path string) error {
+	reply, err := client.send(ctx, http.MethodDelete, client.api+path, githubJSON, nil)
+	if err != nil {
+		return err
+	}
+
+	if reply.status == http.StatusOK {
+		return nil
+	}
+
+	var said struct {
+		Message string `json:"message"`
+	}
+
+	if reply.status == http.StatusNotFound && json.Unmarshal(reply.body, &said) == nil && said.Message == "Label does not exist" {
+		return nil
+	}
+
+	return githubFailure(http.MethodDelete, path, reply)
+}
+
 type commentTarget struct {
 	id     string
 	kind   string

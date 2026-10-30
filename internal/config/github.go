@@ -3,16 +3,16 @@ package config
 // The built-in github-* resource types: their names, the shape of each one's
 // source: and put params:, and the load-time rules that need no network.
 //
-// Five types rather than one, split by what they do, the way the Slack
+// Six types rather than one, split by what they do, the way the Slack
 // built-ins are: two that FIND work (a pull request, a comment) and have no
-// out, and three that PUBLISH (a comment, a review, a reaction) and have no
+// out, and four that PUBLISH (a comment, a review, a reaction, a label) and have no
 // check. A put
 // records its version in the resource's own history (recordPutOrder), so a
 // type that both watched and posted would mint a comment-shaped version into
 // the history it fans out over — and under trigger: true, a post would
 // trigger the build that posts again.
 //
-// All five are Go rather than YAML: steps calls GitHub itself and unpacks the
+// All six are Go rather than YAML: steps calls GitHub itself and unpacks the
 // tree itself, so nothing needs gh, git or curl on any machine, and a fetched
 // tree is an ordinary artifact on this one — placed and containerized steps
 // read it the way they read any other.
@@ -33,11 +33,12 @@ const (
 	GitHubPRCommentType = "github-pr-comment"
 	GitHubPRReviewType  = "github-pr-review"
 	GitHubReactionType  = "github-reaction"
+	GitHubLabelType     = "github-label"
 )
 
 // GitHubTypes is every github-* type, in the order the docs list them.
 func GitHubTypes() []string {
-	return []string{GitHubPRsType, GitHubCommentsType, GitHubPRCommentType, GitHubPRReviewType, GitHubReactionType}
+	return []string{GitHubPRsType, GitHubCommentsType, GitHubPRCommentType, GitHubPRReviewType, GitHubReactionType, GitHubLabelType}
 }
 
 // GitHubFinds reports whether kind is one of the two types a get reads.
@@ -226,6 +227,23 @@ type GitHubReactionParams struct {
 	From string `yaml:"from,omitempty"`
 }
 
+// GitHubLabelParams is a github-label put's params:. Lists, not one name as a reaction is: a state change can take off more than one label.
+type GitHubLabelParams struct {
+	// Add are labels to put on the issue or pull request; GitHub creates one the repository does not have yet.
+	Add []string `yaml:"add,omitempty"`
+	// Remove are labels to take off it, after Add is on, so a swap that fails halfway leaves both states rather than neither.
+	Remove []string `yaml:"remove,omitempty"`
+	// From names the get input whose version carries the number, when more than one input carries one.
+	From string `yaml:"from,omitempty"`
+	// Number is the issue or pull request, for a put with no input naming it.
+	Number string `yaml:"number,omitempty"`
+}
+
+// Post is the part of a label put's params: that says which issue, in the shape every post resolves its target from.
+func (p GitHubLabelParams) Post() GitHubPostParams {
+	return GitHubPostParams{From: p.From, Number: p.Number}
+}
+
 // githubReactions is every reaction GitHub takes on a comment. Its names,
 // not Slack's: there is no white_check_mark.
 var githubReactions = []string{"+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"} //nolint:gochecknoglobals // read-only table
@@ -401,6 +419,52 @@ func ParseGitHubReactionParams(raw map[string]any) (GitHubReactionParams, error)
 	return params, validateGitHubReaction("params.remove", params.Remove)
 }
 
+// ParseGitHubLabelParams decodes a github-label put's params:.
+func ParseGitHubLabelParams(raw map[string]any) (GitHubLabelParams, error) {
+	var params GitHubLabelParams
+
+	err := decodeParams(raw, &params)
+	if err != nil {
+		return params, err
+	}
+
+	err = validateGitHubLabels(params)
+	if err != nil {
+		return params, err
+	}
+
+	if params.From != "" && params.Number != "" {
+		return params, errors.New("params.from and params.number both say which issue or pull request; name one")
+	}
+
+	if params.Number != "" && strings.Trim(params.Number, "0123456789") != "" {
+		return params, fmt.Errorf("params.number: %q is not an issue or pull request number", params.Number)
+	}
+
+	return params, nil
+}
+
+func validateGitHubLabels(params GitHubLabelParams) error {
+	if len(params.Add) == 0 && len(params.Remove) == 0 {
+		return errors.New("params.add or params.remove is required: the labels to put on, or the ones to take off")
+	}
+
+	for field, labels := range map[string][]string{"params.add": params.Add, "params.remove": params.Remove} {
+		if slices.ContainsFunc(labels, func(label string) bool { return strings.TrimSpace(label) == "" }) {
+			return fmt.Errorf("%s: a label name cannot be empty", field)
+		}
+	}
+
+	// GitHub compares label names without regard to case, so Bug and bug are one label, which the remove would take off again.
+	for _, added := range params.Add {
+		if slices.ContainsFunc(params.Remove, func(removed string) bool { return strings.EqualFold(added, removed) }) {
+			return fmt.Errorf("%q is in both params.add and params.remove; the remove would undo the add", strings.ToLower(added))
+		}
+	}
+
+	return nil
+}
+
 func decodeParams(raw map[string]any, out any) error {
 	if raw == nil {
 		raw = map[string]any{}
@@ -518,9 +582,10 @@ func (c *Config) validateGitHubResource(resource Resource) error {
 func (c *Config) validateGitHubSteps() error {
 	for i := range c.Jobs {
 		comments := c.githubCommentGets(c.Jobs[i])
+		gets := jobGets(c.Jobs[i])
 
 		err := c.Jobs[i].visitSteps(func(label string, step *Step) error {
-			return c.checkGitHubStep(label, step, comments)
+			return c.checkGitHubStep(label, step, comments, gets)
 		})
 		if err != nil {
 			return err
@@ -550,6 +615,44 @@ func (c *Config) githubCommentGets(job Job) []string {
 	})
 
 	return names
+}
+
+// jobGets is the name of every get in job: the inputs a put's version can name an issue or pull request under.
+func jobGets(job Job) []string {
+	var names []string
+
+	_ = job.visitSteps(func(_ string, step *Step) error {
+		if step.Get != "" {
+			names = append(names, step.Get)
+		}
+
+		return nil
+	})
+
+	return names
+}
+
+// checkLabelStep refuses a label put with no get among its inputs to name the issue, unless params.number does, and a from: naming no such get. Which get's version carries a number is a run-time fact, as any type's may.
+func checkLabelStep(step *Step, gets []string) error {
+	params, err := ParseGitHubLabelParams(step.Params)
+	if err != nil {
+		return err
+	}
+
+	visible := gets
+	if !step.InputsAll() {
+		visible = slices.DeleteFunc(slices.Clone(step.InputNames()), func(name string) bool { return !slices.Contains(gets, name) })
+	}
+
+	if params.Number == "" && len(visible) == 0 {
+		return errors.New("no get among its inputs names the issue or pull request; list that get in the put's inputs, or set params.number")
+	}
+
+	if params.From != "" && !slices.Contains(visible, params.From) {
+		return fmt.Errorf("params.from: %q is not a get among this put's inputs (%s)", params.From, strings.Join(visible, ", "))
+	}
+
+	return nil
 }
 
 func checkReactionStep(step *Step, comments []string) error {
@@ -591,7 +694,25 @@ func checkCommentInput(step *Step, comments []string, from, verb string) error {
 	return nil
 }
 
-func (c *Config) checkGitHubStep(label string, step *Step, comments []string) error {
+// checkGitHubPut checks a put's params: against the publishing type it reaches; a find's put is refused elsewhere.
+func checkGitHubPut(kind string, step *Step, comments, gets []string) error {
+	switch kind {
+	case GitHubPRCommentType:
+		return checkPRCommentStep(step, comments)
+	case GitHubPRReviewType:
+		_, err := ParseGitHubReviewParams(step.Params)
+
+		return err
+	case GitHubReactionType:
+		return checkReactionStep(step, comments)
+	case GitHubLabelType:
+		return checkLabelStep(step, gets)
+	}
+
+	return nil
+}
+
+func (c *Config) checkGitHubStep(label string, step *Step, comments, gets []string) error {
 	name, ok := step.resourceName()
 	if !ok {
 		return nil
@@ -611,15 +732,7 @@ func (c *Config) checkGitHubStep(label string, step *Step, comments []string) er
 		return fmt.Errorf("%s: get %q: a %s get takes no params; what it fetches is set on the resource's source instead", label, step.Get, kind)
 	}
 
-	switch kind {
-	case GitHubPRCommentType:
-		err = checkPRCommentStep(step, comments)
-	case GitHubPRReviewType:
-		_, err = ParseGitHubReviewParams(step.Params)
-	case GitHubReactionType:
-		err = checkReactionStep(step, comments)
-	}
-
+	err = checkGitHubPut(kind, step, comments, gets)
 	if err != nil {
 		return fmt.Errorf("%s: put %q: %w", label, step.Put, err)
 	}
