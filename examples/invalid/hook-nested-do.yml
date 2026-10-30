@@ -1,0 +1,13 @@
+# A hook on a step inside a block is checked as one on a plan step is: this do: loaded, then failed when the run reached it.
+# expect: on_failure hook): do: is not valid in a hook
+
+jobs:
+- name: build
+  plan:
+  - do:
+    - task: work
+      run: "false"
+      on_failure:
+        do:
+        - task: say-why
+          run: echo it failed

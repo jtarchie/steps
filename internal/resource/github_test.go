@@ -717,7 +717,8 @@ func TestResolvePullRequest(t *testing.T) {
 		"a comment's has no commit": {inputs: PutInputs{Versions: map[string]map[string]any{"said": comment}}, want: pullRequestTarget{number: "8"}},
 		"from picks":                {params: config.GitHubPostParams{From: "said"}, inputs: PutInputs{Versions: map[string]map[string]any{"pr": pr, "said": comment}}, want: pullRequestTarget{number: "8"}},
 		"number wins":               {params: config.GitHubPostParams{Number: "12"}, inputs: PutInputs{Versions: map[string]map[string]any{"pr": pr}}, want: pullRequestTarget{number: "12"}},
-		"none":                      {inputs: PutInputs{Names: []string{"notes"}}, err: "no input names a pull request"},
+		"a number that is a path":   {params: config.GitHubPostParams{Number: "12/../13"}, err: `params.number: "12/../13" is not`},
+		"none":                      {inputs: PutInputs{Names: []string{"notes"}}, err: "github-prs, github-issues or github-comments get"},
 		"two":                       {inputs: PutInputs{Versions: map[string]map[string]any{"pr": pr, "said": comment}}, err: "several inputs name a pull request (pr, said)"},
 		"from names nothing":        {params: config.GitHubPostParams{From: "gone"}, inputs: PutInputs{Names: []string{"pr"}, Versions: map[string]map[string]any{"pr": pr}}, err: `params.from: "gone"`},
 	} {

@@ -64,14 +64,14 @@ func (h Hooks) Each(fn func(name string, step *Step) error) error {
 // coherent artifact scope than its parent). Nested hooks recurse throughout.
 func (c *Config) validateHooks() error {
 	for _, job := range c.Jobs {
-		for i := range job.Plan {
-			err := validateHookTree(fmt.Sprintf("job %q step %d", job.Name, i), job.Plan[i].Hooks, false)
-			if err != nil {
-				return err
-			}
+		err := job.visitSteps(func(label string, step *Step) error {
+			return validateHookTree(label, step.Hooks, false)
+		})
+		if err != nil {
+			return err
 		}
 
-		err := validateHookTree(fmt.Sprintf("job %q", job.Name), job.Hooks, true)
+		err = validateHookTree(fmt.Sprintf("job %q", job.Name), job.Hooks, true)
 		if err != nil {
 			return err
 		}

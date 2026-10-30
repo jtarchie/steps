@@ -132,3 +132,44 @@ func TestValidateGitHubLabelRefusals(t *testing.T) {
 		t.Errorf("validate = %v, want a put naming its issue by number to load with no inputs", err)
 	}
 }
+
+// TestEndToEndGitHubLabelAcrossNumbers: an across: put names each cell's issue with a rendered params.number, which load cannot read as digits yet; the put checks the number it rendered to, so a cell rendering a path is refused before it reaches the route.
+func TestEndToEndGitHubLabelAcrossNumbers(t *testing.T) {
+	pipeline := func(fake *fakeGitHub, values string) string {
+		return `
+resources:
+- name: state
+  type: github-label
+  source:
+    repo: ` + fakeRepo + `
+    endpoint: ` + fake.URL() + `
+jobs:
+- name: triage
+  plan:
+  - across:
+    - var: n
+      values: ` + values + `
+    put: state
+    params:
+      number: "{{ .vars.n }}"
+      add: [triaged]
+`
+	}
+
+	fake := newFakeGitHub(t)
+	fake.addLabeledIssue(12)
+	fake.addLabeledIssue(13)
+
+	mustRun(t, "run", writePipeline(t, t.TempDir(), pipeline(fake, `["12", "13"]`)), "--job", "triage")
+
+	for _, number := range []int{12, 13} {
+		if got := fake.labelsOn(number); !slices.Equal(got, []string{"triaged"}) {
+			t.Errorf("labels on #%d = %v, want [triaged]", number, got)
+		}
+	}
+
+	err := cli.Run([]string{"run", writePipeline(t, t.TempDir(), pipeline(fake, `["12/../13"]`)), "--job", "triage"})
+	if err == nil || !strings.Contains(err.Error(), `params.number: "12/../13" is not`) {
+		t.Fatalf("run = %v, want the rendered number refused", err)
+	}
+}

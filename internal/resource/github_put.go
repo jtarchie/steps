@@ -479,7 +479,7 @@ type pullRequestTarget struct {
 // to say which.
 func resolvePullRequest(params config.GitHubPostParams, inputs PutInputs) (pullRequestTarget, error) {
 	if params.Number != "" {
-		return pullRequestTarget{number: params.Number}, nil
+		return numberedTarget(params.Number)
 	}
 
 	if params.From != "" {
@@ -506,10 +506,19 @@ func resolvePullRequest(params config.GitHubPostParams, inputs PutInputs) (pullR
 	case 1:
 		return targetOf(inputs.Versions[carrying[0]]), nil
 	case 0:
-		return pullRequestTarget{}, errors.New("no input names a pull request: give this put its github-prs or github-comments get as an input, or set params.number")
+		return pullRequestTarget{}, errors.New("no input names a pull request: give this put its github-prs, github-issues or github-comments get as an input, or set params.number")
 	default:
 		return pullRequestTarget{}, fmt.Errorf("several inputs name a pull request (%s): set params.from to the one this posts on", strings.Join(carrying, ", "))
 	}
+}
+
+// numberedTarget refuses a params.number that is not digits: it lands in the route, and an across: cell renders it from whatever its file said.
+func numberedTarget(number string) (pullRequestTarget, error) {
+	if strings.Trim(number, "0123456789") != "" {
+		return pullRequestTarget{}, fmt.Errorf("params.number: %q is not an issue or pull request number", number)
+	}
+
+	return pullRequestTarget{number: number}, nil
 }
 
 // targetOf reads a version as a pull request. A comment's version names the
@@ -528,16 +537,9 @@ func targetOf(version map[string]any) pullRequestTarget {
 // empty one is refused: posting nothing is how a step that wrote nothing
 // would otherwise look like one that succeeded.
 func readPostBody(srcDir, name string) (string, error) {
-	root, err := os.OpenRoot(srcDir)
+	body, err := readPutFile(srcDir, "params.body_file", name)
 	if err != nil {
-		return "", fmt.Errorf("%w", err)
-	}
-
-	defer func() { _ = root.Close() }()
-
-	body, err := root.ReadFile(name)
-	if err != nil {
-		return "", fmt.Errorf("params.body_file: %w — is the step that writes it one of this put's inputs?", err)
+		return "", err
 	}
 
 	if strings.TrimSpace(string(body)) == "" {
@@ -545,6 +547,23 @@ func readPostBody(srcDir, name string) (string, error) {
 	}
 
 	return string(body), nil
+}
+
+// readPutFile reads name from inside the put's own tree, so a path cannot climb out of it.
+func readPutFile(srcDir, field, name string) ([]byte, error) {
+	root, err := os.OpenRoot(srcDir)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	raw, err := root.ReadFile(name)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w — is the step that writes it one of this put's inputs?", field, err)
+	}
+
+	return raw, nil
 }
 
 // reviewComment is one comment on a line of a pull request's diff, as

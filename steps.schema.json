@@ -565,7 +565,7 @@
         "labels": {
           "type": "array",
           "items": { "type": "string", "pattern": "\\S" },
-          "description": "Labels that must all be on the issue or pull request a comment sits on, compared without regard to case. A comment refused for its labels is not reported later because the label went on after the check passed it."
+          "description": "Labels that must all be on the issue or pull request a comment sits on, compared without regard to case. A comment refused for its labels is reported later only if the label goes on within the five-minute look-back, or the comment is edited."
         }
       }
     },

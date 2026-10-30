@@ -541,7 +541,8 @@ func ParseGitHubLabelParams(raw map[string]any) (GitHubLabelParams, error) {
 		return params, errors.New("params.from and params.number both say which issue or pull request; name one")
 	}
 
-	if params.Number != "" && strings.Trim(params.Number, "0123456789") != "" {
+	// An across: cell renders its params after load; the put checks the number it rendered to.
+	if params.Number != "" && !strings.Contains(params.Number, "{{") && strings.Trim(params.Number, "0123456789") != "" {
 		return params, fmt.Errorf("params.number: %q is not an issue or pull request number", params.Number)
 	}
 

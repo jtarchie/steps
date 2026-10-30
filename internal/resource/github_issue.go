@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
@@ -84,16 +83,9 @@ func issuePayload(srcDir string, params config.GitHubIssueParams) (map[string]an
 
 // readIssueTitle reads a title from inside the put's own tree. A second line is refused rather than cut: a model that wrote the body into the title file should fail by name, not open an issue titled with its first sentence.
 func readIssueTitle(srcDir, name string) (string, error) {
-	root, err := os.OpenRoot(srcDir)
+	raw, err := readPutFile(srcDir, "params.title_file", name)
 	if err != nil {
-		return "", fmt.Errorf("%w", err)
-	}
-
-	defer func() { _ = root.Close() }()
-
-	raw, err := root.ReadFile(name)
-	if err != nil {
-		return "", fmt.Errorf("params.title_file: %w — is the step that writes it one of this put's inputs?", err)
+		return "", err
 	}
 
 	title := strings.TrimRight(string(raw), "\r\n")
