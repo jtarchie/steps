@@ -368,6 +368,7 @@ func TestWatchGitHubCommentsTriggerOnAuthorAndContent(t *testing.T) {
 	fixture.assertDid(t, "102:7:conversation")
 
 	fake.addComment(fakeComment{ID: 103, Number: 7, Kind: "review", Author: "alice", Body: "/steps fix this line", Updated: at.Add(3 * time.Second)})
+	fake.addLabeledIssue(12)
 	fake.addComment(fakeComment{ID: 104, Number: 12, Kind: "issue", Author: "Alice", Body: "/steps build", Updated: at.Add(4 * time.Second)})
 	fixture.watch(t)
 	fixture.assertDid(t, "102:7:conversation", "103:7:review", "104:12:issue")

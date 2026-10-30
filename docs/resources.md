@@ -196,11 +196,11 @@ Besides `version.json`, `thread.json` and `user` (who wrote the reacted message)
 
 ## The built-in GitHub types
 
-Seven built-ins, split by what they do, the way the Slack ones are. `github-prs` and `github-comments` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction`, `github-label` and `github-issue` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
+Eight built-ins, split by what they do, the way the Slack ones are. `github-prs`, `github-comments` and `github-issues` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction`, `github-label` and `github-issue` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
 
-steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the six can be placed with `tags:` themselves, as for every type that runs inside this process.
+steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the eight can be placed with `tags:` themselves, as for every type that runs inside this process.
 
-All six read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
+All eight read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
 
 ### `github-prs`: open pull requests
 
@@ -372,9 +372,87 @@ It stays cheap. A comment is looked at only after it has passed `author` and `bo
 
 **A reaction does not change a comment's `updated`.** Adding the mark makes no new version, so marking a comment never triggers the job again. Removing it does not bring the comment back by itself either: with a cursor, the check asks only for comments written since five minutes before the newest version it reported, so an older comment is not among them, and one inside those five minutes is already in version history. It is work again when it is edited, which is a new version anyway, or when a check with no cursor finds it on its first page.
 
+### `github-issues`: a labeled issue as a trigger
+
+An issue list doubles as a queue: a person labels an issue `self-build`, and a pipeline picks it up, plans it, and builds it. `github-issues` finds every open issue that matches its filters:
+
+```yaml github=labeled-issue
+resources:
+- name: issue
+  type: github-issues
+  source:
+    repo: acme/app
+    labels: [self-build]
+    author: alice
+    assignee: "@me"                    # quoted: @ cannot start a plain YAML value
+    token_env: GH_TOKEN                # the default
+    endpoint: https://api.github.com   # the default
+
+- name: state
+  type: github-label
+  source:
+    repo: acme/app
+
+- name: reply
+  type: github-pr-comment
+  source:
+    repo: acme/app
+
+jobs:
+- name: plan
+  plan:
+  - get: issue
+    trigger: true
+    version: every                     # one build per issue, and per relabel
+  - put: claimed
+    resource: state
+    inputs: [issue]
+    params:
+      add: [factory:planning]          # not a filter label, so marking the issue starts no build
+  - task: read
+    inputs: [issue]
+    outputs: [notes]
+    run: |
+      echo "planning #$(cat issue/issue.number): $(cat issue/issue.title), $(grep -c '^## Comment by' issue/issue.md) comment(s)" | tee notes/body.md
+    assert:
+      stdout: "planning #4: Plan the cache, 2 comment(s)"
+  - put: reply
+    inputs: [issue, notes]
+    params:
+      body_file: notes/body.md         # posted on issue #4
+  assert:
+    execution: [issue, claimed, read, reply]
+    outcome: succeeded
+```
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `repo` | yes | `owner/name` |
+| `labels` | no | labels that must all be on it; also what the version's `labeled_at` is read from |
+| `author` | no | who opened it |
+| `assignee` | no | someone it is assigned to |
+| `token_env`, `endpoint` | no | as for `github-prs` |
+
+`@me` in `author` or `assignee` is the token's own user. Pull requests never match, though GitHub files them as issues too. The check is one GraphQL search per poll, as for `github-prs`, and reports issues oldest first by number.
+
+**The version is `{number, labeled_at}` when `labels` is set, and `{number}` when it is not.** `labeled_at` is when one of the filter labels last went on the issue. That is a deliberate departure from Concourse, whose versions name a thing and nothing about it, made for the same reason [`github-comments`](#github-comments-a-comment-as-a-trigger) carries `updated`: here the label is the request for work. So **taking a filter label off and putting it back asks for the work again**: it makes a new `labeled_at`, so a new version, so a new build, which is how a person retries a failed run from GitHub's own page without touching steps. Any other label changes nothing: a pipeline that marks its progress with [`github-label`](#github-label-state-labels-on-an-issue-or-pull-request) state labels such as `factory:planning` does not trigger itself. Editing the issue or commenting on it is not a new version either. Labels are matched without regard to case, as GitHub matches them. The check reads the last hundred times any label went on an issue; one relabeled more often than that since its filter label went on loses `labeled_at` and comes back as a new version once.
+
+A get writes no tree, since an issue has none, only these:
+
+| file | what it holds |
+|---|---|
+| `issue.json` | the issue, as GitHub's API describes it |
+| `issue.number`, `issue.title`, `issue.url` | its number, title and page |
+| `issue.comments.json` | every comment on it, oldest first, as GitHub's API describes them |
+| `issue.md` | the issue to read: `# <title> (#<number>)`, its page, its body, then each comment under `## Comment by <login>, <created_at>` |
+
+`issue.md` carries the discussion because a decision recorded in a comment after the issue was filed is part of what the work must do, and a plan built from the body alone builds the option the discussion rejected. **A get fetches the issue as it is now**, whichever version it is handed: an issue has no commit to pin it to, so a replay or a later job sees today's title, body and comments. With [`cache.resources:`](workspace.md#cross-build-resource-cache-cache) on, a version already fetched is not fetched again, so a later job sees the issue as it was when the version was first fetched instead.
+
+A `github-pr-comment` put handed a `github-issues` get posts on that issue, as above: the type is named for pull requests, but GitHub files the comment under the issue either way, and a `github-label` put labels it the same way.
+
 ### `github-pr-comment` and `github-pr-review`: publishing
 
-Both take `repo`, `token_env` and `endpoint` in `source:` and nothing else, and find which pull request a put is about in its inputs: the one input whose version names a pull request, which every `github-prs` and `github-comments` get's does. `params.from` picks one when several do, and `params.number` names one outright for a put with none:
+Both take `repo`, `token_env` and `endpoint` in `source:` and nothing else, and find which pull request a put is about in its inputs: the one input whose version names a pull request, which every `github-prs` and `github-comments` get's does, and a `github-issues` get's names an issue the same way. `params.from` picks one when several do, and `params.number` names one outright for a put with none:
 
 ```yaml github=post-fixed
 resources:
@@ -583,7 +661,7 @@ jobs:
 | `from` | the get whose version names the issue or pull request, when more than one input names one |
 | `number` | the issue or pull request, when no input names it; not with `from` |
 
-At least one of `add` and `remove` is required, and both are lists even for one label: a state change can take off several. A label in both is a load error, compared without regard to case as GitHub compares label names, since the remove would take the add straight back off. **Any input whose version carries a `number` names the issue or pull request**: a `github-prs` or `github-comments` get, or a type of your own whose versions do. A put with no get among its inputs and no `number` is refused at load, as is a `from` naming something that is not a get among them.
+At least one of `add` and `remove` is required, and both are lists even for one label: a state change can take off several. A label in both is a load error, compared without regard to case as GitHub compares label names, since the remove would take the add straight back off. **Any input whose version carries a `number` names the issue or pull request**: a `github-prs`, `github-comments` or `github-issues` get, or a type of your own whose versions do. A put with no get among its inputs and no `number` is refused at load, as is a `from` naming something that is not a get among them.
 
 **`add` goes before `remove`**, so a swap from `factory:queued` to `factory:building` that fails halfway leaves both labels rather than neither, and an issue with no state label has fallen off the board. **Adding a label the repository has never had creates it**, in GitHub's default color: GitHub does that, and steps does not fight it, so a misspelt state shows up as a new label on the repository's label page rather than as an error. **Removing a label that is not there is not an error**: it is the issue in the state asked for, which a replay or a resume always finds. GitHub answers that with a 404 saying `Label does not exist`, and it answers an issue or repository that is not there with a 404 too, saying `Not Found`; the message is all that tells them apart, so only the first counts as success. Every label anybody else put on stays where it is. Any other answer fails the put with GitHub's status, its words and the route.
 

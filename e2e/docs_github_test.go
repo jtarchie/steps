@@ -23,6 +23,7 @@ type docGitHubFixture struct {
 	check    func(t *testing.T, fake *fakeGitHub)
 	// labeledIssues are issues by number, with the labels each carries.
 	labeledIssues map[int][]string
+	issues        []fakeIssue
 }
 
 // docGitHubLogin is the token's own user on every fake, so a fixture can
@@ -154,6 +155,30 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 			}
 		},
 	},
+	"labeled-issue": {
+		// #5 is bob's and #42 a pull request, both labeled: the author filter and is:issue keep them out.
+		prs: []fakePR{docPR()},
+		issues: []fakeIssue{
+			{Number: 4, Title: "Plan the cache", Body: "It should key on content.", Author: "alice", Assignees: []string{docGitHubLogin}, Labels: []string{"self-build"}},
+			{Number: 5, Title: "Not ours", Author: "bob", Assignees: []string{docGitHubLogin}, Labels: []string{"self-build"}},
+		},
+		comments: []fakeComment{
+			{ID: 801, Number: 4, Kind: "issue", Author: "bob", Body: "Use the digest.", Updated: time.Date(2026, 10, 1, 9, 30, 0, 0, time.UTC)},
+			{ID: 802, Number: 4, Kind: "issue", Author: "alice", Body: "Agreed.", Updated: time.Date(2026, 10, 1, 9, 35, 0, 0, time.UTC)},
+		},
+		check: func(t *testing.T, fake *fakeGitHub) {
+			t.Helper()
+
+			posted := fake.postedComments()
+			if len(posted) != 1 || posted[0].Number != 4 || posted[0].Body != "planning #4: Plan the cache, 2 comment(s)\n" {
+				t.Errorf("posted %+v, want the plan note on issue #4", posted)
+			}
+
+			if got, want := fake.labelsOn(4), []string{"self-build", "factory:planning"}; !slices.Equal(got, want) {
+				t.Errorf("labels on #4 = %v, want %v", got, want)
+			}
+		},
+	},
 	"post-fixed": {
 		prs: []fakePR{docPR()},
 		check: func(t *testing.T, fake *fakeGitHub) {
@@ -188,6 +213,10 @@ func (fixture docGitHubFixture) serve(t *testing.T) *fakeGitHub {
 
 	for number, labels := range fixture.labeledIssues {
 		fake.addLabeledIssue(number, labels...)
+	}
+
+	for _, issue := range fixture.issues {
+		fake.addIssue(issue)
 	}
 
 	return fake

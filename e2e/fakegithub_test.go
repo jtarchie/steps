@@ -55,6 +55,25 @@ type fakePR struct {
 	Files     []fakeFile
 }
 
+type fakeIssue struct {
+	Number    int
+	Title     string
+	Body      string
+	Author    string
+	Assignees []string
+	Labels    []string
+	// Labeled is every LabeledEvent on it, oldest first. Taking a label off erases none: GitHub's timeline keeps them.
+	Labeled []fakeLabeled
+	Closed  bool
+	// Opened says a put opened it, rather than the test filing it.
+	Opened bool
+}
+
+type fakeLabeled struct {
+	Label string
+	At    time.Time
+}
+
 type fakeComment struct {
 	ID        int64
 	Number    int
@@ -102,15 +121,6 @@ type postedComment struct {
 	Body   string
 }
 
-// createdIssue is one issue a put opened.
-type createdIssue struct {
-	Number    int
-	Title     string
-	Body      string
-	Labels    []string
-	Assignees []string
-}
-
 type fakeGitHub struct {
 	t      *testing.T
 	server *httptest.Server
@@ -122,7 +132,6 @@ type fakeGitHub struct {
 	comments []fakeComment
 	reviews  map[int][]fakeReview
 	posted   []postedComment
-	issues   []createdIssue
 	queries  []string
 	nextID   int64
 	requests int
@@ -133,8 +142,10 @@ type fakeGitHub struct {
 	refuseReactions bool
 	// refuseReplies does the same for every reply in a review thread.
 	refuseReplies bool
-	// issueLabels is each issue's labels by number; an issue absent from it does not exist. A pull request's live on its fakePR.
-	issueLabels map[int][]string
+	// issues are the repository's issues, kept apart from prs as search keeps them apart by is:issue and is:pr; an issue's comments are the fakeComments of kind issue on its number.
+	issues []fakeIssue
+	// clock is when the next label goes on, a minute after the last: GitHub stamps an event to the second, and a test that takes a label off and puts it back must see two moments.
+	clock time.Time
 	// refuseLabelRemoval answers every label removal as a token without write access is answered.
 	refuseLabelRemoval bool
 }
@@ -142,7 +153,7 @@ type fakeGitHub struct {
 func newFakeGitHub(t *testing.T) *fakeGitHub {
 	t.Helper()
 
-	fake := &fakeGitHub{t: t, repo: fakeRepo, login: docGitHubLogin, reviews: map[int][]fakeReview{}, nextID: 9000, issueLabels: map[int][]string{}}
+	fake := &fakeGitHub{t: t, repo: fakeRepo, login: docGitHubLogin, reviews: map[int][]fakeReview{}, nextID: 9000, clock: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)}
 	fake.server = httptest.NewServer(fake.routes())
 	t.Cleanup(fake.server.Close)
 
@@ -259,11 +270,12 @@ func (f *fakeGitHub) postedComments() []postedComment {
 	return slices.Clone(f.posted)
 }
 
-func (f *fakeGitHub) createdIssues() []createdIssue {
+// createdIssues is every issue a put opened, in the order it opened them.
+func (f *fakeGitHub) createdIssues() []fakeIssue {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return slices.Clone(f.issues)
+	return slices.DeleteFunc(slices.Clone(f.issues), func(issue fakeIssue) bool { return !issue.Opened })
 }
 
 func (f *fakeGitHub) reviewsOn(number int) []fakeReview {
@@ -325,15 +337,20 @@ func (f *fakeGitHub) routes() http.Handler {
 		f.deleteReview(w, atoi(r.PathValue("number")), int64(atoi(r.PathValue("id"))))
 	})
 	handle("GET "+repo+"/issues/comments", func(w http.ResponseWriter, r *http.Request) { f.serveCommentList(w, r, "conversation", "issue") })
-	handle("GET "+repo+"/issues/comments/{id}", func(w http.ResponseWriter, r *http.Request) {
-		f.serveComment(w, int64(atoi(r.PathValue("id"))), "conversation", "issue")
+	// issues/comments/{id} and issues/{number}/comments overlap as patterns too, so one route serves both.
+	handle("GET "+repo+"/issues/{number}/{sub}", func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.PathValue("number") == "comments":
+			f.serveComment(w, int64(atoi(r.PathValue("sub"))), "conversation", "issue")
+		case r.PathValue("sub") == "comments":
+			f.serveCommentsOn(w, r, atoi(r.PathValue("number")), "conversation", "issue")
+		default:
+			respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
+		}
 	})
 	handle("POST "+repo+"/issues", f.createIssue)
 	handle("POST "+repo+"/issues/{number}/comments", func(w http.ResponseWriter, r *http.Request) { f.postComment(w, r, atoi(r.PathValue("number"))) })
-	handle("GET "+repo+"/issues/{number}", func(w http.ResponseWriter, r *http.Request) {
-		number := atoi(r.PathValue("number"))
-		respondJSON(w, http.StatusOK, map[string]any{"number": number, "title": "an issue", "html_url": f.html("issues", number)})
-	})
+	handle("GET "+repo+"/issues/{number}", func(w http.ResponseWriter, r *http.Request) { f.serveIssue(w, atoi(r.PathValue("number"))) })
 	for listing, kinds := range map[string][]string{"/issues/comments/": {"conversation", "issue"}, "/pulls/comments/": {"review"}} {
 		reactions := repo + listing + "{id}/reactions"
 		id := func(r *http.Request) int64 { return int64(atoi(r.PathValue("id"))) }
@@ -367,7 +384,7 @@ func (f *fakeGitHub) servePullSub(w http.ResponseWriter, r *http.Request) {
 	case r.PathValue("sub") == "reviews":
 		f.listReviews(w, atoi(r.PathValue("number")))
 	case r.PathValue("sub") == "comments":
-		f.servePullComments(w, r, atoi(r.PathValue("number")))
+		f.serveCommentsOn(w, r, atoi(r.PathValue("number")), "review")
 	default:
 		respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
 	}
@@ -415,11 +432,30 @@ func (f *fakeGitHub) serveSearch(w http.ResponseWriter, r *http.Request) {
 	q, _ := request.Variables["q"].(string)
 	f.queries = append(f.queries, q)
 
+	// A hit is the node's fields only when the query's fragment is on its type; GraphQL answers {} for one that is not.
+	asksPRs := strings.Contains(request.Query, "... on PullRequest")
+	asksIssues := strings.Contains(request.Query, "... on Issue")
 	nodes := []map[string]any{}
 
 	for _, pr := range f.prs {
-		if f.matches(pr, searchQualifiers(q)) {
-			nodes = append(nodes, map[string]any{"number": pr.Number, "headRefOid": pr.SHA})
+		if f.matches(searchedPR(pr), searchQualifiers(q)) {
+			node := map[string]any{}
+			if asksPRs {
+				node = map[string]any{"number": pr.Number, "headRefOid": pr.SHA}
+			}
+
+			nodes = append(nodes, node)
+		}
+	}
+
+	for _, issue := range f.issues {
+		if f.matches(searchedIssue(issue), searchQualifiers(q)) {
+			node := map[string]any{}
+			if asksIssues {
+				node = map[string]any{"number": issue.Number, "timelineItems": map[string]any{"nodes": labeledEvents(issue.Labeled)}}
+			}
+
+			nodes = append(nodes, node)
 		}
 	}
 
@@ -466,7 +502,39 @@ func searchQualifiers(q string) []qualifier {
 	return out
 }
 
-func (f *fakeGitHub) matches(pr fakePR, qualifiers []qualifier) bool {
+// searched is what a search qualifier reads off a pull request or an issue, which GitHub's search indexes as one kind of thing.
+type searched struct {
+	pr        bool
+	open      bool
+	author    string
+	assignees []string
+	reviewers []string
+	labels    []string
+	base      string
+	draft     bool
+}
+
+func searchedPR(pr fakePR) searched {
+	return searched{pr: true, open: true, author: pr.Author, assignees: pr.Assignees, reviewers: pr.Reviewers, labels: pr.Labels, base: pr.Base, draft: pr.Draft}
+}
+
+func searchedIssue(issue fakeIssue) searched {
+	return searched{open: !issue.Closed, author: issue.Author, assignees: issue.Assignees, labels: issue.Labels}
+}
+
+// labeledEvents is an issue's timeline as the issue search asks for it: its last hundred LabeledEvents, oldest first.
+func labeledEvents(labeled []fakeLabeled) []map[string]any {
+	labeled = labeled[max(len(labeled)-100, 0):]
+
+	out := make([]map[string]any, 0, len(labeled))
+	for _, event := range labeled {
+		out = append(out, map[string]any{"createdAt": event.At.UTC().Format(time.RFC3339), "label": map[string]any{"name": event.Label}})
+	}
+
+	return out
+}
+
+func (f *fakeGitHub) matches(item searched, qualifiers []qualifier) bool {
 	me := func(login string) string {
 		if login == "@me" {
 			return f.login
@@ -475,15 +543,20 @@ func (f *fakeGitHub) matches(pr fakePR, qualifiers []qualifier) bool {
 		return login
 	}
 
+	is := map[string]bool{"pr": item.pr, "issue": !item.pr, "open": item.open, "closed": !item.open}
+
 	reads := map[string]func(string) bool{
 		"repo":             func(v string) bool { return v == f.repo },
-		"is":               func(v string) bool { return v == "pr" || v == "open" },
-		"author":           func(v string) bool { return pr.Author == me(v) },
-		"assignee":         func(v string) bool { return slices.Contains(pr.Assignees, me(v)) },
-		"review-requested": func(v string) bool { return slices.Contains(pr.Reviewers, me(v)) },
-		"label":            func(v string) bool { return slices.Contains(pr.Labels, v) },
-		"base":             func(v string) bool { return pr.Base == v },
-		"draft":            func(v string) bool { return strconv.FormatBool(pr.Draft) == v },
+		"is":               func(v string) bool { return is[v] },
+		"author":           func(v string) bool { return item.author == me(v) },
+		"assignee":         func(v string) bool { return slices.Contains(item.assignees, me(v)) },
+		"review-requested": func(v string) bool { return item.pr && slices.Contains(item.reviewers, me(v)) },
+		// GitHub matches a label name without regard to case.
+		"label": func(v string) bool {
+			return slices.ContainsFunc(item.labels, func(have string) bool { return strings.EqualFold(have, v) })
+		},
+		"base":  func(v string) bool { return item.pr && item.base == v },
+		"draft": func(v string) bool { return item.pr && strconv.FormatBool(item.draft) == v },
 	}
 
 	for _, q := range qualifiers {
@@ -648,14 +721,12 @@ func (f *fakeGitHub) serveCommentList(w http.ResponseWriter, r *http.Request, ki
 	_, _ = w.Write(encoded)
 }
 
-// servePullComments is one pull request's inline comments, GitHub's order
-// for them: by id, which is creation order, newest last unless
-// direction=desc asks otherwise. Paged like the repo-wide listings.
-func (f *fakeGitHub) servePullComments(w http.ResponseWriter, r *http.Request, number int) {
+// serveCommentsOn is one pull request's or issue's comments of these kinds in GitHub's order for them: by id, which is creation order, newest last unless direction=desc asks otherwise. Paged like the repo-wide listings.
+func (f *fakeGitHub) serveCommentsOn(w http.ResponseWriter, r *http.Request, number int, kinds ...string) {
 	var picked []fakeComment
 
 	for _, comment := range f.comments {
-		if comment.Kind == "review" && comment.Number == number {
+		if slices.Contains(kinds, comment.Kind) && comment.Number == number {
 			picked = append(picked, comment)
 		}
 	}
@@ -728,6 +799,8 @@ func (f *fakeGitHub) commentJSON(comment fakeComment) map[string]any {
 		"body":       comment.Body,
 		"user":       map[string]any{"login": comment.Author},
 		"updated_at": comment.Updated.UTC().Format(time.RFC3339),
+		// No test edits a comment's creation, so it is the moment the test declared.
+		"created_at": comment.Updated.UTC().Format(time.RFC3339),
 		"reactions":  f.rollup(comment),
 	}
 
@@ -877,6 +950,12 @@ func (f *fakeGitHub) postComment(w http.ResponseWriter, r *http.Request, number 
 		Body string `json:"body"`
 	}
 
+	if _, ok := f.labels(number); !ok {
+		respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
+
+		return
+	}
+
 	err := json.NewDecoder(r.Body).Decode(&body)
 	if err != nil || body.Body == "" {
 		respondJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "Validation Failed"})
@@ -915,13 +994,14 @@ func (f *fakeGitHub) createIssue(w http.ResponseWriter, r *http.Request) {
 		number = max(number, comment.Number)
 	}
 
-	for _, created := range f.issues {
-		number = max(number, created.Number)
+	for _, filed := range f.issues {
+		number = max(number, filed.Number)
 	}
 
 	number++
 	f.nextID++
-	f.issues = append(f.issues, createdIssue{Number: number, Title: issue.Title, Body: issue.Body, Labels: issue.Labels, Assignees: issue.Assignees})
+	f.issues = append(f.issues, fakeIssue{Number: number, Title: issue.Title, Body: issue.Body, Author: f.login, Assignees: issue.Assignees, Opened: true})
+	f.setLabels(number, issue.Labels)
 
 	respondJSON(w, http.StatusCreated, map[string]any{"id": f.nextID, "number": number, "html_url": f.html("issues", number)})
 }
@@ -1045,11 +1125,74 @@ func (f *fakeGitHub) deleteReview(w http.ResponseWriter, number int, id int64) {
 	respondJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 
-func (f *fakeGitHub) addLabeledIssue(number int, labels ...string) {
+// addIssue files an issue; the labels it is filed with each get a LabeledEvent, as a person putting them on would leave.
+func (f *fakeGitHub) addIssue(issue fakeIssue) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.issueLabels[number] = labels
+	labels := issue.Labels
+	issue.Labels = nil
+	f.issues = append(f.issues, issue)
+	f.setLabels(issue.Number, labels)
+}
+
+func (f *fakeGitHub) addLabeledIssue(number int, labels ...string) {
+	f.addIssue(fakeIssue{Number: number, Title: fmt.Sprintf("issue %d", number), Author: "alice", Labels: labels})
+}
+
+// relabel takes label off an issue and puts it back, as a person asking for the work again does by hand.
+func (f *fakeGitHub) relabel(number int, label string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	labels, _ := f.labels(number)
+	labels = slices.DeleteFunc(labels, func(have string) bool { return strings.EqualFold(have, label) })
+	f.setLabels(number, labels)
+	f.setLabels(number, append(slices.Clone(labels), label))
+}
+
+func (f *fakeGitHub) issue(number int) *fakeIssue {
+	for i := range f.issues {
+		if f.issues[i].Number == number {
+			return &f.issues[i]
+		}
+	}
+
+	return nil
+}
+
+// serveIssue answers as GitHub's issues route does, which also answers for a pull request, marking it as one.
+func (f *fakeGitHub) serveIssue(w http.ResponseWriter, number int) {
+	if pr, ok := f.pr(number); ok {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"number": pr.Number, "title": pr.Title, "html_url": f.html("pull", pr.Number), "state": "open",
+			"user": map[string]any{"login": pr.Author}, "labels": labelList(pr.Labels), "pull_request": map[string]any{"html_url": f.html("pull", pr.Number)},
+		})
+
+		return
+	}
+
+	issue := f.issue(number)
+	if issue == nil {
+		respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
+
+		return
+	}
+
+	state := "open"
+	if issue.Closed {
+		state = "closed"
+	}
+
+	var body any
+	if issue.Body != "" {
+		body = issue.Body
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"number": issue.Number, "title": issue.Title, "body": body, "html_url": f.html("issues", issue.Number), "state": state,
+		"user": map[string]any{"login": issue.Author}, "labels": labelList(issue.Labels),
+	})
 }
 
 // labelsOn is an issue's or a pull request's labels, in the order they were put on.
@@ -1068,11 +1211,14 @@ func (f *fakeGitHub) labels(number int) ([]string, bool) {
 		return slices.Clone(pr.Labels), true
 	}
 
-	labels, ok := f.issueLabels[number]
+	if issue := f.issue(number); issue != nil {
+		return slices.Clone(issue.Labels), true
+	}
 
-	return slices.Clone(labels), ok
+	return nil, false
 }
 
+// setLabels replaces the labels on number; on an issue each one newly on gets a LabeledEvent a tick after the last, and one already on gets none, as GitHub records only a change.
 func (f *fakeGitHub) setLabels(number int, labels []string) {
 	for i := range f.prs {
 		if f.prs[i].Number == number {
@@ -1082,7 +1228,19 @@ func (f *fakeGitHub) setLabels(number int, labels []string) {
 		}
 	}
 
-	f.issueLabels[number] = labels
+	issue := f.issue(number)
+	if issue == nil {
+		return
+	}
+
+	for _, label := range labels {
+		if !slices.ContainsFunc(issue.Labels, func(have string) bool { return strings.EqualFold(have, label) }) {
+			f.clock = f.clock.Add(time.Minute)
+			issue.Labeled = append(issue.Labeled, fakeLabeled{Label: label, At: f.clock})
+		}
+	}
+
+	issue.Labels = labels
 }
 
 func labelList(labels []string) []map[string]any {

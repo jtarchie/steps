@@ -683,6 +683,7 @@ func docsCoverageTypes() map[string]reflect.Type {
 		// shape depends on the TYPE of the resource the put names.
 		"GitHubPRsSource":      reflect.TypeOf(config.GitHubPRsSource{}),
 		"GitHubCommentsSource": reflect.TypeOf(config.GitHubCommentsSource{}),
+		"GitHubIssuesSource":   reflect.TypeOf(config.GitHubIssuesSource{}),
 		"GitHubPostSource":     reflect.TypeOf(config.GitHubPostSource{}),
 		"GitHubPostParams":     reflect.TypeOf(config.GitHubPostParams{}),
 		"GitHubReviewParams":   reflect.TypeOf(config.GitHubReviewParams{}),
@@ -800,6 +801,8 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 			record(used, "GitHubPRsSource", source)
 		case config.GitHubCommentsType:
 			record(used, "GitHubCommentsSource", source)
+		case config.GitHubIssuesType:
+			record(used, "GitHubIssuesSource", source)
 		case config.GitHubPRCommentType, config.GitHubPRReviewType, config.GitHubReactionType, config.GitHubLabelType, config.GitHubIssueType:
 			record(used, "GitHubPostSource", source)
 		}

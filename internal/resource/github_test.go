@@ -796,6 +796,7 @@ func TestGitHubGetRefusesAVersionMissingAField(t *testing.T) {
 		"comment without id":     {githubCommentsIn, map[string]any{"kind": "conversation", "number": "7"}, "names no comment"},
 		"comment without kind":   {githubCommentsIn, map[string]any{"id": "1", "number": "7"}, "names no comment"},
 		"comment without number": {githubCommentsIn, map[string]any{"id": "1", "kind": "conversation"}, "names no comment"},
+		"issue without number":   {githubIssuesIn, map[string]any{"labeled_at": "2026-10-01T09:00:00Z"}, "names no issue number"},
 	} {
 		err := tc.get(context.Background(), source, tc.version, t.TempDir())
 		if err == nil || !strings.Contains(err.Error(), tc.want) {

@@ -6,7 +6,7 @@
 #   steps run      examples/self-build.yml --job implement --var repo=owner/name --var label=self-build
 #   steps web && steps pipeline set -c examples/self-build.yml -v repo=owner/name -v label=self-build   # picks up newly labeled issues
 #
-# Needs: git, gh (logged in, `repo` scope), claude, node on PATH. Label an
+# Needs: git, gh (logged in, `repo` scope), claude, node on PATH, and GH_TOKEN set (export GH_TOKEN=$(gh auth token)) for the issue get. Label an
 # issue with the `label` var to queue it; the branch `issue-<n>` already existing on
 # the remote refuses a rerun before the model spends anything. The label is a
 # var because two factories watching one label race each other to the branch:
@@ -18,7 +18,7 @@
 # after a failed late step cost nothing — the phases before it are already
 # bought, and an agent rerun is lossy anyway (a second conversation does not
 # reproduce the tree the first one wrote). `cache.resources` keeps the fetched
-# clone across builds too; both `in:` here are pure fetches, which is the
+# clone across builds too; neither get has side effects, which is the
 # assertion enabling it makes.
 #
 # Nothing is marked `volatile:`. `prep` is the one candidate — it reads the
@@ -33,28 +33,6 @@ workspace:
     resources: true
 
 resource_types:
-- name: github-issues
-  config:
-    # Version = repo + number; edits to the issue must not re-run it. The repo
-    # is in it because history is keyed by pipeline name, and one file run
-    # under two --var repo values is one pipeline: #12 of one repo would
-    # otherwise count as already built for the other.
-    check: |
-      set -e
-      gh issue list --repo {{ .source.repo | shellquote }} --state open \
-        --label {{ .source.label | shellquote }} --limit 100 --json number \
-        | jq --arg repo {{ .source.repo | shellquote }} \
-          'sort_by(.number) | [.[] | {repo: $repo, number: (.number|tostring)}]'
-    in: |
-      set -e
-      gh issue view --repo {{ .source.repo | shellquote }} {{ .version.number | shellquote }} \
-        --json number,title,body,url,comments > issue.json
-      jq -r .number issue.json > number
-      jq -r .title issue.json > title
-      # Comments ride along because a decision recorded on the issue after it was filed lands there, and a plan built from the body alone builds the option the decision rejected.
-      jq -r '"# \(.title) (#\(.number))\n\n\(.url)\n\n\(.body // "(no description)")\n"
-        + ([.comments[] | "\n## Comment by \(.author.login), \(.createdAt)\n\n\(.body)\n"] | join(""))' issue.json > issue.md
-
 # A put: publishing must never be a cached skip. `draft: true` opens a draft PR from the implementer's snapshot so the work is visible during review; without it, the reviewed HEAD is pushed and the PR marked ready (created first if the draft put never managed to).
 - name: github-pr
   config:
@@ -67,8 +45,8 @@ resource_types:
     # dependency straight back.
     out: |
       set -e
-      number=$(cat issue/number)
-      title=$(cat issue/title)
+      number=$(cat issue/issue.number)
+      title=$(cat issue/issue.title)
       base=$(gh repo view {{ .source.repo | shellquote }} --json defaultBranchRef -q .defaultBranchRef.name)
       cd repo
       pr=$(gh pr list --repo {{ .source.repo | shellquote }} --head "issue-$number" --state open --json number -q '.[0].number')
@@ -117,11 +95,12 @@ resource_types:
       printf '{"pr":"%s"}\n' "$pr"
 
 resources:
+# Version {number, labeled_at}: an edit or comment re-runs nothing, a relabel is a retry (prep refuses it while branch issue-<n> exists; `continue` is for that), and the resource cache serves an already-fetched version's comments as they were; it names no repo, and one file run under two --var repo values is one pipeline's history, so only labeled_at keeps #12 of one repo from counting as built for the other (unless both were labeled in the same second): give each repo its own --db where that matters.
 - name: issue
   type: github-issues
   source:
     repo: ((repo))
-    label: ((label))
+    labels: [((label))]
 - name: repo
   type: git
   # The same insteadOf hazard the put names, but the git type's commands are not this file's to edit: an operator whose ~/.gitconfig rewrites https to ssh points GIT_CONFIG_GLOBAL at one that does not.
@@ -313,7 +292,7 @@ jobs:
     outputs: [repo]
     run: |
       set -eu
-      number=$(cat issue/number)
+      number=$(cat issue/issue.number)
       cd repo
       # Three outcomes, not two. `if git ls-remote` collapses "the branch is
       # absent" and "the remote could not be reached at all" into one false,
@@ -404,7 +383,7 @@ jobs:
       tree=$(GIT_INDEX_FILE=$idx git write-tree)
       rm -f "$idx"
       parent=$(git rev-parse -q --verify refs/steps/draft || git rev-parse HEAD)
-      commit=$(git commit-tree "$tree" -p "$parent" -m "$(cat ../issue/title)" -m "Implementation, before review.")
+      commit=$(git commit-tree "$tree" -p "$parent" -m "$(cat ../issue/issue.title)" -m "Implementation, before review.")
       git update-ref refs/steps/draft "$commit"
       echo "snapshot $commit"
 
@@ -505,8 +484,8 @@ jobs:
       if git diff --cached --quiet; then
         echo "reviewer changed nothing; the snapshot is the commit"
       else
-        git commit -q -m "$(cat ../issue/title): review fixes" -m "Closes #$(cat ../issue/number)"
-        echo "committed review fixes for #$(cat ../issue/number)"
+        git commit -q -m "$(cat ../issue/issue.title): review fixes" -m "Closes #$(cat ../issue/issue.number)"
+        echo "committed review fixes for #$(cat ../issue/issue.number)"
       fi
 
   - put: pr
@@ -526,7 +505,7 @@ jobs:
     outputs: [repo]
     run: |
       set -eu
-      number=$(cat issue/number)
+      number=$(cat issue/issue.number)
       cd repo
       GIT_CONFIG_GLOBAL=/dev/null git fetch -q --unshallow "https://github.com/((repo)).git" HEAD
       base=$(git rev-parse HEAD)

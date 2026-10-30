@@ -1,21 +1,10 @@
 package config
 
-// The built-in github-* resource types: their names, the shape of each one's
-// source: and put params:, and the load-time rules that need no network.
-//
-// Several types rather than one, split by what they do, the way the Slack
-// built-ins are: two that FIND work (a pull request, a comment) and have no
-// out, and the rest PUBLISH (a comment, a review, a reaction, a label, an
-// issue) and have no check. A put
-// records its version in the resource's own history (recordPutOrder), so a
-// type that both watched and posted would mint a comment-shaped version into
-// the history it fans out over — and under trigger: true, a post would
-// trigger the build that posts again.
-//
-// All of them are Go rather than YAML: steps calls GitHub itself and unpacks the
-// tree itself, so nothing needs gh, git or curl on any machine, and a fetched
-// tree is an ordinary artifact on this one — placed and containerized steps
-// read it the way they read any other.
+// The built-in github-* resource types: their names, the shape of each one's source: and put params:, and the load-time rules that need no network.
+
+// Several types rather than one, split by what they do, the way the Slack built-ins are: three that FIND work (a pull request, an issue, a comment) and have no out, and the rest PUBLISH (a comment, a review, a reaction, a label, an issue) and have no check. A put records its version in the resource's own history (recordPutOrder), so a type that both watched and posted would mint a comment-shaped version into the history it fans out over — and under trigger: true, a post would trigger the build that posts again.
+
+// All of them are Go rather than YAML: steps calls GitHub itself and unpacks the tree itself, so nothing needs gh, git or curl on any machine, and a fetched tree is an ordinary artifact on this one — placed and containerized steps read it the way they read any other.
 
 import (
 	"errors"
@@ -34,16 +23,17 @@ const (
 	GitHubPRReviewType  = "github-pr-review"
 	GitHubReactionType  = "github-reaction"
 	GitHubLabelType     = "github-label"
+	GitHubIssuesType    = "github-issues"
 )
 
 // GitHubTypes is every github-* type, in the order the docs list them.
 func GitHubTypes() []string {
-	return []string{GitHubPRsType, GitHubCommentsType, GitHubPRCommentType, GitHubPRReviewType, GitHubReactionType, GitHubLabelType, GitHubIssueType}
+	return []string{GitHubPRsType, GitHubCommentsType, GitHubIssuesType, GitHubPRCommentType, GitHubPRReviewType, GitHubReactionType, GitHubLabelType, GitHubIssueType}
 }
 
-// GitHubFinds reports whether kind is one of the two types a get reads.
+// GitHubFinds reports whether kind is one of the types a get reads.
 func GitHubFinds(kind string) bool {
-	return kind == GitHubPRsType || kind == GitHubCommentsType
+	return kind == GitHubPRsType || kind == GitHubCommentsType || kind == GitHubIssuesType
 }
 
 // DefaultGitHubTokenEnv is the variable a github-* resource reads its token
@@ -119,6 +109,24 @@ func (s GitHubPRsSource) Connection() GitHubConnection {
 
 // WantsTree reports whether a get lays down the tree.
 func (s GitHubPRsSource) WantsTree() bool { return s.Checkout == nil || *s.Checkout }
+
+// GitHubIssuesSource is a github-issues resource's source:. Every filter narrows: an issue is a version only while it is open and matches all of them.
+type GitHubIssuesSource struct {
+	Repo     string `yaml:"repo"`
+	TokenEnv string `yaml:"token_env,omitempty"`
+	Endpoint string `yaml:"endpoint,omitempty"`
+	// Author is who opened it. "@me" is the token's own user.
+	Author string `yaml:"author,omitempty"`
+	// Assignee is someone it is assigned to. "@me" is the token's own user.
+	Assignee string `yaml:"assignee,omitempty"`
+	// Labels must all be on it. Set, they also put the moment the last of them went on into the version, so taking one off and putting it back asks for the work again.
+	Labels []string `yaml:"labels,omitempty"`
+}
+
+// Connection is where this resource talks to.
+func (s GitHubIssuesSource) Connection() GitHubConnection {
+	return GitHubConnection{Repo: s.Repo, TokenEnv: s.TokenEnv, Endpoint: s.Endpoint}
+}
 
 // GitHubCommentsSource is a github-comments resource's source:.
 type GitHubCommentsSource struct {
@@ -251,6 +259,41 @@ var githubReactions = []string{"+1", "-1", "laugh", "confused", "heart", "hooray
 // The review events a put may name, as the params: spell them.
 var githubReviewEvents = []string{"comment", "approve", "request_changes", "pending"} //nolint:gochecknoglobals // read-only table
 
+// ParseGitHubIssuesSource decodes a github-issues source: strictly and checks it.
+func ParseGitHubIssuesSource(raw map[string]any) (GitHubIssuesSource, error) {
+	var source GitHubIssuesSource
+
+	err := decodeSource(raw, &source)
+	if err != nil {
+		return source, err
+	}
+
+	err = validateGitHubConnection(source.Connection())
+	if err != nil {
+		return source, err
+	}
+
+	for field, login := range map[string]string{"author": source.Author, "assignee": source.Assignee} {
+		err = validateGitHubLogin(field, login)
+		if err != nil {
+			return source, err
+		}
+	}
+
+	return source, validateGitHubLabelFilter(source.Labels)
+}
+
+// validateGitHubLabelFilter keeps each label one quoted search qualifier.
+func validateGitHubLabelFilter(labels []string) error {
+	for _, label := range labels {
+		if strings.TrimSpace(label) == "" || strings.ContainsAny(label, "\"\n") {
+			return fmt.Errorf("source.labels: %q is not a label name GitHub search can quote", label)
+		}
+	}
+
+	return nil
+}
+
 // ParseGitHubPRsSource decodes a github-prs source: strictly and checks it.
 func ParseGitHubPRsSource(raw map[string]any) (GitHubPRsSource, error) {
 	var source GitHubPRsSource
@@ -272,10 +315,9 @@ func ParseGitHubPRsSource(raw map[string]any) (GitHubPRsSource, error) {
 		}
 	}
 
-	for _, label := range source.Labels {
-		if strings.TrimSpace(label) == "" || strings.ContainsAny(label, "\"\n") {
-			return source, fmt.Errorf("source.labels: %q is not a label name GitHub search can quote", label)
-		}
+	err = validateGitHubLabelFilter(source.Labels)
+	if err != nil {
+		return source, err
 	}
 
 	if source.Base != "" && strings.ContainsAny(source.Base, " \t\n\"") {
@@ -566,6 +608,8 @@ func (c *Config) validateGitHubResource(resource Resource) error {
 		_, err = ParseGitHubPRsSource(resource.Source)
 	case GitHubCommentsType:
 		_, _, err = ParseGitHubCommentsSource(resource.Source)
+	case GitHubIssuesType:
+		_, err = ParseGitHubIssuesSource(resource.Source)
 	default:
 		_, err = ParseGitHubPostSource(resource.Source)
 	}

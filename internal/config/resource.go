@@ -213,8 +213,8 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 		// one backend and not the other.
 	case BackendGitHub:
 		if !GitHubFinds(resourceType.Config.GitHub) {
-			return fmt.Errorf("%s: get %q targets a %s resource, which only publishes; find the pull request with a %s or %s resource instead",
-				label, get, resourceType.Config.GitHub, GitHubPRsType, GitHubCommentsType)
+			return fmt.Errorf("%s: get %q targets a %s resource, which only publishes; find the work with a %s, %s or %s resource instead",
+				label, get, resourceType.Config.GitHub, GitHubPRsType, GitHubIssuesType, GitHubCommentsType)
 		}
 	case BackendWebhook, BackendCron:
 	}

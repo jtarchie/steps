@@ -28,31 +28,34 @@ const githubPRSearch = `query($q: String!, $after: String) {
   }
 }`
 
-// githubPRsQuery is the search string for a source: every filter a
-// qualifier, each value already held by ParseGitHubPRsSource to a shape that
-// stays one qualifier.
+// githubPRsQuery is the search string for a source: every filter a qualifier, each value already held by ParseGitHubPRsSource to a shape that stays one qualifier.
 func githubPRsQuery(source config.GitHubPRsSource) string {
-	parts := []string{"repo:" + source.Repo, "is:pr", "is:open"}
+	qualifiers := map[string]string{"author": source.Author, "assignee": source.Assignee, "review-requested": source.ReviewRequested, "base": source.Base}
+	if source.Draft != nil {
+		qualifiers["draft"] = strconv.FormatBool(*source.Draft)
+	}
 
-	for qualifier, value := range map[string]string{"author": source.Author, "assignee": source.Assignee, "review-requested": source.ReviewRequested, "base": source.Base} {
+	return githubSearchQuery("repo:"+source.Repo+" is:pr is:open", qualifiers, source.Labels)
+}
+
+// githubSearchQuery is head, then each set qualifier and a quoted label: for each label.
+func githubSearchQuery(head string, qualifiers map[string]string, labels []string) string {
+	var parts []string
+
+	for qualifier, value := range qualifiers {
 		if value != "" {
 			parts = append(parts, qualifier+":"+value)
 		}
 	}
 
-	for _, label := range source.Labels {
+	for _, label := range labels {
 		parts = append(parts, `label:"`+label+`"`)
 	}
 
-	if source.Draft != nil {
-		parts = append(parts, "draft:"+strconv.FormatBool(*source.Draft))
-	}
+	// The map above iterates in no order; a stable query keeps the fixture tests and GitHub's own caching honest.
+	sort.Strings(parts)
 
-	// The map above iterates in no order; a stable query keeps the fixture
-	// tests and GitHub's own caching honest.
-	sort.Strings(parts[3:])
-
-	return strings.Join(parts, " ")
+	return strings.Join(append([]string{head}, parts...), " ")
 }
 
 func githubPRsCheck(ctx context.Context, raw map[string]any) ([]map[string]any, error) {
@@ -90,21 +93,36 @@ func githubPRsCheck(ctx context.Context, raw map[string]any) ([]map[string]any, 
 
 // collectPRs pages through one search, number to head commit.
 func (c *githubClient) collectPRs(ctx context.Context, query string) (map[int]string, error) {
+	nodes, err := c.searchAll(ctx, githubPRSearch, query)
+	if err != nil {
+		return nil, err
+	}
+
 	found := map[int]string{}
 
-	var after any
+	for _, node := range nodes {
+		if node.Number > 0 && node.HeadRefOid != "" {
+			found[node.Number] = node.HeadRefOid
+		}
+	}
+
+	return found, nil
+}
+
+// searchAll pages through one search with the GraphQL document given, which picks which of a node's fields come back.
+func (c *githubClient) searchAll(ctx context.Context, document, query string) ([]githubSearchNode, error) {
+	var (
+		nodes []githubSearchNode
+		after any
+	)
 
 	for range githubPageLimit {
-		page, err := c.searchPRs(ctx, query, after)
+		page, err := c.search(ctx, document, query, after)
 		if err != nil {
 			return nil, err
 		}
 
-		for _, node := range page.Nodes {
-			if node.Number > 0 && node.HeadRefOid != "" {
-				found[node.Number] = node.HeadRefOid
-			}
-		}
+		nodes = append(nodes, page.Nodes...)
 
 		if !page.PageInfo.HasNextPage {
 			break
@@ -113,7 +131,7 @@ func (c *githubClient) collectPRs(ctx context.Context, query string) (map[int]st
 		after = page.PageInfo.EndCursor
 	}
 
-	return found, nil
+	return nodes, nil
 }
 
 type githubSearchPage struct {
@@ -121,15 +139,28 @@ type githubSearchPage struct {
 		HasNextPage bool   `json:"hasNextPage"`
 		EndCursor   string `json:"endCursor"`
 	} `json:"pageInfo"`
-	Nodes []struct {
-		Number     int    `json:"number"`
-		HeadRefOid string `json:"headRefOid"`
-	} `json:"nodes"`
+	Nodes []githubSearchNode `json:"nodes"`
 }
 
-func (c *githubClient) searchPRs(ctx context.Context, query string, after any) (githubSearchPage, error) {
+// githubSearchNode is a hit with what either search document asks for: a pull request's head commit, or an issue's label events. A hit of the type the document does not ask about comes back empty.
+type githubSearchNode struct {
+	Number        int    `json:"number"`
+	HeadRefOid    string `json:"headRefOid"`
+	TimelineItems struct {
+		Nodes []githubLabeledEvent `json:"nodes"`
+	} `json:"timelineItems"`
+}
+
+type githubLabeledEvent struct {
+	CreatedAt string `json:"createdAt"`
+	Label     struct {
+		Name string `json:"name"`
+	} `json:"label"`
+}
+
+func (c *githubClient) search(ctx context.Context, document, query string, after any) (githubSearchPage, error) {
 	reply, err := c.send(ctx, http.MethodPost, c.graphql, githubJSON, map[string]any{
-		"query":     githubPRSearch,
+		"query":     document,
 		"variables": map[string]any{"q": query, "after": after},
 	})
 	if err != nil {

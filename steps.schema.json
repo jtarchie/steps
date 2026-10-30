@@ -558,6 +558,42 @@
         }
       }
     },
+    "githubIssuesSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo"],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+          "description": "The repository, owner/name."
+        },
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the token, GH_TOKEN when unset. The variable NAME, never the token; `steps validate` refuses the pipeline while it is unset."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "The REST API base, https://api.github.com when unset; https://<host>/api/v3 for GitHub Enterprise Server."
+        },
+        "author": {
+          "type": "string",
+          "pattern": "^(@me|[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\\[bot\\])?)$",
+          "description": "Who opened it; @me is the token's own user."
+        },
+        "assignee": {
+          "type": "string",
+          "pattern": "^(@me|[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\\[bot\\])?)$",
+          "description": "Someone it is assigned to; @me is the token's own user."
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Labels that must all be on it. Set, the version also carries when the last of them went on, so taking one off and putting it back asks for the work again."
+        }
+      }
+    },
     "githubPostSource": {
       "type": "object",
       "additionalProperties": false,
@@ -683,6 +719,10 @@
         {
           "if": { "properties": { "type": { "const": "github-comments" } }, "required": ["type"] },
           "then": { "properties": { "source": { "$ref": "#/$defs/githubCommentsSource" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "github-issues" } }, "required": ["type"] },
+          "then": { "properties": { "source": { "$ref": "#/$defs/githubIssuesSource" } } }
         },
         {
           "if": { "properties": { "type": { "enum": ["github-pr-comment", "github-pr-review", "github-reaction", "github-label", "github-issue"] } }, "required": ["type"] },

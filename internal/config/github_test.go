@@ -167,6 +167,57 @@ jobs:
 	}
 }
 
+// TestGitHubIssuesLoadRules: a github-issues source is checked as github-prs' is, and it finds work, so a put to it or a get with params is refused.
+func TestGitHubIssuesLoadRules(t *testing.T) {
+	t.Parallel()
+
+	pipeline := func(source, plan string) string {
+		if plan == "" {
+			plan = "\n  - get: issue"
+		}
+
+		return `
+resources:
+- name: issue
+  type: github-issues
+  source:
+    repo: acme/app
+` + source + `
+jobs:
+- name: build
+  plan:` + plan + `
+`
+	}
+
+	for name, tc := range map[string]struct{ source, plan, want string }{
+		"every filter loads": {source: "    author: '@me'\n    assignee: alice\n    labels: [self-build, 'needs plan']", want: ""},
+		"misspelled key":     {source: "    lables: [x]", want: "lables"},
+		"a pr-only filter":   {source: "    base: main", want: "base"},
+		"login with a space": {source: "    assignee: 'alice is:closed'", want: `source.assignee: "alice is:closed"`},
+		"bad author":         {source: "    author: 'a b'", want: "source.author"},
+		"label with a quote": {source: "    labels: ['say \"hi\"']", want: "source.labels"},
+		"blank label":        {source: "    labels: [' ']", want: "source.labels"},
+		"get with params":    {plan: "\n  - get: issue\n    params: {depth: 1}", want: "takes no params"},
+		"put to the finder":  {plan: "\n  - put: issue", want: "only finds work"},
+		"endpoint not a url": {source: "    endpoint: api.github.com", want: "source.endpoint"},
+		"token as a value":   {source: "    token_env: ghp_abc=123", want: "NAME of an environment variable"},
+	} {
+		_, err := LoadConfig(writeConfig(t, pipeline(tc.source, tc.plan)))
+
+		if tc.want == "" {
+			if err != nil {
+				t.Errorf("%s: err = %v, want it to load", name, err)
+			}
+
+			continue
+		}
+
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
 func TestGitHubResourceRefusals(t *testing.T) {
 	t.Parallel()
 
