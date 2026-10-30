@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // The built-in GitHub type names.
@@ -133,9 +135,8 @@ type GitHubCommentsSource struct {
 	Repo     string `yaml:"repo"`
 	TokenEnv string `yaml:"token_env,omitempty"`
 	Endpoint string `yaml:"endpoint,omitempty"`
-	// Author is who wrote the comment, compared without regard to case, as
-	// GitHub compares logins. "@me" is the token's own user.
-	Author string `yaml:"author,omitempty"`
+	// Author is who may have written the comment, any of them, compared without regard to case, as GitHub compares logins. "@me" is the token's own user.
+	Author GitHubLogins `yaml:"author,omitempty"`
 	// Body is an RE2 pattern the comment's text must contain a match for;
 	// anchor it with ^ to mean "starts with".
 	Body string `yaml:"body,omitempty"`
@@ -153,6 +154,61 @@ type GitHubCommentsSource struct {
 	SkipReacted string `yaml:"skip_reacted,omitempty"`
 	// Labels must all be on the issue or pull request a comment sits on, compared without regard to case as GitHub compares label names.
 	Labels []string `yaml:"labels,omitempty"`
+}
+
+// GitHubLogins is one login or a list of them: `author: alice` predates the list form and still loads.
+type GitHubLogins []string
+
+// UnmarshalYAML takes a scalar as a list of one. A sequence of strings has no keys, so rejectUnknownKeys has nothing to check.
+func (l *GitHubLogins) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind { //nolint:exhaustive // a mapping, document or alias is the default's error
+	case yaml.ScalarNode:
+		var login string
+
+		err := node.Decode(&login)
+		if err != nil {
+			return fmt.Errorf("author: %w", err)
+		}
+
+		if login != "" {
+			*l = GitHubLogins{login}
+		}
+
+		return nil
+	case yaml.SequenceNode:
+		logins := []string{}
+
+		err := node.Decode(&logins)
+		if err != nil {
+			return fmt.Errorf("author: %w", err)
+		}
+
+		*l = logins
+
+		return nil
+	default:
+		return fmt.Errorf("author at line %d must be a login or a list of logins", node.Line)
+	}
+}
+
+// validateGitHubLogins refuses an empty list, which would match nobody, and checks each entry as a lone author: is checked.
+func validateGitHubLogins(logins GitHubLogins) error {
+	if logins != nil && len(logins) == 0 {
+		return errors.New("source.author: an empty list matches nobody; remove author to take a comment from anyone")
+	}
+
+	for _, login := range logins {
+		if login == "" {
+			return errors.New(`source.author: "" is not a GitHub login (or @me)`)
+		}
+
+		err := validateGitHubLogin("author", login)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Connection is where this resource talks to.
@@ -349,7 +405,7 @@ func ParseGitHubCommentsSource(raw map[string]any) (GitHubCommentsSource, *regex
 		return source, nil, err
 	}
 
-	err = validateGitHubLogin("author", source.Author)
+	err = validateGitHubLogins(source.Author)
 	if err != nil {
 		return source, nil, err
 	}

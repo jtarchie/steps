@@ -1247,6 +1247,13 @@ func TestGitHubCommentsAuthorMeIsTheTokensUser(t *testing.T) {
 			t.Errorf("skip_reacted %q: %v, %v; want only octocat's comment", skip, versions, err)
 		}
 	}
+
+	versions, err := githubCommentsCheck(context.Background(), map[string]any{
+		"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "author": []any{"bob", "@me"}, "kinds": []any{"conversation"},
+	}, nil)
+	if err != nil || len(versions) != 1 || versions[0]["id"] != "2" {
+		t.Errorf("author [bob, @me]: %v, %v; want octocat's comment, @me resolved inside the list", versions, err)
+	}
 }
 
 // commentPut runs a github-pr-comment put whose input is a comment of kind

@@ -36,7 +36,7 @@ type githubComment struct {
 type commentWatch struct {
 	source  config.GitHubCommentsSource
 	pattern *regexp.Regexp
-	author  string
+	authors []string
 	since   string
 	// self is the token's own user, resolved only when skip_reacted needs it.
 	self string
@@ -201,17 +201,18 @@ func newCommentWatch(ctx context.Context, raw, cursor map[string]any) (commentWa
 		return commentWatch{}, nil, err
 	}
 
-	watch := commentWatch{source: source, pattern: pattern, author: source.Author, since: lookBack(versionField(cursor, "updated"))}
+	watch := commentWatch{source: source, pattern: pattern, authors: slices.Clone(source.Author), since: lookBack(versionField(cursor, "updated"))}
+	me := slices.Index(watch.authors, "@me")
 
-	if watch.author == "@me" || source.SkipReacted != "" {
+	if me >= 0 || source.SkipReacted != "" {
 		watch.self, err = client.login(ctx)
 		if err != nil {
 			return commentWatch{}, nil, err
 		}
 	}
 
-	if watch.author == "@me" {
-		watch.author = watch.self
+	if me >= 0 {
+		watch.authors[me] = watch.self
 	}
 
 	return watch, client, nil
@@ -301,7 +302,7 @@ func (w commentWatch) match(comment githubComment, review bool) (map[string]any,
 		return nil, false
 	}
 
-	if w.author != "" && !strings.EqualFold(comment.User.Login, w.author) {
+	if len(w.authors) > 0 && !slices.ContainsFunc(w.authors, func(author string) bool { return strings.EqualFold(comment.User.Login, author) }) {
 		return nil, false
 	}
 

@@ -311,7 +311,7 @@ resources:
   type: github-comments
   source:
     repo: acme/app
-    author: alice
+    author: [alice, carol]           # either of them; one login needs no list
     body: '^/steps\s+review\b'
     labels: [ready-for-review]       # only on pull requests carrying it
     kinds: [conversation, review]    # the default; add issue for comments on issues
@@ -337,7 +337,7 @@ jobs:
       echo "asked by $(cat command/comment.author) on #$(cat command/pr.number): $(cat command/comment.body)" | tee reply/body.md
       test -f command/README.md
     assert:
-      stdout: "asked by alice on #42: /steps review please"
+      stdout: "asked by carol on #42: /steps review please"
   - put: answer
     inputs: [command, reply]
     params:
@@ -352,7 +352,7 @@ jobs:
 | `source:` field | required | meaning |
 |---|---|---|
 | `repo` | yes | `owner/name` |
-| `author` | no | who wrote it, compared without regard to case as GitHub compares logins; `@me` is the token's own user |
+| `author` | no | who wrote it: one login, or a list of logins any of which may have. Compared without regard to case as GitHub compares logins; `@me` is the token's own user. `github-prs` and `github-issues` take one login only, since theirs is a search qualifier |
 | `body` | no | an [RE2](https://github.com/google/re2/wiki/Syntax) pattern the text must contain a match for; `^` anchors it to the start |
 | `kinds` | no | `conversation` (a pull request's timeline), `review` (inline, on a line of its diff), `issue` (an issue's timeline); default the first two |
 | `checkout` | no | `false` skips the pull request's tree; default `true`. An issue has no tree |

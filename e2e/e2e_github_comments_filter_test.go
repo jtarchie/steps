@@ -75,3 +75,31 @@ func TestWatchGitHubCommentsLabelsNarrowToLabeledParents(t *testing.T) {
 	fixture.watch(t)
 	fixture.assertDid(t, "201:7:conversation", "203:12:issue", "205:7:review", "206:7:conversation", "207:8:conversation")
 }
+
+// TestWatchGitHubCommentsAuthorListTakesAnyOfThem: author: as a list builds a command from any login on it, in any case, and from nobody else.
+func TestWatchGitHubCommentsAuthorListTakesAnyOfThem(t *testing.T) {
+	fake := newFakeGitHub(t)
+	fake.addPR(reviewablePR())
+
+	at := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	command := func(id int64, author string, offset time.Duration) fakeComment {
+		return fakeComment{ID: id, Number: 7, Kind: "conversation", Author: author, Body: "/steps go", Updated: at.Add(offset)}
+	}
+
+	fake.addComment(command(300, "alice", 0))
+
+	pipeline := strings.Replace(commentPipeline, "author: alice", "author: [alice, Carol]", 1)
+	if pipeline == commentPipeline {
+		t.Fatal("commentPipeline no longer names author: alice")
+	}
+
+	fixture := newWatchFixture(t, strings.ReplaceAll(pipeline, "ENDPOINT", fake.URL()))
+	fixture.resources = []string{"command"}
+	fixture.coldStart(t)
+
+	fake.addComment(command(301, "carol", time.Second))
+	fake.addComment(command(302, "dave", 2*time.Second))
+	fake.addComment(command(303, "alice", 3*time.Second))
+	fixture.watch(t)
+	fixture.assertDid(t, "301:7:conversation", "303:7:conversation")
+}
