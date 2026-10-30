@@ -196,7 +196,7 @@ Besides `version.json`, `thread.json` and `user` (who wrote the reacted message)
 
 ## The built-in GitHub types
 
-Six built-ins, split by what they do, the way the Slack ones are. `github-prs` and `github-comments` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction` and `github-label` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
+Seven built-ins, split by what they do, the way the Slack ones are. `github-prs` and `github-comments` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction`, `github-label` and `github-issue` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
 
 steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the six can be placed with `tags:` themselves, as for every type that runs inside this process.
 
@@ -588,6 +588,60 @@ At least one of `add` and `remove` is required, and both are lists even for one 
 **`add` goes before `remove`**, so a swap from `factory:queued` to `factory:building` that fails halfway leaves both labels rather than neither, and an issue with no state label has fallen off the board. **Adding a label the repository has never had creates it**, in GitHub's default color: GitHub does that, and steps does not fight it, so a misspelt state shows up as a new label on the repository's label page rather than as an error. **Removing a label that is not there is not an error**: it is the issue in the state asked for, which a replay or a resume always finds. GitHub answers that with a 404 saying `Label does not exist`, and it answers an issue or repository that is not there with a 404 too, saying `Not Found`; the message is all that tells them apart, so only the first counts as success. Every label anybody else put on stays where it is. Any other answer fails the put with GitHub's status, its words and the route.
 
 A put's version is `{number, add, remove}`, each list joined with commas, and a side the put did not ask for left out, as for `github-reaction`. It lands in the label resource's own history, so a label put cannot trigger anything by itself.
+
+### `github-issue`: opening an issue
+
+`github-issue` opens one issue per put, titled and written from files a step produced. One put, one issue, one version, like every other publisher; a pipeline that opens several runs the put once per item with [`across:`](control-flow.md#one-put-per-item), whose vars render into `params:`. That is the shape it is for: a step breaks the work down, writes one title and body per piece and a list naming them, and the matrix opens one issue each:
+
+```yaml github=issues
+resources:
+- name: children
+  type: github-issue
+  source:
+    repo: acme/app
+    token_env: GH_TOKEN              # the default; who opens the issues
+    endpoint: https://api.github.com # the default
+
+jobs:
+- name: break-down
+  plan:
+  - task: plan
+    outputs: [plan]
+    run: |
+      printf '["login","search","docs"]' > plan/items.json
+      for c in login search docs; do
+        echo "Split out: $c" > plan/$c.title
+        echo "Part of #42" > plan/$c.md
+      done
+  - across:
+    - var: child
+      from_file: plan/items.json
+    put: children
+    inputs: [plan]
+    params:
+      title_file: plan/{{ .vars.child }}.title   # each cell its own
+      body_file: plan/{{ .vars.child }}.md
+      labels: [factory, "{{ .vars.child }}"]
+      assignees: [octocat]
+  assert:
+    execution:
+    - plan
+    - children [child=login]
+    - children [child=search]
+    - children [child=docs]
+    outcome: succeeded
+```
+
+| `params:` field | meaning |
+|---|---|
+| `title_file` | the title, a path inside the put's inputs. One line: the trailing newline is dropped, and a file with a second line fails the put rather than being cut, since that is a body written to the wrong file |
+| `body_file` | the issue's text, a path inside the put's inputs; an empty file is refused, as for `github-pr-comment` |
+| `labels` | labels put on the issue as it opens. GitHub creates a label the repository does not have yet, in its default color |
+| `assignees` | logins the issue is assigned to. `@me` is refused: GitHub assigns by login |
+
+A get of a `github-issue` resource is refused at load, as for every publisher. The put's version is `{id, number}`: the issue GitHub opened, by its id and by the number people write as `#N`.
+
+**Nothing dedupes.** A put that is retried or run again opens a second issue, exactly as a retried `github-pr-comment` posts a second comment: GitHub has no "open this unless it exists", and a title is no identity, since two children may share one. Guard it in the pipeline, where the identity is known: have the step that writes the list search the repository first and leave out any child already open, for instance one whose body carries the same `Part of #42` marker, so a re-run opens only what is missing.
 
 ## The built-in `cron` type
 

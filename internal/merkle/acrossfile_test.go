@@ -179,3 +179,41 @@ func TestAcrossFileMatrixForcesItsProducerToRerun(t *testing.T) {
 		t.Error("the chain is skippable; a cached producer would leave the matrix reading a stale list")
 	}
 }
+
+// TestAcrossPutCellsHashTheirRenderedParams: two cells under one label still differ by the params each rendered, so neither can stand in for the other's node.
+func TestAcrossPutCellsHashTheirRenderedParams(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+
+	cells, err := config.ExpandAcrossValues(`job "j" step 0`, config.Step{
+		Across: []config.AcrossVar{{Var: "child", FromFile: "children/items.json"}},
+		Put:    "issue",
+		Params: map[string]any{"labels": []any{"{{ .vars.child }}"}},
+	}, map[string][]string{"child": {"a", "b"}})
+	if err != nil {
+		t.Fatalf("ExpandAcrossValues: %v", err)
+	}
+
+	hash := func(cell config.Step) string {
+		t.Helper()
+
+		cell.Label = "issue"
+
+		content, err := PutNodeContent(cfg, cell, config.ResourceType{Name: "board"}, nil, map[string]any{}, cell.Params, nil, false)
+		if err != nil {
+			t.Fatalf("PutNodeContent: %v", err)
+		}
+
+		out, err := HashNode(NodeKindPut, content, "parent")
+		if err != nil {
+			t.Fatalf("HashNode: %v", err)
+		}
+
+		return out
+	}
+
+	if hash(cells[0]) == hash(cells[1]) {
+		t.Error("cells rendering different params hash alike; one cell's node would answer for the other")
+	}
+}

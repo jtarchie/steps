@@ -688,6 +688,7 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"GitHubReviewParams":   reflect.TypeOf(config.GitHubReviewParams{}),
 		"GitHubReactionParams": reflect.TypeOf(config.GitHubReactionParams{}),
 		"GitHubLabelParams":    reflect.TypeOf(config.GitHubLabelParams{}),
+		"GitHubIssueParams":    reflect.TypeOf(config.GitHubIssueParams{}),
 	}
 }
 
@@ -799,7 +800,7 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 			record(used, "GitHubPRsSource", source)
 		case config.GitHubCommentsType:
 			record(used, "GitHubCommentsSource", source)
-		case config.GitHubPRCommentType, config.GitHubPRReviewType, config.GitHubReactionType, config.GitHubLabelType:
+		case config.GitHubPRCommentType, config.GitHubPRReviewType, config.GitHubReactionType, config.GitHubLabelType, config.GitHubIssueType:
 			record(used, "GitHubPostSource", source)
 		}
 	})
@@ -826,6 +827,7 @@ var githubParamDefs = map[any]string{ //nolint:gochecknoglobals // read-only tab
 	config.GitHubPRReviewType:  "GitHubReviewParams",
 	config.GitHubReactionType:  "GitHubReactionParams",
 	config.GitHubLabelType:     "GitHubLabelParams",
+	config.GitHubIssueType:     "GitHubIssueParams",
 }
 
 // collectGitHubParamKeys records the params: of every put to a github-*

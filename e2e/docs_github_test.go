@@ -6,6 +6,7 @@ package e2e
 // GitHub Enterprise Server user writes by hand.
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -129,6 +130,27 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 
 			if got, want := fake.labelsOn(12), []string{"release", "has-builds"}; !slices.Equal(got, want) {
 				t.Errorf("labels on #12 = %v, want %v", got, want)
+			}
+		},
+	},
+	"issues": {
+		check: func(t *testing.T, fake *fakeGitHub) {
+			t.Helper()
+
+			issues := fake.createdIssues()
+			got := make([]string, 0, len(issues))
+
+			for _, issue := range issues {
+				got = append(got, fmt.Sprintf("#%d %s|%s|%v|%v", issue.Number, issue.Title, issue.Body, issue.Labels, issue.Assignees))
+			}
+
+			want := []string{
+				"#1 Split out: login|Part of #42\n|[factory login]|[octocat]",
+				"#2 Split out: search|Part of #42\n|[factory search]|[octocat]",
+				"#3 Split out: docs|Part of #42\n|[factory docs]|[octocat]",
+			}
+			if strings.Join(got, "\n") != strings.Join(want, "\n") {
+				t.Errorf("issues opened:\n%s\nwant one per child, each with its own title and label:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 			}
 		},
 	},
