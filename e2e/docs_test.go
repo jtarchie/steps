@@ -687,6 +687,7 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"GitHubPostParams":     reflect.TypeOf(config.GitHubPostParams{}),
 		"GitHubReviewParams":   reflect.TypeOf(config.GitHubReviewParams{}),
 		"GitHubReactionParams": reflect.TypeOf(config.GitHubReactionParams{}),
+		"GitHubIssueParams":    reflect.TypeOf(config.GitHubIssueParams{}),
 	}
 }
 
@@ -798,7 +799,7 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 			record(used, "GitHubPRsSource", source)
 		case config.GitHubCommentsType:
 			record(used, "GitHubCommentsSource", source)
-		case config.GitHubPRCommentType, config.GitHubPRReviewType, config.GitHubReactionType:
+		case config.GitHubPRCommentType, config.GitHubPRReviewType, config.GitHubReactionType, config.GitHubIssueType:
 			record(used, "GitHubPostSource", source)
 		}
 	})
@@ -817,6 +818,14 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 		plan, _ := job["plan"].([]any)
 		collectStepKeys(plan, used)
 	})
+}
+
+// githubParamsDefs is the params: shape of each github-* publishing type, by the name docsCoverageTypes knows it under.
+var githubParamsDefs = map[any]string{ //nolint:gochecknoglobals // read-only table
+	config.GitHubPRCommentType: "GitHubPostParams",
+	config.GitHubPRReviewType:  "GitHubReviewParams",
+	config.GitHubReactionType:  "GitHubReactionParams",
+	config.GitHubIssueType:     "GitHubIssueParams",
 }
 
 // collectGitHubParamKeys records the params: of every put to a github-*
@@ -849,13 +858,8 @@ func collectGitHubParamKeys(doc map[string]any, used map[string]map[string]bool)
 				name = ""
 			}
 
-			switch types[name] {
-			case config.GitHubPRCommentType:
-				record(used, "GitHubPostParams", step["params"])
-			case config.GitHubPRReviewType:
-				record(used, "GitHubReviewParams", step["params"])
-			case config.GitHubReactionType:
-				record(used, "GitHubReactionParams", step["params"])
+			if def, ok := githubParamsDefs[types[name]]; ok {
+				record(used, def, step["params"])
 			}
 
 			for _, group := range nestedStepGroups(step) {

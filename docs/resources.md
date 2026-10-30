@@ -196,11 +196,11 @@ Besides `version.json`, `thread.json` and `user` (who wrote the reacted message)
 
 ## The built-in GitHub types
 
-Five built-ins, split by what they do, the way the Slack ones are. `github-prs` and `github-comments` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review` and `github-reaction` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
+Six built-ins, split by what they do, the way the Slack ones are. `github-prs` and `github-comments` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction` and `github-issue` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
 
-steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the five can be placed with `tags:` themselves, as for every type that runs inside this process.
+steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the six can be placed with `tags:` themselves, as for every type that runs inside this process.
 
-All five read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
+All six read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
 
 ### `github-prs`: open pull requests
 
@@ -529,6 +529,60 @@ At least one of `add` and `remove` is required, and the set is GitHub's, not Sla
 **`add` goes before `remove`**, so a swap from `eyes` to `rocket` that fails halfway leaves both marks rather than neither, and a comment with no mark reads as one nobody picked up. **`remove` touches only the token user's own reaction**: the put lists that reaction on the comment, finds the one the token's user left, and deletes that one by id, so somebody else's `eyes` stays where they put it. **Marking twice is not an error.** GitHub answers an add that is already there with the reaction that is, and a remove finds nothing when it is already gone; both are the comment in the state asked for, which a replay or a resume always finds, the way `slack-reaction` reads `already_reacted`. Any other answer fails the put with GitHub's status, its words and the route.
 
 A put's version is `{comment, add, remove}`, recorded in the reaction resource's own history and never in the comments one, which is why a mark cannot trigger anything.
+
+### `github-issue`: opening an issue
+
+`github-issue` opens one issue per put, titled and written from files a step produced. One put, one issue, one version, like every other publisher; a pipeline that opens several runs the put once per item with [`across:`](control-flow.md#one-put-per-item), whose vars render into `params:`. That is the shape it is for: a step breaks the work down, writes one title and body per piece and a list naming them, and the matrix opens one issue each:
+
+```yaml github=issues
+resources:
+- name: children
+  type: github-issue
+  source:
+    repo: acme/app
+    token_env: GH_TOKEN              # the default; who opens the issues
+    endpoint: https://api.github.com # the default
+
+jobs:
+- name: break-down
+  plan:
+  - task: plan
+    outputs: [plan]
+    run: |
+      printf '["login","search","docs"]' > plan/items.json
+      for c in login search docs; do
+        echo "Split out: $c" > plan/$c.title
+        echo "Part of #42" > plan/$c.md
+      done
+  - across:
+    - var: child
+      from_file: plan/items.json
+    put: children
+    inputs: [plan]
+    params:
+      title_file: plan/{{ .vars.child }}.title   # each cell its own
+      body_file: plan/{{ .vars.child }}.md
+      labels: [factory, "{{ .vars.child }}"]
+      assignees: [octocat]
+  assert:
+    execution:
+    - plan
+    - children [child=login]
+    - children [child=search]
+    - children [child=docs]
+    outcome: succeeded
+```
+
+| `params:` field | meaning |
+|---|---|
+| `title_file` | the title, a path inside the put's inputs. One line: the trailing newline is dropped, and a file with a second line fails the put rather than being cut, since that is a body written to the wrong file |
+| `body_file` | the issue's text, a path inside the put's inputs; an empty file is refused, as for `github-pr-comment` |
+| `labels` | labels put on the issue as it opens. GitHub creates a label the repository does not have yet, in its default color |
+| `assignees` | logins the issue is assigned to. `@me` is refused: GitHub assigns by login |
+
+A get of a `github-issue` resource is refused at load, as for every publisher. The put's version is `{id, number}`: the issue GitHub opened, by its id and by the number people write as `#N`.
+
+**Nothing dedupes.** A put that is retried or run again opens a second issue, exactly as a retried `github-pr-comment` posts a second comment: GitHub has no "open this unless it exists", and a title is no identity, since two children may share one. Guard it in the pipeline, where the identity is known: have the step that writes the list search the repository first and leave out any child already open, for instance one whose body carries the same `Part of #42` marker, so a re-run opens only what is missing.
 
 ## The built-in `cron` type
 

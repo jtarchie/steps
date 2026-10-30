@@ -102,6 +102,15 @@ type postedComment struct {
 	Body   string
 }
 
+// createdIssue is one issue a put opened.
+type createdIssue struct {
+	Number    int
+	Title     string
+	Body      string
+	Labels    []string
+	Assignees []string
+}
+
 type fakeGitHub struct {
 	t      *testing.T
 	server *httptest.Server
@@ -113,6 +122,7 @@ type fakeGitHub struct {
 	comments []fakeComment
 	reviews  map[int][]fakeReview
 	posted   []postedComment
+	issues   []createdIssue
 	queries  []string
 	nextID   int64
 	requests int
@@ -245,6 +255,13 @@ func (f *fakeGitHub) postedComments() []postedComment {
 	return slices.Clone(f.posted)
 }
 
+func (f *fakeGitHub) createdIssues() []createdIssue {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.issues)
+}
+
 func (f *fakeGitHub) reviewsOn(number int) []fakeReview {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -307,6 +324,7 @@ func (f *fakeGitHub) routes() http.Handler {
 	handle("GET "+repo+"/issues/comments/{id}", func(w http.ResponseWriter, r *http.Request) {
 		f.serveComment(w, int64(atoi(r.PathValue("id"))), "conversation", "issue")
 	})
+	handle("POST "+repo+"/issues", f.createIssue)
 	handle("POST "+repo+"/issues/{number}/comments", func(w http.ResponseWriter, r *http.Request) { f.postComment(w, r, atoi(r.PathValue("number"))) })
 	handle("GET "+repo+"/issues/{number}", func(w http.ResponseWriter, r *http.Request) {
 		number := atoi(r.PathValue("number"))
@@ -861,6 +879,42 @@ func (f *fakeGitHub) postComment(w http.ResponseWriter, r *http.Request, number 
 	f.posted = append(f.posted, postedComment{Number: number, Body: body.Body})
 
 	respondJSON(w, http.StatusCreated, map[string]any{"id": f.nextID, "html_url": f.html("pull", number)})
+}
+
+// createIssue numbers past every pull request and issue the fake knows, since GitHub numbers both from one sequence.
+func (f *fakeGitHub) createIssue(w http.ResponseWriter, r *http.Request) {
+	var issue struct {
+		Title     string   `json:"title"`
+		Body      string   `json:"body"`
+		Labels    []string `json:"labels"`
+		Assignees []string `json:"assignees"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&issue)
+	if err != nil || issue.Title == "" {
+		respondJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "Validation Failed", "errors": []map[string]any{{"code": "missing_field", "field": "title"}}})
+
+		return
+	}
+
+	number := 0
+	for _, pr := range f.prs {
+		number = max(number, pr.Number)
+	}
+
+	for _, comment := range f.comments {
+		number = max(number, comment.Number)
+	}
+
+	for _, created := range f.issues {
+		number = max(number, created.Number)
+	}
+
+	number++
+	f.nextID++
+	f.issues = append(f.issues, createdIssue{Number: number, Title: issue.Title, Body: issue.Body, Labels: issue.Labels, Assignees: issue.Assignees})
+
+	respondJSON(w, http.StatusCreated, map[string]any{"id": f.nextID, "number": number, "html_url": f.html("issues", number)})
 }
 
 // replyInThread answers as GitHub's reference says the route does: the id

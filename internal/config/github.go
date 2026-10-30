@@ -3,16 +3,16 @@ package config
 // The built-in github-* resource types: their names, the shape of each one's
 // source: and put params:, and the load-time rules that need no network.
 //
-// Five types rather than one, split by what they do, the way the Slack
+// Several types rather than one, split by what they do, the way the Slack
 // built-ins are: two that FIND work (a pull request, a comment) and have no
-// out, and three that PUBLISH (a comment, a review, a reaction) and have no
-// check. A put
+// out, and the rest PUBLISH (a comment, a review, a reaction, an issue) and
+// have no check. A put
 // records its version in the resource's own history (recordPutOrder), so a
 // type that both watched and posted would mint a comment-shaped version into
 // the history it fans out over — and under trigger: true, a post would
 // trigger the build that posts again.
 //
-// All five are Go rather than YAML: steps calls GitHub itself and unpacks the
+// All of them are Go rather than YAML: steps calls GitHub itself and unpacks the
 // tree itself, so nothing needs gh, git or curl on any machine, and a fetched
 // tree is an ordinary artifact on this one — placed and containerized steps
 // read it the way they read any other.
@@ -37,7 +37,7 @@ const (
 
 // GitHubTypes is every github-* type, in the order the docs list them.
 func GitHubTypes() []string {
-	return []string{GitHubPRsType, GitHubCommentsType, GitHubPRCommentType, GitHubPRReviewType, GitHubReactionType}
+	return []string{GitHubPRsType, GitHubCommentsType, GitHubPRCommentType, GitHubPRReviewType, GitHubReactionType, GitHubIssueType}
 }
 
 // GitHubFinds reports whether kind is one of the two types a get reads.
@@ -611,6 +611,17 @@ func (c *Config) checkGitHubStep(label string, step *Step, comments []string) er
 		return fmt.Errorf("%s: get %q: a %s get takes no params; what it fetches is set on the resource's source instead", label, step.Get, kind)
 	}
 
+	err = checkGitHubPutParams(kind, step, comments)
+	if err != nil {
+		return fmt.Errorf("%s: put %q: %w", label, step.Put, err)
+	}
+
+	return nil
+}
+
+func checkGitHubPutParams(kind string, step *Step, comments []string) error {
+	var err error
+
 	switch kind {
 	case GitHubPRCommentType:
 		err = checkPRCommentStep(step, comments)
@@ -618,13 +629,11 @@ func (c *Config) checkGitHubStep(label string, step *Step, comments []string) er
 		_, err = ParseGitHubReviewParams(step.Params)
 	case GitHubReactionType:
 		err = checkReactionStep(step, comments)
+	case GitHubIssueType:
+		_, err = ParseGitHubIssueParams(step.Params)
 	}
 
-	if err != nil {
-		return fmt.Errorf("%s: put %q: %w", label, step.Put, err)
-	}
-
-	return nil
+	return err
 }
 
 // githubPutRefusal is validateResourcePut's answer for a github-* type: a

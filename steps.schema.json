@@ -685,7 +685,7 @@
           "then": { "properties": { "source": { "$ref": "#/$defs/githubCommentsSource" } } }
         },
         {
-          "if": { "properties": { "type": { "enum": ["github-pr-comment", "github-pr-review", "github-reaction"] } }, "required": ["type"] },
+          "if": { "properties": { "type": { "enum": ["github-pr-comment", "github-pr-review", "github-reaction", "github-issue"] } }, "required": ["type"] },
           "then": { "properties": { "source": { "$ref": "#/$defs/githubPostSource" } } }
         }
       ]
