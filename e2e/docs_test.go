@@ -1048,7 +1048,7 @@ func TestDocsConfigFileExamples(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			err = cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--config", path})
+			err = cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--db", filepath.Join(t.TempDir(), "daemon.db"), "--config", path})
 			if err != nil && strings.Contains(err.Error(), "--config") {
 				t.Fatalf("the example does not load: %v", err)
 			}

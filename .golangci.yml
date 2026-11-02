@@ -177,6 +177,8 @@ linters:
             # scheduler is the daemon's queue drain: the CLI builds the
             # LocalRunner and hands it to web as its Runner.
             - "github.com/jtarchie/steps/internal/scheduler"
+            # secret: cli parses the config file's secret: section and hands the resolver down.
+            - "github.com/jtarchie/steps/internal/secret"
             - "github.com/jtarchie/steps/internal/web"
             - "github.com/jtarchie/steps/internal/workspace"
             # outcome: `steps runs follow` exits as the run it followed did, so
@@ -374,6 +376,17 @@ linters:
             - "**/internal/redact/**"
           allow:
             - "$gostd"
+        # secret runs a deployment's secret source commands; shell only for Start (session + group kill), template for the path, expr for when:/missing:.
+        Secret:
+          files:
+            - "**/internal/secret/**"
+          allow:
+            - "$gostd"
+            - "github.com/expr-lang/expr"
+            - "gopkg.in/yaml.v3"
+            - "github.com/jtarchie/steps/internal/shell"
+            - "github.com/jtarchie/steps/internal/template"
+            - "go.uber.org/goleak"
         # sealbox encrypts what the state database keeps secret; a leaf, so the key never has a reason to travel further than cli.
         Sealbox:
           files:

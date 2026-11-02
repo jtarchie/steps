@@ -98,3 +98,31 @@ func hostGet(t *testing.T, addr, host string) int {
 
 	return resp.StatusCode
 }
+
+// A secret source on a daemon nobody signs in to hands every secret to whoever can PUT a pipeline, and every step is given STEPS_URL; so it does not start. Login present, the refusal is gone and the unbindable --listen is what stops it.
+func TestSecretSourceNeedsALogin(t *testing.T) {
+	t.Parallel()
+
+	config := filepath.Join(t.TempDir(), "steps.yml")
+	writeConfigFile(t, config, `
+web:
+  secret:
+    source:
+      ci:
+        command: cat {{ .path | shellquote }}
+        lookup:
+        - path: /secrets/{{ .pipeline }}/{{ .name }}
+`)
+
+	state := filepath.Join(t.TempDir(), "daemon.db")
+
+	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--db", state, "--config", config})
+	if err == nil || !strings.Contains(err.Error(), "secret source") || !strings.Contains(err.Error(), "sign in") {
+		t.Fatalf("steps web with a secret source and no login = %v, want a refusal naming both", err)
+	}
+
+	err = cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--db", state, "--config", config, "--basic-auth-username", "ops", "--basic-auth-password", "pw"})
+	if err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("steps web with a secret source and a login = %v, want only the bind to fail", err)
+	}
+}

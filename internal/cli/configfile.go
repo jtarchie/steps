@@ -10,6 +10,8 @@ import (
 
 	"github.com/alecthomas/kong"
 	"gopkg.in/yaml.v3"
+
+	"github.com/jtarchie/steps/internal/secret"
 )
 
 // configFileKeysRefused: the password is a credential in a file meant to be committed (env-only, like the OAuth secrets go through --*-client-secret-env), and a config naming a config is a loop.
@@ -39,9 +41,34 @@ func (w *WebCmd) BeforeResolve(ctx *kong.Context) error {
 		return err
 	}
 
+	raw, ok := values["secret"]
+	if ok {
+		delete(values, "secret")
+
+		w.secrets, err = parseSecrets(path, raw)
+		if err != nil {
+			return err
+		}
+	}
+
 	ctx.AddResolver(fileResolver(values))
 
 	return nil
+}
+
+// parseSecrets re-encodes the section so secret.Parse can decode it strictly; the map loadConfigFile holds has already lost YAML's unknown-key information.
+func parseSecrets(path string, raw any) (*secret.Resolver, error) {
+	body, err := yaml.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("web: --config %s: %w", path, err)
+	}
+
+	resolver, err := secret.Parse(body)
+	if err != nil {
+		return nil, fmt.Errorf("web: --config %s: %w", path, err)
+	}
+
+	return resolver, nil
 }
 
 // loadConfigFile checks keys eagerly rather than in kong's Resolver.Validate, which runs after Resolve, so a refused key never reaches a flag first.
@@ -107,6 +134,11 @@ func checkConfigKeys(path string, web map[string]any, flags []*kong.Flag) error 
 	}
 
 	for key := range web {
+		// The one key that is not a flag: a source is nested objects, which no flag can carry.
+		if key == "secret" {
+			continue
+		}
+
 		if slices.Contains(configFileKeysRefused, key) {
 			return fmt.Errorf("web: --config %s: %s may not be set in the file — it is a credential, pass it as STEPS_%s", path, key, strings.ToUpper(strings.ReplaceAll(key, "-", "_")))
 		}

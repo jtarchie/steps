@@ -947,6 +947,14 @@ reviewed. `basic-auth-password` is refused in it and stays
 `STEPS_BASIC_AUTH_PASSWORD`; the OAuth client secrets already come from the
 variables `--github-client-secret-env` and `--google-client-secret-env` name.
 
+**`secret:` is the one key that is not a flag.** It names the commands the
+daemon runs to fetch a credential, which are nested objects no flag can carry.
+A daemon with a secret source refuses to start unless somebody has to sign in
+(`--local-user`, `--basic-auth-username` or a sign-in provider), loopback
+included: a daemon nobody signs in to treats every request as admin, and every
+step is handed `STEPS_URL`, so any step could set a pipeline that reads another
+pipeline's secrets.
+
 Only `steps web` reads it. `steps run`, `steps pipeline set` and the rest take
 their flags on the command line as before.
 

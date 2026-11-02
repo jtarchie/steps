@@ -15,6 +15,7 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/scheduler"
+	"github.com/jtarchie/steps/internal/secret"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/telemetry"
@@ -67,6 +68,9 @@ type WebCmd struct {
 	ExternalURL string `help:"the URL steps publish to every step as STEPS_URL (default http://<listen>)" name:"external-url"`
 	// Web's alone, not global: `pipeline set` and `mcp login` already own --config, and only the daemon has settings that cannot be flags (configfile.go).
 	Config string `env:"STEPS_CONFIG" help:"a YAML file of these flags, under a web: key (a flag on the command line wins; see docs/web.md)" name:"config" placeholder:"PATH"`
+
+	// secrets is the config file's secret: section, set by BeforeResolve; nil when none is configured.
+	secrets *secret.Resolver
 
 	// published is the external URL Run resolved, which every OAuth address the daemon publishes is built from.
 	published string
@@ -170,6 +174,11 @@ func (w *WebCmd) accessOptions(opts []web.Option, published string) ([]web.Optio
 		if err != nil {
 			return nil, fmt.Errorf("web: %w", err)
 		}
+	}
+
+	// A daemon nobody signs in to answers every request as admin, and every step is handed STEPS_URL: any step could set a pipeline named after another and print its secrets.
+	if w.secrets != nil && len(opts) == 0 {
+		return nil, errors.New("web: a secret source is configured and nobody can sign in, so any step could set a pipeline that reads another's secrets: add --local-user, --basic-auth-username or a sign-in provider")
 	}
 
 	if len(w.Role) == 0 {
