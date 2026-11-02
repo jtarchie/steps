@@ -902,11 +902,61 @@ is authorized when it opens and re-checked every 30 seconds, so a sign-out, a
 removed account or a narrowed `access:` rule stops it without waiting for the
 run to end.
 
+## Configuration file
+
+Every `steps web` flag can also live in one YAML file, under a `web:` key,
+given with `--config` or `STEPS_CONFIG`:
+
+```sh
+steps web --config /etc/steps/steps.yml
+```
+
+```yaml config
+web:
+  db: postgres://steps@db/steps
+  listen: 0.0.0.0:8088
+  external-url: https://ci.example.com
+  allowed-host: [ci.example.com]
+  interval: 1m
+  worker:
+    gpu: ssh://ci@gpu-box
+  role:
+  - admin=Provider == "github" && "platform" in Groups
+  - viewer=Provider == "github"
+```
+
+**Every key is exactly one flag**, spelled as the flag is (`external-url`, not
+`externalUrl`), so nothing can be set in one place but not the other. A
+repeatable flag takes a list; a `name=value` one (`--worker`, `--pin`) takes a
+map. A key that is not a flag is a startup error, never silently ignored. A
+path in the file (`local-users-file`) is resolved against the working
+directory, not against the file.
+
+**Precedence is flag, then file, then environment variable, then default.** A
+flag on the command line always wins, so `--listen` on the line beats the
+file's; the file beats `STEPS_ALLOWED_HOSTS` and the other `STEPS_*` variables.
+
+**The file is a privilege boundary.** It will name commands the daemon runs
+as its own user, so it is held to what sshd asks of its own config: refused if
+it is writable by group or others, or owned by another user. It is never
+discovered from the working directory — a cloned repository's `steps.yml` is
+just a file — only `--config` or `STEPS_CONFIG` names it.
+
+**It never holds a credential.** The file is meant to be committed and
+reviewed. `basic-auth-password` is refused in it and stays
+`STEPS_BASIC_AUTH_PASSWORD`; the OAuth client secrets already come from the
+variables `--github-client-secret-env` and `--google-client-secret-env` name.
+
+Only `steps web` reads it. `steps run`, `steps pipeline set` and the rest take
+their flags on the command line as before.
+
 ## Flags
 
 `steps web` — facts about the box, all of them:
 
 ```
+--config         a YAML file of these flags under a web: key ($STEPS_CONFIG;
+                 see Configuration file)
 --listen         address to serve on (default 127.0.0.1:8088)
 --external-url   the URL published to every step as STEPS_URL (default http://<listen>;
                  unset for a wildcard listen address). http(s) only, no credentials,

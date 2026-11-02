@@ -65,6 +65,8 @@ type WebCmd struct {
 	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed, and on a loopback --listen so is --external-url's)" name:"allowed-host" placeholder:"NAME"`
 	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
 	ExternalURL string `help:"the URL steps publish to every step as STEPS_URL (default http://<listen>)" name:"external-url"`
+	// Web's alone, not global: `pipeline set` and `mcp login` already own --config, and only the daemon has settings that cannot be flags (configfile.go).
+	Config string `env:"STEPS_CONFIG" help:"a YAML file of these flags, under a web: key (a flag on the command line wins; see docs/web.md)" name:"config" placeholder:"PATH"`
 
 	// published is the external URL Run resolved, which every OAuth address the daemon publishes is built from.
 	published string

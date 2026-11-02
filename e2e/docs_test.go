@@ -126,8 +126,8 @@ func scenarioFlags(scenario docScenario) []string {
 func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	t.Helper()
 
-	if block.Mode() == "fragment" {
-		t.Skip("fragment: rendered only")
+	if !isPipeline(block) {
+		t.Skip(block.Mode() + ": not a pipeline")
 	}
 
 	err := schema.Validate(yamlStringAsJSONValue(t, block.Body))
@@ -714,8 +714,8 @@ func TestDocsCoverage(t *testing.T) {
 	used := map[string]map[string]bool{}
 
 	for _, block := range mustBlocks(t) {
-		if block.Mode() == "fragment" {
-			continue // fragments are unvalidated prose; they don't count
+		if !isPipeline(block) {
+			continue // fragments are unvalidated prose and config blocks are not pipelines; neither counts
 		}
 
 		var doc map[string]any
@@ -1028,4 +1028,41 @@ func TestDocsPagesListed(t *testing.T) {
 			t.Errorf("docs/README.md has no link to %s", page)
 		}
 	}
+}
+
+// A ```yaml config block is a `steps web --config` file, not a pipeline: it is loaded by the daemon's own flag parser, so every key in it is a flag that exists. The listen flag on argv is unbindable, so the daemon never serves; any refusal that is not about the file is the proof it loaded.
+func TestDocsConfigFileExamples(t *testing.T) {
+	found := 0
+
+	for _, block := range mustBlocks(t) {
+		if block.Mode() != "config" {
+			continue
+		}
+
+		found++
+
+		t.Run(block.Name(), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "steps.yml")
+			err := os.WriteFile(path, []byte(block.Body), 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--config", path})
+			if err != nil && strings.Contains(err.Error(), "--config") {
+				t.Fatalf("the example does not load: %v", err)
+			}
+		})
+	}
+
+	if found == 0 {
+		t.Fatal("no ```yaml config block in docs/*.md; docs/web.md should carry one")
+	}
+}
+
+// isPipeline: fragments are prose and config blocks are `steps web --config` files; every other yaml block is a pipeline.
+func isPipeline(block docs.Block) bool {
+	mode := block.Mode()
+
+	return mode != "fragment" && mode != "config"
 }

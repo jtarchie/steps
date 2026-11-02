@@ -48,14 +48,11 @@ type Block struct {
 	Body string
 }
 
-// Mode reports how the block is tested: "run", "noexec", or "fragment". A
-// bare `noexec` reports "noexec" too — it is a mode with no reason, which
-// TestDocsNoexecReasons rejects; treating it as "run" instead would fail the
-// authoring mistake as a broken pipeline rather than a missing reason.
+// Mode reports how the block is tested: "run", "noexec", "fragment", or "config" (a `steps web --config` file, loaded by TestDocsConfigFileExamples rather than run as a pipeline); a bare `noexec` reports "noexec" too — a mode with no reason, which TestDocsNoexecReasons rejects, where treating it as "run" would fail the authoring mistake as a broken pipeline rather than a missing reason.
 func (b Block) Mode() string {
 	for _, field := range strings.Fields(b.Info) {
 		switch {
-		case field == "fragment":
+		case field == "fragment", field == "config":
 			return field
 		case field == "noexec" || strings.HasPrefix(field, "noexec="):
 			return "noexec"

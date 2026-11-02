@@ -17,7 +17,7 @@ steps web \
 | `--basic-auth-username` | `STEPS_BASIC_AUTH_USERNAME` |
 | `--basic-auth-password` | `STEPS_BASIC_AUTH_PASSWORD` |
 
-Prefer the environment variables in a deployment: a password on a command line is in `ps` output and in shell history.
+Prefer the environment variables in a deployment: a password on a command line is in `ps` output and in shell history. A [config file](web.md#configuration-file) refuses `basic-auth-password` for the same reason: it is meant to be committed.
 
 **Both or neither.** A daemon given only one of them refuses to start, rather than serving open access to somebody who believes it is protected.
 
