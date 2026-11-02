@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -27,6 +28,7 @@ const (
 // outputRecorder is one task command's output: two chunkers, one per stream, feeding one record in arrival order.
 type outputRecorder struct {
 	stdout, stderr *chunker
+	scrubbers      []*redact.Scrubber
 	flushes        []func()
 	record         headTail
 	mu             sync.Mutex
@@ -73,7 +75,11 @@ func recordOutput(ctx context.Context, label string, withStdout bool) (context.C
 			rec.stdout = chunks
 		}
 
-		return io.MultiWriter(prefixed, chunks)
+		// In front of the chunker, which feeds both the live stream and the record: a value split across two chunks is whole here.
+		scrubbed := redact.SecretsFrom(ctx).Writer(chunks)
+		rec.scrubbers = append(rec.scrubbers, scrubbed)
+
+		return io.MultiWriter(prefixed, scrubbed)
 	})
 
 	return ctx, rec
@@ -81,6 +87,10 @@ func recordOutput(ctx context.Context, label string, withStdout bool) (context.C
 
 // finish publishes the record once the command has exited: whatever the chunkers still hold, then the whole as one output event, which the store takes as the signal to drop the chunks.
 func (r *outputRecorder) finish(ctx context.Context) {
+	for _, scrubbed := range r.scrubbers {
+		_ = scrubbed.Flush()
+	}
+
 	for _, c := range []*chunker{r.stdout, r.stderr} {
 		if c != nil {
 			c.close()

@@ -131,9 +131,18 @@ Into the step's environment, and nowhere else steps writes:
   session's stdin. A worker never sees a source command or a lookup path, and
   never holds the login that reads the store.
 
-**Not yet scrubbed from output.** A step that prints its secret has the value
-recorded with the rest of its output and shown in the browser. Do not print
-secrets.
+**Scrubbed from what a step prints.** A value the run has resolved is replaced
+with `***` in the step's recorded output, in the live stream the browser shows,
+and in the output an `assert:` checks or a `fix:` agent is shown, so a model
+never sees it. A value printed in two pieces is still caught, and each line of a
+multi-line value (a PEM key) is masked on its own. A value shorter than 8 bytes
+is masked too, with a warning in the daemon's log, since it may also mask
+ordinary text.
+
+What scrubbing cannot catch: an encoded form of the value (base64, JSON
+escaping, a URL-encoded copy), and files a step writes. Outputs, artifacts and
+cache directories are stored as written. On Postgres, a value that reached a
+query would also reach the server's statement log if that is on.
 
 What steps cannot protect: anything the step itself does with the value, root
 or the same user reading a process's memory or environment while the step runs,

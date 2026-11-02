@@ -209,3 +209,57 @@ jobs:
 
 	assertNotInDatabase(t, served.state, e2eSecretValue)
 }
+
+// A step that prints its secret, split across two writes so no one chunk holds it whole, has the value scrubbed before anything is recorded or streamed.
+func TestPrintedSecretIsScrubbedFromRecordedOutput(t *testing.T) {
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	writePipelineFile(t, path, `
+jobs:
+- name: release
+  plan:
+  - task: leak
+    secrets:
+      TOKEN: ((ci:gh_token))
+    run: |
+      head=${TOKEN%??????????}
+      printf 'token=%s' "$head"
+      sleep 0.2
+      printf '%s done\n' "${TOKEN#"$head"}"
+`)
+
+	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue})
+	defer served.stopIfRunning(t)
+
+	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	if err != nil {
+		t.Fatalf("pipeline set: %v", err)
+	}
+
+	enqueueDirectly(t, served.state, name, "release")
+	waitForRunStatus(t, served.state, name, newestRun(t, served.state, name, "release").ID, "succeeded")
+
+	served.stop(t)
+
+	assertNotInDatabase(t, served.state, e2eSecretValue)
+	assertNotInDatabase(t, served.state, e2eSecretValue[:10])
+
+	if !inDatabase(t, served.state, "token=*** done") {
+		t.Error("the recorded output does not read token=*** done; the step's output was lost rather than scrubbed")
+	}
+}
+
+func inDatabase(t *testing.T, state, text string) bool {
+	t.Helper()
+
+	for _, suffix := range []string{"", "-wal"} {
+		body, err := os.ReadFile(state + suffix) //nolint:gosec // the test's own database
+		if err == nil && bytes.Contains(body, []byte(text)) {
+			return true
+		}
+	}
+
+	return false
+}

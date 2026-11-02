@@ -454,7 +454,10 @@ func runCaptured(ctx context.Context, runner shell.Runner, rt config.ResolvedTas
 		return "", "", 0, fmt.Errorf("task %q: %w", rt.Name, cancelErr)
 	}
 
-	return stdout, stderr, exitCode, nil
+	// Before an assert records it or a fix: agent is shown it: a model must never see a secret the step printed.
+	secrets := redact.SecretsFrom(ctx)
+
+	return secrets.String(stdout), secrets.String(stderr), exitCode, nil
 }
 
 // assertMismatch returns a reason when captured stdout/exit code/output files

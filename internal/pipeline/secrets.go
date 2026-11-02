@@ -4,13 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/secret"
 	"github.com/jtarchie/steps/internal/shell"
 )
+
+// shortSecret is the length below which masking a value starts catching ordinary text.
+const shortSecret = 8
 
 type secretsKey struct{}
 
@@ -41,6 +46,8 @@ func withRunSecrets(ctx context.Context) context.Context {
 		return ctx
 	}
 
+	ctx = redact.WithSecrets(ctx, &redact.Secrets{})
+
 	return context.WithValue(ctx, runSecretsKey{}, resolver.ForRun())
 }
 
@@ -68,6 +75,14 @@ func withStepSecrets(ctx context.Context, secrets map[string]string) (context.Co
 		if err != nil {
 			return ctx, fmt.Errorf("secrets.%s: %w", name, err)
 		}
+
+		// A short value still masks, and masks unrelated output too; said once so a mangled log has an explanation.
+		if len(value) < shortSecret {
+			slog.WarnContext(ctx, "secret.short", "secret", ref.String(), "bytes", len(value), "note", "masking it may also mask unrelated output")
+		}
+
+		// Registered before the step runs, so its first byte of output is already scrubbed.
+		redact.SecretsFrom(ctx).Add(value)
 
 		env[name] = value
 	}
