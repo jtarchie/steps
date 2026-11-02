@@ -75,8 +75,13 @@ func recordOutput(ctx context.Context, label string, withStdout bool) (context.C
 			rec.stdout = chunks
 		}
 
+		secrets := redact.SecretsFrom(ctx)
+		if secrets.Empty() {
+			return io.MultiWriter(prefixed, chunks)
+		}
+
 		// In front of the chunker, which feeds both the live stream and the record: a value split across two chunks is whole here.
-		scrubbed := redact.SecretsFrom(ctx).Writer(chunks)
+		scrubbed := secrets.Writer(chunks)
 		rec.scrubbers = append(rec.scrubbers, scrubbed)
 
 		return io.MultiWriter(prefixed, scrubbed)

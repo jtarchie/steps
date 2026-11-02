@@ -13,6 +13,7 @@ import (
 	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/template"
 )
@@ -58,7 +59,9 @@ func CheckVersions(ctx context.Context, c Call) ([]map[string]any, error) {
 		return nil, err
 	}
 
-	return backendFor(c.Type).check(ctx, c)
+	versions, err := backendFor(c.Type).check(ctx, c)
+
+	return versions, redact.SecretsFrom(ctx).Error(err) //nolint:wrapcheck // masking keeps the chain (Unwrap); the backend already named the stage
 }
 
 // runnerSpec is how every shell stage of rt runs, before the stage adds its
@@ -278,7 +281,8 @@ func RunIn(ctx context.Context, c Call) error {
 		return err
 	}
 
-	return backendFor(c.Type).in(ctx, c)
+	// Masked where it is born: a failed stage's error climbs into the step's and the run's record and the scheduler's log, none of which carries the run's secrets.
+	return redact.SecretsFrom(ctx).Error(backendFor(c.Type).in(ctx, c)) //nolint:wrapcheck // masking keeps the chain (Unwrap); the backend already named the stage
 }
 
 func (shellBackend) in(ctx context.Context, c Call) error {
@@ -341,7 +345,9 @@ func RunOut(ctx context.Context, c Call) (map[string]any, error) {
 		return nil, err
 	}
 
-	return backendFor(c.Type).out(ctx, c)
+	version, err := backendFor(c.Type).out(ctx, c)
+
+	return version, redact.SecretsFrom(ctx).Error(err) //nolint:wrapcheck // masking keeps the chain (Unwrap); the backend already named the stage
 }
 
 func (shellBackend) out(ctx context.Context, c Call) (map[string]any, error) {

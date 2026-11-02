@@ -29,7 +29,7 @@ func TestFixMessagesAreSeparateTurns(t *testing.T) {
 
 	fix := &config.FixSpec{Messages: []string{"Repair the build.", "Now say what you changed."}}
 
-	messages := buildFixMessages(fix, config.ResolvedTask{Name: "build"}, "exit status 1", t.TempDir())
+	messages := buildFixMessages(t.Context(), fix, config.ResolvedTask{Name: "build"}, "exit status 1", t.TempDir())
 
 	if len(messages) != 2 {
 		t.Fatalf("got %d turn(s), want one per message: %q", len(messages), messages)
@@ -61,7 +61,7 @@ func TestFixMessagesLeaveTheConfigAlone(t *testing.T) {
 
 	fix := &config.FixSpec{Messages: []string{"Repair the build."}}
 
-	buildFixMessages(fix, config.ResolvedTask{Name: "build"}, "first failure", t.TempDir())
+	buildFixMessages(t.Context(), fix, config.ResolvedTask{Name: "build"}, "first failure", t.TempDir())
 
 	if fix.Messages[0] != "Repair the build." {
 		t.Fatalf("the loaded fix: now reads %q — the next attempt inherits the last one's failure", fix.Messages[0])
@@ -72,7 +72,7 @@ func TestFixMessagesLeaveTheConfigAlone(t *testing.T) {
 func TestFixWithNoMessagesIsOneTurn(t *testing.T) {
 	t.Parallel()
 
-	messages := buildFixMessages(&config.FixSpec{}, config.ResolvedTask{Name: "build"}, "boom", t.TempDir())
+	messages := buildFixMessages(t.Context(), &config.FixSpec{}, config.ResolvedTask{Name: "build"}, "boom", t.TempDir())
 
 	if len(messages) != 1 {
 		t.Fatalf("got %d turn(s), want 1: %q", len(messages), messages)

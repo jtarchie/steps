@@ -49,7 +49,7 @@ func TestTruncationAtExactlyTheLimit(t *testing.T) {
 		t.Errorf("truncateToolOutputLimit at exactly the limit = %q; want it unchanged", got)
 	}
 
-	if got := spillOrTruncateLimit(s, len(s), t.TempDir()); got != s {
+	if got := spillOrTruncateLimit(t.Context(), s, len(s), t.TempDir()); got != s {
 		t.Errorf("spillOrTruncateLimit at exactly the limit = %q; want it inline, not spilled", got)
 	}
 }

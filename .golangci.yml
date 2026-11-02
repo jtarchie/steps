@@ -547,6 +547,8 @@ linters:
           files:
             - "**/internal/resource/**"
           allow:
+            # redact: a failed stage's error is masked of the run's secrets where it is born.
+            - "github.com/jtarchie/steps/internal/redact"
             - "$gostd"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"

@@ -227,12 +227,12 @@ func mcpToolImpl(client stepsmcp.Client, name string, limit int, pins *mcpPins) 
 				text = fmt.Sprintf("mcp tool %q returned an error with no text content", name)
 			}
 
-			return errorResult(spillOrTruncateLimit(text, limit, env.spillDir))
+			return errorResult(spillOrTruncateLimit(ctx, text, limit, env.spillDir))
 		}
 
 		return map[string]any{
 			"structured_content": boundedStructuredContent(result.StructuredContent, limit, env.spillDir),
-			"content":            spillOrTruncateLimit(text, limit, env.spillDir),
+			"content":            spillOrTruncateLimit(ctx, text, limit, env.spillDir),
 		}
 	}
 }

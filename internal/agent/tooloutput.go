@@ -11,6 +11,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/agent/tree"
 
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -79,15 +80,18 @@ func truncateToolOutputLimit(s string, limit int) string {
 // tool's content, a sub-agent's final answer, a fix loop's failure output —
 // uses this so oversized output is saved to a file the model can read back,
 // not dropped.
-func spillOrTruncate(content string, spillDir string) string {
-	return spillOrTruncateLimit(content, maxToolOutputBytes, spillDir)
+func spillOrTruncate(ctx context.Context, content string, spillDir string) string {
+	return spillOrTruncateLimit(ctx, content, maxToolOutputBytes, spillDir)
 }
 
 // spillOrTruncateLimit is spillOrTruncate with an explicit inline budget, so
 // a tool grant that narrowed its own via max_output_bytes: spills sooner.
 // Nothing is lost by a lower limit — the full content still reaches the spill
 // file — only the inline share shrinks.
-func spillOrTruncateLimit(content string, limit int, spillDir string) string {
+func spillOrTruncateLimit(ctx context.Context, content string, limit int, spillDir string) string {
+	// Masked before it is cut or written to a spill file the model can read back.
+	content = redact.SecretsFrom(ctx).String(content)
+
 	if len(content) <= limit {
 		return content
 	}

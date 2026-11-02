@@ -22,6 +22,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -353,11 +354,12 @@ func FromContext(ctx context.Context) *Bus {
 // Publish publishes to whatever bus ctx carries. It is the form the
 // execution packages use: one call, no nil checks, no-op off the web path.
 func Publish(ctx context.Context, event Event) {
-	FromContext(ctx).Publish(traceEvent(ctx, event))
+	FromContext(ctx).Publish(traceEvent(ctx, scrubEvent(ctx, event)))
 }
 
 // Note publishes a TypeStepNote under the run and step ctx names, or the job (StepIndex -1) outside a step. With no bus to tell — none installed, or one already closed, which is where a job's deferred worker release speaks — it writes the line to Stdout(ctx) instead, or logs it when ctx is Headless, because a note is often the only record of what it says.
 func Note(ctx context.Context, level, text string) {
+	text = scrubFrom(ctx)(text)
 	event := Event{Type: TypeStepNote, RunID: RunID(ctx), StepID: StepID(ctx), Status: level, Text: text}
 	if event.StepID == 0 {
 		event.StepIndex = -1
@@ -498,13 +500,15 @@ func (h ctxHandler) Handle(ctx context.Context, r slog.Record) error {
 	}
 
 	attrs, _ := ctx.Value(logAttrsKey{}).([]slog.Attr)
-	if len(attrs) == 0 {
+	scrub, scrubbing := ctx.Value(scrubKey{}).(func(string) string)
+
+	if len(attrs) == 0 && !scrubbing {
 		return h.inner.Handle(ctx, r) //nolint:wrapcheck // a pass-through: the wrapped handler's error is the answer
 	}
 
 	// A new record rather than r.AddAttrs, which only appends; PC carried so
 	// AddSource still names the call site.
-	out := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	out := slog.NewRecord(r.Time, r.Level, scrubFrom(ctx)(r.Message), r.PC)
 
 	for _, a := range attrs {
 		if !a.Value.Equal(slog.StringValue("")) && !slices.Contains(h.preset, a.Key) && !recordHas(r, a.Key) {
@@ -513,12 +517,57 @@ func (h ctxHandler) Handle(ctx context.Context, r slog.Record) error {
 	}
 
 	r.Attrs(func(a slog.Attr) bool {
+		if scrubbing {
+			a = scrubAttr(a, scrub)
+		}
+
 		out.AddAttrs(a)
 
 		return true
 	})
 
 	return h.inner.Handle(ctx, out) //nolint:wrapcheck // a pass-through: the wrapped handler's error is the answer
+}
+
+type scrubKey struct{}
+
+// WithScrub masks what is published or logged under ctx: a run's resolved secrets, in every event's text and every log line, whoever wrote it. A func rather than a type so this leaf needs no import to carry it.
+func WithScrub(ctx context.Context, scrub func(string) string) context.Context {
+	return context.WithValue(ctx, scrubKey{}, scrub)
+}
+
+func scrubFrom(ctx context.Context) func(string) string {
+	if scrub, ok := ctx.Value(scrubKey{}).(func(string) string); ok {
+		return scrub
+	}
+
+	return func(text string) string { return text }
+}
+
+func scrubEvent(ctx context.Context, event Event) Event {
+	scrub := scrubFrom(ctx)
+	event.Text, event.Detail = scrub(event.Text), scrub(event.Detail)
+
+	return event
+}
+
+// scrubAttr renders a non-string value (an error, a Stringer) to text first, since that is the form a handler would print it in.
+func scrubAttr(a slog.Attr, scrub func(string) string) slog.Attr {
+	value := a.Value.Resolve()
+
+	switch value.Kind() { //nolint:exhaustive // only text can carry a secret
+	case slog.KindString:
+		return slog.String(a.Key, scrub(value.String()))
+	case slog.KindAny:
+		switch typed := value.Any().(type) {
+		case error:
+			return slog.String(a.Key, scrub(typed.Error()))
+		case fmt.Stringer:
+			return slog.String(a.Key, scrub(typed.String()))
+		}
+	}
+
+	return a
 }
 
 // recordHas scans rather than indexing into a map: a line carries a handful

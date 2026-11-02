@@ -15,6 +15,8 @@ var secretRefPattern = regexp.MustCompile(`\(\(([a-z0-9_-]+):([^()]*)\)\)`)
 
 var secretNamePattern = regexp.MustCompile(`^[A-Za-z0-9_./-]+$`)
 
+var shellIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // SecretRef is a ((source:name)) reference: the source is the deployment's, the name the pipeline's.
 type SecretRef struct {
 	Source string
@@ -121,6 +123,14 @@ func (c *Config) validateSecrets() error {
 }
 
 func (c *Config) checkStepSecrets(label string, step *Step) error {
+	// On what the step RUNS with: its own env: or secrets: replaces its entry's, so a collision can be across the two levels.
+	env, secrets := c.effectiveEnvAndSecrets(step)
+	for _, name := range slices.Sorted(maps.Keys(secrets)) {
+		if slices.Contains(env, name) {
+			return fmt.Errorf("%s: %s is named in both env and secrets (between the step and its entry)", label, name)
+		}
+	}
+
 	if step.Secrets == nil {
 		return nil
 	}
@@ -222,6 +232,11 @@ func checkSecretsMap(context string, secrets map[string]string, env []string) er
 			return err
 		}
 
+		// The name is exported by a shell on a bare worker (`export NAME=…`), which rejects anything but an identifier, and TRACEPARENT is overwritten whenever tracing is on: either way the step would silently run without its credential.
+		if !shellIdentifier.MatchString(name) || name == "TRACEPARENT" {
+			return fmt.Errorf("%s: secrets key %q must be a shell variable name (letters, digits, _) and not TRACEPARENT", context, name)
+		}
+
 		// A name in both would leave merge order to decide which value the step sees.
 		if slices.Contains(env, name) {
 			return fmt.Errorf("%s: %s is named in both env and secrets", context, name)
@@ -303,4 +318,31 @@ func refuseMisplacedInStruct(path string, value reflect.Value) error {
 	}
 
 	return nil
+}
+
+// effectiveEnvAndSecrets is the env: and secrets: a task or agent step runs with, each declared-wins over its entry's.
+func (c *Config) effectiveEnvAndSecrets(step *Step) ([]string, map[string]string) {
+	var env []string
+
+	var secrets map[string]string
+
+	task, taskErr := c.FindTask(step.Task)
+	if step.Run == "" && step.Task != "" && taskErr == nil && task != nil {
+		env, secrets = task.Env, task.Secrets
+	}
+
+	agent, agentErr := c.FindAgent(step.Agent)
+	if step.Agent != "" && agentErr == nil && agent != nil {
+		env, secrets = agent.Env, agent.Secrets
+	}
+
+	if step.Env != nil {
+		env = step.Env
+	}
+
+	if step.Secrets != nil {
+		secrets = step.Secrets
+	}
+
+	return env, secrets
 }

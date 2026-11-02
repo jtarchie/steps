@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/secret"
@@ -64,7 +65,9 @@ func WithPollSecrets(ctx context.Context, pipelineName string, ttl time.Duration
 
 // withSecretMemo installs memo for steps and resources alike; pipelineName is for a context with no build metadata to read it from (a poll).
 func withSecretMemo(ctx context.Context, memo *secret.Run, pipelineName string) context.Context {
-	ctx = redact.WithSecrets(ctx, &redact.Secrets{})
+	secrets := &redact.Secrets{}
+	ctx = redact.WithSecrets(ctx, secrets)
+	ctx = events.WithScrub(ctx, secrets.String)
 	ctx = context.WithValue(ctx, runSecretsKey{}, memo)
 
 	return resource.WithSecretLookup(ctx, func(ctx context.Context, name string, secrets map[string]string) (map[string]string, error) {

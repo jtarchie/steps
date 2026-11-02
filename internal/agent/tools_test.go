@@ -426,7 +426,7 @@ func TestSpillOrTruncate(t *testing.T) {
 	t.Run("content at or under the cap passes through unchanged", func(t *testing.T) {
 		t.Parallel()
 
-		if got := spillOrTruncate("hello", t.TempDir()); got != "hello" {
+		if got := spillOrTruncate(t.Context(), "hello", t.TempDir()); got != "hello" {
 			t.Errorf("got %q, want %q", got, "hello")
 		}
 	})
@@ -436,7 +436,7 @@ func TestSpillOrTruncate(t *testing.T) {
 
 		big := strings.Repeat("x", maxToolOutputBytes+500)
 
-		got := spillOrTruncate(big, "")
+		got := spillOrTruncate(t.Context(), big, "")
 		want := truncateToolOutput(big)
 
 		if got != want {
@@ -453,7 +453,7 @@ func TestSpillOrTruncateWritesFile(t *testing.T) {
 	big := strings.Repeat("x", maxToolOutputBytes+500)
 	spillDir := t.TempDir()
 
-	got := spillOrTruncate(big, spillDir)
+	got := spillOrTruncate(t.Context(), big, spillDir)
 
 	if !strings.Contains(got, "<persistent_file>") {
 		t.Fatalf("got %q, want a <persistent_file> pointer message", got)
@@ -499,7 +499,7 @@ func TestSpillOrTruncateDegradesOnWriteFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := spillOrTruncate(big, notADir)
+	got := spillOrTruncate(t.Context(), big, notADir)
 	want := truncateToolOutput(big)
 
 	if got != want {

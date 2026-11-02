@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -49,7 +50,7 @@ func opSource(dir, lookup string) string {
 	return `
 source:
   ci:
-    command: ` + opScript + dir + `/{{ .path }}
+    command: ` + opScript + `{{ printf "%s/%s" "` + dir + `" .path | shellquote }}
     missing: exit_code == 1 && stderr contains "isn't an item"
     lookup:
 ` + lookup
@@ -232,5 +233,82 @@ source:
 
 	if asks() != 2 {
 		t.Errorf("the source ran %d times after the window, want 2", asks())
+	}
+}
+
+// A lookup path is built from names a pipeline author chooses; one that climbs out of its segment would reach another pipeline's secrets.
+func TestLookupRefusesANameThatLeavesItsSegment(t *testing.T) {
+	t.Parallel()
+
+	resolver := resolverFor(t, opSource(fakeOp(t, map[string]string{"prod/x": "prod"}), `
+    - path: "{{ .pipeline }}/{{ .job }}/{{ .name }}"
+`))
+
+	for _, job := range []string{"..", "../../prod", `a\b`} {
+		_, err := resolver.Lookup(t.Context(), Ref{Pipeline: "dev", Job: job, Source: "ci", Name: "x"})
+		if err == nil || !strings.Contains(err.Error(), "cannot be used in a lookup path") {
+			t.Errorf("job %q: Lookup = %v, want refused", job, err)
+		}
+	}
+
+	// A path that does not use the job is not held to it: a job named with a slash still resolves.
+	plain := resolverFor(t, opSource(fakeOp(t, map[string]string{"dev/x": "dev"}), `
+    - path: "{{ .pipeline }}/{{ .name }}"
+`))
+
+	value, err := plain.Lookup(t.Context(), Ref{Pipeline: "dev", Job: "a/b", Source: "ci", Name: "x"})
+	if err != nil || value != "dev" {
+		t.Errorf("Lookup with a path not using the job = %q, %v", value, err)
+	}
+}
+
+func TestParseRefusesAnUnquotedPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := Parse([]byte("source: {ci: {command: 'op read {{ .path }}', lookup: [{path: a}]}}"))
+	if err == nil || !strings.Contains(err.Error(), "shellquote") {
+		t.Fatalf("Parse = %v, want the unquoted path refused", err)
+	}
+
+	_, err = Parse([]byte("source: {ci: {command: 'op read {{ .path | shellquote }}', lookup: [{path: a}]}}"))
+	if err != nil {
+		t.Errorf("Parse of a quoted path = %v", err)
+	}
+}
+
+// Two steps wait on one lookup; the one that started it hits its own deadline, and the other, whose context is fine, must still get the value.
+func TestRunWaiterSurvivesTheOwnersCancellation(t *testing.T) {
+	t.Parallel()
+
+	resolver := resolverFor(t, `
+source:
+  ci:
+    command: sleep 0.4; echo value
+    lookup: [{path: x}]
+`)
+
+	run := resolver.ForRun()
+	ref := Ref{Pipeline: "p", Source: "ci", Name: "a"}
+
+	ownerCtx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+
+	owner := make(chan error, 1)
+
+	go func() {
+		_, err := run.Lookup(ownerCtx, ref)
+		owner <- err
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+
+	value, err := run.Lookup(t.Context(), ref)
+	if err != nil || value != "value" {
+		t.Errorf("waiter = %q, %v; want the value despite the owner's deadline", value, err)
+	}
+
+	err = <-owner
+	if err == nil {
+		t.Error("the owner's own lookup succeeded past its deadline")
 	}
 }

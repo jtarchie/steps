@@ -414,6 +414,10 @@ func TestSecretsAreRefusedWhereNothingWouldResolveThem(t *testing.T) {
 		{"fix agent", "agents:\n- name: a\n  " + hosted + "  secrets: {T: ((ci:t))}\njobs:\n- name: j\n  plan:\n  - task: t\n    run: exit 1\n    fix: a\n", "fix agent never receives"},
 		{"sub-agent", "agents:\n- name: a\n  description: d\n  " + hosted + "  secrets: {T: ((ci:t))}\n- name: b\n  " + hosted + "  tools: [{agent: a}]\njobs:\n- name: j\n  plan:\n  - agent: b\n    messages: [hi]\n", "only an agent step"},
 		{"type env collision", "resource_types:\n- name: t\n  env: [TOKEN]\n  config: {check: 'echo []'}\nresources:\n- name: r\n  type: t\n  source: {}\n  secrets: {TOKEN: ((ci:t))}\njobs:\n- name: j\n  plan:\n  - get: r\n", "named in both env and secrets"},
+		{"task env, step secrets", "tasks:\n- name: t\n  env: [TOK]\n  run: echo hi\njobs:\n- name: j\n  plan:\n  - task: t\n    secrets: {TOK: ((ci:t))}\n", "named in both env and secrets"},
+		{"task secrets, step env", "tasks:\n- name: t\n  secrets: {TOK: ((ci:t))}\n  run: echo hi\njobs:\n- name: j\n  plan:\n  - task: t\n    env: [TOK]\n", "named in both env and secrets"},
+		{"not an identifier", "jobs:\n- name: j\n  plan:\n  - task: t\n    secrets: {A-B: ((ci:t))}\n    run: echo hi\n", "shell variable name"},
+		{"traceparent", "jobs:\n- name: j\n  plan:\n  - task: t\n    secrets: {TRACEPARENT: ((ci:t))}\n    run: echo hi\n", "TRACEPARENT"},
 		{"get step", "resources:\n- name: r\n  type: cron\n  source: {schedule: '0 * * * *'}\njobs:\n- name: j\n  plan:\n  - get: r\n    secrets: {T: ((ci:t))}\n", "task and agent steps only"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -482,6 +486,8 @@ jobs:
 
 // A failed poll's error is stored and shown on the resource's page; one that quotes the resource's credential must not keep it.
 func TestAFailedChecksErrorIsScrubbed(t *testing.T) {
+	logs := captureStderr(t)
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	name := cli.PipelineName(path)
@@ -527,6 +533,11 @@ jobs:
 	}
 
 	assertNotInDatabase(t, served.state, e2eSecretValue)
+
+	// The poll also logs the failure every interval; the daemon's log is as durable as its database.
+	if strings.Contains(logs(), e2eSecretValue) {
+		t.Error("the daemon log carries the secret from a failed check")
+	}
 }
 
 // A sub-agent was granted nothing the parent step resolved: its tools run without the parent's secrets, the way a fix agent's do.
@@ -587,5 +598,58 @@ jobs:
 
 	if joined := strings.Join(results, "\n"); !strings.Contains(joined, "seen=[]") {
 		t.Errorf("the sub-agent's run_shell result = %q, want it to have seen no TOKEN", joined)
+	}
+}
+
+// A get that fails inside a run records its error as the step's and the job's outcome, which the browser shows; an error quoting the resource's credential must be masked there too.
+func TestAFailedGetsErrorIsScrubbed(t *testing.T) {
+	logs := captureStderr(t)
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	writePipelineFile(t, path, `
+resource_types:
+- name: leaky
+  config:
+    expr:
+      check: '[{n: "1"}]'
+      in: fail("leaked " + env("TOKEN"))
+
+resources:
+- name: feed
+  type: leaky
+  source: {}
+  secrets:
+    TOKEN: ((ci:gh_token))
+
+jobs:
+- name: fetch
+  plan:
+  - get: feed
+`)
+
+	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue})
+	defer served.stopIfRunning(t)
+
+	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	if err != nil {
+		t.Fatalf("pipeline set: %v", err)
+	}
+
+	enqueueDirectly(t, served.state, name, "fetch")
+	waitForRunStatus(t, served.state, name, newestRun(t, served.state, name, "fetch").ID, "failed")
+
+	served.stop(t)
+
+	if !inDatabase(t, served.state, "leaked ***") {
+		t.Error("the failed get's masked error was not recorded")
+	}
+
+	assertNotInDatabase(t, served.state, e2eSecretValue)
+
+	if strings.Contains(logs(), e2eSecretValue) {
+		t.Error("the daemon log carries the secret from a failed get")
 	}
 }

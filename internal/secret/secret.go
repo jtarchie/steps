@@ -74,6 +74,8 @@ type source struct {
 type lookupPath struct {
 	template string
 	when     *vm.Program
+	// usesJob and usesResource say which author-chosen names this path is built from, so only those are held to the segment rule.
+	usesJob, usesResource bool
 }
 
 // lookupEnv is all a when: rule sees; only pipeline is admin-gated (through set), the rest are the pipeline author's to choose.
@@ -178,13 +180,20 @@ func checkShape(spec Source) error {
 		return fmt.Errorf("timeout: %s is negative", spec.Timeout)
 	}
 
-	_, err := template.Render(spec.Command, map[string]any{"path": "p"})
+	// A path is built from names a pipeline author chooses, so a command that drops it in unquoted is a shell injection on the daemon; a sentinel holding a quote shows whether it was quoted.
+	rendered, err := template.Render(spec.Command, map[string]any{"path": unquotedSentinel})
 	if err != nil {
 		return fmt.Errorf("command: %w", err)
 	}
 
+	if strings.Contains(rendered, unquotedSentinel) {
+		return errors.New("command: write {{ .path | shellquote }}; an unquoted path lets a job or resource name run as shell on the daemon")
+	}
+
 	return nil
 }
+
+const unquotedSentinel = "x'y"
 
 func compilePath(path Path) (lookupPath, error) {
 	_, err := template.Render(path.Path, pathData(Ref{}))
@@ -192,7 +201,7 @@ func compilePath(path Path) (lookupPath, error) {
 		return lookupPath{}, fmt.Errorf("path: %w", err)
 	}
 
-	entry := lookupPath{template: path.Path}
+	entry := lookupPath{template: path.Path, usesJob: strings.Contains(path.Path, ".job"), usesResource: strings.Contains(path.Path, ".resource")}
 
 	if path.When != "" {
 		entry.when, err = expr.Compile(path.When, expr.Env(lookupEnv{}), expr.AsBool())
@@ -227,6 +236,11 @@ func (r *Resolver) Lookup(ctx context.Context, ref Ref) (string, error) {
 			continue
 		}
 
+		err = path.safeFor(ref)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", ref, err)
+		}
+
 		location, err := template.Render(path.template, pathData(ref))
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", ref, err)
@@ -251,6 +265,20 @@ func (r *Resolver) Lookup(ctx context.Context, ref Ref) (string, error) {
 	return "", fmt.Errorf("%w: %s is not at %s", ErrNotFound, ref, strings.Join(tried, ", "))
 }
 
+// safeFor refuses a job or resource name that would climb out of, or across, a path segment: those names are the pipeline author's, unlike the pipeline's own, which set already holds to this rule.
+func (p lookupPath) safeFor(ref Ref) error {
+	for _, field := range []struct {
+		used        bool
+		kind, value string
+	}{{p.usesJob, "job", ref.Job}, {p.usesResource, "resource", ref.Resource}} {
+		if field.used && (field.value == "." || field.value == ".." || strings.ContainsAny(field.value, "/\\")) {
+			return fmt.Errorf("%s name %q cannot be used in a lookup path: it would leave its own path segment", field.kind, field.value)
+		}
+	}
+
+	return nil
+}
+
 func (p lookupPath) applies(ref Ref) (bool, error) {
 	if p.when == nil {
 		return true, nil
@@ -273,6 +301,8 @@ func (s *source) fetch(ctx context.Context, location string) (string, bool, erro
 		return "", false, err //nolint:wrapcheck // Render names the template
 	}
 
+	parent := ctx
+
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
@@ -293,6 +323,10 @@ func (s *source) fetch(ctx context.Context, location string) (string, bool, erro
 	defer release()
 
 	err = cmd.Wait()
+
+	if parent.Err() != nil {
+		return "", false, fmt.Errorf("stopped by the step: %w", parent.Err())
+	}
 
 	if ctx.Err() != nil {
 		return "", false, fmt.Errorf("gave up after %s: %w", s.timeout, ctx.Err())
@@ -374,6 +408,8 @@ type runEntry struct {
 	value string
 	err   error
 	at    time.Time
+	// ownerCancelled is whether the caller that ran the lookup had its own context end, which says nothing about the secret.
+	ownerCancelled bool
 }
 
 // ForRun starts a run's memo.
@@ -401,28 +437,40 @@ func (run *Run) expired(entry *runEntry) bool {
 
 // Lookup answers from the memo; a failure is not kept, so a declined prompt can be retried by the next attempt.
 func (run *Run) Lookup(ctx context.Context, ref Ref) (string, error) {
-	run.mu.Lock()
+	for {
+		run.mu.Lock()
 
-	entry, cached := run.entries[ref]
-	if entry == nil || run.expired(entry) {
-		entry = &runEntry{done: make(chan struct{})}
-		run.entries[ref] = entry
-		cached = false
-	}
+		entry, cached := run.entries[ref]
+		if entry == nil || run.expired(entry) {
+			entry = &runEntry{done: make(chan struct{})}
+			run.entries[ref] = entry
+			cached = false
+		}
 
-	run.mu.Unlock()
+		run.mu.Unlock()
 
-	if cached {
+		if !cached {
+			return run.lead(ctx, ref, entry)
+		}
+
 		select {
 		case <-entry.done:
+			// The owner's cancellation is no answer about the secret: a waiter whose own context is live asks again rather than fail with it.
+			if entry.ownerCancelled && ctx.Err() == nil {
+				continue
+			}
+
 			return entry.value, entry.err
 		case <-ctx.Done():
 			return "", fmt.Errorf("%s: %w", ref, ctx.Err())
 		}
 	}
+}
 
+func (run *Run) lead(ctx context.Context, ref Ref, entry *runEntry) (string, error) {
 	entry.value, entry.err = run.resolver.Lookup(ctx, ref)
 	entry.at = time.Now()
+	entry.ownerCancelled = ctx.Err() != nil
 
 	if entry.err != nil {
 		run.mu.Lock()

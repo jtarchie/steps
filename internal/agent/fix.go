@@ -35,13 +35,13 @@ const defaultFixPrompt = `A command that must pass has just failed; the failure 
 // with a blank line into a single turn, which is the difference between asking
 // a model to do a thing and then check it, and asking it to do both at once —
 // the ordering a list of messages exists to buy.
-func buildFixMessages(fix *config.FixSpec, rt config.ResolvedTask, failureOutput, spillDir string) []string {
+func buildFixMessages(ctx context.Context, fix *config.FixSpec, rt config.ResolvedTask, failureOutput, spillDir string) []string {
 	messages := slices.Clone(fix.Messages)
 	if len(messages) == 0 {
 		messages = []string{fmt.Sprintf(defaultFixPrompt, rt.Name)}
 	}
 
-	messages[0] += "\n\n--- failure output ---\n" + spillOrTruncate(failureOutput, spillDir)
+	messages[0] += "\n\n--- failure output ---\n" + spillOrTruncate(ctx, failureOutput, spillDir)
 
 	return messages
 }
@@ -137,7 +137,7 @@ func RunFix(
 		defer func() { _ = os.RemoveAll(spillDir) }()
 	}
 
-	messages := buildFixMessages(fix, rt, failureOutput, spillDir)
+	messages := buildFixMessages(ctx, fix, rt, failureOutput, spillDir)
 
 	// Computed here, before buildSystemMessage, rather than just before
 	// runOneConversation below (where it used to live): the disclosure needs

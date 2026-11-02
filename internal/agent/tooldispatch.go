@@ -51,7 +51,10 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env too
 	secrets := redact.SecretsFrom(ctx)
 
 	for i, call := range calls {
-		response, _ := scrubValues(responses[i], secrets.String).(map[string]any)
+		response := responses[i]
+		if !secrets.Empty() {
+			response, _ = scrubValues(response, secrets.String).(map[string]any)
+		}
 
 		parts = append(parts, &genai.Part{
 			FunctionResponse: &genai.FunctionResponse{ID: call.ID, Name: call.Name, Response: response},

@@ -122,11 +122,13 @@ type Output struct {
 
 	stdout, stderr *Capture
 	flushes        []func()
+	secrets        *redact.Secrets
+	scrubbers      []*redact.Scrubber
 }
 
 // Output wires the command's streams for this run.
 func (c Command) Output(ctx context.Context, label string) *Output {
-	o := &Output{}
+	o := &Output{secrets: redact.SecretsFrom(ctx)}
 	o.Stdout, o.stdout = o.sink(c, StreamStdout, label, events.Stdout(ctx))
 	o.Stderr, o.stderr = o.sink(c, StreamStderr, label, events.Stderr(ctx))
 
@@ -145,7 +147,15 @@ func (o *Output) sink(c Command, which Streams, label string, dst io.Writer) (io
 	var capture *Capture
 	if c.Capture {
 		capture = NewCapture(c.Limit, c.SpillDir)
-		writers = append(writers, capture)
+
+		// In front of the capture, so its truncation and its spill file only ever hold masked bytes: masking a truncated result afterwards misses a value cut at the limit.
+		if o.secrets.Empty() {
+			writers = append(writers, capture)
+		} else {
+			scrubbed := o.secrets.Writer(capture)
+			o.scrubbers = append(o.scrubbers, scrubbed)
+			writers = append(writers, scrubbed)
+		}
 	}
 
 	switch len(writers) {
@@ -167,6 +177,10 @@ func (o *Output) Flush() {
 
 // Result is what was captured, with code.
 func (o *Output) Result(code int) Result {
+	for _, scrubbed := range o.scrubbers {
+		_ = scrubbed.Flush()
+	}
+
 	res := Result{Code: code}
 
 	if o.stdout != nil {
