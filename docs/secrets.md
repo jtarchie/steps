@@ -200,6 +200,7 @@ multi-line value (a PEM key) is masked on its own. A value shorter than 8 bytes
 is masked too, with a warning in the daemon's log, since it may also mask
 ordinary text.
 
+A sub-agent does not receive its parent step's secrets either.
 A `fix:` agent does not receive the task's secrets. Its tools, including its
 own rerun of the task, run without them; the verdict re-run after the agent
 finishes has them again.

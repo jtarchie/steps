@@ -96,7 +96,15 @@ func (c *Config) validateSecrets() error {
 	}
 
 	for _, r := range c.Resources {
-		err := checkSecretsMap(fmt.Sprintf("resource %q", r.Name), r.Secrets, r.Env)
+		env := r.Env
+
+		// The type's env: names reach the same commands, so a collision there leaves merge order to pick a value too.
+		resourceType, findErr := c.FindResourceType(r.Type)
+		if findErr == nil && resourceType != nil {
+			env = UnionEnv(resourceType.Env, r.Env)
+		}
+
+		err := checkSecretsMap(fmt.Sprintf("resource %q", r.Name), r.Secrets, env)
 		if err != nil {
 			return err
 		}

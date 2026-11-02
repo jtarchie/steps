@@ -413,6 +413,7 @@ func TestSecretsAreRefusedWhereNothingWouldResolveThem(t *testing.T) {
 		{"cli agent", "agents:\n- name: a\n  source: {model: \"@claude/sonnet\"}\n  secrets: {T: ((ci:t))}\njobs:\n- name: j\n  plan:\n  - agent: a\n    messages: [hi]\n", "cli agent"},
 		{"fix agent", "agents:\n- name: a\n  " + hosted + "  secrets: {T: ((ci:t))}\njobs:\n- name: j\n  plan:\n  - task: t\n    run: exit 1\n    fix: a\n", "fix agent never receives"},
 		{"sub-agent", "agents:\n- name: a\n  description: d\n  " + hosted + "  secrets: {T: ((ci:t))}\n- name: b\n  " + hosted + "  tools: [{agent: a}]\njobs:\n- name: j\n  plan:\n  - agent: b\n    messages: [hi]\n", "only an agent step"},
+		{"type env collision", "resource_types:\n- name: t\n  env: [TOKEN]\n  config: {check: 'echo []'}\nresources:\n- name: r\n  type: t\n  source: {}\n  secrets: {TOKEN: ((ci:t))}\njobs:\n- name: j\n  plan:\n  - get: r\n", "named in both env and secrets"},
 		{"get step", "resources:\n- name: r\n  type: cron\n  source: {schedule: '0 * * * *'}\njobs:\n- name: j\n  plan:\n  - get: r\n    secrets: {T: ((ci:t))}\n", "task and agent steps only"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -526,4 +527,65 @@ jobs:
 	}
 
 	assertNotInDatabase(t, served.state, e2eSecretValue)
+}
+
+// A sub-agent was granted nothing the parent step resolved: its tools run without the parent's secrets, the way a fix agent's do.
+func TestSubAgentDoesNotInheritTheParentsSecrets(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+
+	fake := newFakeLLM(t,
+		callsTool("helper", map[string]any{"request": "look"}),
+		callsTool("run_shell", map[string]any{"command": `printf 'seen=[%s]' "$TOKEN"`}),
+		says("child done"),
+		says("parent done"),
+	)
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	writePipelineFile(t, path, `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: helper
+  description: looks things up
+  source: {endpoint: `+fake.URL+`/v1/, model: test-model, api_key_env: STEPS_TEST_AGENT_API_KEY}
+  tools: [run_shell]
+- name: lead
+  source: {endpoint: `+fake.URL+`/v1/, model: test-model, api_key_env: STEPS_TEST_AGENT_API_KEY}
+  tools: [{agent: helper}]
+  secrets:
+    TOKEN: ((ci:gh_token))
+
+jobs:
+- name: delegate
+  plan:
+  - agent: lead
+    messages: [delegate it]
+`)
+
+	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue})
+	defer served.stopIfRunning(t)
+
+	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	if err != nil {
+		t.Fatalf("pipeline set: %v", err)
+	}
+
+	enqueueDirectly(t, served.state, name, "delegate")
+	waitForRunStatus(t, served.state, name, newestRun(t, served.state, name, "delegate").ID, "succeeded")
+
+	served.stop(t)
+
+	var results []string
+	for _, request := range fake.allRequests() {
+		results = append(results, request.toolResults()...)
+	}
+
+	if joined := strings.Join(results, "\n"); !strings.Contains(joined, "seen=[]") {
+		t.Errorf("the sub-agent's run_shell result = %q, want it to have seen no TOKEN", joined)
+	}
 }

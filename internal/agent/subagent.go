@@ -153,6 +153,9 @@ func (c preparedSubAgent) allowanceFrom(parent *stepUsage) (int, error) {
 // child failure comes back to the parent as {"error": ...} data, the same
 // contract every toolImpl honours.
 func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
+	// Without the parent step's secrets: they were granted to the parent, and the child's tools read the context's env.
+	ctx = shell.WithSecretEnv(ctx, nil)
+
 	request := stringArg(args, subAgentRequestParam)
 	if request == "" {
 		return errorResult(fmt.Sprintf("%s: missing required argument %q", c.ri.AgentName, subAgentRequestParam))
