@@ -412,6 +412,9 @@ func nonZeroValue(t *testing.T, typ reflect.Type) reflect.Value {
 		value.Elem().Set(nonZeroValue(t, typ.Elem()))
 	case reflect.Slice:
 		value.Set(reflect.Append(value, nonZeroValue(t, typ.Elem())))
+	case reflect.Map:
+		value.Set(reflect.MakeMap(typ))
+		value.SetMapIndex(nonZeroValue(t, typ.Key()), nonZeroValue(t, typ.Elem()))
 	case reflect.Struct:
 		setFirstExportedField(t, value)
 	default:

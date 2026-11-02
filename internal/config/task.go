@@ -41,6 +41,8 @@ type Task struct {
 	// only — see validateEnvValues. A referencing step's own Env, if
 	// non-nil, overrides this for that step only, mirroring how Fix works.
 	Env []string `yaml:"env,omitempty"`
+	// Secrets maps an environment variable to a ((source:name)) reference the daemon resolves when the step runs; a step's own Secrets, if non-nil, replaces it (declared-wins, like Env). Hashed as the reference, never the value, so rotating a credential re-runs nothing.
+	Secrets map[string]string `secret:"ref" yaml:"secrets,omitempty"`
 	// User is the container user this task's run: executes as (docker's
 	// --user). Empty takes the platform default — see shell's
 	// defaultContainerUser. Only meaningful alongside Image.

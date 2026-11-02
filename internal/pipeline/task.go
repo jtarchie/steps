@@ -148,7 +148,7 @@ func executeTask(
 		// last attempt wrote outside its declared outputs. A task that marks
 		// progress on disk to skip work it has already done would then pass
 		// here and loop forever on a worker.
-		dialed, runner, runnerErr := taskRunner(ctx, step, rt, space, remote)
+		ctx, dialed, runner, runnerErr := placedTaskRunner(ctx, step, rt, space, remote)
 		if runnerErr != nil {
 			return dialed, runnerErr
 		}
@@ -256,6 +256,23 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 	}
 
 	return worker, runner.WithLabel(rt.Name), nil
+}
+
+// placedTaskRunner resolves the step's secrets after placement and before the first command: a short-lived credential should not age through a spot launch, and the run's memo makes a re-placement reuse the value rather than prompt again.
+func placedTaskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, space workspace.StepSpace, remote map[string]shell.RemoteInput) (context.Context, string, shell.Runner, error) {
+	dialed, runner, err := taskRunner(ctx, step, rt, space, remote)
+	if err != nil {
+		return ctx, dialed, nil, err
+	}
+
+	ctx, err = withStepSecrets(ctx, rt.Secrets)
+	if err != nil {
+		shell.CloseRunner(runner, rt.Name)
+
+		return ctx, dialed, nil, fmt.Errorf("task %q: %w", rt.Name, err)
+	}
+
+	return ctx, dialed, runner, nil
 }
 
 // runTaskCommand runs a task's run: command. Without an assert: or fix:, it

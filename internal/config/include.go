@@ -282,6 +282,10 @@ func mergeTaskContainer(t *Task, doc Task) {
 		t.Env = doc.Env
 	}
 
+	if t.Secrets == nil {
+		t.Secrets = doc.Secrets
+	}
+
 	if t.User == "" {
 		t.User = doc.User
 	}

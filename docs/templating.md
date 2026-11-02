@@ -116,7 +116,7 @@ The file is read on the machine running the pipeline, so it may not leave the st
 
 ### ⚠️ Vars are config, not secrets
 
-A substituted value is parsed, **hashed, and stored in `state.db`** like anything else written in the file. Vars separate shape from parameters; they are not a secret store. Keep credentials in the env-var references that exist for them (`api_key_env:`), which are read at run time and never enter the merkle content. Neither is masked: a step that prints a secret has it stored and shown as printed (see [conformance.md](conformance.md)).
+A substituted value is parsed, **hashed, and stored in `state.db`** like anything else written in the file. Vars separate shape from parameters; they are not a secret store. Keep credentials in a `secrets:` map ([secrets.md](secrets.md)), resolved by the daemon at run time and hashed only as the reference, or in the env-var references that exist for them (`api_key_env:`). Neither is masked: a step that prints a secret has it stored and shown as printed (see [conformance.md](conformance.md)).
 
 ### The rest
 

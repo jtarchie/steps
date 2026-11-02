@@ -243,6 +243,7 @@ func (c *Config) validate() error {
 		c.validateArtifactMappings,
 		c.validateImageRules,
 		c.validateEnvRules,
+		c.validateSecrets,
 		c.validateUserRules,
 		c.validateNetworkRules,
 		c.validateTagRules,

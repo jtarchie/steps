@@ -66,6 +66,15 @@ func BuildEnv(ctx context.Context) map[string]string {
 		env[buildEnvNames[i]] = value
 	}
 
+	// Per exec, never create-time: dockerd persists a container's create-time Env to config.v2.json and the container is kept for postmortem, while an exec's lives only in memory.
+	for name, value := range secretEnvFrom(ctx) {
+		if env == nil {
+			env = map[string]string{}
+		}
+
+		env[name] = value
+	}
+
 	// Not in buildEnvNames, so env: may still name it (config refuses those) and is overridden only while tracing, where the trace a command continues has to be its step's.
 	if parent := events.Traceparent(ctx); parent != "" {
 		if env == nil {
@@ -90,4 +99,17 @@ func buildEnvPairs(ctx context.Context) []string {
 	slices.Sort(pairs)
 
 	return pairs
+}
+
+type secretEnvKey struct{}
+
+// WithSecretEnv carries a step's resolved secrets to every command made under the context; config refuses a name that is also in env: or reserved, so no merge order decides a value.
+func WithSecretEnv(ctx context.Context, env map[string]string) context.Context {
+	return context.WithValue(ctx, secretEnvKey{}, env)
+}
+
+func secretEnvFrom(ctx context.Context) map[string]string {
+	env, _ := ctx.Value(secretEnvKey{}).(map[string]string)
+
+	return env
 }

@@ -753,3 +753,30 @@ func TestContractCancelledCommandKeepsItsOutput(t *testing.T) {
 		t.Errorf("stdout = %q, want the output captured before the cancel", stdout)
 	}
 }
+
+// A secret rides each exec's Env, never the container's create-time Env: dockerd writes the latter to config.v2.json and `docker inspect` shows it, and the container is kept after the step for postmortem.
+func TestContractSecretEnvNeverReachesTheContainerConfig(t *testing.T) {
+	testdocker.Require(t)
+
+	const value = "contract-secret-value-71c2"
+
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	ctx := WithSecretEnv(t.Context(), map[string]string{"STEPS_TEST_SECRET": value})
+
+	stdout, _, _, err := RunCaptureFull(ctx, runner, `printf %s "$STEPS_TEST_SECRET"`)
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	if stdout != value {
+		t.Errorf("the command saw %q, want the secret", stdout)
+	}
+
+	view := inspectContainerOf(t, runner)
+
+	for _, entry := range view.Config.Env {
+		if strings.Contains(entry, value) || strings.HasPrefix(entry, "STEPS_TEST_SECRET") {
+			t.Errorf("the container's create-time Env carries the secret: %q", entry)
+		}
+	}
+}

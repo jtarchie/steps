@@ -339,6 +339,8 @@ func (w *WebCmd) Run() error {
 	// A daemon is often a background group on the terminal that launched it, where a stray tty read or write would stop it whole; ignored, those get EIO instead.
 	shell.IgnoreTerminalStops()
 
+	ctx = pipeline.WithSecrets(ctx, w.secrets)
+
 	ctx, base, err := w.ExecFlags.Apply(ctx)
 	if err != nil {
 		return err

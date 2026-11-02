@@ -264,6 +264,8 @@ type Step struct {
 	// absent). Invalid on get/put steps, matching Image: a put's environment
 	// comes from its resource type, and a get has no task/agent to override.
 	Env []string `yaml:"env,omitempty"`
+	// Secrets, on a task step, replaces the referenced task's Secrets for this step only (declared-wins, like Env). See Task.Secrets.
+	Secrets map[string]string `secret:"ref" yaml:"secrets,omitempty"`
 	// User, on a task or agent step, overrides the referenced task's/agent's
 	// User for this step only (non-empty-wins, like Image). Invalid on
 	// get/put steps, for the same reason Image is.

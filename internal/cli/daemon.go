@@ -423,6 +423,11 @@ func (d *daemon) accept(name, source string, includes map[string]string) (*confi
 		return nil, fmt.Errorf("%w: %s %w:\n%w", web.ErrRefused, name, errCannotRunHere, err)
 	}
 
+	err = pipeline.CheckSecretSources(d.base, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s %w: %w", web.ErrRefused, name, errCannotRunHere, err)
+	}
+
 	d.history.Apply(cfg)
 
 	return cfg, nil

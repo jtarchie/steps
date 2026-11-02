@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/expr-lang/expr"
@@ -357,4 +358,57 @@ func (c *capped) Write(p []byte) (int, error) {
 	_, _ = c.Buffer.Write(p)
 
 	return len(p), nil
+}
+
+// Run memoizes one run's lookups, single-flight, so a step re-placed after a spot reclaim, or two steps asking for the same name, prompt once.
+type Run struct {
+	resolver *Resolver
+
+	mu      sync.Mutex
+	entries map[Ref]*runEntry
+}
+
+type runEntry struct {
+	done  chan struct{}
+	value string
+	err   error
+}
+
+// ForRun starts a run's memo.
+func (r *Resolver) ForRun() *Run {
+	return &Run{resolver: r, entries: map[Ref]*runEntry{}}
+}
+
+// Lookup answers from the memo; a failure is not kept, so a declined prompt can be retried by the next attempt.
+func (run *Run) Lookup(ctx context.Context, ref Ref) (string, error) {
+	run.mu.Lock()
+
+	entry, ok := run.entries[ref]
+	if !ok {
+		entry = &runEntry{done: make(chan struct{})}
+		run.entries[ref] = entry
+	}
+
+	run.mu.Unlock()
+
+	if ok {
+		select {
+		case <-entry.done:
+			return entry.value, entry.err
+		case <-ctx.Done():
+			return "", fmt.Errorf("%s: %w", ref, ctx.Err())
+		}
+	}
+
+	entry.value, entry.err = run.resolver.Lookup(ctx, ref)
+
+	if entry.err != nil {
+		run.mu.Lock()
+		delete(run.entries, ref)
+		run.mu.Unlock()
+	}
+
+	close(entry.done)
+
+	return entry.value, entry.err
 }

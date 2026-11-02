@@ -525,6 +525,11 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["env"] = sortedEnv(rt.Env)
 	}
 
+	// The reference, never the value: rotating a credential re-runs nothing, and the value must never reach the store.
+	if len(rt.Secrets) > 0 {
+		content["secrets"] = rt.Secrets
+	}
+
 	if rt.User != "" {
 		content["user"] = rt.User
 	}

@@ -1352,6 +1352,14 @@
           },
           "description": "Host environment variable NAMES this entity's commands may see, on top of the built-in allowlist. Names only \u2014 a KEY=VALUE literal is rejected, since a value would be hashed into the state database in cleartext."
         },
+        "secrets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^\\(\\([a-z0-9_-]+:[A-Za-z0-9_./-]+\\)\\)$"
+          },
+          "description": "Environment variables resolved by steps web from its --config file's secret sources when the step runs, as NAME: ((source:name)). Hashed and stored as the reference, never the value."
+        },
         "user": {
           "type": "string",
           "description": "Container user for docker's --user (e.g. \"root\", \"1000:1000\"). Empty takes the platform default: on Linux, the uid:gid running steps, so containers do not leave root-owned files in the bind-mounted working directory."
@@ -1872,6 +1880,14 @@
             "type": "string"
           },
           "description": "Host environment variable NAMES this entity's commands may see, on top of the built-in allowlist. Names only \u2014 a KEY=VALUE literal is rejected, since a value would be hashed into the state database in cleartext."
+        },
+        "secrets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^\\(\\([a-z0-9_-]+:[A-Za-z0-9_./-]+\\)\\)$"
+          },
+          "description": "Environment variables resolved by steps web from its --config file's secret sources when the step runs, as NAME: ((source:name)). Hashed and stored as the reference, never the value."
         },
         "user": {
           "type": "string",

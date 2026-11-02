@@ -317,3 +317,13 @@ func applyResume(
 
 	return ctx, jobName, nil
 }
+
+// refuseSecretsLocally: sources live in `steps web --config` alone, so a local run has nowhere to resolve a reference, and a step run with the variable unset is worse than not running.
+func refuseSecretsLocally(cfg *config.Config) error {
+	refs := cfg.SecretRefs()
+	if len(refs) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("%s: secrets are resolved only by steps web, from its --config file's secret: section; set this pipeline into a daemon with `steps pipeline set`", refs[0])
+}

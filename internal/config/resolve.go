@@ -32,6 +32,8 @@ type ResolvedTask struct {
 	// Env names the host environment variables this task's commands may see
 	// beyond the baseline. See Task.Env/Step.Env.
 	Env []string
+	// Secrets maps environment variables to ((source:name)) references. See Task.Secrets/Step.Secrets.
+	Secrets map[string]string
 	// User is the container user this task's commands run as. See
 	// Task.User/Step.User.
 	User string
@@ -108,7 +110,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 	if step.Run != "" {
 		return ResolvedTask{
 			Name: step.Task, Run: step.Run, Fix: step.Fix,
-			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, User: step.User, Network: step.Network,
+			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, Secrets: step.Secrets, User: step.User, Network: step.Network,
 			Privileged: step.Privileged, Limits: step.Limits, Timeout: step.Timeout,
 			InputMapping: step.InputMapping, OutputMapping: step.OutputMapping,
 			Assert: step.Assert, Caches: step.Caches,
@@ -142,9 +144,14 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		timeout = step.Timeout
 	}
 
+	secrets := task.Secrets
+	if step.Secrets != nil {
+		secrets = step.Secrets
+	}
+
 	return ResolvedTask{
 		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs,
-		Image: runtime.Image, Env: runtime.Env, User: runtime.User, Network: runtime.Network,
+		Image: runtime.Image, Env: runtime.Env, Secrets: secrets, User: runtime.User, Network: runtime.Network,
 		Privileged: runtime.Privileged, Limits: runtime.Limits, Sandbox: runtime.Sandbox, Timeout: timeout,
 		InputMapping: step.InputMapping, OutputMapping: step.OutputMapping, Assert: step.Assert,
 		Caches: resolveCaches(task.Caches, step),

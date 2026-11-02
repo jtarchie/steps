@@ -63,6 +63,7 @@ var stepMutationSkips = map[string]string{ //nolint:gochecknoglobals // a test's
 	"network":          "same: noexec=docker",
 	"privileged":       "same: noexec=docker",
 	"container_limits": "same: noexec=docker",
+	"secrets":          "only spelled in noexec=secrets blocks: the corpus runs under steps test, which refuses a reference; pinned end to end by TestTaskSecretsReachTheStepAndNeverTheDatabase",
 
 	"messages":          "the scripted provider answers by POSITION, not by prompt content, so rewriting a message changes nothing a fixture can observe — asserting on it would be asserting on the fake",
 	"max_context_bytes": "same reason: it bounds how much context_paths content the model is handed, and a positional fake says the same thing however much it receives",

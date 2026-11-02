@@ -70,6 +70,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 		RunID: resume.id, JobName: job.Name, PipelineName: cfg.Name, PipelineRevision: cfg.Revision.SHA, URL: opts.ExternalURL,
 	})
 	ctx = venue.WithLiveTaskCaches(ctx, cfg.Name, liveTaskCacheKeys(cfg))
+	ctx = withRunSecrets(ctx)
 
 	// internal/agent reads these off the context, the same way approval: does.
 	ctx = agent.WithAnswerDB(ctx, opts.AnswerDB)

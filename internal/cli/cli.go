@@ -234,6 +234,12 @@ func Run(args []string) error {
 func setup(
 	cfg *config.Config, pipelinePath string, flags StateFlags, exec ExecFlags,
 ) (store.Store, workspace.Provider, func(), error) {
+	// Before anything is opened: the refusal costs nothing.
+	err := refuseSecretsLocally(cfg)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	name := resolvePipelineName(pipelinePath, flags.Name)
 
 	// The identity the caller loaded the Config under has to be the identity

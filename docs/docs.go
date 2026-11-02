@@ -77,6 +77,7 @@ func NoexecReasons() []string {
 		"network",     // reaches a real host over the network
 		"root",        // names a workspace root: this host may not be able to create
 		"schedule",    // fires on a slot of a clock that is not due while the test runs
+		"secrets",     // references a secret source, which only steps web resolves
 		"stdio-mcp",   // needs an MCP server binary on PATH
 	}
 }
@@ -209,7 +210,7 @@ func Groups() []Group {
 			"templating.md", "mcp.md", "complete.md",
 		}},
 		{Title: "Reference", Pages: []string{
-			"web.md", "observability.md", "authentication.md", "agents-internals.md", "aws-workers.md", "gcp-workers.md", "do-workers.md", "conformance.md",
+			"web.md", "observability.md", "authentication.md", "secrets.md", "agents-internals.md", "aws-workers.md", "gcp-workers.md", "do-workers.md", "conformance.md",
 		}},
 	}
 }
