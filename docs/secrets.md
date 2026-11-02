@@ -33,16 +33,46 @@ Terms:
 - **A lookup path** turns a pipeline's short name into the full location in the
   secret store. Paths are tried in order and the first one found wins.
 
+An agent takes the same map. Its `run_shell` and custom tools see the
+variables; the model does not, because every tool result is scrubbed before it
+becomes the next message:
+
+```yaml noexec=secrets
+agents:
+- name: triage
+  source:
+    endpoint: https://openrouter.ai/api/v1/
+    model: anthropic/claude-sonnet-5.5
+    api_key_env: OPENROUTER_API_KEY
+  tools: [run_shell]
+  secrets:
+    GH_TOKEN: ((ci:gh_token))
+
+jobs:
+- name: triage
+  plan:
+  - agent: triage
+    messages: [Label the open issues with gh.]
+```
+
 ## Where a reference may appear
 
-Only in a `secrets:` map, on a `tasks:` entry or on a task step. Each key is the
+Only in a `secrets:` map, on a `tasks:` entry, an `agents:` entry, or a task or
+agent step. Each key is the
 environment variable the step's commands see; each value is exactly one
 `((source:name))`. A step's own `secrets:` replaces its task's, the way `env:`
 does. A name may not be in both `env:` and `secrets:`.
 
 A reference anywhere else is a load error: written into `run:` it would be
-hashed, stored and put on a command line. `secrets:` on agent steps and secret
-values in a resource's `source:` are not supported yet and are refused.
+hashed, stored and put on a command line. Secret values in a resource's
+`source:` are not supported yet and are refused.
+
+`secrets:` is refused on a CLI agent (`source: cli:…`), because the CLI runs its
+own tools and shows their output to its own model, which steps cannot scrub. It
+is refused on an agent used as a `fix:` agent or a sub-agent too: only an agent
+step resolves secrets, and a silently missing variable is worse than a load
+error. An agent's `api_key_env:` still names a variable in the daemon's own
+environment, not a `secrets:` key.
 
 A bare `((x))` is always a var, never a secret. Whether a reference is a secret
 is decided by its text alone, before anything is fetched. Concourse differs here:

@@ -22,6 +22,9 @@
     "privileged": true,
     "reasoning_effort": "medium",
     "sandbox": true,
+    "secrets": {
+      "Secrets.key": "Secrets.value"
+    },
     "system": "System",
     "temperature": 0.305,
     "tools": [
@@ -101,6 +104,9 @@
           "privileged": true,
           "reasoning_effort": "medium",
           "sandbox": true,
+          "secrets": {
+            "Secrets.key": "Secrets.value"
+          },
           "system": "System",
           "temperature": 0.305,
           "tools": [],
@@ -135,6 +141,9 @@
     "privileged": true,
     "reasoning_effort": "medium",
     "sandbox": true,
+    "secrets": {
+      "Secrets.key": "Secrets.value"
+    },
     "system": "System",
     "temperature": 0.305,
     "tools": [],

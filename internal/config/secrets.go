@@ -62,6 +62,10 @@ func (c *Config) SecretRefs() []SecretRef {
 		add(task.Secrets)
 	}
 
+	for _, agent := range c.Agents {
+		add(agent.Secrets)
+	}
+
 	for _, job := range c.Jobs {
 		_ = job.visitSteps(func(_ string, step *Step) error {
 			add(step.Secrets)
@@ -82,25 +86,114 @@ func (c *Config) validateSecrets() error {
 		}
 	}
 
+	err := c.validateAgentSecrets()
+	if err != nil {
+		return err
+	}
+
 	for _, job := range c.Jobs {
-		err := job.visitSteps(func(label string, step *Step) error {
-			if step.Secrets == nil {
-				return nil
-			}
-
-			// ponytail: task steps only; agent and resource secrets are later rungs of #98, refused rather than silently ignored until then.
-			if kind, _ := step.Kind(); kind != StepKindTask {
-				return fmt.Errorf("%s: secrets: is valid on task steps only", label)
-			}
-
-			return checkSecretsMap(label, step.Secrets, step.Env)
-		})
+		err := job.visitSteps(c.checkStepSecrets)
 		if err != nil {
 			return err
 		}
 	}
 
 	return refuseMisplacedSecrets("", reflect.ValueOf(c).Elem())
+}
+
+func (c *Config) checkStepSecrets(label string, step *Step) error {
+	if step.Secrets == nil {
+		return nil
+	}
+
+	// ponytail: resource secrets are a later rung of #98; get/put steps are refused rather than silently ignored until then.
+	kind, _ := step.Kind()
+	if kind != StepKindTask && kind != StepKindAgent {
+		return fmt.Errorf("%s: secrets: is valid on task and agent steps only", label)
+	}
+
+	if kind == StepKindAgent && c.agentIsCLI(step.Agent) {
+		return fmt.Errorf("%s: secrets: on a cli agent — the CLI runs its own tools and shows their output to its model, which steps cannot scrub", label)
+	}
+
+	return checkSecretsMap(label, step.Secrets, step.Env)
+}
+
+func (c *Config) agentIsCLI(name string) bool {
+	agent, err := c.FindAgent(name)
+
+	return err == nil && agent != nil && agentUsesCLI(*agent)
+}
+
+// validateAgentSecrets refuses every place an agent's secrets would be silently dropped: only an agent step resolves them.
+func (c *Config) validateAgentSecrets() error {
+	for _, agent := range c.Agents {
+		err := checkAgentSecrets(agent)
+		if err != nil {
+			return err
+		}
+	}
+
+	withSecrets := func(name string) bool {
+		agent, err := c.FindAgent(name)
+
+		return err == nil && agent != nil && len(agent.Secrets) > 0
+	}
+
+	err := c.refuseSecretSubAgents(withSecrets)
+	if err != nil {
+		return err
+	}
+
+	for _, fix := range c.fixSpecs() {
+		if fix != nil && withSecrets(fix.Agent) {
+			return fmt.Errorf("fix: names agent %q, which has secrets:; a fix agent never receives secrets", fix.Agent)
+		}
+	}
+
+	return nil
+}
+
+func checkAgentSecrets(agent Agent) error {
+	if len(agent.Secrets) == 0 {
+		return nil
+	}
+
+	if agentUsesCLI(agent) {
+		return fmt.Errorf("agent %q: secrets: on a cli agent — the CLI runs its own tools and shows their output to its model, which steps cannot scrub", agent.Name)
+	}
+
+	return checkSecretsMap(fmt.Sprintf("agent %q", agent.Name), agent.Secrets, agent.Env)
+}
+
+func (c *Config) refuseSecretSubAgents(withSecrets func(string) bool) error {
+	for _, agent := range c.Agents {
+		for _, spec := range agent.Tools {
+			if spec.Agent != "" && withSecrets(spec.Agent) {
+				return fmt.Errorf("agent %q: tool %q delegates to agent %q, which has secrets:; only an agent step resolves them", agent.Name, ToolSpecName(spec), spec.Agent)
+			}
+		}
+	}
+
+	return nil
+}
+
+// fixSpecs is every fix: in the pipeline, on tasks: entries and on steps.
+func (c *Config) fixSpecs() []*FixSpec {
+	fixes := []*FixSpec{}
+	for _, task := range c.Tasks {
+		fixes = append(fixes, task.Fix)
+	}
+
+	for _, job := range c.Jobs {
+		_ = job.visitSteps(func(_ string, step *Step) error {
+			fixes = append(fixes, step.Fix)
+
+			return nil
+		})
+	}
+
+	return fixes
 }
 
 func checkSecretsMap(context string, secrets map[string]string, env []string) error {

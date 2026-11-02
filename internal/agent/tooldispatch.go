@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"google.golang.org/genai"
+
+	"github.com/jtarchie/steps/internal/redact"
 )
 
 // maxConcurrentReads bounds how many read-only calls from one turn run at once.
@@ -45,9 +47,14 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env too
 
 	parts := make([]*genai.Part, 0, len(calls))
 
+	// Before the result is a message: the model, the transcript and the live stream all read it from here, and none of them may see a secret a tool printed.
+	secrets := redact.SecretsFrom(ctx)
+
 	for i, call := range calls {
+		response, _ := scrubValues(responses[i], secrets.String).(map[string]any)
+
 		parts = append(parts, &genai.Part{
-			FunctionResponse: &genai.FunctionResponse{ID: call.ID, Name: call.Name, Response: responses[i]},
+			FunctionResponse: &genai.FunctionResponse{ID: call.ID, Name: call.Name, Response: response},
 		})
 	}
 

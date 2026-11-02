@@ -329,3 +329,102 @@ jobs:
 
 	assertNotInDatabase(t, served.state, e2eSecretValue)
 }
+
+// An agent's tools get its secrets, and the model never does: the tool result is scrubbed before it becomes the next message, which is also what the transcript records.
+func TestAgentSecretsReachItsToolsButNotTheModel(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+
+	dir := t.TempDir()
+	expected := filepath.Join(dir, "expected")
+
+	err := os.WriteFile(expected, []byte(e2eSecretValue), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fake := newFakeLLM(t,
+		callsTool("run_shell", map[string]any{"command": `test "$TOKEN" = "$(cat ` + expected + `)" && printf 'match:%s' "$TOKEN"`}),
+		says("done"),
+	)
+
+	path := pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	writePipelineFile(t, path, `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: reviewer
+  source:
+    endpoint: `+fake.URL+`/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell]
+  secrets:
+    TOKEN: ((ci:gh_token))
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    messages: [check the token]
+`)
+
+	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue})
+	defer served.stopIfRunning(t)
+
+	err = cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	if err != nil {
+		t.Fatalf("pipeline set: %v", err)
+	}
+
+	enqueueDirectly(t, served.state, name, "review")
+	waitForRunStatus(t, served.state, name, newestRun(t, served.state, name, "review").ID, "succeeded")
+
+	served.stop(t)
+
+	var results []string
+	for _, request := range fake.allRequests() {
+		results = append(results, request.toolResults()...)
+	}
+
+	joined := strings.Join(results, "\n")
+	if !strings.Contains(joined, "match:***") {
+		t.Errorf("the tool result = %q, want the command to have matched and the value masked", joined)
+	}
+
+	if strings.Contains(joined, e2eSecretValue) {
+		t.Error("the model was shown the agent's secret")
+	}
+
+	assertNotInDatabase(t, served.state, e2eSecretValue)
+}
+
+// Each place a secret would be silently dropped is a load error instead.
+func TestSecretsAreRefusedWhereNothingWouldResolveThem(t *testing.T) {
+	t.Parallel()
+
+	const hosted = "source: {endpoint: http://127.0.0.1:1/v1/, model: m}\n"
+
+	for _, tc := range []struct{ name, pipeline, want string }{
+		{"cli agent", "agents:\n- name: a\n  source: {model: \"@claude/sonnet\"}\n  secrets: {T: ((ci:t))}\njobs:\n- name: j\n  plan:\n  - agent: a\n    messages: [hi]\n", "cli agent"},
+		{"fix agent", "agents:\n- name: a\n  " + hosted + "  secrets: {T: ((ci:t))}\njobs:\n- name: j\n  plan:\n  - task: t\n    run: exit 1\n    fix: a\n", "fix agent never receives"},
+		{"sub-agent", "agents:\n- name: a\n  description: d\n  " + hosted + "  secrets: {T: ((ci:t))}\n- name: b\n  " + hosted + "  tools: [{agent: a}]\njobs:\n- name: j\n  plan:\n  - agent: b\n    messages: [hi]\n", "only an agent step"},
+		{"get step", "resources:\n- name: r\n  type: cron\n  source: {schedule: '0 * * * *'}\njobs:\n- name: j\n  plan:\n  - get: r\n    secrets: {T: ((ci:t))}\n", "task and agent steps only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := pipelinePath(t, dir)
+			writePipelineFile(t, path, tc.pipeline)
+
+			err := cli.Run([]string{"validate", path})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validate = %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}

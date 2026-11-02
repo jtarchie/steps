@@ -273,24 +273,31 @@ func maskValues(v any, secrets []string) any {
 		return v
 	}
 
-	switch typed := v.(type) {
-	case string:
+	return scrubValues(v, func(text string) string {
 		for _, secret := range secrets {
-			typed = strings.ReplaceAll(typed, secret, secretMask)
+			text = strings.ReplaceAll(text, secret, secretMask)
 		}
 
-		return typed
+		return text
+	})
+}
+
+// scrubValues applies scrub to every string in v, before v is encoded, for the reason maskValues gives.
+func scrubValues(v any, scrub func(string) string) any {
+	switch typed := v.(type) {
+	case string:
+		return scrub(typed)
 	case map[string]any:
 		masked := make(map[string]any, len(typed))
 		for key, value := range typed {
-			masked[key] = maskValues(value, secrets)
+			masked[key] = scrubValues(value, scrub)
 		}
 
 		return masked
 	case []any:
 		masked := make([]any, len(typed))
 		for i, value := range typed {
-			masked[i] = maskValues(value, secrets)
+			masked[i] = scrubValues(value, scrub)
 		}
 
 		return masked

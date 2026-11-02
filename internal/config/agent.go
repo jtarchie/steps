@@ -41,6 +41,8 @@ type Agent struct {
 	// shell.HostEnv). Names only — see validateEnvValues. A step's own Env, if
 	// non-nil, overrides this for that step only (see Step.Env).
 	Env []string `yaml:"env,omitempty"`
+	// Secrets maps an environment variable this agent's run_shell/custom-tool commands see to a ((source:name)) reference the daemon resolves when the step runs; a tool result carrying a value is scrubbed before the model sees it. A step's own Secrets, if non-nil, replaces it. Hashed as the reference, never the value.
+	Secrets map[string]string `secret:"ref" yaml:"secrets,omitempty"`
 	// User is the container user this agent's run_shell/custom-tool commands
 	// execute as (docker's --user). Empty takes the platform default — see
 	// shell's defaultContainerUser. Only meaningful alongside Image.

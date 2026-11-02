@@ -788,6 +788,8 @@ linters:
             - "!**/internal/agent/tree/**"
             - "!**/internal/agent/llmclient/**"
           allow:
+            # redact: a tool result is scrubbed of the run's secrets before the model sees it.
+            - "github.com/jtarchie/steps/internal/redact"
             # testdocker is test-only: whether a daemon is reachable, and a directory it can bind-mount.
             - "github.com/jtarchie/steps/internal/testdocker"
             - "$gostd"

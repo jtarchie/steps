@@ -334,10 +334,7 @@ func subAgentInvocationContent(cfg *config.Config, name string) (map[string]any,
 		content["image"] = ri.Image
 	}
 
-	// Names only — see the get node's env comment.
-	if len(ri.Env) > 0 {
-		content["env"] = sortedEnv(ri.Env)
-	}
+	withEnv(content, ri.Env, ri.Secrets)
 
 	if ri.User != "" {
 		content["user"] = ri.User
@@ -438,10 +435,7 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 		content["image"] = ri.Image
 	}
 
-	// Names only — see the get node's env comment.
-	if len(ri.Env) > 0 {
-		content["env"] = sortedEnv(ri.Env)
-	}
+	withEnv(content, ri.Env, ri.Secrets)
 
 	if ri.User != "" {
 		content["user"] = ri.User

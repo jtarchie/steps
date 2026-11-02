@@ -394,6 +394,10 @@ func mergeAgentContainer(a *Agent, doc Agent) {
 		a.Env = doc.Env
 	}
 
+	if a.Secrets == nil {
+		a.Secrets = doc.Secrets
+	}
+
 	if a.User == "" {
 		a.User = doc.User
 	}

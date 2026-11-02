@@ -94,6 +94,12 @@ func runAgentStepUnrecorded(ctx context.Context, r stepRunner, i int, step confi
 		return agentOutcome{hash: hash, cached: true}, nil
 	}
 
+	// After the cache check, so a reused step fetches nothing; the runner dials lazily, so this is still before the first command on its worker.
+	ctx, err = withStepSecrets(ctx, prepared.Primary().Secrets)
+	if err != nil {
+		return agentOutcome{}, fail(err)
+	}
+
 	out, err := runAgentConversation(ctx, r, prepared, node, fail)
 	if err != nil {
 		return out, err

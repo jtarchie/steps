@@ -144,10 +144,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		timeout = step.Timeout
 	}
 
-	secrets := task.Secrets
-	if step.Secrets != nil {
-		secrets = step.Secrets
-	}
+	secrets := resolveSecrets(task.Secrets, step)
 
 	return ResolvedTask{
 		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs,
@@ -245,6 +242,8 @@ type ResolvedInvocation struct {
 	// Env names the host environment variables this step's commands may see
 	// beyond the baseline. See Agent.Env/Step.Env.
 	Env []string
+	// Secrets maps environment variables to ((source:name)) references. See Agent.Secrets/Step.Secrets.
+	Secrets map[string]string
 	// User is the container user this step's commands run as. See
 	// Agent.User/Step.User.
 	User string
@@ -384,6 +383,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		StringOnlyToolChoice: target.StringOnlyToolChoice,
 		Image:                runtime.Image,
 		Env:                  runtime.Env,
+		Secrets:              resolveSecrets(agent.Secrets, step),
 		User:                 runtime.User,
 		Network:              runtime.Network,
 		Privileged:           runtime.Privileged,
@@ -447,4 +447,13 @@ func (ri ResolvedInvocation) WithSource(source AgentSource, agent *Agent) (Resol
 	ri.CompactAfterTokens, ri.ContextWindow = resolveCompactionBudget(target.ModelName, agent.ContextWindow, agent.CompactAfterTokens)
 
 	return ri, nil
+}
+
+// resolveSecrets is declared-wins like env: an explicit `secrets: {}` on a step drops the entry's.
+func resolveSecrets(entry map[string]string, step Step) map[string]string {
+	if step.Secrets != nil {
+		return step.Secrets
+	}
+
+	return entry
 }

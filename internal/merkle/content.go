@@ -20,6 +20,17 @@ func sortedEnv(env []string) []string {
 	return out
 }
 
+// withEnv folds env: by name only (see the get node's env comment) and secrets: by reference, never value, so rotating a credential re-runs nothing and the value never reaches the store.
+func withEnv(content map[string]any, env []string, secrets map[string]string) {
+	if len(env) > 0 {
+		content["env"] = sortedEnv(env)
+	}
+
+	if len(secrets) > 0 {
+		content["secrets"] = secrets
+	}
+}
+
 // withSandbox keys sandbox: only when set, so an unsandboxed node hashes as it did before the field existed.
 func withSandbox(sandbox bool, content map[string]any) {
 	if sandbox {
@@ -520,15 +531,7 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["image"] = rt.Image
 	}
 
-	// Names only — see the get node's env comment.
-	if len(rt.Env) > 0 {
-		content["env"] = sortedEnv(rt.Env)
-	}
-
-	// The reference, never the value: rotating a credential re-runs nothing, and the value must never reach the store.
-	if len(rt.Secrets) > 0 {
-		content["secrets"] = rt.Secrets
-	}
+	withEnv(content, rt.Env, rt.Secrets)
 
 	if rt.User != "" {
 		content["user"] = rt.User
