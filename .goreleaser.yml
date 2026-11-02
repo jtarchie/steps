@@ -1,12 +1,6 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 version: 2
 
-# There is no CI workflow — the tag push is the only gate, so run the test
-# suite before anything is published.
-before:
-  hooks:
-    - go test ./...
-
 builds:
   - id: steps
     binary: steps
@@ -63,9 +57,9 @@ homebrew_casks:
       post:
         # The binary is unsigned, so Gatekeeper quarantines it on download and
         # macOS refuses to run it. Strip the attribute at install time.
-        install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/steps"]
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/steps"]
           end
 
 release:

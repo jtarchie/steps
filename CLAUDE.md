@@ -12,7 +12,7 @@ Trust these instructions. Only search the codebase if something here is missing 
 - **Containers are created over the engine API, not by spawning `docker`**; a call needing daemon or credential resolution goes through `internal/dockerapi`, never `client.FromEnv` — [internal/dockerapi/CLAUDE.md](internal/dockerapi/CLAUDE.md).
 - **A container's exit status is DATA; only "there was no container" is an error** (125 for a refused start, a container dead at birth is infrastructure) — [internal/shell/CLAUDE.md](internal/shell/CLAUDE.md).
 - **Nothing below `internal/cli` prints** (forbidigo refuses `fmt.Print*`/`os.Stdout`/`os.Stderr` elsewhere); machinery speaks through `events.Note` and `events.Stdout/Stderr(ctx)`, and `steps web`'s terminal is slog only — [internal/events/CLAUDE.md](internal/events/CLAUDE.md#nothing-below-internalcli-prints), [internal/cli/CLAUDE.md](internal/cli/CLAUDE.md).
-- **No CI configured**: there is no `.github/`, no CONTRIBUTING.md. `Taskfile.yml` (go-task) is the entire validation pipeline — run it locally exactly as documented before considering any change done.
+- **No CI configured**: `.github/workflows/release.yml` only publishes tagged releases and runs no tests; no CONTRIBUTING.md. `Taskfile.yml` (go-task) is the entire validation pipeline — run it locally exactly as documented before considering any change done.
 
 ## Working rules
 
