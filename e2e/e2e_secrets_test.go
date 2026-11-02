@@ -263,3 +263,69 @@ func inDatabase(t *testing.T, state, text string) bool {
 
 	return false
 }
+
+// A fix: agent was never granted the task's secrets: its tools run without them, so nothing it runs can print one into its transcript or hand one to the model.
+func TestFixAgentDoesNotInheritTheTasksSecrets(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+
+	fake := newFakeLLM(t,
+		callsTool("run_shell", map[string]any{"command": `printf 'seen=[%s]' "$TOKEN"`}),
+		says("done"),
+	)
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	writePipelineFile(t, path, `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: fixer
+  source:
+    endpoint: `+fake.URL+`/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell]
+
+jobs:
+- name: repair
+  plan:
+  - task: check
+    secrets:
+      TOKEN: ((ci:gh_token))
+    run: exit 1
+    fix: fixer
+`)
+
+	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue})
+	defer served.stopIfRunning(t)
+
+	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	if err != nil {
+		t.Fatalf("pipeline set: %v", err)
+	}
+
+	enqueueDirectly(t, served.state, name, "repair")
+	waitForRunStatus(t, served.state, name, newestRun(t, served.state, name, "repair").ID, "failed")
+
+	served.stop(t)
+
+	var results []string
+	for _, request := range fake.allRequests() {
+		results = append(results, request.toolResults()...)
+	}
+
+	joined := strings.Join(results, "\n")
+	if !strings.Contains(joined, "seen=[]") {
+		t.Errorf("the fix agent's run_shell result = %q, want it to have seen no TOKEN", joined)
+	}
+
+	if strings.Contains(joined, e2eSecretValue) {
+		t.Error("the model was shown the task's secret")
+	}
+
+	assertNotInDatabase(t, served.state, e2eSecretValue)
+}

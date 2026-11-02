@@ -60,3 +60,27 @@ func TestNilSecretsPassThrough(t *testing.T) {
 		t.Errorf("a nil Secrets changed the text: %q", out.String())
 	}
 }
+
+// Only a tail that could still become a value waits; anything else reaches the stream at once, so a step that prints a line and goes quiet is not hidden from the live view.
+func TestScrubberHoldsBackOnlyAPossibleValue(t *testing.T) {
+	t.Parallel()
+
+	secrets := &Secrets{}
+	secrets.Add("hunter2-is-the-password")
+
+	var out strings.Builder
+
+	scrubber := secrets.Writer(&out)
+
+	_, _ = scrubber.Write([]byte("building...\n"))
+
+	if out.String() != "building...\n" {
+		t.Errorf("a line with no part of a value was held back: %q", out.String())
+	}
+
+	_, _ = scrubber.Write([]byte("next hunt"))
+
+	if out.String() != "building...\nnext " {
+		t.Errorf("after a possible start of a value, the stream = %q, want it held from hunt", out.String())
+	}
+}

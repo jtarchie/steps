@@ -52,7 +52,8 @@ func (s *Secrets) String(text string) string {
 	return text
 }
 
-func (s *Secrets) longest() int {
+// heldTail is how much of text's end could still become a value once more bytes arrive; holding back only that keeps a quiet step's last line in the live view.
+func (s *Secrets) heldTail(text string) int {
 	if s == nil {
 		return 0
 	}
@@ -60,11 +61,19 @@ func (s *Secrets) longest() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if len(s.values) == 0 {
-		return 0
+	held := 0
+
+	for _, value := range s.values {
+		for k := min(len(value)-1, len(text)); k > held; k-- {
+			if strings.HasSuffix(text, value[:k]) {
+				held = k
+
+				break
+			}
+		}
 	}
 
-	return len(s.values[0])
+	return held
 }
 
 // Writer scrubs a stream before it reaches w; Flush hands over the bytes it holds back.
@@ -72,7 +81,7 @@ func (s *Secrets) Writer(w io.Writer) *Scrubber {
 	return &Scrubber{secrets: s, w: w}
 }
 
-// Scrubber holds back the last longest-1 bytes of what it has seen, so a value split across two writes is still whole when it is masked.
+// Scrubber holds back a tail that is the start of a value, so a value split across two writes is still whole when it is masked.
 type Scrubber struct {
 	mu      sync.Mutex
 	secrets *Secrets
@@ -86,7 +95,7 @@ func (sc *Scrubber) Write(p []byte) (int, error) {
 
 	text := sc.secrets.String(sc.pending + string(p))
 
-	keep := min(max(sc.secrets.longest()-1, 0), len(text))
+	keep := sc.secrets.heldTail(text)
 	sc.pending = text[len(text)-keep:]
 
 	_, err := io.WriteString(sc.w, text[:len(text)-keep])

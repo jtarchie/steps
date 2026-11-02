@@ -139,6 +139,10 @@ multi-line value (a PEM key) is masked on its own. A value shorter than 8 bytes
 is masked too, with a warning in the daemon's log, since it may also mask
 ordinary text.
 
+A `fix:` agent does not receive the task's secrets. Its tools, including its
+own rerun of the task, run without them; the verdict re-run after the agent
+finishes has them again.
+
 What scrubbing cannot catch: an encoded form of the value (base64, JSON
 escaping, a URL-encoded copy), and files a step writes. Outputs, artifacts and
 cache directories are stored as written. On Postgres, a value that reached a
