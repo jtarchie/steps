@@ -108,6 +108,9 @@ func WithSecretEnv(ctx context.Context, env map[string]string) context.Context {
 	return context.WithValue(ctx, secretEnvKey{}, env)
 }
 
+// SecretEnv is the resolved secrets the context carries, for an in-process reader (a native resource type, an expr env()) that never execs a command.
+func SecretEnv(ctx context.Context) map[string]string { return secretEnvFrom(ctx) }
+
 func secretEnvFrom(ctx context.Context) map[string]string {
 	env, _ := ctx.Value(secretEnvKey{}).(map[string]string)
 

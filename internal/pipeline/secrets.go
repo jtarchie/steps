@@ -1,15 +1,18 @@
 package pipeline
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/redact"
+	"github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/secret"
 	"github.com/jtarchie/steps/internal/shell"
 )
@@ -46,9 +49,27 @@ func withRunSecrets(ctx context.Context) context.Context {
 		return ctx
 	}
 
-	ctx = redact.WithSecrets(ctx, &redact.Secrets{})
+	return withSecretMemo(ctx, resolver.ForRun(), "")
+}
 
-	return context.WithValue(ctx, runSecretsKey{}, resolver.ForRun())
+// WithPollSecrets is the poller's resolution for one pipeline: no run, so answers are cached for ttl rather than per run.
+func WithPollSecrets(ctx context.Context, pipelineName string, ttl time.Duration) context.Context {
+	resolver, _ := ctx.Value(secretsKey{}).(*secret.Resolver)
+	if resolver == nil {
+		return ctx
+	}
+
+	return withSecretMemo(ctx, resolver.ForChecks(ttl), pipelineName)
+}
+
+// withSecretMemo installs memo for steps and resources alike; pipelineName is for a context with no build metadata to read it from (a poll).
+func withSecretMemo(ctx context.Context, memo *secret.Run, pipelineName string) context.Context {
+	ctx = redact.WithSecrets(ctx, &redact.Secrets{})
+	ctx = context.WithValue(ctx, runSecretsKey{}, memo)
+
+	return resource.WithSecretLookup(ctx, func(ctx context.Context, name string, secrets map[string]string) (map[string]string, error) {
+		return lookupSecrets(ctx, secret.Ref{Pipeline: cmp.Or(shell.MetadataFrom(ctx).PipelineName, pipelineName), Job: shell.MetadataFrom(ctx).JobName, Resource: name}, secrets)
+	})
 }
 
 // withStepSecrets resolves a step's secrets: map onto the context its commands run under; lazily, so a branch that never runs fetches nothing.
@@ -57,23 +78,36 @@ func withStepSecrets(ctx context.Context, secrets map[string]string) (context.Co
 		return ctx, nil
 	}
 
-	run, _ := ctx.Value(runSecretsKey{}).(*secret.Run)
-	if run == nil {
-		return ctx, errors.New("secrets: this run has no secret source; only steps web resolves secrets")
+	meta := shell.MetadataFrom(ctx)
+
+	env, err := lookupSecrets(ctx, secret.Ref{Pipeline: meta.PipelineName, Job: meta.JobName}, secrets)
+	if err != nil {
+		return ctx, err
 	}
 
-	meta := shell.MetadataFrom(ctx)
+	return shell.WithSecretEnv(ctx, env), nil
+}
+
+// lookupSecrets resolves each name of a secrets: map through the context's memo, scoped by where (pipeline, job, resource), and registers each value for scrubbing before anything runs.
+func lookupSecrets(ctx context.Context, where secret.Ref, secrets map[string]string) (map[string]string, error) {
+	run, _ := ctx.Value(runSecretsKey{}).(*secret.Run)
+	if run == nil {
+		return nil, errors.New("secrets: this run has no secret source; only steps web resolves secrets")
+	}
+
 	env := make(map[string]string, len(secrets))
 
 	for _, name := range slices.Sorted(maps.Keys(secrets)) {
 		ref, err := config.ParseSecretRef(secrets[name])
 		if err != nil {
-			return ctx, fmt.Errorf("secrets.%s: %w", name, err)
+			return nil, fmt.Errorf("secrets.%s: %w", name, err)
 		}
 
-		value, err := run.Lookup(ctx, secret.Ref{Pipeline: meta.PipelineName, Job: meta.JobName, Source: ref.Source, Name: ref.Name})
+		where.Source, where.Name = ref.Source, ref.Name
+
+		value, err := run.Lookup(ctx, where)
 		if err != nil {
-			return ctx, fmt.Errorf("secrets.%s: %w", name, err)
+			return nil, fmt.Errorf("secrets.%s: %w", name, err)
 		}
 
 		// A short value still masks, and masks unrelated output too; said once so a mangled log has an explanation.
@@ -81,11 +115,10 @@ func withStepSecrets(ctx context.Context, secrets map[string]string) (context.Co
 			slog.WarnContext(ctx, "secret.short", "secret", ref.String(), "bytes", len(value), "note", "masking it may also mask unrelated output")
 		}
 
-		// Registered before the step runs, so its first byte of output is already scrubbed.
 		redact.SecretsFrom(ctx).Add(value)
 
 		env[name] = value
 	}
 
-	return shell.WithSecretEnv(ctx, env), nil
+	return env, nil
 }

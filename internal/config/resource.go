@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -135,6 +136,8 @@ type Resource struct {
 	// shell-backed type; an mcp-backed type authenticates via its
 	// mcp_servers: entry and never consults env: at all.
 	Env []string `yaml:"env,omitempty"`
+	// Secrets maps an environment variable this resource's check, in and out see (and a native type's token_env may name) to a ((source:name)) reference the daemon resolves. Hashed by NAME only, with env: (see HashedEnv): which variables the commands can read changes what they see, while which credential answers a name decides access to a version, not what the version is.
+	Secrets map[string]string `secret:"ref" yaml:"secrets,omitempty"`
 	// Tags names the worker this resource's check, in and out run on, for a
 	// source only reachable from that machine's network. A get or put step's
 	// own tags: overrides it for that step, and it overrides a tag the step
@@ -613,4 +616,9 @@ func UnionEnv(typeEnv, extraEnv []string) []string {
 	}
 
 	return union
+}
+
+// HashedEnv is what a resource's content keys on for its environment: env: and the names of secrets:, never a secret's reference or value.
+func (r Resource) HashedEnv() []string {
+	return UnionEnv(r.Env, slices.Sorted(maps.Keys(r.Secrets)))
 }

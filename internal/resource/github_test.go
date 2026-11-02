@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 type tarEntry struct {
@@ -246,7 +247,7 @@ func TestGitHubClientRetriesAGet(t *testing.T) {
 		_, _ = w.Write([]byte(`{"login":"octocat"}`))
 	})
 
-	client, err := newGitHubClient(connection)
+	client, err := newGitHubClient(t.Context(), connection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +270,7 @@ func TestGitHubClientDoesNotRetryAPost(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	})
 
-	client, err := newGitHubClient(connection)
+	client, err := newGitHubClient(t.Context(), connection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +293,7 @@ func TestGitHubClientDoesNotSitOutARateLimit(t *testing.T) {
 		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
 	})
 
-	client, err := newGitHubClient(connection)
+	client, err := newGitHubClient(t.Context(), connection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +321,7 @@ func TestGitHubClientAsksConditionally(t *testing.T) {
 		_, _ = w.Write([]byte(`{"login":"octocat"}`))
 	})
 
-	client, err := newGitHubClient(connection)
+	client, err := newGitHubClient(t.Context(), connection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +341,7 @@ func TestGitHubClientAsksConditionally(t *testing.T) {
 func TestGitHubClientNeedsItsToken(t *testing.T) {
 	t.Setenv("RESOURCE_TEST_MISSING_TOKEN", "")
 
-	_, err := newGitHubClient(config.GitHubConnection{Repo: "acme/app", TokenEnv: "RESOURCE_TEST_MISSING_TOKEN"})
+	_, err := newGitHubClient(t.Context(), config.GitHubConnection{Repo: "acme/app", TokenEnv: "RESOURCE_TEST_MISSING_TOKEN"})
 	if !errors.Is(err, errGitHubToken) || !strings.Contains(err.Error(), "$RESOURCE_TEST_MISSING_TOKEN") {
 		t.Errorf("err = %v, want the missing variable named", err)
 	}
@@ -362,7 +363,7 @@ func TestGitHubClientGivesUpAfterItsRetries(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 
-	client, err := newGitHubClient(connection)
+	client, err := newGitHubClient(t.Context(), connection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +388,7 @@ func TestGitHubClientTypesOnlyABody(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	})
 
-	client, err := newGitHubClient(connection)
+	client, err := newGitHubClient(t.Context(), connection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +439,7 @@ func TestGitHubClientRefusesAnOversizedAnswer(t *testing.T) {
 		_, _ = io.CopyN(w, zeros{}, size)
 	})
 
-	client, err := newGitHubClient(connection)
+	client, err := newGitHubClient(t.Context(), connection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +560,7 @@ func TestGitHubListingsStopAtThePageLimit(t *testing.T) {
 				_, _ = w.Write([]byte(full))
 			})
 
-			client, err := newGitHubClient(connection)
+			client, err := newGitHubClient(t.Context(), connection)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -600,7 +601,7 @@ func TestSortCommentVersionsIsByUpdatedThenID(t *testing.T) {
 func TestGitHubEnterpriseGraphQLSitsBesideREST(t *testing.T) {
 	t.Setenv("RESOURCE_TEST_GH_TOKEN", "t")
 
-	client, err := newGitHubClient(config.GitHubConnection{TokenEnv: "RESOURCE_TEST_GH_TOKEN", Endpoint: "https://ghe.example/api/v3/"})
+	client, err := newGitHubClient(t.Context(), config.GitHubConnection{TokenEnv: "RESOURCE_TEST_GH_TOKEN", Endpoint: "https://ghe.example/api/v3/"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1612,5 +1613,21 @@ func TestGitHubVersionNumbersMustBeDecimal(t *testing.T) {
 
 	if len(sent) != 0 {
 		t.Errorf("sent %q, want no request for a version naming no decimal id", sent)
+	}
+}
+
+// token_env may name a key of the resource's secrets: map; the resolved value wins over a daemon variable of the same name, which the step never asked for.
+func TestGitHubTokenComesFromTheResourcesSecretsFirst(t *testing.T) {
+	t.Setenv("RESOURCE_TEST_SECRET_TOKEN", "from-the-daemon")
+
+	ctx := shell.WithSecretEnv(t.Context(), map[string]string{"RESOURCE_TEST_SECRET_TOKEN": "from-the-secret"})
+
+	client, err := newGitHubClient(ctx, config.GitHubConnection{TokenEnv: "RESOURCE_TEST_SECRET_TOKEN"})
+	if err != nil {
+		t.Fatalf("newGitHubClient: %v", err)
+	}
+
+	if client.token != "from-the-secret" {
+		t.Errorf("token = %q, want the resolved secret", client.token)
 	}
 }

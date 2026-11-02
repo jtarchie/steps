@@ -14,6 +14,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/exprlang"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // exprInput assembles what an expression evaluates against. The env allowlist
@@ -21,12 +22,13 @@ import (
 // resource instance's own env: — config.Resource.Env), which is the whole
 // set env() will resolve — see exprlang's envFunc for why there is no
 // baseline beneath it.
-func exprInput(rt config.ResourceType, extraEnv []string, source, version, params map[string]any, dir string) exprlang.Input {
+func exprInput(ctx context.Context, rt config.ResourceType, extraEnv []string, source, version, params map[string]any, dir string) exprlang.Input {
 	return exprlang.Input{
 		Source:   source,
 		Version:  version,
 		Params:   params,
 		EnvAllow: config.UnionEnv(rt.Env, extraEnv),
+		Secrets:  shell.SecretEnv(ctx),
 		Dir:      dir,
 	}
 }
@@ -41,7 +43,7 @@ func exprCheckVersions(
 
 	slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "source_keys", keyNames(source), "version", version, "backend", "expr")
 
-	versions, err := exprlang.RunCheck(ctx, rt.Config.Expr.Check, exprInput(rt, extraEnv, source, version, nil, ""))
+	versions, err := exprlang.RunCheck(ctx, rt.Config.Expr.Check, exprInput(ctx, rt, extraEnv, source, version, nil, ""))
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
@@ -66,7 +68,7 @@ func exprRunIn(
 	slog.DebugContext(ctx, "resource.in", "resource_type", rt.Name, "source_keys", keyNames(source), "version", version,
 		"param_keys", keyNames(params), "dest_dir", destDir, "backend", "expr")
 
-	files, err := exprlang.RunIn(ctx, rt.Config.Expr.In, exprInput(rt, extraEnv, source, version, params, ""))
+	files, err := exprlang.RunIn(ctx, rt.Config.Expr.In, exprInput(ctx, rt, extraEnv, source, version, params, ""))
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
@@ -122,7 +124,7 @@ func exprRunOut(
 	slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "source_keys", keyNames(source), "param_keys", keyNames(params),
 		"src_dir", srcDir, "backend", "expr")
 
-	in := exprInput(rt, extraEnv, source, nil, params, srcDir)
+	in := exprInput(ctx, rt, extraEnv, source, nil, params, srcDir)
 	in.Inputs = inputs.Names
 	in.Versions = inputs.Versions
 

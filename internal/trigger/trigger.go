@@ -23,6 +23,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
+	"github.com/jtarchie/steps/internal/redact"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -459,7 +460,8 @@ func observe(ctx context.Context, cfg *config.Config, st PollStore, name string)
 func recordCheckOutcome(ctx context.Context, st PollStore, resourceName string, checkErr error) {
 	var message string
 	if checkErr != nil {
-		message = checkErr.Error()
+		// Stored and shown on the resource's page: a check that quoted its own credential in a failure must not keep it.
+		message = redact.SecretsFrom(ctx).String(checkErr.Error())
 	}
 
 	err := st.RecordCheckError(ctx, resourceName, message)

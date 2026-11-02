@@ -338,3 +338,20 @@ func TestGitHubCheckoutDefaultsToTheTree(t *testing.T) {
 		}
 	}
 }
+
+// A token_env naming a secrets: key is the daemon's to resolve when the resource runs, so its absence from the environment is no problem to report.
+func TestGitHubTokenFromSecretsIsNoPreflightProblem(t *testing.T) {
+	t.Setenv("ACME_TOKEN", "")
+	t.Setenv("GH_TOKEN", "set")
+
+	cfg, err := LoadConfig(writeConfig(t, githubPipeline("\n    token_env: ACME_TOKEN\n  secrets: {ACME_TOKEN: ((ci:acme))}", "")))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	for _, problem := range cfg.CheckEnvironment() {
+		if strings.Contains(problem.Detail, "ACME_TOKEN") {
+			t.Errorf("preflight reported a token the resource's secrets: provides: %s %s", problem.Target, problem.Detail)
+		}
+	}
+}

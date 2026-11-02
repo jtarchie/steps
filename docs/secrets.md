@@ -55,17 +55,40 @@ jobs:
     messages: [Label the open issues with gh.]
 ```
 
+A resource takes it too. Its `check`, `in` and `out` see the variables, an
+`expr:` type's `env()` reads them by name, and a native type's `token_env:` may
+name one:
+
+```yaml noexec=secrets
+resources:
+- name: pr
+  type: github-prs
+  source:
+    repo: acme/app
+    token_env: GH_TOKEN
+  secrets:
+    GH_TOKEN: ((ci:gh_token))
+
+jobs:
+- name: review
+  plan:
+  - get: pr
+    trigger: true
+```
+
 ## Where a reference may appear
 
-Only in a `secrets:` map, on a `tasks:` entry, an `agents:` entry, or a task or
-agent step. Each key is the
+Only in a `secrets:` map, on a `tasks:` entry, an `agents:` entry, a
+`resources:` entry, or a task or agent step. A get or put step has no
+`secrets:` of its own; its resource's apply. Each key is the
 environment variable the step's commands see; each value is exactly one
 `((source:name))`. A step's own `secrets:` replaces its task's, the way `env:`
 does. A name may not be in both `env:` and `secrets:`.
 
 A reference anywhere else is a load error: written into `run:` it would be
-hashed, stored and put on a command line. Secret values in a resource's
-`source:` are not supported yet and are refused.
+hashed, stored and put on a command line. That includes a resource's
+`source:`: name the variable in `secrets:` and read it from the environment, as
+`"$GH_TOKEN"` in a shell command or `env("GH_TOKEN")` in an expression.
 
 `secrets:` is refused on a CLI agent (`source: cli:…`), because the CLI runs its
 own tools and shows their output to its own model, which steps cannot scrub. It
@@ -147,12 +170,20 @@ so a retried attempt asks again.
 and never runs one. `steps run` and `steps test` refuse a pipeline with a
 reference, since sources exist only on the daemon; `steps validate` accepts it.
 
+**A resource polled by `steps web` resolves outside any run.** Its answers are
+cached for one `--interval`, so a `trigger: true` resource does not prompt every
+poll and a rotated credential reaches the poller within one interval. A check
+whose resource has secrets never shares its answer with another pipeline's
+identical check, since the same name can resolve to a different credential.
+
 ## Where the value goes
 
 Into the step's environment, and nowhere else steps writes:
 
-- **Never hashed.** The step cache keys on the reference, so rotating a
-  credential re-runs nothing, and neither does editing a lookup path.
+- **Never hashed.** A task or agent step keys on the reference, so rotating a
+  credential re-runs nothing, and neither does editing a lookup path. A
+  resource keys on the secret's name only, like `env:`: which credential answers
+  decides whether a version can be fetched, not what the version is.
 - **Never in a container's configuration.** On a docker-backed worker the value
   is passed with each command, not when the container is created, so it is not
   in `docker inspect` or on the daemon's disk, even though the container is kept
@@ -163,8 +194,8 @@ Into the step's environment, and nowhere else steps writes:
 
 **Scrubbed from what a step prints.** A value the run has resolved is replaced
 with `***` in the step's recorded output, in the live stream the browser shows,
-and in the output an `assert:` checks or a `fix:` agent is shown, so a model
-never sees it. A value printed in two pieces is still caught, and each line of a
+in the output an `assert:` checks or a `fix:` agent is shown, in every tool
+result an agent's model is sent, and in a failed check's recorded error. A value printed in two pieces is still caught, and each line of a
 multi-line value (a PEM key) is masked on its own. A value shorter than 8 bytes
 is masked too, with a warning in the daemon's log, since it may also mask
 ordinary text.

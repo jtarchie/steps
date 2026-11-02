@@ -363,6 +363,7 @@ func (c *capped) Write(p []byte) (int, error) {
 // Run memoizes one run's lookups, single-flight, so a step re-placed after a spot reclaim, or two steps asking for the same name, prompt once.
 type Run struct {
 	resolver *Resolver
+	ttl      time.Duration
 
 	mu      sync.Mutex
 	entries map[Ref]*runEntry
@@ -372,6 +373,7 @@ type runEntry struct {
 	done  chan struct{}
 	value string
 	err   error
+	at    time.Time
 }
 
 // ForRun starts a run's memo.
@@ -379,19 +381,38 @@ func (r *Resolver) ForRun() *Run {
 	return &Run{resolver: r, entries: map[Ref]*runEntry{}}
 }
 
+// ForChecks is a memo whose answers expire: a poll has no run to scope one to, and without it a trigger: true resource prompts every interval (Concourse's --secret-cache-duration).
+func (r *Resolver) ForChecks(ttl time.Duration) *Run {
+	return &Run{resolver: r, ttl: ttl, entries: map[Ref]*runEntry{}}
+}
+
+func (run *Run) expired(entry *runEntry) bool {
+	if run.ttl == 0 {
+		return false
+	}
+
+	select {
+	case <-entry.done:
+		return time.Since(entry.at) > run.ttl
+	default:
+		return false
+	}
+}
+
 // Lookup answers from the memo; a failure is not kept, so a declined prompt can be retried by the next attempt.
 func (run *Run) Lookup(ctx context.Context, ref Ref) (string, error) {
 	run.mu.Lock()
 
-	entry, ok := run.entries[ref]
-	if !ok {
+	entry, cached := run.entries[ref]
+	if entry == nil || run.expired(entry) {
 		entry = &runEntry{done: make(chan struct{})}
 		run.entries[ref] = entry
+		cached = false
 	}
 
 	run.mu.Unlock()
 
-	if ok {
+	if cached {
 		select {
 		case <-entry.done:
 			return entry.value, entry.err
@@ -401,6 +422,7 @@ func (run *Run) Lookup(ctx context.Context, ref Ref) (string, error) {
 	}
 
 	entry.value, entry.err = run.resolver.Lookup(ctx, ref)
+	entry.at = time.Now()
 
 	if entry.err != nil {
 		run.mu.Lock()

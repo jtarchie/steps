@@ -61,7 +61,7 @@ func (w *planWalk) triggerBuild(ctx context.Context, step config.Step, remainder
 		return fmt.Errorf("step %d (get %q): the input set binds no version for it", i, step.Get)
 	}
 
-	content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Env, resource.Source, version)
+	content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.HashedEnv(), resource.Source, version)
 	if err != nil {
 		return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
@@ -464,7 +464,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 
 	recordBuildVersion(ctx, resource.Name, version)
 
-	content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Env, resource.Source, version)
+	content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.HashedEnv(), resource.Source, version)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
@@ -622,7 +622,7 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, 
 		fetch = func(dir string) error { return writeDelivery(ctx, st, resource.Name, version, dir) }
 	}
 
-	err := resourceDir(ctx, cfg, artifact, resourceType, resource.Env, resource.Source, version, params, bw, fetch)
+	err := resourceDir(ctx, cfg, artifact, resourceType, resource.HashedEnv(), resource.Source, version, params, bw, fetch)
 	if err != nil {
 		return fmt.Errorf("could not fetch resource %q: %w", resource.Name, classifyRunError(ctx, err))
 	}

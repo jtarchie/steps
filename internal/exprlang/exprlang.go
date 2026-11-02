@@ -57,6 +57,8 @@ type Input struct {
 	// EnvAllow is the resource type's env: list, and the complete set of
 	// names env() will resolve. See envFunc for why there is no baseline.
 	EnvAllow []string
+	// Secrets are the resource's resolved secrets: map, readable by env() under their names without an env: entry, since the pipeline granted them by naming them.
+	Secrets map[string]string
 	// Dir is the put's read view, the only directory file() may read from.
 	// Out slot only.
 	Dir string
@@ -145,7 +147,7 @@ func orEmpty(m map[string]any) map[string]any {
 // out-only: they read the put's inputs, and no other slot has a build.
 func slotFuncs(ctx context.Context, slot Slot, in Input) []expr.Option {
 	funcs := []expr.Option{
-		expr.Function("env", envFunc(in.EnvAllow)),
+		expr.Function("env", envFunc(in.EnvAllow, in.Secrets)),
 		expr.Function("http", httpFunc(ctx)),
 		expr.Function("fail", failFunc()),
 	}

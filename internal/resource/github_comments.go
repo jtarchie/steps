@@ -196,7 +196,7 @@ func newCommentWatch(ctx context.Context, raw, cursor map[string]any) (commentWa
 		return commentWatch{}, nil, fmt.Errorf("%w", err)
 	}
 
-	client, err := newGitHubClient(source.Connection())
+	client, err := newGitHubClient(ctx, source.Connection())
 	if err != nil {
 		return commentWatch{}, nil, err
 	}
@@ -442,7 +442,7 @@ func githubCommentsIn(ctx context.Context, raw, version map[string]any, destDir 
 		return fmt.Errorf("version %v names no comment", version)
 	}
 
-	client, err := newGitHubClient(source.Connection())
+	client, err := newGitHubClient(ctx, source.Connection())
 	if err != nil {
 		return err
 	}

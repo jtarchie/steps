@@ -46,7 +46,7 @@ func githubCommentOut(ctx context.Context, raw, rawParams map[string]any, inputs
 		return nil, err
 	}
 
-	client, err := newGitHubClient(source.Connection())
+	client, err := newGitHubClient(ctx, source.Connection())
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func githubReviewOut(ctx context.Context, raw, rawParams map[string]any, inputs 
 		return nil, err
 	}
 
-	client, err := newGitHubClient(source.Connection())
+	client, err := newGitHubClient(ctx, source.Connection())
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func githubReactionOut(ctx context.Context, raw, rawParams map[string]any, input
 		return nil, err
 	}
 
-	client, err := newGitHubClient(source.Connection())
+	client, err := newGitHubClient(ctx, source.Connection())
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +325,7 @@ func githubLabelOut(ctx context.Context, raw, rawParams map[string]any, inputs P
 		return nil, err
 	}
 
-	client, err := newGitHubClient(source.Connection())
+	client, err := newGitHubClient(ctx, source.Connection())
 	if err != nil {
 		return nil, err
 	}

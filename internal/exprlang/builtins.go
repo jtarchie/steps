@@ -26,11 +26,15 @@ import (
 // an unset token silently produces an unauthenticated request, which fails
 // later, further away, and as something else. Pass a default to opt into
 // that: env("TOKEN", "").
-func envFunc(allow []string) func(...any) (any, error) {
+func envFunc(allow []string, secrets map[string]string) func(...any) (any, error) {
 	return func(params ...any) (any, error) {
 		name, fallback, hasFallback, err := nameAndFallback("env", params)
 		if err != nil {
 			return nil, err
+		}
+
+		if value, ok := secrets[name]; ok {
+			return value, nil
 		}
 
 		if !slices.Contains(allow, name) {

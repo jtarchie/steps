@@ -815,6 +815,14 @@
           },
           "description": "Host environment variable NAMES this resource instance's check/in/out may see, UNIONED with its resource type's own env: (not replacing it). For when one resource of a shared type needs a credential under a different name than the type's own default."
         },
+        "secrets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^\\(\\([a-z0-9_-]+:[A-Za-z0-9_./-]+\\)\\)$"
+          },
+          "description": "Environment variables resolved by steps web from its --config file's secret sources when the step runs, as NAME: ((source:name)). Hashed and stored as the reference, never the value."
+        },
         "tags": {
           "type": "array",
           "minItems": 1,

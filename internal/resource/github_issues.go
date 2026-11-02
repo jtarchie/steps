@@ -42,7 +42,7 @@ func githubIssuesCheck(ctx context.Context, raw, _ map[string]any) ([]map[string
 		return nil, fmt.Errorf("%w", err)
 	}
 
-	client, err := newGitHubClient(source.Connection())
+	client, err := newGitHubClient(ctx, source.Connection())
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func githubIssuesIn(ctx context.Context, raw, version map[string]any, destDir st
 		return fmt.Errorf("version %v names no issue number", version)
 	}
 
-	client, err := newGitHubClient(source.Connection())
+	client, err := newGitHubClient(ctx, source.Connection())
 	if err != nil {
 		return err
 	}

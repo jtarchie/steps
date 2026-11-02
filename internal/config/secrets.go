@@ -66,6 +66,10 @@ func (c *Config) SecretRefs() []SecretRef {
 		add(agent.Secrets)
 	}
 
+	for _, r := range c.Resources {
+		add(r.Secrets)
+	}
+
 	for _, job := range c.Jobs {
 		_ = job.visitSteps(func(_ string, step *Step) error {
 			add(step.Secrets)
@@ -89,6 +93,13 @@ func (c *Config) validateSecrets() error {
 	err := c.validateAgentSecrets()
 	if err != nil {
 		return err
+	}
+
+	for _, r := range c.Resources {
+		err := checkSecretsMap(fmt.Sprintf("resource %q", r.Name), r.Secrets, r.Env)
+		if err != nil {
+			return err
+		}
 	}
 
 	for _, job := range c.Jobs {

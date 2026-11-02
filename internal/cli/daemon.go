@@ -586,7 +586,10 @@ func (d *daemon) start(
 		defer loops.Done()
 
 		// The METHOD, not its result: a later set swaps the configuration under this loop, and a value would pin it to whatever was set first.
-		pollErr := trigger.Poll(d.checks.Context(loopCtx), target.Config, st, d.interval)
+		// A poll is no run: its secrets are cached for an interval rather than per run, or a trigger: true resource would prompt every poll.
+		pollCtx := pipeline.WithPollSecrets(d.checks.Context(loopCtx), name, d.interval)
+
+		pollErr := trigger.Poll(pollCtx, target.Config, st, d.interval)
 		if pollErr != nil {
 			slog.ErrorContext(loopCtx, "web.poll_stopped", "pipeline", name, "error", pollErr)
 		}

@@ -425,7 +425,7 @@ func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 			return nil, fmt.Errorf("resolve put: %w", err)
 		}
 
-		return PutNodeContent(cfg, step, *resourceType, res.Env, res.Source, step.Params, step.InputNames(), step.InputsAll())
+		return PutNodeContent(cfg, step, *resourceType, res.HashedEnv(), res.Source, step.Params, step.InputNames(), step.InputsAll())
 	case config.StepKindAgent:
 		ri, err := cfg.ResolveAgentInvocation(step)
 		if err != nil {

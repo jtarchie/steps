@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 const (
@@ -53,8 +54,13 @@ type githubClient struct {
 	cacheKey string
 }
 
-func newGitHubClient(connection config.GitHubConnection) (*githubClient, error) {
-	token := os.Getenv(connection.Token())
+// newGitHubClient reads the token from the resource's resolved secrets first, so token_env may name a secrets: key, and from the daemon's environment otherwise.
+func newGitHubClient(ctx context.Context, connection config.GitHubConnection) (*githubClient, error) {
+	token, ok := shell.SecretEnv(ctx)[connection.Token()]
+	if !ok {
+		token = os.Getenv(connection.Token())
+	}
+
 	if token == "" {
 		return nil, fmt.Errorf("%w: $%s is not set (source.token_env)", errGitHubToken, connection.Token())
 	}

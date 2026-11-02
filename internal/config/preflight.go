@@ -146,16 +146,25 @@ func (c *Config) resourceCredentialProblems(name string) []Problem {
 	}
 
 	if resourceType.Config.Backend() == BackendGitHub {
-		return githubCredentialProblems(name, resource.Source)
+		return githubCredentialProblems(name, resource.Source, resource.Secrets)
 	}
 
 	if resourceType.Config.Backend() != BackendExpr {
 		return nil
 	}
 
+	return exprCredentialProblems(name, resource, resourceType)
+}
+
+func exprCredentialProblems(name string, resource *Resource, resourceType *ResourceType) []Problem {
 	var problems []Problem
 
+	// Seeded with the secrets: names, which the daemon resolves when the resource runs and are never read from its environment.
 	reported := map[string]bool{}
+	for variable := range resource.Secrets {
+		reported[variable] = true
+	}
+
 	expression := resourceType.Config.Expr
 
 	for _, src := range []string{expression.Check, expression.In, expression.Out} {
@@ -184,8 +193,13 @@ func (c *Config) resourceCredentialProblems(name string) []Problem {
 // the type cannot do anything at all without it: GitHub answers an
 // unauthenticated poller with a limit it spends in minutes, and a put cannot
 // post as nobody.
-func githubCredentialProblems(name string, source map[string]any) []Problem {
+func githubCredentialProblems(name string, source map[string]any, secrets map[string]string) []Problem {
 	variable := GitHubConnectionOf(source).Token()
+
+	// A token_env naming a secrets: key is resolved by the daemon when the resource runs, never read from its environment.
+	if _, secret := secrets[variable]; secret {
+		return nil
+	}
 
 	if value, ok := os.LookupEnv(variable); ok && value != "" {
 		return nil

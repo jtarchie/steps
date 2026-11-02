@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/testsshd"
@@ -427,4 +428,102 @@ func TestSecretsAreRefusedWhereNothingWouldResolveThem(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A resource's secrets reach both its poll, which runs outside any run, and its in: inside one; the poll is the case with no run to cache the lookup in.
+func TestResourceSecretsReachItsCheckAndIn(t *testing.T) {
+	dir := t.TempDir()
+	expected := filepath.Join(dir, "expected")
+
+	err := os.WriteFile(expected, []byte(e2eSecretValue), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	writePipelineFile(t, path, `
+resource_types:
+- name: guarded
+  config:
+    check: test "$TOKEN" = "$(cat `+expected+`)" && echo '[{"n":"1"}]'
+    in: test "$TOKEN" = "$(cat `+expected+`)"
+
+resources:
+- name: feed
+  type: guarded
+  source: {}
+  secrets:
+    TOKEN: ((ci:gh_token))
+
+jobs:
+- name: consume
+  plan:
+  - get: feed
+    trigger: true
+`)
+
+	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue}, "--interval", "200ms")
+	defer served.stopIfRunning(t)
+
+	err = cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	if err != nil {
+		t.Fatalf("pipeline set: %v", err)
+	}
+
+	waitForRunStatus(t, served.state, name, newestRun(t, served.state, name, "consume").ID, "succeeded")
+
+	served.stop(t)
+
+	assertNotInDatabase(t, served.state, e2eSecretValue)
+}
+
+// A failed poll's error is stored and shown on the resource's page; one that quotes the resource's credential must not keep it.
+func TestAFailedChecksErrorIsScrubbed(t *testing.T) {
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	writePipelineFile(t, path, `
+resource_types:
+- name: leaky
+  config:
+    expr:
+      check: fail("leaked " + env("TOKEN"))
+
+resources:
+- name: feed
+  type: leaky
+  source: {}
+  secrets:
+    TOKEN: ((ci:gh_token))
+
+jobs:
+- name: consume
+  plan:
+  - get: feed
+    trigger: true
+`)
+
+	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue}, "--interval", "200ms")
+	defer served.stopIfRunning(t)
+
+	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	if err != nil {
+		t.Fatalf("pipeline set: %v", err)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	for !inDatabase(t, served.state, "leaked ***") && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	served.stop(t)
+
+	if !inDatabase(t, served.state, "leaked ***") {
+		t.Fatal("no scrubbed check error was recorded")
+	}
+
+	assertNotInDatabase(t, served.state, e2eSecretValue)
 }

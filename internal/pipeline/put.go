@@ -50,7 +50,7 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 		return stepResult{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	content, err := merkle.PutNodeContent(r.cfg, step, *resourceType, resource.Env, resource.Source, step.Params, step.InputNames(), step.InputsAll())
+	content, err := merkle.PutNodeContent(r.cfg, step, *resourceType, resource.HashedEnv(), resource.Source, step.Params, step.InputNames(), step.InputsAll())
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}

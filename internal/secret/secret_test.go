@@ -191,3 +191,46 @@ func TestParseRefusals(t *testing.T) {
 		})
 	}
 }
+
+// A poll's cache answers within its window and asks again after it, so a rotated credential reaches the poller within one interval.
+func TestForChecksExpiresItsAnswers(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "count")
+
+	resolver := resolverFor(t, `
+source:
+  ci:
+    command: echo x >> `+counter+`; echo value
+    lookup: [{path: x}]
+`)
+
+	asks := func() int {
+		body, _ := os.ReadFile(counter) //nolint:gosec // the test's own file
+
+		return strings.Count(string(body), "x")
+	}
+
+	cache := resolver.ForChecks(100 * time.Millisecond)
+	ref := Ref{Pipeline: "p", Source: "ci", Name: "a"}
+
+	for range 3 {
+		_, err := cache.Lookup(t.Context(), ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if asks() != 1 {
+		t.Fatalf("the source ran %d times inside one window, want 1", asks())
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	_, _ = cache.Lookup(t.Context(), ref)
+
+	if asks() != 2 {
+		t.Errorf("the source ran %d times after the window, want 2", asks())
+	}
+}

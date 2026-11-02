@@ -935,6 +935,8 @@ linters:
           files:
             - "**/internal/trigger/**"
           allow:
+            # redact: a recorded check failure is scrubbed of the poll's secrets.
+            - "github.com/jtarchie/steps/internal/redact"
             - "$gostd"
             # go-sdk/mcp is test-only here (mcp_test.go builds a fake MCP
             # server to prove the trigger loop needs no changes for an

@@ -28,7 +28,7 @@ func githubIssueOut(ctx context.Context, raw, rawParams map[string]any, _ PutInp
 		return nil, err
 	}
 
-	client, err := newGitHubClient(source.Connection())
+	client, err := newGitHubClient(ctx, source.Connection())
 	if err != nil {
 		return nil, err
 	}

@@ -64,7 +64,7 @@ func githubPRsCheck(ctx context.Context, raw map[string]any) ([]map[string]any, 
 		return nil, fmt.Errorf("%w", err)
 	}
 
-	client, err := newGitHubClient(source.Connection())
+	client, err := newGitHubClient(ctx, source.Connection())
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +211,7 @@ func githubPRsIn(ctx context.Context, raw, version map[string]any, destDir strin
 		return fmt.Errorf("version %v names no pull request number and commit", version)
 	}
 
-	client, err := newGitHubClient(source.Connection())
+	client, err := newGitHubClient(ctx, source.Connection())
 	if err != nil {
 		return err
 	}

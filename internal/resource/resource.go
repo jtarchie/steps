@@ -53,6 +53,11 @@ func CheckVersions(ctx context.Context, c Call) ([]map[string]any, error) {
 		c.Version = map[string]any{}
 	}
 
+	ctx, err := withResourceSecrets(ctx, c.Resource)
+	if err != nil {
+		return nil, err
+	}
+
 	return backendFor(c.Type).check(ctx, c)
 }
 
@@ -80,7 +85,9 @@ func (shellBackend) check(ctx context.Context, c Call) ([]map[string]any, error)
 	spec := runnerSpec(rt, c.Resource.Env)
 
 	share, key := sharedCheckFor(ctx, command, spec)
-	if share != nil {
+
+	// Never shared: two pipelines can hold the same check and resolve the same names to different credentials, and the shared answer would be the other pipeline's.
+	if share != nil && len(c.Resource.Secrets) == 0 {
 		return share.do(ctx, key, func() ([]map[string]any, error) {
 			return runShellCheck(ctx, rt, spec, command)
 		})
@@ -266,6 +273,11 @@ func matchesPin(version map[string]any, pinned map[string]string) bool {
 // in:-omitted default (writing version.json) and the materialization
 // convention when in: is set.
 func RunIn(ctx context.Context, c Call) error {
+	ctx, err := withResourceSecrets(ctx, c.Resource)
+	if err != nil {
+		return err
+	}
+
 	return backendFor(c.Type).in(ctx, c)
 }
 
@@ -324,6 +336,11 @@ type PutInputs struct {
 // validateMCPResourcePuts, which rejects a put step targeting an mcp-backed
 // type with no out: at load time), so this is only ever reached with it set.
 func RunOut(ctx context.Context, c Call) (map[string]any, error) {
+	ctx, err := withResourceSecrets(ctx, c.Resource)
+	if err != nil {
+		return nil, err
+	}
+
 	return backendFor(c.Type).out(ctx, c)
 }
 

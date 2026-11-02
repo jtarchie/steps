@@ -155,7 +155,7 @@ func planBoundGetNode(
 	}
 
 	node, err := newNode(NodeKindGet, fmt.Sprintf("get %q", step.Get), i, parentHash, res.Name, func() (map[string]any, error) {
-		return GetNodeContent(cfg, step, *resourceType, res.Env, res.Source, version)
+		return GetNodeContent(cfg, step, *resourceType, res.HashedEnv(), res.Source, version)
 	})
 	if err != nil {
 		return Node{}, config.Fetched{}, err
@@ -376,7 +376,7 @@ func planGetStep(
 
 	for _, version := range versions {
 		node, err := newNode(NodeKindGet, fmt.Sprintf("get %q", step.Get), i, parentHash, res.Name, func() (map[string]any, error) {
-			return GetNodeContent(cfg, step, *resourceType, res.Env, res.Source, version)
+			return GetNodeContent(cfg, step, *resourceType, res.HashedEnv(), res.Source, version)
 		})
 		if err != nil {
 			return nil, err
