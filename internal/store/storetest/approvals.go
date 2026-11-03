@@ -19,7 +19,7 @@ import (
 func (s suite) TestDecidingTwiceIsNotPending(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 	requesting := time.Now()
 
@@ -74,7 +74,7 @@ func (s suite) TestDecidingTwiceIsNotPending(t *testing.T) {
 func (s suite) TestApprovalsListsOnlyWhatIsWaiting(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.twoApprovals(t)
 
 	pending, err := st.Approvals(ctx, true, 0)
@@ -98,7 +98,7 @@ func (s suite) TestApprovalsListsOnlyWhatIsWaiting(t *testing.T) {
 func (s suite) TestApprovalsListsTheDecisionsNewestFirst(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.twoApprovals(t)
 
 	all, err := st.Approvals(ctx, false, 10)
@@ -124,7 +124,7 @@ func (s suite) TestApprovalsListsTheDecisionsNewestFirst(t *testing.T) {
 func (s suite) TestApprovalStatusReadsOneDecision(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	id, err := st.RequestApproval(ctx, "deploy", "ship it?")
@@ -152,7 +152,7 @@ func (s suite) TestApprovalStatusReadsOneDecision(t *testing.T) {
 func (s suite) twoApprovals(t *testing.T) store.Store {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	st := s.open(t, "test")
 
@@ -180,7 +180,7 @@ func (s suite) twoApprovals(t *testing.T) store.Store {
 func (s suite) TestPendingApprovalsAreNotCapped(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	// Above every bound the tree uses (web lists 200, the CLI 20): fewer and
@@ -214,7 +214,7 @@ func (s suite) TestPendingApprovalsAreNotCapped(t *testing.T) {
 func (s suite) TestApprovalsAuditHonoursItsLimit(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	for range 3 {
@@ -247,10 +247,10 @@ func (s suite) TestApprovalsAuditHonoursItsLimit(t *testing.T) {
 func (s suite) TestAResumedStepKeepsItsApproval(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	startRuns(t, st, "RUN1", "RUN2")
+	seedRuns(t, st, "build", "RUN1", "RUN2")
 
 	first, err := st.RequestApprovalFor(ctx, "RUN1", "step-a", "deploy", "ship it?")
 	if err != nil {
@@ -283,10 +283,10 @@ func (s suite) TestAResumedStepKeepsItsApproval(t *testing.T) {
 func (s suite) TestAnApprovalNamesItsRun(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	startRuns(t, st, "RUN1")
+	seedRuns(t, st, "build", "RUN1")
 
 	id, err := st.RequestApprovalFor(ctx, "RUN1", "step-a", "deploy", "ship it?")
 	if err != nil {
@@ -313,10 +313,10 @@ func (s suite) TestAnApprovalNamesItsRun(t *testing.T) {
 func (s suite) TestAGrantedApprovalStandsForTheResumedStep(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	startRuns(t, st, "RUN1")
+	seedRuns(t, st, "build", "RUN1")
 
 	granted, err := st.RequestApprovalFor(ctx, "RUN1", "step-a", "deploy", "ship it?")
 	if err != nil {
@@ -353,11 +353,12 @@ func (s suite) TestAGrantedApprovalStandsForTheResumedStep(t *testing.T) {
 func (s suite) TestARequestSurvivesBeingDecidedAtOnce(t *testing.T) {
 	t.Parallel()
 
+	// Not ctxFor(t): the decider goroutines are joined in t.Cleanup, which runs after t.Context() is cancelled, and they must keep deciding until stop closes.
 	ctx := context.Background()
 	requester := s.open(t, "test")
 	decider := s.open(t, "test")
 
-	startRuns(t, requester, "RUN1")
+	seedRuns(t, requester, "build", "RUN1")
 
 	stop := make(chan struct{})
 

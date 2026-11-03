@@ -3,7 +3,6 @@ package storetest
 // Reading across the pipelines one state file holds.
 
 import (
-	"context"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -14,7 +13,7 @@ import (
 func (s suite) TestSourcePathIsWhatAReaderReports(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	err := st.SetSourcePath(ctx, "/src/app/pipeline.yml")
@@ -90,12 +89,12 @@ func pipelineNames(t *testing.T, st store.Store) []string {
 func (s suite) TestReaderRunsFilterToTheNamedPipelines(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	app := s.open(t, "app")
 	unserved := s.open(t, "unserved")
 
-	mustStartRuns(ctx, t, app, "build", "kept")
-	mustStartRuns(ctx, t, unserved, "noise", "n1", "n2", "n3")
+	seedRuns(t, app, "build", "kept")
+	seedRuns(t, unserved, "noise", "n1", "n2", "n3")
 
 	runs, err := app.Reader().RecentRuns(ctx, []string{"app"}, 2)
 	if err != nil {

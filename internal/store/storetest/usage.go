@@ -16,7 +16,7 @@ import (
 func (s suite) TestRunCostTotalsKeepsUnpricedApartFromFree(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 	priced := 0.25
 

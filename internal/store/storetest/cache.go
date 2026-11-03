@@ -3,7 +3,6 @@ package storetest
 // The merkle skip index and the transcripts hung off it.
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +18,7 @@ import (
 func (s suite) TestHasNodeSucceededIsPerJobAndStatus(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	mustRecordNode(t, st, "build", hashOf(1))
@@ -52,7 +51,7 @@ func (s suite) TestHasNodeSucceededIsPerJobAndStatus(t *testing.T) {
 func (s suite) TestHasNodesSucceededAnswersAWholeMatrix(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 	other := s.open(t, "other")
 
@@ -85,7 +84,7 @@ func (s suite) TestHasNodesSucceededAnswersAWholeMatrix(t *testing.T) {
 func (s suite) TestListNodes(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	record := store.NodeRecord{
@@ -120,7 +119,7 @@ func (s suite) TestListNodes(t *testing.T) {
 func (s suite) TestListNodesOnAnEmptyStore(t *testing.T) {
 	t.Parallel()
 
-	rows, err := s.open(t, "test").ListNodes(context.Background(), "", 10)
+	rows, err := s.open(t, "test").ListNodes(ctxFor(t), "", 10)
 	if err != nil {
 		t.Fatalf("listing an empty store should not error: %v", err)
 	}
@@ -133,7 +132,7 @@ func (s suite) TestListNodesOnAnEmptyStore(t *testing.T) {
 func (s suite) TestListNodesHonoursItsLimit(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	for _, hash := range []string{"n1", "n2", "n3"} {
@@ -172,7 +171,7 @@ func (s suite) TestListNodesHonoursItsLimit(t *testing.T) {
 func (s suite) TestRecordNodeStoresWhatItWasGiven(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	root := strings.Repeat("a", 64)
@@ -237,7 +236,7 @@ func (s suite) TestRecordNodeStoresWhatItWasGiven(t *testing.T) {
 func mustRecordNode(t *testing.T, st store.Store, jobName, hash string) {
 	t.Helper()
 
-	err := st.RecordNode(context.Background(), store.NodeRecord{
+	err := st.RecordNode(ctxFor(t), store.NodeRecord{
 		Hash: hash, Kind: "task", Resource: "step", Content: map[string]any{"hash": hash},
 	}, jobName, "succeeded", nil, nil)
 	if err != nil {
@@ -250,7 +249,7 @@ func mustRecordChainSucceeded(t *testing.T, st store.Store, jobName, rootHash st
 
 	mustRecordNode(t, st, jobName, rootHash)
 
-	err := st.RecordChainSucceeded(context.Background(), jobName, rootHash)
+	err := st.RecordChainSucceeded(ctxFor(t), jobName, rootHash)
 	if err != nil {
 		t.Fatalf("RecordChainSucceeded(%q, %q): %v", jobName, rootHash, err)
 	}
@@ -259,7 +258,7 @@ func mustRecordChainSucceeded(t *testing.T, st store.Store, jobName, rootHash st
 func mustForgetChain(t *testing.T, st store.Store, jobName, rootHash string) {
 	t.Helper()
 
-	err := st.ForgetChain(context.Background(), jobName, rootHash)
+	err := st.ForgetChain(ctxFor(t), jobName, rootHash)
 	if err != nil {
 		t.Fatalf("ForgetChain(%q, %q): %v", jobName, rootHash, err)
 	}
@@ -274,7 +273,7 @@ func (s suite) TestStoreHasSucceededBatch(t *testing.T) {
 	mustForgetChain(t, st, "job", "hash2")
 	mustRecordChainSucceeded(t, st, "other-job", "hash1")
 
-	got, err := st.HasSucceededBatch(context.Background(), "job", []string{"hash1", "hash2", "hash3"})
+	got, err := st.HasSucceededBatch(ctxFor(t), "job", []string{"hash1", "hash2", "hash3"})
 	if err != nil {
 		t.Fatalf("HasSucceededBatch: %v", err)
 	}
@@ -284,7 +283,7 @@ func (s suite) TestStoreHasSucceededBatch(t *testing.T) {
 		t.Errorf("HasSucceededBatch = %v, want a map with only hash1=true (hash2 failed, hash3 unknown, other-job's hash1 is a different job)", got)
 	}
 
-	got, err = st.HasSucceededBatch(context.Background(), "job", nil)
+	got, err = st.HasSucceededBatch(ctxFor(t), "job", nil)
 	if err != nil {
 		t.Fatalf("HasSucceededBatch(nil): %v", err)
 	}
@@ -313,7 +312,7 @@ func (s suite) TestStoreHasSucceededBatchManyHashes(t *testing.T) {
 		mustRecordChainSucceeded(t, st, "job", hash)
 	}
 
-	got, err := st.HasSucceededBatch(context.Background(), "job", hashes)
+	got, err := st.HasSucceededBatch(ctxFor(t), "job", hashes)
 	if err != nil {
 		t.Fatalf("HasSucceededBatch: %v", err)
 	}
@@ -334,7 +333,7 @@ func (s suite) TestStoreRecordNode(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	node := store.NodeRecord{
 		Hash:       "abc",
@@ -365,7 +364,7 @@ func (s suite) TestNodeTranscriptRoundTrip(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	_, ok, err := st.NodeTranscript(ctx, "abc123")
 	if err != nil {
@@ -401,7 +400,7 @@ func (s suite) TestNodeTranscriptReplace(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	mustRecordNode(t, st, "build", "abc123")
 
@@ -428,7 +427,7 @@ func (s suite) TestNodeTranscriptReplace(t *testing.T) {
 func (s suite) TestAFailedRerunUngreensTheChain(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	mustRecordChainSucceeded(t, st, "job", "hash1")
@@ -453,7 +452,7 @@ func (s suite) TestAFailedRerunUngreensTheChain(t *testing.T) {
 func (s suite) TestFailedChainsDoNotCrowdOutGreenOnes(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	green := []string{"green-1", "green-2", "green-3"}
@@ -504,7 +503,7 @@ func TranscriptJSON(size int) string {
 func (s suite) TestNodeTranscriptIsCapped(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	mustRecordNode(t, st, "job", "agent-node")
@@ -535,7 +534,7 @@ func (s suite) TestNodeTranscriptIsCapped(t *testing.T) {
 func roundTripTranscript(t *testing.T, st store.Store, hash, transcript string) string {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	mustRecordNode(t, st, "job", hash)
 

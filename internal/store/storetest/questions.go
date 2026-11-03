@@ -3,7 +3,6 @@ package storetest
 // Questions: the memo a run asks through, and the listing that answers it.
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -20,7 +19,7 @@ func (s suite) startQuestionRun(t *testing.T) store.Store {
 
 	st := s.open(t, "test")
 
-	err := st.StartRun(context.Background(), store.NewRun{ID: "run-1", JobName: "release-note", Workspace: "/tmp/ws"})
+	err := st.StartRun(ctxFor(t), store.NewRun{ID: "run-1", JobName: "release-note", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -31,7 +30,7 @@ func (s suite) startQuestionRun(t *testing.T) store.Store {
 func askBump(t *testing.T, st store.Store, runID string) (store.Question, bool) {
 	t.Helper()
 
-	question, existing, err := st.AskQuestion(context.Background(), store.Question{
+	question, existing, err := st.AskQuestion(ctxFor(t), store.Question{
 		RunID: runID, JobName: "release-note", AgentName: "writer",
 		Question: "Is this release a major or a minor bump?",
 		Options:  []string{"major", "minor"},
@@ -73,7 +72,7 @@ func (s suite) TestAskQuestionMemoIsPerRun(t *testing.T) {
 
 	st := s.startQuestionRun(t)
 
-	err := st.StartRun(context.Background(), store.NewRun{ID: "run-2", JobName: "release-note", Workspace: "/tmp/ws"})
+	err := st.StartRun(ctxFor(t), store.NewRun{ID: "run-2", JobName: "release-note", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -97,7 +96,7 @@ func (s suite) TestAskQuestionMemoSeparatesDifferentOptions(t *testing.T) {
 
 	first, _ := askBump(t, st, "run-1")
 
-	widened, existing, err := st.AskQuestion(context.Background(), store.Question{
+	widened, existing, err := st.AskQuestion(ctxFor(t), store.Question{
 		RunID: "run-1", JobName: "release-note", AgentName: "writer",
 		Question: "Is this release a major or a minor bump?",
 		Options:  []string{"major", "minor", "patch"},
@@ -154,7 +153,7 @@ func (s suite) TestAskQuestionMemoHoldsUnderConcurrentAskers(t *testing.T) {
 func (s suite) TestAnswerQuestionRecordsWhoAndWhat(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.startQuestionRun(t)
 	asking := time.Now()
 	question, _ := askBump(t, st, "run-1")
@@ -203,7 +202,7 @@ func (s suite) TestAnswerQuestionRecordsWhoAndWhat(t *testing.T) {
 func (s suite) TestAnswerQuestionEnforcesOptionsRequired(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.startQuestionRun(t)
 
 	question, _, err := st.AskQuestion(ctx, store.Question{
@@ -236,7 +235,7 @@ func (s suite) TestAnswerQuestionEnforcesOptionsRequired(t *testing.T) {
 func (s suite) TestCloseQuestionRecordsWhatTheModelWasTold(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.startQuestionRun(t)
 
 	expired, _ := askBump(t, st, "run-1")
@@ -285,7 +284,7 @@ func (s suite) TestCloseQuestionRecordsWhatTheModelWasTold(t *testing.T) {
 func (s suite) TestAllQuestionsListsWhatIsWaitingFirst(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.startQuestionRun(t)
 
 	parked, _ := askBump(t, st, "run-1")
@@ -327,7 +326,7 @@ func (s suite) TestAllQuestionsListsWhatIsWaitingFirst(t *testing.T) {
 func (s suite) TestPendingQuestionsAreNotCapped(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.startQuestionRun(t)
 
 	// Above every bound the tree uses (web lists 200, the CLI 20): fewer and

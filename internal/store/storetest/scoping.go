@@ -37,7 +37,7 @@ func (s suite) TestTheOpenerSharesOneDatabase(t *testing.T) {
 	// The description is a promise; this is the storage. Two private
 	// databases can answer to one description (`:memory:` does), and the
 	// scoping tests would then assert nothing.
-	rows, err := web.Reader().Pipelines(context.Background())
+	rows, err := web.Reader().Pipelines(ctxFor(t))
 	if err != nil {
 		t.Fatalf("Pipelines through web: %v", err)
 	}
@@ -122,11 +122,11 @@ func (s suite) TestPauseIsScopedToItsPipeline(t *testing.T) {
 func (s suite) TestAskQuestionRefusesARunFromAnotherPipeline(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	mine := s.open(t, "mine")
 	theirs := s.open(t, "theirs")
 
-	mustStartRuns(ctx, t, theirs, "build", "their-run")
+	seedRuns(t, theirs, "build", "their-run")
 
 	_, _, err := mine.AskQuestion(ctx, store.Question{
 		RunID: "their-run", JobName: "build", AgentName: "writer", Question: "Which bump?",
@@ -194,7 +194,7 @@ func (s suite) TestAMemoryNamesOnlyItsOwnPipelinesRun(t *testing.T) {
 	web := s.open(t, "web")
 	infra := s.open(t, "infra")
 
-	mustStartRuns(ctx, t, infra, "build", "infra-run")
+	seedRuns(t, infra, "build", "infra-run")
 
 	memory, _, err := web.Remember(ctx, store.Memory{Scope: "U1", Text: "likes go", RunID: "infra-run"}, 0)
 	if err != nil {
@@ -213,7 +213,7 @@ func (s suite) TestAMemoryNamesOnlyItsOwnPipelinesRun(t *testing.T) {
 func (s suite) TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	web := s.open(t, "web")
 
 	infra := s.open(t, "infra")
@@ -245,15 +245,12 @@ func (s suite) TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
 func (s suite) TestPendingQuestionsAreScopedToTheirPipeline(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	mine := s.open(t, "test")
 
 	theirs := s.open(t, "other")
 
-	err := mine.StartRun(ctx, store.NewRun{ID: "run-1", JobName: "release-note", Workspace: "/tmp/ws"})
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
+	seedRuns(t, mine, "release-note", "run-1")
 
 	question, _ := askBump(t, mine, "run-1")
 
@@ -306,18 +303,15 @@ func (s suite) TestAbortingAQueuedJobIsScopedToItsPipeline(t *testing.T) {
 func (s suite) TestCompletedRunStepsAreScopedToTheirPipeline(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	web := s.open(t, "web")
 	infra := s.open(t, "infra")
 
 	const shared = "SHARED01"
 
-	err := web.StartRun(ctx, store.NewRun{ID: shared, JobName: "build", Workspace: "/tmp/web"})
-	if err != nil {
-		t.Fatalf("StartRun web: %v", err)
-	}
+	seedRuns(t, web, "build", shared)
 
-	err = web.RecordRunStep(ctx, shared, store.RunStep{BuildID: shared + "#0", Index: 0, Name: "compile"})
+	err := web.RecordRunStep(ctx, shared, store.RunStep{BuildID: shared + "#0", Index: 0, Name: "compile"})
 	if err != nil {
 		t.Fatalf("RecordRunStep web: %v", err)
 	}
@@ -343,18 +337,15 @@ func (s suite) TestCompletedRunStepsAreScopedToTheirPipeline(t *testing.T) {
 func (s suite) TestRunEventsAreScopedToTheirPipeline(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	web := s.open(t, "web")
 	infra := s.open(t, "infra")
 
 	const shared = "SHARED02"
 
-	err := web.StartRun(ctx, store.NewRun{ID: shared, JobName: "build", Workspace: "/tmp/web"})
-	if err != nil {
-		t.Fatalf("StartRun web: %v", err)
-	}
+	seedRuns(t, web, "build", shared)
 
-	err = web.AppendRunEvent(ctx, store.RunEventRow{RunID: shared, Type: "step_started", StepName: "compile", At: time.Now()})
+	err := web.AppendRunEvent(ctx, store.RunEventRow{RunID: shared, Type: "step_started", StepName: "compile", At: time.Now()})
 	if err != nil {
 		t.Fatalf("AppendRunEvent web: %v", err)
 	}
@@ -387,16 +378,13 @@ func (s suite) TestRunEventsAreScopedToTheirPipeline(t *testing.T) {
 func (s suite) TestRunScopedWritesRefuseAnotherPipelinesRun(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	web := s.open(t, "web")
 	infra := s.open(t, "infra")
 
 	const run = "FOREIGN01"
 
-	err := web.StartRun(ctx, store.NewRun{ID: run, JobName: "build", Workspace: "/tmp/web"})
-	if err != nil {
-		t.Fatalf("StartRun web: %v", err)
-	}
+	seedRuns(t, web, "build", run)
 
 	writes := map[string]error{
 		"RecordRunStep":    infra.RecordRunStep(ctx, run, store.RunStep{BuildID: "b", Index: 1, Name: "evil"}),
@@ -419,7 +407,7 @@ func (s suite) TestRunScopedWritesRefuseAnotherPipelinesRun(t *testing.T) {
 
 	// The owner still writes, and writing the same step twice stays a no-op rather than a refusal.
 	for range 2 {
-		err = web.RecordRunStep(ctx, run, store.RunStep{BuildID: "b", Index: 1, Name: "ok"})
+		err := web.RecordRunStep(ctx, run, store.RunStep{BuildID: "b", Index: 1, Name: "ok"})
 		if err != nil {
 			t.Fatalf("owner RecordRunStep: %v", err)
 		}
@@ -513,17 +501,14 @@ func (s suite) TestFindRevisionIsScopedToItsPipeline(t *testing.T) {
 func (s suite) TestStartRunRefusesAnIDHeldByAnotherPipeline(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	web := s.open(t, "web")
 
 	infra := s.open(t, "infra")
 
-	err := web.StartRun(ctx, store.NewRun{ID: "SHARED01", JobName: "build", Workspace: "/tmp/web"})
-	if err != nil {
-		t.Fatalf("StartRun web: %v", err)
-	}
+	seedRuns(t, web, "build", "SHARED01")
 
-	err = infra.StartRun(ctx, store.NewRun{ID: "SHARED01", JobName: "build", Workspace: "/tmp/infra"})
+	err := infra.StartRun(ctx, store.NewRun{ID: "SHARED01", JobName: "build", Workspace: "/tmp/infra"})
 	if !errors.Is(err, store.ErrRunExists) {
 		t.Fatalf("minting an id another pipeline holds returned %v, want store.ErrRunExists", err)
 	}
@@ -535,17 +520,14 @@ func (s suite) TestStartRunRefusesAnIDHeldByAnotherPipeline(t *testing.T) {
 func (s suite) TestResumeRunIsScopedToItsPipeline(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	web := s.open(t, "web")
 
 	infra := s.open(t, "infra")
 
-	err := web.StartRun(ctx, store.NewRun{ID: "WEBRUN01", JobName: "build", Workspace: "/tmp/web"})
-	if err != nil {
-		t.Fatalf("StartRun web: %v", err)
-	}
+	seedRuns(t, web, "build", "WEBRUN01")
 
-	err = infra.ResumeRun(ctx, "WEBRUN01", "/tmp/infra", "")
+	err := infra.ResumeRun(ctx, "WEBRUN01", "/tmp/infra", "")
 	if !errors.Is(err, store.ErrNoSuchRun) {
 		t.Fatalf("resuming another pipeline's run returned %v, want store.ErrNoSuchRun", err)
 	}
@@ -557,7 +539,7 @@ func (s suite) TestResumeRunIsScopedToItsPipeline(t *testing.T) {
 func (s suite) TestStepBlobsAreScopedToThePipeline(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	first := s.open(t, "app")
 

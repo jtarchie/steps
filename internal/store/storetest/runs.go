@@ -14,10 +14,10 @@ import (
 func (s suite) TestRecordRunParentIsWhatARunReports(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	mustStartRuns(ctx, t, st, "build", "original", "replay")
+	seedRuns(t, st, "build", "original", "replay")
 
 	err := st.RecordRunParent(ctx, "replay", "original")
 	if err != nil {
@@ -30,11 +30,12 @@ func (s suite) TestRecordRunParentIsWhatARunReports(t *testing.T) {
 	}
 }
 
-func mustStartRuns(ctx context.Context, t *testing.T, st store.Store, jobName string, ids ...string) {
+// seedRuns starts one run per id under job. The workspace is the same for all: no test that seeds this way reads it back.
+func seedRuns(t *testing.T, st store.Store, job string, ids ...string) {
 	t.Helper()
 
 	for _, id := range ids {
-		err := st.StartRun(ctx, store.NewRun{ID: id, JobName: jobName, Workspace: "/tmp/ws"})
+		err := st.StartRun(ctxFor(t), store.NewRun{ID: id, JobName: job, Workspace: "/tmp/ws"})
 		if err != nil {
 			t.Fatalf("StartRun(%q): %v", id, err)
 		}
@@ -44,10 +45,10 @@ func mustStartRuns(ctx context.Context, t *testing.T, st store.Store, jobName st
 func (s suite) TestListRunsHonoursItsLimit(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	mustStartRuns(ctx, t, st, "build", "r1", "r2", "r3")
+	seedRuns(t, st, "build", "r1", "r2", "r3")
 
 	all, err := st.ListRuns(ctx, "build", 0)
 	if err != nil {
@@ -73,7 +74,7 @@ func (s suite) TestListRunsHonoursItsLimit(t *testing.T) {
 func (s suite) TestRunsUsingNodeHonoursItsLimit(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	seedRunEvents(ctx, t, st)
@@ -101,10 +102,10 @@ func (s suite) TestRunsUsingNodeHonoursItsLimit(t *testing.T) {
 func (s suite) TestARerunRecordsWhichRunItReran(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	startRuns(t, st, "ORIGINAL", "RERUN")
+	seedRuns(t, st, "build", "ORIGINAL", "RERUN")
 
 	err := st.RecordRunRerun(ctx, "RERUN", "ORIGINAL")
 	if err != nil {
@@ -135,10 +136,10 @@ func (s suite) TestARerunRecordsWhichRunItReran(t *testing.T) {
 func (s suite) TestARerunOfAnOldBuildDoesNotBecomeTheJobsStatus(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	startRuns(t, st, "OLD", "CURRENT", "RETRYOLD")
+	seedRuns(t, st, "build", "OLD", "CURRENT", "RETRYOLD")
 
 	err := st.RecordRunRerun(ctx, "RETRYOLD", "OLD")
 	if err != nil {
@@ -149,10 +150,7 @@ func (s suite) TestARerunOfAnOldBuildDoesNotBecomeTheJobsStatus(t *testing.T) {
 		t.Errorf("latest = %s, want CURRENT: a rerun of an older build became the job's status", latest)
 	}
 
-	err = st.StartRun(ctx, store.NewRun{ID: "RETRYCURRENT", JobName: "build", Workspace: "/tmp/r"})
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
+	seedRuns(t, st, "build", "RETRYCURRENT")
 
 	err = st.RecordRunRerun(ctx, "RETRYCURRENT", "CURRENT")
 	if err != nil {
@@ -170,11 +168,11 @@ func (s suite) TestARerunOfAnOldBuildDoesNotBecomeTheJobsStatus(t *testing.T) {
 func (s suite) TestLatestFinishedRunByJobLooksPastWhatIsRunning(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 	other := s.open(t, "other")
 
-	mustStartRuns(ctx, t, st, "build", "B1", "B2")
+	seedRuns(t, st, "build", "B1", "B2")
 
 	for id, status := range map[string]store.RunStatus{"B1": store.RunFailed, "B2": store.RunSucceeded} {
 		err := st.FinishRun(ctx, id, status)
@@ -184,9 +182,9 @@ func (s suite) TestLatestFinishedRunByJobLooksPastWhatIsRunning(t *testing.T) {
 	}
 
 	// More in flight than the board's old five-run look-back reached past.
-	mustStartRuns(ctx, t, st, "build", "B3", "B4", "B5", "B6", "B7", "B8")
-	mustStartRuns(ctx, t, st, "lint", "L1")
-	mustStartRuns(ctx, t, other, "build", "O1")
+	seedRuns(t, st, "build", "B3", "B4", "B5", "B6", "B7", "B8")
+	seedRuns(t, st, "lint", "L1")
+	seedRuns(t, other, "build", "O1")
 
 	err := other.FinishRun(ctx, "O1", store.RunAborted)
 	if err != nil {
@@ -209,26 +207,12 @@ func mustLatest(t *testing.T, st interface {
 ) string {
 	t.Helper()
 
-	latest, err := st.LatestRunByJob(context.Background())
+	latest, err := st.LatestRunByJob(ctxFor(t))
 	if err != nil {
 		t.Fatalf("LatestRunByJob: %v", err)
 	}
 
 	return latest["build"].ID
-}
-
-func startRuns(t *testing.T, st interface {
-	StartRun(ctx context.Context, run store.NewRun) error
-}, ids ...string,
-) {
-	t.Helper()
-
-	for _, id := range ids {
-		err := st.StartRun(context.Background(), store.NewRun{ID: id, JobName: "build", Workspace: "/tmp/" + id})
-		if err != nil {
-			t.Fatalf("StartRun %s: %v", id, err)
-		}
-	}
 }
 
 // TestRunStepsAreKeptPerWalk is #144's key: the walk after a get counts from
@@ -237,16 +221,13 @@ func startRuns(t *testing.T, st interface {
 func (s suite) TestRunStepsAreKeptPerWalk(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	web := s.open(t, "web")
 	infra := s.open(t, "infra")
 
 	const run = "PERBUILD01"
 
-	err := web.StartRun(ctx, store.NewRun{ID: run, JobName: "build", Workspace: "/tmp/web"})
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
+	seedRuns(t, web, "build", run)
 
 	// The build's step first, so completion order and build-id order disagree; prep's second visit is a route sending the walk back through it, and compile's repeat is the same visit recorded twice.
 	for _, step := range []store.RunStep{
@@ -255,7 +236,7 @@ func (s suite) TestRunStepsAreKeptPerWalk(t *testing.T) {
 		{BuildID: run + "#0", Index: 0, Visit: 1, Name: "compile", Outcome: "success"},
 		{BuildID: run, Index: 0, Visit: 2, Name: "prep", Hash: "prephash", Outcome: "success"},
 	} {
-		err = web.RecordRunStep(ctx, run, step)
+		err := web.RecordRunStep(ctx, run, step)
 		if err != nil {
 			t.Fatalf("RecordRunStep %+v: %v", step, err)
 		}
@@ -309,7 +290,7 @@ func (s suite) TestRunStepsAreKeptPerWalk(t *testing.T) {
 func (s suite) TestStartRunRefusesAnIDSomeRunAlreadyHas(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	err := st.StartRun(ctx, store.NewRun{ID: "COLLIDE1", JobName: "build", Workspace: "/tmp/first"})
@@ -348,7 +329,7 @@ func (s suite) TestStartRunRefusesAnIDSomeRunAlreadyHas(t *testing.T) {
 func (s suite) TestResumeRunNeedsARunToResume(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	err := st.ResumeRun(ctx, "MISSING1", "/tmp/ws", "")

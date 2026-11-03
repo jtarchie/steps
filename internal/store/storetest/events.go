@@ -16,7 +16,7 @@ import (
 func seedRunEvents(ctx context.Context, t *testing.T, st store.Store) {
 	t.Helper()
 
-	mustStartRuns(ctx, t, st, "build", "r1", "r2")
+	seedRuns(t, st, "build", "r1", "r2") //nolint:contextcheck // seedRuns takes the test context; the ctx here is that same one
 
 	for i, runID := range []string{"r1", "r1", "r1", "r2"} {
 		err := st.AppendRunEvent(ctx, store.RunEventRow{
@@ -46,7 +46,7 @@ func mustRunEvents(ctx context.Context, t *testing.T, st store.Store, runID stri
 func (s suite) TestRunEventsReplayInOrderFromASeq(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	seedRunEvents(ctx, t, st)
@@ -71,12 +71,12 @@ func (s suite) TestRunEventsReplayInOrderFromASeq(t *testing.T) {
 func (s suite) TestDeleteStepEventsTakesOneTypeOfOneStep(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 	other := s.open(t, "other")
 
-	mustStartRuns(ctx, t, st, "build", "run-1")
-	mustStartRuns(ctx, t, other, "build", "run-theirs")
+	seedRuns(t, st, "build", "run-1")
+	seedRuns(t, other, "build", "run-theirs")
 
 	rows := []store.RunEventRow{
 		{RunID: "run-1", Type: "step_started", StepID: 1},

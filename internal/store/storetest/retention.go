@@ -71,7 +71,7 @@ const chainsPerRetainedRun = 5
 func build(ctx context.Context, t *testing.T, st store.Store, jobName, runID string, n int) {
 	t.Helper()
 
-	mustStartRuns(ctx, t, st, jobName, runID)
+	seedRuns(t, st, jobName, runID) //nolint:contextcheck // seedRuns takes the test context; the ctx here is that same one
 
 	hash := hashOf(1_000_000 + n)
 
@@ -106,7 +106,7 @@ func build(ctx context.Context, t *testing.T, st store.Store, jobName, runID str
 func runIDs(t *testing.T, st store.Store, jobName string) []string {
 	t.Helper()
 
-	runs, err := st.ListRuns(context.Background(), jobName, 0)
+	runs, err := st.ListRuns(ctxFor(t), jobName, 0)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -124,7 +124,7 @@ func runIDs(t *testing.T, st store.Store, jobName string) []string {
 func assertRunSurvives(t *testing.T, st store.Store, runID, what string) {
 	t.Helper()
 
-	_, found, err := st.FindRunRow(context.Background(), runID)
+	_, found, err := st.FindRunRow(ctxFor(t), runID)
 	if err != nil {
 		t.Fatalf("FindRunRow(%q): %v", runID, err)
 	}
@@ -137,7 +137,7 @@ func assertRunSurvives(t *testing.T, st store.Store, runID, what string) {
 func countNodes(t *testing.T, st store.Store, jobName string) int {
 	t.Helper()
 
-	nodes, err := st.ListNodes(context.Background(), jobName, 0)
+	nodes, err := st.ListNodes(ctxFor(t), jobName, 0)
 	if err != nil {
 		t.Fatalf("ListNodes: %v", err)
 	}
@@ -148,7 +148,7 @@ func countNodes(t *testing.T, st store.Store, jobName string) int {
 func mustPlace(t *testing.T, st store.Store, placement store.Placement) {
 	t.Helper()
 
-	err := st.RecordPlacement(context.Background(), placement)
+	err := st.RecordPlacement(ctxFor(t), placement)
 	if err != nil {
 		t.Fatalf("RecordPlacement: %v", err)
 	}
@@ -169,7 +169,7 @@ func fillNodeCache(t *testing.T, st store.Store, jobName string, count int) {
 func (s suite) TestPruneKeepsTheNewestRuns(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	for n := 1; n <= 8; n++ {
@@ -197,7 +197,7 @@ func (s suite) TestPruneKeepsTheNewestRuns(t *testing.T) {
 func (s suite) TestPruneIsSafeOnAnEmptyDatabase(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	err := st.Prune(ctx, store.Retention{JobName: "nothing-here", Runs: 10}, "")
@@ -224,7 +224,7 @@ func (s suite) TestPruneIsSafeOnAnEmptyDatabase(t *testing.T) {
 func (s suite) TestPruneKeepsTheRunItWasCalledFrom(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	for n := 1; n <= 4; n++ {
@@ -261,10 +261,10 @@ func (s suite) TestPruneKeepsTheRunItWasCalledFrom(t *testing.T) {
 func (s suite) TestPruneSparesARunStillInFlight(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	mustStartRuns(ctx, t, st, "job", "INFLIGHT")
+	seedRuns(t, st, "job", "INFLIGHT")
 
 	for n := 1; n <= 4; n++ {
 		build(ctx, t, st, "job", fmt.Sprintf("RUN%05d", n), n)
@@ -285,7 +285,7 @@ func (s suite) TestPruneSparesARunStillInFlight(t *testing.T) {
 func (s suite) TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	const (
@@ -294,7 +294,7 @@ func (s suite) TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 		keep    = 1
 	)
 
-	mustStartRuns(ctx, t, st, jobName, runID)
+	seedRuns(t, st, jobName, runID)
 
 	placedHash, agentHash := hashOf(900_001), hashOf(900_002)
 
@@ -353,7 +353,7 @@ func (s suite) TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 func (s suite) TestPruneStillWorksBesideAHookPlacement(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	const (
@@ -362,7 +362,7 @@ func (s suite) TestPruneStillWorksBesideAHookPlacement(t *testing.T) {
 		keep    = 1
 	)
 
-	mustStartRuns(ctx, t, st, jobName, runID)
+	seedRuns(t, st, jobName, runID)
 
 	mustPlace(t, st, store.Placement{
 		RunID: runID, StepName: "build", JobName: jobName,
@@ -396,7 +396,7 @@ func (s suite) TestPruneStillWorksBesideAHookPlacement(t *testing.T) {
 func (s suite) TestPruneNodesKeepsTheNewestAndWhatAnEventNames(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	const (
@@ -436,7 +436,7 @@ func (s suite) TestPruneNodesKeepsTheNewestAndWhatAnEventNames(t *testing.T) {
 func (s suite) TestPruneBoundsTheChainCache(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	const (
@@ -508,7 +508,7 @@ func revisionExists(ctx context.Context, t *testing.T, st store.Store, sha strin
 func (s suite) TestPruneSweepsWhatTheReapedRowsLeftBehind(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	const (
@@ -562,7 +562,7 @@ func (s suite) TestPruneSweepsWhatTheReapedRowsLeftBehind(t *testing.T) {
 func (s suite) TestPruneUnderTheCapLeavesParentLinksAlone(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	parent, child := hashOf(1), hashOf(2)
@@ -600,7 +600,7 @@ func (s suite) TestPruneUnderTheCapLeavesParentLinksAlone(t *testing.T) {
 func (s suite) TestPruneBoundsTheTriggerQueue(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	const (

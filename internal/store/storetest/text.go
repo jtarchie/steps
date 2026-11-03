@@ -3,7 +3,6 @@ package storetest
 // Stored text: what a driver keeps of text that is hostile or too big.
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -25,10 +24,10 @@ const hostile = "before\x00middle\xff\xfeafter"
 func (s suite) TestHostileTextIsRecorded(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	mustStartRuns(ctx, t, st, "build", "run-1")
+	seedRuns(t, st, "build", "run-1")
 
 	err := st.AppendRunEvent(ctx, store.RunEventRow{
 		RunID: "run-1", Type: "step_note", StepName: hostile, Text: hostile, Detail: hostile, At: time.Now(),
@@ -90,7 +89,7 @@ func assertReadable(t *testing.T, what, got string) {
 func (s suite) TestStoredErrorsAreCappedAtExactlyTheLimit(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	fits := strings.Repeat("e", store.MaxStoredErrorBytes)

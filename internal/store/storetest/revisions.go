@@ -129,7 +129,7 @@ func pipelineSource(edit int) string {
 func (s suite) TestRunsRecordTheRevisionTheyWereGiven(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	for _, sha := range []string{"sha-one", "sha-two"} {
@@ -176,7 +176,7 @@ func (s suite) TestRunsRecordTheRevisionTheyWereGiven(t *testing.T) {
 func (s suite) TestResumeRecordsTheConfigItResumesUnder(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	for _, sha := range []string{"sha-broken", "sha-fixed"} {
@@ -217,13 +217,10 @@ func (s suite) TestResumeRecordsTheConfigItResumesUnder(t *testing.T) {
 func (s suite) TestRunWithNoRecordedConfigurationSaysSo(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	err := st.StartRun(ctx, store.NewRun{ID: "run-one", JobName: "build", Workspace: "/tmp/ws-one"})
-	if err != nil {
-		t.Fatalf("StartRun with no configuration recorded: %v", err)
-	}
+	seedRuns(t, st, "build", "run-one")
 
 	rows, err := st.ListRuns(ctx, "build", 10)
 	if err != nil {
@@ -242,7 +239,7 @@ func (s suite) TestRunWithNoRecordedConfigurationSaysSo(t *testing.T) {
 func (s suite) TestResumeKeepsTheConfigurationItCannotName(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	err := st.RecordRevision(ctx, "sha-recorded", pipelineSource(1), nil)
@@ -280,7 +277,7 @@ func (s suite) TestResumeKeepsTheConfigurationItCannotName(t *testing.T) {
 func (s suite) TestIncludesComeBackByteForByte(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	includes := map[string]string{

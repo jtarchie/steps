@@ -9,7 +9,6 @@ package storetest
 // happens to serialize them.
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -46,7 +45,7 @@ func concurrently(n int, handles []store.Store, fn func(st store.Store, i int)) 
 func (s suite) TestConcurrentClaimersHonourSerialGroups(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	handles := []store.Store{s.open(t, "test"), s.open(t, "test")}
 
 	err := handles[0].SyncJobLimits(ctx, map[string][]string{"deploy-a": {"target"}, "deploy-b": {"target"}}, nil)
@@ -105,7 +104,7 @@ func (s suite) TestConcurrentClaimersHonourSerialGroups(t *testing.T) {
 func (s suite) TestConcurrentVersionsGetDistinctOrder(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	handles := []store.Store{s.open(t, "test"), s.open(t, "test")}
 
 	const writers = 24
@@ -150,7 +149,7 @@ func (s suite) TestConcurrentVersionsGetDistinctOrder(t *testing.T) {
 func assertDistinctOrders(t *testing.T, st store.Store, resource string, want int) {
 	t.Helper()
 
-	orders, err := st.VersionOrders(context.Background(), resource)
+	orders, err := st.VersionOrders(ctxFor(t), resource)
 	if err != nil {
 		t.Fatalf("VersionOrders: %v", err)
 	}

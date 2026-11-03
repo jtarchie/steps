@@ -48,7 +48,7 @@ func placeAt(ctx context.Context, t *testing.T, st store.Store, placement store.
 func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	instance := "i-0123456789abcdef0"
@@ -124,7 +124,7 @@ func onlyPlacement(ctx context.Context, t *testing.T, st store.Store, runID stri
 func (s suite) TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	reclaimed := "i-000000000000000aa"
@@ -174,7 +174,7 @@ func (s suite) TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T)
 func (s suite) TestPlacementsReadBackInPlanOrder(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	// Recorded last-step-first, under hashes whose own order matches the order
@@ -237,7 +237,7 @@ func derefOr[T any](value *T, absent T) T {
 func (s suite) TestPlacementWithoutANodeIsStillKeyed(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	ensureRun(ctx, t, st, "HOOKRUN1", "build")

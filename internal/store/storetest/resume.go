@@ -3,7 +3,6 @@ package storetest
 // A restart resumes the run a claimed row started (#208): the queue row carries the run, and the restart's recovery tells a run it interrupted from one that had already ended.
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 func (s suite) TestARestartQueuesTheRunsItInterruptedToResume(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	err := st.SyncJobLimits(ctx, nil, map[string]int{"build": 2})
@@ -52,7 +51,7 @@ func (s suite) TestARestartQueuesTheRunsItInterruptedToResume(t *testing.T) {
 func (s suite) TestARestartClosesARowWhoseRunAlreadyEnded(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	startClaimedRun(t, st, "STOPPED1")
@@ -83,7 +82,7 @@ func (s suite) TestARestartClosesARowWhoseRunAlreadyEnded(t *testing.T) {
 func (s suite) TestARestartBeforeAResumeStartedResumesItAgain(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	startClaimedRun(t, st, "TWICE001")
@@ -111,7 +110,7 @@ func (s suite) TestARestartBeforeAResumeStartedResumesItAgain(t *testing.T) {
 func (s suite) TestPruneKeepsARunWaitingToBeResumed(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	startClaimedRun(t, st, "WAITING1")
@@ -123,7 +122,7 @@ func (s suite) TestPruneKeepsARunWaitingToBeResumed(t *testing.T) {
 
 	// A newer pending row of the job, which the reaped run's SET NULL would collide with on the pending-job index.
 	mustEnqueueJob(t, st, "build", "a newer version")
-	mustStartRuns(ctx, t, st, "build", "NEWER001")
+	seedRuns(t, st, "build", "NEWER001")
 
 	err = st.FinishRun(ctx, "NEWER001", store.RunSucceeded)
 	if err != nil {
@@ -143,10 +142,10 @@ func (s suite) TestPruneKeepsARunWaitingToBeResumed(t *testing.T) {
 func (s suite) TestAResumedRunIsInFlightAgain(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	mustStartRuns(ctx, t, st, "build", "AGAIN001")
+	seedRuns(t, st, "build", "AGAIN001")
 
 	err := st.FinishRun(ctx, "AGAIN001", store.RunAborted)
 	if err != nil {
@@ -171,12 +170,12 @@ func (s suite) TestAResumedRunIsInFlightAgain(t *testing.T) {
 func (s suite) TestResumableRunsListsOnlyThisPipelinesResumableRuns(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 	neighbour := s.open(t, "neighbour")
 
-	mustStartRuns(ctx, t, st, "build", "LIVE0001", "DONE0001")
-	mustStartRuns(ctx, t, neighbour, "build", "THEIRS01")
+	seedRuns(t, st, "build", "LIVE0001", "DONE0001")
+	seedRuns(t, neighbour, "build", "THEIRS01")
 	startClaimedRun(t, st, "WAITING1")
 
 	// A restart queued WAITING1 to resume and closed it; the next restart comes before its claim.
@@ -185,7 +184,7 @@ func (s suite) TestResumableRunsListsOnlyThisPipelinesResumableRuns(t *testing.T
 		t.Fatalf("ResetStaleRunning: %v", err)
 	}
 
-	mustStartRuns(ctx, t, st, "build", "LIVE0002")
+	seedRuns(t, st, "build", "LIVE0002")
 
 	err = st.FinishRun(ctx, "DONE0001", store.RunFailed)
 	if err != nil {
@@ -210,12 +209,12 @@ func (s suite) TestResumableRunsListsOnlyThisPipelinesResumableRuns(t *testing.T
 func (s suite) TestMaxStepIDIsTheHighestARunMinted(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 	neighbour := s.open(t, "neighbour")
 
-	mustStartRuns(ctx, t, st, "build", "MINE0001", "EMPTY001")
-	mustStartRuns(ctx, t, neighbour, "build", "THEIRS01")
+	seedRuns(t, st, "build", "MINE0001", "EMPTY001")
+	seedRuns(t, neighbour, "build", "THEIRS01")
 
 	for _, row := range []struct {
 		st   store.Store
@@ -259,7 +258,7 @@ func startClaimedRun(t *testing.T, st store.Store, runID string) {
 func claimResume(t *testing.T, st store.Store) string {
 	t.Helper()
 
-	claim, found, err := st.ClaimNextJob(context.Background())
+	claim, found, err := st.ClaimNextJob(ctxFor(t))
 	if err != nil || !found {
 		t.Fatalf("ClaimNextJob: %v (found %v)", err, found)
 	}

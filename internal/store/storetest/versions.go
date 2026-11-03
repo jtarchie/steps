@@ -7,7 +7,6 @@ package storetest
 // failing poll used to leave nowhere but a log line.
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -142,7 +141,7 @@ func (s suite) TestACheckErrorIsBoundedLikeEveryOtherStoredError(t *testing.T) {
 func (s suite) TestCheckedResourcesListsEachCursor(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	for name, version := range map[string]store.VersionKey{"repo": `{"ref":"b"}`, "image": `{"digest":"a"}`} {
@@ -163,7 +162,7 @@ func (s suite) TestCheckedResourcesListsEachCursor(t *testing.T) {
 func (s suite) TestHasPassedVersionSetNeedsOneBuild(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 	want := map[string]store.VersionKey{"repo": `{"ref":"a"}`, "image": `{"digest":"b"}`}
 
@@ -201,7 +200,7 @@ func (s suite) TestHasPassedVersionSetNeedsOneBuild(t *testing.T) {
 func (s suite) TestRecordPassedVersionsRecordsAWholeBuild(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	err := st.RecordPassedVersions(ctx, nil)
@@ -238,7 +237,7 @@ func (s suite) TestRecordPassedVersionsRecordsAWholeBuild(t *testing.T) {
 func (s suite) TestTheCheckedVersionMovesOnlyFromWhatWasRead(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	for _, step := range []struct {
@@ -271,7 +270,7 @@ func (s suite) TestTheCheckedVersionMovesOnlyFromWhatWasRead(t *testing.T) {
 func (s suite) TestPassedVersionsAreNewestFirstWithinASecond(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	const recorded = 30
@@ -333,7 +332,7 @@ func recordN(t *testing.T, st store.Store, resource string, names ...string) {
 		versions = append(versions, map[string]any{"n": name})
 	}
 
-	_, err := st.RecordVersions(context.Background(), resource, versions, 0)
+	_, err := st.RecordVersions(ctxFor(t), resource, versions, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +343,7 @@ func (s suite) TestRecordVersionOrderAnswersWithTheOrderFiled(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	recordN(t, st, "items", "1", "2")
 
@@ -402,7 +401,7 @@ func (s suite) TestResourceVersionsJSONPreservesAWideID(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	_, err := st.RecordVersions(ctx, "items", []map[string]any{
 		{"n": "1"}, {"id": json.Number("1234567890123456789")},
@@ -461,7 +460,7 @@ func (s suite) TestRecordVersionsKeepsExactDigits(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	_, err := st.RecordVersions(context.Background(), "items", []map[string]any{
+	_, err := st.RecordVersions(ctxFor(t), "items", []map[string]any{
 		{"id": json.Number("1234567890123456789"), "ts": json.Number("1699887654.001200")},
 	}, 0)
 	if err != nil {
@@ -495,7 +494,7 @@ func (s suite) TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	oldest, err := store.EncodeVersion(map[string]any{"n": "1"})
 	if err != nil {
@@ -554,7 +553,7 @@ func (s suite) TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	version, err := store.EncodeVersion(map[string]any{"n": "7"})
 	if err != nil {
@@ -611,7 +610,7 @@ func (s suite) TestTheMarkCannotDevelopHoles(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	// Far more versions than any set-based cap would have kept.
 	const total = 5000
@@ -682,7 +681,7 @@ func (s suite) TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	// A manual run files v10 before any check has seen the resource.
 	v10 := mustEncode(t, map[string]any{"n": "10"})
@@ -720,7 +719,7 @@ func (s suite) TestSteadyStateReportWritesNothing(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	report := []map[string]any{{"n": "1"}, {"n": "2"}, {"n": "3"}}
 
@@ -763,7 +762,7 @@ func (s suite) TestPruneNeverEatsTheReportedWindow(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	window := make([]map[string]any, 0, 20)
 	for i := 1; i <= 20; i++ {
@@ -807,7 +806,7 @@ func mustEncode(t *testing.T, version map[string]any) store.VersionKey {
 func decodedVersions(t *testing.T, st store.Store, name string) ([]map[string]any, error) {
 	t.Helper()
 
-	encoded, err := st.ResourceVersionsJSON(context.Background(), name)
+	encoded, err := st.ResourceVersionsJSON(ctxFor(t), name)
 	if err != nil {
 		return nil, fmt.Errorf("could not read the stored versions: %w", err)
 	}
@@ -833,7 +832,7 @@ func decodedVersions(t *testing.T, st store.Store, name string) ([]map[string]an
 func (s suite) TestVersionHistoryZeroMeansNoLimit(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	// Filed across several checks, not one. A prune never touches versions the
@@ -875,7 +874,7 @@ func (s suite) TestGreenVersionsIsTheIntersection(t *testing.T) {
 
 	st := s.open(t, "test")
 	other := s.open(t, "other")
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	recordN(t, st, "items", "1", "2", "3", "4")
 	recordN(t, other, "items", "1", "2", "3", "4")
@@ -927,22 +926,19 @@ func (s suite) TestGreenVersionsIsTheIntersection(t *testing.T) {
 func (s suite) TestRunInputsAreKeptPerGet(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "web")
 
 	const run = "PERBUILD02"
 
-	err := st.StartRun(ctx, store.NewRun{ID: run, JobName: "build", Workspace: "/tmp/web"})
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
+	seedRuns(t, st, "build", run)
 
 	for _, input := range []store.RunInput{
 		{Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
 		{Input: "baseline", Resource: "repo", Version: `{"ref":"v1"}`},
 		{Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
 	} {
-		err = st.RecordRunInput(ctx, run, store.RunInput{Input: input.Input, Resource: input.Resource, Version: input.Version})
+		err := st.RecordRunInput(ctx, run, store.RunInput{Input: input.Input, Resource: input.Resource, Version: input.Version})
 		if err != nil {
 			t.Fatalf("RecordRunInput %+v: %v", input, err)
 		}
@@ -981,7 +977,7 @@ func (s suite) TestRunInputsAreKeptPerGet(t *testing.T) {
 func (s suite) TestVersionRunsAreTheRunsThatTookEachVersion(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	web := s.open(t, "web")
 	infra := s.open(t, "infra")
 
@@ -1041,7 +1037,7 @@ func (s suite) TestVersionRunsAreTheRunsThatTookEachVersion(t *testing.T) {
 func (s suite) TestVersionRunsReadOnlyTheNamedVersions(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	web := s.open(t, "web")
 
 	recordInputRun(t, web, "VNAMED01", "repo", `{"ref":"v1"}`, "succeeded")
@@ -1062,7 +1058,7 @@ func (s suite) TestVersionRunsReadOnlyTheNamedVersions(t *testing.T) {
 func recordInputRun(t *testing.T, st store.Store, runID, resource string, version store.VersionKey, status store.RunStatus) {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	err := st.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/web"})
 	if err != nil {
@@ -1083,7 +1079,7 @@ func recordInputRun(t *testing.T, st store.Store, runID, resource string, versio
 func assertLastCheckedVersion(t *testing.T, st store.Store, resourceName string, wantFound bool, wantVersion store.VersionKey) {
 	t.Helper()
 
-	last, found, err := st.LastChecked(context.Background(), resourceName)
+	last, found, err := st.LastChecked(ctxFor(t), resourceName)
 	if err != nil {
 		t.Fatalf("LastChecked(%q): %v", resourceName, err)
 	}
@@ -1098,7 +1094,7 @@ func (s suite) TestStoreCheckedVersionRoundTrip(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	assertLastCheckedVersion(t, st, "thing", false, "")
 
@@ -1124,7 +1120,7 @@ func (s suite) TestConsumedMarkRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	mark, err := st.ConsumedMark(ctx, "answer", "mentions")
 	if err != nil {

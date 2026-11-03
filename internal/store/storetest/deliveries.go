@@ -3,7 +3,6 @@ package storetest
 // webhook_deliveries: a delivery is a version, and its payload lives and dies with it.
 
 import (
-	"context"
 	"fmt"
 	"slices"
 	"testing"
@@ -22,7 +21,7 @@ func delivery(id string) store.Delivery {
 func pendingJobs(t *testing.T, st store.Store) []string {
 	t.Helper()
 
-	rows, err := st.ListTriggerQueue(context.Background(), 100)
+	rows, err := st.ListTriggerQueue(ctxFor(t), 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +51,7 @@ func encoded(t *testing.T, version map[string]any) store.VersionKey {
 func recordedPayload(t *testing.T, st store.Store, version store.VersionKey) (store.Delivery, bool) {
 	t.Helper()
 
-	got, found, err := st.Delivery(context.Background(), "push", version)
+	got, found, err := st.Delivery(ctxFor(t), "push", version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +63,7 @@ func recordedPayload(t *testing.T, st store.Store, version store.VersionKey) (st
 func (s suite) TestADeliveryIsAVersionWithItsPayload(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	recorded, err := st.RecordDelivery(ctx, "push", delivery("a"), store.Dispatch{Jobs: []string{"build"}}, 0)
@@ -89,7 +88,7 @@ func (s suite) TestADeliveryIsAVersionWithItsPayload(t *testing.T) {
 func (s suite) TestADeliveryDispatchesInTheSameCall(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	_, err := st.RecordDelivery(ctx, "push", delivery("a"), store.Dispatch{Jobs: []string{"build", "deploy"}}, 0)
@@ -116,7 +115,7 @@ func (s suite) TestADeliveryDispatchesInTheSameCall(t *testing.T) {
 func (s suite) TestARedeliveryChangesNothing(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	_, err := st.RecordDelivery(ctx, "push", delivery("a"), store.Dispatch{Jobs: []string{"build"}}, 0)
@@ -155,7 +154,7 @@ func (s suite) TestARedeliveryChangesNothing(t *testing.T) {
 func (s suite) TestPruningAVersionTakesItsPayload(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	for _, id := range []string{"a", "b"} {
@@ -178,7 +177,7 @@ func (s suite) TestPruningAVersionTakesItsPayload(t *testing.T) {
 func (s suite) TestADeliveryUnderZeroHistoryPrunesNothing(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	// Filed by earlier calls: a prune never touches the version the current call reports, so only these can show a cap.
@@ -215,7 +214,7 @@ func (s suite) TestADeliveryUnderZeroHistoryPrunesNothing(t *testing.T) {
 func (s suite) TestAHeldDeliveryIsRecordedButNotDispatched(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	recorded, err := st.RecordDelivery(ctx, "push", delivery("a"), store.Dispatch{Jobs: []string{"build"}, Held: true}, 0)

@@ -3,7 +3,6 @@ package storetest
 // The artifact-store index: action key to output digests.
 
 import (
-	"context"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -16,7 +15,7 @@ func (s suite) TestStepBlobsRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-	ctx := context.Background()
+	ctx := ctxFor(t)
 
 	got, err := st.StepBlobs(ctx, "unknown")
 	if err != nil || len(got) != 0 {
@@ -43,7 +42,7 @@ func (s suite) TestStepBlobsRoundTrip(t *testing.T) {
 func assertBlobs(t *testing.T, st store.Store, key string, want map[string]string) {
 	t.Helper()
 
-	got, err := st.StepBlobs(context.Background(), key)
+	got, err := st.StepBlobs(ctxFor(t), key)
 	if err != nil {
 		t.Fatalf("StepBlobs(%q): %v", key, err)
 	}

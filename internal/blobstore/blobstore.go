@@ -378,15 +378,18 @@ func (s *Store) rawKey(key string) string {
 
 // Has reports whether the store holds key.
 func (s *Store) Has(ctx context.Context, key string) (bool, error) {
-	full := s.rawKey(key)
+	return s.head(ctx, key, s.rawKey(key))
+}
 
+// head is Has and HasTree's shared body: name is what an error calls the object, full the already-built key, which stays with the caller because the two build it differently.
+func (s *Store) head(ctx context.Context, name, full string) (bool, error) {
 	response, err := s.do(ctx, http.MethodHead, full, nil)
 	if err != nil {
 		if isNotFound(err) {
 			return false, nil
 		}
 
-		return false, fmt.Errorf("checking %s in %q: %w", key, s.opts.URL, err)
+		return false, fmt.Errorf("checking %s in %q: %w", name, s.opts.URL, err)
 	}
 
 	_ = response.Body.Close()
@@ -452,23 +455,18 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 // itself — how a venue with zero AWS identity is handed exactly the blobs
 // its job needs and nothing else.
 func (s *Store) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	full := s.rawKey(key)
-
-	signed, err := s.presign(ctx, http.MethodGet, full, ttl)
-	if err != nil {
-		return "", fmt.Errorf("presigning a read of %s in %q: %w", key, s.opts.URL, err)
-	}
-
-	return signed, nil
+	return s.presignAs(ctx, http.MethodGet, "a read", key, ttl)
 }
 
 // PresignPut is PresignGet for writing key.
 func (s *Store) PresignPut(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	full := s.rawKey(key)
+	return s.presignAs(ctx, http.MethodPut, "a write", key, ttl)
+}
 
-	signed, err := s.presign(ctx, http.MethodPut, full, ttl)
+func (s *Store) presignAs(ctx context.Context, method, what, key string, ttl time.Duration) (string, error) {
+	signed, err := s.presign(ctx, method, s.rawKey(key), ttl)
 	if err != nil {
-		return "", fmt.Errorf("presigning a write of %s in %q: %w", key, s.opts.URL, err)
+		return "", fmt.Errorf("presigning %s of %s in %q: %w", what, key, s.opts.URL, err)
 	}
 
 	return signed, nil
@@ -478,18 +476,7 @@ func (s *Store) PresignPut(ctx context.Context, key string, ttl time.Duration) (
 // skipped — the point of content addressing is that a key never needs
 // re-uploading.
 func (s *Store) HasTree(ctx context.Context, digest string) (bool, error) {
-	response, err := s.do(ctx, http.MethodHead, s.key(digest), nil)
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-
-		return false, fmt.Errorf("checking %s in %q: %w", digest, s.opts.URL, err)
-	}
-
-	_ = response.Body.Close()
-
-	return true, nil
+	return s.head(ctx, digest, s.key(digest))
 }
 
 // PutTree uploads dir as one blob under digest.

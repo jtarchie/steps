@@ -3,7 +3,6 @@ package storetest
 // The trigger queue, the breaker, and the job limits a claim honours.
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -17,7 +16,7 @@ import (
 func (s suite) TestTheBreakerCountsHoldsAndResets(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	assertOutcome(t, st, "deploy", false, 2, false, 1)
@@ -46,7 +45,7 @@ func (s suite) TestTheBreakerCountsHoldsAndResets(t *testing.T) {
 func assertOutcome(t *testing.T, st store.Store, job string, succeeded bool, maxFailures int, wantHeld bool, wantConsecutive int) {
 	t.Helper()
 
-	held, consecutive, err := st.RecordJobOutcome(context.Background(), job, succeeded, maxFailures)
+	held, consecutive, err := st.RecordJobOutcome(ctxFor(t), job, succeeded, maxFailures)
 	if err != nil || held != wantHeld || consecutive != wantConsecutive {
 		t.Fatalf("RecordJobOutcome(%q, succeeded=%v) = held %v, %d in a row, %v; want held %v, %d in a row",
 			job, succeeded, held, consecutive, err, wantHeld, wantConsecutive)
@@ -56,7 +55,7 @@ func assertOutcome(t *testing.T, st store.Store, job string, succeeded bool, max
 func assertNotHeld(t *testing.T, st store.Store, job string) {
 	t.Helper()
 
-	held, err := st.IsJobHeld(context.Background(), job)
+	held, err := st.IsJobHeld(ctxFor(t), job)
 	if err != nil || held {
 		t.Fatalf("IsJobHeld(%q) = %v, %v; want false", job, held, err)
 	}
@@ -67,7 +66,7 @@ func assertNotHeld(t *testing.T, st store.Store, job string) {
 func (s suite) TestSerialGroupHolderNamesWhoIsRunning(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	err := st.SyncJobLimits(ctx, map[string][]string{"deploy-a": {"target"}, "deploy-b": {"target"}}, nil)
@@ -99,7 +98,7 @@ func (s suite) TestSerialGroupHolderNamesWhoIsRunning(t *testing.T) {
 func (s suite) TestListTriggerQueue(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	err := st.EnqueueJob(ctx, "build", "resource repo changed", "")
@@ -138,7 +137,7 @@ func (s suite) TestListTriggerQueue(t *testing.T) {
 func (s suite) TestAQueueRowKeepsTheInstantItWasEnqueued(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	err := st.StartRun(ctx, store.NewRun{ID: "run-before", JobName: "build"})
@@ -162,7 +161,7 @@ func (s suite) TestAQueueRowKeepsTheInstantItWasEnqueued(t *testing.T) {
 func (s suite) TestListTriggerQueueHonoursItsLimit(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	// Three jobs: a pending row is one per job, so three of one job is one row.
@@ -358,7 +357,7 @@ func claimAndComplete(t *testing.T, st store.Queue) store.ClaimedJob {
 func mustEnqueueJob(t *testing.T, st store.Store, jobName, reason string) {
 	t.Helper()
 
-	err := st.EnqueueJob(context.Background(), jobName, reason, "")
+	err := st.EnqueueJob(ctxFor(t), jobName, reason, "")
 	if err != nil {
 		t.Fatalf("EnqueueJob(%q, %q): %v", jobName, reason, err)
 	}
@@ -369,7 +368,7 @@ func mustEnqueueJob(t *testing.T, st store.Store, jobName, reason string) {
 func mustClaimJob(t *testing.T, st store.Store, want string) (id int64, jobName string) {
 	t.Helper()
 
-	claim, found, err := st.ClaimNextJob(context.Background())
+	claim, found, err := st.ClaimNextJob(ctxFor(t))
 	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
 	}
@@ -388,7 +387,7 @@ func mustClaimJob(t *testing.T, st store.Store, want string) (id int64, jobName 
 func assertQueueEmpty(t *testing.T, st store.Store) {
 	t.Helper()
 
-	_, found, err := st.ClaimNextJob(context.Background())
+	_, found, err := st.ClaimNextJob(ctxFor(t))
 	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
 	}
@@ -433,7 +432,7 @@ func (s suite) TestStoreClaimSerializesSameJob(t *testing.T) {
 	assertQueueEmpty(t, st)
 
 	// Once the running build completes, the queued change becomes claimable.
-	err := st.CompleteJob(context.Background(), id, store.QueueSucceeded, nil)
+	err := st.CompleteJob(ctxFor(t), id, store.QueueSucceeded, nil)
 	if err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
@@ -454,7 +453,7 @@ func (s suite) TestStoreResetStaleRunningWithPendingSuccessor(t *testing.T) {
 	mustClaimJob(t, st, "build")                 // now running
 	mustEnqueueJob(t, st, "build", "resource-b") // pending successor
 
-	err := st.ResetStaleRunning(context.Background())
+	err := st.ResetStaleRunning(ctxFor(t))
 	if err != nil {
 		t.Fatalf("ResetStaleRunning: %v", err)
 	}
@@ -506,7 +505,7 @@ func (s suite) TestStoreClaimNextJobAtomicity(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			claim, found, err := st.ClaimNextJob(context.Background())
+			claim, found, err := st.ClaimNextJob(ctxFor(t))
 			jobName := claim.JobName
 			if err != nil {
 				t.Errorf("ClaimNextJob: %v", err)
@@ -554,7 +553,7 @@ func (s suite) TestStoreResetStaleRunning(t *testing.T) {
 
 	// Simulate a crash/interrupted run: the row is stuck "running". A fresh
 	// watch startup must recover it, not leave it stranded forever.
-	err := st.ResetStaleRunning(context.Background())
+	err := st.ResetStaleRunning(ctxFor(t))
 	if err != nil {
 		t.Fatalf("ResetStaleRunning: %v", err)
 	}
@@ -569,12 +568,12 @@ func (s suite) TestStoreResetStaleRunning(t *testing.T) {
 func (s suite) TestStoreResetStaleRunningClosesRuns(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 	neighbour := s.open(t, "neighbour")
 
-	mustStartRuns(ctx, t, st, "build", "STALE001", "DONE0001")
-	mustStartRuns(ctx, t, neighbour, "build", "OTHER001")
+	seedRuns(t, st, "build", "STALE001", "DONE0001")
+	seedRuns(t, neighbour, "build", "OTHER001")
 
 	err := st.FinishRun(ctx, "DONE0001", store.RunSucceeded)
 	if err != nil {
@@ -625,7 +624,7 @@ func (s suite) TestConformanceSerialGroupsBlockAcrossJobs(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	err := st.SyncJobLimits(context.Background(), map[string][]string{
+	err := st.SyncJobLimits(ctxFor(t), map[string][]string{
 		"deploy-staging": {"deploy"},
 		"deploy-prod":    {"deploy"},
 		// "lint" belongs to no group at all.
@@ -649,7 +648,7 @@ func (s suite) TestConformanceSerialGroupsBlockAcrossJobs(t *testing.T) {
 	// deploy-prod shares "deploy" with the running deploy-staging, so it is not.
 	assertQueueEmpty(t, st)
 
-	err = st.CompleteJob(context.Background(), id, store.QueueSucceeded, nil)
+	err = st.CompleteJob(ctxFor(t), id, store.QueueSucceeded, nil)
 	if err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
@@ -679,7 +678,7 @@ func (s suite) TestConformanceMaxInFlightAdmitsUpToTheLimit(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	err := st.SyncJobLimits(context.Background(), nil, map[string]int{"build": 2})
+	err := st.SyncJobLimits(ctxFor(t), nil, map[string]int{"build": 2})
 	if err != nil {
 		t.Fatalf("SyncJobLimits: %v", err)
 	}
@@ -698,7 +697,7 @@ func (s suite) TestConformanceMaxInFlightAdmitsUpToTheLimit(t *testing.T) {
 	assertQueueEmpty(t, st)
 
 	// One finishes, so a slot opens.
-	err = st.CompleteJob(context.Background(), first, store.QueueSucceeded, nil)
+	err = st.CompleteJob(ctxFor(t), first, store.QueueSucceeded, nil)
 	if err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
@@ -714,7 +713,7 @@ func (s suite) TestConformanceSerialForcesOneInFlight(t *testing.T) {
 	st := s.open(t, "test")
 
 	// What EffectiveMaxInFlight produces for a serial job.
-	err := st.SyncJobLimits(context.Background(), nil, map[string]int{"deploy": 1})
+	err := st.SyncJobLimits(ctxFor(t), nil, map[string]int{"deploy": 1})
 	if err != nil {
 		t.Fatalf("SyncJobLimits: %v", err)
 	}
@@ -757,7 +756,7 @@ func (s suite) TestMaxInFlightDefaultsToOneForAnUnknownJob(t *testing.T) {
 func (s suite) TestSyncJobLimitsClearsBothMirrors(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	err := st.SyncJobLimits(ctx, nil, map[string]int{"build": 2})
@@ -784,7 +783,7 @@ func (s suite) TestSyncJobLimitsClearsBothMirrors(t *testing.T) {
 func (s suite) TestQueueStatusesMatchTheSQL(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
 	mustEnqueueJob(t, st, "build", "r")
@@ -813,7 +812,7 @@ func (s suite) TestQueueStatusesMatchTheSQL(t *testing.T) {
 func assertNewestQueueStatus(t *testing.T, st store.Store, want store.QueueStatus) {
 	t.Helper()
 
-	rows, err := st.ListTriggerQueue(context.Background(), 1)
+	rows, err := st.ListTriggerQueue(ctxFor(t), 1)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("ListTriggerQueue: %v (%d rows)", err, len(rows))
 	}

@@ -53,12 +53,9 @@ func (s suite) TestRenameKeepsTheHistoryUnderTheNewName(t *testing.T) {
 	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	err := st.StartRun(ctx, store.NewRun{ID: "run-one", JobName: "build", Workspace: "/tmp/ws"})
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
+	seedRuns(t, st, "build", "run-one")
 
-	err = st.FinishRun(ctx, "run-one", store.RunSucceeded)
+	err := st.FinishRun(ctx, "run-one", store.RunSucceeded)
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
@@ -103,10 +100,7 @@ func (s suite) TestDeleteForgetsThePipelineAndItsHistory(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = bystander.StartRun(ctx, store.NewRun{ID: "run-two", JobName: "build", Workspace: "/tmp/ws"})
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
+	seedRuns(t, bystander, "build", "run-two")
 
 	err = doomed.Delete(ctx)
 	if err != nil {
