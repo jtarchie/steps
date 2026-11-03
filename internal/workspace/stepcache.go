@@ -122,9 +122,7 @@ type stepCache struct {
 }
 
 func newStepCache(backend treeBackend, root string, maxEntries int) (*stepCache, error) {
-	// removeTree, not remove: an entry is a plain directory that CONTAINS the
-	// backend's materialized trees.
-	entries, err := newEntryStore(root, stepCacheDirName, maxEntries, backend.removeTree)
+	entries, err := newEntryStore(root, stepCacheDirName, maxEntries, backend.remove)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +303,7 @@ func (c *stepCache) discardStaged(staged []stagedOutput) {
 // output's mere presence as cached: an entry filled in place and interrupted
 // mid-copy would serve an empty output as a hit.
 func (c *stepCache) store(ctx context.Context, key, path, artifacts string, digests func(string) (string, error), req StepCacheRequest) error {
-	err := replaceTree(path, c.backend.removeTree, func(staged string) error {
+	err := replaceTree(path, c.backend.remove, func(staged string) error {
 		mkErr := os.MkdirAll(staged, 0o750)
 		if mkErr != nil {
 			return fmt.Errorf("creating cache entry: %w", mkErr)

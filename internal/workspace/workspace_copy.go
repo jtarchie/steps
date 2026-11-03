@@ -92,12 +92,6 @@ func (copyBackend) remove(dir string) error {
 	return nil
 }
 
-// removeTree is identical to remove: plain directories and copied trees are
-// all removed the same way.
-func (b copyBackend) removeTree(dir string) error {
-	return b.remove(dir)
-}
-
 // copyTree copies src's contents into dst (which must already exist),
 // trying each platform candidate command line in order (see
 // copyTreeCandidates) until one succeeds — earlier candidates prefer
