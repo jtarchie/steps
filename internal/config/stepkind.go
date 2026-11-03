@@ -7,13 +7,7 @@ import (
 	"strings"
 )
 
-// ReferencesEntities reports whether a step of this kind names something the
-// pipeline has to resolve — a resource, a task, an agent, or branches that do.
-func (k StepKind) ReferencesEntities() bool {
-	return k != StepKindLoadVar && k != StepKindApproval
-}
-
-// StepKind is which of Get/Task/Put/Agent a Step is. See Step.Kind.
+// StepKind is which kind of step a Step is. See Step.Kind.
 type StepKind string
 
 // The StepKind values, one per Step field Kind can resolve to. Each is also
@@ -44,6 +38,12 @@ const (
 	// steps cannot express (see Step.Do).
 	StepKindDo StepKind = "do"
 )
+
+// ReferencesEntities reports whether a step of this kind names something the
+// pipeline has to resolve — a resource, a task, an agent, or branches that do.
+func (k StepKind) ReferencesEntities() bool {
+	return k != StepKindLoadVar && k != StepKindApproval
+}
 
 // nesting is how a kind holds the steps nested under it.
 type nesting int

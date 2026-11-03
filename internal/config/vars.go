@@ -4,9 +4,9 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 )
 
@@ -57,7 +57,7 @@ func UnresolvedVars(value string) []string {
 		}
 	}
 
-	sort.Strings(names)
+	slices.Sort(names)
 
 	return names
 }
@@ -101,7 +101,7 @@ func (c *Config) validateVars() error {
 		produced := varSet{}
 
 		for i := range job.Plan {
-			produced, err = checkVarFlow(fmt.Sprintf("%s step %d%s", job.label(), i, job.Plan[i].at()), &job.Plan[i], produced)
+			produced, err = checkVarFlow(job.stepLabel(i), &job.Plan[i], produced)
 			if err != nil {
 				return err
 			}
@@ -119,6 +119,14 @@ func (c *Config) validateVars() error {
 }
 
 type varSet map[string]bool
+
+func (s varSet) union(other varSet) varSet {
+	out := make(varSet, len(s)+len(other))
+	maps.Copy(out, s)
+	maps.Copy(out, other)
+
+	return out
+}
 
 func (s varSet) with(names ...string) varSet {
 	out := make(varSet, len(s)+len(names))
@@ -193,11 +201,7 @@ func checkBranchFlow(label string, step *Step, before, after varSet) (varSet, er
 		joined = joinBranch(kind, joined, out, i == 0)
 	}
 
-	for name := range joined {
-		after = after.with(name)
-	}
-
-	return after, nil
+	return after.union(joined), nil
 }
 
 // checkHookFlow checks hooks against what preceded their step, giving
@@ -224,11 +228,7 @@ func joinBranch(kind StepKind, joined, branch varSet, first bool) varSet {
 	}
 
 	if kind == StepKindInParallel {
-		for name := range joined {
-			branch = branch.with(name)
-		}
-
-		return branch
+		return branch.union(joined)
 	}
 
 	common := varSet{}
@@ -277,7 +277,7 @@ func validateLoadVarStep(label string, step *Step) error {
 // `((version))` in a put's params: was neither rejected here nor rendered
 // there, so the resource's out: published a release literally named
 // "((version))".
-func checkStepVars(label string, step *Step, produced map[string]bool) error {
+func checkStepVars(label string, step *Step, produced varSet) error {
 	for _, field := range varFields(step) {
 		for _, name := range UnresolvedVars(*field.value) {
 			if !produced[name] {

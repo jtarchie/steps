@@ -89,7 +89,7 @@ func (j Job) visitHookSteps(fn func(label string, step *Step) error) error {
 
 	for i := range j.Plan {
 		err := j.Plan[i].Hooks.Each(func(name string, hook *Step) error {
-			return visitStepTree(fmt.Sprintf("%s step %d%s (%s hook)", jobLabel, i, j.Plan[i].at(), name), hook, fn)
+			return visitStepTree(fmt.Sprintf("%s (%s hook)", j.stepLabel(i), name), hook, fn)
 		})
 		if err != nil {
 			return err
@@ -126,7 +126,7 @@ func walkJob[T any](j Job, carried T, pass func(string, *Step, T) (T, T), fn fun
 	jobLabel := j.label()
 
 	for i := range j.Plan {
-		err := walkStepTree(fmt.Sprintf("%s step %d%s", jobLabel, i, j.Plan[i].at()), &j.Plan[i], carried, pass, fn)
+		err := walkStepTree(j.stepLabel(i), &j.Plan[i], carried, pass, fn)
 		if err != nil {
 			return err
 		}
@@ -139,6 +139,10 @@ func walkJob[T any](j Job, carried T, pass func(string, *Step, T) (T, T), fn fun
 
 func (j Job) label() string {
 	return fmt.Sprintf("job %q", j.Name)
+}
+
+func (j Job) stepLabel(i int) string {
+	return fmt.Sprintf("%s step %d%s", j.label(), i, j.Plan[i].at())
 }
 
 // FindJob returns the job with the given name, or an error if not found.

@@ -5,15 +5,10 @@
 package config
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
-	"os"
 	"path/filepath"
-	"slices"
 )
 
 // Config is the top-level shape of a Concourse-style pipeline YAML file.
@@ -44,95 +39,10 @@ type Config struct {
 	// Access narrows who may see and operate this pipeline on a daemon people
 	// sign in to. See Access.
 	Access *Access `yaml:"access,omitempty"`
-	// Name is WHICH pipeline this is, stamped by the loader. Not YAML, never
-	// hashed: it is identity, not content.
-	//
-	// It exists because one daemon serves several pipelines (each uploaded by
-	// `steps pipeline set`), and process-wide state keyed by a name a pipeline
-	// chose — an agent, a job — collides across them. The Config holds it for
-	// the same reason a store.Store handle holds its pipeline: the scope has to be
-	// impossible to forget.
-	//
-	// It is the SAME STRING the store's pipelines.name and the web UI's
-	// /p/<slug> route use, and that is the whole point of it being supplied
-	// rather than derived here. A path was the obvious discriminator and was
-	// the wrong one: it is a second identity that disagrees with the one the
-	// repo already resolves and publishes, so a pin log line said
-	// /abs/infra/deploy.yml where every run record said deploy — and --name,
-	// which exists precisely to say which pipeline this is, moved the store
-	// and the route and not the pin.
-	//
-	// A Config built in a test rather than loaded has an empty Name, which
-	// shares one scope with every other such Config, exactly as everything
-	// did before this field existed.
+	// Name is WHICH pipeline this is, stamped by the loader, never YAML, never hashed (identity, not content). It is the SAME STRING store pipelines.name and the web /p/<slug> route use, supplied rather than derived from a path because a path is a second identity that disagrees with the published one (--name moved the store and the route but not the pin). A Config built in a test has an empty Name and shares one scope with every other such Config.
 	Name string `yaml:"-"`
-	// Revision is WHICH configuration this is: the bytes it was parsed from,
-	// and their hash. Stamped by the loader, never YAML, never hashed into a
-	// node — it identifies the content, so folding it into a step's content
-	// would make every step of an edited file re-run, which is the merkle
-	// cache's job to decide and not this field's.
-	//
-	// Computed AFTER ((var)) substitution, because substitution happens
-	// before the parse: one file under two --vars-files is two
-	// configurations, and a revision taken from the file on disk would call
-	// them one.
-	//
-	// A Config built in a test rather than loaded has an empty Revision, and
-	// a run started from one records no revision at all — see
-	// store.Store.RecordRevision.
+	// Revision is WHICH configuration this is, stamped by the loader, never YAML, never hashed into a node: folding it into step content would re-run every step of an edited file, which is the merkle cache's call. Computed AFTER ((var)) substitution, so one file under two --vars-files is two configurations. A Config built in a test has an empty Revision and records none (store.Store.RecordRevision).
 	Revision Revision `yaml:"-"`
-}
-
-// Revision is one configuration, as parsed: the substituted source, the include contents it folded in, and the hash over both.
-type Revision struct {
-	SHA    string
-	Source string
-	// Includes is path→content, the path exactly as the pipeline names it: the string is hashed, so a resolved path made ci/app.yml and /repo/ci/app.yml two configurations of the same bytes.
-	Includes map[string]string
-}
-
-// withIncludes hashes path→content PAIRS in sorted path order, so the hash describes the SET of includes rather than the order the resolver walked the config in.
-func (r Revision) withIncludes(includes map[string]string) Revision {
-	sum := sha256.New()
-	sum.Write([]byte(r.Source))
-
-	if len(includes) > 0 {
-		for _, path := range slices.Sorted(maps.Keys(includes)) {
-			sum.Write([]byte("\x00" + path + "\x00"))
-			sum.Write([]byte(includes[path]))
-		}
-
-		r.Includes = includes
-	}
-
-	r.SHA = hex.EncodeToString(sum.Sum(nil))
-
-	return r
-}
-
-// Recorded reports whether this Config was loaded from a source (rather than built in a test), which is what makes its revision worth writing down.
-func (r Revision) Recorded() bool { return r.SHA != "" }
-
-// ReadSource reads the pipeline file at path with ((name)) substitution applied: the bytes a revision is taken over, and what `steps pipeline set` uploads.
-func ReadSource(path string, vars map[string]string) ([]byte, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // path is the pipeline file the user asked to run, not untrusted input
-	if err != nil {
-		return nil, fmt.Errorf("could not read pipeline file %q: %w", path, err)
-	}
-
-	return InterpolateVars(data, vars), nil
-}
-
-// Slugify turns a pipeline path into its identity: the base name without its
-// extension.
-//
-// It lives here, and web.Slugify calls it, because a second copy is how the
-// identity split the first time. internal/web cannot be imported from this
-// package, and the string is needed on both sides.
-func Slugify(path string) string {
-	base := filepath.Base(path)
-
-	return base[:len(base)-len(filepath.Ext(base))]
 }
 
 // LoadConfig reads and parses a pipeline YAML file at path, under the

@@ -72,7 +72,7 @@ type include struct {
 	target  *string // the sibling field to fill in place
 }
 
-// applyInclude reads inc.path (resolved relative to baseDir) into *inc.target
+// applyInclude reads inc.path through the resolver into *inc.target
 // when inc.path is set; a no-op when it's empty. Setting both the inline
 // field and its *_file sibling is a load-time error, and so is an empty
 // included file — either would silently change what the entry means (e.g. an
@@ -115,12 +115,7 @@ type includeResolver struct {
 	read map[string]string
 }
 
-// readFile resolves path through r.files and reads it. A DirFS allows ".."
-// to escape its directory: the pipeline file is trusted input, and a file
-// placed beside it by the same author is at the same trust level — a shared
-// ../tasks/ directory next to a pipelines/ directory is a legitimate layout,
-// not a hole to close. A Bundle is a closed set instead: on a daemon, "beside
-// the pipeline file" is somebody else's disk.
+// readFile resolves path through r.files and reads it; why DirFS allows ".." and Bundle is closed is at DirFS and Bundle in files.go.
 //
 // A path with the "@builtin/<name>" prefix reads from the embedded prompt
 // library instead of through r.files, so pipelines can reference the curated
