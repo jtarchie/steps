@@ -53,7 +53,7 @@ func ClearTaskCaches(ctx context.Context, cfg *config.Config, jobName, step, cac
 	}
 
 	if len(missing) > 0 {
-		names := sortedKeys(missing)
+		names := slices.Sorted(maps.Keys(missing))
 
 		return nil, fmt.Errorf("job %q: no worker is registered for %s (%s) — map it with --worker %s=ssh://user@host, or the cache there stays",
 			jobName, pluralTag(len(names)), describeMissing(missing, names), names[0])
@@ -69,7 +69,7 @@ func ClearTaskCaches(ctx context.Context, cfg *config.Config, jobName, step, cac
 		return cleared, err
 	}
 
-	for _, tag := range sortedKeys(workers) {
+	for _, tag := range slices.Sorted(maps.Keys(workers)) {
 		cleared = append(cleared, clearOnWorker(ctx, tag, workers[tag], paths, keys, start)...)
 	}
 

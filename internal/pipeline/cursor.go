@@ -311,6 +311,7 @@ func (c *versionCursor) take(
 // thin adapter over store.EncodeVersion so the "same version, same string"
 // rule has one implementation.
 func encodeVersion(version map[string]any) (store.VersionKey, bool) {
+	// ponytail: versions are decoded JSON so json.Marshal cannot fail here and this error path is effectively dead; keep the (key, ok) shape until callers are collapsed to store.EncodeVersion.
 	encoded, err := store.EncodeVersion(version)
 	if err != nil {
 		return "", false
