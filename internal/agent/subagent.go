@@ -173,7 +173,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		return errorResult(err.Error())
 	}
 
-	runner, err := shell.NewRunner(containerSpec(c.ri.Image, env.dir, c.ri.Env, invocationIsolation(c.ri)))
+	runner, err := shell.NewRunner(containerSpec(c.ri.Image, env.dir, c.ri.Env, c.ri.Isolation()))
 	if err != nil {
 		return errorResult(err.Error())
 	}

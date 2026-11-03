@@ -93,21 +93,9 @@ func (p preparedAgentStep) openTree(ctx context.Context) (preparedAgentStep, err
 }
 
 // containerSpec is the one place a resolved invocation, task or export becomes a RunnerSpec's isolation fields, so a field added to the shape cannot be missed at one of the four call sites; callers set the placement fields (Subdir, Caches, Fetch, Keep) on the result.
-func containerSpec(image, cwd string, env []string, iso isolation) shell.RunnerSpec {
-	return shell.RunnerSpec{Image: image, Cwd: cwd, Env: env, User: iso.user, Network: iso.network, Sandbox: iso.sandbox,
-		Privileged: iso.privileged, CPUShares: iso.limits.CPUShares(), MemoryBytes: iso.limits.MemoryBytes()}
-}
-
-// isolation is the container-shaping settings of a resolved invocation, task or export, named so the two adjacent strings and two bools cannot be transposed at a call site the way positional parameters could.
-type isolation struct {
-	user, network string
-	privileged    bool
-	limits        *config.ContainerLimits
-	sandbox       bool
-}
-
-func invocationIsolation(ri config.ResolvedInvocation) isolation {
-	return isolation{user: ri.User, network: ri.Network, privileged: ri.Privileged, limits: ri.Limits, sandbox: ri.Sandbox}
+func containerSpec(image, cwd string, env []string, iso config.Isolation) shell.RunnerSpec {
+	return shell.RunnerSpec{Image: image, Cwd: cwd, Env: env, User: iso.User, Network: iso.Network, Sandbox: iso.Sandbox,
+		Privileged: iso.Privileged, CPUShares: iso.Limits.CPUShares(), MemoryBytes: iso.Limits.MemoryBytes()}
 }
 
 // close releases everything prepareAgentStep opened for this step: any tool
@@ -263,7 +251,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	// Cwd is the whole step directory and Subdir is where the model works, even though dir: is the only thing that makes them differ. The step's outputs: are named relative to the SPACE, so a placed agent that sent only its subdirectory would fetch them from a path that does not exist and come home with nothing.
-	spec := containerSpec(ri.Image, space.Dir(), ri.Env, invocationIsolation(ri))
+	spec := containerSpec(ri.Image, space.Dir(), ri.Env, ri.Isolation())
 	spec.Subdir, spec.Caches, spec.Fetch, spec.Keep = step.Dir, caches, step.Outputs, workspace.Kept(space)
 
 	runner, err := newRunner.build(ctx, spec)

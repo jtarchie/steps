@@ -111,7 +111,7 @@ func RunFix(
 	}
 	defer closeAll(closers)
 
-	runner, err := shell.NewRunner(containerSpec(rt.Image, dir, rt.Env, isolation{user: rt.User, network: rt.Network, privileged: rt.Privileged, limits: rt.Limits, sandbox: rt.Sandbox}))
+	runner, err := shell.NewRunner(containerSpec(rt.Image, dir, rt.Env, rt.Isolation()))
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
 	}

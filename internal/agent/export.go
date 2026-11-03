@@ -196,7 +196,7 @@ func (c callSpace) open(tool string) (toolEnv, func(), error) {
 		return toolEnv{dir: dir}, remove, nil
 	}
 
-	runner, err := shell.NewRunner(containerSpec(c.export.Image, dir, c.env[tool], isolation{user: c.export.User, network: c.export.Network, privileged: c.export.Privileged, limits: c.export.Limits}))
+	runner, err := shell.NewRunner(containerSpec(c.export.Image, dir, c.env[tool], c.export.Isolation()))
 	if err != nil {
 		remove()
 

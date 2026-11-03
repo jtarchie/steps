@@ -14,7 +14,7 @@ func TestContainerSpecCarriesEveryIsolationField(t *testing.T) {
 		Limits: &config.ContainerLimits{CPU: 512, Memory: 1 << 20},
 	}
 
-	got := containerSpec(ri.Image, "/work", nil, invocationIsolation(ri))
+	got := containerSpec(ri.Image, "/work", nil, ri.Isolation())
 
 	type fields struct {
 		image, cwd, user, network string
