@@ -77,8 +77,10 @@ func CheckVersions(ctx context.Context, c Call) ([]map[string]any, error) {
 // runnerSpec is how every shell stage of rt runs, before the stage adds its
 // own tree: a check has none.
 func runnerSpec(rt config.ResourceType, extraEnv []string) shell.RunnerSpec {
-	return shell.RunnerSpec{Image: rt.Image, Env: config.UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network, Sandbox: rt.Sandbox,
-		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()}
+	iso := rt.Isolation()
+
+	return shell.RunnerSpec{Image: rt.Image, Env: config.UnionEnv(rt.Env, extraEnv), User: iso.User, Network: iso.Network, Sandbox: iso.Sandbox,
+		Privileged: iso.Privileged, CPUShares: iso.Limits.CPUShares(), MemoryBytes: iso.Limits.MemoryBytes()}
 }
 
 // keyNames is what a debug line may say about a source or params map: their values carry credentials (see template.Render).

@@ -244,3 +244,31 @@ func TestResolveStepImage(t *testing.T) {
 		})
 	}
 }
+
+// The guard's spec carries every container setting of the step it guards, and carries each in its own field (user and network are both strings).
+func TestResolveStepRuntimeCarriesEveryIsolationField(t *testing.T) {
+	t.Parallel()
+
+	limits := &config.ContainerLimits{CPU: 512, Memory: 1 << 20}
+	cfg := &config.Config{
+		Tasks: []config.Task{{Name: "built", Run: "true", Image: "img", User: "uid", Network: "net", Privileged: true, Limits: limits, Sandbox: true}},
+		Agents: []config.Agent{
+			{Name: "a", Source: config.AgentSource{Model: "lmstudio/qwen"}, Image: "img", User: "uid", Network: "net", Privileged: true, Limits: limits, Sandbox: true},
+		},
+	}
+
+	for name, step := range map[string]config.Step{
+		"task":  {Task: "built"},
+		"agent": {Agent: "a", Messages: []string{"x"}},
+	} {
+		spec, _, err := resolveStepRuntime(cfg, step)
+		if err != nil {
+			t.Fatalf("%s: resolveStepRuntime: %v", name, err)
+		}
+
+		if spec.User != "uid" || spec.Network != "net" || !spec.Privileged || !spec.Sandbox || spec.CPUShares != limits.CPUShares() || spec.MemoryBytes != limits.MemoryBytes() {
+			t.Errorf("%s: spec = User %q Network %q Privileged %v Sandbox %v CPUShares %d MemoryBytes %d, want uid net true true %d %d",
+				name, spec.User, spec.Network, spec.Privileged, spec.Sandbox, spec.CPUShares, spec.MemoryBytes, limits.CPUShares(), limits.MemoryBytes())
+		}
+	}
+}

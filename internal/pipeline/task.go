@@ -238,8 +238,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 		return venue.Worker{}, nil, err
 	}
 
-	runner, err := newRunner(worker, shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
-		Privileged: rt.Privileged, Sandbox: rt.Sandbox, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
+	runner, err := newRunner(worker, withIsolation(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env,
 		WorkerTag: placementTag(step), Fetch: rt.Outputs, ReusedWarm: reusedWarm(ctx, step),
 		DeferFetch:   deferrable(step, rt),
 		RemoteInputs: remote,
@@ -250,7 +249,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 		// at the machine boundary without this. Asked of the workspace rather
 		// than read from the flag, because the workspace is what actually
 		// decided whether this step's directory survives.
-		Keep: workspace.Kept(space)})
+		Keep: workspace.Kept(space)}, rt.Isolation()))
 	if err != nil {
 		return worker, nil, fmt.Errorf("task %q: %w", rt.Name, err)
 	}

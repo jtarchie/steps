@@ -149,8 +149,7 @@ func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec,
 			return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve task: %w", err)
 		}
 
-		return shell.RunnerSpec{Image: rt.Image, Env: rt.Env, User: rt.User, Network: rt.Network, Sandbox: rt.Sandbox,
-				Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()},
+		return withIsolation(shell.RunnerSpec{Image: rt.Image, Env: rt.Env}, rt.Isolation()),
 			guardInputs{inputs: rt.Inputs, mapping: rt.InputMapping}, nil
 	case config.StepKindAgent:
 		ri, err := cfg.ResolveAgentInvocation(step)
@@ -161,8 +160,7 @@ func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec,
 		// An agent step's own space is staged from the step's declared inputs
 		// with no mapping (see internal/agent's prepareAgentStep), so this is
 		// the whole of its view.
-		return shell.RunnerSpec{Image: ri.Image, Env: ri.Env, User: ri.User, Network: ri.Network, Sandbox: ri.Sandbox,
-				Privileged: ri.Privileged, CPUShares: ri.Limits.CPUShares(), MemoryBytes: ri.Limits.MemoryBytes()},
+		return withIsolation(shell.RunnerSpec{Image: ri.Image, Env: ri.Env}, ri.Isolation()),
 			guardInputs{inputs: step.InputNames()}, nil
 	case config.StepKindTry:
 		return resolveStepRuntime(cfg, *step.Try)

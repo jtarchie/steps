@@ -124,3 +124,15 @@ func perturb(t *testing.T, v reflect.Value) {
 		t.Fatalf("no perturbation for a %s field", v.Kind())
 	}
 }
+
+// A resource type's container settings land in their own RunnerSpec fields (user and network are both strings).
+func TestRunnerSpecCarriesTheTypesIsolation(t *testing.T) {
+	t.Parallel()
+
+	limits := &config.ContainerLimits{CPU: 512, Memory: 1 << 20}
+	spec := runnerSpec(config.ResourceType{Image: "img", User: "uid", Network: "net", Privileged: true, Limits: limits, Sandbox: true}, nil)
+
+	if spec.User != "uid" || spec.Network != "net" || !spec.Privileged || !spec.Sandbox || spec.CPUShares != limits.CPUShares() || spec.MemoryBytes != limits.MemoryBytes() {
+		t.Errorf("runnerSpec = User %q Network %q Privileged %v Sandbox %v CPUShares %d MemoryBytes %d", spec.User, spec.Network, spec.Privileged, spec.Sandbox, spec.CPUShares, spec.MemoryBytes)
+	}
+}

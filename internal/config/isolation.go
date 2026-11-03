@@ -18,6 +18,11 @@ func (rt ResolvedTask) Isolation() Isolation {
 	return Isolation{User: rt.User, Network: rt.Network, Privileged: rt.Privileged, Limits: rt.Limits, Sandbox: rt.Sandbox}
 }
 
+// Isolation collects the resource type's container-shaping settings.
+func (rt ResourceType) Isolation() Isolation {
+	return Isolation{User: rt.User, Network: rt.Network, Privileged: rt.Privileged, Limits: rt.Limits, Sandbox: rt.Sandbox}
+}
+
 // Isolation of an export never sets Sandbox: an MCP export has no host-sandbox setting.
 func (e MCPExport) Isolation() Isolation {
 	return Isolation{User: e.User, Network: e.Network, Privileged: e.Privileged, Limits: e.Limits}

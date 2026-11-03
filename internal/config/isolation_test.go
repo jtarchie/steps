@@ -15,6 +15,7 @@ func TestIsolationCarriesEveryField(t *testing.T) {
 	}{
 		{"invocation", ResolvedInvocation{User: "u", Network: "n", Privileged: true, Limits: limits, Sandbox: true}.Isolation(), full},
 		{"task", ResolvedTask{User: "u", Network: "n", Privileged: true, Limits: limits, Sandbox: true}.Isolation(), full},
+		{"resource type", ResourceType{User: "u", Network: "n", Privileged: true, Limits: limits, Sandbox: true}.Isolation(), full},
 		{"export has no sandbox", MCPExport{User: "u", Network: "n", Privileged: true, Limits: limits}.Isolation(), Isolation{User: "u", Network: "n", Privileged: true, Limits: limits}},
 	}
 
