@@ -255,6 +255,7 @@ func raceBranches(ctx context.Context, r stepRunner, i int, branches []config.St
 
 		go func() {
 			defer wg.Done()
+			defer recoverBranch(ctx, "race.panic", index, func(index int, err error) { results[index].err = err })
 
 			branch := branches[index]
 			results[index] = branchResult{index: index, name: executedStepName(branch)}

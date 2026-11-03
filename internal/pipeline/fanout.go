@@ -45,12 +45,7 @@ func fanOut(
 		go func() {
 			defer wg.Done()
 			defer slot.release()
-			defer func() {
-				if p := recover(); p != nil {
-					slog.ErrorContext(ctx, "fanout.panic", "index", index, "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
-					onPanic(index, fmt.Errorf("panic: %v", p))
-				}
-			}()
+			defer recoverBranch(ctx, "fanout.panic", index, onPanic)
 
 			run(runCtx, index)
 		}()
@@ -62,5 +57,13 @@ func fanOut(
 		if itemLog != nil {
 			mergeExecLog(ctx, itemLog)
 		}
+	}
+}
+
+// recoverBranch is the deferred recover shared by every goroutine that runs a branch: the panic becomes that branch's error via onPanic. It must be deferred directly, since recover only works in the deferred function itself.
+func recoverBranch(ctx context.Context, msg string, index int, onPanic func(index int, err error)) {
+	if p := recover(); p != nil {
+		slog.ErrorContext(ctx, msg, "index", index, "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+		onPanic(index, fmt.Errorf("panic: %v", p))
 	}
 }

@@ -68,6 +68,31 @@ func TestInParallelBranchPanicIsThatBranchsError(t *testing.T) {
 	}
 }
 
+// TestRaceBranchPanicIsThatBranchsError: a panicking race branch is an errored branch with no winner, not a dead daemon.
+func TestRaceBranchPanicIsThatBranchsError(t *testing.T) {
+	t.Parallel()
+
+	branches := []config.Step{{Task: "a"}, {Task: "b"}}
+
+	// A zero stepRunner has no store, so runNonGetStep dereferences nil: the stand-in for any bug inside a branch.
+	winner, results := raceBranches(t.Context(), stepRunner{}, 0, branches, "hash")
+
+	if winner != -1 {
+		t.Errorf("winner = %d, want -1: a panicked branch cannot win", winner)
+	}
+
+	for _, result := range results {
+		if result.err == nil || !strings.Contains(result.err.Error(), "panic") {
+			t.Errorf("branch %d err = %v, want the recovered panic", result.index, result.err)
+		}
+	}
+
+	err := raceOutcome(t.Context(), winner, results)
+	if err == nil {
+		t.Error("race block with every branch panicked reported success")
+	}
+}
+
 // TestEnsembleStopsAdmittingMembersPastTheJobDeadline: a job timeout bounds an ensemble like it does in_parallel, and a member never admitted is an errored vote rather than a zero-value one the verdict could mistake for an abstention.
 func TestEnsembleStopsAdmittingMembersPastTheJobDeadline(t *testing.T) {
 	t.Parallel()
