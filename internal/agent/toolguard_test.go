@@ -394,3 +394,8 @@ func TestRunAgentConversationCallBudgetResetsAcrossAttempts(t *testing.T) {
 		}
 	}
 }
+
+// executeBudgetedTool is admitTool then runBudgetedTool, the pair every production dispatch runs; only tests call it as one step.
+func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv, registry map[string]toolImpl, maxCalls, callCounts map[string]int) map[string]any {
+	return runBudgetedTool(ctx, call, env, registry, admitTool(call, maxCalls, callCounts))
+}

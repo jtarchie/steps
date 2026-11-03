@@ -187,7 +187,7 @@ func cliArgs(prepared preparedAgentStep, mcpConfig string, plan cliAttempt) []st
 	// What the child is handed is the step's REMAINDER, not its declared
 	// ceiling: budget: usd bounds the step, and a retry that started over with
 	// the full figure would let three attempts spend three budgets. See
-	// remainingCLIBudget.
+	// remainingBudget.
 	if plan.budgetUSD != unlimitedBudget {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(plan.budgetUSD, 'f', -1, 64))
 	}

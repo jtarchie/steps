@@ -431,7 +431,7 @@ func resolveWithFailover(ctx context.Context, cfg *config.Config, step config.St
 }
 
 // prepareStepPrompt resolves a run-time message_files: {artifact, path} (see
-// resolveDeferredPrompt) out of the materialized workspace, when the step
+// resolveDeferredMessages) out of the materialized workspace, when the step
 // declares one. Extracted from prepareAgentStep (its branches would
 // otherwise push the preparation flow over the complexity budget); behavior
 // is unchanged.
@@ -451,7 +451,7 @@ func prepareStepPrompt(spaceDir string, step config.Step) (config.Step, error) {
 	return step, nil
 }
 
-// resolveDeferredPrompt reads step's run-time message_files: {artifact, path}
+// resolveDeferredMessages reads step's run-time message_files: {artifact, path}
 // (see config.FileRef.Deferred) out of the step's own materialized working
 // directory. Unlike a load-time include (resolved once, at LoadConfig, before
 // merkle.PlanChains ever runs), this file lives inside an artifact a get step

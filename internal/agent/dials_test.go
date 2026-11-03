@@ -77,25 +77,25 @@ func TestWithAgentDeadlineLeavesAnUncappedContextAlone(t *testing.T) {
 func TestRemainingCLITurnsCarriesTheSentinel(t *testing.T) {
 	t.Parallel()
 
-	if got := remainingCLITurns(0, 17); got != unlimitedTurns {
-		t.Errorf("remainingCLITurns(0, 17) = %d, want the unlimited sentinel", got)
+	if got := remainingTurns(0, 17); got != unlimitedTurns {
+		t.Errorf("remainingTurns(0, 17) = %d, want the unlimited sentinel", got)
 	}
 
-	if got := remainingCLITurns(30, 12); got != 18 {
-		t.Errorf("remainingCLITurns(30, 12) = %d, want 18", got)
+	if got := remainingTurns(30, 12); got != 18 {
+		t.Errorf("remainingTurns(30, 12) = %d, want 18", got)
 	}
 
 	// The CLI reports num_turns in its own units, so a capped step can come
 	// back having spent more than its ceiling. A bare subtraction lands on
 	// exactly the sentinel here, which would read as "uncapped" and hand the
 	// next attempt no --max-turns at all.
-	overspent := remainingCLITurns(30, 31)
+	overspent := remainingTurns(30, 31)
 	if overspent == unlimitedTurns {
 		t.Fatal("an overspent budget collided with the unlimited sentinel")
 	}
 
 	if !(cliAttempt{maxTurns: overspent}).outOfTurns() {
-		t.Errorf("remainingCLITurns(30, 31) = %d, which does not read as an exhausted budget", overspent)
+		t.Errorf("remainingTurns(30, 31) = %d, which does not read as an exhausted budget", overspent)
 	}
 }
 

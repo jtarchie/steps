@@ -689,30 +689,3 @@ func answerSource(row store.Question) string {
 
 	return row.AnsweredBy
 }
-
-func errorResult(message string) map[string]any {
-	return map[string]any{"error": message}
-}
-
-// stringsArg reads a list-of-strings tool argument. The model's arguments
-// arrive as []any through JSON; a Go caller (tests, the bridge) may pass
-// []string directly. Anything else — including a bare string where a list was
-// asked for — is read as no options rather than guessed at.
-func stringsArg(args map[string]any, key string) []string {
-	switch v := args[key].(type) {
-	case []string:
-		return v
-	case []any:
-		out := make([]string, 0, len(v))
-
-		for _, entry := range v {
-			if s, ok := entry.(string); ok && s != "" {
-				out = append(out, s)
-			}
-		}
-
-		return out
-	default:
-		return nil
-	}
-}

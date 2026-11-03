@@ -20,24 +20,24 @@ func closeEnough(got, want float64) bool {
 func TestRemainingCLIBudgetCarriesTheSentinel(t *testing.T) {
 	t.Parallel()
 
-	if got := remainingCLIBudget(0, 1.23); got != unlimitedBudget {
-		t.Errorf("remainingCLIBudget(0, 1.23) = %v, want the unlimited sentinel", got)
+	if got := remainingBudget(0, 1.23); got != unlimitedBudget {
+		t.Errorf("remainingBudget(0, 1.23) = %v, want the unlimited sentinel", got)
 	}
 
-	if got := remainingCLIBudget(0.50, 0.20); !closeEnough(got, 0.30) {
-		t.Errorf("remainingCLIBudget(0.50, 0.20) = %v, want 0.30", got)
+	if got := remainingBudget(0.50, 0.20); !closeEnough(got, 0.30) {
+		t.Errorf("remainingBudget(0.50, 0.20) = %v, want 0.30", got)
 	}
 
 	// A CLI's own circuit breaker trips mid-conversation and the call in
 	// flight is still paid for, so a step can legitimately come back having
 	// spent more than it was given.
-	overspent := remainingCLIBudget(0.50, 0.75)
+	overspent := remainingBudget(0.50, 0.75)
 	if overspent == unlimitedBudget {
 		t.Fatal("an overspent budget collided with the unlimited sentinel")
 	}
 
 	if !(cliAttempt{budgetUSD: overspent}).outOfBudget() {
-		t.Errorf("remainingCLIBudget(0.50, 0.75) = %v, which does not read as an exhausted budget", overspent)
+		t.Errorf("remainingBudget(0.50, 0.75) = %v, which does not read as an exhausted budget", overspent)
 	}
 
 	if (cliAttempt{budgetUSD: unlimitedBudget}).outOfBudget() {

@@ -215,21 +215,21 @@ func TestRemainingTurnsSpansTheCascade(t *testing.T) {
 
 	conv := agentConversation{maxTurns: 30} //nolint:exhaustruct // only the ceiling is under test
 
-	if got := remainingTurns(conv, 0); got != 30 {
+	if got := remainingTurns(conv.maxTurns, 0); got != 30 {
 		t.Errorf("a fresh conversation gets %d turns, want the full 30", got)
 	}
 
-	if got := remainingTurns(conv, 25); got != 5 {
+	if got := remainingTurns(conv.maxTurns, 25); got != 5 {
 		t.Errorf("after 25 turns the next source gets %d, want the remaining 5", got)
 	}
 
 	// A checkpoint at or past the ceiling yields no turns rather than a
 	// negative count, so the loop falls straight through to outOfTurns.
-	if got := remainingTurns(conv, 30); got != 0 {
+	if got := remainingTurns(conv.maxTurns, 30); got != 0 {
 		t.Errorf("a spent budget gives %d turns, want 0", got)
 	}
 
-	if got := remainingTurns(conv, 42); got != 0 {
+	if got := remainingTurns(conv.maxTurns, 42); got != 0 {
 		t.Errorf("an overspent budget gives %d turns, want 0 (never negative)", got)
 	}
 }

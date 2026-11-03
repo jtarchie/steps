@@ -141,12 +141,12 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			// max_turns: 0 has no remainder to track: it passes the sentinel
 			// through, and cliArgs omits the flag so the CLI applies its own
 			// (absent) default.
-			maxTurns: remainingCLITurns(prepared.ri.MaxTurns, state.turns),
+			maxTurns: remainingTurns(prepared.ri.MaxTurns, state.turns),
 			// The dollar budget is per STEP for the same reason the turn
 			// budget is, and the remainder is ours to track for a sharper
 			// one: the child enforces the ceiling it was handed and knows
 			// nothing of the attempt before it.
-			budgetUSD: remainingCLIBudget(prepared.ri.BudgetUSD, state.costUSD),
+			budgetUSD: remainingBudget(prepared.ri.BudgetUSD, state.costUSD),
 		}
 
 		plan.prompt = cliAttemptPrompt(plan.resume, attempt > 0, sent, state, prepared)
@@ -244,7 +244,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 // the first.
 //
 // max_turns: does NOT reset: it bounds the whole conversation, exactly as it
-// does on the hosted path, and remainingCLITurns already tracks it per step.
+// does on the hosted path, and remainingTurns already tracks it per step.
 func runCLIMessages(
 	ctx context.Context, prepared preparedAgentStep, state *cliStepState,
 	nudges, spent, sent *int, attempts func(int) error,
@@ -478,7 +478,7 @@ func nudgeCLIForOwed(ctx context.Context, prepared preparedAgentStep, state *cli
 		return false
 	}
 
-	if remainingCLITurns(prepared.ri.MaxTurns, state.turns) == 0 {
+	if remainingTurns(prepared.ri.MaxTurns, state.turns) == 0 {
 		return false
 	}
 
@@ -492,7 +492,7 @@ func nudgeCLIForOwed(ctx context.Context, prepared preparedAgentStep, state *cli
 	return true
 }
 
-// remainingCLITurns is the CLI path's share of the step's turn budget, with
+// remainingTurns is what is left of the step's turn budget, shared by the hosted and CLI paths, with
 // max_turns: 0 carried through as the sentinel rather than turned into a
 // number — subtracting spent turns from "no cap" is how an uncapped step
 // would have acquired one.
@@ -504,7 +504,7 @@ func nudgeCLIForOwed(ctx context.Context, prepared preparedAgentStep, state *cli
 // subtraction lands on exactly -1 often enough to matter. That value would
 // read as "uncapped" and hand the next attempt no --max-turns at all — the
 // precise opposite of the exhausted budget it represents.
-func remainingCLITurns(maxTurns, spent int) int {
+func remainingTurns(maxTurns, spent int) int {
 	if maxTurns == 0 {
 		return unlimitedTurns
 	}
@@ -512,9 +512,9 @@ func remainingCLITurns(maxTurns, spent int) int {
 	return max(maxTurns-spent, 0)
 }
 
-// remainingCLIBudget is the step's dollar ceiling less what earlier attempts
+// remainingBudget is the step's dollar ceiling less what earlier attempts
 // spent, with an undeclared budget carried through as the sentinel rather than
-// turned into a number — for the same reason remainingCLITurns does it, and
+// turned into a number — for the same reason remainingTurns does it, and
 // with the same collision to avoid. Here the collision is sharper: 0 is
 // already the "no budget declared" spelling on the way in (cliArgs omits the
 // flag), so a plain subtraction reaching 0 would read as "spend freely" —
@@ -524,7 +524,7 @@ func remainingCLITurns(maxTurns, spent int) int {
 // A CLI can legitimately come back having spent more than it was given: the
 // flag is a circuit breaker it trips mid-conversation, not a hard cap, and the
 // call in flight when it trips is still paid for.
-func remainingCLIBudget(budgetUSD, spent float64) float64 {
+func remainingBudget(budgetUSD, spent float64) float64 {
 	if budgetUSD <= 0 {
 		return unlimitedBudget
 	}
@@ -752,6 +752,7 @@ func newCLISessionID() (string, error) {
 // and a CLI that stores transcripts somewhere else simply leaves nothing to
 // find.
 func cleanupCLISession(session string) {
+	// ponytail: hardcodes claude's ~/.claude/projects/*/<id>.jsonl layout because cliProviders has only "claude"; add a per-CLI profile (transcript glob) when a second CLI appears.
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return

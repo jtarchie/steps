@@ -173,7 +173,7 @@ func TestResolveDeferredMessagesRejectsEmptyFile(t *testing.T) {
 	}
 }
 
-// TestResolveDeferredMessagesRejectsSymlinkEscape proves resolveDeferredPrompt
+// TestResolveDeferredMessagesRejectsSymlinkEscape proves resolveDeferredMessages
 // inherits tree.ResolvePath's symlink confinement (already exhaustively
 // tested at that level in tools_test.go) rather than re-implementing it — an
 // artifact's contents are untrusted, and a symlink planted inside it (e.g. by

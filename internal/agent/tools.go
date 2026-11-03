@@ -627,30 +627,6 @@ func executeAgentTool(ctx context.Context, call *genai.FunctionCall, env toolEnv
 	return impl(ctx, call.Args, env)
 }
 
-func stringArg(args map[string]any, key string) string {
-	v, _ := args[key].(string)
-
-	return v
-}
-
-// intArg reads an integer tool argument. The genai/JSON path decodes a
-// model-supplied number as float64; the int case exists only so
-// Go-constructed args (tests, sub-agent/verdict plumbing) can pass a plain
-// int without going through JSON first. The bool return distinguishes "not
-// supplied" from "supplied as 0", which read_file's start_line/end_line
-// both need (0 is not a valid line number, but its absence and its
-// explicit-zero are different requests).
-func intArg(args map[string]any, key string) (int, bool) {
-	switch v := args[key].(type) {
-	case float64:
-		return int(v), true
-	case int:
-		return v, true
-	default:
-		return 0, false
-	}
-}
-
 // UnquotedToolRefs reports each action in a custom tool's run: that prints a
 // .args value without shellquote — the model-authored half of a tool reaching
 // sh -c as syntax.

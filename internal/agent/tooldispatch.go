@@ -23,7 +23,7 @@ const maxConcurrentReads = 4
 // (a nonzero exit_code, or an {"error": ...} result) stops any other call in
 // the turn, or the conversation — every failure is just data the model sees
 // on its next turn and can react to. maxCalls/callCounts enforce each
-// budgeted tool's max_calls: — see executeBudgetedTool.
+// budgeted tool's max_calls: — see admitTool.
 //
 // A run of consecutive calls whose tool is in readOnly executes concurrently, up to maxConcurrentReads at a time; any other call is a barrier that starts after everything before it finished and finishes before anything after it starts. Parts always come back in the model's call order.
 func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env toolEnv, registry map[string]toolImpl, readOnly map[string]bool, maxCalls, callCounts map[string]int) []*genai.Part {
@@ -101,31 +101,7 @@ func runGroup(ctx context.Context, calls []*genai.FunctionCall, env toolEnv, reg
 	wg.Wait()
 }
 
-// executeBudgetedTool enforces call.Name's max_calls: budget (if any) before
-// dispatching to executeAgentTool: once callCounts[call.Name] has reached its
-// budget, the call is rejected as ordinary tool-result data — never executed,
-// since the budget's whole point is bounding side effects — so the model sees
-// the rejection and can react on its next turn instead of the attempt
-// aborting. Every dispatch increments the counter, success or not; a rejected one
-// does not (it's already at the ceiling). Tools absent from maxCalls are
-// unlimited.
-//
-// Every call (budget-rejected or dispatched) is bracketed by a debug-level
-// "agent.tool_call"/"agent.tool_result" log pair — the args a call was made
-// with, and how it finished (duration, error/exit_code, plus a size-capped
-// preview of the rest of the result via debugToolResultPreview — the gap
-// that once made a model silently abandoning a granted tool for a worse
-// fallback undiagnosable without an out-of-band probe). Debug logging is
-// opt-in, so this is silent
-// unless an operator has already asked to see command/output content at
-// that level; call.Args/the result can hold a model-authored value (e.g. a
-// custom tool's args, or write_file's content), no different from the full
-// command/output internal/shell already logs at this level.
-func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv, registry map[string]toolImpl, maxCalls, callCounts map[string]int) map[string]any {
-	return runBudgetedTool(ctx, call, env, registry, admitTool(call, maxCalls, callCounts))
-}
-
-// admitTool counts call against its tool's budget, returning the rejection to hand the model once the budget is spent and nil when the call may run. It touches callCounts, so it is never called from a goroutine.
+// admitTool enforces call.Name's max_calls: budget (if any): once callCounts[call.Name] has reached its budget, the call is rejected as ordinary tool-result data (returned for the model to see and react to on its next turn, never an aborted attempt) and must never execute, since the budget's whole point is bounding side effects. Every admitted call increments the counter, success or not; a rejected one does not (it is already at the ceiling). Tools absent from maxCalls are unlimited. It touches callCounts, so it is never called from a goroutine.
 func admitTool(call *genai.FunctionCall, maxCalls, callCounts map[string]int) map[string]any {
 	if budget, ok := maxCalls[call.Name]; ok && callCounts[call.Name] >= budget {
 		return errorResult(fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", call.Name, budget))
@@ -136,7 +112,7 @@ func admitTool(call *genai.FunctionCall, maxCalls, callCounts map[string]int) ma
 	return nil
 }
 
-// runBudgetedTool is executeBudgetedTool after admission: rejection, when non-nil, is the result and the tool never runs.
+// runBudgetedTool runs call after admission: rejection, when non-nil, is the result and the tool never runs. Every call (budget-rejected or dispatched) is bracketed by a debug-level "agent.tool_call"/"agent.tool_result" log pair: the args a call was made with, and how it finished (duration, error/exit_code, plus a size-capped preview of the rest of the result via debugToolResultPreview, the gap that once made a model silently abandoning a granted tool for a worse fallback undiagnosable without an out-of-band probe). Debug logging is opt-in, so this is silent unless an operator has already asked to see command/output content at that level; call.Args/the result can hold a model-authored value (e.g. a custom tool's args, or write_file's content), no different from the full command/output internal/shell already logs at this level.
 func runBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv, registry map[string]toolImpl, rejection map[string]any) map[string]any {
 	// Which run/job/step/depth this call belongs to — the identity every
 	// nested call (sub-agent, MCP, custom tool) shares with its enclosing
@@ -195,7 +171,7 @@ const debugToolResultPreviewBytes = 500
 // debugToolResultPreview renders response as a size-capped preview for the
 // agent.tool_result debug log, mirroring truncateToolOutput's
 // "... [truncated N bytes]" marker (internal/agent/tools.go). error/
-// exit_code are already their own log fields (see executeBudgetedTool), so
+// exit_code are already their own log fields (see runBudgetedTool), so
 // they're excluded here to avoid duplicating them in the preview.
 func debugToolResultPreview(response map[string]any) string {
 	preview := make(map[string]any, len(response))

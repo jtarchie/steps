@@ -329,7 +329,7 @@ func TestCLIArgsBudgetUSD(t *testing.T) {
 	prepared.ri.BudgetUSD = 0.25
 
 	plan := firstAttempt()
-	plan.budgetUSD = remainingCLIBudget(prepared.ri.BudgetUSD, 0)
+	plan.budgetUSD = remainingBudget(prepared.ri.BudgetUSD, 0)
 
 	args := cliArgs(prepared, "/tmp/mcp.json", plan)
 
@@ -342,7 +342,7 @@ func TestCLIArgsBudgetUSD(t *testing.T) {
 	// cliArgs reads the plan and never the declared ceiling, which is what
 	// makes that true of every attempt after the first.
 	retried := firstAttempt()
-	retried.budgetUSD = remainingCLIBudget(prepared.ri.BudgetUSD, 0.10)
+	retried.budgetUSD = remainingBudget(prepared.ri.BudgetUSD, 0.10)
 
 	if got := argValue(cliArgs(prepared, "/tmp/mcp.json", retried), "--max-budget-usd"); got != "0.15" {
 		t.Errorf("a retry's --max-budget-usd = %q, want 0.15 -- what is left of 0.25", got)

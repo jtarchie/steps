@@ -455,16 +455,6 @@ const unlimitedBudget = -1.0
 // all resets it, so a model that stalls once and then complies is unaffected.
 const maxIgnoredForces = 5
 
-// remainingTurns is how many turns this source may still spend: the step's
-// declared max_turns: less whatever earlier sources already used. Never
-// negative for a capped step — a checkpoint at or past the ceiling yields 0,
-// and the loop falls straight through to outOfTurns, which is the right
-// answer for a step that has already spent its whole allowance. The CLI path
-// keeps the same budget, so both share remainingCLITurns.
-func remainingTurns(conv agentConversation, spent int) int {
-	return remainingCLITurns(conv.maxTurns, spent)
-}
-
 // runConversationLoop is runAgentConversation's body, split out so the
 // transcript attaches once at the boundary instead of at each of the loop's
 // several return sites.
@@ -525,7 +515,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// budget is fixed before the loop so the sentinel is compared, not
 	// counted down: an uncapped conversation ends by answering, by the step's
 	// deadline, by its token budget, or by loop detection — never here.
-	budget := remainingTurns(conv, turnsBefore)
+	budget := remainingTurns(conv.maxTurns, turnsBefore)
 
 	turn := 0
 
@@ -1080,7 +1070,7 @@ func (conv agentConversation) advance(req *model.LLMRequest, state *resumeCheckp
 // again. The exception is a required tool that has also spent its max_calls:
 // budget, which resets on an attempts: restart and not before — so requiring
 // it again would be requiring the impossible. finishOrForce would force it
-// every turn, executeBudgetedTool would answer "call budget exhausted", and
+// every turn, admitTool would answer "call budget exhausted", and
 // the step would burn max_turns and fail having asked for something it had
 // already forbidden.
 //

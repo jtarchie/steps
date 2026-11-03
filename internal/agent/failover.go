@@ -123,7 +123,7 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (_
 		// live is read from the recorder PreparedStep.Run/RunHook/RunFix already set
 		// up (see step.go's own doc comment on prepared.conv.recorder) rather
 		// than threaded as parameters here — the same reason
-		// executeBudgetedTool reads it: this line otherwise names the two
+		// runBudgetedTool reads it: this line otherwise names the two
 		// models and nothing about which job, step, or run hit the cascade.
 		live := prepared.conv.recorder.liveIdentity()
 
