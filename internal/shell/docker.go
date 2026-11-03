@@ -639,6 +639,11 @@ func (d DockerRunner) dockerExec(ctx context.Context, cmd Command) (Result, erro
 		d.session.orphan(pidfile)
 	}
 
+	// A caller that gave up on a live session (a tool-level deadline) gets the cut-off reported as data, not an error, but the command still runs in the container and would race the next one.
+	if execErr == nil && code == dockerapi.SignalledExitCode {
+		d.session.orphan(pidfile)
+	}
+
 	return out.Result(code), d.session.diagnose(ctx, client, id, execErr)
 }
 

@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -777,6 +778,70 @@ func TestContractSecretEnvNeverReachesTheContainerConfig(t *testing.T) {
 	for _, entry := range view.Config.Env {
 		if strings.Contains(entry, value) || strings.HasPrefix(entry, "STEPS_TEST_SECRET") {
 			t.Errorf("the container's create-time Env carries the secret: %q", entry)
+		}
+	}
+}
+
+// A command cut off by its caller's deadline keeps running in the session container, which outlives that caller; the next command must find it dead, not racing it.
+func TestContractCutOffCommandIsKilledBeforeTheNextOne(t *testing.T) {
+	testdocker.Require(t)
+
+	dir := testdocker.MountableDir(t)
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: dir})
+
+	_, _, _, err := RunCaptureFull(t.Context(), runner, "true")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	pidFile := filepath.Join(dir, "victim.pid")
+
+	go cancelOncePidWritten(ctx, cancel, pidFile)
+
+	_, _, code, err := RunCaptureFull(ctx, runner, "echo $$ > victim.pid; exec sleep 300")
+	if err != nil || code != SignalledExitCode {
+		t.Fatalf("cut-off command: exit %d, err %v; want %d as data", code, err, SignalledExitCode)
+	}
+
+	awaitVictimDead(t, runner)
+}
+
+// cancelOncePidWritten spins on the pidfile rather than sleeping: the cancel must land after the command has written its pid and before it finishes, and only the file says which moment that is.
+func cancelOncePidWritten(ctx context.Context, cancel context.CancelFunc, pidFile string) {
+	for ctx.Err() == nil {
+		data, err := os.ReadFile(pidFile) //nolint:gosec // a path the test itself built inside its own temp dir
+		if err == nil && strings.HasSuffix(string(data), "\n") {
+			cancel()
+
+			return
+		}
+
+		runtime.Gosched()
+	}
+}
+
+// awaitVictimDead probes from the same session until the pid in victim.pid is gone or a zombie; the 30s bound is a failure guard, not an assertion on timing.
+func awaitVictimDead(t *testing.T, runner Runner) {
+	t.Helper()
+
+	bound, stop := context.WithTimeout(t.Context(), 30*time.Second)
+	defer stop()
+
+	for {
+		stdout, _, _, err := RunCaptureFull(bound, runner, `p=$(cat victim.pid); if [ -r /proc/$p/stat ] && ! grep -q ') Z' /proc/$p/stat; then echo alive; else echo dead; fi`)
+		if err != nil {
+			t.Fatalf("liveness probe: %v", err)
+		}
+
+		if strings.TrimSpace(stdout) == "dead" {
+			return
+		}
+
+		if bound.Err() != nil {
+			t.Fatal("the cut-off command was still running after the next command started")
 		}
 	}
 }
