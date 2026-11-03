@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/labstack/echo/v5"
 
@@ -50,10 +51,19 @@ func reasonDetail(c *echo.Context) map[string]string {
 
 	const maxReason = 200
 	if len(reason) > maxReason {
-		reason = reason[:maxReason] + "…"
+		reason = reason[:runeCut(reason, maxReason)] + "…"
 	}
 
 	return map[string]string{"reason": reason}
+}
+
+// runeCut is the largest cut point at or below limit that does not split a UTF-8 rune; s must be longer than limit.
+func runeCut(s string, limit int) int {
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
+	}
+
+	return limit
 }
 
 func currentSHA(c *echo.Context, p *Pipeline) string {

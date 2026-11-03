@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 	"testing"
 	"time"
 
@@ -480,6 +481,17 @@ func TestGitHubFailureTrimsOnlyALongMessage(t *testing.T) {
 }
 
 // TestETagCacheDropsWholeOnlyWhenFull: a miss costs a request, so nothing is dropped before the limit.
+func TestGitHubFailureCutsOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	body := "x" + strings.Repeat("€", 300)
+	err := githubFailure(http.MethodGet, "/x", githubReply{status: http.StatusForbidden, body: []byte(body)})
+
+	if !utf8.ValidString(err.Error()) || !strings.HasSuffix(err.Error(), "…") {
+		t.Fatalf("error = %q, want valid UTF-8 ending in an ellipsis", err.Error())
+	}
+}
+
 func TestETagCacheDropsWholeOnlyWhenFull(t *testing.T) {
 	t.Parallel()
 

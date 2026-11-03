@@ -3,11 +3,30 @@ package web
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/internal/store"
 )
+
+func TestReasonDetailCutsOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	// One leading byte shifts every 3-byte rune off the 200 cut, which would land inside one.
+	form := url.Values{"reason": {"x" + strings.Repeat("€", 300)}}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	got := reasonDetail(echo.NewContext(req, httptest.NewRecorder()))["reason"]
+	if !utf8.ValidString(got) || !strings.HasSuffix(got, "…") || len(got) > 200+len("…") {
+		t.Fatalf("reason = %q (len %d), want valid UTF-8 ending in an ellipsis within the bound", got, len(got))
+	}
+}
 
 // TestEveryMutatingRouteIsRecordedOrExcused: the log is only as good as the routes it covers, so a mutating route added without an entry, or an entry for a route that is gone, fails here.
 func TestEveryMutatingRouteIsRecordedOrExcused(t *testing.T) {

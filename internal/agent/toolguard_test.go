@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -13,6 +14,15 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
 )
+
+func TestDebugToolResultPreviewCutsOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	got := debugToolResultPreview(map[string]any{"content": "x" + strings.Repeat("€", debugToolResultPreviewBytes)})
+	if !utf8.ValidString(got) || !strings.Contains(got, "... [truncated ") || len(got) > debugToolResultPreviewBytes+40 {
+		t.Fatalf("preview = %q, want valid UTF-8 with the truncation marker within bound", got)
+	}
+}
 
 // TestResolveToolSpecPinnedArgsExcludedFromSchema proves a pinned key never
 // appears in the schema shown to the model, even though the run: template

@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/genai"
 
@@ -217,5 +218,10 @@ func debugToolResultPreview(response map[string]any) string {
 		return s
 	}
 
-	return s[:debugToolResultPreviewBytes] + fmt.Sprintf("... [truncated %d bytes]", len(s)-debugToolResultPreviewBytes)
+	cut := debugToolResultPreviewBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut] + fmt.Sprintf("... [truncated %d bytes]", len(s)-cut)
 }

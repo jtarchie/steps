@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
@@ -326,7 +327,12 @@ func githubFailure(method, path string, reply githubReply) error {
 	}
 
 	if len(message) > 500 {
-		message = message[:500] + "…"
+		cut := 500
+		for cut > 0 && !utf8.RuneStart(message[cut]) {
+			cut--
+		}
+
+		message = message[:cut] + "…"
 	}
 
 	return fmt.Errorf("github: %s %s: %d %s: %s", method, path, reply.status, http.StatusText(reply.status), message)
