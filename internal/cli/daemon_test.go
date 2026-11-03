@@ -1163,3 +1163,45 @@ func TestAFailedDestroyLeavesThePipelineServed(t *testing.T) {
 		t.Fatal("pipeline still served after a successful destroy")
 	}
 }
+
+type deleteExpires struct {
+	store.Store
+	grant func()
+}
+
+func (s deleteExpires) Delete(ctx context.Context) error {
+	<-ctx.Done()
+	s.grant()
+
+	return ctx.Err() //nolint:wrapcheck // test double
+}
+
+func TestADestroyWhoseDeleteRunsOutOfTimeStillRestoresThePipeline(t *testing.T) {
+	isolateLogins(t)
+
+	held := servingDaemon(t)
+
+	orig := daemonWriteBound
+	t.Cleanup(func() { daemonWriteBound = orig })
+
+	held.wrapStore = func(st store.Store) store.Store {
+		return deleteExpires{Store: st, grant: func() { daemonWriteBound = orig }}
+	}
+
+	setPipeline(t, held, "doomed", idlePipeline)
+
+	daemonWriteBound = time.Millisecond
+
+	err := held.Destroy(t.Context(), "doomed")
+	if err == nil || !strings.Contains(err.Error(), "could not destroy") {
+		t.Fatalf("destroy error = %v, want could not destroy", err)
+	}
+
+	if strings.Contains(err.Error(), "nor could it be served again") {
+		t.Fatalf("restore failed on the dead write context: %v", err)
+	}
+
+	if held.server.Lookup("doomed") == nil {
+		t.Fatal("a destroy whose delete timed out left the pipeline unserved")
+	}
+}

@@ -62,7 +62,7 @@ var (
 )
 
 // daemonWriteBound is what a give-back write gets on its own context, since the request's is likeliest to be cancelled exactly when one runs.
-const daemonWriteBound = 30 * time.Second
+var daemonWriteBound = 30 * time.Second
 
 // pending counts each served pipeline's queued builds, for the steps.queue.pending gauge.
 func (d *daemon) pending(ctx context.Context) map[string]int64 {
@@ -650,7 +650,10 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 	// The logins stay when the rows did: a restart serves the pipeline again, and it would then need them.
 	if err != nil {
 		// Serve it again from the rows that survived, so a refused destroy is one that did not happen; the detach already stopped its runs, which the queue requeues like any restart's.
-		restoreErr := d.restoreLocked(writeCtx, name, served.target.Path())
+		restoreCtx, restoreCancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
+		defer restoreCancel()
+
+		restoreErr := d.restoreLocked(restoreCtx, name, served.target.Path())
 		if restoreErr != nil {
 			return fmt.Errorf("could not destroy %q: %w; nor could it be served again, so a restart does: %w", name, err, restoreErr)
 		}
