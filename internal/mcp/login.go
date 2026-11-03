@@ -20,8 +20,8 @@ import (
 )
 
 // Login runs the interactive OAuth authorization-code + PKCE flow for an
-// auth: {type: oauth} server and persists the resulting token to its
-// per-pipeline token path (see TokenPath) — the implementation behind `steps
+// auth: {type: oauth} server and saves the resulting login to the Vault
+// (see saveLogin) — the implementation behind `steps
 // mcp login <server>`. open is the browser-launch function
 // (injected so this is testable without a real browser and so this package
 // stays free of an os/exec dependency — see main.go's openBrowser for the
@@ -215,7 +215,7 @@ func buildAuthorizationHandler(redirectURL string, fetcher auth.AuthorizationCod
 		// server that answers the challenge with one authorization server
 		// while publishing another therefore gets a client registered — and a
 		// client secret sent — at the first, and the code exchanged at the
-		// second, with the token file recording the first's token endpoint.
+		// second, with the saved login recording the first's token endpoint.
 		// Every later refresh then goes to a server that never issued the
 		// token, fails, and is reported as needing a login that will
 		// "succeed" and leave the same state again.
@@ -415,7 +415,7 @@ func issuersEqual(a, b string) bool {
 
 // withScopes replaces the scope parameter of the authorization URL the SDK
 // built with the pipeline's auth.scopes:, and is what makes that setting
-// mean anything. Before this it was persisted into the token file and read
+// mean anything. Before this it was persisted into the saved login and read
 // by nothing: the scopes actually REQUESTED were whichever ones the
 // protected-resource metadata advertised, so a pipeline asking for
 // `[agent:search]` against a server offering seventeen scopes was granted
@@ -462,7 +462,7 @@ func withScopes(authURL string, scopes []string) string {
 }
 
 // persistLoginResult writes the completed login's token and the client
-// credentials/endpoint used to obtain it to srv's token file for pipeline.
+// credentials/endpoint used to obtain it to srv's login in the Vault for pipeline.
 //
 // One thing it will not do is replace a renewable credential with a
 // disposable one. Login persists before it judges (see its comment), which is

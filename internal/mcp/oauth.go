@@ -264,7 +264,7 @@ func ForgetLogins(pipeline string) error {
 	return nil
 }
 
-// LoadTokenFile reads and parses the token file at path.
+// LoadTokenFile reads and parses a pre-vault token file at path; only importLegacyLogin still calls it.
 func LoadTokenFile(path string) (*TokenFile, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path is always TokenPath's own output, never attacker-influenced
 	if err != nil {

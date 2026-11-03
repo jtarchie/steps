@@ -14,7 +14,7 @@ type Tree interface {
 	Root() string
 	// Resolve confines rel to root and answers the absolute path in this tree's spelling.
 	Resolve(ctx context.Context, rel string) (string, error)
-	// ResolveWrite is resolve for a path that need not exist yet: the closest existing ancestor is what gets checked against root, since a missing leaf has no link to follow. Missing parents are created by whichever caller goes on to write.
+	// ResolveWrite is resolve for a path that need not exist yet: the closest existing ancestor is what gets checked against root, since a missing leaf has no link to follow. Missing parents are not created here: Host makes them in ResolveWritePath, Container in WriteFile, so a caller must not assume the directory exists until WriteFile returns.
 	ResolveWrite(ctx context.Context, rel string) (string, error)
 	// Stat answers os.ErrNotExist for a missing path, like os.Stat.
 	Stat(ctx context.Context, path string) (Stat, error)
@@ -24,7 +24,7 @@ type Tree interface {
 	OpenRange(ctx context.Context, path string, through int) (io.ReadCloser, error)
 	// WriteFile replaces path's contents, keeping the file's mode when it already exists.
 	WriteFile(ctx context.Context, path string, data []byte, appendTo bool) error
-	// ListDir is one directory's entries, unsorted, as the tool reports them.
+	// ListDir is one directory's entries, sorted by name (Container sorts explicitly, Host relies on os.ReadDir), as the tool reports them.
 	ListDir(ctx context.Context, path string) ([]Entry, error)
 	// Search walks base under opts and returns what the model is shown.
 	Search(ctx context.Context, base string, opts SearchOpts) (SearchResult, error)

@@ -105,7 +105,7 @@ func saveLogin(ctx context.Context, pipeline, server string, tf *TokenFile) erro
 }
 
 // importLegacyLogin moves a login an older steps left in the config directory into the vault, the first time anything asks for it, and removes the file once the vault holds it.
-// ponytail: a migration with no end date; delete it, TokenPath and the *Logins functions a few releases after the one that ships it.
+// ponytail: deletable once no pre-vault login directory can still exist on any machine; it goes with TokenPath, LoadTokenFile and the config-directory *Logins functions (LoginsExist, MoveLogins, ForgetLogins), whose live callers are in internal/cli/daemon.go.
 func importLegacyLogin(ctx context.Context, vault Vault, pipeline, server string) (*TokenFile, error) {
 	path, err := TokenPath(pipeline, server)
 	if err != nil {

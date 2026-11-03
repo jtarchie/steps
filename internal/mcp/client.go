@@ -8,8 +8,8 @@
 // transport/auth implementation.
 //
 // Bearer and oauth auth are both supported (see config.MCPServerAuth); oauth
-// token persistence and the interactive `steps mcp login` bootstrap live in
-// oauth.go/login.go respectively.
+// token refresh (reading and writing the login through the Vault) and the
+// interactive `steps mcp login` bootstrap live in oauth.go/login.go respectively.
 package mcp
 
 import (
@@ -51,7 +51,7 @@ type sessionClient struct {
 // version with it — not any work done afterwards.
 //
 // Only preflight ever imposed a deadline on an MCP call, and preflight runs
-// once at startup. The production paths (internal/agent's buildMCPTools,
+// once at startup. The production paths (internal/agent's buildMCPTools in mcptool.go,
 // internal/resource's check/in/out) pass the caller's context straight
 // through, and a step only carries a deadline if the pipeline author wrote
 // `timeout:` — which trigger polling has no way to set at all. A server that
@@ -158,9 +158,9 @@ func (c *sessionClient) Close() error {
 // Connect opens a session to srv, over whichever transport it's configured
 // for (see config.MCPServer.IsStdio/newTransport). For an HTTP server, per
 // its configured auth (see config.MCPServerAuth): "bearer" reads a static
-// token from the named env var (mirroring internal/agent's lookupAPIKey
-// exactly); "oauth" loads a persisted, self-refreshing token from the
-// per-pipeline token store (see oauth.go) — never an interactive flow here,
+// token from the named env var (mirroring internal/agent/llmclient's
+// LookupAPIKey with required set); "oauth" loads the pipeline's login from the Vault as a
+// self-refreshing token (see oauth.go) — never an interactive flow here,
 // that's `steps mcp login` (login.go) alone. "" / "none" connects
 // unauthenticated. A stdio server is always unauthenticated by construction
 // (config.validateMCPServerTransport rejects any other auth.type at load
@@ -247,8 +247,8 @@ func tracedClient() *http.Client {
 }
 
 // lookupBearerToken reads a bearer token from the OS environment variable
-// named by envVar — mirrors internal/agent/llmclient.go's lookupAPIKey
-// exactly (a missing/empty variable is a hard error, not a silently blank
+// named by envVar — mirrors internal/agent/llmclient's LookupAPIKey
+// with required set (mcp cannot import llmclient), exactly (a missing/empty variable is a hard error, not a silently blank
 // Authorization header).
 func lookupBearerToken(envVar string) (string, error) {
 	if envVar == "" {
