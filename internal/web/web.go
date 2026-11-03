@@ -1,19 +1,8 @@
-// Package web serves the pipeline UI: a read-and-operate view of what the
-// runner has done and is doing, over the same sqlite store the CLI writes.
+// Package web serves the pipeline UI: a read-and-operate view of what the runner has done and is doing, over the same sqlite store the CLI writes.
 //
-// It is a second front end on the existing model, never a second model. Every
-// page answers a question the store already holds the answer to — what jobs
-// exist and how they depend on each other, what a run did step by step, why a
-// step was skipped, what an agent actually said — and the two mutations it
-// offers (enqueue a job, decide an approval) go through the same rows
-// `steps web` and `steps approvals approve` use. Nothing here is a parallel
-// execution path.
+// It is a second front end on the existing model, never a second model. Every page answers a question the store already holds the answer to: what jobs exist and how they depend on each other, what a run did step by step, why a step was skipped, what an agent actually said. What it lets a reader DO (trigger, rerun, abort, pause and release a job or pipeline, decide an approval, answer a question, plus the /api group for the CLI) goes through the same scheduler and store rows `steps run` and `steps approvals approve` use. Nothing here is a parallel execution path.
 //
-// The server is single-user and binds loopback by default, where it asks for
-// nothing: the thing it would authenticate against does not exist — this is
-// the local runner's own UI, in the same trust domain as the terminal that
-// started it. A deployment that is NOT that turns on HTTP Basic (see auth.go),
-// which is the whole of the authentication here.
+// Bound to loopback the server asks for nothing: it is the local runner's own UI, in the same trust domain as the terminal that started it. A deployment that is NOT that turns on HTTP Basic or browser sessions (local users, GitHub or Google sign-in, roles, OAuth for the MCP exports; see auth.go and docs/authentication.md), and the activity log records who did what.
 package web
 
 import (
@@ -325,10 +314,19 @@ func (s *Server) routes() error {
 	e.Use(s.recordActivity)
 
 	e.GET("/", s.handleIndex)
-	e.GET("/static/app.css", s.handleCSS)
-	e.GET("/static/htmx.min.js", s.handleHTMX)
-	e.GET("/static/hx-sse.min.js", s.handleHTMXSSE)
-	e.GET("/static/app.js", s.handleAppJS)
+	e.GET("/static/app.css", assetHandler("static/app.css", "text/css; charset=utf-8"))
+	// The htmx route serves the vendored copy of htmx (4.0.0), which drives every
+	// live region in the UI. Vendored and embedded rather than pulled from a CDN:
+	// this server is expected to run where there is no route to one, and a
+	// refresh that silently stops working there is worse than no refresh at all.
+	//
+	// The version is pinned by a test, because 4.x is not a drop-in for 2.x and
+	// the differences are silent: the events renamed to `htmx:after:swap`,
+	// `hx-sync` defaults to `queue first`, and the trigger grammar became HCON —
+	// which is what turned `every 2.5s` into a 2-millisecond poll.
+	e.GET("/static/htmx.min.js", assetHandler("static/htmx.min.js", "text/javascript; charset=utf-8"))
+	e.GET("/static/hx-sse.min.js", assetHandler("static/hx-sse.min.js", "text/javascript; charset=utf-8"))
+	e.GET("/static/app.js", assetHandler("static/app.js", "text/javascript; charset=utf-8"))
 	e.GET("/mark", s.handleMark)
 	e.GET("/docs", s.handleDocsIndex)
 	e.GET("/docs/:page", s.handleDocs)

@@ -151,57 +151,41 @@ func sectionOf(page string) string {
 	}
 }
 
-// handleCSS serves the stylesheet from the embedded assets.
-func (s *Server) handleCSS(c *echo.Context) error {
-	return serveAsset(c, "static/app.css", "text/css; charset=utf-8")
-}
-
-// handleHTMX serves the vendored copy of htmx (4.0.0), which drives every
-// live region in the UI. Vendored and embedded rather than pulled from a CDN:
-// this server is expected to run where there is no route to one, and a
-// refresh that silently stops working there is worse than no refresh at all.
-//
-// The version is pinned by a test, because 4.x is not a drop-in for 2.x and
-// the differences are silent: the events renamed to `htmx:after:swap`,
-// `hx-sync` defaults to `queue first`, and the trigger grammar became HCON —
-// which is what turned `every 2.5s` into a 2-millisecond poll.
-func (s *Server) handleHTMX(c *echo.Context) error {
-	return serveAsset(c, "static/htmx.min.js", "text/javascript; charset=utf-8")
-}
-
-// handleHTMXSSE serves htmx's server-sent-events extension, which the run
-// page uses to receive the step fragments the stream renders.
-func (s *Server) handleHTMXSSE(c *echo.Context) error {
-	return serveAsset(c, "static/hx-sse.min.js", "text/javascript; charset=utf-8")
-}
-
-// handleAppJS serves the layout's own script, a file rather than inline so a page and each of its polls carry only markup.
-func (s *Server) handleAppJS(c *echo.Context) error {
-	return serveAsset(c, "static/app.js", "text/javascript; charset=utf-8")
-}
-
-// serveAsset serves one embedded file with a validator, so a browser that
-// already holds it asks and is told 304 instead of taking the ~80KB of
-// stylesheet and library again on every navigation. The tag is the content's
-// own hash, which is what lets `no-cache` be safe: a vendored bump changes
-// the tag, and the next request after it gets the new bytes.
-func serveAsset(c *echo.Context, path, contentType string) error {
-	data, err := assets.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("web: %w", err)
+// assetHandler serves one embedded file with a validator, so a browser that already holds it asks and is told 304 instead of taking the ~80KB of stylesheet and library again on every navigation. The tag is the content's own hash, computed once because the embedded bytes cannot change, which is what lets `no-cache` be safe: a vendored bump changes the tag, and the next request after it gets the new bytes.
+func assetHandler(path, contentType string) echo.HandlerFunc {
+	type loaded struct {
+		data []byte
+		etag string
 	}
 
-	sum := sha256.Sum256(data)
-	header := c.Response().Header()
-	header.Set(echo.HeaderContentType, contentType)
-	header.Set("ETag", `"`+hex.EncodeToString(sum[:8])+`"`)
-	header.Set("Cache-Control", "no-cache")
+	load := sync.OnceValues(func() (loaded, error) {
+		data, err := assets.ReadFile(path)
+		if err != nil {
+			return loaded{}, fmt.Errorf("web: %w", err)
+		}
 
-	// A range ServeContent computes is offsets into the plain file, which a gzipped response makes wrong; assets are small enough to always send whole.
-	c.Request().Header.Del("Range")
-	http.ServeContent(c.Response(), c.Request(), path, time.Time{}, bytes.NewReader(data))
+		sum := sha256.Sum256(data)
 
-	return nil
+		return loaded{data: data, etag: `"` + hex.EncodeToString(sum[:8]) + `"`}, nil
+	})
+
+	return func(c *echo.Context) error {
+		asset, err := load()
+		if err != nil {
+			return err
+		}
+
+		header := c.Response().Header()
+		header.Set(echo.HeaderContentType, contentType)
+		header.Set("ETag", asset.etag)
+		header.Set("Cache-Control", "no-cache")
+
+		// A range ServeContent computes is offsets into the plain file, which a gzipped response makes wrong; assets are small enough to always send whole.
+		c.Request().Header.Del("Range")
+		http.ServeContent(c.Response(), c.Request(), path, time.Time{}, bytes.NewReader(asset.data))
+
+		return nil
+	}
 }
 
 // templateFuncs are the formatting decisions the templates share. They live
