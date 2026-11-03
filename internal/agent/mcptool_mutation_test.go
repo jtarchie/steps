@@ -39,12 +39,12 @@ func TestBoundedStructuredContentKeepsAPayloadExactlyAtTheLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := boundedStructuredContent(sc, len(data), t.TempDir())
+	got := boundedStructuredContent(t.Context(), sc, len(data), t.TempDir())
 	if !reflect.DeepEqual(got, sc) {
 		t.Errorf("boundedStructuredContent at exactly the limit = %#v, want the structure untouched", got)
 	}
 
-	if _, spilled := boundedStructuredContent(sc, len(data)-1, t.TempDir()).(string); !spilled {
+	if _, spilled := boundedStructuredContent(t.Context(), sc, len(data)-1, t.TempDir()).(string); !spilled {
 		t.Error("one byte over the limit was not spilled")
 	}
 }

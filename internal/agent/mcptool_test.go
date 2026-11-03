@@ -353,7 +353,7 @@ func TestMCPToolImplNeverReturnsTruncatedJSON(t *testing.T) {
 func TestSpillToFileDegradesWithoutSpillDir(t *testing.T) {
 	t.Parallel()
 
-	path, ok := spillToFile("anything", "")
+	path, ok := spillToFile(t.Context(), "anything", "")
 	if ok || path != "" {
 		t.Errorf("spillToFile(_, \"\") = (%q, %v), want (\"\", false)", path, ok)
 	}

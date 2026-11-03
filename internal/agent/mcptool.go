@@ -17,6 +17,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -231,7 +232,7 @@ func mcpToolImpl(client stepsmcp.Client, name string, limit int, pins *mcpPins) 
 		}
 
 		return map[string]any{
-			"structured_content": boundedStructuredContent(result.StructuredContent, limit, env.spillDir),
+			"structured_content": boundedStructuredContent(ctx, result.StructuredContent, limit, env.spillDir),
 			"content":            spillOrTruncateLimit(ctx, text, limit, env.spillDir),
 		}
 	}
@@ -488,21 +489,33 @@ func sortedKeys[V any](m map[string]V) []string {
 // what the tool returned. So this branches on spillToFile's ok directly and
 // falls back to prose that says what happened, pointing at the text content,
 // which the SDK usually populates with the same payload anyway.
-func boundedStructuredContent(sc any, limit int, spillDir string) any {
+func boundedStructuredContent(ctx context.Context, sc any, limit int, spillDir string) any {
 	if sc == nil {
 		return nil
 	}
 
-	data, err := json.Marshal(sc)
+	raw, err := json.Marshal(sc)
 	if err != nil {
 		return fmt.Sprintf("[structured content omitted: could not marshal: %s]", err.Error())
 	}
 
+	// Masked before the size check and any spill, the same as spillOrTruncateLimit, so neither the file the model can read back nor the inline value holds a secret.
+	data := redact.SecretsFrom(ctx).String(string(raw))
+
 	if len(data) <= limit {
-		return sc
+		if data == string(raw) {
+			return sc
+		}
+
+		var masked any
+		if json.Unmarshal([]byte(data), &masked) != nil {
+			return data
+		}
+
+		return masked
 	}
 
-	path, ok := spillToFile(string(data), spillDir)
+	path, ok := spillToFile(ctx, data, spillDir)
 	if !ok {
 		return fmt.Sprintf(
 			"[structured content omitted: %s of JSON exceeded the %s inline limit and could not be saved to a file;"+
@@ -511,7 +524,7 @@ func boundedStructuredContent(sc any, limit int, spillDir string) any {
 		)
 	}
 
-	return shell.SpillPointerMessage(len(data), path, spillPreview(string(data)))
+	return shell.SpillPointerMessage(len(data), path, spillPreview(data))
 }
 
 // joinTextContent concatenates every TextContent block in content,

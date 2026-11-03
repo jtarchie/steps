@@ -96,7 +96,7 @@ func spillOrTruncateLimit(ctx context.Context, content string, limit int, spillD
 		return content
 	}
 
-	path, ok := spillToFile(content, spillDir)
+	path, ok := spillToFile(ctx, content, spillDir)
 	if !ok {
 		return truncateToolOutputLimit(content, limit)
 	}
@@ -112,14 +112,14 @@ func spillOrTruncateLimit(ctx context.Context, content string, limit int, spillD
 // degrades rather than erroring. Split out so a caller that must NOT fall
 // back to a byte prefix — boundedStructuredContent, whose content is
 // serialized JSON — can branch on ok explicitly.
-func spillToFile(content string, spillDir string) (string, bool) {
+func spillToFile(ctx context.Context, content string, spillDir string) (string, bool) {
 	if spillDir == "" {
 		return "", false
 	}
 
 	f, err := os.CreateTemp(spillDir, "output-*.txt")
 	if err != nil {
-		slog.Warn("agent.spill_output", "error", err)
+		slog.WarnContext(ctx, "agent.spill_output", "error", err)
 
 		return "", false
 	}
@@ -129,7 +129,7 @@ func spillToFile(content string, spillDir string) (string, bool) {
 
 	if writeErr != nil || closeErr != nil {
 		_ = os.Remove(f.Name())
-		slog.Warn("agent.spill_output", "write_error", writeErr, "close_error", closeErr)
+		slog.WarnContext(ctx, "agent.spill_output", "write_error", writeErr, "close_error", closeErr)
 
 		return "", false
 	}
