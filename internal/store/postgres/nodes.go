@@ -229,7 +229,7 @@ func (s *Store) HasSucceededBatch(ctx context.Context, jobName string, rootHashe
 	found, err := collect(ctx, s.db, "job_runs",
 		`SELECT root_hash FROM job_runs
 		 WHERE pipeline_id = $1 AND job_name = $2 AND root_hash = ANY($3::text[])`,
-		[]any{s.pipelineID, jobName, textArray(rootHashes)}, scanString)
+		[]any{s.pipelineID, jobName, textArray(rootHashes)}, scanString[string])
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +252,7 @@ func (s *Store) HasNodesSucceeded(ctx context.Context, jobName string, hashes []
 	found, err := collect(ctx, s.db, "nodes",
 		`SELECT hash FROM nodes
 		 WHERE pipeline_id = $1 AND job_name = $2 AND status = 'succeeded' AND hash = ANY($3::text[])`,
-		[]any{s.pipelineID, jobName, textArray(hashes)}, scanString)
+		[]any{s.pipelineID, jobName, textArray(hashes)}, scanString[string])
 	if err != nil {
 		return nil, err
 	}

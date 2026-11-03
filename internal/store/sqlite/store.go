@@ -13,14 +13,12 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync/atomic"
-	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver name used by sql.Open below
 
@@ -377,85 +375,6 @@ func (s *Store) Pipeline() string { return s.pipeline }
 // network driver returns a credential-free URL for the same string's purpose.
 func (s *Store) Description() string { return s.path }
 
-// checkSchemaVersion refuses a database this build cannot write to, and stamps
-// one it just created. By the time it runs, upgrade has already brought any
-// file from v0.1.0 on to schemaVersion, so what it refuses is a file older
-// than that or newer than this build. What it adds is that somebody is TOLD.
-//
-// Without it the failure was silent and looked like success. The schema is
-// CREATE TABLE IF NOT EXISTS, so an older database opens fine and simply lacks
-// a column; every INSERT naming that column then fails, and the run-event sink
-// only warns — a build went green having recorded nothing, and whoever ran it
-// found out when they opened the web UI to an empty run. A green build that
-// quietly lost its history is worse than a red one that says why.
-//
-// PRAGMA user_version rather than a table: it lives in the file header, costs
-// no row, and cannot itself be the thing that is missing.
-func checkSchemaVersion(ctx context.Context, db executor, path string) error {
-	found, err := readSchemaVersion(ctx, db, path)
-	if err != nil {
-		return err
-	}
-
-	// Zero is a database created before this check existed, which is every
-	// database older than it — and every one of those predates at least this
-	// column. Stamping instead of refusing would bless exactly the stale files
-	// the check is for, so the only zero that is accepted is one this open
-	// just created, which the DDL above has already filled in.
-	if found == schemaVersion {
-		return nil
-	}
-
-	if found == 0 && freshlyCreated(ctx, db) {
-		return writeVersion(ctx, db, path)
-	}
-
-	return schemaVersionError(path, found)
-}
-
-// readSchemaVersion reports what schema the file at path was written by.
-func readSchemaVersion(ctx context.Context, db executor, path string) (int, error) {
-	var found int
-
-	err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&found)
-	if err != nil {
-		return 0, fmt.Errorf("could not read the schema version of %q: %w", path, err)
-	}
-
-	return found, nil
-}
-
-// schemaVersionError is the one message a file this build cannot use gets,
-// whether the caller meant to write to it or only to read it — a reader of a
-// stale file is told the same thing, because the answer is the same and
-// because a read that silently returned nothing is the failure mode this
-// whole check exists for.
-func schemaVersionError(path string, found int) error {
-	switch {
-	case found > schemaVersion:
-		return fmt.Errorf("%w: %s is at schema %d, written by a newer steps than this one (%d); use that steps or a later one",
-			store.ErrSchemaVersion, path, found, schemaVersion)
-	case found >= oldestUpgradable:
-		return fmt.Errorf("%w: %s is at schema %d and this steps writes %d; the next steps command that writes to it (steps web, steps run) upgrades it, keeping a copy beside it",
-			store.ErrSchemaVersion, path, found, schemaVersion)
-	}
-
-	return fmt.Errorf("%w: %s is at schema %d, older than steps v0.1.0 (%d), and has no upgrade path; delete the file and run again, which loses that pipeline's run history and cache but nothing else",
-		store.ErrSchemaVersion, path, found, oldestUpgradable)
-}
-
-// freshlyCreated reports that this open made the database, rather than
-// inheriting one an older build left. A database with no run and no node has
-// nothing to lose by being stamped.
-func freshlyCreated(ctx context.Context, db executor) bool {
-	var rows int
-
-	err := db.QueryRowContext(ctx,
-		"SELECT (SELECT COUNT(*) FROM runs) + (SELECT COUNT(*) FROM nodes)").Scan(&rows)
-
-	return err == nil && rows == 0
-}
-
 // Close reclaims what retention freed and closes the underlying connection.
 //
 // Both reclaims are best-effort and deliberately ignored: a database that could
@@ -532,143 +451,4 @@ func (s *Store) closeReads() {
 	if s.reads != s.db {
 		_ = s.reads.Close()
 	}
-}
-
-// now is whole-second RFC3339, for columns nothing orders or subtracts finer
-// than a second (nodes, versions, approvals, usage, placements, the breaker).
-// A column that is ordered or subtracted takes nowNano instead.
-func now() string {
-	return time.Now().UTC().Format(time.RFC3339)
-}
-
-// sortableNano is RFC3339 with a FIXED nine-digit fraction.
-//
-// time.RFC3339Nano is the obvious choice and is wrong for a stored column: its
-// layout uses "9"s, which TRIM trailing zeros, so the strings it produces are
-// not comparable in time order. '…:00.5Z' sorts AFTER '…:00.51Z' (because 'Z'
-// 0x5A > '1' 0x31), and a timestamp landing exactly on a second has no fraction
-// at all and sorts after every fractional timestamp within it.
-//
-// That matters because sqlite orders these as TEXT: ListRuns, LatestRunByJob
-// and FirstRunSince all sort on them, and retention DELETES by that order. With
-// the trimming layout, two runs in the same second could be reaped in the wrong
-// order — throwing away the newer one, which is the one somebody wants to look
-// at. Zero-padding costs a few bytes a row and makes string order time order.
-const sortableNano = "2006-01-02T15:04:05.000000000Z07:00"
-
-// nowNano is the sub-second form, for tables whose rows are ordered or
-// subtracted: at whole-second resolution every run faster than a second
-// reports a duration of zero, which is most task-only runs. RFC3339 parsing
-// accepts the fractional form, so reading stays uniform.
-func nowNano() string {
-	return time.Now().UTC().Format(sortableNano)
-}
-
-func nullableString(b []byte) any {
-	if len(b) == 0 {
-		return nil
-	}
-
-	return string(b)
-}
-
-// parseTimestamp turns a stored RFC3339 string into a Time, yielding the zero
-// Time for an empty or unparseable value. Reading history is a diagnostic, so
-// a malformed row is better rendered blank than fatal.
-func parseTimestamp(value string) time.Time {
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		return time.Time{}
-	}
-
-	return parsed
-}
-
-// rowLimit turns this repo's "zero means no limit" convention into the LIMIT
-// sqlite wants for it, which is -1. Without it a caller asking for everything
-// has to pass a number it invented, and the number it invents is the bug.
-func rowLimit(limit int) int {
-	if limit <= 0 {
-		return -1
-	}
-
-	return limit
-}
-
-// byJob narrows a listing to one job, or leaves it whole for an empty name. Spliced in rather than written `(? = ” OR job_name = ?)`, which no index can serve: every call sorted the pipeline's whole history to return twenty rows.
-func byJob(jobName string, args []any) (string, []any) {
-	if jobName == "" {
-		return "", args
-	}
-
-	return " AND job_name = ?", append(args, jobName)
-}
-
-// jsonList binds a list as ONE argument, read back with `IN (SELECT value FROM json_each(?))`. sqlite has no array binding, and the alternative — a generated "?,?,?" list — needed chunking under the bind-variable limit at every call site.
-func jsonList[S ~string](values []S) string {
-	if values == nil {
-		// json_each('null') yields one NULL row rather than none, so an empty list must be an empty array.
-		return "[]"
-	}
-
-	encoded, _ := json.Marshal(values) //nolint:errchkjson // a list of strings cannot fail to marshal
-
-	return string(encoded)
-}
-
-func scanString(rows *sql.Rows) (string, error) {
-	var value string
-
-	return value, rows.Scan(&value) //nolint:wrapcheck // collect wraps with the thing being read
-}
-
-func scanPair(rows *sql.Rows) ([2]string, error) {
-	var pair [2]string
-
-	return pair, rows.Scan(&pair[0], &pair[1]) //nolint:wrapcheck // collect wraps with the thing being read
-}
-
-// collect runs a query and decodes every row through scan.
-//
-// It exists because the alternative — query, defer Close, loop, scan, check
-// rows.Err — is fifteen lines of identical bookkeeping at every list query in this
-// package, and the last of those five steps is
-// the one that is quietly forgotten. what names the thing being read, for the
-// error message.
-func collect[T any](ctx context.Context, db *sql.DB, what, query string, args []any, scan func(*sql.Rows) (T, error)) ([]T, error) {
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("could not read %s: %w", what, err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	var out []T
-
-	for rows.Next() {
-		item, scanErr := scan(rows)
-		if scanErr != nil {
-			return nil, fmt.Errorf("could not read %s: %w", what, scanErr)
-		}
-
-		out = append(out, item)
-	}
-
-	err = rows.Err()
-	if err != nil {
-		return nil, fmt.Errorf("could not read %s: %w", what, err)
-	}
-
-	return out, nil
-}
-
-func writeVersion(ctx context.Context, db interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, path string) error {
-	_, err := db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
-	if err != nil {
-		return fmt.Errorf("could not stamp the schema version of %q: %w", path, err)
-	}
-
-	return nil
 }

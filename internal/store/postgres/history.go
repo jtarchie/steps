@@ -149,11 +149,7 @@ func (s *Store) ResourceVersionsJSON(ctx context.Context, resourceName string) (
 		`SELECT version_json FROM resource_versions
 		 WHERE pipeline_id = $1 AND resource_name = $2 AND from_check
 		 ORDER BY check_order`,
-		[]any{s.pipelineID, resourceName}, func(rows *sql.Rows) (store.VersionKey, error) {
-			var encoded store.VersionKey
-
-			return encoded, rows.Scan(&encoded)
-		})
+		[]any{s.pipelineID, resourceName}, scanString[store.VersionKey])
 }
 
 // VersionOrders maps every recorded version of a resource to its
@@ -240,7 +236,7 @@ func (s *Store) GreenVersions(ctx context.Context, resourceName string, upstream
 		      )
 		  )
 		ORDER BY rv.check_order
-	`, []any{s.pipelineID, resourceName, textArray(upstreamJobs)}, scanString)
+	`, []any{s.pipelineID, resourceName, textArray(upstreamJobs)}, scanString[store.VersionKey])
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +244,7 @@ func (s *Store) GreenVersions(ctx context.Context, resourceName string, upstream
 	versions := make([]map[string]any, 0, len(encoded))
 
 	for _, one := range encoded {
-		version, err := store.DecodeVersion(store.VersionKey(one))
+		version, err := store.DecodeVersion(one)
 		if err != nil {
 			return nil, fmt.Errorf("could not read green versions for %q: %w", resourceName, err)
 		}

@@ -125,7 +125,7 @@ func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName strin
 		      WHERE u.pipeline_id = nodes.pipeline_id AND u.node_hash = nodes.hash
 		  )
 		RETURNING content_hash
-	`, []any{pipelineID, jobName, keep}, scanString)
+	`, []any{pipelineID, jobName, keep}, scanString[string])
 	if err != nil {
 		return nil, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
 	}
