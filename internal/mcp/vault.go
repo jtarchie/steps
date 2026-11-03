@@ -14,10 +14,20 @@ import (
 
 // Vault is where a pipeline's oauth logins are kept. internal/cli installs the one that seals them into the state database; this package hands it plaintext and never decides where it lands.
 type Vault interface {
-	// Load is the login saved for server in pipeline, and scope names the pipeline it was read under: stable across a rename, different for a pipeline later set under a destroyed one's name. found is false when there is none.
-	Load(ctx context.Context, pipeline, server string) (data []byte, scope string, found bool, err error)
+	// Load is the login saved under key. StoredLogin.Scope names the pipeline it was read under: stable across a rename, different for a pipeline later set under a destroyed one's name. StoredLogin.Found is false when there is none.
+	Load(ctx context.Context, key LoginKey) (StoredLogin, error)
 	// Save replaces it. A non-empty scope is a write-back, refused with ErrLoginOrphaned unless the pipeline is still the one the login was read under; empty is a fresh login for whichever pipeline holds the name. A vault that cannot keep it safe refuses rather than keep it in the clear.
-	Save(ctx context.Context, pipeline, server, scope string, data []byte) error
+	Save(ctx context.Context, key LoginKey, scope string, data []byte) error
+}
+
+// LoginKey names one login: a pipeline's oauth login to one of its servers. A struct so the two strings cannot be passed swapped.
+type LoginKey struct{ Pipeline, Server string }
+
+// StoredLogin is what a Vault holds for a LoginKey.
+type StoredLogin struct {
+	Data  []byte
+	Scope string
+	Found bool
 }
 
 // ErrLoginOrphaned is a write-back for a pipeline that is gone: destroyed, or its name taken by another since the login was read.
@@ -58,34 +68,34 @@ func currentVault() (Vault, error) {
 }
 
 // loadLogin is the login saved for server, or nil when there is none.
-func loadLogin(ctx context.Context, pipeline, server string) (*TokenFile, error) {
+func loadLogin(ctx context.Context, key LoginKey) (*TokenFile, error) {
 	vault, err := currentVault()
 	if err != nil {
 		return nil, err
 	}
 
-	data, scope, found, err := vault.Load(ctx, pipeline, server)
+	login, err := vault.Load(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("read the login: %w", err)
 	}
 
-	if !found {
-		return importLegacyLogin(ctx, vault, pipeline, server)
+	if !login.Found {
+		return importLegacyLogin(ctx, vault, key)
 	}
 
 	var tf TokenFile
 
-	err = json.Unmarshal(data, &tf)
+	err = json.Unmarshal(login.Data, &tf)
 	if err != nil {
 		return nil, fmt.Errorf("parse the login: %w", err)
 	}
 
-	tf.scope = scope
+	tf.scope = login.Scope
 
 	return &tf, nil
 }
 
-func saveLogin(ctx context.Context, pipeline, server string, tf *TokenFile) error {
+func saveLogin(ctx context.Context, key LoginKey, tf *TokenFile) error {
 	vault, err := currentVault()
 	if err != nil {
 		return err
@@ -96,7 +106,7 @@ func saveLogin(ctx context.Context, pipeline, server string, tf *TokenFile) erro
 		return fmt.Errorf("marshal the login: %w", err)
 	}
 
-	err = vault.Save(ctx, pipeline, server, tf.scope, data)
+	err = vault.Save(ctx, key, tf.scope, data)
 	if err != nil {
 		return fmt.Errorf("save the login: %w", err)
 	}
@@ -106,8 +116,8 @@ func saveLogin(ctx context.Context, pipeline, server string, tf *TokenFile) erro
 
 // importLegacyLogin moves a login an older steps left in the config directory into the vault, the first time anything asks for it, and removes the file once the vault holds it.
 // ponytail: deletable once no pre-vault login directory can still exist on any machine; it goes with TokenPath, LoadTokenFile and the config-directory *Logins functions (LoginsExist, MoveLogins, ForgetLogins), whose live callers are in internal/cli/daemon.go.
-func importLegacyLogin(ctx context.Context, vault Vault, pipeline, server string) (*TokenFile, error) {
-	path, err := TokenPath(pipeline, server)
+func importLegacyLogin(ctx context.Context, vault Vault, key LoginKey) (*TokenFile, error) {
+	path, err := TokenPath(key.Pipeline, key.Server)
 	if err != nil {
 		return nil, nil //nolint:nilnil,nilerr // no config directory, so no older login to import: simply none
 	}
@@ -126,7 +136,7 @@ func importLegacyLogin(ctx context.Context, vault Vault, pipeline, server string
 		return nil, fmt.Errorf("marshal the login: %w", err)
 	}
 
-	err = vault.Save(ctx, pipeline, server, "", data)
+	err = vault.Save(ctx, key, "", data)
 	if err != nil {
 		return nil, fmt.Errorf("found a login an older steps saved at %s, which moves into the state database on first use: %w", path, err)
 	}
@@ -139,7 +149,7 @@ func importLegacyLogin(ctx context.Context, vault Vault, pipeline, server string
 
 	_ = os.Remove(filepath.Dir(path))
 
-	slog.InfoContext(ctx, "mcp.login.imported", "pipeline", pipeline, "server", server, "from", path)
+	slog.InfoContext(ctx, "mcp.login.imported", "pipeline", key.Pipeline, "server", key.Server, "from", path)
 
 	return tf, nil
 }
@@ -147,29 +157,29 @@ func importLegacyLogin(ctx context.Context, vault Vault, pipeline, server string
 // MemoryVault keeps logins in memory, for tests that are not about where they land.
 type MemoryVault struct {
 	mu     sync.Mutex
-	logins map[string][]byte
+	logins map[LoginKey][]byte
 }
 
 // Load is the login saved for pipeline's server; a MemoryVault has one scope.
-func (m *MemoryVault) Load(_ context.Context, pipeline, server string) ([]byte, string, bool, error) {
+func (m *MemoryVault) Load(_ context.Context, key LoginKey) (StoredLogin, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	data, found := m.logins[pipeline+"\x00"+server]
+	data, found := m.logins[key]
 
-	return data, "", found, nil
+	return StoredLogin{Data: data, Found: found}, nil
 }
 
 // Save replaces it.
-func (m *MemoryVault) Save(_ context.Context, pipeline, server, _ string, data []byte) error {
+func (m *MemoryVault) Save(_ context.Context, key LoginKey, _ string, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.logins == nil {
-		m.logins = map[string][]byte{}
+		m.logins = map[LoginKey][]byte{}
 	}
 
-	m.logins[pipeline+"\x00"+server] = append([]byte(nil), data...)
+	m.logins[key] = append([]byte(nil), data...)
 
 	return nil
 }
@@ -181,19 +191,19 @@ func (m *MemoryVault) Put(pipeline, server string, tf *TokenFile) error {
 		return fmt.Errorf("marshal the login: %w", err)
 	}
 
-	return m.Save(context.Background(), pipeline, server, "", data)
+	return m.Save(context.Background(), LoginKey{pipeline, server}, "", data)
 }
 
 // Get is the login saved for pipeline's server, or nil.
 func (m *MemoryVault) Get(pipeline, server string) *TokenFile {
-	data, _, found, _ := m.Load(context.Background(), pipeline, server)
-	if !found {
+	login, _ := m.Load(context.Background(), LoginKey{pipeline, server})
+	if !login.Found {
 		return nil
 	}
 
 	var tf TokenFile
 
-	if json.Unmarshal(data, &tf) != nil {
+	if json.Unmarshal(login.Data, &tf) != nil {
 		return nil
 	}
 

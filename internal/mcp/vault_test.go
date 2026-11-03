@@ -19,7 +19,7 @@ type refusingVault struct {
 	refuse error
 }
 
-func (r *refusingVault) Save(ctx context.Context, pipeline, server, scope string, data []byte) error {
+func (r *refusingVault) Save(ctx context.Context, key LoginKey, scope string, data []byte) error {
 	if r.refuse != nil {
 		return r.refuse
 	}
@@ -28,7 +28,7 @@ func (r *refusingVault) Save(ctx context.Context, pipeline, server, scope string
 		return fmt.Errorf("refusing vault: %w", ctx.Err())
 	}
 
-	return r.MemoryVault.Save(ctx, pipeline, server, scope, data)
+	return r.MemoryVault.Save(ctx, key, scope, data)
 }
 
 func useVault(t *testing.T, v Vault) {
@@ -64,7 +64,7 @@ func TestALegacyLoginMovesIntoTheVaultOnFirstUse(t *testing.T) {
 	legacy := &TokenFile{Endpoint: inspectEndpoint, AccessToken: "older", RefreshToken: "r"}
 	path := writeLegacyLogin(t, "tracker", legacy)
 
-	tf, err := loadLogin(t.Context(), testPipeline, "tracker")
+	tf, err := loadLogin(t.Context(), LoginKey{testPipeline, "tracker"})
 	if err != nil || tf == nil || tf.AccessToken != legacy.AccessToken {
 		t.Fatalf("loadLogin over a legacy file = %+v, %v; want it imported", tf, err)
 	}
@@ -88,7 +88,7 @@ func TestALegacyLoginTheVaultRefusesStaysWhereItWas(t *testing.T) {
 
 	path := writeLegacyLogin(t, "tracker", &TokenFile{Endpoint: inspectEndpoint, AccessToken: "a"})
 
-	_, err := loadLogin(t.Context(), testPipeline, "tracker")
+	_, err := loadLogin(t.Context(), LoginKey{testPipeline, "tracker"})
 	if !errors.Is(err, refusal) || !strings.Contains(err.Error(), path) {
 		t.Fatalf("loadLogin with a vault that refuses = %v, want the refusal naming %s", err, path)
 	}
@@ -141,10 +141,10 @@ type scopeVault struct {
 	saved []string
 }
 
-func (v *scopeVault) Save(ctx context.Context, pipeline, server, scope string, data []byte) error {
+func (v *scopeVault) Save(ctx context.Context, key LoginKey, scope string, data []byte) error {
 	v.saved = append(v.saved, scope)
 
-	return v.MemoryVault.Save(ctx, pipeline, server, scope, data)
+	return v.MemoryVault.Save(ctx, key, scope, data)
 }
 
 // A refresh writes back to the pipeline it read from, by identity, so the vault can refuse one whose pipeline is gone.
@@ -165,10 +165,11 @@ func TestAWriteBackCarriesTheIdentityItWasReadUnder(t *testing.T) {
 // fixedScopeVault answers every Load under one scope.
 type fixedScopeVault struct{ scopeVault }
 
-func (v *fixedScopeVault) Load(ctx context.Context, pipeline, server string) ([]byte, string, bool, error) {
-	data, _, found, err := v.MemoryVault.Load(ctx, pipeline, server)
+func (v *fixedScopeVault) Load(ctx context.Context, key LoginKey) (StoredLogin, error) {
+	login, err := v.MemoryVault.Load(ctx, key)
+	login.Scope = "pipeline-9"
 
-	return data, "pipeline-9", found, err
+	return login, err
 }
 
 // Not t.Parallel(): the vault is process state.
@@ -181,19 +182,42 @@ func TestTheScopeALoginWasReadUnderIsTheOneItIsSavedUnder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tf, err := loadLogin(t.Context(), testPipeline, "tracker")
+	tf, err := loadLogin(t.Context(), LoginKey{testPipeline, "tracker"})
 	if err != nil || tf == nil {
 		t.Fatalf("loadLogin = %v, %v", tf, err)
 	}
 
 	vault.saved = nil
 
-	err = saveLogin(t.Context(), testPipeline, "tracker", tf)
+	err = saveLogin(t.Context(), LoginKey{testPipeline, "tracker"}, tf)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if len(vault.saved) != 1 || vault.saved[0] != "pipeline-9" {
 		t.Errorf("saved under scopes %q, want the one it was read under", vault.saved)
+	}
+}
+
+func TestMemoryVaultKeysOnPipelineAndServer(t *testing.T) {
+	t.Parallel()
+
+	vault := &MemoryVault{}
+
+	err := vault.Save(t.Context(), LoginKey{Pipeline: "a", Server: "b"}, "", []byte("ab"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, other := range []LoginKey{{Pipeline: "b", Server: "a"}, {Pipeline: "a", Server: "c"}, {Pipeline: "c", Server: "b"}} {
+		got, err := vault.Load(t.Context(), other)
+		if err != nil || got.Found {
+			t.Errorf("Load(%+v) = %+v, %v; want none", other, got, err)
+		}
+	}
+
+	got, err := vault.Load(t.Context(), LoginKey{Pipeline: "a", Server: "b"})
+	if err != nil || !got.Found || string(got.Data) != "ab" || got.Scope != "" {
+		t.Errorf("Load = %+v, %v; want the saved login under no scope", got, err)
 	}
 }

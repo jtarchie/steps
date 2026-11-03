@@ -299,24 +299,22 @@ func oauthTokenSource(ctx context.Context, pipeline string, srv config.MCPServer
 		return nil, err
 	}
 
-	return &connTokenSource{ctx: ctx, shared: sharedTokenFor(ctx, pipeline, srv.Name, tf)}, nil
+	return &connTokenSource{ctx: ctx, shared: sharedTokenFor(ctx, LoginKey{pipeline, srv.Name}, tf)}, nil
 }
 
 var sharedTokens = struct {
 	mu    sync.Mutex
-	byKey map[string]*sharedToken
-}{byKey: map[string]*sharedToken{}}
+	byKey map[LoginKey]*sharedToken
+}{byKey: map[LoginKey]*sharedToken{}}
 
 // sharedTokenFor returns the process's one sharedToken for pipeline's login to server. An existing one re-reads the vault, so a `steps mcp login` done while a daemon runs takes effect on the next connect.
-func sharedTokenFor(ctx context.Context, pipeline, server string, tf *TokenFile) *sharedToken {
+func sharedTokenFor(ctx context.Context, key LoginKey, tf *TokenFile) *sharedToken {
 	sharedTokens.mu.Lock()
 	defer sharedTokens.mu.Unlock()
 
-	key := pipeline + "\x00" + server
-
 	shared, ok := sharedTokens.byKey[key]
 	if !ok {
-		shared = &sharedToken{pipeline: pipeline, server: server, file: tf, saved: tf.AccessToken}
+		shared = &sharedToken{pipeline: key.Pipeline, server: key.Server, file: tf, saved: tf.AccessToken}
 		sharedTokens.byKey[key] = shared
 
 		return shared
@@ -392,7 +390,7 @@ func (s *sharedToken) token(ctx context.Context) (*oauth2.Token, error) {
 // it — a fresh login, or a refresh by a process sharing the database. A login still holding what this process last saw is
 // ignored: after a failed write it holds a refresh token already spent.
 func (s *sharedToken) reload(ctx context.Context) {
-	saved, err := loadLogin(ctx, s.pipeline, s.server)
+	saved, err := loadLogin(ctx, LoginKey{s.pipeline, s.server})
 	if err != nil || saved == nil || saved.AccessToken == s.saved {
 		return
 	}
@@ -463,7 +461,7 @@ func (s *sharedToken) persist(ctx context.Context, tok *oauth2.Token) {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistBound)
 	defer cancel()
 
-	err := saveLogin(writeCtx, s.pipeline, s.server, &updated)
+	err := saveLogin(writeCtx, LoginKey{s.pipeline, s.server}, &updated)
 	if err != nil {
 		slog.WarnContext(ctx, "mcp.oauth.persist_failed", "pipeline", s.pipeline, "server", s.server, "error", err,
 			"hint", "the rotated token is not saved, so a later process needs a login again")

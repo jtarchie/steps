@@ -90,14 +90,16 @@ func noSuchState(err error) bool {
 // Load opens the pipeline's sealed login, re-sealing it under the current key when only the old one opened it.
 //
 //nolint:contextcheck // opening a store takes none
-func (l *sealedLogins) Load(ctx context.Context, pipeline, server string) ([]byte, string, bool, error) {
+func (l *sealedLogins) Load(ctx context.Context, key stepsmcp.LoginKey) (stepsmcp.StoredLogin, error) {
+	pipeline, server := key.Pipeline, key.Server
+
 	st, err := attachState(l.state, pipeline)
 	if noSuchState(err) {
-		return nil, "", false, nil
+		return stepsmcp.StoredLogin{}, nil
 	}
 
 	if err != nil {
-		return nil, "", false, err
+		return stepsmcp.StoredLogin{}, err
 	}
 
 	defer release(st)
@@ -107,12 +109,12 @@ func (l *sealedLogins) Load(ctx context.Context, pipeline, server string) ([]byt
 
 	sealed, found, err := st.Credential(ctx, name)
 	if err != nil || !found {
-		return nil, "", false, err //nolint:wrapcheck // the store names the credential and the pipeline
+		return stepsmcp.StoredLogin{}, err //nolint:wrapcheck // the store names the credential and the pipeline
 	}
 
 	plain, stale, err := l.box.Open(sealed, credentialAAD(st, name))
 	if err != nil {
-		return nil, "", false, unopenable{err}
+		return stepsmcp.StoredLogin{}, unopenable{err}
 	}
 
 	if stale {
@@ -123,7 +125,7 @@ func (l *sealedLogins) Load(ctx context.Context, pipeline, server string) ([]byt
 		}
 	}
 
-	return plain, scope, true, nil
+	return stepsmcp.StoredLogin{Data: plain, Scope: scope, Found: true}, nil
 }
 
 // Save seals data under the current key, bound to the pipeline, and refuses with no key before anything is written.
@@ -131,7 +133,9 @@ func (l *sealedLogins) Load(ctx context.Context, pipeline, server string) ([]byt
 // Only a local command's fresh login may register the pipeline. Everything else attaches to a pipeline already there, so a write-back cannot resurrect one a destroy removed, and checks it is still the pipeline the login was read under, so it cannot land on a stranger that took the name; a destroy between the two is refused by the foreign key.
 //
 //nolint:contextcheck // opening a store takes none
-func (l *sealedLogins) Save(ctx context.Context, pipeline, server, scope string, data []byte) error {
+func (l *sealedLogins) Save(ctx context.Context, key stepsmcp.LoginKey, scope string, data []byte) error {
+	pipeline, server := key.Pipeline, key.Server
+
 	err := l.box.Ready()
 	if err != nil {
 		return err //nolint:wrapcheck // sealbox names the variable to set

@@ -14,26 +14,26 @@ import (
 
 type fileVault struct{}
 
-func (fileVault) Load(_ context.Context, pipeline, server string) ([]byte, string, bool, error) {
-	path, err := TokenPath(pipeline, server)
+func (fileVault) Load(_ context.Context, key LoginKey) (StoredLogin, error) {
+	path, err := TokenPath(key.Pipeline, key.Server)
 	if err != nil {
-		return nil, "", false, err
+		return StoredLogin{}, err
 	}
 
 	data, err := os.ReadFile(path) //nolint:gosec // TokenPath's own output
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, "", false, nil
+		return StoredLogin{}, nil
 	}
 
 	if err != nil {
-		return nil, "", false, fmt.Errorf("read %s: %w", path, err)
+		return StoredLogin{}, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	return data, "", true, nil
+	return StoredLogin{Data: data, Found: true}, nil
 }
 
-func (fileVault) Save(_ context.Context, pipeline, server, _ string, data []byte) error {
-	path, err := TokenPath(pipeline, server)
+func (fileVault) Save(_ context.Context, key LoginKey, _ string, data []byte) error {
+	path, err := TokenPath(key.Pipeline, key.Server)
 	if err != nil {
 		return err
 	}

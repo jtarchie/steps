@@ -80,7 +80,7 @@ func faultDetail(fault credentialFault) string {
 
 // checkCredential loads srv's login and refuses the states that make it unusable, in the order a run meets them: unreadable, none, one authorized for a different endpoint, and an access token that expired with nothing to renew it.
 func checkCredential(ctx context.Context, pipeline string, srv config.MCPServer) (*TokenFile, credentialFault, error) {
-	tf, err := loadLogin(ctx, pipeline, srv.Name)
+	tf, err := loadLogin(ctx, LoginKey{pipeline, srv.Name})
 	if err != nil {
 		return nil, faultUnreadable, fmt.Errorf("mcp server %q in pipeline %q: %w", srv.Name, pipeline, err)
 	}

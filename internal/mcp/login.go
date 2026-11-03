@@ -489,7 +489,7 @@ func persistLoginResult(ctx context.Context, pipeline string, srv config.MCPServ
 		Expiry:       tok.Expiry,
 	}
 
-	err = saveLogin(ctx, pipeline, srv.Name, tf)
+	err = saveLogin(ctx, LoginKey{pipeline, srv.Name}, tf)
 	if err != nil {
 		return fmt.Errorf("mcp server %q: %w", srv.Name, err)
 	}
@@ -509,7 +509,7 @@ func checkNotADowngrade(ctx context.Context, pipeline string, srv config.MCPServ
 		return nil
 	}
 
-	existing, err := loadLogin(ctx, pipeline, srv.Name)
+	existing, err := loadLogin(ctx, LoginKey{pipeline, srv.Name})
 	if err != nil || existing == nil {
 		// None, or one this process cannot read. Either way there is
 		// nothing here worth preserving over a token that works right now.

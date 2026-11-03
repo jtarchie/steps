@@ -379,7 +379,8 @@ func writeTokenFile(t testing.TB, token *stepsmcp.TokenFile) {
 	}
 
 	if token == nil {
-		_, _, found, err := fixtureLogins.Load(t.Context(), "app", tokenFixtureServer)
+		login, err := fixtureLogins.Load(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: tokenFixtureServer})
+		found := login.Found
 		if err != nil || found {
 			t.Fatalf("a login is already saved (%v), and nothing removes one but a destroy", err)
 		}
@@ -387,7 +388,7 @@ func writeTokenFile(t testing.TB, token *stepsmcp.TokenFile) {
 		return
 	}
 
-	err := fixtureLogins.Save(t.Context(), "app", tokenFixtureServer, "", loginJSON(t, token))
+	err := fixtureLogins.Save(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: tokenFixtureServer}, "", loginJSON(t, token))
 	if err != nil {
 		t.Fatal(err)
 	}

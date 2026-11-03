@@ -99,7 +99,7 @@ func TestALoginIsSealedInTheStateDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "steps.db")
 	logins := installTestLogins(t, State(path), true)
 
-	err := logins.Save(t.Context(), "app", "tracker", "", loginJSON(t, &stepsmcp.TokenFile{AccessToken: secretToken, RefreshToken: "refresh-" + secretToken}))
+	err := logins.Save(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"}, "", loginJSON(t, &stepsmcp.TokenFile{AccessToken: secretToken, RefreshToken: "refresh-" + secretToken}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,9 @@ func TestALoginIsSealedInTheStateDatabase(t *testing.T) {
 		t.Fatal("the state database holds the token in the clear")
 	}
 
-	plain, _, found, err := logins.Load(t.Context(), "app", "tracker")
+	login, err := logins.Load(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"})
+
+	plain, found := login.Data, login.Found
 	if err != nil || !found || !bytes.Contains(plain, []byte(secretToken)) {
 		t.Fatalf("Load = %q, %v, %v; want the login back", plain, found, err)
 	}
@@ -129,7 +131,7 @@ func TestNoKeyRefusesALoginAndWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = logins.Save(t.Context(), "app", "tracker", "", []byte(`{}`))
+	err = logins.Save(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"}, "", []byte(`{}`))
 	if !errors.Is(err, sealbox.ErrNoKey) || !strings.Contains(err.Error(), sealbox.KeyEnv) {
 		t.Fatalf("Save with no key = %v, want ErrNoKey naming %s", err, sealbox.KeyEnv)
 	}
@@ -149,7 +151,7 @@ func TestADaemonSavesOnlyForPipelinesItHolds(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "steps.db")
 	logins := installTestLogins(t, State(path), false)
 
-	err := logins.Save(t.Context(), "gone", "tracker", "", []byte(`{}`))
+	err := logins.Save(t.Context(), stepsmcp.LoginKey{Pipeline: "gone", Server: "tracker"}, "", []byte(`{}`))
 	if err == nil {
 		t.Fatal("a daemon saved a login for a pipeline it does not hold")
 	}
@@ -171,7 +173,7 @@ func TestAKeyRotationReSealsOnRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = logins.Save(t.Context(), "app", "tracker", "", []byte(`{"access_token":"a"}`))
+	err = logins.Save(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"}, "", []byte(`{"access_token":"a"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +186,7 @@ func TestAKeyRotationReSealsOnRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, _, err = newOnly.Load(t.Context(), "app", "tracker")
+	_, err = newOnly.Load(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"})
 	if !errors.Is(err, sealbox.ErrWrongKey) {
 		t.Fatalf("Load under a new key alone = %v, want ErrWrongKey", err)
 	}
@@ -196,14 +198,17 @@ func TestAKeyRotationReSealsOnRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, found, err := rotating.Load(t.Context(), "app", "tracker")
+	login, err := rotating.Load(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"})
+
+	found := login.Found
 	if err != nil || !found {
 		t.Fatalf("Load during a rotation = found %v, %v", found, err)
 	}
 
 	t.Setenv(sealbox.OldKeyEnv, "")
 
-	_, _, found, err = newOnly.Load(context.Background(), "app", "tracker")
+	login, err = newOnly.Load(context.Background(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"})
+	found = login.Found
 	if err != nil || !found {
 		t.Errorf("Load under the new key after a rotating read = found %v, %v; want it re-sealed", found, err)
 	}
@@ -213,7 +218,7 @@ func TestAKeyRotationReSealsOnRead(t *testing.T) {
 func TestAnUnopenableLoginNeedsALogin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "steps.db")
 
-	err := installTestLogins(t, State(path), true).Save(t.Context(), "app", "tracker", "", []byte(`{"access_token":"a"}`))
+	err := installTestLogins(t, State(path), true).Save(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"}, "", []byte(`{"access_token":"a"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +230,7 @@ func TestAnUnopenableLoginNeedsALogin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, _, err = other.Load(t.Context(), "app", "tracker")
+	_, err = other.Load(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"})
 	if !errors.Is(err, sealbox.ErrWrongKey) || !errors.Is(err, stepsmcp.ErrNeedsLogin) {
 		t.Errorf("Load under another key = %v, want ErrWrongKey classed as ErrNeedsLogin", err)
 	}
@@ -237,7 +242,7 @@ func TestARowCopiedOntoAnotherPipelineDoesNotOpen(t *testing.T) {
 	logins := installTestLogins(t, State(path), true)
 
 	for _, name := range []string{"app", "other"} {
-		err := logins.Save(t.Context(), name, "tracker", "", []byte(`{"access_token":"`+name+`"}`))
+		err := logins.Save(t.Context(), stepsmcp.LoginKey{Pipeline: name, Server: "tracker"}, "", []byte(`{"access_token":"`+name+`"}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -255,7 +260,7 @@ func TestARowCopiedOntoAnotherPipelineDoesNotOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, _, err = logins.Load(t.Context(), "other", "tracker")
+	_, err = logins.Load(t.Context(), stepsmcp.LoginKey{Pipeline: "other", Server: "tracker"})
 	if !errors.Is(err, sealbox.ErrWrongKey) {
 		t.Errorf("Load of app's row copied onto other = %v, want ErrWrongKey", err)
 	}
@@ -291,12 +296,14 @@ func readThenDestroy(t *testing.T, path string) (*sealedLogins, string) {
 		t.Fatal(err)
 	}
 
-	err = logins.Save(t.Context(), "app", "tracker", "", []byte(`{"access_token":"a"}`))
+	err = logins.Save(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"}, "", []byte(`{"access_token":"a"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, scope, found, err := logins.Load(t.Context(), "app", "tracker")
+	login, err := logins.Load(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"})
+
+	scope, found := login.Scope, login.Found
 	if err != nil || !found || scope == "" {
 		t.Fatalf("Load = scope %q, found %v, %v", scope, found, err)
 	}
@@ -316,7 +323,7 @@ func TestAWriteBackAfterADestroyResurrectsNothing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "steps.db")
 	logins, scope := readThenDestroy(t, path)
 
-	err := logins.Save(t.Context(), "app", "tracker", scope, []byte(`{"access_token":"rotated"}`))
+	err := logins.Save(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"}, scope, []byte(`{"access_token":"rotated"}`))
 	if err == nil {
 		t.Fatal("a write-back for a destroyed pipeline was saved")
 	}
@@ -339,13 +346,43 @@ func TestAWriteBackDoesNotLandOnAPipelineThatTookTheName(t *testing.T) {
 
 	release(again)
 
-	err = logins.Save(t.Context(), "app", "tracker", scope, []byte(`{"access_token":"rotated"}`))
+	err = logins.Save(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"}, scope, []byte(`{"access_token":"rotated"}`))
 	if !errors.Is(err, stepsmcp.ErrLoginOrphaned) {
 		t.Fatalf("a write-back onto the new app = %v, want ErrLoginOrphaned", err)
 	}
 
-	_, _, found, err := logins.Load(t.Context(), "app", "tracker")
+	login, err := logins.Load(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"})
+
+	found := login.Found
 	if err != nil || found {
 		t.Errorf("the new app holds the old one's login: found %v, %v", found, err)
+	}
+}
+
+// The row a login lands on is the stored contract: the credential is named "mcp:<server>" in the pipeline's own store and sealed with "<scope>|mcp:<server>" as its AAD, so a refactor of the key type cannot orphan logins already saved.
+func TestALoginKeepsItsStoredName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "steps.db")
+	logins := installTestLogins(t, State(path), true)
+
+	err := logins.Save(t.Context(), stepsmcp.LoginKey{Pipeline: "app", Server: "tracker"}, "", []byte(`{"access_token":"a"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := attachState(State(path), "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer release(st)
+
+	sealed, found, err := st.Credential(t.Context(), "mcp:tracker")
+	if err != nil || !found {
+		t.Fatalf("Credential(mcp:tracker) = found %v, %v", found, err)
+	}
+
+	plain, _, err := logins.box.Open(sealed, []byte(st.CredentialScope()+"|mcp:tracker"))
+	if err != nil || string(plain) != `{"access_token":"a"}` {
+		t.Fatalf("stored credential opens to %q, %v", plain, err)
 	}
 }
