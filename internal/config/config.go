@@ -289,7 +289,10 @@ func (c *Config) validate() error {
 		c.validateNativeGets,
 		c.validateGitResources,
 		c.validateApprovals,
-		c.validateCredentialHandling,
+		c.validateAgentEndpoints,
+		c.validateMCPServers,
+		c.validateMCPToolGrants,
+		c.validateResourceTypeConfig,
 	}
 
 	errs := make([]error, 0, len(checks))
@@ -302,26 +305,4 @@ func (c *Config) validate() error {
 	}
 
 	return errors.Join(errs...)
-}
-
-// validateCredentialHandling groups validateAgentEndpoints and every
-// mcp_servers:-related check: all of it is trust-boundary validation around
-// how a config references an external system's endpoint and credentials.
-func (c *Config) validateCredentialHandling() error {
-	err := c.validateAgentEndpoints()
-	if err != nil {
-		return err
-	}
-
-	err = c.validateMCPServers()
-	if err != nil {
-		return err
-	}
-
-	err = c.validateMCPToolGrants()
-	if err != nil {
-		return err
-	}
-
-	return c.validateResourceTypeConfig()
 }

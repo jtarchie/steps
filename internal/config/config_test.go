@@ -1867,3 +1867,23 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+func TestValidateJoinsCredentialErrors(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Agents:     []Agent{{Name: "a", Source: AgentSource{Model: "x", Endpoint: "https://user:token@proxy.internal/v1/"}}}, //nolint:gosec // test fixture: the literal this validator must reject, not a real credential
+		MCPServers: []MCPServer{{Endpoint: "https://srv.internal/"}},
+	}
+
+	err := cfg.validate()
+	if err == nil {
+		t.Fatal("expected errors")
+	}
+
+	for _, want := range []string{"must not embed credentials", "mcp_servers[0]: name is required"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("joined error missing %q: %v", want, err)
+		}
+	}
+}
