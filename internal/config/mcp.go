@@ -169,6 +169,19 @@ type MCPServerAuth struct {
 	Scopes          []string `yaml:"scopes,omitempty"`
 }
 
+// The auth.type spellings. An empty Type is "none".
+const (
+	MCPAuthNone   = "none"
+	MCPAuthBearer = "bearer"
+	MCPAuthOAuth  = "oauth"
+)
+
+// OAuth reports whether the server authenticates through a `steps mcp login` credential.
+func (a MCPServerAuth) OAuth() bool { return a.Type == MCPAuthOAuth }
+
+// None reports that no auth applies: an omitted block and an explicit "none" are the same.
+func (a MCPServerAuth) None() bool { return a.Type == "" || a.Type == MCPAuthNone }
+
 // FindMCPServer returns the mcp_servers: entry with the given name, or an
 // error if not found.
 func (c *Config) FindMCPServer(name string) (*MCPServer, error) {

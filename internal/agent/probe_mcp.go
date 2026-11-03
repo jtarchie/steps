@@ -78,7 +78,7 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 	}
 
 	identity := []string{"mcp", srv.Name, srv.Endpoint, srv.Command, srv.Cwd}
-	if srv.Auth.Type == "oauth" {
+	if srv.Auth.OAuth() {
 		identity = append(identity, cfg.Name)
 	}
 

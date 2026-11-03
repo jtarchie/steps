@@ -284,7 +284,7 @@ func (m *MCPLoginCmd) Run() error {
 		return fmt.Errorf("could not find mcp server: %w", err)
 	}
 
-	if srv.Auth.Type != "oauth" {
+	if !srv.Auth.OAuth() {
 		return fmt.Errorf("mcp server %q is not auth: {type: oauth}; nothing to log in to", m.Server)
 	}
 

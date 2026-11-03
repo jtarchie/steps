@@ -56,8 +56,8 @@ func (s MCPServer) Target() string {
 
 // AuthLabel names the auth type and, for bearer, the environment variable the credential is read from — the thing to go check when it is the credential that is missing. Never the value.
 func (s MCPServer) AuthLabel() string {
-	if s.Auth.Type == "" || s.Auth.Type == "none" {
-		return "none"
+	if s.Auth.None() {
+		return MCPAuthNone
 	}
 
 	if s.Auth.APIKeyEnv != "" {
@@ -92,9 +92,9 @@ func (s MCPServer) StaticStatus() MCPStatus {
 	}
 
 	switch s.Auth.Type {
-	case "oauth":
+	case MCPAuthOAuth:
 		return MCPStatus{Readiness: MCPUnknown, Detail: "needs a login"}
-	case "bearer":
+	case MCPAuthBearer:
 		if detail := unsetEnvDetail(s.Auth.APIKeyEnv); detail != "" {
 			return MCPStatus{Readiness: MCPMissing, Detail: detail}
 		}

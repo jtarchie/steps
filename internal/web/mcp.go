@@ -86,7 +86,7 @@ func markFor(readiness config.MCPReadiness) string {
 func mcpMetaLine(server config.MCPServer) string {
 	parts := []string{server.Transport()}
 
-	if auth := server.AuthLabel(); auth != "none" {
+	if auth := server.AuthLabel(); auth != config.MCPAuthNone {
 		parts = append(parts, auth)
 	}
 
@@ -162,7 +162,7 @@ func (s *Server) mcpRowFor(pipeline *Pipeline, server config.MCPServer) mcpRow {
 	row := mcpRow{
 		Name:   server.Name,
 		UsedBy: pipeline.Config().MCPUsers(server.Name),
-		OAuth:  server.Auth.Type == "oauth",
+		OAuth:  server.Auth.OAuth(),
 		Status: status.Detail,
 		Mark:   markFor(status.Readiness),
 		Meta:   mcpMetaLine(server),

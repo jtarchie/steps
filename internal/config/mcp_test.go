@@ -1027,3 +1027,17 @@ jobs: [{ name: j, plan: [] }]
 
 	wantLoadError(t, path, "absolute cwd")
 }
+
+func TestMCPServerAuthPredicates(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		typ         string
+		oauth, none bool
+	}{{"", false, true}, {"none", false, true}, {"oauth", true, false}, {"bearer", false, false}, {"other", false, false}} {
+		a := MCPServerAuth{Type: tc.typ}
+		if a.OAuth() != tc.oauth || a.None() != tc.none {
+			t.Errorf("type %q: OAuth=%v None=%v, want %v %v", tc.typ, a.OAuth(), a.None(), tc.oauth, tc.none)
+		}
+	}
+}

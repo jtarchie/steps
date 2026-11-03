@@ -110,7 +110,7 @@ func probeWorthMaking(ctx context.Context, pipeline *web.Pipeline, server string
 
 // notConnectable reports why a probe could not succeed whatever the server does, or "" for one worth dialling. The oauth half is the reason this is not just StaticStatus: the saved login is the credential, and only the holder can look at it.
 func notConnectable(ctx context.Context, pipeline string, srv config.MCPServer) string {
-	if srv.Auth.Type == "oauth" {
+	if srv.Auth.OAuth() {
 		token := stepsmcp.InspectToken(ctx, pipeline, srv)
 		if !token.Connected {
 			return token.Detail
@@ -137,7 +137,7 @@ func (p *probes) MCPState(pipeline *web.Pipeline, server string) web.MCPState {
 		return state
 	}
 
-	if srv.Auth.Type == "oauth" {
+	if srv.Auth.OAuth() {
 		state.Credential = p.creds.of(p.base, pipeline.Config().Name, *srv)
 	}
 

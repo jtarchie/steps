@@ -220,16 +220,16 @@ func newTransport(ctx context.Context, pipeline string, srv config.MCPServer) (s
 // per srv.Auth.Type.
 func authorizedHTTPClient(ctx context.Context, pipeline string, srv config.MCPServer) (*http.Client, error) {
 	switch srv.Auth.Type {
-	case "", "none":
+	case "", config.MCPAuthNone:
 		return tracedClient(), nil
-	case "bearer":
+	case config.MCPAuthBearer:
 		token, err := lookupBearerToken(srv.Auth.APIKeyEnv)
 		if err != nil {
 			return nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
 		}
 
 		return oauth2.NewClient(context.WithValue(ctx, oauth2.HTTPClient, tracedClient()), oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})), nil
-	case "oauth":
+	case config.MCPAuthOAuth:
 		ts, err := oauthTokenSource(ctx, pipeline, srv)
 		if err != nil {
 			return nil, err

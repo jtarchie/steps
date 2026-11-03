@@ -91,7 +91,7 @@ func (l *logins) StartLogin(pipeline *web.Pipeline, server string, req web.Login
 		return web.LoginStatus{}, fmt.Errorf("%w", err)
 	}
 
-	if srv.Auth.Type != "oauth" {
+	if !srv.Auth.OAuth() {
 		return web.LoginStatus{}, fmt.Errorf("mcp server %q is not auth: {type: oauth}; nothing to log in to", server)
 	}
 

@@ -59,15 +59,15 @@ func (c *Config) validateMCPServers() error {
 // validateMCPServerAuth checks one server's auth: block shape.
 func validateMCPServerAuth(srv MCPServer) error {
 	switch srv.Auth.Type {
-	case "", "none":
+	case "", MCPAuthNone:
 		if srv.Auth.APIKeyEnv != "" {
 			return fmt.Errorf("mcp server %q: api_key_env is only valid with auth.type: bearer", srv.Name)
 		}
-	case "bearer":
+	case MCPAuthBearer:
 		if srv.Auth.APIKeyEnv == "" {
 			return fmt.Errorf("mcp server %q: auth.type: bearer requires api_key_env", srv.Name)
 		}
-	case "oauth":
+	case MCPAuthOAuth:
 		if srv.Auth.APIKeyEnv != "" {
 			return fmt.Errorf("mcp server %q: api_key_env is only valid with auth.type: bearer", srv.Name)
 		}
@@ -84,7 +84,7 @@ func validateMCPServerAuth(srv MCPServer) error {
 // looking but bound to nothing, which is the failure mode this codebase
 // rejects at load time rather than at 3am.
 func validateMCPServerClientCredentials(srv MCPServer) error {
-	if srv.Auth.Type != "oauth" {
+	if !srv.Auth.OAuth() {
 		if srv.Auth.ClientID != "" {
 			return fmt.Errorf("mcp server %q: client_id is only valid with auth.type: oauth", srv.Name)
 		}
@@ -163,7 +163,7 @@ func validateMCPServerHTTPOnlyFields(srv MCPServer) error {
 // persisted token to srv.Endpoint, which an empty endpoint would make
 // vacuous.
 func validateMCPServerStdioAuth(srv MCPServer) error {
-	if srv.Auth.Type != "" && srv.Auth.Type != "none" {
+	if !srv.Auth.None() {
 		return fmt.Errorf("mcp server %q: auth.type %q requires an http endpoint; a stdio server has no request to authenticate", srv.Name, srv.Auth.Type)
 	}
 

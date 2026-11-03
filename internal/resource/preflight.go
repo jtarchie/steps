@@ -462,7 +462,7 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 	// server adds the pipeline, whose login is the credential it connects
 	// with (its saved login): one pipeline's login must not vouch for another's.
 	identity := []string{srv.Name, srv.Endpoint, srv.Command, srv.Cwd}
-	if srv.Auth.Type == "oauth" {
+	if srv.Auth.OAuth() {
 		identity = append(identity, cfg.Name)
 	}
 
