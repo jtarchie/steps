@@ -377,7 +377,7 @@ func (l *Live) summary(run *liveRun, event events.Event) []string {
 
 	lines := []string{""}
 
-	if event.Status == "succeeded" {
+	if event.Status == events.StatusSucceeded {
 		lines = append(lines, l.style("32", "✓ "+run.job+" succeeded")+fmt.Sprintf(" in %s · %d steps", clock(took), len(view.Steps)))
 	} else {
 		lines = append(lines, l.style("31", "✗ "+run.job+" "+event.Status)+fmt.Sprintf(" in %s · %d steps", clock(took), len(view.Steps)))
@@ -388,7 +388,7 @@ func (l *Live) summary(run *liveRun, event events.Event) []string {
 	}
 
 	for _, step := range view.Steps {
-		explains := step.Failed() || (step.Hook() && event.Status != "succeeded")
+		explains := step.Failed() || (step.Hook() && event.Status != events.StatusSucceeded)
 		if !explains || step.Block() || len(step.Outputs) == 0 {
 			continue
 		}

@@ -54,7 +54,7 @@ func (r Transcript) Running() bool { return r.Run.Status == store.RunRunning }
 func (r Transcript) ended() bool {
 	switch r.Run.Status {
 	// "errored" is no RunStatus (FinishRun records such a run failed) but outcome's word for it, and a fold handed an event-side run status must still end its steps.
-	case store.RunSucceeded, store.RunFailed, store.RunAborted, "errored":
+	case store.RunSucceeded, store.RunFailed, store.RunAborted, events.StatusErrored:
 		return true
 	case store.RunRunning:
 		return false
@@ -267,10 +267,13 @@ func (s Step) Running() bool { return s.open() && !s.unreported }
 // "failed" for it would be as much a guess as the clock that kept ticking.
 func (s Step) Unreported() bool { return s.unreported }
 
+// stepRunning is a step Status nothing publishes today (no events constant); kept so a foreign or stored "running" row still reads as open.
+const stepRunning = "running"
+
 // open is Running as the events alone answer it. The fold asks this rather
 // than Running, so what it decides never depends on the row the last View
 // happened to be handed.
-func (s Step) open() bool { return s.Status == "" || s.Status == "running" }
+func (s Step) open() bool { return s.Status == "" || s.Status == stepRunning }
 
 // Elapsed is how long a running step has been running, for the row's own
 // clock. The page's timer script keeps it counting; this is what it reads
@@ -303,11 +306,11 @@ func (s Step) Remaining() time.Duration {
 }
 
 // Skipped reports a step that did not execute.
-func (s Step) Skipped() bool { return s.Status == "skipped" }
+func (s Step) Skipped() bool { return s.Status == events.StatusSkipped }
 
 // Failed reports a step that ended badly, by any classification.
 func (s Step) Failed() bool {
-	return s.Status == "failed" || s.Status == "errored" || s.Status == "aborted"
+	return s.Status == events.StatusFailed || s.Status == events.StatusErrored || s.Status == events.StatusAborted
 }
 
 // Container reports a step that ran other steps inside it, hooks included:
@@ -316,7 +319,7 @@ func (s Step) Container() bool { return len(s.Children) > 0 }
 
 // Hook reports a hook's own row — an on_failure/ensure/… that ran after the
 // step or job it guards, rather than a step of the plan.
-func (s Step) Hook() bool { return s.Kind == "hook" }
+func (s Step) Hook() bool { return s.Kind == events.KindHook }
 
 // Block reports a step that contains plan steps, as distinct from a step
 // whose only children are its hooks: a task with an ensure: is still a task,
@@ -1212,13 +1215,13 @@ func markCollateral(siblings []*Step) {
 	failed := false
 
 	for _, step := range siblings {
-		if !step.Hook() && step.Failed() && step.Status != "aborted" {
+		if !step.Hook() && step.Failed() && step.Status != events.StatusAborted {
 			failed = true
 		}
 	}
 
 	for _, step := range siblings {
-		step.collateral = failed && step.Status == "aborted"
+		step.collateral = failed && step.Status == events.StatusAborted
 		markCollateral(step.Children)
 	}
 }
