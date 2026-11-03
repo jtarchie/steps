@@ -80,3 +80,26 @@ func TestNobodyRecordedIsEmpty(t *testing.T) {
 		t.Errorf("From(With(ops)) = %#v", got)
 	}
 }
+
+func TestIsLocalIsOnlyTheLocalKind(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		a    Actor
+		want bool
+	}{
+		{Local("ops"), true},
+		{OS("jt"), false},
+		{Check("repo"), false},
+		{Webhook("push"), false},
+		{Upstream(), false},
+		{Backlog(), false},
+		{Actor{Kind: "github", ID: "alex"}, false},
+		{Actor{ID: "web"}, false},
+		{Actor{}, false},
+	} {
+		if got := tc.a.IsLocal(); got != tc.want {
+			t.Errorf("%#v.IsLocal() = %v, want %v", tc.a, got, tc.want)
+		}
+	}
+}

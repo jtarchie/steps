@@ -151,7 +151,7 @@ func (r Roles) highest(id Identity) Role {
 func (s *Server) identityOf(ctx context.Context, who actor.Actor) Identity {
 	id := Identity{Provider: who.Kind, UserID: who.ID, ID: who.ID}
 
-	if s.sessions == nil || who.Kind == "local" {
+	if s.sessions == nil || who.IsLocal() {
 		return id
 	}
 

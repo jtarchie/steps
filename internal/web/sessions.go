@@ -68,7 +68,7 @@ func (s *Server) sessionActor(c *echo.Context) (actor.Actor, bool) {
 
 // signsIn is whether who is still somebody this daemon lets in: a local account it still holds, or a provider it still offers. A session or a grant outlives the flag that admitted it otherwise, and removing the account and restarting would end nothing.
 func (s *Server) signsIn(who actor.Actor) bool {
-	if who.Kind == "local" {
+	if who.IsLocal() {
 		return s.auth.knows(who.ID)
 	}
 

@@ -72,6 +72,9 @@ func Parse(stored string) Actor {
 	return Actor{Kind: kind, ID: id}
 }
 
+// IsLocal reports a person who signed in with one of the daemon's own accounts.
+func (a Actor) IsLocal() bool { return a.Kind == kindLocal }
+
 // Unverified reports an actor whose name nobody checked.
 func (a Actor) Unverified() bool { return a.Kind == kindOS }
 
