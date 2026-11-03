@@ -14,13 +14,17 @@ import (
 // AccountsOpenFunc opens the daemon-level accounts handle on a fresh database.
 type AccountsOpenFunc func(t *testing.T) store.Accounts
 
+// CorruptRedirectsFunc overwrites one registered client's redirect_uris column with text that is not JSON, reaching past the interface into the driver's raw database, which is the only way to model a column damaged outside this code.
+type CorruptRedirectsFunc func(t *testing.T, accounts store.Accounts, clientID string)
+
 // accountsSuite is the conformance suite for store.Accounts, found by reflection for the reason suite is.
 type accountsSuite struct {
-	open AccountsOpenFunc
+	open    AccountsOpenFunc
+	corrupt CorruptRedirectsFunc
 }
 
 // RunAccounts runs the accounts conformance suite against one driver.
-func RunAccounts(t *testing.T, open AccountsOpenFunc) {
+func RunAccounts(t *testing.T, open AccountsOpenFunc, corrupt CorruptRedirectsFunc) {
 	t.Helper()
 
 	closing := func(t *testing.T) store.Accounts {
@@ -32,7 +36,7 @@ func RunAccounts(t *testing.T, open AccountsOpenFunc) {
 		return accounts
 	}
 
-	value := reflect.ValueOf(&accountsSuite{open: closing})
+	value := reflect.ValueOf(&accountsSuite{open: closing, corrupt: corrupt})
 	typ := value.Type()
 
 	for index := range typ.NumMethod() {
@@ -326,5 +330,32 @@ func assertConnections(t *testing.T, accounts store.Accounts, filter store.Grant
 		if !slices.Contains(want, conn.Grant) || conn.Client != "claude" || conn.AuthorizedAt.IsZero() {
 			t.Errorf("Grants(%+v) returned %+v, which is not one of %+v", filter, conn, want)
 		}
+	}
+}
+
+// TestACorruptRedirectColumnIsAnErrorNotAnEmptyList: a damaged redirect_uris must surface, because an empty list reads as "no redirect registered" and hides the corruption from the operator.
+func (s accountsSuite) TestACorruptRedirectColumnIsAnErrorNotAnEmptyList(t *testing.T) {
+	t.Parallel()
+
+	accounts := s.open(t)
+	registerClient(t, accounts, "claude")
+
+	grant := store.Grant{ClientID: "claude", Actor: "github:alex", Pipeline: "ops", Export: "support"}
+
+	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "a1", Kind: store.TokenAccess, Grant: grant, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.corrupt(t, accounts, "claude")
+
+	client, found, err := accounts.FindClient(ctxFor(t), "claude")
+	if err == nil {
+		t.Errorf("FindClient over corrupt redirect_uris = %+v, found %v, nil error; want an error", client, found)
+	}
+
+	connections, err := accounts.Grants(ctxFor(t), store.Grant{})
+	if err == nil {
+		t.Errorf("Grants over corrupt redirect_uris = %+v, nil error; want an error", connections)
 	}
 }

@@ -57,5 +57,17 @@ func TestAccountsConformance(t *testing.T) {
 		}
 
 		return accounts
+	}, func(t *testing.T, accounts store.Accounts, clientID string) {
+		t.Helper()
+
+		pgAccounts, ok := accounts.(*Accounts)
+		if !ok {
+			t.Fatalf("accounts is %T, want *Accounts", accounts)
+		}
+
+		_, err := pgAccounts.held.db.ExecContext(t.Context(), `UPDATE oauth_clients SET redirect_uris = 'not json' WHERE id = $1`, clientID)
+		if err != nil {
+			t.Fatal(err)
+		}
 	})
 }

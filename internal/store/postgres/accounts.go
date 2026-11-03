@@ -220,7 +220,11 @@ func (a *Accounts) FindClient(ctx context.Context, id string) (store.OAuthClient
 		return store.OAuthClient{}, false, fmt.Errorf("could not read a client: %w", err)
 	}
 
-	_ = json.Unmarshal([]byte(redirects), &client.RedirectURIs)
+	err = json.Unmarshal([]byte(redirects), &client.RedirectURIs)
+	if err != nil {
+		return store.OAuthClient{}, false, fmt.Errorf("could not decode the redirect uris of client %q: %w", id, err)
+	}
+
 	client.CreatedAt = client.CreatedAt.UTC()
 
 	return client, true, nil
@@ -316,9 +320,17 @@ func (a *Accounts) Grants(ctx context.Context, filter store.Grant) ([]store.Conn
 		)
 
 		err := rows.Scan(&conn.ClientID, &conn.Client, &redirects, &conn.Actor, &conn.Pipeline, &conn.Export, &conn.AuthorizedAt)
-		_ = json.Unmarshal([]byte(redirects), &conn.RedirectURIs)
+		if err != nil {
+			return store.Connection{}, err //nolint:wrapcheck // collect names what it was reading
+		}
+
+		err = json.Unmarshal([]byte(redirects), &conn.RedirectURIs)
+		if err != nil {
+			return store.Connection{}, fmt.Errorf("could not decode the redirect uris of client %q: %w", conn.ClientID, err)
+		}
+
 		conn.AuthorizedAt = conn.AuthorizedAt.UTC()
 
-		return conn, err //nolint:wrapcheck // collect names what it was reading
+		return conn, nil
 	})
 }
