@@ -51,6 +51,9 @@ func IsImageNotFound(err error) bool {
 	return errdefs.IsNotFound(err)
 }
 
+// IsNotFound reports a daemon answering that the thing asked about does not exist.
+func IsNotFound(err error) bool { return errdefs.IsNotFound(err) }
+
 // Pull fetches image, reporting the daemon's progress to progress.
 //
 // The reporting is not decoration. An image pull is minutes of silence

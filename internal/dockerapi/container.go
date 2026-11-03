@@ -1,12 +1,15 @@
 package dockerapi
 
-// Finding and removing containers.
+// Finding, running and removing containers.
 
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/containerd/errdefs"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
 
@@ -72,4 +75,81 @@ func (c *Client) RemoveContainer(ctx context.Context, id string) error {
 	}
 
 	return nil
+}
+
+// RunOnce runs spec to completion and removes it: its exit code, and stdout kept apart from stderr so a one-line answer can be read as one.
+func (c *Client) RunOnce(ctx context.Context, spec ContainerSpec) (int, string, string, error) {
+	id, err := c.CreateContainer(ctx, spec)
+	if err != nil {
+		return 0, "", "", err
+	}
+
+	defer func() {
+		removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalBound)
+		defer cancel()
+
+		_ = c.RemoveContainer(removeCtx, id)
+	}()
+
+	err = c.StartContainer(ctx, id)
+	if err != nil {
+		return 0, "", "", err
+	}
+
+	// Not-running is safe here, unlike on a container never started: it answers with the real exit even if the container already finished.
+	result := c.api.ContainerWait(ctx, id, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
+
+	var code int
+
+	select {
+	case status := <-result.Result:
+		code = int(status.StatusCode)
+	case err = <-result.Error:
+		return 0, "", "", fmt.Errorf("waiting on container %s: %w", id, err)
+	}
+
+	logs, err := c.api.ContainerLogs(ctx, id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		return code, "", "", fmt.Errorf("reading container %s's output: %w", id, err)
+	}
+	defer func() { _ = logs.Close() }()
+
+	stdout, stderr := &cappedBuffer{}, &cappedBuffer{}
+
+	_, err = stdcopy.StdCopy(stdout, stderr, logs)
+	if err != nil {
+		return code, "", "", fmt.Errorf("reading container %s's output: %w", id, err)
+	}
+
+	return code, strings.TrimSpace(stdout.String()), stderr.String(), nil
+}
+
+// runOnceOutputCap bounds each of RunOnce's streams: the output is whatever the image chooses to print, and the one caller reads a digest from the first line, so truncating (with a marker) loses nothing it parses.
+const runOnceOutputCap = 1 << 20
+
+// cappedBuffer keeps the first runOnceOutputCap bytes and swallows the rest, reporting full writes so the log stream is still drained rather than failed with a short write.
+type cappedBuffer struct {
+	buf       strings.Builder
+	truncated bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+
+	room := runOnceOutputCap - b.buf.Len()
+	if len(p) > room {
+		p, b.truncated = p[:room], true
+	}
+
+	_, _ = b.buf.Write(p)
+
+	return n, nil
+}
+
+func (b *cappedBuffer) String() string {
+	if b.truncated {
+		return b.buf.String() + "\n[output truncated at 1 MiB]"
+	}
+
+	return b.buf.String()
 }

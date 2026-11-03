@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/moby/moby/client"
@@ -78,6 +79,19 @@ func New(host string) (*Client, error) {
 	}
 
 	return &Client{api: api, host: host}, nil
+}
+
+// NewDialer reaches a daemon through dial, for a socket with no address of its own here (one forwarded over ssh); name is what errors call it.
+func NewDialer(name string, dial func(ctx context.Context) (net.Conn, error)) (*Client, error) {
+	api, err := client.New(
+		client.WithHost(DefaultHost),
+		client.WithDialContext(func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) }),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to the docker daemon at %s: %w", name, err)
+	}
+
+	return &Client{api: api, host: name}, nil
 }
 
 // Host is the address this client talks to, for a message that has to say

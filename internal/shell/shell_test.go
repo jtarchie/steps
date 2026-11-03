@@ -20,7 +20,7 @@ func TestRunShellCaptureFull(t *testing.T) {
 	t.Run("captures stdout, stderr, and exit code separately", func(t *testing.T) {
 		t.Parallel()
 
-		stdout, stderr, exitCode, err := RunShellCaptureFull(context.Background(), "echo out; echo err >&2; exit 3", t.TempDir())
+		stdout, stderr, exitCode, err := RunCaptureFull(context.Background(), HostRunner{cwd: t.TempDir()}, "echo out; echo err >&2; exit 3")
 		if err != nil {
 			t.Fatalf("RunShellCaptureFull: %v", err)
 		}
@@ -41,7 +41,7 @@ func TestRunShellCaptureFull(t *testing.T) {
 	t.Run("successful command has exit code 0 and a nil error", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, exitCode, err := RunShellCaptureFull(context.Background(), "true", t.TempDir())
+		_, _, exitCode, err := RunCaptureFull(context.Background(), HostRunner{cwd: t.TempDir()}, "true")
 		if err != nil {
 			t.Fatalf("RunShellCaptureFull: %v", err)
 		}
@@ -54,7 +54,7 @@ func TestRunShellCaptureFull(t *testing.T) {
 	t.Run("a nonzero exit is not a Go error", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, exitCode, err := RunShellCaptureFull(context.Background(), "exit 1", t.TempDir())
+		_, _, exitCode, err := RunCaptureFull(context.Background(), HostRunner{cwd: t.TempDir()}, "exit 1")
 		if err != nil {
 			t.Fatalf("RunShellCaptureFull returned a Go error for a normal nonzero exit: %v", err)
 		}
@@ -67,7 +67,7 @@ func TestRunShellCaptureFull(t *testing.T) {
 	t.Run("a failure to start the process returns a Go error", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, _, err := RunShellCaptureFull(context.Background(), "true", "/nonexistent/dir/for/sure")
+		_, _, _, err := RunCaptureFull(context.Background(), HostRunner{cwd: "/nonexistent/dir/for/sure"}, "true")
 		if err == nil {
 			t.Error("expected an error when cwd doesn't exist")
 		}
@@ -117,7 +117,7 @@ func TestRunShellCaptureFullSignalKilled(t *testing.T) {
 	// SIGKILL lands directly on it instead of orphaning a grandchild that
 	// would keep the output pipe open until it exits on its own — keeps
 	// this test fast instead of blocking for the full sleep duration.
-	stdout, _, exitCode, err := RunShellCaptureFull(ctx, "echo partial; touch "+ready+"; exec sleep 30", dir)
+	stdout, _, exitCode, err := RunCaptureFull(ctx, HostRunner{cwd: dir}, "echo partial; touch "+ready+"; exec sleep 30")
 	if err != nil {
 		t.Fatalf("a signal-killed process must be reported as data, not a Go error (regression: it was misclassified as \"failed to start\"): %v", err)
 	}
@@ -137,7 +137,7 @@ func TestRunShellCapture(t *testing.T) {
 	t.Run("returns captured stdout on success", func(t *testing.T) {
 		t.Parallel()
 
-		out, err := RunShellCapture(context.Background(), "echo hello", t.TempDir())
+		out, err := RunCapture(context.Background(), HostRunner{cwd: t.TempDir()}, "echo hello")
 		if err != nil {
 			t.Fatalf("RunShellCapture: %v", err)
 		}
@@ -150,7 +150,7 @@ func TestRunShellCapture(t *testing.T) {
 	t.Run("a nonzero exit is a Go error, unlike RunShellCaptureFull", func(t *testing.T) {
 		t.Parallel()
 
-		out, err := RunShellCapture(context.Background(), "echo partial; exit 1", t.TempDir())
+		out, err := RunCapture(context.Background(), HostRunner{cwd: t.TempDir()}, "echo partial; exit 1")
 		if err == nil {
 			t.Fatal("expected an error for a nonzero exit")
 		}
@@ -172,7 +172,7 @@ func TestRunShellCapture(t *testing.T) {
 func TestHostRunnerScrubsNonAllowlistedEnv(t *testing.T) {
 	t.Setenv("STEPS_TEST_SECRET", "leaked-if-visible")
 
-	stdout, _, exitCode, err := RunShellCaptureFull(context.Background(), `echo "[$STEPS_TEST_SECRET]"`, t.TempDir())
+	stdout, _, exitCode, err := RunCaptureFull(context.Background(), HostRunner{cwd: t.TempDir()}, `echo "[$STEPS_TEST_SECRET]"`)
 	if err != nil {
 		t.Fatalf("RunShellCaptureFull: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestHostRunnerScrubsNonAllowlistedEnv(t *testing.T) {
 		t.Errorf("stdout = %q, want %q (STEPS_TEST_SECRET must not reach a host-executed command)", stdout, "[]\n")
 	}
 
-	pathOut, _, _, err := RunShellCaptureFull(context.Background(), `echo "[$PATH]"`, t.TempDir())
+	pathOut, _, _, err := RunCaptureFull(context.Background(), HostRunner{cwd: t.TempDir()}, `echo "[$PATH]"`)
 	if err != nil {
 		t.Fatalf("RunShellCaptureFull: %v", err)
 	}

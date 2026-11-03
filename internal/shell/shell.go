@@ -7,8 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/jtarchie/steps/internal/dockerapi"
-	"github.com/jtarchie/steps/internal/redact"
 	"io"
 	"log/slog"
 	"net"
@@ -17,6 +15,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/redact"
 )
 
 // Runner runs pipeline-defined commands, either on the host or inside a
@@ -601,7 +602,7 @@ func (h HostRunner) Close() error {
 // other credential an operator happens to have exported (cloud credentials,
 // tokens, etc.) — is deliberately not passed through: DockerRunner already
 // starts every containerized command from the image's own env with no host
-// variables at all (see docker.go), and this brings the default host path to
+// variables except the pipeline's env: names (see docker.go), and this brings the default host path to
 // the same trust boundary instead of silently handing every pipeline-defined
 // command, and by extension any LLM directing run_shell/a custom tool/a
 // stdio MCP server, read access to the operator's full environment.
@@ -825,27 +826,6 @@ func (h HostRunner) Exec(ctx context.Context, cmd Command) (Result, error) {
 // them look different.
 func IsExitError(err error) bool {
 	return err != nil && processStarted(err)
-}
-
-// RunShell runs command on the host via `sh -c command` with cwd as its
-// working directory, streaming stdout/stderr live. Equivalent to Run over
-// HostRunner{cwd: cwd}; kept as a package-level function for callers
-// that never need containerized execution.
-func RunShell(ctx context.Context, command, cwd string) error {
-	return Run(ctx, HostRunner{cwd: cwd}, command)
-}
-
-// RunShellCapture runs command on the host via `sh -c command`, capturing
-// stdout. Equivalent to RunCapture over HostRunner{cwd: cwd}.
-func RunShellCapture(ctx context.Context, command, cwd string) ([]byte, error) {
-	return RunCapture(ctx, HostRunner{cwd: cwd}, command)
-}
-
-// RunShellCaptureFull runs command on the host via `sh -c command`,
-// capturing stdout/stderr separately and reporting a normal nonzero exit as
-// data. Equivalent to RunCaptureFull over HostRunner{cwd: cwd}.
-func RunShellCaptureFull(ctx context.Context, command, cwd string) (stdout, stderr string, exitCode int, err error) {
-	return RunCaptureFull(ctx, HostRunner{cwd: cwd}, command)
 }
 
 // cancelWaitDelay bounds how long a cancelled command is waited on after its

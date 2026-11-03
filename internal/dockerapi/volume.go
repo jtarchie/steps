@@ -5,12 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"strings"
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	volumetypes "github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
@@ -25,19 +22,6 @@ type Volume struct {
 	CreatedAt time.Time
 }
 
-// NewDialer reaches a daemon through dial, for a socket with no address of its own here (one forwarded over ssh); name is what errors call it.
-func NewDialer(name string, dial func(ctx context.Context) (net.Conn, error)) (*Client, error) {
-	api, err := client.New(
-		client.WithHost(DefaultHost),
-		client.WithDialContext(func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) }),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to the docker daemon at %s: %w", name, err)
-	}
-
-	return &Client{api: api, host: name}, nil
-}
-
 var errNoLabels = errors.New("no labels to select by")
 
 func volumeOf(v volumetypes.Volume) Volume {
@@ -45,9 +29,6 @@ func volumeOf(v volumetypes.Volume) Volume {
 
 	return Volume{Name: v.Name, Mountpoint: v.Mountpoint, Labels: v.Labels, CreatedAt: created}
 }
-
-// IsNotFound reports a daemon answering that the thing asked about does not exist.
-func IsNotFound(err error) bool { return errdefs.IsNotFound(err) }
 
 // OverlayOptions are the local driver's options for a copy-on-write child of lower; all three are daemon-side paths, and upper and work must share a filesystem.
 // ponytail: paths are joined unescaped, safe while they are daemon Mountpoints; validate ',' and ':' if a caller ever passes its own.
@@ -146,81 +127,4 @@ func (c *Client) GetArchive(ctx context.Context, id, src string) (io.ReadCloser,
 	}
 
 	return copied.Content, nil
-}
-
-// RunOnce runs spec to completion and removes it: its exit code, and stdout kept apart from stderr so a one-line answer can be read as one.
-func (c *Client) RunOnce(ctx context.Context, spec ContainerSpec) (int, string, string, error) {
-	id, err := c.CreateContainer(ctx, spec)
-	if err != nil {
-		return 0, "", "", err
-	}
-
-	defer func() {
-		removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalBound)
-		defer cancel()
-
-		_ = c.RemoveContainer(removeCtx, id)
-	}()
-
-	err = c.StartContainer(ctx, id)
-	if err != nil {
-		return 0, "", "", err
-	}
-
-	// Not-running is safe here, unlike on a container never started: it answers with the real exit even if the container already finished.
-	result := c.api.ContainerWait(ctx, id, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
-
-	var code int
-
-	select {
-	case status := <-result.Result:
-		code = int(status.StatusCode)
-	case err = <-result.Error:
-		return 0, "", "", fmt.Errorf("waiting on container %s: %w", id, err)
-	}
-
-	logs, err := c.api.ContainerLogs(ctx, id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
-	if err != nil {
-		return code, "", "", fmt.Errorf("reading container %s's output: %w", id, err)
-	}
-	defer func() { _ = logs.Close() }()
-
-	stdout, stderr := &cappedBuffer{}, &cappedBuffer{}
-
-	_, err = stdcopy.StdCopy(stdout, stderr, logs)
-	if err != nil {
-		return code, "", "", fmt.Errorf("reading container %s's output: %w", id, err)
-	}
-
-	return code, strings.TrimSpace(stdout.String()), stderr.String(), nil
-}
-
-// runOnceOutputCap bounds each of RunOnce's streams: the output is whatever the image chooses to print, and the one caller reads a digest from the first line, so truncating (with a marker) loses nothing it parses.
-const runOnceOutputCap = 1 << 20
-
-// cappedBuffer keeps the first runOnceOutputCap bytes and swallows the rest, reporting full writes so the log stream is still drained rather than failed with a short write.
-type cappedBuffer struct {
-	buf       strings.Builder
-	truncated bool
-}
-
-func (b *cappedBuffer) Write(p []byte) (int, error) {
-	n := len(p)
-
-	room := runOnceOutputCap - b.buf.Len()
-	if len(p) > room {
-		p, b.truncated = p[:room], true
-	}
-
-	_, _ = b.buf.Write(p)
-
-	return n, nil
-}
-
-func (b *cappedBuffer) String() string {
-	if b.truncated {
-		return b.buf.String() + "\n[output truncated at 1 MiB]"
-	}
-
-	return b.buf.String()
 }

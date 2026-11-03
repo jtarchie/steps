@@ -2,11 +2,11 @@ package shell
 
 import (
 	"context"
-	"github.com/jtarchie/steps/internal/redact"
 	"io"
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/redact"
 )
 
 // Command is one command and what to do with it: four independent settings
@@ -73,11 +73,7 @@ func Run(ctx context.Context, r Runner, script string) error {
 	return err //nolint:wrapcheck // the runner's error is the command's
 }
 
-// RunCapture returns stdout while streaming stderr live, stdin attached as Run
-// attaches it; any
-// nonzero exit is an error. The captured output is logged at debug on both
-// outcomes, so a failing check/out command's output is not lost to the terse
-// "exit status N".
+// RunCapture returns stdout while streaming stderr live, stdin attached as Run attaches it; any nonzero exit is an error. The captured output is logged at debug on both outcomes, so a failing check/out command's output is not lost to the terse "exit status N".
 func RunCapture(ctx context.Context, r Runner, script string) ([]byte, error) {
 	res, err := r.Exec(ctx, Command{Script: script, Stdin: !events.Headless(ctx), Stream: StreamStderr, Capture: true})
 	if err != nil {

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"github.com/jtarchie/steps/internal/redact"
 	"log/slog"
 	"net"
 	"os"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/redact"
 )
 
 // errSessionClosed is returned when a command is issued through a runner
@@ -54,8 +54,8 @@ const dockerSessionLifetime = 24 * time.Hour
 // The working directory is bind-mounted at its own (resolved) host path and
 // set as the container's workdir, so host-side readers (agent
 // read_file/list_dir, workspace Capture) see the same files a containerized
-// command wrote. No host environment variables are passed through — the
-// container starts from the image's own env only.
+// command wrote. No host variables are passed through except the pipeline's env: names — the
+// container otherwise starts from the image's own env.
 type DockerRunner struct {
 	Image   string
 	label   string
@@ -741,8 +741,7 @@ func keepAliveCommand() string {
 // (or rejected with a confusing error) rather than failing clearly here.
 //
 // Exported for a caller outside this package that mounts the same directory
-// at the same resolved path a step's session container uses. The one that did
-// was internal/agent's containerized CLI run, deleted by issue #100.
+// at the same resolved path a step's session container uses.
 func ResolveMountPath(cwd string) (string, error) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
