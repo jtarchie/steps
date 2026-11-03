@@ -54,13 +54,20 @@ resources:
   source: { repo: acme/app, repoo: acme/app }
 jobs: [{ name: j, plan: [] }]
 `, "repoo"},
-		"an http github endpoint": {`
+		"a loopback http github endpoint": {`
+resources:
+- name: comment
+  type: github-pr-comment
+  source: { repo: acme/app, endpoint: "http://127.0.0.1:8080/api/v3" }
+jobs: [{ name: j, plan: [] }]
+`, ""},
+		"a non-loopback http github endpoint": {`
 resources:
 - name: comment
   type: github-pr-comment
   source: { repo: acme/app, endpoint: "http://ghe.internal/api/v3" }
 jobs: [{ name: j, plan: [] }]
-`, ""},
+`, "would travel in cleartext"},
 		"a non-http github endpoint": {`
 resources:
 - name: comment

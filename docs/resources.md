@@ -285,7 +285,7 @@ A version is `{number, sha}`: the pull request and its head commit, so a push is
 | `draft` | no | `true` keeps only drafts, `false` only ready ones; both when unset |
 | `checkout` | no | `false` skips the tree and writes only the metadata files; default `true` |
 | `token_env` | no | the variable holding the token; default `GH_TOKEN` |
-| `endpoint` | no | the REST API base; default `https://api.github.com`, and `https://<host>/api/v3` for GitHub Enterprise Server |
+| `endpoint` | no | the REST API base; default `https://api.github.com`, and `https://<host>/api/v3` for GitHub Enterprise Server; plain `http` is accepted only for a loopback host (`localhost`, `127.0.0.0/8`, `::1`), because the token would otherwise travel in cleartext |
 
 `@me` in any of the three login fields is the token's own user. A get writes the tree at the version's commit, then these beside it:
 

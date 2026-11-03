@@ -9,6 +9,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"slices"
@@ -601,14 +602,33 @@ func validateGitHubConnection(connection GitHubConnection) error {
 		return fmt.Errorf("source.token_env must be the NAME of an environment variable holding the token, not %q — a literal would be hashed into state.db in cleartext", connection.TokenEnv)
 	}
 
-	if connection.Endpoint != "" {
-		parsed, err := url.Parse(connection.Endpoint)
+	return validateGitHubEndpoint(connection.Endpoint)
+}
+
+func validateGitHubEndpoint(endpoint string) error {
+	if endpoint != "" {
+		parsed, err := url.Parse(endpoint)
 		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
-			return fmt.Errorf("source.endpoint must be an http(s) URL such as %s, not %q", DefaultGitHubEndpoint, connection.Endpoint)
+			return fmt.Errorf("source.endpoint must be an http(s) URL such as %s, not %q", DefaultGitHubEndpoint, endpoint)
+		}
+
+		if parsed.Scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
+			return fmt.Errorf("source.endpoint: http is only accepted for a loopback host, and %q is not one — the token (token_env) would travel in cleartext; use an https URL", endpoint)
 		}
 	}
 
 	return nil
+}
+
+// isLoopbackHost is true for localhost and any 127.0.0.0/8 or ::1 literal; url.Hostname() has already stripped brackets, port and userinfo.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
 }
 
 // validateGitHubLogin is what keeps a filter one search qualifier: a value
