@@ -182,6 +182,8 @@ Shared headers are a *setting* rather than something you merge into each request
 
 **A status is data.** Non-2xx does not fail the call — an API that answers `200` with `ok: false`, or `404` for something that does not exist yet, is answering. Only a request that never produced a response is a failure, and that fails the whole `http()` call with a message naming the method and URL. That is the point: a check that cannot reach its API should fail loudly, not return a shorter list that reads as "nothing new".
 
+**`http()` is trusted by design.** It makes real requests from the machine running steps, can reach localhost and cloud metadata addresses, and carries whatever `env()` or secrets the pipeline author passes it, so only trust pipelines you would trust to run commands. A cross-host redirect drops headers and the request body.
+
 **Retries** apply only to the statuses you list. `Retry-After` is honored when the server sends one (seconds or an HTTP date, capped at a minute), otherwise the backoff is exponential. When retries run out the **last response is returned** rather than an error — a persistent 429 is something your expression gets to decide about.
 
 **Partial tolerance** is opt-in. `{tolerate_errors: true}` turns a failed request into an envelope with `status: 0` and an `error` string instead of failing the batch, so one channel a bot was removed from does not take out a poll over nineteen healthy ones:

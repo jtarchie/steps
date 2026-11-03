@@ -9,7 +9,7 @@
 //
 // The language is expr-lang/expr, chosen for what it CANNOT do. It has no
 // statements, no loops, no assignment, and no I/O except through the
-// functions handed to it here — so a resource type written this way cannot
+// functions handed to it here (http(), env(), file(): real network and disk access, trusted by design) — so a resource type written this way cannot
 // run a shell command, cannot outlive its call, and cannot be made to by any
 // amount of cleverness in a pipeline file. Adding a scripting engine with
 // those capabilities would have meant owning a sandbox; this way there is
