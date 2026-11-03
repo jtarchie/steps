@@ -8,6 +8,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -69,29 +70,28 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 	// retried, and left the lease bound to the dead machine. The worker is
 	// resolved INSIDE the retry, so a re-placement dials the freshly acquired
 	// machine rather than the one just forgotten.
-	err = withVenueRetry(ctx, step, 0, func(ctx context.Context) (string, error) {
+	err = withVenueRetry(ctx, step, 0, func(ctx context.Context) (venue.Worker, error) {
 		worker, workerErr := workerFor(ctx, step)
 		if workerErr != nil {
-			return "", fmt.Errorf("guard for %q: %w", label, workerErr)
+			return venue.Worker{}, fmt.Errorf("guard for %q: %w", label, workerErr)
 		}
 
-		spec.Worker = worker
 		spec.ReusedWarm = reusedWarm(ctx, step)
 
-		runner, runnerErr := newRunner(spec)
+		runner, runnerErr := newRunner(worker, spec)
 		if runnerErr != nil {
-			return spec.Worker, runnerErr
+			return worker, runnerErr
 		}
 
 		defer shell.CloseRunner(runner, label)
-		defer releaseIfReclaimed(ctx, step, runner, spec.Worker)
+		defer releaseIfReclaimed(ctx, step, runner, worker)
 
 		stdout, stderr, exitCode, runnerErr = shell.RunCaptureFull(ctx, runner, step.When.Run)
 		if runnerErr != nil {
-			return spec.Worker, fmt.Errorf("%w", runnerErr)
+			return worker, fmt.Errorf("%w", runnerErr)
 		}
 
-		return spec.Worker, nil
+		return worker, nil
 	})
 	if err != nil {
 		return false, fmt.Errorf("guard command %q could not run: %w", redact.Command(step.When.Run), err)

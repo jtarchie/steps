@@ -293,7 +293,7 @@ func (s *plusSession) connect(ctx context.Context) error {
 	}
 
 	spec := s.spec
-	spec.Worker, spec.WorkerTag = "", ""
+	spec.WorkerTag = ""
 	spec.DockerHost = s.daemonName()
 	spec.DockerDial = dial
 	spec.EnvValues = withWorkerTag(resolveEnv(spec.Env), s.spec.WorkerTag)

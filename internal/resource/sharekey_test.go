@@ -37,7 +37,6 @@ var shareUnkeyed = map[string]string{
 	"DockerHost":   "set only by a venue, and a placed check never shares",
 	"DockerDial":   "set only by a venue, and a placed check never shares",
 	"EnvValues":    "set only by a venue, and a placed check never shares",
-	"Worker":       "set only by a venue, and a placed check never shares",
 	"WorkerTag":    "set only by a venue, and a placed check never shares",
 	"ReusedWarm":   "set only by a venue, and a placed check never shares",
 }

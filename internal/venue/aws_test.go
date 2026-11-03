@@ -71,19 +71,17 @@ func (f awsFixture) options() string {
 }
 
 // spec builds a RunnerSpec for a step in a container on the fixture's daemon: an aws:// worker is docker+ (steps#206).
-func (f awsFixture) spec(cwd, worker string, outputs ...string) shell.RunnerSpec {
+func (f awsFixture) spec(cwd, worker string, outputs ...string) placedSpec {
 	sep := "?"
 	if strings.Contains(worker, "?") {
 		sep = "&"
 	}
 
-	return shell.RunnerSpec{
+	return placedSpec{RunnerSpec: shell.RunnerSpec{
 		Cwd:       cwd,
 		Image:     realCloudImage,
-		Worker:    worker + sep + f.options(),
 		WorkerTag: "aws",
-		Fetch:     outputs,
-	}
+		Fetch:     outputs}, Worker: worker + sep + f.options()}
 }
 
 // TestRealAWSRunsAStepOnAManagedInstance is the whole aws:// path against reality: the key install runs on a real Amazon Linux AMI through SendCommand, a real SSM port-forward carries ssh to its sshd, and the step runs in a container on its real dockerd.
@@ -197,12 +195,11 @@ func TestRealAWSLaunchRungAcquiresAndTerminates(t *testing.T) {
 
 	assertLaunchTags(ctx, t, worker, resolved.Instance)
 
-	// The URL a runner re-parses has to dial the machine that was launched —
+	// The worker a runner is handed has to dial the machine that was launched —
 	// the break no reviewer caught, worth proving against reality.
-	runner := newLocalRunner(t, shell.RunnerSpec{
-		Cwd:    t.TempDir(),
-		Image:  realCloudImage,
-		Worker: resolved.URL,
+	runner := newRunnerOn(t, resolved, shell.RunnerSpec{
+		Cwd:   t.TempDir(),
+		Image: realCloudImage,
 	})
 
 	err = shell.Run(ctx, runner, "true")
@@ -297,10 +294,9 @@ func TestRealAWSSpotEviction(t *testing.T) {
 
 	t.Logf("spot instance %s — interrupting it", resolved.Instance)
 
-	runner := newLocalRunner(t, shell.RunnerSpec{
-		Cwd:    t.TempDir(),
-		Image:  realCloudImage,
-		Worker: resolved.URL,
+	runner := newRunnerOn(t, resolved, shell.RunnerSpec{
+		Cwd:   t.TempDir(),
+		Image: realCloudImage,
 	})
 
 	// Open the session first: the watcher only polls while a session is

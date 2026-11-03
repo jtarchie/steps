@@ -7,24 +7,23 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
-// Pull fills dst, an existing empty directory, with the tree the worker spec names holds under digest, and reports the bytes that crossed. A worker that no longer holds it is an error naming the worker; the caller decides what a lost holder costs.
-func Pull(ctx context.Context, spec shell.RunnerSpec, digest, dst string) (int64, error) {
-	worker, err := ParseWorker(spec.Worker)
+// Pull fills dst, an existing empty directory, with the tree the worker at holder holds under digest, and reports the bytes that crossed. A worker that no longer holds it is an error naming the worker; the caller decides what a lost holder costs. holder is a URL string, and stays one: it is recorded on an artifact and parsed on whichever step reads it later, which is a real serialized identity (see asStatic) rather than the resolve-to-dial handoff NewRunner takes as a struct.
+func Pull(ctx context.Context, holder, digest, dst string) (int64, error) {
+	worker, err := ParseWorker(holder)
 	if err != nil {
 		return 0, err
 	}
 
 	if !worker.dockerPlus() {
-		return 0, fmt.Errorf("worker %q: %w", spec.Worker, errHoldsNothing)
+		return 0, fmt.Errorf("worker %q: %w", holder, errHoldsNothing)
 	}
 
 	received, err := pullPlus(ctx, worker, digest, dst)
 	if err != nil {
-		return 0, fmt.Errorf("worker %q: %w", spec.Worker, err)
+		return 0, fmt.Errorf("worker %q: %w", holder, err)
 	}
 
 	return received, nil

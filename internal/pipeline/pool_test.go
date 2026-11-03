@@ -124,9 +124,9 @@ func TestAStepsTimeoutDoesNotCountItsWaitForAPoolMachine(t *testing.T) {
 	testdocker.Require(t)
 
 	previous := newRunner
-	newRunner = func(spec shell.RunnerSpec) (shell.Runner, error) {
-		if spec.Worker == "" {
-			return previous(spec)
+	newRunner = func(worker venue.Worker, spec shell.RunnerSpec) (shell.Runner, error) {
+		if worker.Here() {
+			return previous(worker, spec)
 		}
 
 		return onceEvicted{}, nil
@@ -203,9 +203,9 @@ func TestAPoolWaitIsNotSpentFromAReplacedStepsBudget(t *testing.T) {
 	var placed atomic.Int32
 
 	previous := newRunner
-	newRunner = func(spec shell.RunnerSpec) (shell.Runner, error) {
-		if spec.Worker == "" {
-			return previous(spec)
+	newRunner = func(worker venue.Worker, spec shell.RunnerSpec) (shell.Runner, error) {
+		if worker.Here() {
+			return previous(worker, spec)
 		}
 
 		return onceEvicted{evict: placed.Add(1) == 1}, nil

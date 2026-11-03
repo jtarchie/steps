@@ -38,7 +38,7 @@ func TestACancelledCommandStillRemovesItsContainer(t *testing.T) {
 
 	spec := localWorker(t, t.TempDir())
 
-	placed, err := NewRunner(spec)
+	placed, err := openRunner(spec)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

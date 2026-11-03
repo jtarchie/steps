@@ -396,7 +396,7 @@ func TestVenueRunsAStepOnADOLaunchedDroplet(t *testing.T) {
 	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
 	mustMkdir(t, filepath.Join(cwd, "out"))
 
-	runner := newLocalRunner(t, shell.RunnerSpec{Cwd: cwd, Image: "alpine:3", Worker: resolved.URL, Fetch: []string{"out"}})
+	runner := newRunnerOn(t, resolved, shell.RunnerSpec{Cwd: cwd, Image: "alpine:3", Fetch: []string{"out"}})
 
 	err = shell.Run(context.Background(), runner, "cat data/seed.txt > out/report.txt")
 	if err != nil {

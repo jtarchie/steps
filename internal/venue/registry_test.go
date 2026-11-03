@@ -206,7 +206,7 @@ func TestRegistryRetiresAnEvictedMachineForEveryUser(t *testing.T) {
 	dead := mustResolve(t, watcher)
 	mustResolve(t, sibling)
 
-	watcher.Abandon("box", dead.URL)
+	watcher.Abandon("box", dead)
 	mustResolve(t, sibling)
 
 	fake.mu.Lock()
@@ -506,7 +506,7 @@ func TestRegistryParksARestartedMachineOnlyAfterItsLastUser(t *testing.T) {
 	dead := mustResolve(t, evicted)
 
 	fake.reclaim()
-	evicted.Abandon("box", dead.URL)
+	evicted.Abandon("box", dead)
 	mustResolve(t, evicted)
 
 	joined := registry.Leases(workers)
@@ -533,7 +533,7 @@ func TestRegistryStillParksAMachineReacquiredRunning(t *testing.T) {
 
 	var notes bytes.Buffer
 
-	job.Abandon("box", dying.URL)
+	job.Abandon("box", dying)
 	mustResolveTag(events.WithOutput(context.Background(), events.Output{Stdout: &notes}), t, job, "box")
 	mustRelease(t, job)
 
@@ -828,7 +828,7 @@ func TestRegistryAbandonRacingASiblingsResolveCountsEachMachineOnce(t *testing.T
 
 	go func() {
 		defer close(abandoned)
-		job.Abandon("box", dead.URL)
+		job.Abandon("box", dead)
 	}()
 
 	parkedIn(t, "venue.(*Registry).retire(")
@@ -1046,7 +1046,7 @@ func TestRegistryRetiresASharedLaunchForEverySpelling(t *testing.T) {
 	dead := mustResolve(t, other)
 
 	// plain acquired it, other watched it die.
-	other.Abandon("box", dead.URL)
+	other.Abandon("box", dead)
 
 	if fresh := mustResolve(t, plain); fresh.Instance != "i-2" {
 		t.Fatalf("plain resolved to %q, want a fresh machine", fresh.URL)
@@ -1089,7 +1089,7 @@ func TestRegistryCountsOneMachineUnderTwoTagsOfOneScope(t *testing.T) {
 
 	mustResolveTag(ctx, t, other, "a")
 
-	job.Abandon("a", onA.URL)
+	job.Abandon("a", onA)
 
 	if onB = mustResolveTag(ctx, t, job, "b"); onB.Instance != "i-2" {
 		t.Fatalf("tag b resolved to %q after tag a watched the machine die, want a fresh one", onB.URL)
@@ -1222,7 +1222,7 @@ func TestReusedWarmIsOnlyAMachineTakenFromItsIdleWindow(t *testing.T) {
 		t.Fatal("a machine taken from its idle window does not read as a warm reuse")
 	}
 
-	reused.Abandon("box", dead.URL)
+	reused.Abandon("box", dead)
 
 	if reused.ReusedWarm("box") {
 		t.Error("an abandoned warm machine still reads as a warm reuse, so its replacement's failure would be re-placed again")
@@ -1262,7 +1262,7 @@ func TestReusedWarmIsForgottenWhenAParkedMachineIsAbandoned(t *testing.T) {
 		t.Fatal("a parked machine taken from its idle window does not read as a warm reuse")
 	}
 
-	job.Abandon("box", dead.URL)
+	job.Abandon("box", dead)
 	mustResolve(t, job)
 
 	if job.ReusedWarm("box") {

@@ -22,13 +22,13 @@ func TestPlaceAgentSpecCarriesTheResolvedWorker(t *testing.T) {
 	step := config.Step{Agent: "hand", Tags: []string{"box"}}
 
 	// Only what the agent itself knows goes in; what comes out is the closure's whole contribution.
-	got, err := placeAgentSpec(ctx, step, shell.RunnerSpec{Image: "alpine:3", Cwd: t.TempDir(), Subdir: "code"})
+	worker, got, err := placeAgentSpec(ctx, step, shell.RunnerSpec{Image: "alpine:3", Cwd: t.TempDir(), Subdir: "code"})
 	if err != nil {
 		t.Fatalf("placeAgentSpec: %v", err)
 	}
 
-	if got.Worker != "local:" {
-		t.Errorf("Worker = %q, want the machine the tag resolved to — the agent's runner would dial nothing", got.Worker)
+	if worker.Address() != "local:" {
+		t.Errorf("Worker = %q, want the machine the tag resolved to — the agent's runner would dial nothing", worker.Address())
 	}
 
 	if got.WorkerTag != "box" {
@@ -49,13 +49,13 @@ func TestPlaceAgentSpecLeavesAnUntaggedStepAlone(t *testing.T) {
 		t.Fatalf("WithWorkers: %v", err)
 	}
 
-	got, err := placeAgentSpec(ctx, config.Step{Agent: "hand"}, shell.RunnerSpec{Cwd: t.TempDir()})
+	worker, got, err := placeAgentSpec(ctx, config.Step{Agent: "hand"}, shell.RunnerSpec{Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatalf("placeAgentSpec: %v", err)
 	}
 
-	if got.Worker != "" || got.WorkerTag != "" {
-		t.Errorf("Worker/WorkerTag = %q/%q, want empty for a step that named no tag", got.Worker, got.WorkerTag)
+	if !worker.Here() || got.WorkerTag != "" {
+		t.Errorf("Worker/WorkerTag = %q/%q, want empty for a step that named no tag", worker.URL, got.WorkerTag)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestPlaceAgentSpecDoesNotPresumeAWarmMachineReclaimed(t *testing.T) {
 		t.Fatal("the fixture's machine is not a warm reuse, so this proves nothing")
 	}
 
-	got, err := placeAgentSpec(ctx, step, shell.RunnerSpec{Image: "alpine:3", Cwd: t.TempDir()})
+	_, got, err := placeAgentSpec(ctx, step, shell.RunnerSpec{Image: "alpine:3", Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatalf("placeAgentSpec: %v", err)
 	}

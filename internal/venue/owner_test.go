@@ -543,7 +543,7 @@ func TestAReacquiredStampedMachineIsNotCalledARestart(t *testing.T) {
 
 	var notes bytes.Buffer
 
-	leases.Abandon("box", dying.URL)
+	leases.Abandon("box", dying)
 	mustResolveTag(events.WithOutput(context.Background(), events.Output{Stdout: &notes}), t, leases, "box")
 	mustRelease(t, leases)
 

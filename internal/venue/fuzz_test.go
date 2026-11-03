@@ -55,7 +55,7 @@ func FuzzParseWorker(f *testing.F) {
 	})
 }
 
-// checkAcquiredURL holds asStatic to rebuilding a URL that parses back to the acquired instance with every connection option intact.
+// checkAcquiredURL holds asStatic to rebuilding a URL that parses back to the acquired instance with every connection option intact, and to handing a runner the same machine as a struct with nothing of how it was acquired.
 func checkAcquiredURL(t *testing.T, raw string, worker Worker) {
 	t.Helper()
 
@@ -77,6 +77,14 @@ func checkAcquiredURL(t *testing.T, raw string, worker Worker) {
 
 	if static != want {
 		t.Fatalf("%q acquired as %q, which reads as\n%+v\nwant\n%+v", raw, acquired.URL, static, want)
+	}
+
+	dialed := worker
+	dialed.URL, dialed.Rung, dialed.Instance = acquired.URL, RungStatic, instance
+	dialed.Template, dialed.Capacity, dialed.Version, dialed.Idle, dialed.Exclusive, dialed.Max, dialed.Size = "", "", "", 0, false, 0, ""
+
+	if acquired != dialed {
+		t.Fatalf("%q acquired as\n%+v\nwant\n%+v", raw, acquired, dialed)
 	}
 }
 

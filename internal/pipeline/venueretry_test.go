@@ -49,15 +49,15 @@ func TestVenueRetryReplacesUpToTheCap(t *testing.T) {
 
 	runs := 0
 
-	err := withVenueRetry(evictionCtx(t), taggedStep(), 0, func(context.Context) (string, error) {
+	err := withVenueRetry(evictionCtx(t), taggedStep(), 0, func(context.Context) (venue.Worker, error) {
 		runs++
 
 		// Bounded, so a cap that never trips fails here rather than spinning until the suite's timeout.
 		if runs > venueRetries+1 {
-			return "", errors.New("re-placed past the cap")
+			return venue.Worker{}, errors.New("re-placed past the cap")
 		}
 
-		return "aws://i-0abc123def456789", errTestEvicted
+		return mustWorker(t, "aws://i-0abc123def456789"), errTestEvicted
 	})
 	if err == nil {
 		t.Fatal("a machine evicted every time reported success")
@@ -80,11 +80,11 @@ func TestVenueRetryStopsWhenTheBudgetIsSpent(t *testing.T) {
 
 	runs := 0
 
-	err := withVenueRetry(evictionCtx(t), taggedStep(), time.Nanosecond, func(context.Context) (string, error) {
+	err := withVenueRetry(evictionCtx(t), taggedStep(), time.Nanosecond, func(context.Context) (venue.Worker, error) {
 		runs++
 		time.Sleep(2 * time.Millisecond)
 
-		return "aws://i-0abc123def456789", errTestEvicted
+		return mustWorker(t, "aws://i-0abc123def456789"), errTestEvicted
 	})
 	if err == nil {
 		t.Fatal("an evicted step past its budget reported success")
@@ -109,11 +109,11 @@ func TestVenueRetryStopsForACancelledBuild(t *testing.T) {
 
 	runs := 0
 
-	err := withVenueRetry(ctx, taggedStep(), 0, func(context.Context) (string, error) {
+	err := withVenueRetry(ctx, taggedStep(), 0, func(context.Context) (venue.Worker, error) {
 		runs++
 		cancel()
 
-		return "aws://i-0abc123def456789", errTestEvicted
+		return mustWorker(t, "aws://i-0abc123def456789"), errTestEvicted
 	})
 	if err == nil {
 		t.Fatal("a cancelled build reported success")
@@ -140,10 +140,10 @@ func TestVenueRetryReportsAWorkerWithNowhereElseToGo(t *testing.T) {
 
 	runs := 0
 
-	err = withVenueRetry(ctx, taggedStep(), 0, func(context.Context) (string, error) {
+	err = withVenueRetry(ctx, taggedStep(), 0, func(context.Context) (venue.Worker, error) {
 		runs++
 
-		return "ssh://jt@gpu-box", errTestEvicted
+		return mustWorker(t, "ssh://jt@gpu-box"), errTestEvicted
 	})
 	if err == nil {
 		t.Fatal("an evicted static worker reported success")
@@ -163,10 +163,10 @@ func TestVenueRetryPassesOrdinaryOutcomesThrough(t *testing.T) {
 	for name, outcome := range map[string]error{"success": nil, "failure": errors.New("exit 1")} {
 		runs := 0
 
-		err := withVenueRetry(evictionCtx(t), taggedStep(), 0, func(context.Context) (string, error) {
+		err := withVenueRetry(evictionCtx(t), taggedStep(), 0, func(context.Context) (venue.Worker, error) {
 			runs++
 
-			return "aws://i-0abc123def456789", outcome
+			return mustWorker(t, "aws://i-0abc123def456789"), outcome
 		})
 		if !errors.Is(err, outcome) && (err != nil) != (outcome != nil) {
 			t.Errorf("%s: error = %v, want %v", name, err, outcome)

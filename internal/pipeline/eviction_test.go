@@ -38,9 +38,9 @@ func reclaimPlacedSteps(t *testing.T) *atomic.Int32 {
 	var commands atomic.Int32
 
 	previous := newRunner
-	newRunner = func(spec shell.RunnerSpec) (shell.Runner, error) {
-		if spec.Worker == "" {
-			return previous(spec)
+	newRunner = func(worker venue.Worker, spec shell.RunnerSpec) (shell.Runner, error) {
+		if worker.Here() {
+			return previous(worker, spec)
 		}
 
 		return reclaimedRunner{&commands}, nil

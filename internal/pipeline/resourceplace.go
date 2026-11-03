@@ -34,17 +34,17 @@ func WithResourcePlacement(ctx context.Context) context.Context {
 			return nil, err
 		}
 
-		if worker == "" {
+		if worker.Here() {
 			return nil, nil
 		}
 
 		keep := keepFrom(ctx)
 
 		return func(spec shell.RunnerSpec) (shell.Runner, error) {
-			spec.Worker, spec.WorkerTag, spec.Keep, spec.HoldAs = worker, tag, keep, step.Get
+			spec.WorkerTag, spec.Keep, spec.HoldAs = tag, keep, step.Get
 			spec.RemoteInputs = remoteInputsFrom(ctx)
 
-			runner, err := placedRunner(ctx, step, spec)
+			runner, err := placedRunner(ctx, step, worker, spec)
 			if err != nil {
 				return nil, err
 			}
@@ -54,7 +54,7 @@ func WithResourcePlacement(ctx context.Context) context.Context {
 			// task's command gets from withVenueRetry, applied to the one
 			// call a check makes. An in: or out: is retried by its stage.
 			if spec.Cwd == "" {
-				return &checkRunner{Runner: runner, step: step, spec: spec}, nil
+				return &checkRunner{Runner: runner, step: step, worker: worker, spec: spec}, nil
 			}
 
 			return runner, nil
@@ -65,20 +65,20 @@ func WithResourcePlacement(ctx context.Context) context.Context {
 // placedRunner builds one stage's runner on its worker, reading what the
 // machine said about itself on the way out — the same two facts a task
 // defers, at the same moment — since the stage closes the runner itself.
-func placedRunner(ctx context.Context, step config.Step, spec shell.RunnerSpec) (shell.Runner, error) {
+func placedRunner(ctx context.Context, step config.Step, worker venue.Worker, spec shell.RunnerSpec) (shell.Runner, error) {
 	// An in: fills a directory nothing here reads until a later step does,
 	// so the tree stays on the worker. An out: fetches nothing.
 	spec.DeferFetch = spec.FetchAll
 	// Recomputed rather than inherited: a check's re-placement copies the spec of the machine that just died.
 	spec.ReusedWarm = reusedWarm(ctx, step)
 
-	runner, err := newRunner(spec)
+	runner, err := newRunner(worker, spec)
 	if err != nil {
 		return nil, err
 	}
 
 	return closingRunner{Runner: runner, onClose: func(r shell.Runner) {
-		releaseIfReclaimed(ctx, step, r, spec.Worker)
+		releaseIfReclaimed(ctx, step, r, worker)
 		notePlacement(ctx, r)
 		noteHeld(ctx, r)
 	}}, nil
@@ -112,8 +112,9 @@ func (c closingRunner) WithLabel(label string) shell.Runner {
 type checkRunner struct {
 	shell.Runner
 
-	step config.Step
-	spec shell.RunnerSpec
+	step   config.Step
+	worker venue.Worker
+	spec   shell.RunnerSpec
 }
 
 // A pointer receiver, because the stage closes the runner it holds and a replacement stored on a copy was never closed while the dead machine was closed twice.
@@ -122,21 +123,18 @@ func (c *checkRunner) Exec(ctx context.Context, cmd shell.Command) (shell.Result
 
 	current := c.Runner
 	// The machine current dials, handed to the retry because Abandon is identity-checked: after a re-placement it is no longer the spec's.
-	dialed := c.spec.Worker
+	dialed := c.worker
 
-	err := withVenueRetry(ctx, c.step, 0, func(retryCtx context.Context) (string, error) {
+	err := withVenueRetry(ctx, c.step, 0, func(retryCtx context.Context) (venue.Worker, error) {
 		if current == nil {
 			worker, err := workerFor(retryCtx, c.step)
 			if err != nil {
-				return "", err
+				return venue.Worker{}, err
 			}
 
 			dialed = worker
 
-			spec := c.spec
-			spec.Worker = worker
-
-			runner, err := placedRunner(retryCtx, c.step, spec)
+			runner, err := placedRunner(retryCtx, c.step, worker, c.spec)
 			if err != nil {
 				return worker, err
 			}
@@ -267,14 +265,14 @@ func runPlacedStage(ctx context.Context, step config.Step, stage func(context.Co
 		return err
 	}
 
-	return withVenueRetry(ctx, step, budget, func(ctx context.Context) (string, error) {
+	return withVenueRetry(ctx, step, budget, func(ctx context.Context) (venue.Worker, error) {
 		// Resolved INSIDE the retry, so a re-placement dials the freshly
 		// acquired machine rather than the one just forgotten. Place asks
 		// the leases the same question a moment later and gets the same
 		// memoized answer, so this names the machine the stage dials.
 		dialed, err := workerFor(ctx, step)
 		if err != nil {
-			return "", err
+			return venue.Worker{}, err
 		}
 
 		// Before Place, so the placer the stage dials through leaves what

@@ -22,12 +22,11 @@ import (
 // newRunner is venue.NewRunner, swapped by tests for a worker the cloud reclaims mid-command, which no local machine can stage.
 var newRunner = venue.NewRunner //nolint:gochecknoglobals // test seam
 
-// workerFor answers which worker a step runs on, or "" for this machine,
-// acquiring the machine if this is the first step in the job to ask.
-func workerFor(ctx context.Context, step config.Step) (string, error) {
+// workerFor answers which worker a step runs on, or the zero Worker for this machine, acquiring the machine if this is the first step in the job to ask. The struct goes to the runner as it was resolved: nothing re-reads a URL.
+func workerFor(ctx context.Context, step config.Step) (venue.Worker, error) {
 	tag := placementTag(step)
 	if tag == "" {
-		return "", nil
+		return venue.Worker{}, nil
 	}
 
 	leases := leasesFrom(ctx)
@@ -36,18 +35,18 @@ func workerFor(ctx context.Context, step config.Step) (string, error) {
 		// step runner directly. An already-running worker needs none of it.
 		worker, ok := workersFrom(ctx)[tag]
 		if !ok {
-			return "", nil
+			return venue.Worker{}, nil
 		}
 
-		return worker.URL, nil
+		return worker, nil
 	}
 
 	worker, err := leases.Resolve(ctx, tag)
 	if err != nil {
-		return "", fmt.Errorf("worker for tag %q: %w", tag, err)
+		return venue.Worker{}, fmt.Errorf("worker for tag %q: %w", tag, err)
 	}
 
-	return worker.URL, nil
+	return worker, nil
 }
 
 // claimWorker takes the job's place on a tag's machine, waiting its turn on a capped exclusive pool, without acquiring it: called before a step's timeout: starts, because the wait has no bound of its own and is not the step's.
@@ -99,11 +98,11 @@ const venueRetries = 2
 // resolves to the same address next time round, so retrying would re-run the
 // step against the host that just went away, paying a dial timeout and any
 // side effects the commands already had, twice, to reach the same end.
-// work reports the dial URL of the machine it ran against alongside its
+// work reports the machine it ran against alongside its
 // error, because forgetting a lease is identity-checked: the machine to
 // forget is the one THIS attempt watched die, never whatever the tag happens
 // to hold by then — a parallel sibling may have re-acquired already.
-func withVenueRetry(ctx context.Context, step config.Step, budget time.Duration, work func(context.Context) (string, error)) error {
+func withVenueRetry(ctx context.Context, step config.Step, budget time.Duration, work func(context.Context) (venue.Worker, error)) error {
 	tag := placementTag(step)
 
 	// Before the clock starts: a turn waited on a capped pool is not the step's to pay for.
@@ -186,7 +185,7 @@ func acquiredOnDemand(ctx context.Context, tag string) bool {
 // stays bound to the doomed instance and the next step on the tag opens a
 // session against a host that dies at the handshake — which sticks, is not an
 // eviction, and fails the build on a machine steps already knew was dying.
-func releaseIfReclaimed(ctx context.Context, step config.Step, runner shell.Runner, dialed string) {
+func releaseIfReclaimed(ctx context.Context, step config.Step, runner shell.Runner, dialed venue.Worker) {
 	tag := placementTag(step)
 
 	leases := leasesFrom(ctx)

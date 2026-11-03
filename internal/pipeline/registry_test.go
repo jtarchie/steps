@@ -630,7 +630,8 @@ jobs:
 	var stage shell.Runner = &checkRunner{
 		Runner: first,
 		step:   config.Step{Get: "repo", Tags: []string{"box"}},
-		spec:   shell.RunnerSpec{Worker: "local:", WorkerTag: "box", Image: "alpine:3"},
+		worker: mustWorker(t, "local:"),
+		spec:   shell.RunnerSpec{WorkerTag: "box", Image: "alpine:3"},
 	}
 
 	stage = stage.WithLabel("probe check")
@@ -836,7 +837,7 @@ func TestAWarmMachineThatAnsweredIsNoLongerPresumedDead(t *testing.T) {
 		t.Fatal("the fixture's machine is not a warm reuse, so this proves nothing")
 	}
 
-	runner, err := venue.NewRunner(shell.RunnerSpec{Cwd: t.TempDir(), Worker: worker, WorkerTag: "box", ReusedWarm: true, Image: "alpine:3"})
+	runner, err := venue.NewRunner(worker, shell.RunnerSpec{Cwd: t.TempDir(), WorkerTag: "box", ReusedWarm: true, Image: "alpine:3"})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -865,8 +866,9 @@ func TestARePlacedCheckAbandonsTheMachineItActuallyDialled(t *testing.T) {
 	ctx, _ = withPlacementSink(ctx)
 
 	stage := &checkRunner{
-		step: config.Step{Get: "repo", Tags: []string{"box"}},
-		spec: shell.RunnerSpec{Worker: "ssh://nobody@the-machine-the-stage-was-built-on", WorkerTag: "box", Image: "alpine:3"},
+		step:   config.Step{Get: "repo", Tags: []string{"box"}},
+		worker: mustWorker(t, "ssh://nobody@the-machine-the-stage-was-built-on"),
+		spec:   shell.RunnerSpec{WorkerTag: "box", Image: "alpine:3"},
 	}
 
 	out, err := shell.RunCapture(ctx, stage, "echo fresh")
@@ -883,4 +885,15 @@ func TestARePlacedCheckAbandonsTheMachineItActuallyDialled(t *testing.T) {
 	if starts, _ := fake.counts(); starts != 2 {
 		t.Errorf("%d acquisitions, want the dead warm machine and one replacement", starts)
 	}
+}
+
+func mustWorker(t *testing.T, raw string) venue.Worker {
+	t.Helper()
+
+	worker, err := venue.ParseWorker(raw)
+	if err != nil {
+		t.Fatalf("ParseWorker(%q): %v", raw, err)
+	}
+
+	return worker
 }

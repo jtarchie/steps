@@ -14,23 +14,58 @@ import (
 )
 
 // localWorker is a local: worker, a docker+ one on this machine's own daemon, with a root of its own so its cache is its own.
-func localWorker(t *testing.T, cwd string, outputs ...string) shell.RunnerSpec {
+func localWorker(t *testing.T, cwd string, outputs ...string) placedSpec {
 	t.Helper()
 
 	testdocker.Require(t)
 
-	return shell.RunnerSpec{
-		Cwd:    cwd,
-		Image:  "alpine:3",
-		Worker: "local:" + t.TempDir(),
-		Fetch:  outputs,
-	}
+	return placedSpec{RunnerSpec: shell.RunnerSpec{
+		Cwd:   cwd,
+		Image: "alpine:3",
+		Fetch: outputs}, Worker: "local:" + t.TempDir()}
 }
 
-func newLocalRunner(t *testing.T, spec shell.RunnerSpec) shell.Runner {
+// placedSpec is a spec with the mapping its worker is parsed from, the two halves a pipeline carries as a resolved Worker and a RunnerSpec.
+type placedSpec struct {
+	shell.RunnerSpec
+
+	Worker string
+}
+
+// openRunner parses the spec's mapping the way a static worker is read, and hands the struct to NewRunner as the pipeline does.
+func openRunner(spec placedSpec) (shell.Runner, error) {
+	var worker Worker
+
+	if spec.Worker != "" {
+		var err error
+
+		worker, err = ParseWorker(spec.Worker)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return NewRunner(worker, spec.RunnerSpec)
+}
+
+// newRunnerOn is a runner on a worker a lease resolved, handed over as the struct it is.
+func newRunnerOn(t *testing.T, worker Worker, spec shell.RunnerSpec) shell.Runner {
 	t.Helper()
 
-	runner, err := NewRunner(spec)
+	runner, err := NewRunner(worker, spec)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	return runner
+}
+
+func newLocalRunner(t *testing.T, spec placedSpec) shell.Runner {
+	t.Helper()
+
+	runner, err := openRunner(spec)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -105,13 +140,13 @@ func TestVenueReportsExitAsData(t *testing.T) {
 }
 
 // deadWorker is a docker+ssh:// worker whose sshd was listening and no longer is.
-func deadWorker(t *testing.T) shell.RunnerSpec {
+func deadWorker(t *testing.T) placedSpec {
 	t.Helper()
 
 	server := newTestSSHD(t)
 	worker := strings.Replace(dockerPlusURL(server, "/var/run/docker.sock"), server.Addr(), deadAddress(t), 1)
 
-	return shell.RunnerSpec{Cwd: t.TempDir(), Image: "alpine:3", Worker: worker}
+	return placedSpec{RunnerSpec: shell.RunnerSpec{Cwd: t.TempDir(), Image: "alpine:3"}, Worker: worker}
 }
 
 // TestVenueUnreachableWorkerIsNotAVerdict is the inverse, and the one that
@@ -122,7 +157,7 @@ func TestVenueUnreachableWorkerIsNotAVerdict(t *testing.T) {
 
 	spec := deadWorker(t)
 
-	runner, err := NewRunner(spec)
+	runner, err := openRunner(spec)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -161,7 +196,7 @@ func TestVenueReadsADeadWarmMachineAsReclaimed(t *testing.T) {
 			spec := deadWorker(t)
 			spec.ReusedWarm = c.warm
 
-			runner, err := NewRunner(spec)
+			runner, err := openRunner(spec)
 			if err != nil {
 				t.Fatalf("NewRunner: %v", err)
 			}
@@ -260,7 +295,7 @@ func TestVenueSharesOneSessionAcrossLabels(t *testing.T) {
 func TestVenueCloseIsSafeWhenNothingRan(t *testing.T) {
 	t.Parallel()
 
-	runner, err := NewRunner(localWorker(t, t.TempDir()))
+	runner, err := openRunner(localWorker(t, t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -304,9 +339,8 @@ func TestVenueCancellationStopsTheCommand(t *testing.T) {
 func TestVenueCarriesAnImageToTheWorker(t *testing.T) {
 	t.Parallel()
 
-	built, err := NewRunner(shell.RunnerSpec{
-		Cwd: t.TempDir(), Worker: "local:", Image: "alpine", Network: "none",
-	})
+	built, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{
+		Cwd: t.TempDir(), Image: "alpine", Network: "none"}, Worker: "local:"})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -332,7 +366,7 @@ func TestVenueCarriesAnImageToTheWorker(t *testing.T) {
 func TestNoWorkerIsTheLocalRunner(t *testing.T) {
 	t.Parallel()
 
-	runner, err := NewRunner(shell.RunnerSpec{Cwd: t.TempDir()})
+	runner, err := NewRunner(Worker{}, shell.RunnerSpec{Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -392,7 +426,7 @@ func mustRead(t *testing.T, path string) string {
 func TestLocalDaemonDownIsNotAnSSHProblem(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "unix://"+filepath.Join(os.TempDir(), "steps-no-daemon-"+randomSuffix()+".sock"))
 
-	runner := newLocalRunner(t, shell.RunnerSpec{Cwd: t.TempDir(), Image: "alpine:3", Worker: "local:"})
+	runner := newLocalRunner(t, placedSpec{RunnerSpec: shell.RunnerSpec{Cwd: t.TempDir(), Image: "alpine:3"}, Worker: "local:"})
 
 	_, err := shell.RunCapture(t.Context(), runner, "true")
 	if err == nil {
@@ -412,7 +446,7 @@ func TestLocalDaemonDownIsNotAnSSHProblem(t *testing.T) {
 func TestLocalDaemonOverTCPIsDialled(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
 
-	runner := newLocalRunner(t, shell.RunnerSpec{Cwd: t.TempDir(), Image: "alpine:3", Worker: "local:"})
+	runner := newLocalRunner(t, placedSpec{RunnerSpec: shell.RunnerSpec{Cwd: t.TempDir(), Image: "alpine:3"}, Worker: "local:"})
 
 	_, err := shell.RunCapture(t.Context(), runner, "true")
 	if err == nil || !strings.Contains(err.Error(), "127.0.0.1:1 did not answer") {

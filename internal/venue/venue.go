@@ -9,15 +9,14 @@ import (
 	"github.com/jtarchie/steps/internal/shell"
 )
 
-// NewRunner returns a runner for spec, on a worker when spec.Worker names one
-// and on this machine otherwise.
+// NewRunner returns a runner for spec on worker, which is dialed exactly as handed in: the struct a lease resolved, never a URL parsed back from text. The zero Worker means this machine.
 //
-// The empty case hands straight back to shell.NewRunner, unchanged and
+// The zero case hands straight back to shell.NewRunner, unchanged and
 // undecorated. That is deliberate: placement is opt-in, and a pipeline that
 // never mentions a worker must take exactly the path it took before this
 // package existed — same runner, same behavior, nothing wrapped.
-func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
-	if spec.Worker == "" {
+func NewRunner(worker Worker, spec shell.RunnerSpec) (shell.Runner, error) {
+	if worker.Here() {
 		// Refused rather than dropped: a local runner cannot fetch them, so
 		// the step would run against a tree missing those inputs.
 		if len(spec.RemoteInputs) > 0 {
@@ -25,11 +24,6 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		}
 
 		return shell.NewRunner(spec) //nolint:wrapcheck // the local path is shell's answer, returned as shell phrased it
-	}
-
-	worker, err := ParseWorker(spec.Worker)
-	if err != nil {
-		return nil, err
 	}
 
 	if worker.dockerPlus() {

@@ -121,16 +121,7 @@ type RunnerSpec struct {
 	// MemoryBytes is the memory limit, in bytes. Zero leaves it unset.
 	// A container over it is OOM-killed, which surfaces as exit 137.
 	MemoryBytes int64
-	// Worker is the venue a step's tags: resolved to — a worker URL, already
-	// mapped from tag to machine by whoever parsed the CLI. Empty, the
-	// overwhelming default, runs on this machine and leaves the host/container
-	// decision below exactly as it was.
-	//
-	// Cwd stays a LOCAL path when this is set: it is the tree that gets sent
-	// and the tree the results come back into. Nothing above here has to know
-	// which machine ran the command.
-	Worker string
-	// WorkerTag is the tag that resolved to Worker, published to the command
+	// WorkerTag is the tag a step was placed by, published to the command
 	// as STEPS_WORKER so a script can tell it is on a worker and which one.
 	// Empty for a step running on this machine, which is what makes the
 	// variable's absence meaningful.

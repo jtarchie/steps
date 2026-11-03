@@ -621,12 +621,12 @@ func dialOf(spelling, machine Worker) Worker {
 }
 
 // Abandon is identity-checked so a stale notice cannot orphan the fresh machine a sibling re-acquired under the same tag, retires the machine so no other scope is handed it, and does not release it: a parallel sibling may still be inside the grace the notice promised, and a spot stop or hibernate leaves a live instance only the last user's release will ever end.
-func (l *Leases) Abandon(tag, dialURL string) {
+func (l *Leases) Abandon(tag string, dialed Worker) {
 	l.mu.Lock()
 	held, ok := l.held[tag]
 	l.mu.Unlock()
 
-	if !ok || !held.abandonIf(dialURL, l.source[tag]) {
+	if !ok || !held.abandonIf(dialed, l.source[tag]) {
 		return
 	}
 
@@ -652,11 +652,11 @@ func (l *Leases) Abandon(tag, dialURL string) {
 }
 
 // abandonIf never matches an acquisition in flight: a machine still being acquired is not the machine anybody watched die. A parked one is left for its next user to restart rather than retired, because its replacement is the same instance: as two entries, whichever ended first parked it under the other.
-func (l *lease) abandonIf(dialURL string, spelling Worker) bool {
+func (l *lease) abandonIf(dialed, spelling Worker) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if !l.acquired || l.err != nil || dialOf(spelling, l.worker).URL != dialURL {
+	if !l.acquired || l.err != nil || !dialOf(spelling, l.worker).SameMachine(dialed) {
 		return false
 	}
 

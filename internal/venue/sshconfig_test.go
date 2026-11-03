@@ -48,7 +48,7 @@ Host gpu-alias
 	spec := sshSpec(t, server, cwd, "out")
 	spec.Worker = aliasWorker(t, "gpu-alias", server, config)
 
-	runner, err := NewRunner(spec)
+	runner, err := openRunner(spec)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -93,7 +93,7 @@ Host gpu-alias
 	spec := sshSpec(t, server, t.TempDir())
 	spec.Worker = aliasWorker(t, "gpu-alias", server, config)
 
-	runner, err := NewRunner(spec)
+	runner, err := openRunner(spec)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

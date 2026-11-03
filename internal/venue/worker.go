@@ -120,10 +120,7 @@ type Worker struct {
 	// exactly one, and unlike the project there is no credentials file to
 	// fall back to — only ?zone= or CLOUDSDK_COMPUTE_ZONE can answer.
 	Zone string
-	// Query is the mapping's raw query string, kept so a worker that is
-	// RESOLVED to another machine (an acquisition rung becoming the instance
-	// it started) can carry its connection options into the URL it is dialed
-	// by. See asStatic.
+	// Query is the mapping's raw query string, kept so a worker that is RESOLVED to another machine (an acquisition rung becoming the instance it started) can carry its connection options into the URL that names it: the holder a docker+ step records for the trees it keeps is that URL, parsed back by whichever step pulls from it. See asStatic.
 	Query string
 	// Socket is the daemon's unix socket on a docker+ssh worker.
 	Socket string
@@ -133,6 +130,23 @@ type Worker struct {
 	// and this is where that attestation arrives. Host keys are still always
 	// checked -- this says against WHAT rather than against which file.
 	HostKey string
+}
+
+// Here is the zero Worker: the sentinel for "this machine", which NewRunner hands straight to shell. A parsed worker always has a Scheme, so nothing real is mistaken for it.
+func (w Worker) Here() bool { return w.Scheme == "" }
+
+// SameMachine reports whether two resolved workers dial the same machine, which is what Abandon is identity-checked against. It compares what a dial reads (scheme, instance, root and every connection option) and none of how the machine was acquired.
+func (w Worker) SameMachine(other Worker) bool { return w.dialKey() == other.dialKey() }
+
+type dialKey struct {
+	scheme                                           Scheme
+	user, host, root, instance                       string
+	identity, knownHosts, sshConfig, hostKey, socket string
+	region, project, zone                            string
+}
+
+func (w Worker) dialKey() dialKey {
+	return dialKey{w.Scheme, w.User, w.Host, w.Root, w.Instance, w.Identity, w.KnownHosts, w.SSHConfig, w.HostKey, w.Socket, w.Region, w.Project, w.Zone}
 }
 
 // Acquirable reports whether this worker names a machine that steps brings
@@ -423,10 +437,7 @@ var removedKeys = map[string]string{
 // EXISTENCE rather than how it is reached, which is why a static parse refuses
 // every one of them (see checkAWS and parseTemplateVersion).
 //
-// staticURL strips exactly this set when it rebuilds an acquired worker's URL,
-// and it lives here rather than there so the two facts cannot drift: version=
-// was added to queryKeys without being added to the strip list, and the
-// resulting URL launched a billed instance and then failed to re-parse.
+// staticURL strips exactly this set when it rebuilds an acquired worker's URL, and it lives here rather than there so the two facts cannot drift: version= was added to queryKeys without being added to the strip list, and the resulting URL launched a billed instance and then failed to re-parse.
 //
 //nolint:gochecknoglobals // as queryKeys: a fact about the grammar, not state
 var acquisitionKeys = []string{"capacity", "idle", "version", "exclusive", "max", "size"}

@@ -25,15 +25,13 @@ import (
 	"github.com/jtarchie/steps/internal/shell"
 )
 
-func sshSpec(t *testing.T, server *testSSHD, cwd string, outputs ...string) shell.RunnerSpec {
+func sshSpec(t *testing.T, server *testSSHD, cwd string, outputs ...string) placedSpec {
 	t.Helper()
 
-	return shell.RunnerSpec{
+	return placedSpec{RunnerSpec: shell.RunnerSpec{
 		Cwd:       cwd,
-		Worker:    server.URL,
 		WorkerTag: "gpu",
-		Fetch:     outputs,
-	}
+		Fetch:     outputs}, Worker: server.URL}
 }
 
 // TestSSHWorkerRoundTripsAStep is the feature over its real transport: the
@@ -49,7 +47,7 @@ func TestSSHWorkerRoundTripsAStep(t *testing.T) {
 	mustMkdir(t, filepath.Join(cwd, "out"))
 	mustMkdir(t, filepath.Join(cwd, "logs"))
 
-	runner, err := NewRunner(sshSpec(t, server, cwd, "out", "logs"))
+	runner, err := openRunner(sshSpec(t, server, cwd, "out", "logs"))
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -90,7 +88,7 @@ func TestSSHWorkerSendsNoEnvRequests(t *testing.T) {
 
 	t.Setenv("STEPS_TEST_SSH_VALUE", "carried-in-a-frame")
 
-	runner, err := NewRunner(spec)
+	runner, err := openRunner(spec)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -149,7 +147,7 @@ func TestSSHWorkerNonzeroExitIsAStepFailure(t *testing.T) {
 
 	server := newTestSSHD(t)
 
-	runner, err := NewRunner(sshSpec(t, server, t.TempDir()))
+	runner, err := openRunner(sshSpec(t, server, t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -179,7 +177,7 @@ func TestSSHWorkerCleansUpItsScratch(t *testing.T) {
 
 	server := newTestSSHD(t)
 
-	runner, err := NewRunner(sshSpec(t, server, t.TempDir()))
+	runner, err := openRunner(sshSpec(t, server, t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -213,7 +211,7 @@ func TestSSHWorkerReportsScratchItCouldNotRemove(t *testing.T) {
 		t.Skip("root removes a file under a read-only directory")
 	}
 
-	runner, err := NewRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
+	runner, err := openRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -251,7 +249,7 @@ func TestSSHWorkerRefusesAnUnknownHostKey(t *testing.T) {
 	spec := sshSpec(t, server, t.TempDir())
 	spec.Worker = replaceKnownHosts(spec.Worker, empty)
 
-	runner, err := NewRunner(spec)
+	runner, err := openRunner(spec)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -322,7 +320,7 @@ func TestSSHWorkerRefusesAnImage(t *testing.T) {
 	spec := sshSpec(t, server, t.TempDir())
 	spec.Image = "alpine:3"
 
-	_, err := NewRunner(spec)
+	_, err := openRunner(spec)
 	if !errors.Is(err, errImageOnSSH) {
 		t.Fatalf("want errImageOnSSH, got %v", err)
 	}
@@ -564,7 +562,7 @@ func TestSSHWorkerKeepsADirectoryNothingWillSweep(t *testing.T) {
 func TestSSHWorkerRedialsADroppedConnection(t *testing.T) {
 	t.Parallel()
 
-	runner, err := NewRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
+	runner, err := openRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -600,7 +598,7 @@ func TestSSHWorkerRedialsADroppedConnection(t *testing.T) {
 func TestSSHWorkerRemovesItsDirectoryAfterADroppedConnection(t *testing.T) {
 	t.Parallel()
 
-	runner, err := NewRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
+	runner, err := openRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -723,7 +721,7 @@ func TestSSHDialGivesUpOnASilentHandshake(t *testing.T) {
 func TestSSHWorkerKillsTheCommandADropInterrupted(t *testing.T) {
 	t.Parallel()
 
-	runner, err := NewRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
+	runner, err := openRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

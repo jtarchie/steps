@@ -39,7 +39,7 @@ func TestVenueKeepLeavesTheWorkersScratch(t *testing.T) {
 	spec := localWorker(t, cwd)
 	spec.Keep = true
 
-	runner, err := NewRunner(spec)
+	runner, err := openRunner(spec)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

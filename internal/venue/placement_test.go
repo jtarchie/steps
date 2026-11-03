@@ -80,7 +80,7 @@ func TestPlacementCountsWhatWasPushed(t *testing.T) {
 func TestPlacementOfAnUnplacedRunnerIsFalse(t *testing.T) {
 	t.Parallel()
 
-	runner, err := NewRunner(shell.RunnerSpec{Cwd: t.TempDir()})
+	runner, err := NewRunner(Worker{}, shell.RunnerSpec{Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

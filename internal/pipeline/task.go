@@ -139,7 +139,7 @@ func executeTask(
 		holder string
 	)
 
-	err = withVenueRetry(ctx, step, budget, func(ctx context.Context) (string, error) {
+	err = withVenueRetry(ctx, step, budget, func(ctx context.Context) (venue.Worker, error) {
 		// One runner for every attempt, not one per attempt. A retry is a
 		// second go at the SAME workspace: locally that falls out of the
 		// directory simply persisting, but a venue session owns a remote
@@ -226,7 +226,7 @@ func stepBudget(step config.Step, timeout string) (time.Duration, error) {
 
 // taskRunner builds the runner a task's attempts share, reporting which
 // machine it dials so an eviction can name what to forget.
-func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, space workspace.StepSpace, remote map[string]shell.RemoteInput) (string, shell.Runner, error) {
+func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, space workspace.StepSpace, remote map[string]shell.RemoteInput) (venue.Worker, shell.Runner, error) {
 	workspaceDir := space.Dir()
 
 	// Fetch is the step's declared outputs: what a worker sends back after
@@ -235,12 +235,12 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 	if err != nil {
 		// Bare: both of this function's error sites are already prefixed by
 		// its caller, and wrapping here produced `task "x": task "x": ...`.
-		return "", nil, err
+		return venue.Worker{}, nil, err
 	}
 
-	runner, err := newRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
+	runner, err := newRunner(worker, shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, Sandbox: rt.Sandbox, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
-		Worker: worker, WorkerTag: placementTag(step), Fetch: rt.Outputs, ReusedWarm: reusedWarm(ctx, step),
+		WorkerTag: placementTag(step), Fetch: rt.Outputs, ReusedWarm: reusedWarm(ctx, step),
 		DeferFetch:   deferrable(step, rt),
 		RemoteInputs: remote,
 		Caches:       taskCacheKeys(ctx, step.Task, rt.Caches),
@@ -259,7 +259,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 }
 
 // placedTaskRunner resolves the step's secrets after placement and before the first command: a short-lived credential should not age through a spot launch, and the run's memo makes a re-placement reuse the value rather than prompt again.
-func placedTaskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, space workspace.StepSpace, remote map[string]shell.RemoteInput) (context.Context, string, shell.Runner, error) {
+func placedTaskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, space workspace.StepSpace, remote map[string]shell.RemoteInput) (context.Context, venue.Worker, shell.Runner, error) {
 	dialed, runner, err := taskRunner(ctx, step, rt, space, remote)
 	if err != nil {
 		return ctx, dialed, nil, err

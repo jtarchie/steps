@@ -64,19 +64,17 @@ func (f gcpFixture) options() string {
 	return "project=" + f.project + "&zone=" + f.zone
 }
 
-func (f gcpFixture) spec(cwd, worker string, outputs ...string) shell.RunnerSpec {
+func (f gcpFixture) spec(cwd, worker string, outputs ...string) placedSpec {
 	sep := "?"
 	if strings.Contains(worker, "?") {
 		sep = "&"
 	}
 
-	return shell.RunnerSpec{
+	return placedSpec{RunnerSpec: shell.RunnerSpec{
 		Cwd:       cwd,
 		Image:     realCloudImage,
-		Worker:    worker + sep + f.options(),
 		WorkerTag: "gcp",
-		Fetch:     outputs,
-	}
+		Fetch:     outputs}, Worker: worker + sep + f.options()}
 }
 
 // TestRealGCPRunsAStepOnAnInstance is the whole gcp:// path against reality:
@@ -175,10 +173,9 @@ func TestRealGCPLaunchRungAcquiresAndDeletes(t *testing.T) {
 
 	assertLaunchLabels(ctx, t, fixture, worker, resolved.Instance)
 
-	runner := newLocalRunner(t, shell.RunnerSpec{
+	runner := newRunnerOn(t, resolved, shell.RunnerSpec{
 		Cwd:       t.TempDir(),
 		Image:     realCloudImage,
-		Worker:    resolved.URL,
 		WorkerTag: "burst",
 	})
 
@@ -379,10 +376,9 @@ func TestRealGCPPreemption(t *testing.T) {
 
 	t.Logf("spot instance %s — preempting it", resolved.Instance)
 
-	runner := newLocalRunner(t, shell.RunnerSpec{
+	runner := newRunnerOn(t, resolved, shell.RunnerSpec{
 		Cwd:       t.TempDir(),
 		Image:     realCloudImage,
-		Worker:    resolved.URL,
 		WorkerTag: "spot",
 	})
 

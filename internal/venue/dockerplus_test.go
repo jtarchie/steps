@@ -66,7 +66,7 @@ func pidVolumes(t *testing.T) int {
 func plusRunnerFor(t *testing.T, worker, cwd string, fetch ...string) shell.Runner {
 	t.Helper()
 
-	runner, err := NewRunner(shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, Fetch: fetch, Worker: worker, WorkerTag: "box"})
+	runner, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, Fetch: fetch, WorkerTag: "box"}, Worker: worker})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestDockerPlusNamesADeadSSHD(t *testing.T) {
 func TestDockerPlusRefusesAStepWithNoImage(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewRunner(shell.RunnerSpec{Cwd: t.TempDir(), Worker: "docker+ssh://box", WorkerTag: "box"})
+	_, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{Cwd: t.TempDir(), WorkerTag: "box"}, Worker: "docker+ssh://box"})
 	if !errors.Is(err, errNoImageOnDocker) {
 		t.Fatalf("want errNoImageOnDocker, got %v", err)
 	}
@@ -245,7 +245,7 @@ func payloadDir(t *testing.T, size int) string {
 func runAndClose(t *testing.T, worker, cwd, command string) Placement {
 	t.Helper()
 
-	runner, err := NewRunner(shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, Worker: worker, WorkerTag: "box"})
+	runner, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, WorkerTag: "box"}, Worker: worker})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func TestDockerPlusHoldsPastAStaleAlias(t *testing.T) {
 		t.Fatalf("the same output digested %s then %s", first, second)
 	}
 
-	_, err = Pull(t.Context(), shell.RunnerSpec{Worker: worker}, second, t.TempDir())
+	_, err = Pull(t.Context(), worker, second, t.TempDir())
 	if err != nil {
 		t.Fatalf("pulling the second step's own output: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestDockerPlusNonRootUserWritesItsOutputs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner, err := NewRunner(shell.RunnerSpec{Image: "alpine:3", User: "1000:1000", Cwd: cwd, Fetch: []string{"out"}, Worker: dockerPlusURL(testsshd.New(t), socket), WorkerTag: "box"})
+	runner, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{Image: "alpine:3", User: "1000:1000", Cwd: cwd, Fetch: []string{"out"}, WorkerTag: "box"}, Worker: dockerPlusURL(testsshd.New(t), socket)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,7 +564,7 @@ func deferredRunner(t *testing.T, worker string) shell.Runner {
 		t.Fatal(err)
 	}
 
-	runner, err := NewRunner(shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, Fetch: []string{"out"}, DeferFetch: true, Worker: worker, WorkerTag: "box"})
+	runner, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, Fetch: []string{"out"}, DeferFetch: true, WorkerTag: "box"}, Worker: worker})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -652,7 +652,7 @@ func TestDockerPlusHoldsAGetsWholeTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner, err := NewRunner(shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, FetchAll: true, DeferFetch: true, HoldAs: "src", Worker: worker, WorkerTag: "box"})
+	runner, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, FetchAll: true, DeferFetch: true, HoldAs: "src", WorkerTag: "box"}, Worker: worker})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +677,7 @@ func TestDockerPlusHoldsAGetsWholeTree(t *testing.T) {
 
 	dst := t.TempDir()
 
-	_, err = Pull(t.Context(), shell.RunnerSpec{Worker: worker}, held["src"], dst)
+	_, err = Pull(t.Context(), worker, held["src"], dst)
 	if err != nil {
 		t.Fatalf("pulling the held tree: %v", err)
 	}
@@ -849,10 +849,9 @@ func assertInterruptedCommandIsKilled(t *testing.T, runner shell.Runner, seconds
 func TestDockerPlusHoldsAGetsTreeUnderTheNameItWasGiven(t *testing.T) {
 	t.Parallel()
 
-	runner, err := NewRunner(shell.RunnerSpec{
-		Image: "alpine:3", Cwd: t.TempDir(), Worker: localWorker(t, t.TempDir()).Worker,
-		FetchAll: true, DeferFetch: true, HoldAs: "repo",
-	})
+	runner, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{
+		Image: "alpine:3", Cwd: t.TempDir(),
+		FetchAll: true, DeferFetch: true, HoldAs: "repo"}, Worker: localWorker(t, t.TempDir()).Worker})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

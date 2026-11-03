@@ -31,7 +31,7 @@ func TestFetchedTreesAreBounded(t *testing.T) { //nolint:paralleltest // swaps f
 		cwd := t.TempDir()
 		mustWrite(t, filepath.Join(cwd, "out", "kept.txt"), "kept\n")
 
-		runner, err := NewRunner(sshSpec(t, newTestSSHD(t), cwd, "out"))
+		runner, err := openRunner(sshSpec(t, newTestSSHD(t), cwd, "out"))
 		if err != nil {
 			t.Fatalf("NewRunner: %v", err)
 		}
@@ -62,7 +62,7 @@ func TestFetchedTreesAreBounded(t *testing.T) { //nolint:paralleltest // swaps f
 
 		tightenFetchLimits(t)
 
-		_, err := Pull(t.Context(), shell.RunnerSpec{Worker: worker}, digest, t.TempDir())
+		_, err := Pull(t.Context(), worker, digest, t.TempDir())
 		if !errors.Is(err, wire.ErrTreeTooLarge) {
 			t.Fatalf("Pull = %v, want wire.ErrTreeTooLarge", err)
 		}

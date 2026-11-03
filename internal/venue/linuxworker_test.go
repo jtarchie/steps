@@ -401,12 +401,10 @@ func TestLinuxRootWorkerReportsItsOwnIdentity(t *testing.T) {
 	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
 	mustMkdir(t, filepath.Join(cwd, "out"))
 
-	runner, err := NewRunner(shell.RunnerSpec{
+	runner, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{
 		Cwd:       cwd,
-		Worker:    worker.url,
 		WorkerTag: "linux",
-		Fetch:     []string{"out"},
-	})
+		Fetch:     []string{"out"}}, Worker: worker.url})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -480,13 +478,11 @@ func TestLinuxRootWorkerRunsAContainerizedStep(t *testing.T) {
 	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
 	mustMkdir(t, filepath.Join(cwd, "out"))
 
-	runner, err := NewRunner(shell.RunnerSpec{
+	runner, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{
 		Cwd:       cwd,
-		Worker:    worker.dockerURL,
 		WorkerTag: "linux",
 		Image:     containerizedStepImage,
-		Fetch:     []string{"out"},
-	})
+		Fetch:     []string{"out"}}, Worker: worker.dockerURL})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -539,13 +535,11 @@ func TestLinuxRootWorkerPullsAPlacedImage(t *testing.T) {
 	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
 	mustMkdir(t, filepath.Join(cwd, "out"))
 
-	runner, err := NewRunner(shell.RunnerSpec{
+	runner, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{
 		Cwd:       cwd,
-		Worker:    worker.dockerURL,
 		WorkerTag: "linux",
 		Image:     containerizedStepImage,
-		Fetch:     []string{"out"},
-	})
+		Fetch:     []string{"out"}}, Worker: worker.dockerURL})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -567,7 +561,7 @@ func TestLinuxRootWorkerCancelEndsTheWholeProcessGroup(t *testing.T) {
 	t.Parallel()
 
 	worker := startLinuxWorker(t)
-	runner := newLocalRunner(t, shell.RunnerSpec{Cwd: t.TempDir(), Worker: worker.url, WorkerTag: "linux"})
+	runner := newLocalRunner(t, placedSpec{RunnerSpec: shell.RunnerSpec{Cwd: t.TempDir(), WorkerTag: "linux"}, Worker: worker.url})
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
@@ -630,7 +624,7 @@ func TestAWSInstallReachesARealSSHDAndItsDaemon(t *testing.T) {
 		mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
 		mustMkdir(t, filepath.Join(cwd, "out"))
 
-		runner := newLocalRunner(t, shell.RunnerSpec{Cwd: cwd, Image: containerizedStepImage, Worker: "aws://i-0abc123def456789", Fetch: []string{"out"}})
+		runner := newLocalRunner(t, placedSpec{RunnerSpec: shell.RunnerSpec{Cwd: cwd, Image: containerizedStepImage, Fetch: []string{"out"}}, Worker: "aws://i-0abc123def456789"})
 
 		err := shell.Run(context.Background(), runner, "cat data/seed.txt > out/report.txt")
 		if err != nil {

@@ -77,7 +77,7 @@ func TestParseDORefusals(t *testing.T) {
 	}
 }
 
-// The resolved URL is what crosses into the runner as a string, so it must re-parse into the same droplet — and only because this process launched it.
+// The resolved URL is what a holder records as a string, so it must re-parse into the same droplet — and only because this process launched it.
 func TestDOResolvedURLReparsesOnlyWhileLaunched(t *testing.T) {
 	fake := newFakeDO(t)
 	fake.noBoot = true

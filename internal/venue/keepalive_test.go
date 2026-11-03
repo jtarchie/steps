@@ -106,7 +106,7 @@ func proxiedSSHRunner(t *testing.T) (shell.Runner, *atomic.Bool) {
 		"ssh_config": {"none"},
 	}.Encode()
 
-	runner := newLocalRunner(t, shell.RunnerSpec{Cwd: t.TempDir(), Worker: worker})
+	runner := newLocalRunner(t, placedSpec{RunnerSpec: shell.RunnerSpec{Cwd: t.TempDir()}, Worker: worker})
 
 	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {

@@ -157,19 +157,17 @@ func (f *fakeSSM) StartSession(
 var errNotForwardedHere = errors.New("StartSession is seamed out in venue tests; see ssmForward")
 
 // localSSMWorker is an aws:// step whose "instance" is a test sshd in front of this machine's docker daemon: SSM's control plane and tunnel are faked, the ssh and the engine API are real.
-func localSSMWorker(t *testing.T, fake *fakeSSM, cwd string, outputs ...string) shell.RunnerSpec {
+func localSSMWorker(t *testing.T, fake *fakeSSM, cwd string, outputs ...string) placedSpec {
 	t.Helper()
 
 	socket := hostDockerSocket(t)
 	seamSSMToSSHD(t, fake, newSSMSSHD(t, fake))
 	seamCloudSocket(t, socket)
 
-	return shell.RunnerSpec{
-		Cwd:    cwd,
-		Image:  "alpine:3",
-		Worker: "aws://i-0abc123def456789",
-		Fetch:  outputs,
-	}
+	return placedSpec{RunnerSpec: shell.RunnerSpec{
+		Cwd:   cwd,
+		Image: "alpine:3",
+		Fetch: outputs}, Worker: "aws://i-0abc123def456789"}
 }
 
 func seamCloudSocket(t *testing.T, socket string) {

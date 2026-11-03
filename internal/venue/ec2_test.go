@@ -686,20 +686,12 @@ func assertLaunchForm(t *testing.T) {
 	}
 }
 
-// TestLeaseResolvedWorkerDialsTheAcquiredInstance pins the rebuild asStatic
-// does, against the break every reviewer missed: the pipeline hands a runner
-// the worker's URL as a STRING and the venue parses it back — so a launch
-// worker whose URL still said aws://launch/lt-… re-parsed into a template
-// with no instance, and the session dialed nothing at all, on a machine the
-// job had just paid to start.
+// TestLeaseResolvedWorkerDialsTheAcquiredInstance pins the rebuild asStatic does, against the break every reviewer missed: a worker is named by its URL wherever one is recorded and parsed back (the holder a step keeps its trees on) — so a launch worker whose URL still said aws://launch/lt-… re-parsed into a template with no instance, and a later step pulled from nothing, on a machine the job had just paid to start.
 func TestLeaseResolvedWorkerDialsTheAcquiredInstance(t *testing.T) {
 	fake := &fakeEC2{}
 	seamEC2(t, fake)
 
-	// version= is here because it is the option that broke this seam: it was
-	// added to the grammar as launch-rung-only without being added to what
-	// the rebuild strips, so the URL a paid-for instance was named by no
-	// longer parsed. Every acquisition-only option belongs in this mapping.
+	// version= is here because it is the option that broke this seam: it was added to the grammar as launch-rung-only without being added to what the rebuild strips, so the URL a paid-for instance was named by no longer parsed. Every acquisition-only option belongs in this mapping.
 	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde?capacity=spot&version=7&region=us-west-2")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
@@ -712,9 +704,7 @@ func TestLeaseResolvedWorkerDialsTheAcquiredInstance(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 
-	// The URL a runner will re-parse has to name the MACHINE, keep the
-	// connection options, and drop the acquisition ones a static parse
-	// refuses.
+	// The URL has to name the MACHINE, keep the connection options, and drop the acquisition ones a static parse refuses.
 	reparsed, err := ParseWorker(resolved.URL)
 	if err != nil {
 		t.Fatalf("the resolved URL %q does not parse: %v", resolved.URL, err)
@@ -727,13 +717,13 @@ func TestLeaseResolvedWorkerDialsTheAcquiredInstance(t *testing.T) {
 	if reparsed.Region != "us-west-2" {
 		t.Errorf("re-parsed = %+v, want the connection options carried over", reparsed)
 	}
+
+	if resolved.Instance != "i-0faced0123456789" || resolved.Region != "us-west-2" {
+		t.Errorf("resolved = %+v, want the struct a runner is handed to name the launched instance with its connection options", resolved)
+	}
 }
 
-// TestResolvedWorkerDropsEveryAcquisitionOption is the same seam by the SET
-// rather than by name, so an option added to the grammar and forgotten in the
-// rebuild fails here rather than on a machine the job has already paid for.
-// version= was exactly that: launch-rung-only, refused on a static parse, and
-// left in the URL every step re-parses.
+// TestResolvedWorkerDropsEveryAcquisitionOption is the same seam by the SET rather than by name: an option added to the grammar and forgotten in the rebuild fails here rather than on a machine the job has already paid for. version= was exactly that: launch-rung-only, refused on a static parse, and left in the URL every holder carries.
 func TestResolvedWorkerDropsEveryAcquisitionOption(t *testing.T) {
 	seamEC2(t, &fakeEC2{})
 
@@ -753,6 +743,35 @@ func TestResolvedWorkerDropsEveryAcquisitionOption(t *testing.T) {
 	_, err = ParseWorker(resolved.URL)
 	if err != nil {
 		t.Fatalf("the resolved URL %q does not parse: %v", resolved.URL, err)
+	}
+}
+
+// TestResolvedWorkerDropsEveryAcquisitionOptionAsAStruct is the same set held against the struct a runner is handed: an option from acquisitionKeys that asStatic forgot to clear would make a mapping with it dial differently from one without, on a machine the job has already paid for. version= was exactly that.
+func TestResolvedWorkerDropsEveryAcquisitionOptionAsAStruct(t *testing.T) {
+	seamEC2(t, &fakeEC2{})
+
+	for key, mapping := range map[string][2]string{
+		"capacity":  {poolTemplate, poolTemplate + "?capacity=spot"},
+		"idle":      {poolTemplate, poolTemplate + "?idle=7m"},
+		"version":   {poolTemplate, poolTemplate + "?version=7"},
+		"exclusive": {poolTemplate, poolTemplate + "?exclusive"},
+		"max":       {poolTemplate + "?exclusive", poolTemplate + "?exclusive&max=3"},
+		"size":      {"do://launch/", "do://launch/?size=s-2vcpu-4gb"},
+	} {
+		if !slices.Contains(acquisitionKeys, key) {
+			t.Errorf("%s is not in acquisitionKeys, so this case guards nothing", key)
+		}
+
+		without, with := mustParse(t, mapping[0]).asStatic("i-0faced0123456789"), mustParse(t, mapping[1]).asStatic("i-0faced0123456789")
+		without.URL, with.URL, without.Query, with.Query = "", "", "", ""
+
+		if with != without {
+			t.Errorf("%s= still shapes the resolved worker:\n%+v\nversus\n%+v", key, with, without)
+		}
+	}
+
+	if len(acquisitionKeys) != 6 {
+		t.Errorf("acquisitionKeys = %v: a new acquisition option needs a case above", acquisitionKeys)
 	}
 }
 
@@ -776,7 +795,7 @@ func TestLeaseAbandonForgetsWithoutDestroying(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 
-	leases.Abandon("burst", first.URL)
+	leases.Abandon("burst", first)
 
 	fake.mu.Lock()
 	terminated := len(fake.terminated)
@@ -821,7 +840,7 @@ func TestLeaseAbandonIsIdentityChecked(t *testing.T) {
 	}
 
 	// A stale notice about some other machine: identity mismatch, no-op.
-	leases.Abandon("gpu", "aws://i-0someoneelse1234")
+	leases.Abandon("gpu", Worker{Scheme: SchemeAWS, Instance: "i-0someoneelse1234"})
 
 	again, err := leases.Resolve(context.Background(), "gpu")
 	if err != nil {
@@ -845,7 +864,7 @@ func TestLeaseAbandonIsIdentityChecked(t *testing.T) {
 	// read the other way, on the theory that a reclaimed machine's fate
 	// belongs to AWS; that is true only of a spot TERMINATE, and a stop or a
 	// hibernate leaves a live instance nothing would ever have released.
-	leases.Abandon("gpu", again.URL)
+	leases.Abandon("gpu", again)
 
 	err = leases.ReleaseAll(context.Background())
 	if err != nil {
@@ -1172,7 +1191,7 @@ func TestAbandonedMachineIsStillReleasedAtJobEnd(t *testing.T) {
 	}
 
 	// AWS said it is taking the machine; the step is re-placed elsewhere.
-	leases.Abandon("burst", resolved.URL)
+	leases.Abandon("burst", resolved)
 
 	// The next step on the tag must get a FRESH machine, not the doomed one.
 	again, err := leases.Resolve(context.Background(), "burst")
@@ -1224,7 +1243,7 @@ func TestRetiredMachineIsReleasedWithoutWaitingOutItsIdleWindow(t *testing.T) {
 	}
 
 	// AWS said it is taking the machine.
-	leases.Abandon("box", resolved.URL)
+	leases.Abandon("box", resolved)
 
 	started := time.Now()
 

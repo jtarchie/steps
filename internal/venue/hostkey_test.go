@@ -110,7 +110,7 @@ func TestWorkerPinAndKnownHostsConflict(t *testing.T) {
 func pinnedRunner(t *testing.T, mapping, cwd string) shell.Runner {
 	t.Helper()
 
-	runner, err := NewRunner(shell.RunnerSpec{Cwd: cwd, Worker: mapping})
+	runner, err := openRunner(placedSpec{RunnerSpec: shell.RunnerSpec{Cwd: cwd}, Worker: mapping})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

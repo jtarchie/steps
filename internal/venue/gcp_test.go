@@ -371,17 +371,15 @@ func shrinkGCPWaits(t *testing.T) {
 }
 
 // localGCPWorker builds a spec pointing at a gcp:// worker served by the local sshd, in front of this machine's docker daemon.
-func localGCPWorker(t *testing.T, _ *testSSHD, cwd string, outputs ...string) shell.RunnerSpec {
+func localGCPWorker(t *testing.T, _ *testSSHD, cwd string, outputs ...string) placedSpec {
 	t.Helper()
 
 	seamCloudSocket(t, hostDockerSocket(t))
 
-	return shell.RunnerSpec{
-		Cwd:    cwd,
-		Image:  "alpine:3",
-		Worker: "gcp://worker-1?project=test-project&zone=us-central1-a",
-		Fetch:  outputs,
-	}
+	return placedSpec{RunnerSpec: shell.RunnerSpec{
+		Cwd:   cwd,
+		Image: "alpine:3",
+		Fetch: outputs}, Worker: "gcp://worker-1?project=test-project&zone=us-central1-a"}
 }
 
 // TestVenueRunsAStepOnAGCPWorker is the feature: a step placed on a gcp://
@@ -666,7 +664,7 @@ func TestGCPLaunchRungDialsTheMachineItAcquired(t *testing.T) {
 }
 
 // TestGCPLaunchRungAcquiresAndDeletes pins the launch rung's whole life:
-// created from the template, resolved to a static worker whose rebuilt URL
+// created from the template, resolved to a static worker that
 // still carries the connection options, and deleted at release.
 func TestGCPLaunchRungAcquiresAndDeletes(t *testing.T) {
 	fake := &fakeGCE{}
@@ -707,10 +705,7 @@ func TestGCPLaunchRungAcquiresAndDeletes(t *testing.T) {
 	}
 }
 
-// assertResolvedGCPWorker checks the launched worker's rebuilt URL: it is
-// what the pipeline hands the runner as a STRING, so it must re-parse into
-// the same machine with its project and zone — this is the seam a resolved
-// worker crosses.
+// assertResolvedGCPWorker checks the launched worker's rebuilt URL, which a docker+ step records as the holder of the trees it keeps and a later step parses back: it must re-parse into the same machine with its project and zone. The struct a runner is handed is held to the same.
 func assertResolvedGCPWorker(t *testing.T, resolved Worker) {
 	t.Helper()
 
@@ -726,6 +721,10 @@ func assertResolvedGCPWorker(t *testing.T, resolved Worker) {
 	if reparsed.Instance != resolved.Instance || reparsed.Project != "test-project" ||
 		reparsed.Zone != "us-central1-a" {
 		t.Errorf("re-parsed worker = %+v, want the launched instance in test-project/us-central1-a", reparsed)
+	}
+
+	if resolved.Rung != RungStatic || resolved.Project != "test-project" || resolved.Zone != "us-central1-a" {
+		t.Errorf("resolved worker = %+v, want the launched instance as a static worker in test-project/us-central1-a", resolved)
 	}
 }
 

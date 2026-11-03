@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/venue"
 )
 
 // A check has no tree, so a machine reclaimed under it costs nothing to replace: the check is asked again of a fresh one rather than failing the get. Two machines are lost, because a run checks twice and the second check would hide one lost first check.
@@ -35,15 +36,15 @@ jobs:
 	)
 
 	previous := newRunner
-	newRunner = func(spec shell.RunnerSpec) (shell.Runner, error) {
-		if spec.Worker != "" && placed.Add(1) <= 2 {
+	newRunner = func(worker venue.Worker, spec shell.RunnerSpec) (shell.Runner, error) {
+		if !worker.Here() && placed.Add(1) <= 2 {
 			return reclaimedRunner{&commands}, nil
 		}
 
 		// The fresh machine is this host, uncontained, so the test needs no daemon.
-		spec.Worker, spec.Image = "", ""
+		worker, spec.Image = venue.Worker{}, ""
 
-		return previous(spec)
+		return previous(worker, spec)
 	}
 
 	t.Cleanup(func() { newRunner = previous })

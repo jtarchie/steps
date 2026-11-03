@@ -194,18 +194,13 @@ func waitingFor(err error, worker Worker, instance string) error {
 	return err
 }
 
-// asStatic is this worker as the already-running machine it just became, so
-// everything downstream dials it without knowing how it got there.
+// asStatic is this worker as the already-running machine it just became, so everything downstream dials it without knowing how it got there.
 //
-// The URL is REBUILT, and that is the load-bearing part: the pipeline hands a
-// runner the worker's URL as a string, and the venue parses it back — so a
-// launch-rung worker whose URL still said aws://launch/lt-… would re-parse
-// into a template with no instance, and the session would dial nothing at
-// all, on a machine the job had just paid to start. The acquisition-only
-// options are stripped because a static parse refuses them, by design.
+// The runner is handed this struct, never a URL to parse back, so the acquisition-only fields are cleared: they describe how the machine came to exist, which a running one no longer has. URL is still REBUILT, and that is the load-bearing part for the holder: a docker+ step records the URL as the place its kept trees live, and a later step parses it to pull from there, so it has to name the instance, keep every connection option, and drop the acquisition ones a static parse refuses.
 func (w Worker) asStatic(instance string) Worker {
 	w.Rung = RungStatic
 	w.Instance = instance
+	w.Template, w.Capacity, w.Version, w.Idle, w.Exclusive, w.Max, w.Size = "", "", "", 0, false, 0, ""
 	w.URL = staticURL(w.Scheme, instance, w.Root, w.Query)
 
 	return w

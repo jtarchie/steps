@@ -37,10 +37,7 @@ func TestParseWorkerPoolOptions(t *testing.T) {
 			t.Errorf("ParseWorker(%q) = exclusive %v max %d, want %+v", raw, worker.Exclusive, worker.Max, want)
 		}
 
-		// A launched machine is dialled by a URL re-parsed as a static one, which refuses both.
-		if again := mustParse(t, worker.asStatic("i-0abc123def456789").URL); again.Exclusive || again.Max != 0 {
-			t.Errorf("%q dialled as a static machine still carries the pool: %+v", raw, again)
-		}
+		assertLaunchedMachineIsNoPool(t, raw, worker)
 	}
 
 	for raw, why := range map[string]string{
@@ -58,6 +55,21 @@ func TestParseWorkerPoolOptions(t *testing.T) {
 		if !errors.Is(err, ErrWorker) || !strings.Contains(err.Error(), why) {
 			t.Errorf("ParseWorker(%q) = %v, want it refused: %s", raw, err, why)
 		}
+	}
+}
+
+// A launched machine is named by a URL re-parsed as a static one, which refuses both, and is dialled as a struct that carries neither.
+func assertLaunchedMachineIsNoPool(t *testing.T, raw string, worker Worker) {
+	t.Helper()
+
+	acquired := worker.asStatic("i-0abc123def456789")
+
+	if again := mustParse(t, acquired.URL); again.Exclusive || again.Max != 0 {
+		t.Errorf("%q named as a static machine still carries the pool: %+v", raw, again)
+	}
+
+	if acquired.Exclusive || acquired.Max != 0 {
+		t.Errorf("%q dialled as a static machine still carries the pool: %+v", raw, acquired)
 	}
 }
 
@@ -397,7 +409,7 @@ func TestPoolReplacesAnEvictedJobsMachineAheadOfTheQueue(t *testing.T) {
 
 	eventually(t, "the second job queued", func() bool { return waitersOf(registry) == 1 })
 
-	evicted.Abandon("box", dead.URL)
+	evicted.Abandon("box", dead)
 
 	blocked(t, "a waiter while the evicted job's place is kept", got)
 
@@ -436,7 +448,7 @@ func TestPoolGivesUpAKeptPlaceWhenTheJobEnds(t *testing.T) {
 	got := resolveAsync(context.Background(), waiting)
 
 	eventually(t, "the second job queued", func() bool { return waitersOf(registry) == 1 })
-	evicted.Abandon("box", dead.URL)
+	evicted.Abandon("box", dead)
 	mustRelease(t, evicted)
 
 	if answer := within(t, "the waiter served", got); answer.err != nil || answer.worker.Instance == dead.Instance {
