@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"maps"
 	"sync"
 	"time"
@@ -39,6 +40,8 @@ type CheckShare struct {
 	// a test's way to know waiters are waiting without sleeping on it.
 	joined func()
 }
+
+var errCheckAborted = errors.New("shared check aborted before it answered")
 
 type sharedCheck struct {
 	done     chan struct{}
@@ -149,8 +152,24 @@ func (s *CheckShare) join(key string) (*sharedCheck, bool) {
 }
 
 func (s *CheckShare) lead(ctx context.Context, key string, entry *sharedCheck, check func() ([]map[string]any, error)) ([]map[string]any, error) {
-	versions, err := check()
+	// A check that panics (or Goexits) never reaches the settle below, which would leave the entry unfinished forever and every later caller for the key blocked in join.
+	returned := false
 
+	defer func() {
+		if !returned {
+			s.settle(ctx, key, entry, nil, errCheckAborted)
+		}
+	}()
+
+	versions, err := check()
+	returned = true
+
+	s.settle(ctx, key, entry, versions, err)
+
+	return cloneVersions(versions), err
+}
+
+func (s *CheckShare) settle(ctx context.Context, key string, entry *sharedCheck, versions []map[string]any, err error) {
 	s.mu.Lock()
 	entry.at, entry.versions, entry.err = time.Now(), versions, err
 	entry.leaderCancelled = err != nil && ctx.Err() != nil
@@ -161,8 +180,6 @@ func (s *CheckShare) lead(ctx context.Context, key string, entry *sharedCheck, c
 
 	s.mu.Unlock()
 	close(entry.done)
-
-	return cloneVersions(versions), err
 }
 
 func (e *sharedCheck) finished() bool {

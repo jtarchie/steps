@@ -266,6 +266,61 @@ func TestCheckShareLiveLeaderFailureReachesWaiters(t *testing.T) {
 	}
 }
 
+func TestCheckSharePanickingLeaderDoesNotWedgeTheKey(t *testing.T) {
+	t.Parallel()
+
+	share := NewCheckShare(time.Hour)
+	joins := countJoins(share)
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+
+	panicked := make(chan any, 1)
+
+	go func() {
+		defer func() { panicked <- recover() }()
+
+		_, _ = share.do(t.Context(), "k", func() ([]map[string]any, error) {
+			close(started)
+			<-release
+
+			panic("boom")
+		})
+	}()
+
+	<-started
+
+	waiterErr := make(chan error, 1)
+
+	go func() {
+		_, err := share.do(t.Context(), "k", func() ([]map[string]any, error) {
+			t.Error("a waiter ran its own check")
+
+			return nil, nil
+		})
+		waiterErr <- err
+	}()
+
+	awaitJoins(joins, 1)
+	close(release)
+
+	if p := <-panicked; p != "boom" {
+		t.Errorf("leader recovered %v, want its own panic re-raised", p)
+	}
+
+	err := <-waiterErr
+	if err == nil {
+		t.Error("a waiter on a panicked check got no error")
+	}
+
+	versions, err2 := share.do(t.Context(), "k", func() ([]map[string]any, error) {
+		return []map[string]any{{"ref": "fresh"}}, nil
+	})
+	if err2 != nil || len(versions) != 1 {
+		t.Errorf("a caller after the panic got %v, %v, want a fresh check", versions, err2)
+	}
+}
+
 // countJoins reports each caller that joins a check already in flight. Its
 // buffer outlasts any test here, so a late join never blocks the share.
 func countJoins(share *CheckShare) <-chan struct{} {
