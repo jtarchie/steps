@@ -214,15 +214,15 @@ func searchResultMap(base string, opts tree.SearchOpts, r tree.SearchResult) map
 	}
 
 	truncated := kept < r.Total
-	result["truncated"] = truncated
+	result[resultTruncatedKey] = truncated
 
 	switch {
 	case r.BudgetHit:
-		result["message"] = fmt.Sprintf(
+		result[resultMessageKey] = fmt.Sprintf(
 			"stopped after scanning %d files; narrow path or glob to search a smaller part of the tree", r.FilesScanned,
 		)
 	case truncated:
-		result["message"] = fmt.Sprintf(
+		result[resultMessageKey] = fmt.Sprintf(
 			"showing %d of %d matches; narrow the pattern or glob rather than paging — there is no page 2", kept, r.Total,
 		)
 	}

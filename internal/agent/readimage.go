@@ -166,7 +166,7 @@ func nonTextResult(ctx context.Context, files tree.Tree, resolved, rel string, r
 
 	mime := sniffImage(head)
 	if mime == "" {
-		return map[string]any{"content": fmt.Sprintf(
+		return map[string]any{resultContentKey: fmt.Sprintf(
 			"%s: binary file, %s (%s). read_file returns text, so its bytes are not shown.",
 			rel, shell.FormatBytes(int(size)), mimeEssence(http.DetectContentType(head)))}
 	}
@@ -174,7 +174,7 @@ func nonTextResult(ctx context.Context, files tree.Tree, resolved, rel string, r
 	width, height, _ := imageDimensions(mime, head)
 
 	if !sight.sees() {
-		return map[string]any{"content": fmt.Sprintf(
+		return map[string]any{resultContentKey: fmt.Sprintf(
 			"%s: %s. This model can't be shown images, so read_file describes the file instead of returning its bytes.",
 			rel, describeImage(mime, size, width, height))}
 	}
@@ -212,7 +212,7 @@ func imageResult(rel, mime string, data []byte, sight imageSight) map[string]any
 
 	width, height, ok := imageDimensions(mime, data)
 	if !ok {
-		return map[string]any{"content": fmt.Sprintf(
+		return map[string]any{resultContentKey: fmt.Sprintf(
 			"%s: %s whose header does not decode, so it was not sent as an image.", rel, describeImage(mime, size, 0, 0))}
 	}
 
@@ -223,8 +223,8 @@ func imageResult(rel, mime string, data []byte, sight imageSight) map[string]any
 	}
 
 	return map[string]any{
-		"content": fmt.Sprintf("%s: %s, attached as an image.", rel, describeImage(mime, size, width, height)),
-		imageKey:  newToolImage(rel, mime, data, width, height),
+		resultContentKey: fmt.Sprintf("%s: %s, attached as an image.", rel, describeImage(mime, size, width, height)),
+		imageKey:         newToolImage(rel, mime, data, width, height),
 	}
 }
 

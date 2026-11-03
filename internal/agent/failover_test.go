@@ -31,10 +31,12 @@ func TestResolveWithFailoverKeepsThePrimaryForHashing(t *testing.T) {
 
 	// Before any failover, the two are the same invocation, and there is no
 	// fallback index to resume the mid-run cascade from.
-	primary, effective, _, fallbackIndex, err := resolveWithFailover(context.Background(), cfg, step)
+	resolved, err := resolveWithFailover(context.Background(), cfg, step)
 	if err != nil {
 		t.Fatalf("resolveWithFailover: %v", err)
 	}
+
+	primary, effective, fallbackIndex := resolved.primary, resolved.ri, resolved.fallbackIndex
 
 	if effective.ModelName != primary.ModelName {
 		t.Fatalf("with no failover selected, effective = %q, want the primary %q", effective.ModelName, primary.ModelName)
@@ -45,10 +47,12 @@ func TestResolveWithFailoverKeepsThePrimaryForHashing(t *testing.T) {
 	// Preflight selects the fallback.
 	selectSource(testPin("writer"), cfg.Agents[0].Fallback[0].Source, 0)
 
-	primary, effective, _, fallbackIndex, err = resolveWithFailover(context.Background(), cfg, step)
+	resolved, err = resolveWithFailover(context.Background(), cfg, step)
 	if err != nil {
 		t.Fatalf("resolveWithFailover after failover: %v", err)
 	}
+
+	primary, effective, fallbackIndex = resolved.primary, resolved.ri, resolved.fallbackIndex
 
 	assertFallbackIndex(t, fallbackIndex, 0, "agent.Fallback[0], the one preflight selected")
 
@@ -187,9 +191,7 @@ func TestAMidRunFailureResumesOnTheNextSource(t *testing.T) {
 	}
 
 	_, served, err := runPreparedWithFailover(t.Context(), preparedAgentStep{
-		ri:            ri,
-		agent:         &cfg.Agents[0],
-		fallbackIndex: -1,
+		resolvedAgent: resolvedAgent{ri: ri, agent: &cfg.Agents[0], fallbackIndex: -1},
 		llm:           llmclient.New(ri, "test-key"),
 		conv:          agentConversation{system: "system", messages: []string{"prompt"}, maxTurns: testMaxTurns},
 	})
@@ -387,7 +389,7 @@ func TestFallbackIsAnnouncedOnlyWhenTheServingSourceDiffers(t *testing.T) {
 	primary := config.ResolvedInvocation{ModelName: "big-model", BaseURL: "https://primary.example/v1/"}
 
 	ctx, out := captured()
-	noteFallback(ctx, "writer", preparedAgentStep{ri: primary, primary: primary})
+	noteFallback(ctx, "writer", preparedAgentStep{resolvedAgent: resolvedAgent{ri: primary, primary: primary}})
 
 	if out.Len() != 0 {
 		t.Errorf("a step on its configured source said %q", out.String())
@@ -397,7 +399,7 @@ func TestFallbackIsAnnouncedOnlyWhenTheServingSourceDiffers(t *testing.T) {
 	elsewhere.BaseURL = "https://backup.example/v1/"
 
 	ctx, out = captured()
-	noteFallback(ctx, "writer", preparedAgentStep{ri: elsewhere, primary: primary})
+	noteFallback(ctx, "writer", preparedAgentStep{resolvedAgent: resolvedAgent{ri: elsewhere, primary: primary}})
 
 	if !strings.Contains(out.String(), "agent: writer (fallback: big-model — big-model is unavailable)") {
 		t.Errorf("a step served by another endpoint said %q, want the fallback named", out.String())

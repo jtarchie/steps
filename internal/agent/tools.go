@@ -467,11 +467,11 @@ func withToolTimeout(name string, d time.Duration, impl toolImpl) toolImpl {
 		}
 
 		msg := fmt.Sprintf("%s: timed out after %s — its context was cancelled, so anything it returned may be partial", name, d)
-		if previous, ok := response["error"].(string); ok && previous != "" {
+		if previous, ok := response[resultErrorKey].(string); ok && previous != "" {
 			msg += ": " + previous
 		}
 
-		response["error"] = msg
+		response[resultErrorKey] = msg
 
 		return response
 	}

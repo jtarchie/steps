@@ -141,7 +141,7 @@ func (ts *toolSpan) end(ctx context.Context, response map[string]any) {
 		attrs = append(attrs, attribute.String("gen_ai.agent.name", ts.agentName))
 	}
 
-	if failure, ok := response["error"]; ok && failure != nil {
+	if failure, ok := response[resultErrorKey]; ok && failure != nil {
 		ts.span.SetStatus(codes.Error, fmt.Sprint(failure))
 		ts.span.SetAttributes(attribute.String("error.type", "_OTHER"))
 		attrs = append(attrs, attribute.String("error.type", "_OTHER"))

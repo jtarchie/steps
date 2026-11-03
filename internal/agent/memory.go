@@ -230,7 +230,7 @@ func execRemember(ctx context.Context, args map[string]any, env toolEnv) map[str
 	}
 
 	if !added {
-		return map[string]any{"id": memory.ID, "remembered": false, "note": "already remembered"}
+		return map[string]any{"id": memory.ID, "remembered": false, resultNoteKey: "already remembered"}
 	}
 
 	return map[string]any{"id": memory.ID, "remembered": true}

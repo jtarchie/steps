@@ -295,9 +295,9 @@ func (b *cliBridge) capture(name string, args, result map[string]any) {
 
 	// Last successful call wins, matching how runAgentConversation resolves a
 	// model that revises its own verdict.
-	if verdict, isString := result["verdict"].(string); isString && verdict != "" {
+	if verdict, isString := result[resultVerdictKey].(string); isString && verdict != "" {
 		b.verdict = verdict
-		b.note, _ = result["note"].(string)
+		b.note, _ = result[resultNoteKey].(string)
 	}
 }
 

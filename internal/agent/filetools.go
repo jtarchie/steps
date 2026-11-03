@@ -49,10 +49,10 @@ func execListDir(ctx context.Context, args map[string]any, env toolEnv) map[stri
 		items = append(items, map[string]any{"name": e.Name, "is_dir": e.IsDir, "size": e.Size})
 	}
 
-	result := map[string]any{"entries": items, "total": total, "truncated": truncated}
+	result := map[string]any{"entries": items, "total": total, resultTruncatedKey: truncated}
 
 	if truncated {
-		result["message"] = fmt.Sprintf(
+		result[resultMessageKey] = fmt.Sprintf(
 			"showing the first %d of %d entries; narrow path or use run_shell (e.g. `ls | grep ...`) to search a large directory",
 			maxListDirEntries, total,
 		)

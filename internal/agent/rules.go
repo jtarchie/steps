@@ -169,7 +169,7 @@ func withRules(tool string, pins map[string]string, checks []ruleCheck, impl too
 const RuleKey = "rule"
 
 func refusedBy(rule, message string) map[string]any {
-	return map[string]any{"error": message, RuleKey: rule}
+	return map[string]any{resultErrorKey: message, RuleKey: rule}
 }
 
 func (c ruleCheck) decided(outcome exprlang.RuleOutcome, err error, otherwise string) map[string]any {
@@ -205,7 +205,7 @@ func (c ruleCheck) checkAccept(tool string, args map[string]any, who ExportWho, 
 		return refusedBy(c.name, fmt.Sprintf("rule %s could not read the result, so it was withheld: %s", c.name, err))
 	}
 
-	failure, _ := result["error"].(string)
+	failure, _ := result[resultErrorKey].(string)
 
 	outcome, err := c.accept(exprlang.AcceptEnv{
 		Tool: tool, Args: orEmptyArgs(args), Who: who,
@@ -246,7 +246,7 @@ func (c ruleCheck) checkJudge(ctx context.Context, tool string, args map[string]
 
 	answer := c.judge(judgeCtx, map[string]any{subAgentRequestParam: judgeRequest(tool, args, who)}, env)
 
-	reply, ok := answer["result"].(string)
+	reply, ok := answer[resultResultKey].(string)
 	if !ok || strings.TrimSpace(reply) == "" {
 		return refusedBy(c.name, fmt.Sprintf("rule %s: %s gave no answer, so the call was refused", c.name, c.judged))
 	}

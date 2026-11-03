@@ -144,8 +144,8 @@ func loadContextBlock(ctx context.Context, dir, path string, limit int, sight im
 func nonTextContextBlock(path string, answer map[string]any) contextBlock {
 	block := contextBlock{path: path}
 
-	block.content, _ = answer["content"].(string)
-	if refusal, ok := answer["error"].(string); ok {
+	block.content, _ = answer[resultContentKey].(string)
+	if refusal, ok := answer[resultErrorKey].(string); ok {
 		block.content = refusal
 	}
 

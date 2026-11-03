@@ -26,6 +26,18 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
+// resolvedAgent is what resolveWithFailover answers: the agent's invocation as CONFIGURED and as it will RUN, with the definition and fallback position the mid-run cascade continues from.
+type resolvedAgent struct {
+	// ri is the invocation as it will RUN, after any preflight failover.
+	ri config.ResolvedInvocation
+	// primary is the invocation as CONFIGURED, before failover. The step hashes against this one, so which source served a run is availability, not content: a fallback firing cannot invalidate a cache entry.
+	primary config.ResolvedInvocation
+	// fallbackIndex is ri's position in the agent's fallback: list, or -1 when ri is still the primary (preflight picked nothing). It is where runPreparedWithFailover's mid-run cascade (failover.go) starts looking for the NEXT candidate, continuing the same ordered list preflight already walked rather than re-trying a source preflight just proved dead.
+	fallbackIndex int
+	// agent is the resolved agent definition, carried so the cascade reads the fallback: list resolveWithFailover already resolved rather than looking it up again. Never nil when resolveWithFailover returns no error.
+	agent *config.Agent
+}
+
 // preparedAgentStep is an agent step resolved and materialized: everything
 // needed to run the conversation. PreparedStep carries it across to
 // internal/pipeline, which keys and records the step around the conversation.
@@ -37,24 +49,8 @@ type preparedAgentStep struct {
 	// caller's, so merkle.AgentContentMap sees the loaded prompt text rather than
 	// the file reference.
 	step config.Step
-	// ri is the invocation as it will RUN, after any preflight failover.
-	ri config.ResolvedInvocation
-	// primary is the invocation as CONFIGURED, before failover. The step
-	// hashes against this one, so which source served a run is availability,
-	// not content: a fallback firing cannot invalidate a cache entry.
-	primary config.ResolvedInvocation
-	// fallbackIndex is ri's position in the agent's fallback: list, or -1
-	// when ri is still the primary (preflight picked nothing). It is where
-	// runPreparedWithFailover's mid-run cascade (failover.go) starts looking
-	// for the NEXT candidate — continuing the same ordered list preflight
-	// already walked, rather than re-trying a source preflight just proved
-	// dead.
-	fallbackIndex int
-	// agent is the resolved agent definition, carried so the cascade reads
-	// the fallback: list prepareAgentStep already resolved rather than
-	// looking it up again. Never nil in a prepared step — preparation fails
-	// outright if the agent cannot be found (see resolveWithFailover).
-	agent *config.Agent
+	// resolvedAgent carries the invocation as configured and as it will run, the agent definition, and the fallback position; see resolvedAgent.
+	resolvedAgent
 	// pin scopes this step's source pin to the pipeline that declared the
 	// agent as well as to the agent itself (see pinScope). Carried on the
 	// prepared step because the mid-run cascade pins and releases, and by
@@ -97,9 +93,21 @@ func (p preparedAgentStep) openTree(ctx context.Context) (preparedAgentStep, err
 }
 
 // containerSpec is the one place a resolved invocation, task or export becomes a RunnerSpec's isolation fields, so a field added to the shape cannot be missed at one of the four call sites; callers set the placement fields (Subdir, Caches, Fetch, Keep) on the result.
-func containerSpec(image, cwd string, env []string, user, network string, privileged bool, limits *config.ContainerLimits, sandbox bool) shell.RunnerSpec {
-	return shell.RunnerSpec{Image: image, Cwd: cwd, Env: env, User: user, Network: network, Sandbox: sandbox,
-		Privileged: privileged, CPUShares: limits.CPUShares(), MemoryBytes: limits.MemoryBytes()}
+func containerSpec(image, cwd string, env []string, iso isolation) shell.RunnerSpec {
+	return shell.RunnerSpec{Image: image, Cwd: cwd, Env: env, User: iso.user, Network: iso.network, Sandbox: iso.sandbox,
+		Privileged: iso.privileged, CPUShares: iso.limits.CPUShares(), MemoryBytes: iso.limits.MemoryBytes()}
+}
+
+// isolation is the container-shaping settings of a resolved invocation, task or export, named so the two adjacent strings and two bools cannot be transposed at a call site the way positional parameters could.
+type isolation struct {
+	user, network string
+	privileged    bool
+	limits        *config.ContainerLimits
+	sandbox       bool
+}
+
+func invocationIsolation(ri config.ResolvedInvocation) isolation {
+	return isolation{user: ri.User, network: ri.Network, privileged: ri.Privileged, limits: ri.Limits, sandbox: ri.Sandbox}
 }
 
 // close releases everything prepareAgentStep opened for this step: any tool
@@ -188,10 +196,12 @@ func (p preparedAgentStep) spillDirWouldBeCaptured() bool {
 // with. On error, any workspace.StepSpace already created is closed before
 // returning so the caller never has to.
 func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace, newRunner RunnerFactory) (preparedAgentStep, error) {
-	primary, ri, agent, fallbackIndex, err := resolveWithFailover(ctx, cfg, step)
+	resolved, err := resolveWithFailover(ctx, cfg, step)
 	if err != nil {
 		return preparedAgentStep{}, err
 	}
+
+	ri := resolved.ri
 
 	// The mapping is nil except for a cell of a collecting matrix, where each
 	// output is captured under the cell's own coordinates — see
@@ -253,7 +263,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	// Cwd is the whole step directory and Subdir is where the model works, even though dir: is the only thing that makes them differ. The step's outputs: are named relative to the SPACE, so a placed agent that sent only its subdirectory would fetch them from a path that does not exist and come home with nothing.
-	spec := containerSpec(ri.Image, space.Dir(), ri.Env, ri.User, ri.Network, ri.Privileged, ri.Limits, ri.Sandbox)
+	spec := containerSpec(ri.Image, space.Dir(), ri.Env, invocationIsolation(ri))
 	spec.Subdir, spec.Caches, spec.Fetch, spec.Keep = step.Dir, caches, step.Outputs, workspace.Kept(space)
 
 	runner, err := newRunner.build(ctx, spec)
@@ -321,7 +331,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	return preparedAgentStep{
 		detachCaches: detachCaches,
 		dir:          dir, runner: runner, lost: lost,
-		step: step, ri: ri, primary: primary, fallbackIndex: fallbackIndex, agent: agent,
+		step: step, resolvedAgent: resolved,
 		pin:   agentPinScope(cfg, ri.AgentName),
 		space: space, conv: conv, llm: invocationLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir,
@@ -392,9 +402,7 @@ func invocationLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 // lookup happens before anything that could fail for another reason, so
 // there is no partial state where a step has an invocation but no fallback
 // list.
-func resolveWithFailover(ctx context.Context, cfg *config.Config, step config.Step) (primary, effective config.ResolvedInvocation, agent *config.Agent, fallbackIndex int, err error) {
-	fallbackIndex = -1
-
+func resolveWithFailover(ctx context.Context, cfg *config.Config, step config.Step) (resolvedAgent, error) {
 	// Looked up FIRST, and unconditionally: the mid-run cascade needs the
 	// fallback list even on a run that starts on the primary, which is the
 	// common case.
@@ -405,29 +413,29 @@ func resolveWithFailover(ctx context.Context, cfg *config.Config, step config.St
 	// it was unreachable, and the `agent == nil` state it seemed to produce
 	// was carried through preparedAgentStep and guarded against in three
 	// places downstream that could never fire.
-	agent, err = cfg.FindAgent(step.Agent)
+	agent, err := cfg.FindAgent(step.Agent)
 	if err != nil {
-		return primary, effective, nil, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
+		return resolvedAgent{fallbackIndex: -1}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	primary, err = cfg.ResolveAgentInvocation(step)
+	primary, err := cfg.ResolveAgentInvocation(step)
 	if err != nil {
-		return primary, effective, nil, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
+		return resolvedAgent{primary: primary, fallbackIndex: -1}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
 	// Judged against the run's start, not the wall clock: every step of one
 	// job must see the same source (see WithRunBoundary).
 	selection, ok := selectedSourceAt(agentPinScope(cfg, primary.AgentName), runInstant(ctx))
 	if !ok {
-		return primary, primary, agent, fallbackIndex, nil
+		return resolvedAgent{ri: primary, primary: primary, agent: agent, fallbackIndex: -1}, nil
 	}
 
-	effective, err = primary.WithSource(selection.source, agent)
+	effective, err := primary.WithSource(selection.source, agent)
 	if err != nil {
-		return primary, primary, agent, fallbackIndex, fmt.Errorf("agent %q: %w", step.Agent, err)
+		return resolvedAgent{ri: primary, primary: primary, agent: agent, fallbackIndex: -1}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	return primary, effective, agent, selection.index, nil
+	return resolvedAgent{ri: effective, primary: primary, agent: agent, fallbackIndex: selection.index}, nil
 }
 
 // prepareStepPrompt resolves a run-time message_files: {artifact, path} (see

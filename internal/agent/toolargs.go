@@ -1,7 +1,19 @@
 package agent
 
+// The keys of a tool's result map. The map goes to the model as the tool's JSON response and is read back by the dispatcher, the failure probes and the telemetry layer, so a spelling shared between files lives here; these are wire values, pinned by TestResultKeysAreWireSpelled.
+const (
+	resultErrorKey     = "error"
+	resultExitCodeKey  = "exit_code"
+	resultVerdictKey   = "verdict"
+	resultNoteKey      = "note"
+	resultResultKey    = "result"
+	resultContentKey   = "content"
+	resultTruncatedKey = "truncated"
+	resultMessageKey   = "message"
+)
+
 func errorResult(message string) map[string]any {
-	return map[string]any{"error": message}
+	return map[string]any{resultErrorKey: message}
 }
 
 // stringsArg reads a list-of-strings tool argument. The model's arguments

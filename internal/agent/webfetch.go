@@ -152,10 +152,10 @@ func doWebFetch(ctx context.Context, target *url.URL, allow []string) map[string
 	}
 
 	return map[string]any{
-		"status":       resp.StatusCode,
-		"content_type": resp.Header.Get("Content-Type"),
-		"body":         string(body),
-		"truncated":    truncated,
+		"status":           resp.StatusCode,
+		"content_type":     resp.Header.Get("Content-Type"),
+		"body":             string(body),
+		resultTruncatedKey: truncated,
 	}
 }
 

@@ -135,7 +135,7 @@ func runBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv,
 
 	slog.DebugContext(ctx, "agent.tool_result", "tool", call.Name, "id", call.ID,
 		"run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex, "depth", live.depth,
-		"duration", time.Since(start), "error", response["error"], "exit_code", response["exit_code"],
+		"duration", time.Since(start), "error", response[resultErrorKey], "exit_code", response[resultExitCodeKey],
 		"result", lazyToolResultPreview{response: response})
 
 	span.end(ctx, response)
@@ -177,7 +177,7 @@ func debugToolResultPreview(response map[string]any) string {
 	preview := make(map[string]any, len(response))
 
 	for k, v := range response {
-		if k == "error" || k == "exit_code" {
+		if k == resultErrorKey || k == resultExitCodeKey {
 			continue
 		}
 

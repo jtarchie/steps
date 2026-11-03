@@ -373,10 +373,12 @@ func TestAPinSurvivesWithoutPreflightUntilItsLifetimeIsUp(t *testing.T) {
 	// conversation. No preflight ran, and none will.
 	pinServedSource(scope, &cfg.Agents[0], 0)
 
-	_, effective, _, index, err := resolveWithFailover(context.Background(), cfg, step)
+	resolved, err := resolveWithFailover(context.Background(), cfg, step)
 	if err != nil {
 		t.Fatalf("resolveWithFailover: %v", err)
 	}
+
+	effective, index := resolved.ri, resolved.fallbackIndex
 
 	if effective.ModelName != "backup" || index != 0 {
 		t.Fatalf("the step resolved to %q at index %d, want the pinned fallback — a fresh pin must hold", effective.ModelName, index)
@@ -384,10 +386,12 @@ func TestAPinSurvivesWithoutPreflightUntilItsLifetimeIsUp(t *testing.T) {
 
 	agePin(t, scope, pinLifetime)
 
-	_, effective, _, index, err = resolveWithFailover(context.Background(), cfg, step)
+	resolved, err = resolveWithFailover(context.Background(), cfg, step)
 	if err != nil {
 		t.Fatalf("resolveWithFailover after the lifetime: %v", err)
 	}
+
+	effective, index = resolved.ri, resolved.fallbackIndex
 
 	if effective.ModelName != "primary" || index != -1 {
 		t.Errorf("the step resolved to %q at index %d, want the primary — the pin outlived its evidence with nothing able to end it",

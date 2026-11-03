@@ -40,11 +40,11 @@ func TestPreparingAContainerAgentStartsNothing(t *testing.T) {
 		dir:    t.TempDir(),
 		runner: runner,
 		lost:   &tree.Lost{},
-		ri: config.ResolvedInvocation{
+		resolvedAgent: resolvedAgent{ri: config.ResolvedInvocation{
 			AgentName: "hand",
 			Image:     "alpine:3",
 			ToolSpecs: []config.ToolSpec{{Builtin: "read_file"}},
-		},
+		}},
 		space: testStepSpace(t),
 	}
 
@@ -86,10 +86,10 @@ func TestPreparingAHostAgentNeedsNoProbe(t *testing.T) {
 		dir:    dir,
 		runner: runner,
 		lost:   &tree.Lost{},
-		ri: config.ResolvedInvocation{
+		resolvedAgent: resolvedAgent{ri: config.ResolvedInvocation{
 			AgentName: "hand",
 			ToolSpecs: []config.ToolSpec{{Builtin: "read_file"}},
-		},
+		}},
 		space: testStepSpace(t),
 	}
 

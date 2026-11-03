@@ -171,8 +171,8 @@ func shellToolResult(ctx context.Context, command string, env toolEnv, limit int
 	}
 
 	return map[string]any{
-		"stdout":    stdout,
-		"stderr":    stderr,
-		"exit_code": exitCode,
+		"stdout":          stdout,
+		"stderr":          stderr,
+		resultExitCodeKey: exitCode,
 	}
 }

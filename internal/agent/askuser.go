@@ -409,9 +409,9 @@ func (g askGrant) askResponder(ctx context.Context, env toolEnv, row store.Quest
 
 	result := g.responder(ctx, map[string]any{subAgentRequestParam: responderRequest(row)}, env)
 
-	answer, ok := result["result"].(string)
+	answer, ok := result[resultResultKey].(string)
 	if !ok || strings.TrimSpace(answer) == "" {
-		slog.WarnContext(ctx, "agent.question_unescalated", "question", row.ID, "responder", g.answeredBy, "error", result["error"])
+		slog.WarnContext(ctx, "agent.question_unescalated", "question", row.ID, "responder", g.answeredBy, "error", result[resultErrorKey])
 
 		return "", false
 	}
@@ -569,11 +569,11 @@ func (g askGrant) expire(ctx context.Context, env toolEnv, row store.Question) m
 	g.close(ctx, env, row, store.QuestionExpired, g.defaultAnswer, "default")
 
 	return map[string]any{
-		"exit_code": 0,
-		"answered":  false,
-		"answer":    g.defaultAnswer,
-		"source":    "default",
-		"note": fmt.Sprintf("nobody answered within %s; the declared default was used. Say in your final answer that you proceeded on a default.",
+		resultExitCodeKey: 0,
+		"answered":        false,
+		"answer":          g.defaultAnswer,
+		"source":          "default",
+		resultNoteKey: fmt.Sprintf("nobody answered within %s; the declared default was used. Say in your final answer that you proceeded on a default.",
 			g.wait),
 	}
 }
@@ -667,14 +667,14 @@ func AnswerFlags(ctx context.Context, pipeline string) string {
 // abandoned question stood in for an answer nobody gave.
 func resolvedResult(row store.Question, source string) map[string]any {
 	result := map[string]any{
-		"exit_code": 0,
-		"answered":  row.Status == store.QuestionAnswered,
-		"answer":    row.Answer,
-		"source":    source,
+		resultExitCodeKey: 0,
+		"answered":        row.Status == store.QuestionAnswered,
+		"answer":          row.Answer,
+		"source":          source,
 	}
 
 	if row.Status != store.QuestionAnswered {
-		result["note"] = "nobody answered this question; " + row.Answer + " was used because the pipeline declared it as the default"
+		result[resultNoteKey] = "nobody answered this question; " + row.Answer + " was used because the pipeline declared it as the default"
 	}
 
 	return result

@@ -53,13 +53,13 @@ func cliPrepared(t *testing.T, toolNames []string) preparedAgentStep {
 
 	return preparedAgentStep{
 		step: config.Step{Agent: "reviewer"},
-		ri: config.ResolvedInvocation{
+		resolvedAgent: resolvedAgent{ri: config.ResolvedInvocation{
 			AgentName: "reviewer",
 			CLI:       "claude",
 			ModelName: "sonnet",
 			MaxTurns:  12,
 			Attempts:  1,
-		},
+		}},
 		conv: conv,
 	}
 }

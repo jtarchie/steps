@@ -233,7 +233,7 @@ func mcpToolImpl(client stepsmcp.Client, name string, limit int, pins *mcpPins) 
 
 		return map[string]any{
 			"structured_content": boundedStructuredContent(ctx, result.StructuredContent, limit, env.spillDir),
-			"content":            spillOrTruncateLimit(ctx, text, limit, env.spillDir),
+			resultContentKey:     spillOrTruncateLimit(ctx, text, limit, env.spillDir),
 		}
 	}
 }

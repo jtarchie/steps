@@ -91,8 +91,8 @@ func readFileNonTextRange(ctx context.Context, files tree.Tree, resolved, rel st
 	}
 
 	answer := nonTextResult(ctx, files, resolved, rel, head, stat.Size, sight)
-	if content, ok := answer["content"].(string); ok {
-		answer["content"] = content + " start_line/end_line do not apply to it and were ignored."
+	if content, ok := answer[resultContentKey].(string); ok {
+		answer[resultContentKey] = content + " start_line/end_line do not apply to it and were ignored."
 	}
 
 	return answer, true
@@ -131,7 +131,7 @@ func readFileFull(ctx context.Context, files tree.Tree, resolved, rel string, si
 		)
 	}
 
-	return map[string]any{"content": content}
+	return map[string]any{resultContentKey: content}
 }
 
 // readFileRange reads resolved line by line, returning only lines
@@ -161,10 +161,10 @@ func readFileRange(ctx context.Context, files tree.Tree, resolved string, startL
 	}
 
 	return map[string]any{
-		"content":    content,
-		"start_line": startLine,
-		"end_line":   lastLine,
-		"truncated":  truncated,
+		resultContentKey:   content,
+		"start_line":       startLine,
+		"end_line":         lastLine,
+		resultTruncatedKey: truncated,
 	}
 }
 

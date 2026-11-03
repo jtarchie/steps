@@ -62,11 +62,11 @@ func buildVerdictTool(verdicts []string, noteRequired bool, expect stepExpectati
 			return errorResult("verdict: " + message)
 		}
 
-		result := map[string]any{"exit_code": 0, "verdict": choice}
+		result := map[string]any{resultExitCodeKey: 0, resultVerdictKey: choice}
 
 		note := stringArg(args, "note")
 		if note != "" {
-			result["note"] = note
+			result[resultNoteKey] = note
 		}
 
 		return result

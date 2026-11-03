@@ -54,9 +54,8 @@ func TestRunPreparedRunsOneConversation(t *testing.T) {
 	// a nil one, and a test that fabricates that state is testing a shape
 	// production cannot reach.
 	_, _, err := runPreparedWithFailover(t.Context(), preparedAgentStep{
-		ri:    config.ResolvedInvocation{Attempts: 3, MaxTurns: testMaxTurns},
-		agent: &config.Agent{Name: "writer"},
-		llm:   llm,
+		resolvedAgent: resolvedAgent{ri: config.ResolvedInvocation{Attempts: 3, MaxTurns: testMaxTurns}, agent: &config.Agent{Name: "writer"}},
+		llm:           llm,
 		conv: agentConversation{
 			system:   "system",
 			messages: []string{"prompt"},

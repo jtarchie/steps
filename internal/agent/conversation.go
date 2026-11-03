@@ -209,7 +209,7 @@ type agentConversation struct {
 // upstream step's decision both arrive this way. An image block arrives the
 // way read_file would have returned it, image part and all.
 func syntheticToolExchange(callID, name string, args map[string]any, block contextBlock) []*genai.Content {
-	response := map[string]any{"content": block.content}
+	response := map[string]any{resultContentKey: block.content}
 	if block.image != nil {
 		response[imageKey] = *block.image
 	}
@@ -857,9 +857,9 @@ func (conv agentConversation) trackToolResults(parts []*genai.Part, satisfied ma
 		}
 
 		if conv.verdictTool != "" && name == conv.verdictTool {
-			if choice, ok := part.FunctionResponse.Response["verdict"].(string); ok && choice != "" {
+			if choice, ok := part.FunctionResponse.Response[resultVerdictKey].(string); ok && choice != "" {
 				verdict = choice
-				note, _ = part.FunctionResponse.Response["note"].(string)
+				note, _ = part.FunctionResponse.Response[resultNoteKey].(string)
 			}
 		}
 	}
@@ -897,11 +897,11 @@ func forceRequiredTool(req *model.LLMRequest, name string, stringOnly bool) {
 // exit_code at all; for those, absence of an "error" key is success (see
 // mcpToolImpl's {"structured_content", "content"} vs {"error"} shapes).
 func requiredCallSucceeded(resp map[string]any) bool {
-	if code, ok := resp["exit_code"].(int); ok {
+	if code, ok := resp[resultExitCodeKey].(int); ok {
 		return code == 0
 	}
 
-	_, hasError := resp["error"]
+	_, hasError := resp[resultErrorKey]
 
 	return !hasError
 }

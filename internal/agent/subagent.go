@@ -62,10 +62,12 @@ func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.Tool
 	// primary preflight had just proved dead — preflight making a promise the
 	// runtime did not keep. A sub-agent still gets no MID-RUN cascade of its
 	// own; the delegation is one conversation on the source preflight chose.
-	_, ri, _, _, err := resolveWithFailover(ctx, cfg, config.Step{Agent: spec.Agent})
+	resolved, err := resolveWithFailover(ctx, cfg, config.Step{Agent: spec.Agent})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
 	}
+
+	ri := resolved.ri
 
 	childTools, childClosers, err := buildAgentTools(ctx, cfg, ri.ToolSpecs, ri.Image)
 	if err != nil {
@@ -171,7 +173,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		return errorResult(err.Error())
 	}
 
-	runner, err := shell.NewRunner(containerSpec(c.ri.Image, env.dir, c.ri.Env, c.ri.User, c.ri.Network, c.ri.Privileged, c.ri.Limits, c.ri.Sandbox))
+	runner, err := shell.NewRunner(containerSpec(c.ri.Image, env.dir, c.ri.Env, invocationIsolation(c.ri)))
 	if err != nil {
 		return errorResult(err.Error())
 	}
@@ -276,5 +278,5 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// no max_tokens must not flood the parent's context past maxToolOutputBytes.
 	// Spills to a file (like shellToolResult/MCP) rather than dropping the
 	// overflow, using the parent's own spill directory.
-	return map[string]any{"result": spillOrTruncate(ctx, res.text, env.spillDir)}
+	return map[string]any{resultResultKey: spillOrTruncate(ctx, res.text, env.spillDir)}
 }
