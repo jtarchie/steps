@@ -59,7 +59,17 @@ func CheckVersions(ctx context.Context, c Call) ([]map[string]any, error) {
 		return nil, err
 	}
 
+	// The one place every check path (poll, refresh, a get's own check) reaches, so the limit holds for all of them.
+	limit := c.Resource.CheckLimit()
+	parent := ctx
+
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+
 	versions, err := backendFor(c.Type).check(ctx, c)
+	if err != nil && ctx.Err() != nil && parent.Err() == nil {
+		err = fmt.Errorf("check of resource %q exceeded check_timeout %s and was cancelled: %w", c.Resource.Name, limit, err)
+	}
 
 	return versions, redact.SecretsFrom(ctx).Error(err) //nolint:wrapcheck // masking keeps the chain (Unwrap); the backend already named the stage
 }

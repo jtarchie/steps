@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 )
 
 // ResourceType defines a resource kind as a set of shell command templates. Its Name is never hashed: a step is keyed by what the type DOES — the rendered template, image, env, user, network, limits — so renaming a type re-runs nothing, and two types that do the same thing share a cache entry, which is what content-addressing means.
@@ -149,6 +150,21 @@ type Resource struct {
 	// repetition is the papercut Concourse's docs warn about. Same shape as a
 	// step's tags: — one entry, not hashed (see Step.Tags).
 	Tags []string `yaml:"tags,omitempty"`
+	// CheckTimeout is the longest one check of this resource may run (e.g. "30s", "5m"); empty means DefaultCheckTimeout. A check that outlives it is cancelled and fails like any other failed check, so a hung check cannot hold up the resources polled after it. Concourse's check_timeout. Never hashed: it bounds how long discovering versions may take and not what a step computes.
+	CheckTimeout string `yaml:"check_timeout,omitempty"`
+}
+
+// DefaultCheckTimeout is Concourse's default for check_timeout.
+const DefaultCheckTimeout = time.Hour
+
+// CheckLimit is the deadline one check of r is held to. A parse failure (unreachable against a validated config) falls back to the default rather than to no deadline.
+func (r Resource) CheckLimit() time.Duration {
+	d, err := ParseTimeout(r.CheckTimeout)
+	if err != nil || d == 0 {
+		return DefaultCheckTimeout
+	}
+
+	return d
 }
 
 // validateResourcePut rejects a put step against a resource type that declares

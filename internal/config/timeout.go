@@ -20,7 +20,32 @@ func (c *Config) validateTimeouts() error {
 		return err
 	}
 
+	err = c.validateResourceTimeouts()
+	if err != nil {
+		return err
+	}
+
 	return c.validateStepTimeouts()
+}
+
+// validateResourceTimeouts checks check_timeout: zero is refused for the reason a job's timeout: is, and the empty field means the default.
+func (c *Config) validateResourceTimeouts() error {
+	for _, res := range c.Resources {
+		if res.CheckTimeout == "" {
+			continue
+		}
+
+		d, err := ParseTimeout(res.CheckTimeout)
+		if err != nil {
+			return fmt.Errorf("resource %q: check_timeout: %w", res.Name, err)
+		}
+
+		if d <= 0 {
+			return fmt.Errorf("resource %q: check_timeout must be a positive duration (omit it for the default of %s)", res.Name, DefaultCheckTimeout)
+		}
+	}
+
+	return nil
 }
 
 // validateJobTimeouts checks the job-level wall-clock deadline.

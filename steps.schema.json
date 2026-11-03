@@ -797,6 +797,10 @@
         "type"
       ],
       "properties": {
+        "check_timeout": {
+          "type": "string",
+          "description": "The longest one check of this resource may run, a Go duration such as 30s or 5m. Default 1h. A check that outlives it is cancelled and fails like any failed check; the other resources are still checked."
+        },
         "name": {
           "type": "string"
         },

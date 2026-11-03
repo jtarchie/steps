@@ -897,6 +897,38 @@ Three things to know:
 - **The cursor belongs to `steps web` alone**, which both advances it and is the only thing that reads it. A `steps run` or `steps plan` renders `{{ .version }}` as an empty map even when a watcher has been polling for weeks — a manual run asks what exists, not what is new.
 - **A check that ignores `.version` keeps working exactly as before.** The cursor narrows what a check *asks for*; it is not a filter steps applies to the answer, and it is not what decides which versions a job builds — that is [history](#version-history).
 
+#### Bounding a check: `check_timeout:`
+
+A resource may set `check_timeout:` (a Go duration such as `30s` or `5m`; default `1h`, as in Concourse) to cap how long one check of it may run. A check that outlives it is cancelled and fails like any other failed check, with an error naming the resource and the limit. A watcher polls its resources one after another, so the limit is what stops one hung check from starving every resource polled after it. Zero and negative values are load errors; omit the field for the default. It applies wherever a check runs: the poll, a refresh before a plan, and a get's own check.
+
+```yaml
+resource_types:
+- name: counter
+  config:
+    check: |
+      printf '[{"n": "1"}]'
+    in: echo {{ .version.n | shellquote }} > n.txt
+
+resources:
+- name: ticks
+  type: counter
+  source: {}
+  check_timeout: 30s
+
+jobs:
+- name: build
+  plan:
+  - get: ticks
+  - task: show
+    inputs: [ticks]
+    run: cat ticks/n.txt
+    assert:
+      stdout: "1"
+  assert:
+    execution: [ticks, show]
+    outcome: succeeded
+```
+
 ### Version history
 
 steps remembers every version it has seen of a resource, in the order it first
