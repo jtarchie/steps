@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -864,5 +865,20 @@ func TestParseVersionObjectKeepsWideIntegersExact(t *testing.T) {
 	number, ok := got["id"].(json.Number)
 	if !ok || number.String() != "1152921504606846977" {
 		t.Errorf("id = %#v, want json.Number 1152921504606846977", got["id"])
+	}
+}
+
+// A mapping with a non-string key reaches the server with the key spelled by config.StringKeys, the conversion merkle's cache key shares, and its templates are rendered.
+func TestRenderArgValueSpellsNonStringKeysThroughStringKeys(t *testing.T) {
+	t.Parallel()
+
+	got, err := renderArgValue("args", map[any]any{2024: "{{ .v }}", true: "plain"}, map[string]any{"v": "rendered"})
+	if err != nil {
+		t.Fatalf("renderArgValue: %v", err)
+	}
+
+	want := map[string]any{"2024": "rendered", "true": "plain"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("renderArgValue = %#v, want %#v", got, want)
 	}
 }

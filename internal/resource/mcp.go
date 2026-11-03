@@ -115,12 +115,7 @@ func renderArgValue(path string, value any, data map[string]any) (any, error) {
 		// server as the literal text `{{ .version.ts }}`) and un-marshalable
 		// by encoding/json, so normalize the keys and treat it as the object
 		// the author obviously meant.
-		normalized := make(map[string]any, len(typed))
-		for key, inner := range typed {
-			normalized[fmt.Sprint(key)] = inner
-		}
-
-		return renderArgMap(path, normalized, data)
+		return renderArgMap(path, config.StringKeys(typed), data)
 	case []any:
 		out := make([]any, len(typed))
 

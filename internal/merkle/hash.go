@@ -5,13 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+
+	"github.com/jtarchie/steps/internal/config"
 )
 
 // normalizeMapKeys rewrites every map[any]any nested in value into a
-// map[string]any, so the result is marshalable by encoding/json. It mirrors
-// resource.renderArgValue's handling of the same shape; the two must agree,
-// because one decides what the call sends and the other what its cache key
-// is.
+// map[string]any, so the result is marshalable by encoding/json. Keys are spelled by config.StringKeys, the same conversion resource.renderArgValue uses: one decides what the call sends and the other what its cache key is, so they share it.
 func normalizeMapKeys(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -22,9 +21,9 @@ func normalizeMapKeys(value any) any {
 
 		return out
 	case map[any]any:
-		out := make(map[string]any, len(typed))
-		for key, inner := range typed {
-			out[fmt.Sprint(key)] = normalizeMapKeys(inner)
+		out := config.StringKeys(typed)
+		for key, inner := range out {
+			out[key] = normalizeMapKeys(inner)
 		}
 
 		return out
