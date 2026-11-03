@@ -399,15 +399,10 @@ func (s *Store) VersionRuns(ctx context.Context, resourceName string, versions [
 }
 
 func scanVersionRun(rows *sql.Rows) (store.VersionRun, error) {
-	var (
-		one                   store.VersionRun
-		startedAt, finishedAt string
-	)
+	var one store.VersionRun
 
-	err := rows.Scan(&one.Version, &one.Run.ID, &one.Run.JobName, &one.Run.Workspace, &one.Run.Status, &startedAt, &finishedAt, &one.Run.ParentRunID, &one.Run.ConfigSHA, &one.Run.RerunOf, &one.Run.CreatedBy)
+	run, err := scanRunRow(withLeadingDest{rows: rows, extra: []any{&one.Version}})
+	one.Run = run
 
-	one.Run.StartedAt = parseTimestamp(startedAt)
-	one.Run.FinishedAt = parseTimestamp(finishedAt)
-
-	return one, err //nolint:wrapcheck // collect names the resource
+	return one, err
 }

@@ -332,17 +332,11 @@ func (s *Store) VersionRuns(ctx context.Context, resourceName string, versions [
 		WHERE r.pipeline_id = $2
 		ORDER BY r.started_at DESC, r.seq DESC
 	`, []any{resourceName, s.pipelineID, textArray(versions)}, func(rows *sql.Rows) (store.VersionRun, error) {
-		var (
-			one      store.VersionRun
-			started  time.Time
-			finished sql.NullTime
-		)
+		var one store.VersionRun
 
-		err := rows.Scan(&one.Version, &one.Run.ID, &one.Run.JobName, &one.Run.Workspace, &one.Run.Status, &started, &finished, &one.Run.ParentRunID, &one.Run.ConfigSHA, &one.Run.RerunOf, &one.Run.CreatedBy)
+		run, err := scanRunRow(withLeadingDest{rows: rows, extra: []any{&one.Version}})
+		one.Run = run
 
-		one.Run.StartedAt = started.UTC()
-		one.Run.FinishedAt = utc(finished)
-
-		return one, err //nolint:wrapcheck // collect names the resource
+		return one, err
 	})
 }

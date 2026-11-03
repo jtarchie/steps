@@ -42,6 +42,7 @@ INSERT INTO run_steps_v33 (run_id, build_id, step_index, step_name, hash)
     SELECT run_id, build_id, step_index, step_name, hash FROM run_steps ORDER BY rowid;
 DROP TABLE run_steps;
 ALTER TABLE run_steps_v33 RENAME TO run_steps;`),
+	execStep(`CREATE INDEX idx_run_inputs_version ON run_inputs(resource_name, version_json)`),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {

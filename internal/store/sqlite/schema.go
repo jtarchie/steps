@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 34 indexed run_inputs(resource_name, version_json), which VersionRuns filters on and only the (run_id, input_name) key covered, so each call scanned every input ever recorded.
+//
 // 33 rekeyed run_steps per visit and added outcome, so a resume replays the route each pass took (steps#231). Rows from before carry visit 1 and no outcome: a resume skips them without routing on them, as it always did.
 //
 // 32 added run_steps.hash, the node a finished step left, so a resume that skips it chains what follows from the same parent (steps#230).
@@ -98,7 +100,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 33
+const schemaVersion = 34
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -864,6 +866,7 @@ CREATE TABLE IF NOT EXISTS run_inputs (
     version_json  TEXT NOT NULL,
     PRIMARY KEY (run_id, input_name)
 ) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_run_inputs_version ON run_inputs(resource_name, version_json);
 
 -- Where a placed step actually ran, and what it cost in bytes rather than in
 -- money.

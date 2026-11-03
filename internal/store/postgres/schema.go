@@ -8,6 +8,8 @@ package postgres
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was DROP SCHEMA.
 //
+// 20 indexed run_inputs(resource_name, version_json), as sqlite's 34 did.
+//
 // 19 rekeyed run_steps per visit and added outcome, as sqlite's 33 did.
 //
 // 18 added run_steps.hash, as sqlite's 32 did.
@@ -24,7 +26,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 19
+const schemaVersion = 20
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -392,6 +394,7 @@ CREATE TABLE IF NOT EXISTS run_inputs (
     version_json  TEXT NOT NULL,
     PRIMARY KEY (run_id, input_name)
 );
+CREATE INDEX IF NOT EXISTS idx_run_inputs_version ON run_inputs(resource_name, version_json);
 
 -- node_hash is NULL for a hook, and MATCH SIMPLE exempts a row whose key has
 -- a NULL from the composite reference, as sqlite does.
