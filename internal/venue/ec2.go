@@ -463,8 +463,15 @@ func terminateInstance(api ec2API, worker Worker, instance string) {
 func terminateEC2(api ec2API, instance string) func(context.Context) error {
 	return func(ctx context.Context) error {
 		_, err := api.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
+		if err != nil {
+			return err //nolint:wrapcheck // the caller names the instance and the worker
+		}
 
-		return err //nolint:wrapcheck // the caller names the instance and the worker
+		// Only a terminate forgets: a stop or park reuses the same id, whose install memory still holds.
+		awsInstalled.Delete(instance)
+		awsInstalling.Delete(instance)
+
+		return nil
 	}
 }
 
