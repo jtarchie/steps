@@ -130,10 +130,6 @@ func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName strin
 		return nil, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
-	}
-
 	return hashes, nil
 }
 
