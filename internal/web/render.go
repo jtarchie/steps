@@ -24,6 +24,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -353,7 +354,7 @@ func shortID(id string) string {
 // reader should not have to know which table they are looking at.
 func statusWord[S ~string](status S) string {
 	switch string(status) {
-	case "succeeded":
+	case events.StatusSucceeded:
 		return "passed"
 	case "pending":
 		return "queued"
