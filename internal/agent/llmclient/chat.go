@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"iter"
 	"mime"
 	"net/http"
@@ -106,7 +105,7 @@ func (m *chatModel) generate(ctx context.Context, req *model.LLMRequest) (*model
 
 	defer func() { _ = response.Body.Close() }()
 
-	contents, err := io.ReadAll(response.Body)
+	contents, err := readBodyCapped(response.Body, maxResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("error reading response body: %w", err)
 	}

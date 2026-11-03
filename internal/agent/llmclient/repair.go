@@ -38,11 +38,11 @@ import (
 	"strings"
 )
 
-// maxRepairResponseBytes caps how large a chat-completion response body the
-// repair transport buffers. Responses are a few KB of choices in practice;
-// the cap keeps a pathological server from turning an opportunistic repair
-// pass into an unbounded allocation. Larger bodies pass through unrepaired.
-const maxRepairResponseBytes = 32 << 20
+// maxResponseBytes caps how large a chat-completion response body is buffered, by the repair transport and by generate alike. Responses are a few KB of choices in practice; the cap keeps a pathological or hostile base_url from turning a read into an unbounded allocation. The repair transport passes larger JSON bodies through unrepaired, and generate then refuses them.
+const maxResponseBytes = 32 << 20
+
+// errResponseTooLarge carries no body content: a provider's bytes can echo request content.
+var errResponseTooLarge = errors.New("agent: response body too large")
 
 // repairTransport wraps a base RoundTripper and repairs malformed tool-call
 // arguments in chat-completion RESPONSES (requests pass through untouched —
@@ -85,7 +85,7 @@ func (t *repairTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, nil
 	}
 
-	body, readErr := readBodyCapped(resp.Body, maxRepairResponseBytes)
+	body, readErr := readBodyCapped(resp.Body, maxResponseBytes)
 	if readErr != nil {
 		// Repair is opportunistic and must never be the reason a request
 		// fails: pass through what was recovered (possibly partial),
@@ -116,7 +116,7 @@ func readBodyCapped(r io.ReadCloser, limit int64) ([]byte, error) {
 	}
 
 	if int64(len(body)) > limit {
-		return body[:limit], errors.New("agent: response body too large to repair")
+		return body[:limit], errResponseTooLarge
 	}
 
 	return body, nil
