@@ -70,7 +70,7 @@ func (p *PipelineSetCmd) Run() error {
 		return fmt.Errorf("%w", err)
 	}
 
-	// Substituted and parsed HERE: a var never reaches the daemon, and the parse is what resolves the includes that travel with it.
+	// Substituted and parsed HERE, so the daemon receives the substituted text (stored in the revision, printed in the confirm diff, returned by `pipeline get`), and the parse is what resolves the includes that travel with it.
 	cfg, err := p.Load(p.Config, name)
 	if err != nil {
 		return err

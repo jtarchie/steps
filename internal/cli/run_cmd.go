@@ -172,7 +172,7 @@ func (r *RunCmd) Run() error {
 
 	slog.Info("pipeline.done", "pipeline", r.Pipeline, "job", job.Name, "error", runErr)
 
-	// A successful manual run clears the watch circuit breaker: running the
+	// A successful manual run clears the job-failure circuit breaker: running the
 	// job by hand is the natural way to confirm a fix, and requiring a
 	// separate resume afterwards would be a step nobody remembers.
 	if runErr == nil {

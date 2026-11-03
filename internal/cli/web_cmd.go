@@ -32,7 +32,7 @@ import (
 // chose rather than a filename, and a change happens when somebody asks for
 // it rather than when a file moves. Nothing here watches a file.
 //
-// It binds loopback by default and has no authentication, because there is
+// It binds loopback by default and authentication is opt-in (basic auth, local users, sign-in providers), because by default there is
 // nothing to authenticate against — this is the local runner's own front end,
 // in the same trust domain as the shell that started it. `steps pipeline set`
 // makes that sharper than it was: a pipeline is arbitrary commands, so the

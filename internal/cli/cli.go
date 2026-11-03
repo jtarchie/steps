@@ -229,7 +229,7 @@ func Run(args []string) error {
 // setup opens the state store and builds/validates the workspace provider
 // shared by the commands that run steps, returning a cleanup func that closes both
 // (logging, not returning, any close error — mirroring the deferred
-// close-error handling both commands used inline before this helper
+// close-error handling the commands used inline before this helper
 // existed).
 func setup(
 	cfg *config.Config, pipelinePath string, flags StateFlags, exec ExecFlags,
@@ -358,7 +358,7 @@ func attachArtifactStore(provider workspace.Provider, st store.Blobs, raw string
 	return nil
 }
 
-// wrapRunErr adds context to a RunJob/Watch error without adding another
+// wrapRunErr adds context to a RunJob error without adding another
 // branch to the caller, which is already at cyclop's per-function
 // complexity budget.
 func wrapRunErr(err error) error {

@@ -40,7 +40,7 @@ steps pipeline set -p app -c app.yml -v repo_uri=https://github.com/acme/app
 - **`-v` / `--vars-file` are per-set.** Substitution happens before the upload,
   so the daemon holds the substituted text and one file set twice under two var
   sets is two pipelines. Vars are still not a secret store — see
-  [templating.md](templating.md).
+  [templating.md](templating.md). `--var` values are substituted into the pipeline text, uploaded to the daemon, stored in the revision and shown in confirm diffs and `pipeline get`; keep secrets in `secret:` sources (see [secrets.md](secrets.md)), not `--var`.
 - **Includes travel with it.** A `run_file:`, `system_file:` or
   `message_files:` entry is pipeline-relative, and the daemon has no sibling
   filesystem, so `set` sends `{source, includes}` and the daemon resolves those
