@@ -7,19 +7,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/jtarchie/steps/internal/redact"
 	"io"
-	"log/slog"
-	"maps"
 	"os"
-	"path"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/jtarchie/steps/internal/redact"
 
 	"golang.org/x/crypto/ssh"
 
@@ -202,109 +199,6 @@ func (s *bareSession) connect(ctx context.Context) error {
 	return s.attachCaches(ctx)
 }
 
-// cachePairs is each cache's kept directory beside the step's place for it, shell-quoted, and the test that a symlink sits between, in a stable order.
-func (s *bareSession) cachePairs() [][3]string {
-	rels := slices.Sorted(maps.Keys(s.spec.Caches))
-	pairs := make([][3]string, 0, len(rels))
-
-	for _, rel := range rels {
-		pairs = append(pairs, [3]string{s.root() + "/steps-task-caches/" + s.spec.Caches[rel], shellQuote(path.Join(s.dir, rel)), s.linkedAbove(rel)})
-	}
-
-	return pairs
-}
-
-// linkedAbove is a shell test, true when a directory between the step's directory and rel is a symlink: an uploaded input keeps its symlinks, and an rm or mv through one reaches outside the step.
-func (s *bareSession) linkedAbove(rel string) string {
-	var test strings.Builder
-
-	test.WriteString("{ false")
-
-	for dir := path.Dir(path.Clean(rel)); dir != "."; dir = path.Dir(dir) {
-		test.WriteString(" || [ -L " + shellQuote(path.Join(s.dir, dir)) + " ]")
-	}
-
-	test.WriteString("; }")
-
-	return test.String()
-}
-
-// attachCaches moves each kept cache over the uploaded stand-in, the rename the local workspace does, on the worker.
-func (s *bareSession) attachCaches(ctx context.Context) error {
-	if len(s.spec.Caches) == 0 {
-		return nil
-	}
-
-	s.pipeline = shell.MetadataFrom(ctx).PipelineName
-
-	var stdout, stderr strings.Builder
-
-	_, err := s.exec(ctx, s.attachScript(), nil, &stdout, &stderr)
-	if err != nil {
-		return fmt.Errorf("restoring the step's caches: %w", err)
-	}
-
-	s.markAttached(stdout.String())
-
-	// A cache is a speed-up, so one that cannot be put back is an empty cache, as on this machine, never a failed step.
-	if len(s.attached) < len(s.spec.Caches) {
-		slog.WarnContext(ctx, "venue.ssh.task_cache_restore_failed", "worker", s.worker.String(), "restored", len(s.attached), "caches", len(s.spec.Caches), "stderr", strings.TrimSpace(stderr.String()))
-	}
-
-	return nil
-}
-
-// markAttached reads attachScript's one "attached <i>" line per cache it put in place.
-func (s *bareSession) markAttached(stdout string) {
-	s.attached = map[int]bool{}
-
-	for line := range strings.Lines(stdout) {
-		i, err := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(line), "attached "))
-		if err == nil {
-			s.attached[i] = true
-		}
-	}
-}
-
-func (s *bareSession) attachScript() string {
-	var script strings.Builder
-
-	for i, pair := range s.cachePairs() {
-		// A failure leaves the cache where it was kept; the step gets an empty directory if one can be made.
-		fmt.Fprintf(&script, `if ! %[3]s; then { rm -rf %[2]s && mkdir -p "$(dirname %[2]s)" && if [ -d %[1]s ]; then mv %[1]s %[2]s; else mkdir -p %[2]s; fi && echo attached %[4]d; } || mkdir -p %[2]s; fi; `, pair[0], pair[1], pair[2], i)
-	}
-
-	return script.String()
-}
-
-// detachCaches is the shell that files each cache back, replacing one a concurrent session filed first; run after the step's processes are gone.
-func (s *bareSession) detachCaches() string {
-	if len(s.attached) == 0 {
-		return ""
-	}
-
-	var script strings.Builder
-
-	script.WriteString("mkdir -p " + s.root() + "/steps-task-caches; ")
-
-	// A concurrent close can file the entry between the rm and the mv, and a plain mv then moves this cache inside it. GNU mv -T refuses instead, and one retry keeps the last finisher's. ponytail: no -T outside Linux, so the race can still nest there; a lock is the upgrade.
-	move := "mv %[2]s %[1]s"
-	if s.goos == "linux" {
-		move = "{ mv -T %[2]s %[1]s || { rm -rf %[1]s; mv -T %[2]s %[1]s; }; }"
-	}
-
-	for i, pair := range s.cachePairs() {
-		if !s.attached[i] {
-			continue
-		}
-
-		// The .pipeline file is what a later run of this pipeline judges the cache by when its config stops naming it.
-		fmt.Fprintf(&script, `if ! %[4]s && [ -d %[2]s ]; then rm -rf %[1]s; `+move+` && printf %%s %[3]s > %[1]s.pipeline; fi; `, pair[0], pair[1], shellQuote(s.pipeline), pair[2])
-	}
-
-	return script.String()
-}
-
 func (s *bareSession) root() string {
 	if s.worker.Root != "" {
 		return shellQuote(s.worker.Root)
@@ -437,95 +331,6 @@ func (s *bareSession) untar(ctx context.Context, dir string, pack func(io.Writer
 	}
 
 	return nil
-}
-
-func (s *bareSession) run(ctx context.Context, command string, out *shell.Output) (int, error) {
-	workdir := s.dir
-	if s.spec.Subdir != "" {
-		workdir = path.Join(s.dir, s.spec.Subdir)
-	}
-
-	// One pid file per command: an agent's concurrent tool calls share this session, and a cancel must signal its own command's group, not whichever started last.
-	pidfile := s.dir + ".pid." + randomSuffix()
-
-	// Only execs: sshd made this session's shell a session leader, so the pid it records is also the group cancel signals.
-	// The env arrives on stdin, never in argv: a passed-through secret on the command line is readable by every user on the worker for as long as the command runs.
-	script := `exec sh -c 'echo $$ > "$1"; eval "$(cat)"; cd "$2" || exit 1; exec sh -c "$3"' sh ` +
-		shellQuote(pidfile) + " " + shellQuote(workdir) + " " + shellQuote(command)
-
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	stopped := make(chan struct{})
-
-	go func() {
-		defer close(stopped)
-
-		<-runCtx.Done()
-
-		if ctx.Err() != nil {
-			s.kill(context.WithoutCancel(ctx), pidfile)
-		}
-	}()
-
-	code, err := s.exec(runCtx, script, strings.NewReader(s.envScript(ctx)), out.Stdout, out.Stderr)
-
-	cancel()
-	<-stopped
-
-	if ctx.Err() != nil {
-		return 0, fmt.Errorf("%w", ctx.Err())
-	}
-
-	if err != nil {
-		s.mu.Lock()
-		s.orphans = append(s.orphans, pidfile)
-		s.mu.Unlock()
-	}
-
-	return code, err
-}
-
-// envScript is the command's env as shell exports: the step's, its worker tag, and this command's build metadata.
-func (s *bareSession) envScript(ctx context.Context) string {
-	env := withWorkerTag(resolveEnv(s.spec.Env), s.spec.WorkerTag)
-
-	var script strings.Builder
-
-	for _, vars := range []map[string]string{env, shell.BuildEnv(ctx)} {
-		for name, value := range vars {
-			script.WriteString("export " + name + "=" + shellQuote(value) + "\n")
-		}
-	}
-
-	return script.String()
-}
-
-// pidFiles globs every command's pid file beside dir.
-func pidFiles(dir string) string { return shellQuote(dir) + ".pid.*" }
-
-// kill ends the command's process group: TERM, then KILL if it is still there after a grace period.
-func (s *bareSession) kill(ctx context.Context, pidfile string) {
-	pidfile = shellQuote(pidfile)
-	signal := func(sig string) {
-		_, _ = s.exec(ctx, `p=$(cat `+pidfile+` 2>/dev/null) && { kill -`+sig+` -- -"$p" 2>/dev/null || kill -`+sig+` "$p" 2>/dev/null; }; true`, nil, io.Discard, io.Discard)
-	}
-
-	signal("TERM")
-
-	// Polled from here rather than slept on the worker: fractional sleep is not POSIX, and a cancel that always waits the whole grace slows every race: and fail_fast.
-	deadline := time.Now().Add(killGrace)
-
-	for time.Now().Before(deadline) && ctx.Err() == nil {
-		code, err := s.exec(ctx, `p=$(cat `+pidfile+` 2>/dev/null) && kill -0 -- -"$p" 2>/dev/null`, nil, io.Discard, io.Discard)
-		if err != nil || code != 0 {
-			return
-		}
-
-		time.Sleep(killPoll)
-	}
-
-	signal("KILL")
 }
 
 func (s *bareSession) fetch(ctx context.Context) error {

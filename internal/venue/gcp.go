@@ -338,35 +338,6 @@ func gcpConnect(ctx context.Context, api gceAPI, worker Worker, project, zone st
 	}
 }
 
-// sshHandshake runs the SSH handshake with a watchdog. The tunnel conn has
-// no deadlines (its SetDeadline is a no-op) and NewClientConn ignores
-// config.Timeout — only ssh.Dial's TCP dial honors it — so a peer that
-// stalls mid-handshake would otherwise hold the dial forever, and closing
-// the conn is the one interruption that reaches a blocked handshake.
-func sshHandshake(conn net.Conn, address string, config *ssh.ClientConfig) (*ssh.Client, error) {
-	watchdog := time.AfterFunc(config.Timeout, func() { _ = conn.Close() })
-	defer watchdog.Stop()
-
-	sshConn, channels, requests, err := ssh.NewClientConn(conn, address, config)
-	if err != nil {
-		_ = conn.Close()
-
-		return nil, err //nolint:wrapcheck // the caller names the worker and instance
-	}
-
-	// Stop answers false once the watchdog has already fired, which means the
-	// conn this client would ride on is being closed right now: report the
-	// timeout the watchdog exists to report, rather than hand back a live
-	// client over a dead transport whose first use fails as something else.
-	if !watchdog.Stop() {
-		_ = sshConn.Close()
-
-		return nil, fmt.Errorf("the SSH handshake did not finish within %s", config.Timeout)
-	}
-
-	return ssh.NewClient(sshConn, channels, requests), nil
-}
-
 // gcpDialRelay opens the tunnel, waiting out the window where the instance
 // is up but sshd is not yet answering — the relay reports that as "could not
 // reach the backend", which for a machine acquired seconds ago means "yet".

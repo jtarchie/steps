@@ -187,12 +187,3 @@ func (ssmAddr) Network() string                  { return "ssm" }
 func (ssmAddr) String() string                   { return "ssm" }
 
 type ssmAddr struct{}
-
-// hostKeyAlgorithms are the signature algorithms a pinned key can verify; an RSA key signs as rsa-sha2-*, never as its own type name.
-func hostKeyAlgorithms(key ssh.PublicKey) []string {
-	if key.Type() == ssh.KeyAlgoRSA {
-		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}
-	}
-
-	return []string{key.Type()}
-}
