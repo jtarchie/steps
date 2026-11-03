@@ -24,7 +24,7 @@ type VersionResolver interface {
 
 // PlanChains walks a job's plan exactly like the pipeline's runSteps does
 // (resolving get-step versions/pins through cache, the same resolution the
-// executor uses), but never executes anything — no RunIn, RunShell, or
+// executor uses), but never executes anything — no RunIn or
 // RunOut. It returns one Chain per leaf reached, which is more than one only
 // when a get step uses version: every.
 //
