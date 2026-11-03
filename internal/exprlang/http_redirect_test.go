@@ -3,6 +3,7 @@ package exprlang
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -101,5 +102,46 @@ func TestHTTPErrorTextOmitsTheQueryString(t *testing.T) {
 
 	if strings.Contains(err.Error(), "?token=") || !strings.Contains(err.Error(), "GET "+dead) {
 		t.Errorf("err = %v, want the request named without its query", err)
+	}
+}
+
+func TestHTTPRedirectDropsBodyAcrossHosts(t *testing.T) {
+	t.Parallel()
+
+	type landed struct {
+		body, key, contentType string
+		length                 int64
+	}
+
+	seen := make(chan landed, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		seen <- landed{string(data), r.Header.Get("X-Api-Key"), r.Header.Get("Content-Type"), r.ContentLength}
+
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(target.Close)
+
+	elsewhere := strings.Replace(target.URL, "127.0.0.1", "localhost", 1)
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(origin.Close)
+
+	source := fmt.Sprintf(`[http({url: %q, method: "POST", headers: {"X-Api-Key": "secret"}, json: {token: "hunter2"}})] | map(({a: "b"}))`, origin.URL)
+
+	_, err := RunCheck(context.Background(), source, Input{})
+	if err != nil {
+		t.Fatalf("RunCheck: %v", err)
+	}
+
+	got := <-seen
+	if got.body != "" || got.length > 0 {
+		t.Errorf("body after cross-host 307 = %q (length %d), want none", got.body, got.length)
+	}
+
+	if got.key != "" || got.contentType != "" {
+		t.Errorf("headers after cross-host 307 = key %q, content-type %q, want none", got.key, got.contentType)
 	}
 }

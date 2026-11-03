@@ -650,6 +650,10 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 
 	if req.URL.Host != via[0].URL.Host {
 		req.Header = http.Header{} //nolint:gosec // this IS the cross-origin header strip G119 asks for
+		// net/http has already rebuilt the body from GetBody for a 307/308 by the time CheckRedirect runs, so a token in a JSON payload would follow the redirect too.
+		req.Body = http.NoBody
+		req.GetBody = nil
+		req.ContentLength = 0
 	}
 
 	return nil
