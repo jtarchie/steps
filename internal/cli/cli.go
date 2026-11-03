@@ -12,23 +12,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"os/signal"
 	"runtime/debug"
-	"sync"
-	"syscall"
-	"time"
 
 	"github.com/alecthomas/kong"
-	"github.com/lmittmann/tint"
 
-	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/events"
-	"github.com/jtarchie/steps/internal/shell"
-	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/telemetry"
-	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // CLI is the pipeline runner's command-line grammar, parsed by kong. Run is
@@ -78,27 +67,6 @@ func moduleVersion(stamped string, read func() (*debug.BuildInfo, bool)) string 
 	return info.Main.Version
 }
 
-// RecordRevision writes down WHICH configuration the runs opened against this
-// handle will have executed.
-//
-// Called from the same funnel as SetSourcePath, and for the same reason: it
-// is the only place holding both the configuration that was parsed and the
-// handle its runs are recorded against. A command that only READS history
-// never comes through there and records no revision, which is right — it
-// resolved no configuration.
-func RecordRevision(ctx context.Context, st store.Revisions, cfg *config.Config) error {
-	if !cfg.Revision.Recorded() {
-		return nil
-	}
-
-	err := st.RecordRevision(ctx, cfg.Revision.SHA, cfg.Revision.Source, cfg.Revision.Includes)
-	if err != nil {
-		return fmt.Errorf("could not record the pipeline's configuration: %w", err)
-	}
-
-	return nil
-}
-
 // shortConfig abbreviates a configuration hash for a column a human scans.
 //
 // The question this column answers is "did the pipeline change between these
@@ -118,76 +86,6 @@ func shortConfig(sha string) string {
 	}
 
 	return sha[:shown]
-}
-
-// DefaultLogLevel is what InitLogging runs at before the CLI's own
-// --log-level/STEPS_LOG_LEVEL has been parsed (during kong construction
-// itself, and as CLI.LogLevel's own default) — never debug, so a parse
-// failure (or any other pre-parse code path) can't fall back to printing
-// every subsequent command/output dump by accident.
-const DefaultLogLevel = "info"
-
-// parseLogLevel maps a --log-level/STEPS_LOG_LEVEL string to a slog.Level,
-// falling back to slog.LevelInfo for anything unrecognized — reachable only
-// if called before kong's own enum: validation on CLI.LogLevel runs (e.g.
-// DefaultLogLevel's own value, or a hypothetical future caller), never from
-// a successfully parsed CLI. A standalone function (rather than inlined
-// into InitLogging) so it can be unit-tested without touching the global
-// slog default logger, which every run() call in this package's test suite
-// also mutates — asserting on slog.Default() itself would race against
-// whichever other test's run() call happens to finish last.
-func parseLogLevel(level string) slog.Level {
-	parsed, ok := map[string]slog.Level{
-		"debug": slog.LevelDebug,
-		"info":  slog.LevelInfo,
-		"warn":  slog.LevelWarn,
-		"error": slog.LevelError,
-	}[level]
-	if !ok {
-		return slog.LevelInfo
-	}
-
-	return parsed
-}
-
-// InitLogging installs a slog handler on stderr as the default logger,
-// separate from this tool's plain stdout progress lines ("get: prs
-// (version: ...)", "task: review"), at the given level (see parseLogLevel).
-// Debug is what previously ran unconditionally on every invocation: shell.go/
-// docker.go log the full rendered command and complete captured stdout/
-// stderr at that level, so any resource check/in/out command whose
-// templated source: or output embeds a credential was written to stderr on
-// every ordinary run, with no way to suppress it. Defaulting to info (see
-// CLI.LogLevel) makes that opt-in, via --log-level debug or
-// STEPS_LOG_LEVEL=debug, rather than the permanent default.
-func InitLogging(level string) {
-	slog.SetDefault(slog.New(telemetry.LogHandler(events.LogHandler(tint.NewTextHandler(os.Stderr, &tint.Options{
-		Level:     parseLogLevel(level),
-		AddSource: true,
-		NoColor:   wantNoColor(),
-	})))))
-}
-
-// wantNoColor reports whether log output should skip ANSI color: either
-// stderr isn't a terminal (piped, redirected to a file, captured by a
-// screen reader or log tool) or the operator opted out via NO_COLOR
-// (https://no-color.org). Terminal detection is a stdlib character-device
-// check (no isatty dependency needed) rather than an internal/shell-style
-// pattern, since this is the one place in the process that cares whether
-// its own stderr is a live terminal. Checked at every InitLogging call
-// rather than cached, since tests re-invoke it against different stderr
-// targets.
-func wantNoColor() bool {
-	if os.Getenv("NO_COLOR") != "" {
-		return true
-	}
-
-	info, err := os.Stderr.Stat()
-	if err != nil {
-		return true
-	}
-
-	return info.Mode()&os.ModeCharDevice == 0
 }
 
 // Run parses args as the steps command line and executes the command they
@@ -226,138 +124,6 @@ func Run(args []string) error {
 	return kctx.Run() //nolint:wrapcheck // the Run methods above already wrap their own errors via wrapRunErr
 }
 
-// setup opens the state store and builds/validates the workspace provider
-// shared by the commands that run steps, returning a cleanup func that closes both
-// (logging, not returning, any close error — mirroring the deferred
-// close-error handling the commands used inline before this helper
-// existed).
-func setup(
-	cfg *config.Config, pipelinePath string, flags StateFlags, exec ExecFlags,
-) (store.Store, workspace.Provider, func(), error) {
-	// Before anything is opened: the refusal costs nothing.
-	err := refuseSecretsLocally(cfg)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	name := resolvePipelineName(pipelinePath, flags.Name)
-
-	// The identity the caller loaded the Config under has to be the identity
-	// the store is opened under, because they are one identity: the store
-	// scopes every row by it, the /p/<slug> route is it, and the Config
-	// carries it to whatever else is keyed by pipeline (an agent pin). They
-	// were computed independently and silently disagreed, which is the whole
-	// of #94 — so a caller that resolves it differently, or forgets and takes
-	// the file-name default while --name says otherwise, is told rather than
-	// left to split.
-	if cfg.Name != name {
-		return nil, nil, nil, fmt.Errorf(
-			"the pipeline was loaded as %q but its state is scoped to %q — these are one identity, so load it with resolvePipelineName(path, flags.Name)",
-			cfg.Name, name)
-	}
-
-	st, err := openLocalState(pipelinePath, flags.DB, name)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	// This is the funnel every command that RUNS a local pipeline file comes
-	// through (run, test), and the only place holding
-	// both the YAML path and the handle to record it against.
-	err = st.SetSourcePath(context.Background(), pipelinePath)
-	if err != nil {
-		_ = st.Close()
-
-		return nil, nil, nil, fmt.Errorf("could not record the pipeline's source path: %w", err)
-	}
-
-	err = RecordRevision(context.Background(), st, cfg)
-	if err != nil {
-		_ = st.Close()
-
-		return nil, nil, nil, err
-	}
-
-	provider, err := workspace.NewProvider(cfg.Workspace, exec.KeepWorkspace)
-	if err != nil {
-		_ = st.Close()
-
-		return nil, nil, nil, fmt.Errorf("could not build workspace provider: %w", err)
-	}
-
-	err = readyProvider(provider, workspace.Provider.Validate, st, exec.ArtifactStore)
-	if err != nil {
-		_ = st.Close()
-
-		return nil, nil, nil, err
-	}
-
-	cleanup := func() {
-		closeErr := provider.Close()
-		if closeErr != nil {
-			slog.Error("workspace.close", "error", closeErr)
-		}
-
-		closeErr = st.Close()
-		if closeErr != nil {
-			slog.Error("store.close", "error", closeErr)
-		}
-	}
-
-	return st, provider, cleanup, nil
-}
-
-// readyProvider checks a freshly built provider and attaches --artifact-store
-// to it, closing it on any failure: the provider owns a temp root it created
-// and only its Close removes one, so a caller that closed its store alone left
-// a steps-* directory behind on every attempt, with nothing to reap it.
-func readyProvider(provider workspace.Provider, check func(workspace.Provider) error, st store.Blobs, artifactStore string) error {
-	err := check(provider)
-	if err != nil {
-		_ = provider.Close()
-
-		return fmt.Errorf("workspace: %w", err)
-	}
-
-	err = attachArtifactStore(provider, st, artifactStore)
-	if err != nil {
-		_ = provider.Close()
-
-		return err
-	}
-
-	return nil
-}
-
-// attachArtifactStore wires --artifact-store into the provider's step cache:
-// the blob half from the URL, the index half from the state store the digests
-// are truth in. A pipeline with no durable workspace.root: has no step cache
-// to mirror — that half is warned about rather than refused, because the
-// flag's other consumer, a placed step's data plane, works without one.
-func attachArtifactStore(provider workspace.Provider, st store.Blobs, raw string) error {
-	if raw == "" {
-		return nil
-	}
-
-	opts, err := blobstore.Parse(raw)
-	if err != nil {
-		return err //nolint:wrapcheck // blobstore's own errors name the URL and the rule it broke
-	}
-
-	blobs, err := blobstore.New(context.Background(), opts)
-	if err != nil {
-		return err //nolint:wrapcheck // as above
-	}
-
-	if !provider.AttachArtifactStore(blobs, st) {
-		slog.Warn("artifact_store.no_step_cache",
-			"store", raw,
-			"why", "no durable workspace.root:, so cached step outputs are not mirrored; placed steps still use the store as their data plane")
-	}
-
-	return nil
-}
-
 // wrapRunErr adds context to a RunJob error without adding another
 // branch to the caller, which is already at cyclop's per-function
 // complexity budget.
@@ -387,62 +153,4 @@ func selectJob(cfg *config.Config, name string) (*config.Job, error) {
 	}
 
 	return job, nil
-}
-
-// withSignalCancel derives a context from parent that is canceled on
-// SIGINT/SIGTERM, and returns it along with its cancel func. A second signal
-// is the operator saying "now": see exitNow.
-func withSignalCancel(parent context.Context) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(parent)
-
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
-	stopped := make(chan struct{})
-
-	go watchSignals(ctx, sigs, stopped, cancel, exitNow)
-
-	// Once, since callers defer this and may also call it early themselves.
-	return ctx, sync.OnceFunc(func() {
-		signal.Stop(sigs)
-		close(stopped)
-		cancel()
-	})
-}
-
-// watchSignals cancels on the first signal and hands the second to now. The
-// shutdown the first one starts can wait a long time (an abort hook's grace, a
-// non-interruptible job's), and a second ^C swallowed meanwhile left SIGKILL
-// as the only way out, which orphans every child.
-func watchSignals(ctx context.Context, sigs <-chan os.Signal, stopped <-chan struct{}, cancel func(), now func(os.Signal)) {
-	select {
-	case sig := <-sigs:
-		slog.WarnContext(ctx, "signal.received", "signal", sig.String())
-		cancel()
-	case <-stopped:
-		return
-	}
-
-	select {
-	case sig := <-sigs:
-		slog.WarnContext(ctx, "signal.received_again", "signal", sig.String(), "action", "killing every child and exiting now")
-		now(sig)
-	case <-stopped:
-	}
-}
-
-// exitNow kills every child session and dies of sig, so a supervisor reads the
-// exit as the signal it sent rather than as an error code this process chose.
-func exitNow(sig os.Signal) {
-	shell.KillAll()
-	signal.Reset(sig)
-
-	self, err := os.FindProcess(os.Getpid())
-	if err == nil {
-		_ = self.Signal(sig)
-	}
-
-	// Unreachable where sig's default action is to terminate; a backstop elsewhere.
-	time.Sleep(time.Second)
-	os.Exit(1)
 }

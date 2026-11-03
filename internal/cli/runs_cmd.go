@@ -56,17 +56,9 @@ func (r *RunsListCmd) Run() error {
 		return r.runAcross()
 	}
 
-	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
-		return nil
-	}
-
-	st, done, err := openRecorded(r.ReadFlags)
-	if err != nil {
-		return err
-	}
-	defer done()
-
-	return r.printJobRuns(context.Background(), st)
+	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
+		return r.printJobRuns(ctx, st)
+	})
 }
 
 // RunsStepsCmd is the per-step detail: what previous runs actually did.
@@ -87,21 +79,13 @@ func (r *RunsStepsCmd) Run() error {
 		return errors.New("--job does not apply to a named run; a run belongs to one job already")
 	}
 
-	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
-		return nil
-	}
+	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
+		if r.RunID != "" {
+			return r.printRunSteps(ctx, st)
+		}
 
-	st, done, err := openRecorded(r.ReadFlags)
-	if err != nil {
-		return err
-	}
-	defer done()
-
-	if r.RunID != "" {
-		return r.printRunSteps(context.Background(), st)
-	}
-
-	return r.printSteps(context.Background(), st)
+		return r.printSteps(ctx, st)
+	})
 }
 
 // RunsQueueCmd is what the trigger loop has queued and not yet run.
@@ -112,17 +96,9 @@ type RunsQueueCmd struct {
 
 // Run prints the trigger queue.
 func (r *RunsQueueCmd) Run() error {
-	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
-		return nil
-	}
-
-	st, done, err := openRecorded(r.ReadFlags)
-	if err != nil {
-		return err
-	}
-	defer done()
-
-	return r.printQueue(context.Background(), st)
+	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
+		return r.printQueue(ctx, st)
+	})
 }
 
 // RunsCostCmd is what agent steps spent: per run, or per step within one run.
@@ -138,23 +114,13 @@ type RunsCostCmd struct {
 
 // Run prints per-run totals, or one run's steps.
 func (r *RunsCostCmd) Run() error {
-	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
-		return nil
-	}
+	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
+		if r.RunID != "" {
+			return r.printRunCost(ctx, st)
+		}
 
-	st, done, err := openRecorded(r.ReadFlags)
-	if err != nil {
-		return err
-	}
-	defer done()
-
-	ctx := context.Background()
-
-	if r.RunID != "" {
-		return r.printRunCost(ctx, st)
-	}
-
-	return r.printCostTotals(ctx, st)
+		return r.printCostTotals(ctx, st)
+	})
 }
 
 // RunsWhereCmd is which machines a run's placed steps ran on.
@@ -166,17 +132,9 @@ type RunsWhereCmd struct {
 
 // Run prints one run's placements.
 func (r *RunsWhereCmd) Run() error {
-	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
-		return nil
-	}
-
-	st, done, err := openRecorded(r.ReadFlags)
-	if err != nil {
-		return err
-	}
-	defer done()
-
-	return r.printPlacements(context.Background(), st)
+	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
+		return r.printPlacements(ctx, st)
+	})
 }
 
 // RunsAbortCmd goes over HTTP rather than writing a row, because what it stops is a context inside the daemon's process that no database write can reach.
@@ -267,6 +225,21 @@ func openRecorded(flags ReadFlags) (store.Store, func(), error) {
 	}
 
 	return st, func() { _ = st.Close() }, nil
+}
+
+// withRecorded is the whole read-a-pipeline's-history preamble the `steps runs` views share — the empty-state sentence, the open, the deferred close — so a new view cannot forget a step of it.
+func withRecorded(flags ReadFlags, fn func(ctx context.Context, st store.Store) error) error {
+	if nothingRecorded(flags, noRunsYet(flags.Pipeline)) {
+		return nil
+	}
+
+	st, done, err := openRecorded(flags)
+	if err != nil {
+		return err
+	}
+	defer done()
+
+	return fn(context.Background(), st)
 }
 
 // runAcross reports on every pipeline in one state file: what it holds, and

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -80,5 +81,24 @@ func TestCachePercentOfNothingIsADash(t *testing.T) {
 
 	if got := cachePercent(200, 50); got != "25" {
 		t.Errorf("cachePercent(200, 50) = %q, want 25", got)
+	}
+}
+
+// Every `runs` view says the same empty-state sentence and creates no database, since they all go through withRecorded; not parallel, it captures stdout.
+func TestEveryRunsViewSaysNothingRecorded(t *testing.T) {
+	for _, view := range []string{"list", "steps", "queue", "cost", "where"} {
+		db := filepath.Join(t.TempDir(), "none.db")
+
+		var err error
+
+		out := captureStdout(t, func() { err = Run([]string{"runs", view, "-p", "app", "--db", db}) })
+		if err != nil || !strings.Contains(out, "no runs recorded yet for app") {
+			t.Errorf("runs %s with no state = %v, printing %q; want the empty-state sentence", view, err, out)
+		}
+
+		_, statErr := os.Stat(db)
+		if statErr == nil {
+			t.Errorf("runs %s created %s by asking about it", view, db)
+		}
 	}
 }
