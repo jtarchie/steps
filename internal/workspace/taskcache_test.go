@@ -243,6 +243,51 @@ func TestTaskCacheNeverFollowsASymlinkOutOfTheStep(t *testing.T) {
 	}
 }
 
+// TestTaskCacheNeverFilesASymlinkAsTheEntry: a step that swapped its cache directory itself for a link must not get the link filed as the entry, where the next attach would rename it back into place.
+func TestTaskCacheNeverFilesASymlinkAsTheEntry(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	key := TaskCacheKey("p", "j", "s", "c")
+	caches := map[string]string{"c": key}
+	outside := t.TempDir()
+	mustWrite(t, filepath.Join(outside, "precious"), "x")
+
+	dir := t.TempDir()
+	detach := bw.AttachCaches(t.Context(), dir, caches)
+
+	err := os.RemoveAll(filepath.Join(dir, "c"))
+	if err == nil {
+		err = os.Symlink(outside, filepath.Join(dir, "c"))
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detach()
+
+	ib, isIso := bw.(*isolatingBuild)
+	if !isIso {
+		t.Fatalf("build is %T", bw)
+	}
+
+	entry, ok := ib.taskCaches.path(key)
+	if !ok {
+		t.Fatal("no cache entry path")
+	}
+
+	_, err = os.Lstat(entry)
+	if err == nil {
+		t.Error("a symlink was filed into the cache as the entry")
+	}
+
+	_, err = os.Stat(filepath.Join(outside, "precious"))
+	if err != nil {
+		t.Errorf("the link's target was disturbed: %v", err)
+	}
+}
+
 // TestTaskCacheRetriesAnEntryFiledConcurrently: a run that files the entry between this one's remove and rename does not cost this, the later, finisher its cache.
 func TestTaskCacheRetriesAnEntryFiledConcurrently(t *testing.T) {
 	bw := newBuild(t)

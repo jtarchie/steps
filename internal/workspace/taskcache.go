@@ -153,6 +153,17 @@ func (b *isolatingBuild) detach(ctx context.Context, entry, dir, rel string) {
 		return
 	}
 
+	info, err := os.Lstat(dst)
+	if err != nil {
+		return
+	}
+
+	if !info.IsDir() {
+		slog.WarnContext(ctx, "workspace.task_cache_symlinked", "dir", dst)
+
+		return
+	}
+
 	entries, err := os.ReadDir(dst)
 	if err != nil {
 		return
