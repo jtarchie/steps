@@ -48,9 +48,9 @@ func recordOutput(ctx context.Context, label string, withStdout bool) (context.C
 	rec := &outputRecorder{}
 
 	ctx = events.Tee(ctx, func(stderr bool, inner io.Writer) io.Writer {
-		stream := "stdout"
+		stream := events.StreamStdout
 		if stderr {
-			stream = "stderr"
+			stream = events.StreamStderr
 		}
 
 		chunks := newChunker(time.Now, func(text string) {

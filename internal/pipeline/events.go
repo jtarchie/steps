@@ -149,7 +149,7 @@ func publishFinished(
 	ctx context.Context, jobName string, i int, name, kind, worker string, mark stepMark,
 	hash string, started time.Time, err error,
 ) {
-	status := "succeeded"
+	status := events.StatusSucceeded
 	text := ""
 
 	if err != nil {
@@ -176,14 +176,11 @@ func publishFinished(
 	})
 }
 
-// hookKind is the kind a hook's row is published under.
-const hookKind = "hook"
-
 // publishHookStarted opens a hook's own row, under whatever container ctx
 // names: the step it guards, or nothing for a job hook, which then reads as a
 // root after the plan. It has no plan position, hence index -1.
 func publishHookStarted(ctx context.Context, jobName, label string) stepMark {
-	return publishStarted(ctx, jobName, -1, label, hookKind)
+	return publishStarted(ctx, jobName, -1, label, events.KindHook)
 }
 
 // publishHookFinished closes the row publishHookStarted opened. No hash: a
@@ -191,7 +188,7 @@ func publishHookStarted(ctx context.Context, jobName, label string) stepMark {
 func publishHookFinished(
 	ctx context.Context, jobName, label string, body config.Step, mark stepMark, started time.Time, err error,
 ) {
-	publishFinished(ctx, jobName, -1, label, hookKind, placementOf(ctx, body), mark, "", started, err)
+	publishFinished(ctx, jobName, -1, label, events.KindHook, placementOf(ctx, body), mark, "", started, err)
 }
 
 // hookRowName is a hook's row label: which hook fired, then what it ran —
@@ -230,7 +227,7 @@ func publishStepSkipped(
 		StepKind:     stepKindName(step),
 		StepID:       mark.id,
 		ParentStepID: mark.parent,
-		Status:       "skipped",
+		Status:       events.StatusSkipped,
 		Hash:         hash,
 		Text:         reason,
 	})
@@ -299,7 +296,7 @@ func publishForCurrentStep(ctx context.Context, eventType, status, text string) 
 
 	name, kind := eventStepName(identity.step), stepKindName(identity.step)
 	if identity.label != "" {
-		name, kind = identity.label, hookKind
+		name, kind = identity.label, events.KindHook
 	}
 
 	events.Publish(ctx, events.Event{
@@ -339,7 +336,7 @@ func runOutcome(ctx context.Context, err error) (string, string) {
 		return string(outcome.Classify(ctx, err)), err.Error()
 	}
 
-	return "succeeded", ""
+	return events.StatusSucceeded, ""
 }
 
 func publishJobFinished(ctx context.Context, jobName string, started time.Time, err error) {

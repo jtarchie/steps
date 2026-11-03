@@ -68,6 +68,24 @@ const (
 	NoteWarn = "warn"
 )
 
+// Finish statuses, carried in Status of a TypeStepFinished, TypeStepSkipped or TypeJobFinished event. The first four are internal/outcome's Class spellings (a pipeline test holds them equal, since this leaf cannot import it). Status is one field for four vocabularies — these, the note levels above, an output chunk's stream below and an agent turn's depth label — so it is not a named type: that would claim a vocabulary the field does not have, and splitting it would change the run_events column and every SSE frame.
+const (
+	StatusSucceeded = "succeeded"
+	StatusFailed    = "failed"
+	StatusErrored   = "errored"
+	StatusAborted   = "aborted"
+	StatusSkipped   = "skipped"
+)
+
+// Output streams, carried in Status of a TypeStepOutputChunk event.
+const (
+	StreamStdout = "stdout"
+	StreamStderr = "stderr"
+)
+
+// KindHook is the StepKind a hook's row is published under; every other kind is a config.StepKind spelling, which this leaf cannot import.
+const KindHook = "hook"
+
 // Event is one thing that happened during a run.
 //
 // Flat rather than a type union: it is serialized to sqlite and to SSE, and
