@@ -53,6 +53,8 @@ type receivers struct {
 type compiledReceiver struct {
 	receiver *webhook.Receiver
 	err      error
+	// unset gates the unset-secret warning to one per compiled configuration, since an unauthenticated caller controls how many requests there are.
+	unset *sync.Once
 }
 
 func (c *receivers) of(cfg *config.Config) map[string]compiledReceiver {
@@ -66,7 +68,7 @@ func (c *receivers) of(cfg *config.Config) map[string]compiledReceiver {
 		for _, res := range cfg.Resources {
 			if res.Type == config.WebhookType {
 				receiver, err := c.compile(res)
-				c.byName[res.Name] = compiledReceiver{receiver: receiver, err: err}
+				c.byName[res.Name] = compiledReceiver{receiver: receiver, err: err, unset: &sync.Once{}}
 			}
 		}
 	}
@@ -78,15 +80,17 @@ func (c *receivers) of(cfg *config.Config) map[string]compiledReceiver {
 func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, compiled map[string]compiledReceiver, st HookStore, name string) {
 	ctx := events.WithLogAttrs(r.Context(), "pipeline", cfg.Name, "revision", cfg.Revision.SHA)
 
-	receiver, found := receiverFor(ctx, w, compiled, name)
+	entry, found := receiverFor(ctx, w, compiled, name)
 	if !found {
 		return
 	}
 
+	receiver := entry.receiver
+
 	// Only after receiverFor resolved it: the path segment is the sender's, and a guessed name must never become a line's identity.
 	ctx = events.WithLogAttrs(ctx, "resource", name)
 
-	body, valid := verified(ctx, w, r, receiver, name)
+	body, valid := verified(ctx, w, r, entry, name)
 	if !valid {
 		return
 	}
@@ -112,11 +116,11 @@ func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, compile
 	}
 }
 
-func receiverFor(ctx context.Context, w http.ResponseWriter, compiled map[string]compiledReceiver, name string) (*webhook.Receiver, bool) {
+func receiverFor(ctx context.Context, w http.ResponseWriter, compiled map[string]compiledReceiver, name string) (compiledReceiver, bool) {
 	if len(compiled) == 0 {
 		http.Error(w, "no webhook resources in this pipeline", http.StatusNotFound)
 
-		return nil, false
+		return compiledReceiver{}, false
 	}
 
 	// Unknown and not-a-webhook answer exactly as a bad signature does, so the route does not enumerate a pipeline's resources for whoever asks.
@@ -124,21 +128,22 @@ func receiverFor(ctx context.Context, w http.ResponseWriter, compiled map[string
 	if !found {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 
-		return nil, false
+		return compiledReceiver{}, false
 	}
 
-	receiver, err := entry.receiver, entry.err
-	if err != nil {
-		slog.ErrorContext(ctx, "webhook.config", "resource", name, "error", err)
+	if entry.err != nil {
+		slog.ErrorContext(ctx, "webhook.config", "resource", name, "error", entry.err)
 		http.Error(w, "webhook misconfigured", http.StatusInternalServerError)
 
-		return nil, false
+		return compiledReceiver{}, false
 	}
 
-	return receiver, true
+	return entry, true
 }
 
-func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, receiver *webhook.Receiver, name string) ([]byte, bool) {
+func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, entry compiledReceiver, name string) ([]byte, bool) {
+	receiver := entry.receiver
+
 	body, err := receiver.ReadBody(w, r)
 	if errors.Is(err, webhook.ErrTooLarge) {
 		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
@@ -154,12 +159,12 @@ func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, recei
 
 	secret := os.Getenv(receiver.SecretEnv)
 	if secret == "" {
-		slog.WarnContext(ctx, "webhook.secret_unset", "resource", name, "env", receiver.SecretEnv)
+		entry.unset.Do(func() { slog.WarnContext(ctx, "webhook.secret_unset", "resource", name, "env", receiver.SecretEnv) })
 	}
 
 	err = receiver.Verify(webhook.Request{Method: r.Method, Header: r.Header, Query: r.URL.Query(), Body: body}, secret, time.Now())
 	if err != nil {
-		slog.InfoContext(ctx, "webhook.unauthorized", "resource", name)
+		slog.DebugContext(ctx, "webhook.unauthorized", "resource", name)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 
 		return nil, false

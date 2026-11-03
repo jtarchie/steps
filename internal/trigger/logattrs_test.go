@@ -26,7 +26,7 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	var buf bytes.Buffer
 
 	prev := slog.Default()
-	slog.SetDefault(slog.New(events.LogHandler(slog.NewTextHandler(&buf, nil))))
+	slog.SetDefault(slog.New(events.LogHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	return &buf

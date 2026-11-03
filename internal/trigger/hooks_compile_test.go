@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -82,6 +83,30 @@ func TestAHookRecompilesWhenTheConfigurationChanges(t *testing.T) {
 
 	if got := f.versions(t); len(got) != 1 {
 		t.Errorf("versions = %v, want only d1: the new configuration's filter drops d2", got)
+	}
+}
+
+// TestAnUnsetSecretIsWarnedOncePerConfiguration: the warning names a misconfiguration, which does not change per request, and every unsigned caller can send a request, so a line per request is a log flood they control.
+func TestAnUnsetSecretIsWarnedOncePerConfiguration(t *testing.T) {
+	f := newHookFixture(t, nil)
+	t.Setenv("STEPS_TEST_HOOK_SECRET", "")
+
+	out := captureLog(t)
+	handler := hookHandler(staticConfig(f.cfg), f.st, rsrc.Receiver)
+	body := []byte(`{}`)
+
+	for range 5 {
+		if code := postHook(t, handler, signed("", "d1", body), body); code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", code)
+		}
+	}
+
+	if got := strings.Count(out.String(), "msg=webhook.secret_unset "); got != 1 {
+		t.Errorf("5 deliveries to an unset secret logged %d webhook.secret_unset lines, want 1:\n%s", got, out)
+	}
+
+	if line := logLine(out.String(), "webhook.unauthorized"); !strings.Contains(line, "level=DEBUG") {
+		t.Errorf("per-request webhook.unauthorized = %q, want Debug so callers cannot flood the log", line)
 	}
 }
 

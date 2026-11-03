@@ -36,8 +36,13 @@ func (s Scheme) Verify(r Request, secret []byte, now time.Time) bool {
 		return false
 	}
 
-	in := r.input(Custom, "")
 	message := r.Body
+
+	// Parsing the body is the cost a forged request must not be able to buy, so only a scheme whose expressions read it pays, and only on its way to the MAC.
+	var in Input
+	if s.Signed != nil || s.Timestamp != nil {
+		in = r.input(Custom, "")
+	}
 
 	if s.Signed != nil {
 		signed, err := s.Signed(in)
