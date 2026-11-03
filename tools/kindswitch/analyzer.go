@@ -35,6 +35,9 @@ func main() { singlechecker.Main(Analyzer) }
 // A bare directive is not honored: the reason is the point.
 const ignoreDirective = "//kindswitch:ignore"
 
+// kindTag is the struct tag naming a kind field; the floor test in analyzer_test.go counts it on config.Step so a rename cannot leave the pass checking nothing.
+const kindTag = "kind"
+
 // Analyzer is the go/analysis pass.
 var Analyzer = &analysis.Analyzer{
 	Name:     "kindswitch",
@@ -126,7 +129,7 @@ func isKindField(selection *types.Selection) bool {
 		typ = structType.Field(index).Type()
 	}
 
-	_, ok := reflect.StructTag(tag).Lookup("kind")
+	_, ok := reflect.StructTag(tag).Lookup(kindTag)
 
 	return ok
 }
