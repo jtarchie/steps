@@ -1,12 +1,10 @@
-package workspace
+package config
 
 import (
 	"fmt"
 	"maps"
 	"path/filepath"
 	"slices"
-
-	"github.com/jtarchie/steps/internal/config"
 )
 
 // ValidateArtifactFlow statically checks that every task/agent/put step's
@@ -27,7 +25,7 @@ import (
 // set to just its own resource rather than adding to it; otherwise this
 // check would pass an input referencing a pre-get artifact that the runtime
 // can't actually see, exactly the late failure it exists to prevent.
-func ValidateArtifactFlow(cfg *config.Config, job *config.Job) error {
+func ValidateArtifactFlow(cfg *Config, job *Job) error {
 	available := map[string]bool{}
 
 	for i, step := range job.Plan {
@@ -48,7 +46,7 @@ func ValidateArtifactFlow(cfg *config.Config, job *config.Job) error {
 // its outputs), while failure-path hooks (on_failure/on_error/on_abort/ensure)
 // see only the pre-outputs view, since the step may have failed before
 // producing anything.
-func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+func validateStepArtifactFlow(cfg *Config, jobName string, i int, step Step, available map[string]bool) error {
 	// across: is a MODIFIER, so a from_file: axis can sit on a step of any
 	// kind. Checked before the kind dispatch, once, rather than in each arm —
 	// and here rather than at the top-level walk, so a matrix nested in a try:,
@@ -63,9 +61,9 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 
 // validateStepKindArtifactFlow is validateStepArtifactFlow's kind dispatch,
 // split out so neither half carries the other's branch count.
-func validateStepKindArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+func validateStepKindArtifactFlow(cfg *Config, jobName string, i int, step Step, available map[string]bool) error {
 	switch kind, _ := step.Kind(); kind {
-	case config.StepKindGet:
+	case StepKindGet:
 		// A get inside an existing build fetches into the same workspace,
 		// so its resource accumulates alongside earlier artifacts.
 		// Failure-path hooks run before the fetch has landed anything, so
@@ -75,19 +73,19 @@ func validateStepKindArtifactFlow(cfg *config.Config, jobName string, i int, ste
 		available[fetchedByGet(step.Get)] = true
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
-	case config.StepKindPut:
+	case StepKindPut:
 		return validatePutArtifactFlow(cfg, jobName, i, step, available)
-	case config.StepKindTask:
+	case StepKindTask:
 		return validateTaskArtifactFlow(cfg, jobName, i, step, available)
-	case config.StepKindAgent:
+	case StepKindAgent:
 		return validateAgentArtifactFlow(cfg, jobName, i, step, available)
-	case config.StepKindTry:
+	case StepKindTry:
 		return validateTryArtifactFlow(cfg, jobName, i, step, available)
-	case config.StepKindDo:
+	case StepKindDo:
 		return validateDoArtifactFlow(cfg, jobName, i, step, available)
-	case config.StepKindLoadVar:
+	case StepKindLoadVar:
 		return validateLoadVarArtifactFlow(cfg, jobName, i, step, available)
-	case config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindApproval:
+	case StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindApproval:
 		// Handled together below, via blockBranches.
 	}
 
@@ -114,7 +112,7 @@ func validateStepKindArtifactFlow(cfg *config.Config, jobName string, i int, ste
 // container instead made a try-wrapped producer invisible here, and the next
 // step naming its output failed static validation with "not a resource
 // fetched or an output produced earlier".
-func validateTryArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+func validateTryArtifactFlow(cfg *Config, jobName string, i int, step Step, available map[string]bool) error {
 	pre := maps.Clone(available)
 
 	err := validateStepArtifactFlow(cfg, jobName, i, *step.Try, available)
@@ -134,7 +132,7 @@ func validateTryArtifactFlow(cfg *config.Config, jobName string, i int, step con
 // inputs (see internal/pipeline's runLoadVarStep). Without this the classic
 // `task: pick-tag` / `load_var: tag, file: version.txt` pair validated clean
 // and then died mid-run on a file nothing had materialized.
-func validateLoadVarArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+func validateLoadVarArtifactFlow(cfg *Config, jobName string, i int, step Step, available map[string]bool) error {
 	pre := maps.Clone(available)
 
 	err := checkInputsAvailable(jobName, i, "load_var", step.LoadVar, step.InputNames(), available)
@@ -156,7 +154,7 @@ func validateLoadVarArtifactFlow(cfg *config.Config, jobName string, i int, step
 // artifact at all, which under per-step isolation can only ever be a missing
 // file: nothing but declared artifacts is materialized at the root of a step's
 // directory.
-func checkVarFileDeclared(jobName string, i int, step config.Step) error {
+func checkVarFileDeclared(jobName string, i int, step Step) error {
 	root := firstPathComponent(step.VarFile)
 	if root == "" || root == "." {
 		return nil
@@ -187,7 +185,7 @@ func checkVarFileDeclared(jobName string, i int, step config.Step) error {
 // along), which is why this cannot go through the shared branch walk: the
 // children thread the SAME available map in declaration order, and what they
 // produce stays visible to the steps after the block.
-func validateDoArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+func validateDoArtifactFlow(cfg *Config, jobName string, i int, step Step, available map[string]bool) error {
 	pre := maps.Clone(available)
 
 	for childIndex := range step.Do {
@@ -202,16 +200,16 @@ func validateDoArtifactFlow(cfg *config.Config, jobName string, i int, step conf
 
 // blockBranches returns a concurrent block's branches, or nil for an ordinary
 // step.
-func blockBranches(step config.Step) []config.Step {
+func blockBranches(step Step) []Step {
 	switch kind, _ := step.Kind(); kind {
-	case config.StepKindInParallel:
+	case StepKindInParallel:
 		return step.InParallel.Steps
-	case config.StepKindRace:
+	case StepKindRace:
 		return step.Race.Steps
-	case config.StepKindEnsemble:
+	case StepKindEnsemble:
 		return step.Ensemble.Agents
-	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent,
-		config.StepKindTry, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+	case StepKindGet, StepKindTask, StepKindPut, StepKindAgent,
+		StepKindTry, StepKindLoadVar, StepKindApproval, StepKindDo:
 		// Only the concurrent blocks have branches; do: is walked as a sequence instead.
 	}
 
@@ -221,7 +219,7 @@ func blockBranches(step config.Step) []config.Step {
 // validatePutArtifactFlow checks a put step's declared inputs. A put produces
 // no artifacts into the build store, so its pre and post hook views are the
 // same one.
-func validatePutArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+func validatePutArtifactFlow(cfg *Config, jobName string, i int, step Step, available map[string]bool) error {
 	// inputs: all draws on whatever exists, so there is nothing to check.
 	if !step.InputsAll() {
 		err := checkInputsAvailable(jobName, i, "put", step.Put, step.InputNames(), available)
@@ -240,7 +238,7 @@ func validatePutArtifactFlow(cfg *config.Config, jobName string, i int, step con
 
 // validateBlockArtifactFlow validates a concurrent block's branches and then
 // the block's own hooks.
-func validateBlockArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, branches []config.Step, available map[string]bool) error {
+func validateBlockArtifactFlow(cfg *Config, jobName string, i int, step Step, branches []Step, available map[string]bool) error {
 	pre := maps.Clone(available)
 
 	err := validateParallelArtifactFlow(cfg, jobName, i, branches, available)
@@ -260,7 +258,7 @@ func validateBlockArtifactFlow(cfg *config.Config, jobName string, i int, step c
 // artifact is not available here" rather than "sometimes". Everything the
 // branches produce joins the view after the block, where a later step may
 // legitimately consume it.
-func validateParallelArtifactFlow(cfg *config.Config, jobName string, i int, branches []config.Step, available map[string]bool) error {
+func validateParallelArtifactFlow(cfg *Config, jobName string, i int, branches []Step, available map[string]bool) error {
 	start := maps.Clone(available)
 
 	for _, branch := range branches {
@@ -279,7 +277,7 @@ func validateParallelArtifactFlow(cfg *config.Config, jobName string, i int, bra
 	return nil
 }
 
-func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+func validateAgentArtifactFlow(cfg *Config, jobName string, i int, step Step, available map[string]bool) error {
 	pre := maps.Clone(available)
 
 	err := checkInputsAvailable(jobName, i, "agent", step.Agent, step.InputNames(), available)
@@ -321,7 +319,7 @@ func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step c
 }
 
 // checkMessageFileArtifactsAvailable validates a run-time message_files:
-// {artifact, path}'s artifact (see config.FileRef.Deferred) against both the
+// {artifact, path}'s artifact (see FileRef.Deferred) against both the
 // plan's available set (so it names something actually fetched/produced
 // somewhere in the job) and the step's own declared inputs: (so the artifact
 // is guaranteed to be materialized into the step's working directory by the
@@ -329,7 +327,7 @@ func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step c
 // relative to the step's own build space, not the whole plan). A load-time
 // message_files: (a plain path, not a mapping) names no artifact and is a
 // no-op here.
-func checkMessageFileArtifactsAvailable(jobName string, i int, agentName string, messageFiles []*config.FileRef, inputs []string, available map[string]bool) error {
+func checkMessageFileArtifactsAvailable(jobName string, i int, agentName string, messageFiles []*FileRef, inputs []string, available map[string]bool) error {
 	for _, ref := range messageFiles {
 		if !ref.Deferred() {
 			continue
@@ -349,7 +347,7 @@ func checkMessageFileArtifactsAvailable(jobName string, i int, agentName string,
 	return nil
 }
 
-func validateTaskArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
+func validateTaskArtifactFlow(cfg *Config, jobName string, i int, step Step, available map[string]bool) error {
 	rt, err := cfg.ResolveTask(step)
 	if err != nil {
 		return fmt.Errorf("job %q step %d: %w", jobName, i, err)
@@ -384,8 +382,8 @@ func validateTaskArtifactFlow(cfg *config.Config, jobName string, i int, step co
 // declared outputs are captured into the build store but never added to the
 // plan's available set — a later plan step must not depend on a
 // conditionally-run hook's output.
-func validateStepHooks(cfg *config.Config, jobName string, i int, step config.Step, pre, post map[string]bool) error {
-	return step.Hooks.Each(func(name string, hook *config.Step) error { //nolint:wrapcheck // callback errors carry full job/step/hook context
+func validateStepHooks(cfg *Config, jobName string, i int, step Step, pre, post map[string]bool) error {
+	return step.Hooks.Each(func(name string, hook *Step) error {
 		view := pre
 		if name == "on_success" {
 			view = post
@@ -398,28 +396,28 @@ func validateStepHooks(cfg *config.Config, jobName string, i int, step config.St
 // validateHookArtifactFlow checks one hook step's resolved inputs against the
 // view available to it, then recurses into the hook's own nested hooks (which
 // see the same view). Hook outputs are intentionally not folded into the view.
-func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookName string, hook config.Step, view map[string]bool) error {
+func validateHookArtifactFlow(cfg *Config, jobName string, i int, hookName string, hook Step, view map[string]bool) error {
 	var (
 		inputs     []string
 		kind, name string
 	)
 
 	switch hookKind, _ := hook.Kind(); hookKind {
-	case config.StepKindTask:
+	case StepKindTask:
 		rt, err := cfg.ResolveTask(hook)
 		if err != nil {
 			return fmt.Errorf("job %q step %d %s hook: %w", jobName, i, hookName, err)
 		}
 
 		inputs, kind, name = rt.Inputs, "task", rt.Name
-	case config.StepKindPut:
+	case StepKindPut:
 		inputs, kind, name = hook.InputNames(), "put", hook.Put
-	case config.StepKindAgent:
+	case StepKindAgent:
 		inputs, kind, name = hook.InputNames(), "agent", hook.Agent
-	case config.StepKindGet, config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble,
-		config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+	case StepKindGet, StepKindInParallel, StepKindRace, StepKindEnsemble,
+		StepKindLoadVar, StepKindApproval, StepKindDo:
 		// get: is rejected in a hook body at load time (see config's validateHookStep); these declare no inputs checked here.
-	case config.StepKindTry:
+	case StepKindTry:
 		// try: is a legal hook body, and a wrapper declares no inputs of its
 		// own — the step it wraps does, against this same view. Falling into
 		// the no-case branch left those inputs entirely unchecked, which is
@@ -440,14 +438,14 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 		return err
 	}
 
-	return hook.Hooks.Each(func(nestedName string, nested *config.Step) error { //nolint:wrapcheck // callback errors carry full job/step/hook context
+	return hook.Hooks.Each(func(nestedName string, nested *Step) error {
 		return validateHookArtifactFlow(cfg, jobName, i, hookName+"."+nestedName, *nested, view)
 	})
 }
 
 // checkHookInputsAvailable holds a hook's inputs and artifact image to its
 // view; split out of validateHookArtifactFlow for the cyclomatic budget.
-func checkHookInputsAvailable(cfg *config.Config, jobName string, i int, hookName, kind, name string, inputs []string, image string, view map[string]bool) error {
+func checkHookInputsAvailable(cfg *Config, jobName string, i int, hookName, kind, name string, inputs []string, image string, view map[string]bool) error {
 	for _, in := range inputs {
 		if !view[in] {
 			return fmt.Errorf("job %q step %d %s hook (%s %q): input %q is not available to this hook",
@@ -459,7 +457,7 @@ func checkHookInputsAvailable(cfg *config.Config, jobName string, i int, hookNam
 }
 
 // checkHookAgentArtifacts holds an agent hook to a plan agent's dir: and message_files: rules against the hook's view; split out of validateHookArtifactFlow for the cyclomatic budget.
-func checkHookAgentArtifacts(jobName string, i int, hookName string, hook config.Step, inputs []string, view map[string]bool) error {
+func checkHookAgentArtifacts(jobName string, i int, hookName string, hook Step, inputs []string, view map[string]bool) error {
 	if hook.Agent == "" {
 		return nil
 	}
@@ -507,7 +505,7 @@ func checkHookAgentArtifacts(jobName string, i int, hookName string, hook config
 // image need not ALSO be an input, as in Concourse — the daemon pulls it, so
 // the artifact's files are never read. An earlier task's output of the same
 // name does not count: only a get's version names an image.
-func checkImageAvailable(cfg *config.Config, jobName string, i int, kind, name, image string, available map[string]bool) error {
+func checkImageAvailable(cfg *Config, jobName string, i int, kind, name, image string, available map[string]bool) error {
 	if image == "" || available[fetchedByGet(image)] || !cfg.ImageArtifacts(jobName)[image] {
 		return nil
 	}
@@ -539,7 +537,7 @@ func checkInputsAvailable(jobName string, i int, kind, name string, inputs []str
 // runner reads the file by materializing that artifact (see internal/pipeline's
 // readAcrossFile), so an axis pointing at something nothing produces would fail
 // mid-run, after the steps before it had already been paid for.
-func checkAcrossFromFileAvailable(jobName string, i int, step config.Step, available map[string]bool) error {
+func checkAcrossFromFileAvailable(jobName string, i int, step Step, available map[string]bool) error {
 	for _, axis := range step.Across {
 		if !axis.Runtime() {
 			continue
@@ -559,7 +557,7 @@ func checkAcrossFromFileAvailable(jobName string, i int, step config.Step, avail
 // path component) is one of the step's own declared inputs: or outputs: —
 // only declared artifacts are materialized into the step's directory, so an
 // undeclared dir: would be a missing directory at run time.
-func checkDirDeclared(jobName string, i int, kind string, step config.Step) error {
+func checkDirDeclared(jobName string, i int, kind string, step Step) error {
 	root := firstPathComponent(step.Dir)
 	if root == "" || root == "." {
 		return nil

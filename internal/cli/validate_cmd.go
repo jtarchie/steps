@@ -9,7 +9,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/pipeline"
-	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // ValidateCmd checks a pipeline and prints what's wrong with it, without
@@ -112,7 +111,7 @@ func fileProblems(cfg *config.Config) error {
 	}
 
 	for i := range cfg.Jobs {
-		flowErr := workspace.ValidateArtifactFlow(cfg, &cfg.Jobs[i])
+		flowErr := config.ValidateArtifactFlow(cfg, &cfg.Jobs[i])
 		if flowErr != nil {
 			errs = append(errs, flowErr)
 		}

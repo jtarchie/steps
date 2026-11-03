@@ -66,7 +66,7 @@ jobs:
 		t.Parallel()
 
 		// This loads (LoadConfig doesn't run flow validation), but
-		// ValidateArtifactFlow (exercised in internal/workspace) rejects it.
+		// ValidateArtifactFlow rejects it.
 		loadOK(t, `
 jobs:
 - name: j

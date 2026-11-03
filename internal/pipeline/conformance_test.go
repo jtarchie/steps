@@ -394,7 +394,7 @@ jobs:
 
 	// The flow check runs per job (RunJob calls it before any step executes,
 	// and `steps validate` calls it for every job), not at LoadConfig.
-	err = workspace.ValidateArtifactFlow(badCfg, &badCfg.Jobs[0])
+	err = config.ValidateArtifactFlow(badCfg, &badCfg.Jobs[0])
 	if err == nil {
 		t.Fatal("a task consuming a bare put's resource validated; a put produces no artifact, so this must be a plan-time error")
 	}

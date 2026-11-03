@@ -84,7 +84,7 @@ func TestAcrossFromFileAxisRules(t *testing.T) {
 			wantErr: "escapes the workspace",
 		},
 		// An axis naming an artifact nothing produces is checked by
-		// workspace.ValidateArtifactFlow, where dir:'s identical rule lives —
+		// config.ValidateArtifactFlow, where dir:'s identical rule lives —
 		// see TestAcrossFromFileArtifactMustBeAvailable there.
 	}
 

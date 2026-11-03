@@ -239,7 +239,7 @@ type Step struct {
 	// earlier task/agent step. Both are optional and default to empty: an
 	// absent inputs: means "sees nothing declared" (there is no requirement to
 	// declare them). When present, an inputs: naming an artifact nothing
-	// produces is caught by workspace.ValidateArtifactFlow. Declarations only
+	// produces is caught by config.ValidateArtifactFlow. Declarations only
 	// change what a step physically sees under a top-level workspace: block
 	// (see WorkspaceConfig); without one they are a validated contract, not
 	// isolation, and are never folded into a node's hash (see internal/merkle).

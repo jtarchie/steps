@@ -36,7 +36,7 @@ const WorkerReleaseTimeout = 15 * time.Minute
 // single-mutable-directory implementation.
 //
 // Before executing anything, it statically validates every task/agent/put
-// step's declared inputs (see workspace.ValidateArtifactFlow — always runs, even
+// step's declared inputs (see config.ValidateArtifactFlow — always runs, even
 // under --force) and plans every chain the job's steps could resolve to
 // (resolving get versions but running nothing), checking the store for chains
 // that already succeeded with identical content so that already-run
@@ -416,7 +416,7 @@ func validateJob(ctx context.Context, cfg *config.Config, job *config.Job) error
 		return err
 	}
 
-	err = workspace.ValidateArtifactFlow(cfg, job)
+	err = config.ValidateArtifactFlow(cfg, job)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}

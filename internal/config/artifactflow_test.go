@@ -1,10 +1,8 @@
-package workspace
+package config
 
 import (
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/config"
 )
 
 // TestValidateArtifactFlowRunsWithoutWorkspace confirms flow validation is
@@ -13,12 +11,12 @@ import (
 func TestValidateArtifactFlowRunsWithoutWorkspace(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{} // no workspace: block
+	cfg := &Config{} // no workspace: block
 
-	job := &config.Job{
+	job := &Job{
 		Name: "j",
-		Plan: []config.Step{
-			{Task: "work", Run: "true", Inputs: config.Inputs("missing")},
+		Plan: []Step{
+			{Task: "work", Run: "true", Inputs: Inputs("missing")},
 		},
 	}
 
@@ -31,13 +29,13 @@ func TestValidateArtifactFlowRunsWithoutWorkspace(t *testing.T) {
 func TestValidateArtifactFlowDeclaredProducer(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
+	cfg := &Config{}
 
-	job := &config.Job{
+	job := &Job{
 		Name: "j",
-		Plan: []config.Step{
+		Plan: []Step{
 			{Get: "repo"},
-			{Task: "work", Run: "true", Inputs: config.Inputs("repo")},
+			{Task: "work", Run: "true", Inputs: Inputs("repo")},
 		},
 	}
 
@@ -52,16 +50,16 @@ func TestValidateArtifactFlowDeclaredProducer(t *testing.T) {
 func TestValidateArtifactFlowDir(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{
-		Agents: []config.Agent{{Name: "r", Tools: []config.ToolSpec{{Builtin: "read_file"}}}},
+	cfg := &Config{
+		Agents: []Agent{{Name: "r", Tools: []ToolSpec{{Builtin: "read_file"}}}},
 	}
 
 	t.Run("dir naming a declared available artifact passes", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			{Get: "repo"},
-			{Agent: "r", Dir: "repo/cmd", Inputs: config.Inputs("repo")},
+			{Agent: "r", Dir: "repo/cmd", Inputs: Inputs("repo")},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -73,7 +71,7 @@ func TestValidateArtifactFlowDir(t *testing.T) {
 	t.Run("dir naming an available but undeclared artifact errors", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			{Get: "repo"},
 			{Agent: "r", Dir: "repo/cmd"},
 		}}
@@ -87,7 +85,7 @@ func TestValidateArtifactFlowDir(t *testing.T) {
 	t.Run("dir naming nothing fetched errors", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			{Agent: "r", Dir: "repo"},
 		}}
 
@@ -101,7 +99,7 @@ func TestValidateArtifactFlowDir(t *testing.T) {
 	t.Run("dir naming the step's own fresh output passes", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			{Agent: "r", Dir: "report", Outputs: []string{"report"}},
 		}}
 
@@ -114,7 +112,7 @@ func TestValidateArtifactFlowDir(t *testing.T) {
 	t.Run("dir naming neither an available artifact nor the step's own output errors", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			{Agent: "r", Dir: "report", Outputs: []string{"other"}},
 		}}
 
@@ -132,18 +130,18 @@ func TestValidateArtifactFlowDir(t *testing.T) {
 func TestAcrossFromFileArtifactMustBeAvailable(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
+	cfg := &Config{}
 
-	axis := func(from string) []config.AcrossVar {
-		return []config.AcrossVar{{Var: "item", FromFile: from}}
+	axis := func(from string) []AcrossVar {
+		return []AcrossVar{{Var: "item", FromFile: from}}
 	}
 
 	t.Run("an earlier step's output passes", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
-			{Task: "scan", Run: "true", Inputs: config.Inputs(), Outputs: []string{"findings"}},
-			{Across: axis("findings/items.json"), Task: "work", Run: "true", Inputs: config.Inputs("findings")},
+		job := &Job{Name: "j", Plan: []Step{
+			{Task: "scan", Run: "true", Inputs: Inputs(), Outputs: []string{"findings"}},
+			{Across: axis("findings/items.json"), Task: "work", Run: "true", Inputs: Inputs("findings")},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -155,9 +153,9 @@ func TestAcrossFromFileArtifactMustBeAvailable(t *testing.T) {
 	t.Run("a fetched resource passes", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			{Get: "repo"},
-			{Across: axis("repo/matrix.json"), Task: "work", Run: "true", Inputs: config.Inputs("repo")},
+			{Across: axis("repo/matrix.json"), Task: "work", Run: "true", Inputs: Inputs("repo")},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -169,8 +167,8 @@ func TestAcrossFromFileArtifactMustBeAvailable(t *testing.T) {
 	t.Run("an artifact nothing produces errors", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
-			{Across: axis("nowhere/items.json"), Task: "work", Run: "true", Inputs: config.Inputs()},
+		job := &Job{Name: "j", Plan: []Step{
+			{Across: axis("nowhere/items.json"), Task: "work", Run: "true", Inputs: Inputs()},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -184,9 +182,9 @@ func TestAcrossFromFileArtifactMustBeAvailable(t *testing.T) {
 
 		// The file has to exist by the time the matrix expands, so producing it
 		// afterwards is the same mistake as consuming any other artifact early.
-		job := &config.Job{Name: "j", Plan: []config.Step{
-			{Across: axis("findings/items.json"), Task: "work", Run: "true", Inputs: config.Inputs()},
-			{Task: "scan", Run: "true", Inputs: config.Inputs(), Outputs: []string{"findings"}},
+		job := &Job{Name: "j", Plan: []Step{
+			{Across: axis("findings/items.json"), Task: "work", Run: "true", Inputs: Inputs()},
+			{Task: "scan", Run: "true", Inputs: Inputs(), Outputs: []string{"findings"}},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -203,16 +201,16 @@ func TestAcrossFromFileArtifactMustBeAvailable(t *testing.T) {
 func TestValidateArtifactFlowPromptFileArtifact(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{
-		Agents: []config.Agent{{Name: "reviewer"}},
+	cfg := &Config{
+		Agents: []Agent{{Name: "reviewer"}},
 	}
 
 	t.Run("artifact fetched and declared as an input passes", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			{Get: "repo"},
-			{Agent: "reviewer", Inputs: config.Inputs("repo"), MessageFiles: []*config.FileRef{{Artifact: "repo", Path: "PROMPT.md"}}},
+			{Agent: "reviewer", Inputs: Inputs("repo"), MessageFiles: []*FileRef{{Artifact: "repo", Path: "PROMPT.md"}}},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -227,8 +225,8 @@ func TestValidateArtifactFlowPromptFileArtifact(t *testing.T) {
 		// Inputs deliberately doesn't declare "repo": if it did,
 		// checkInputsAvailable would reject it first (a plain undeclared-input
 		// error), masking the message_files-specific check this case targets.
-		job := &config.Job{Name: "j", Plan: []config.Step{
-			{Agent: "reviewer", Inputs: config.Inputs(), MessageFiles: []*config.FileRef{{Artifact: "repo", Path: "PROMPT.md"}}},
+		job := &Job{Name: "j", Plan: []Step{
+			{Agent: "reviewer", Inputs: Inputs(), MessageFiles: []*FileRef{{Artifact: "repo", Path: "PROMPT.md"}}},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -240,9 +238,9 @@ func TestValidateArtifactFlowPromptFileArtifact(t *testing.T) {
 	t.Run("artifact fetched but not declared as an input errors", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			{Get: "repo"},
-			{Agent: "reviewer", Inputs: config.Inputs(), MessageFiles: []*config.FileRef{{Artifact: "repo", Path: "PROMPT.md"}}},
+			{Agent: "reviewer", Inputs: Inputs(), MessageFiles: []*FileRef{{Artifact: "repo", Path: "PROMPT.md"}}},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -254,8 +252,8 @@ func TestValidateArtifactFlowPromptFileArtifact(t *testing.T) {
 	t.Run("load-time scalar form names no artifact and is unaffected", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
-			{Agent: "reviewer", Inputs: config.Inputs(), MessageFiles: []*config.FileRef{&config.FileRef{Path: "prompts/review.md"}}},
+		job := &Job{Name: "j", Plan: []Step{
+			{Agent: "reviewer", Inputs: Inputs(), MessageFiles: []*FileRef{&FileRef{Path: "prompts/review.md"}}},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -269,23 +267,23 @@ func TestValidateArtifactFlowPromptFileArtifact(t *testing.T) {
 func TestValidateArtifactFlowHookMessageFiles(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{Agents: []config.Agent{{Name: "reviewer"}}}
+	cfg := &Config{Agents: []Agent{{Name: "reviewer"}}}
 
-	hooked := func(hook config.Step) *config.Job {
-		return &config.Job{Name: "j", Plan: []config.Step{
+	hooked := func(hook Step) *Job {
+		return &Job{Name: "j", Plan: []Step{
 			{Get: "repo"},
-			{Task: "work", Run: "true", Hooks: config.Hooks{OnFailure: &hook}},
+			{Task: "work", Run: "true", Hooks: Hooks{OnFailure: &hook}},
 		}}
 	}
 
-	prompt := func(artifact string) []*config.FileRef {
-		return []*config.FileRef{{Artifact: artifact, Path: "PROMPT.md"}}
+	prompt := func(artifact string) []*FileRef {
+		return []*FileRef{{Artifact: artifact, Path: "PROMPT.md"}}
 	}
 
 	t.Run("an available artifact declared in the hook's inputs passes", func(t *testing.T) {
 		t.Parallel()
 
-		err := ValidateArtifactFlow(cfg, hooked(config.Step{Agent: "reviewer", Inputs: config.Inputs("repo"), MessageFiles: prompt("repo")}))
+		err := ValidateArtifactFlow(cfg, hooked(Step{Agent: "reviewer", Inputs: Inputs("repo"), MessageFiles: prompt("repo")}))
 		if err != nil {
 			t.Fatalf("err = %v, want nil", err)
 		}
@@ -294,7 +292,7 @@ func TestValidateArtifactFlowHookMessageFiles(t *testing.T) {
 	t.Run("an artifact the hook cannot see errors", func(t *testing.T) {
 		t.Parallel()
 
-		err := ValidateArtifactFlow(cfg, hooked(config.Step{Agent: "reviewer", Inputs: config.Inputs(), MessageFiles: prompt("missing")}))
+		err := ValidateArtifactFlow(cfg, hooked(Step{Agent: "reviewer", Inputs: Inputs(), MessageFiles: prompt("missing")}))
 		if err == nil || !strings.Contains(err.Error(), "is not available to this hook") {
 			t.Fatalf("err = %v, want a message_files-not-available error", err)
 		}
@@ -303,7 +301,7 @@ func TestValidateArtifactFlowHookMessageFiles(t *testing.T) {
 	t.Run("an available artifact missing from the hook's inputs errors", func(t *testing.T) {
 		t.Parallel()
 
-		err := ValidateArtifactFlow(cfg, hooked(config.Step{Agent: "reviewer", Inputs: config.Inputs(), MessageFiles: prompt("repo")}))
+		err := ValidateArtifactFlow(cfg, hooked(Step{Agent: "reviewer", Inputs: Inputs(), MessageFiles: prompt("repo")}))
 		if err == nil || !strings.Contains(err.Error(), "must also be declared in this hook's inputs") {
 			t.Fatalf("err = %v, want a must-be-declared error", err)
 		}
@@ -313,24 +311,24 @@ func TestValidateArtifactFlowHookMessageFiles(t *testing.T) {
 func TestValidateArtifactFlowHookDir(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{Agents: []config.Agent{{Name: "r"}}}
+	cfg := &Config{Agents: []Agent{{Name: "r"}}}
 
 	cases := map[string]struct {
-		hook    config.Step
+		hook    Step
 		wantErr string
 	}{
 		"an available artifact declared in the hook's inputs passes": {
-			hook: config.Step{Agent: "r", Dir: "repo/cmd", Inputs: config.Inputs("repo")},
+			hook: Step{Agent: "r", Dir: "repo/cmd", Inputs: Inputs("repo")},
 		},
 		"the hook's own fresh output passes": {
-			hook: config.Step{Agent: "r", Dir: "notes", Outputs: []string{"notes"}},
+			hook: Step{Agent: "r", Dir: "notes", Outputs: []string{"notes"}},
 		},
 		"a dir nothing fetched errors": {
-			hook:    config.Step{Agent: "r", Dir: "nowhere"},
+			hook:    Step{Agent: "r", Dir: "nowhere"},
 			wantErr: `(on_failure hook agent "r"): dir "nowhere" names "nowhere", which is not a resource fetched`,
 		},
 		"an available but undeclared artifact errors": {
-			hook:    config.Step{Agent: "r", Dir: "repo"},
+			hook:    Step{Agent: "r", Dir: "repo"},
 			wantErr: "which the step does not declare",
 		},
 	}
@@ -339,9 +337,9 @@ func TestValidateArtifactFlowHookDir(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			job := &config.Job{Name: "j", Plan: []config.Step{
+			job := &Job{Name: "j", Plan: []Step{
 				{Get: "repo"},
-				{Task: "work", Run: "true", Hooks: config.Hooks{OnFailure: &tc.hook}},
+				{Task: "work", Run: "true", Hooks: Hooks{OnFailure: &tc.hook}},
 			}}
 
 			err := ValidateArtifactFlow(cfg, job)
@@ -360,17 +358,17 @@ func TestValidateArtifactFlowHookDir(t *testing.T) {
 func TestValidateArtifactFlowTaskMappings(t *testing.T) {
 	t.Parallel()
 
-	job := &config.Job{Name: "j", Plan: []config.Step{
+	job := &Job{Name: "j", Plan: []Step{
 		{Get: "repo"},
 		{
 			Task: "build", Run: "true",
-			Inputs: config.Inputs("src"), InputMapping: map[string]string{"src": "repo"},
+			Inputs: Inputs("src"), InputMapping: map[string]string{"src": "repo"},
 			Outputs: []string{"bin"}, OutputMapping: map[string]string{"bin": "release"},
 		},
-		{Task: "ship", Run: "true", Inputs: config.Inputs("release")},
+		{Task: "ship", Run: "true", Inputs: Inputs("release")},
 	}}
 
-	err := ValidateArtifactFlow(&config.Config{}, job)
+	err := ValidateArtifactFlow(&Config{}, job)
 	if err != nil {
 		t.Fatalf("err = %v, want nil (src reads repo, bin publishes release)", err)
 	}
@@ -403,16 +401,16 @@ func TestFirstPathComponent(t *testing.T) {
 func TestValidateArtifactFlowThroughTry(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
+	cfg := &Config{}
 
 	t.Run("a wrapped task publishes its outputs", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{
+		job := &Job{
 			Name: "j",
-			Plan: []config.Step{
-				{Try: &config.Step{Task: "build", Run: "true", Outputs: []string{"bin"}}},
-				{Task: "deploy", Run: "true", Inputs: config.Inputs("bin")},
+			Plan: []Step{
+				{Try: &Step{Task: "build", Run: "true", Outputs: []string{"bin"}}},
+				{Task: "deploy", Run: "true", Inputs: Inputs("bin")},
 			},
 		}
 
@@ -425,10 +423,10 @@ func TestValidateArtifactFlowThroughTry(t *testing.T) {
 	t.Run("a wrapped task's undeclared input is still caught", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{
+		job := &Job{
 			Name: "j",
-			Plan: []config.Step{
-				{Try: &config.Step{Task: "build", Run: "true", Inputs: config.Inputs("missing")}},
+			Plan: []Step{
+				{Try: &Step{Task: "build", Run: "true", Inputs: Inputs("missing")}},
 			},
 		}
 
@@ -447,19 +445,19 @@ func TestValidateArtifactFlowThroughTry(t *testing.T) {
 func TestValidateArtifactFlowTryWrappedHook(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
+	cfg := &Config{}
 
 	t.Run("undeclared input inside a try: hook is caught", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{
+		job := &Job{
 			Name: "j",
-			Plan: []config.Step{{
+			Plan: []Step{{
 				Task: "work",
 				Run:  "true",
-				Hooks: config.Hooks{
-					OnFailure: &config.Step{
-						Try: &config.Step{Task: "notify", Run: "true", Inputs: config.Inputs("missing")},
+				Hooks: Hooks{
+					OnFailure: &Step{
+						Try: &Step{Task: "notify", Run: "true", Inputs: Inputs("missing")},
 					},
 				},
 			}},
@@ -474,16 +472,16 @@ func TestValidateArtifactFlowTryWrappedHook(t *testing.T) {
 	t.Run("an available input inside a try: hook still passes", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{
+		job := &Job{
 			Name: "j",
-			Plan: []config.Step{
+			Plan: []Step{
 				{Get: "repo"},
 				{
 					Task: "work",
 					Run:  "true",
-					Hooks: config.Hooks{
-						OnFailure: &config.Step{
-							Try: &config.Step{Task: "notify", Run: "true", Inputs: config.Inputs("repo")},
+					Hooks: Hooks{
+						OnFailure: &Step{
+							Try: &Step{Task: "notify", Run: "true", Inputs: Inputs("repo")},
 						},
 					},
 				},
@@ -505,16 +503,16 @@ func TestValidateArtifactFlowTryWrappedHook(t *testing.T) {
 func TestValidateArtifactFlowLoadVar(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
+	cfg := &Config{}
 
-	producer := config.Step{Task: "pick-tag", Run: "true", Outputs: []string{"meta"}}
+	producer := Step{Task: "pick-tag", Run: "true", Outputs: []string{"meta"}}
 
 	t.Run("file inside a declared input passes", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			producer,
-			{LoadVar: "tag", VarFile: "meta/version.txt", Inputs: config.Inputs("meta")},
+			{LoadVar: "tag", VarFile: "meta/version.txt", Inputs: Inputs("meta")},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -526,7 +524,7 @@ func TestValidateArtifactFlowLoadVar(t *testing.T) {
 	t.Run("a bare file name is refused", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			producer,
 			{LoadVar: "tag", VarFile: "version.txt"},
 		}}
@@ -540,10 +538,10 @@ func TestValidateArtifactFlowLoadVar(t *testing.T) {
 	t.Run("a file in an artifact other than the declared one is refused", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			producer,
 			{Get: "repo"},
-			{LoadVar: "tag", VarFile: "meta/version.txt", Inputs: config.Inputs("repo")},
+			{LoadVar: "tag", VarFile: "meta/version.txt", Inputs: Inputs("repo")},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -555,7 +553,7 @@ func TestValidateArtifactFlowLoadVar(t *testing.T) {
 	t.Run("a file in an undeclared artifact is refused", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
+		job := &Job{Name: "j", Plan: []Step{
 			producer,
 			{LoadVar: "tag", VarFile: "meta/version.txt"},
 		}}
@@ -569,8 +567,8 @@ func TestValidateArtifactFlowLoadVar(t *testing.T) {
 	t.Run("an input nothing produced is refused", func(t *testing.T) {
 		t.Parallel()
 
-		job := &config.Job{Name: "j", Plan: []config.Step{
-			{LoadVar: "tag", VarFile: "meta/version.txt", Inputs: config.Inputs("meta")},
+		job := &Job{Name: "j", Plan: []Step{
+			{LoadVar: "tag", VarFile: "meta/version.txt", Inputs: Inputs("meta")},
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
@@ -586,54 +584,54 @@ func TestValidateArtifactFlowArtifactImage(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]struct {
-		plan []config.Step
+		plan []Step
 		want string
 	}{
 		"before its get": {
-			plan: []config.Step{{Task: "build", Run: "true", Image: "toolchain"}, {Get: "toolchain"}},
+			plan: []Step{{Task: "build", Run: "true", Image: "toolchain"}, {Get: "toolchain"}},
 			want: `image "toolchain"`,
 		},
 		"after its get": {
-			plan: []config.Step{{Get: "toolchain"}, {Task: "build", Run: "true", Image: "toolchain"}},
+			plan: []Step{{Get: "toolchain"}, {Task: "build", Run: "true", Image: "toolchain"}},
 		},
 		"an in_parallel sibling": {
-			plan: []config.Step{{InParallel: &config.InParallel{Steps: []config.Step{
+			plan: []Step{{InParallel: &InParallel{Steps: []Step{
 				{Get: "toolchain"},
 				{Agent: "a", Image: "toolchain"},
 			}}}},
 			want: `image "toolchain"`,
 		},
 		"a step hook after the get": {
-			plan: []config.Step{{Get: "toolchain", Hooks: config.Hooks{
-				OnSuccess: &config.Step{Task: "note", Run: "true", Image: "toolchain"},
+			plan: []Step{{Get: "toolchain", Hooks: Hooks{
+				OnSuccess: &Step{Task: "note", Run: "true", Image: "toolchain"},
 			}}},
 		},
 		"a step hook before the get": {
-			plan: []config.Step{{Task: "t", Run: "true", Hooks: config.Hooks{
-				OnFailure: &config.Step{Task: "note", Run: "true", Image: "toolchain"},
+			plan: []Step{{Task: "t", Run: "true", Hooks: Hooks{
+				OnFailure: &Step{Task: "note", Run: "true", Image: "toolchain"},
 			}}},
 			want: `image "toolchain"`,
 		},
 		"an earlier task's output of the same name": {
-			plan: []config.Step{
+			plan: []Step{
 				{Task: "make", Run: "true", Outputs: []string{"toolchain"}},
 				{Task: "build", Run: "true", Image: "toolchain"},
 			},
 			want: `image "toolchain"`,
 		},
 		"an output shadowing a get": {
-			plan: []config.Step{
+			plan: []Step{
 				{Get: "toolchain"},
 				{Task: "make", Run: "true", Outputs: []string{"toolchain"}},
 				{Task: "build", Run: "true", Image: "toolchain"},
 			},
 		},
 		"a resource never fetched": {
-			plan: []config.Step{{Task: "build", Run: "true", Image: "toolchain"}},
+			plan: []Step{{Task: "build", Run: "true", Image: "toolchain"}},
 			want: "rename the resource",
 		},
 		"an image that is not an artifact": {
-			plan: []config.Step{{Task: "build", Run: "true", Image: "alpine:3"}},
+			plan: []Step{{Task: "build", Run: "true", Image: "alpine:3"}},
 		},
 	}
 
@@ -641,10 +639,10 @@ func TestValidateArtifactFlowArtifactImage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			job := config.Job{Name: "j", Plan: tc.plan}
-			cfg := &config.Config{
-				Resources: []config.Resource{{Name: "toolchain", Type: "registry-image"}},
-				Jobs:      []config.Job{job},
+			job := Job{Name: "j", Plan: tc.plan}
+			cfg := &Config{
+				Resources: []Resource{{Name: "toolchain", Type: "registry-image"}},
+				Jobs:      []Job{job},
 			}
 
 			err := ValidateArtifactFlow(cfg, &job)
@@ -656,5 +654,285 @@ func TestValidateArtifactFlowArtifactImage(t *testing.T) {
 				t.Fatalf("err = %v, want one containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestValidateArtifactFlowUnknownInputErrors(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	job := &Job{
+		Name: "build",
+		Plan: []Step{
+			{Task: "unit", Run: "true", Inputs: Inputs("repo")},
+		},
+	}
+
+	err := ValidateArtifactFlow(cfg, job)
+	if err == nil {
+		t.Fatal("expected an error for a task input naming nothing fetched or produced earlier")
+	}
+}
+
+func TestValidateArtifactFlowChainedOutputsResolve(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	job := &Job{
+		Name: "build",
+		Plan: []Step{
+			{Get: "repo"},
+			{Task: "build", Run: "true", Inputs: Inputs("repo"), Outputs: []string{"built"}},
+			{Task: "publish", Run: "true", Inputs: Inputs("built")},
+			{Put: "results", Inputs: Inputs("built")},
+		},
+	}
+
+	err := ValidateArtifactFlow(cfg, job)
+	if err != nil {
+		t.Errorf("expected the plan's declared inputs/outputs to resolve cleanly, got %v", err)
+	}
+}
+
+// TestValidateArtifactFlowGetsAccumulateInSharedWorkspace verifies that
+// consecutive get steps accumulate their resources in the same build workspace,
+// so an earlier get's resource (or output from a task step between them) is
+// visible to later steps. This matches Concourse semantics: within a single
+// build, every get fetches into the shared artifact store.
+func TestValidateArtifactFlowGetsAccumulateInSharedWorkspace(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+
+	t.Run("task output before a later get is visible", func(t *testing.T) {
+		t.Parallel()
+
+		job := &Job{
+			Name: "build",
+			Plan: []Step{
+				{Get: "repo"},
+				{Task: "build", Run: "true", Inputs: Inputs("repo"), Outputs: []string{"built"}},
+				{Get: "other"},
+				{Task: "test", Run: "true", Inputs: Inputs("built")},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Errorf("expected `built` (produced before `get other`) to be visible in the shared workspace, got %v", err)
+		}
+	})
+
+	t.Run("an earlier get's resource is visible after a later get", func(t *testing.T) {
+		t.Parallel()
+
+		job := &Job{
+			Name: "build",
+			Plan: []Step{
+				{Get: "repo"},
+				{Get: "other"},
+				{Task: "test", Run: "true", Inputs: Inputs("repo")},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Errorf("expected `repo` (fetched before `get other`) to be visible in the shared workspace, got %v", err)
+		}
+	})
+
+	t.Run("every get's resource is available after consecutive gets", func(t *testing.T) {
+		t.Parallel()
+
+		job := &Job{
+			Name: "build",
+			Plan: []Step{
+				{Get: "repo"},
+				{Get: "other"},
+				{Task: "test", Run: "true", Inputs: Inputs("repo", "other")},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Errorf("expected both `repo` and `other` to be visible in the shared workspace, got %v", err)
+		}
+	})
+}
+
+// TestValidateArtifactFlowStepHooks checks that a step hook's declared inputs
+// are validated against the artifact view it will actually see: on_success
+// sees the step's own outputs, failure-path hooks do not.
+func TestValidateArtifactFlowStepHooks(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+
+	t.Run("on_success hook may consume the step's own output", func(t *testing.T) {
+		t.Parallel()
+
+		job := &Job{
+			Name: "build",
+			Plan: []Step{
+				{Get: "repo"},
+				{
+					Task: "build", Run: "true", Inputs: Inputs("repo"), Outputs: []string{"built"},
+					Hooks: Hooks{OnSuccess: &Step{Put: "results", Inputs: Inputs("built")}},
+				},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Errorf("on_success hook consuming the step's output should validate, got %v", err)
+		}
+	})
+
+	t.Run("ensure hook may not consume the step's own output", func(t *testing.T) {
+		t.Parallel()
+
+		job := &Job{
+			Name: "build",
+			Plan: []Step{
+				{Get: "repo"},
+				{
+					Task: "build", Run: "true", Inputs: Inputs("repo"), Outputs: []string{"built"},
+					Hooks: Hooks{Ensure: &Step{Put: "results", Inputs: Inputs("built")}},
+				},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil {
+			t.Fatal("expected an error: ensure runs on the failure path, before `built` is guaranteed to exist")
+		}
+	})
+
+	t.Run("a hook output is not visible to a later plan step", func(t *testing.T) {
+		t.Parallel()
+
+		job := &Job{
+			Name: "build",
+			Plan: []Step{
+				{Get: "repo"},
+				{
+					Task: "build", Run: "true", Inputs: Inputs("repo"),
+					Hooks: Hooks{OnSuccess: &Step{Task: "gen", Run: "true", Outputs: []string{"extra"}}},
+				},
+				{Task: "consume", Run: "true", Inputs: Inputs("extra")},
+			},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil {
+			t.Fatal("expected an error: a conditional hook's output must not satisfy a later plan step's input")
+		}
+	})
+
+	t.Run("a hook's own nested hook is checked against the same view", func(t *testing.T) {
+		t.Parallel()
+
+		job := &Job{
+			Name: "build",
+			Plan: []Step{{
+				Task: "build", Run: "true",
+				Hooks: Hooks{OnFailure: &Step{
+					Task: "notify", Run: "true",
+					Hooks: Hooks{Ensure: &Step{Task: "cleanup", Run: "true", Inputs: Inputs("missing")}},
+				}},
+			}},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil || !strings.Contains(err.Error(), "on_failure.ensure hook") {
+			t.Fatalf("err = %v, want the nested hook's undeclared input reported", err)
+		}
+	})
+}
+
+func TestValidateArtifactFlowNoOpWithoutWorkspace(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{}
+	job := &Job{
+		Name: "build",
+		Plan: []Step{
+			{Task: "unit", Run: "true"},
+		},
+	}
+
+	err := ValidateArtifactFlow(cfg, job)
+	if err != nil {
+		t.Errorf("validateArtifactFlow with no workspace: block should always be a no-op, got %v", err)
+	}
+}
+
+// TestValidateArtifactFlowPutProducesNothing pins that a put is
+// artifact-neutral: it publishes and fetches nothing (the implicit get was
+// removed in the DSL audit — every artifact in the build is one a step
+// declared). A later step naming the put as an input has to fail HERE —
+// before anything runs — rather than at run time against a directory nobody
+// created; the valid spelling is an explicit get: after the put.
+func TestValidateArtifactFlowPutProducesNothing(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	job := &Job{
+		Name: "build",
+		Plan: []Step{
+			{Put: "release"},
+			{Task: "verify", Run: "true", Inputs: Inputs("release")},
+		},
+	}
+
+	err := ValidateArtifactFlow(cfg, job)
+	if err == nil {
+		t.Fatal("expected an error: a put produces no artifact, so the task's input never exists")
+	}
+}
+
+// TestValidateArtifactFlowExplicitGetAfterPut is the opt-in spelling: the get
+// step after the put is what makes the artifact exist.
+func TestValidateArtifactFlowExplicitGetAfterPut(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	job := &Job{
+		Name: "build",
+		Plan: []Step{
+			{Put: "release"},
+			{Get: "release"},
+			{Task: "verify", Run: "true", Inputs: Inputs("release")},
+		},
+	}
+
+	err := ValidateArtifactFlow(cfg, job)
+	if err != nil {
+		t.Errorf("an explicit get after the put must satisfy the task's input, got %v", err)
+	}
+}
+
+// TestValidateArtifactFlowPutHooksSeeNoPutArtifact pins that a put's hooks
+// cannot name the put as an input either — a put produces no artifact on any
+// path, success or failure.
+func TestValidateArtifactFlowPutHooksSeeNoPutArtifact(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	job := &Job{
+		Name: "build",
+		Plan: []Step{
+			{
+				Put: "release",
+				Hooks: Hooks{
+					OnFailure: &Step{Task: "cleanup", Run: "true", Inputs: Inputs("release")},
+				},
+			},
+		},
+	}
+
+	err := ValidateArtifactFlow(cfg, job)
+	if err == nil {
+		t.Fatal("expected an error: a put produces no artifact, so its hook cannot declare it as an input")
 	}
 }

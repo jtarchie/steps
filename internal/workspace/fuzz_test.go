@@ -74,24 +74,3 @@ func FuzzValidateCachedNames(f *testing.F) {
 		}
 	})
 }
-
-func FuzzFirstPathComponent(f *testing.F) {
-	f.Add("repo/cmd")
-	f.Add("a/../../etc")
-	f.Add("/abs/path")
-	f.Add("")
-	f.Add("./x//y")
-
-	f.Fuzz(func(t *testing.T, dir string) {
-		got := firstPathComponent(dir)
-		cleaned := filepath.Clean(dir)
-
-		if got != cleaned && !strings.HasPrefix(cleaned, got+string(filepath.Separator)) && got != string(filepath.Separator) {
-			t.Fatalf("firstPathComponent(%q) = %q, which does not begin %q", dir, got, cleaned)
-		}
-
-		if got != string(filepath.Separator) && strings.ContainsRune(got, filepath.Separator) {
-			t.Fatalf("firstPathComponent(%q) = %q has more than one component", dir, got)
-		}
-	})
-}

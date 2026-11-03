@@ -27,7 +27,7 @@ type AcrossVar struct {
 	// FromFile is a workspace-relative path to a JSON array of strings, whose
 	// first path component names the artifact holding it (`findings/items.json`
 	// requires an artifact `findings` fetched or produced earlier in the plan —
-	// the same rule dir: follows, checked by workspace.ValidateArtifactFlow).
+	// the same rule dir: follows, checked by config.ValidateArtifactFlow).
 	//
 	// A file rather than a key in a store: the producing step already declares
 	// the artifact in its outputs:, so the value travels the way every other
