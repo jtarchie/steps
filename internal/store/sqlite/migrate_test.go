@@ -253,6 +253,40 @@ func TestEveryWriterUpgradesAV010File(t *testing.T) {
 	}
 }
 
+// TestAFailedBackupKeepsTheOlderOne: the sweep of older copies runs only after the new one is whole, so a full disk or an unwritable target leaves the previous safety net in place.
+func TestAFailedBackupKeepsTheOlderOne(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.db")
+	execFile(t, path, v010)
+
+	older := path + ".v27.bak"
+
+	err := os.WriteFile(older, []byte("older"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocker := backupPath(path, 28) + ".tmp"
+
+	err = os.MkdirAll(filepath.Join(blocker, "x"), 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := OpenStore(path, "app")
+	if err == nil {
+		_ = st.Close()
+
+		t.Fatal("OpenStore succeeded though the backup could not be created")
+	}
+
+	got, err := os.ReadFile(older) //nolint:gosec // a path this test built
+	if err != nil || string(got) != "older" {
+		t.Errorf("the older backup was lost to a failed new one: %q, %v", got, err)
+	}
+}
+
 // TestABackupSweepTouchesOnlyItsOwnFile: the sweep that keeps only the newest copy must not refuse a path holding a glob metacharacter, nor take a neighbouring database's copies with it.
 func TestABackupSweepTouchesOnlyItsOwnFile(t *testing.T) {
 	t.Parallel()

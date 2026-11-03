@@ -94,7 +94,26 @@ func upgrade(ctx context.Context, db *sql.DB, path string) error {
 
 // backup copies the file as it is before an upgrade, owner-only like the file itself, replacing the copy an earlier upgrade left: the newest is the one a failed upgrade needs.
 func backup(ctx context.Context, db *sql.DB, path string, version int) error {
-	// Not filepath.Glob: a path holding [ or * is a pattern there, refused or matching another file's backups.
+	target := backupPath(path, version)
+	// Built beside the target and renamed in, so a same-version copy from an earlier attempt survives until this one is whole.
+	building := target + ".tmp"
+
+	_ = os.Remove(building)
+
+	// VACUUM INTO takes an empty file, so this one is created first and keeps the mode it is created with.
+	err := createPrivate(building)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.ExecContext(ctx, "VACUUM INTO ?", building)
+	if err != nil {
+		_ = os.Remove(building)
+
+		return fmt.Errorf("could not back up %q before upgrading it: %w", path, err)
+	}
+
+	// Only now are the older copies expendable. Not filepath.Glob: a path holding [ or * is a pattern there, refused or matching another file's backups.
 	dir, base := filepath.Split(path)
 
 	entries, err := os.ReadDir(cmp.Or(dir, "."))
@@ -115,17 +134,9 @@ func backup(ctx context.Context, db *sql.DB, path string, version int) error {
 		}
 	}
 
-	target := backupPath(path, version)
-
-	// VACUUM INTO takes an empty file, so this one is created first and keeps the mode it is created with.
-	err = createPrivate(target)
+	err = os.Rename(building, target)
 	if err != nil {
-		return err
-	}
-
-	_, err = db.ExecContext(ctx, "VACUUM INTO ?", target)
-	if err != nil {
-		return fmt.Errorf("could not back up %q before upgrading it: %w", path, err)
+		return fmt.Errorf("could not finish the backup of %q: %w", path, err)
 	}
 
 	return nil
