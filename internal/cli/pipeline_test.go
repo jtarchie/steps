@@ -217,7 +217,7 @@ func TestSetConfirmsARepairAsARepair(t *testing.T) {
 	})
 
 	out := captureStdout(t, func() {
-		_ = (&PipelineSetCmd{}).confirm("app", web.PipelineConfig{}, false, "workspace: root is not writable", idlePipeline, nil)
+		_ = (&PipelineSetCmd{}).confirm("app", Held{Broken: "workspace: root is not writable"}, idlePipeline, nil)
 	})
 
 	if !strings.Contains(out, "app is not being served (workspace: root is not writable); this set will repair it") || strings.Contains(out, "new to this daemon") {
@@ -264,7 +264,8 @@ func TestARepairIsCompareAndSet(t *testing.T) {
 
 	client := newDaemonClient(daemon.URL)
 
-	current, _, broken, err := client.get("app")
+	held, err := client.get("app")
+	current, broken := held.Config, held.Broken
 	if err != nil || broken == "" {
 		t.Fatalf("get = %q, %v; want app held broken", broken, err)
 	}

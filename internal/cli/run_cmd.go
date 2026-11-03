@@ -24,7 +24,7 @@ type RunCmd struct {
 	DeliverFlags  `embed:""`
 	HistoryFlags  `embed:""`
 	ProgressFlags `embed:""`
-	Pipeline      string            `arg:""                                                                                                                         help:"path to the pipeline YAML file"`
+	Path          string            `arg:""                                                                                                                         help:"path to the pipeline YAML file" name:"pipeline"`
 	Job           string            `help:"job name to run (defaults to the pipeline's only job)"`
 	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                                        name:"pin"`
 	Force         bool              `help:"ignore the step cache and re-run every step, even if unchanged (version: every still takes only versions not yet built)"`
@@ -109,12 +109,12 @@ func (r *RunCmd) applyReplay(
 // Run loads the pipeline, selects a job, and runs it once via
 // pipeline.RunJob.
 func (r *RunCmd) Run() error {
-	cfg, err := r.Load(r.Pipeline, resolvePipelineName(r.Pipeline, r.Name))
+	cfg, err := r.Load(r.Path, resolvePipelineName(r.Path, r.Name))
 	if err != nil {
 		return err
 	}
 
-	st, provider, cleanup, err := setup(cfg, r.Pipeline, r.StateFlags, r.ExecFlags)
+	st, provider, cleanup, err := setup(cfg, r.Path, r.StateFlags, r.ExecFlags)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func (r *RunCmd) Run() error {
 	}
 
 	opts.Provider, opts.Pinned, opts.Force = provider, r.Pin, r.Force
-	opts.AnswerDB = answerDB(r.Pipeline, r.DB)
+	opts.AnswerDB = answerDB(r.Path, r.DB)
 
 	jobName := r.Job
 
@@ -158,7 +158,7 @@ func (r *RunCmd) Run() error {
 		return err
 	}
 
-	slog.Info("pipeline.run", "pipeline", r.Pipeline, "job", job.Name)
+	slog.Info("pipeline.run", "pipeline", r.Path, "job", job.Name)
 
 	// One invocation is one build, as `fly trigger-job` is; the rest wait for the next.
 	opts.Backlog = func(ctx context.Context, sets int) {
@@ -170,7 +170,7 @@ func (r *RunCmd) Run() error {
 
 	undraw()
 
-	slog.Info("pipeline.done", "pipeline", r.Pipeline, "job", job.Name, "error", runErr)
+	slog.Info("pipeline.done", "pipeline", r.Path, "job", job.Name, "error", runErr)
 
 	// A successful manual run clears the job-failure circuit breaker: running the
 	// job by hand is the natural way to confirm a fix, and requiring a

@@ -100,13 +100,13 @@ func namedPipeline(name, verb string) (string, error) {
 func (p *PipelineSetCmd) upload(name, source string, includes map[string]string) error {
 	client := newDaemonClient(p.Target)
 
-	current, held, broken, err := client.get(name)
+	current, err := client.get(name)
 	if err != nil {
 		return err
 	}
 
-	if held && current.Source == source && maps.Equal(convertIncludes[string](current.Includes), includes) {
-		fmt.Printf("unchanged: %s is already serving this configuration (%s)\n", name, shortConfig(current.SHA))
+	if current.Present && current.Config.Source == source && maps.Equal(convertIncludes[string](current.Config.Includes), includes) {
+		fmt.Printf("unchanged: %s is already serving this configuration (%s)\n", name, shortConfig(current.Config.SHA))
 
 		// Separately and after, because the pipeline already exists: the window --pause closes is a new pipeline's first poll.
 		if p.Pause {
@@ -116,7 +116,7 @@ func (p *PipelineSetCmd) upload(name, source string, includes map[string]string)
 		return nil
 	}
 
-	err = p.confirm(name, current, held, broken, source, includes)
+	err = p.confirm(name, current, source, includes)
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func (p *PipelineSetCmd) upload(name, source string, includes map[string]string)
 	result, err := client.set(name, web.SetRequest{
 		Source:    source,
 		Includes:  convertIncludes[[]byte](includes),
-		ExpectSHA: current.SHA,
+		ExpectSHA: current.Config.SHA,
 		From:      from,
 		Pause:     p.Pause,
 	})
@@ -155,22 +155,22 @@ func setVerb(result web.SetResult) string {
 
 // confirm shows what would change and asks, unless told not to.
 func (p *PipelineSetCmd) confirm(
-	name string, current web.PipelineConfig, held bool, broken, source string, includes map[string]string,
+	name string, current Held, source string, includes map[string]string,
 ) error {
 	if p.NonInteractive {
 		return nil
 	}
 
 	switch {
-	case broken != "":
-		fmt.Printf("%s is not being served (%s); this set will repair it.\n", name, broken)
-	case !held && p.Pause:
+	case current.Broken != "":
+		fmt.Printf("%s is not being served (%s); this set will repair it.\n", name, current.Broken)
+	case !current.Present && p.Pause:
 		fmt.Printf("%s is new to this daemon; it will be created paused.\n", name)
-	case !held:
+	case !current.Present:
 		fmt.Printf("%s is new to this daemon; it will be created and start running.\n", name)
 	default:
-		fmt.Print(diffSource(current.Source, source))
-		fmt.Print(diffIncludes(convertIncludes[string](current.Includes), includes))
+		fmt.Print(diffSource(current.Config.Source, source))
+		fmt.Print(diffIncludes(convertIncludes[string](current.Config.Includes), includes))
 	}
 
 	return ask("apply configuration?", "not applied")
@@ -329,22 +329,22 @@ func (p *PipelineGetCmd) Run() error {
 
 	client := newDaemonClient(p.Target)
 
-	current, held, broken, err := client.get(name)
+	current, err := client.get(name)
 	if err != nil {
 		return err
 	}
 
-	if broken != "" {
-		return fmt.Errorf("%s holds %q and is not serving it: %s", client.target, name, broken)
+	if current.Broken != "" {
+		return fmt.Errorf("%s holds %q and is not serving it: %s", client.target, name, current.Broken)
 	}
 
-	if !held {
+	if !current.Present {
 		return fmt.Errorf("%s is not serving a pipeline called %q", client.target, name)
 	}
 
-	fmt.Print(current.Source)
+	fmt.Print(current.Config.Source)
 
-	for path, content := range current.Includes {
+	for path, content := range current.Config.Includes {
 		fmt.Printf("\n# --- %s (%d bytes) ---\n%s", path, len(content), content)
 	}
 

@@ -33,7 +33,7 @@ func TestTheTargetsCredentialsTravelInTheHeaderAndNotTheURL(t *testing.T) {
 
 	client := newDaemonClient(withCreds)
 
-	_, _, _, err := client.get("demo")
+	_, err := client.get("demo")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestATargetWithoutCredentialsSendsNone(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, _, _, err := newDaemonClient(server.URL).get("demo")
+	_, err := newDaemonClient(server.URL).get("demo")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestNoMessageCarriesThePasswordOutOfTheTarget(t *testing.T) {
 
 		target := strings.Replace(server.URL, "http://", "http://ops:"+password+"@", 1)
 
-		_, _, _, err := newDaemonClient(target).get("demo")
+		_, err := newDaemonClient(target).get("demo")
 		if err == nil {
 			t.Fatalf("%s: a refusal was read as an answer", name)
 		}
@@ -112,7 +112,7 @@ func TestNoMessageCarriesThePasswordOutOfTheTarget(t *testing.T) {
 
 	target := strings.Replace(dead.URL, "http://", "http://ops:"+password+"@", 1)
 
-	_, _, _, err := newDaemonClient(target).get("demo")
+	_, err := newDaemonClient(target).get("demo")
 	if err == nil {
 		t.Fatal("a closed port was read as an answer")
 	}
@@ -153,7 +153,7 @@ func TestA401NamesTheFix(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, _, _, err := newDaemonClient(server.URL).get("demo")
+	_, err := newDaemonClient(server.URL).get("demo")
 	if err == nil {
 		t.Fatal("a 401 was read as an answer")
 	}

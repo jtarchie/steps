@@ -62,13 +62,19 @@ func splitTargetCredentials(target string) (string, string, string) {
 	return strings.TrimSuffix(parsed.String(), "/"), username, password
 }
 
-// held is false for a pipeline the daemon does not serve, which is a set creating one rather than an error; broken is why, when the daemon holds it and a restart could not serve it — a set then repairs it.
-func (c *daemonClient) get(name string) (web.PipelineConfig, bool, string, error) {
+// Held is what the daemon answers for a pipeline name. Present is false for a pipeline the daemon does not serve, which is a set creating one rather than an error; Broken is why, when the daemon holds it and a restart could not serve it — a set then repairs it.
+type Held struct {
+	Config  web.PipelineConfig
+	Present bool
+	Broken  string
+}
+
+func (c *daemonClient) get(name string) (Held, error) {
 	var current web.PipelineConfig
 
 	status, body, err := c.do(http.MethodGet, "/api/pipelines/"+name, nil)
 	if err != nil {
-		return current, false, "", err
+		return Held{Config: current}, err
 	}
 
 	if status == http.StatusNotFound {
@@ -82,19 +88,19 @@ func (c *daemonClient) get(name string) (web.PipelineConfig, bool, string, error
 		// The held sha, so a repair is compare-and-set against what the daemon holds rather than a blind overwrite of it.
 		current.SHA = missing.SHA
 
-		return current, false, missing.Broken, nil
+		return Held{Config: current, Broken: missing.Broken}, nil
 	}
 
 	if status != http.StatusOK {
-		return current, false, "", daemonError(c.target, status, body)
+		return Held{Config: current}, daemonError(c.target, status, body)
 	}
 
 	err = json.Unmarshal(body, &current)
 	if err != nil {
-		return current, false, "", fmt.Errorf("could not read the daemon's answer: %w", err)
+		return Held{Config: current}, fmt.Errorf("could not read the daemon's answer: %w", err)
 	}
 
-	return current, true, "", nil
+	return Held{Config: current, Present: true}, nil
 }
 
 func (c *daemonClient) list() ([]web.PipelineSummary, error) {
