@@ -95,7 +95,7 @@ func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, compile
 		return
 	}
 
-	result, err := receiver.Accept(webhook.Request{Method: r.Method, Header: r.Header, Query: r.URL.Query(), Body: body})
+	result, err := receiver.Accept(requestFrom(r, body))
 	if err != nil {
 		// A 500 the sender logs as failed, so it can be redelivered once the pipeline is fixed; nothing is recorded meanwhile.
 		slog.ErrorContext(ctx, "webhook.expr_error", "resource", name, "error", err)
@@ -156,7 +156,7 @@ func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, entry
 		entry.unset.Do(func() { slog.WarnContext(ctx, "webhook.secret_unset", "resource", name, "env", receiver.SecretEnv) })
 	}
 
-	err = receiver.Verify(webhook.Request{Method: r.Method, Header: r.Header, Query: r.URL.Query(), Body: body}, secret, time.Now())
+	err = receiver.Verify(requestFrom(r, body), secret, time.Now())
 	if err != nil {
 		slog.DebugContext(ctx, "webhook.unauthorized", "resource", name)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -165,6 +165,10 @@ func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, entry
 	}
 
 	return body, true
+}
+
+func requestFrom(r *http.Request, body []byte) webhook.Request {
+	return webhook.Request{Method: r.Method, Header: r.Header, Query: r.URL.Query(), Body: body}
 }
 
 func record(ctx context.Context, w http.ResponseWriter, cfg *config.Config, st HookStore, name string, accepted webhook.Delivery) {

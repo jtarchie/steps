@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -589,19 +590,12 @@ func readReviewComments(srcDir, name string) ([]reviewComment, error) {
 		return nil, nil
 	}
 
-	root, err := os.OpenRoot(srcDir)
+	raw, err := readPutFile(srcDir, "params.comments_file", name)
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, err
 	}
 
-	defer func() { _ = root.Close() }()
-
-	raw, err := root.ReadFile(name)
-	if err != nil {
-		return nil, fmt.Errorf("params.comments_file: %w — is the step that writes it one of this put's inputs?", err)
-	}
-
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 
 	var comments []reviewComment

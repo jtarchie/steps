@@ -20,6 +20,19 @@ import (
 
 const hookSecret = "s3cret"
 
+// TestRequestFromCarriesEveryPartOfTheDelivery: verifying and accepting both build their webhook.Request here, so a part dropped would be dropped from the signature check and the expression alike.
+func TestRequestFromCarriesEveryPartOfTheDelivery(t *testing.T) {
+	t.Parallel()
+
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/hooks/x?a=1&a=2", nil)
+	r.Header.Set("X-Event", "push")
+
+	got := requestFrom(r, []byte("body"))
+	if got.Method != http.MethodPost || got.Header.Get("X-Event") != "push" || !reflect.DeepEqual(got.Query["a"], []string{"1", "2"}) || string(got.Body) != "body" {
+		t.Errorf("requestFrom = %+v; want method, header, query and body all carried", got)
+	}
+}
+
 func hookConfig(source map[string]any) *config.Config {
 	merged := map[string]any{"provider": "github", "secret_env": "STEPS_TEST_HOOK_SECRET"}
 	for key, value := range source {

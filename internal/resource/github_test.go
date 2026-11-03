@@ -186,6 +186,18 @@ func TestReviewPayloadSendsNoCommentsKeyWithoutComments(t *testing.T) {
 	}
 }
 
+// TestReadReviewCommentsNamesTheFieldWhenTheFileIsNotAnInput: the file is read through readPutFile, so a missing or climbing path fails naming params.comments_file and the likely cause.
+func TestReadReviewCommentsNamesTheFieldWhenTheFileIsNotAnInput(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"absent.json", "../escape.json"} {
+		_, err := readReviewComments(t.TempDir(), name)
+		if err == nil || !strings.Contains(err.Error(), "params.comments_file") || !strings.Contains(err.Error(), "one of this put's inputs") {
+			t.Errorf("%s: err = %v; want it to name params.comments_file and the inputs hint", name, err)
+		}
+	}
+}
+
 func TestWriteMetadataRefusesACollision(t *testing.T) {
 	t.Parallel()
 

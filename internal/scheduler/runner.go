@@ -52,6 +52,7 @@ type LocalRunner struct {
 	// --answer, STEPS_URL, the printed answer command's --db. A property of
 	// the process, not of a request: the operator pinned the daemon, and a
 	// job triggered from the browser is still that daemon running it.
+	// base.Force is --force: every job this process drains ignores the cache, however it was enqueued. Separate from `forced` below, which is one browser request asking for one run without the cache.
 	base pipeline.Run
 	// concurrent bounds how many of one pipeline's queued jobs run at once.
 	// It was `steps web --max-concurrent`, and it is about keeping a daemon
@@ -63,9 +64,6 @@ type LocalRunner struct {
 	slots chan struct{}
 	// active counts claimed builds, which slots cannot: a worker also holds a token for the instant it probes an empty queue.
 	active atomic.Int64
-	// base.Force is --force: every job this process drains ignores the
-	// cache, however it was enqueued. Separate from `forced` below, which is
-	// one browser request asking for one run without the cache.
 	// Only the end of process (StopWith) is a shutdown, the one thing a build that is not interruptible: waits out.
 	process context.Context //nolint:containedctx // a lifetime to compare against, never one a call runs under
 	// A field rather than the constant so a test can shorten it.
@@ -268,7 +266,7 @@ func (r *LocalRunner) AbortQueued(ctx context.Context, target *Pipeline, jobName
 }
 
 // Drain runs each pipeline's queue until ctx is canceled. One goroutine per
-// pipeline: they have separate databases, so they never contend, and a slow
+// pipeline: they share one state database but every query is scoped by pipeline_id, and a slow
 // job in one pipeline must not stall another's queue.
 func (r *LocalRunner) Drain(ctx context.Context, pipelines []*Pipeline) {
 	var wg sync.WaitGroup

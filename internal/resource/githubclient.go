@@ -265,8 +265,7 @@ func retryable(method string, status int) bool {
 	}
 }
 
-// retryDelay reads Retry-After, and a secondary rate limit's reset. Negative
-// means longer than is worth waiting inside one stage.
+// retryDelay reads Retry-After in seconds, else fallback. Negative means longer than is worth waiting inside one stage.
 func retryDelay(header http.Header, fallback time.Duration) time.Duration {
 	raw := header.Get("Retry-After")
 	if raw == "" {
