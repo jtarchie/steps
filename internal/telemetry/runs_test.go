@@ -97,3 +97,11 @@ func TestAStepOpenWhenItsJobEndsIsEnded(t *testing.T) {
 		t.Errorf("an aborted run's result = %q, want cancellation", got)
 	}
 }
+
+func TestResultOfMapsEveryFinishStatus(t *testing.T) {
+	for _, status := range []string{events.StatusSucceeded, events.StatusFailed, events.StatusErrored, events.StatusAborted, events.StatusSkipped} {
+		if got := resultOf(status); got == status {
+			t.Errorf("resultOf(%q) fell through to the default; map it to a CI/CD result", status)
+		}
+	}
+}

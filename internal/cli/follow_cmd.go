@@ -89,7 +89,7 @@ func (r *RunsFollowCmd) renderer(ctx context.Context, st store.Usage) (func(even
 	// A follower has no byte stream of its own: a chunk is the bytes a local run's Stream would have carried into the step's tail.
 	return func(event events.Event) {
 		if event.Type == events.TypeStepOutputChunk {
-			_, _ = io.WriteString(live.Stream(event.StepID, event.Status == "stderr"), event.Text)
+			_, _ = io.WriteString(live.Stream(event.StepID, event.Status == events.StreamStderr), event.Text)
 
 			return
 		}

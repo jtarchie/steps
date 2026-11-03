@@ -265,15 +265,15 @@ func stepSpanName(event events.Event) string {
 // resultOf maps a run status onto the CI/CD semantic conventions' result values.
 func resultOf(status string) string {
 	switch status {
-	case "succeeded":
+	case events.StatusSucceeded:
 		return "success"
-	case "failed":
+	case events.StatusFailed:
 		return "failure"
-	case "errored":
+	case events.StatusErrored:
 		return "error"
-	case "aborted":
+	case events.StatusAborted:
 		return "cancellation"
-	case "skipped":
+	case events.StatusSkipped:
 		return "skip"
 	default:
 		return status
