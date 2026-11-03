@@ -201,7 +201,7 @@ func compilePath(path Path) (lookupPath, error) {
 		return lookupPath{}, fmt.Errorf("path: %w", err)
 	}
 
-	entry := lookupPath{template: path.Path, usesJob: strings.Contains(path.Path, ".job"), usesResource: strings.Contains(path.Path, ".resource")}
+	entry := lookupPath{template: path.Path, usesJob: readsField(path.Path, "job"), usesResource: readsField(path.Path, "resource")}
 
 	if path.When != "" {
 		entry.when, err = expr.Compile(path.When, expr.Env(lookupEnv{}), expr.AsBool())
@@ -213,15 +213,48 @@ func compilePath(path Path) (lookupPath, error) {
 	return entry, nil
 }
 
+// readsField renders the template with two different values for the field and calls it used if the output moves (or the render fails), so index, variables and any other spelling are caught where a substring match on ".job" was not.
+func readsField(tmpl, field string) bool {
+	render := func(value string) (string, error) {
+		data := pathData(Ref{})
+		data[field] = value
+
+		return template.Render(tmpl, data)
+	}
+
+	one, err1 := render("a")
+	two, err2 := render("bb")
+
+	return err1 != nil || err2 != nil || one != two
+}
+
+var secretNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// sourceFor holds the reference name to the same rule config.ParseSecretRef applies, so this package is safe without its caller.
+func (r *Resolver) sourceFor(ref Ref) (*source, error) {
+	src, ok := r.sources[ref.Source]
+	if !ok {
+		return nil, fmt.Errorf("%s: no secret source %q is configured", ref, ref.Source)
+	}
+
+	for _, segment := range strings.Split(ref.Name, "/") {
+		if segment == "." || segment == ".." || !secretNamePattern.MatchString(segment) {
+			return nil, fmt.Errorf("%s: a secret name is letters, digits and _ . / -, with no empty, . or .. segment", ref)
+		}
+	}
+
+	return src, nil
+}
+
 func pathData(ref Ref) map[string]any {
 	return map[string]any{"pipeline": ref.Pipeline, "job": ref.Job, "resource": ref.Resource, "name": ref.Name}
 }
 
 // Lookup resolves one reference: the first lookup path its source finds wins, "missing" tries the next, anything else stops. The value never appears in an error.
 func (r *Resolver) Lookup(ctx context.Context, ref Ref) (string, error) {
-	src, ok := r.sources[ref.Source]
-	if !ok {
-		return "", fmt.Errorf("%s: no secret source %q is configured", ref, ref.Source)
+	src, err := r.sourceFor(ref)
+	if err != nil {
+		return "", err
 	}
 
 	var tried []string
