@@ -158,7 +158,7 @@ jobs:
 The route keeps the daemon's rules for anything a machine rather than a browser sends:
 
 - **POST only.**
-- **A bad signature and an unknown resource are both 401**, so the endpoint is not a directory of a pipeline's resource names. A pipeline with no webhook resource at all answers 404.
+- **A bad signature and an unknown resource are both 401**, so the endpoint is not a directory of a pipeline's resource names. A pipeline with no webhook resource at all answers the same 401, so a caller cannot tell whether it has any.
 - **Exempt from `--read-only` and from the UI's same-origin check.** It is authenticated by the sender's signature, not by the UI's (absent) authentication, and a read-only build box that could not be notified is most of what a read-only build box is for. To turn it off, give the pipeline no webhook resource.
 - **Recorded before it is answered.** The version, its payload and the jobs it triggers are written in one transaction, and only then does the sender get a 2xx. A failed write answers 500, so the sender retries rather than the event being lost.
 - **A paused pipeline records the delivery and queues nothing.** The first poll after [`steps pipeline unpause`](web.md) builds it. Answering 2xx and dropping it would be a loss the sender could never redeliver, since it believes it succeeded.

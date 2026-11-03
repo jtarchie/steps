@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -73,6 +74,17 @@ func (f hookFixture) deliver(t *testing.T, resource string, header http.Header, 
 	HookHandler(staticConfig(f.cfg), f.st)(rec, req, resource)
 
 	return rec.Code
+}
+
+func (f hookFixture) response(t *testing.T, resource string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/p/test/hooks/"+resource, bytes.NewReader(nil))
+	rec := httptest.NewRecorder()
+
+	HookHandler(staticConfig(f.cfg), f.st)(rec, req, resource)
+
+	return rec
 }
 
 func (f hookFixture) versions(t *testing.T) []store.VersionKey {
@@ -165,12 +177,21 @@ func TestAHookDoesNotEnumerateResources(t *testing.T) {
 	}
 }
 
-func TestAHookIsAbsentWithoutWebhookResources(t *testing.T) {
-	f := newHookFixture(t, nil)
-	f.cfg.Resources = f.cfg.Resources[1:]
+// TestAHookWithoutWebhookResourcesAnswersAsAnUnknownResource: a caller must not learn whether a pipeline has any webhook resources, so the answer is byte-identical to the unknown-resource one.
+func TestAHookWithoutWebhookResourcesAnswersAsAnUnknownResource(t *testing.T) {
+	with := newHookFixture(t, nil)
+	without := newHookFixture(t, nil)
+	without.cfg.Resources = without.cfg.Resources[1:]
 
-	if code := f.deliver(t, "push", http.Header{}, nil); code != http.StatusNotFound {
-		t.Errorf("status = %d, want 404", code)
+	want := with.response(t, "nope")
+	got := without.response(t, "push")
+
+	if want.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown resource status = %d, want 401", want.Code)
+	}
+
+	if got.Code != want.Code || got.Body.String() != want.Body.String() || !reflect.DeepEqual(got.Header(), want.Header()) {
+		t.Errorf("no webhook resources answered %d %q %v, want %d %q %v", got.Code, got.Body, got.Header(), want.Code, want.Body, want.Header())
 	}
 }
 

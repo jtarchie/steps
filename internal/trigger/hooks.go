@@ -117,13 +117,7 @@ func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, compile
 }
 
 func receiverFor(ctx context.Context, w http.ResponseWriter, compiled map[string]compiledReceiver, name string) (compiledReceiver, bool) {
-	if len(compiled) == 0 {
-		http.Error(w, "no webhook resources in this pipeline", http.StatusNotFound)
-
-		return compiledReceiver{}, false
-	}
-
-	// Unknown and not-a-webhook answer exactly as a bad signature does, so the route does not enumerate a pipeline's resources for whoever asks.
+	// Unknown, not-a-webhook and a pipeline with no webhook resources at all answer exactly as a bad signature does, so the route does not enumerate a pipeline's resources for whoever asks.
 	entry, found := compiled[name]
 	if !found {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
