@@ -173,7 +173,7 @@ func runPlaced(
 	result, err := work(ctx)
 	if err != nil {
 		recordStepFailure(ctx, r, node, err)
-		recordPlacement(ctx, r, placed, node.StepIndex, placedAs, node.Hash, node.Hash)
+		recordPlacement(ctx, r, placed, node.StepIndex, placedStep{name: placedAs, slot: node.Hash, node: node.Hash})
 
 		return failedAt(node.Hash), err
 	}
@@ -183,7 +183,7 @@ func runPlaced(
 		return stepResult{}, fmt.Errorf("step %d (%s %q): could not record node %q: %w", node.StepIndex, node.Kind, placedAs, node.Hash, err)
 	}
 
-	recordPlacement(ctx, r, placed, node.StepIndex, placedAs, node.Hash, node.Hash)
+	recordPlacement(ctx, r, placed, node.StepIndex, placedStep{name: placedAs, slot: node.Hash, node: node.Hash})
 
 	return ran(node.Hash), nil
 }

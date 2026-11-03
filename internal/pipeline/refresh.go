@@ -83,7 +83,7 @@ func refreshOneResource(ctx context.Context, cfg *config.Config, st store.Store,
 
 	// Recorded under the check's own label, having no node; installed BEFORE PlaceResource, because the placer notes its runner on the context it was resolved under.
 	ctx, placed := withPlacementSink(ctx)
-	defer recordPlacement(ctx, stepRunner{cfg: cfg, jobName: job.Name, st: st}, placed, 0, "check "+name, "check "+name, "")
+	defer recordPlacement(ctx, stepRunner{cfg: cfg, jobName: job.Name, st: st}, placed, 0, placedStep{name: "check " + name, slot: "check " + name, node: ""})
 
 	placedCtx, err := PlaceResource(ctx, cfg, name)
 	if err != nil {

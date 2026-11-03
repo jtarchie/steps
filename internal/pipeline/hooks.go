@@ -174,7 +174,7 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 
 		err = executeTask(ctx, scope.cfg, step, rt, scope.bw, scope.st)
 
-		recordPlacement(ctx, scope.stepRunner, placed, 0, executedStepName(step), scope.label, "")
+		recordPlacement(ctx, scope.stepRunner, placed, 0, placedStep{name: executedStepName(step), slot: scope.label, node: ""})
 
 		return err
 	case config.StepKindPut:
@@ -184,7 +184,7 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 
 		result, err := executePut(ctx, scope.cfg, step, scope.bw)
 
-		recordPlacement(ctx, scope.stepRunner, placed, 0, step.Put, scope.label, "")
+		recordPlacement(ctx, scope.stepRunner, placed, 0, placedStep{name: step.Put, slot: scope.label, node: ""})
 
 		if err == nil {
 			recordPutOrder(ctx, scope.st, step.Put, result)
@@ -197,7 +197,7 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 
 		err := agent.RunHook(ctx, scope.cfg, scope.jobName, step, scope.bw, scope.st, placedAgentRunner(step))
 
-		recordPlacement(ctx, scope.stepRunner, placed, 0, executedStepName(step), scope.label, "")
+		recordPlacement(ctx, scope.stepRunner, placed, 0, placedStep{name: executedStepName(step), slot: scope.label, node: ""})
 
 		if err != nil {
 			return fmt.Errorf("agent hook: %w", err)

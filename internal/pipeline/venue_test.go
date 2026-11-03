@@ -30,7 +30,7 @@ func TestALostPlacementIsWarned(t *testing.T) {
 	ctx, sink := withPlacementSink(events.WithRunID(t.Context(), "run-1"))
 	sink.note(venue.Placement{Tag: "box"})
 
-	recordPlacement(ctx, stepRunner{jobName: "build", st: refusingPlacements{}}, sink, 0, "work", "", "")
+	recordPlacement(ctx, stepRunner{jobName: "build", st: refusingPlacements{}}, sink, 0, placedStep{name: "work", slot: "", node: ""})
 
 	if !strings.Contains(buf.String(), "job.placement_unrecorded") {
 		t.Errorf("no warning for the lost placement; log:\n%s", buf.String())

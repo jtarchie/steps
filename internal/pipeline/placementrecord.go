@@ -96,6 +96,9 @@ func notePlacement(ctx context.Context, runner shell.Runner) {
 	sink.note(placement)
 }
 
+// placedStep names the three strings that identify a placement row, as fields so two of them cannot be swapped at a call site.
+type placedStep struct{ name, slot, node string }
+
 // recordPlacement persists where a step ran, if it ran anywhere but here.
 //
 // Best-effort, like the agent's usage row and for the same reason: a
@@ -109,7 +112,7 @@ func notePlacement(ctx context.Context, runner shell.Runner) {
 // EMPTY when it does not — a hook is deliberately not merkle-hashed, so it has
 // no node for retention to reap the row alongside, and cascades off its run
 // instead.
-func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink, index int, name, slot, node string) {
+func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink, index int, step placedStep) {
 	if runner.st == nil {
 		return
 	}
@@ -135,10 +138,10 @@ func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink
 	err := runner.st.RecordPlacement(context.WithoutCancel(ctx), store.Placement{
 		RunID:         runID,
 		StepIndex:     index,
-		StepName:      name,
+		StepName:      step.name,
 		JobName:       runner.jobName,
-		Slot:          slot,
-		NodeHash:      node,
+		Slot:          step.slot,
+		NodeHash:      step.node,
 		Tag:           placement.Tag,
 		Address:       placement.Address,
 		InstanceID:    instance,
@@ -153,6 +156,6 @@ func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink
 		VolumeBytes:   placement.VolumeBytes,
 	})
 	if err != nil {
-		slog.WarnContext(ctx, "job.placement_unrecorded", "job", runner.jobName, "step", name, "error", err)
+		slog.WarnContext(ctx, "job.placement_unrecorded", "job", runner.jobName, "step", step.name, "error", err)
 	}
 }

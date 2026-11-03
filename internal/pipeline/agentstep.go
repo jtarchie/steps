@@ -41,7 +41,7 @@ func executeAgentStep(ctx context.Context, r stepRunner, i int, step config.Step
 
 	// After its Close, and only under a node it recorded: a failure before the node has no row to reference, and it never ran anywhere either.
 	if out.hash != "" {
-		recordPlacement(ctx, r, placed, i, step.DisplayName(), out.hash, out.hash)
+		recordPlacement(ctx, r, placed, i, placedStep{name: step.DisplayName(), slot: out.hash, node: out.hash})
 	}
 
 	return out, err
