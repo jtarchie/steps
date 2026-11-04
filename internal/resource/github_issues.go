@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"slices"
 	"strconv"
@@ -152,26 +151,10 @@ type issueComment struct {
 // fetchIssueComments is every comment on an issue, oldest first, decoded and as GitHub sent them.
 func fetchIssueComments(ctx context.Context, client *githubClient, repo, number string) ([]issueComment, []byte, error) {
 	listing := "/repos/" + repo + "/issues/" + url.PathEscape(number) + "/comments"
-	query := url.Values{"per_page": {strconv.Itoa(githubPageSize)}}
-	all := []json.RawMessage{}
-	complete := false
 
-	for page := 1; page <= githubPageLimit && !complete; page++ {
-		query.Set("page", strconv.Itoa(page))
-
-		var listed []json.RawMessage
-
-		_, err := client.getJSON(ctx, listing+"?"+query.Encode(), &listed)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		all = append(all, listed...)
-		complete = len(listed) < githubPageSize
-	}
-
-	if !complete {
-		slog.WarnContext(ctx, "resource.github.issue_comments.truncated", "listing", listing, "pages", githubPageLimit)
+	all, err := listAll(ctx, client, listing, url.Values{})
+	if err != nil {
+		return nil, nil, err
 	}
 
 	comments := make([]issueComment, len(all))

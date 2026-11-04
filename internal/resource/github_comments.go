@@ -503,9 +503,9 @@ func (l reviewThreadLink) keep(thread, comments []json.RawMessage) ([]json.RawMe
 // to last, the comment itself included. A command written as a reply says
 // "this" about what the thread's first comment said, and the comment alone
 // carries only that comment's id. GitHub has no listing of one thread, so
-// the pull request's inline comments are read and kept when they are the
-// first comment or point at it.
-func fetchThread(ctx context.Context, client *githubClient, repo, number string, commentJSON []byte) ([]byte, error) {
+// the pull request's inline comments are read, unless inline already holds
+// them, and kept when they are the first comment or point at it.
+func fetchThread(ctx context.Context, client *githubClient, repo, number string, commentJSON []byte, inline []json.RawMessage) ([]byte, error) {
 	var self reviewThreadLink
 
 	err := json.Unmarshal(commentJSON, &self)
@@ -515,12 +515,14 @@ func fetchThread(ctx context.Context, client *githubClient, repo, number string,
 
 	listing := "/repos/" + repo + "/pulls/" + url.PathEscape(number) + "/comments"
 
-	comments, err := listAll(ctx, client, listing, url.Values{"sort": {"created"}, "direction": {"asc"}})
-	if err != nil {
-		return nil, err
+	if inline == nil {
+		inline, err = listAll(ctx, client, listing, url.Values{"sort": {"created"}, "direction": {"asc"}})
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	thread, err := self.keep([]json.RawMessage{}, comments)
+	thread, err := self.keep([]json.RawMessage{}, inline)
 	if err != nil {
 		return nil, fmt.Errorf("github: GET %s: %w", listing, err)
 	}
@@ -561,10 +563,11 @@ func listAll(ctx context.Context, client *githubClient, listing string, query ur
 	return all, nil
 }
 
-// fetchIncluded adds to files what the source asked to include. The issue
-// and pull request comment listings take no sort and already run oldest
-// first; the inline one is told to.
-func fetchIncluded(ctx context.Context, client *githubClient, source config.GitHubCommentsSource, number string, onPR bool, files map[string][]byte) error {
+// fetchIncluded adds to files what the source asked to include, and returns
+// the inline comments when it read them, so a thread is not read twice. The
+// issue and pull request comment listings take no sort and already run
+// oldest first; the inline one is told to.
+func fetchIncluded(ctx context.Context, client *githubClient, source config.GitHubCommentsSource, number string, onPR bool, files map[string][]byte) ([]json.RawMessage, error) {
 	issue := "/repos/" + source.Repo + "/issues/" + url.PathEscape(number)
 	pull := "/repos/" + source.Repo + "/pulls/" + url.PathEscape(number)
 	listings := []struct {
@@ -577,6 +580,8 @@ func fetchIncluded(ctx context.Context, client *githubClient, source config.GitH
 		{config.GitHubIncludeReviews, pull + "/reviews", url.Values{}, true},
 	}
 
+	var inline []json.RawMessage
+
 	for _, l := range listings {
 		if !source.Includes(l.what) || (l.pullOnly && !onPR) {
 			continue
@@ -584,18 +589,53 @@ func fetchIncluded(ctx context.Context, client *githubClient, source config.GitH
 
 		listed, err := listAll(ctx, client, l.listing, l.query)
 		if err != nil {
-			return err
+			return nil, err
+		}
+
+		if l.what == config.GitHubIncludeReviews {
+			listed, err = submitted(listed)
+			if err != nil {
+				return nil, fmt.Errorf("github: GET %s: %w", l.listing, err)
+			}
 		}
 
 		encoded, err := json.Marshal(listed)
 		if err != nil {
-			return fmt.Errorf("github: %s: %w", l.what, err)
+			return nil, fmt.Errorf("github: %s: %w", l.what, err)
 		}
 
 		files[l.what+".json"] = encoded
+
+		if l.what == config.GitHubIncludeReviewComments {
+			inline = listed
+		}
 	}
 
-	return nil
+	return inline, nil
+}
+
+// submitted drops a pending review. GitHub lists the token user's own draft
+// to that user, and a bot answering in public from reviews.json would
+// publish a review its author has not sent.
+func submitted(reviews []json.RawMessage) ([]json.RawMessage, error) {
+	kept := []json.RawMessage{}
+
+	for _, raw := range reviews {
+		var review struct {
+			State string `json:"state"`
+		}
+
+		err := json.Unmarshal(raw, &review)
+		if err != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+
+		if review.State != "PENDING" {
+			kept = append(kept, raw)
+		}
+	}
+
+	return kept, nil
 }
 
 // fetchComment is one comment, as the files a get writes for it.
@@ -627,7 +667,9 @@ func fetchCommentedIssue(ctx context.Context, client *githubClient, source confi
 	files["issue.json"] = issueJSON
 	files["issue.number"] = []byte(number)
 
-	return fetchIncluded(ctx, client, source, number, false, files)
+	_, err = fetchIncluded(ctx, client, source, number, false, files)
+
+	return err
 }
 
 // fetchCommentedPR lays down the pull request a comment sits on. The version
@@ -635,13 +677,13 @@ func fetchCommentedIssue(ctx context.Context, client *githubClient, source confi
 // command written on it is about what it says today. What the source
 // includes, and an inline comment's thread, are added to files.
 func fetchCommentedPR(ctx context.Context, client *githubClient, source config.GitHubCommentsSource, number, kind string, files map[string][]byte, destDir string) error {
-	err := fetchIncluded(ctx, client, source, number, true, files)
+	inline, err := fetchIncluded(ctx, client, source, number, true, files)
 	if err != nil {
 		return err
 	}
 
 	if kind == config.GitHubCommentReview {
-		thread, err := fetchThread(ctx, client, source.Repo, number, files["comment.json"])
+		thread, err := fetchThread(ctx, client, source.Repo, number, files["comment.json"], inline)
 		if err != nil {
 			return err
 		}

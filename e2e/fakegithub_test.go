@@ -135,6 +135,8 @@ type fakeGitHub struct {
 	queries  []string
 	nextID   int64
 	requests int
+	// inlineListings counts reads of a pull request's inline comment listing.
+	inlineListings int
 	// reactionLists is each comment whose reactions were listed, in order.
 	reactionLists []int64
 	// refuseReactions answers every new reaction as a token without write
@@ -384,6 +386,7 @@ func (f *fakeGitHub) servePullSub(w http.ResponseWriter, r *http.Request) {
 	case r.PathValue("sub") == "reviews":
 		f.listReviews(w, r, atoi(r.PathValue("number")))
 	case r.PathValue("sub") == "comments":
+		f.inlineListings++
 		f.serveCommentsOn(w, r, atoi(r.PathValue("number")), "review")
 	default:
 		respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})

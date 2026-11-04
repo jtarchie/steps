@@ -589,7 +589,7 @@
         "include": {
           "type": "array",
           "items": { "enum": ["conversation", "review_comments", "reviews"] },
-          "description": "What around the comment a get also writes, each as <name>.json: conversation (its pull request's or issue's conversation), review_comments (every inline comment on the pull request), reviews (submitted review summaries). None when unset; an issue writes conversation alone."
+          "description": "What around the comment a get also writes, each as <name>.json: conversation (its pull request's or issue's conversation), review_comments (every inline comment on the pull request), reviews (submitted review summaries, never the token user's own draft). None when unset; an issue writes conversation alone."
         }
       }
     },

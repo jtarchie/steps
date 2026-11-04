@@ -786,7 +786,7 @@ jobs:
 
 // TestEndToEndGitHubCommentIncludesWhatItAsksFor: a command that says "the
 // comments above" means comments it doesn't sit beside. include: opts a get
-// into the conversation, every inline comment and the review summaries,
+// into the conversation, every inline comment and the submitted reviews,
 // each read whole however many pages come first. Nothing is fetched unasked,
 // and an issue, which has no reviews, writes its conversation alone.
 func TestEndToEndGitHubCommentIncludesWhatItAsksFor(t *testing.T) {
@@ -823,7 +823,10 @@ func TestEndToEndGitHubCommentIncludesWhatItAsksFor(t *testing.T) {
 			fake.addComment(fakeComment{ID: 1500, Number: 7, Kind: "review", Author: "alice", Body: "why this guard?", Updated: at})
 			fake.addComment(fakeComment{ID: 1502, Number: 7, Kind: "review", Author: "carol", Body: "seconded", Updated: at, InReplyTo: 1500})
 			fake.addComment(fakeComment{ID: 1501, Number: 7, Kind: tc.kind, Author: "alice", Body: "/steps explain", Updated: at.Add(time.Minute)})
-			fake.reviews[7] = append(fake.reviews[7], fakeReview{ID: 1600, User: "alice", State: "CHANGES_REQUESTED", Body: "Request changes."})
+			// GitHub lists the token user's own draft to that user alone; a reply posted from the file would publish it.
+			fake.reviews[7] = append(fake.reviews[7],
+				fakeReview{ID: 1600, User: "alice", State: "CHANGES_REQUESTED", Body: "Request changes."},
+				fakeReview{ID: 1601, User: fake.login, State: "PENDING", Body: "my unread draft"})
 
 			pipeline := `
 resources:
@@ -858,6 +861,57 @@ jobs:
 				}
 			}
 		})
+	}
+}
+
+// TestEndToEndGitHubInlineCommandIncludingReviewCommentsReadsThemOnce: the
+// thread is cut from the same listing review_comments writes, so an inline
+// command that includes them costs one read of it, not two.
+func TestEndToEndGitHubInlineCommandIncludingReviewCommentsReadsThemOnce(t *testing.T) {
+	at := time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)
+	fake := newFakeGitHub(t)
+	fake.addPR(reviewablePR())
+	fake.addComment(fakeComment{ID: 499, Number: 7, Kind: "review", Author: "carol", Body: "another thread", Updated: at})
+	fake.addComment(fakeComment{ID: 500, Number: 7, Kind: "review", Author: "bob", Body: "why this guard?", Updated: at})
+	fake.addComment(fakeComment{ID: 501, Number: 7, Kind: "review", Author: "alice", Body: "/steps explain", Updated: at.Add(time.Minute), InReplyTo: 500})
+
+	pipeline := `
+resources:
+- name: command
+  type: github-comments
+  source:
+    repo: ` + fakeRepo + `
+    endpoint: ` + fake.URL() + `
+    author: alice
+    body: '^/steps\s'
+    checkout: false
+    include: [review_comments]
+jobs:
+- name: act
+  plan:
+  - get: command
+  - task: read
+    inputs: [command]
+    run: |
+      echo "thread: $(grep -o '"body":"[^"]*"' command/thread.json | tr '\n' ' ')."
+      echo "review_comments: $(grep -o '"body":"[^"]*"' command/review_comments.json | tr '\n' ' ')."
+`
+	out := captureStdout(t, func() { mustRun(t, "run", writePipeline(t, t.TempDir(), pipeline), "--job", "act") })
+
+	for _, want := range []string{
+		`thread: "body":"why this guard?" "body":"/steps explain" .`,
+		`review_comments: "body":"another thread" "body":"why this guard?" "body":"/steps explain" .`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output = %q, want it to contain %q", out, want)
+		}
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if fake.inlineListings != 1 {
+		t.Errorf("the inline comment listing was read %d times, want 1", fake.inlineListings)
 	}
 }
 
