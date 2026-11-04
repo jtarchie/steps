@@ -850,15 +850,28 @@
       ]
     },
     "./internal/scheduler": {
-      "swept_at": "014f3512",
+      "swept_at": "2065e581",
       "date": "2026-11-04",
-      "killed": 41,
-      "lived": 5,
-      "timed_out": 1,
-      "not_covered": 7,
-      "efficacy": 89.13,
-      "note": "Measured only. The survivors are NOT triaged: package mode never runs ./e2e, so some will die there, and nobody has looked.",
-      "equivalent": []
+      "killed": 46,
+      "lived": 3,
+      "timed_out": 2,
+      "not_covered": 3,
+      "efficacy": 93.88,
+      "note": "First sweep 2026-11-04 (89.13 -> 93.88). Four behaviors got tests (runner_mutation_test.go): a shutdown leaves an interruptible run running for the next start to resume instead of closing it aborted (the Interrupted callback had no positive-path test), a resume in the tree the run left continues the same run id, --max-runs (LimitRuns: a positive limit sets the capacity, zero or less is no limit and a drain still takes a slot), and EnqueueRerun/AbortQueued surface a store failure with the scheduler prefix. The 2 TIMED OUT are real kills by hang (drainWorker's ctx.Err() check, confirmed by stack in TestDrainRunsUpToMaxConcurrent; LimitRuns(0) with an unbuffered slot channel). The 3 NOT COVERED are the two time constants (nonInterruptibleGrace is killed by two tests when applied by hand; drainIdleBackoff is equivalent, below) and PrepareRerun's error branch, killed by e2e TestRetryOnARunPageRebuildsThatBuild. OPEN, a real gap left on purpose: runner.go `if err == nil {` before pipeline.CheckResumable in resume(). Skipping the check turns a finished triggered build whose tree was removed (CheckResumable's fresh/refetch outcome) into a refusal, and no test at any level constructs that run (nothing references CheckResumable); a scheduler-level test needs a get-triggered build with recorded inputs.",
+      "equivalent": [
+        {
+          "mutant": "runner.go | ARITHMETIC_BASE | const drainIdleBackoff = 250 * time.Millisecond",
+          "why": "a polling interval; a zero backoff only spins the idle drain loop and no test can tell without a wall-clock assertion"
+        },
+        {
+          "mutant": "runner.go | CONDITIONALS_BOUNDARY | if concurrent < 1 {",
+          "why": "at concurrent == 1 the body assigns 1, the value it already holds"
+        },
+        {
+          "mutant": "runner.go | CONDITIONALS_BOUNDARY | if runErr == nil || job.MaxConsecutiveFailures <= 0 || !paused {",
+          "why": "at MaxConsecutiveFailures == 0 RecordJobOutcome never pauses, so !paused is already true and the early return is the same"
+        }
+      ]
     },
     "./internal/sealbox": {
       "swept_at": "014f3512",
@@ -1020,15 +1033,28 @@
       ]
     },
     "./internal/telemetry": {
-      "swept_at": "014f3512",
+      "swept_at": "2065e581",
       "date": "2026-11-04",
-      "killed": 32,
-      "lived": 10,
+      "killed": 46,
+      "lived": 2,
       "timed_out": 0,
-      "not_covered": 7,
-      "efficacy": 76.19,
-      "note": "Measured only. The survivors are NOT triaged: package mode never runs ./e2e, so some will die there, and nobody has looked.",
-      "equivalent": []
+      "not_covered": 1,
+      "efficacy": 95.83,
+      "note": "First sweep 2026-11-04 (76.19 -> 95.83). Gaps that got tests (runs_mutation_test.go, start_mutation_test.go): a finished step's span carries steps.step.hash and steps.worker only when the event has them; only a failed or errored step is marked an error; a run's identity (events.WithLogAttrs) becomes steps.* span attributes and its pipeline labels the run metrics; the active-runs gauge falls back to zero when a run ends; seconds(ms); Start with telemetry on installs the run tracer and its flush removes it (it was only ever tested down its failure path); a traces exporter that cannot be built fails Start; ObserveQueue reports pending per pipeline until stopped. The NOT COVERED shutdownBound is a timing constant (5 * time.Second).",
+      "equivalent": [
+        {
+          "mutant": "runs.go | ARITHMETIC_BASE | attrs := make([]attribute.KeyValue, 0, 3+len(identity))",
+          "why": "a capacity hint; append grows the slice, so the attributes are identical"
+        },
+        {
+          "mutant": "telemetry.go | CONDITIONALS_NEGATION | if err != nil {",
+          "why": "the shutdown closure's error check only decides whether to slog.Warn a failed flush"
+        },
+        {
+          "mutant": "telemetry.go | ARITHMETIC_BASE | const shutdownBound = 5 * time.Second",
+          "why": "a flush deadline; a test cannot tell 5s from 0 without a wall-clock assertion, and a flush that misses it only logs"
+        }
+      ]
     },
     "./internal/template": {
       "swept_at": "824ba22",
