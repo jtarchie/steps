@@ -107,6 +107,39 @@ func (s *Secrets) heldTail(text string) int {
 	return held
 }
 
+// insideValue is whether position i of text falls strictly inside a complete occurrence of a value, so cutting there would leave half of a secret on each side.
+func (s *Secrets) insideValue(text string, i int) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, value := range s.values {
+		for pos := max(i-len(value)+1, 0); pos < i; pos++ {
+			if strings.HasPrefix(text[pos:], value) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// split divides raw, a stream's held bytes plus its newest write, into what is safe to pass on masked and what must wait for the next write. The tail is judged on the RAW text first: a complete value that a longer value still extends (one secret a prefix of another) would otherwise be masked now and leave the longer one's rest showing when the next write arrives. A cut that would land inside a complete occurrence falls back to judging the masked text.
+func (s *Secrets) split(raw string) (head, tail string) {
+	if s == nil {
+		return raw, ""
+	}
+
+	keep := s.heldTail(raw)
+	if keep > 0 && !s.insideValue(raw, len(raw)-keep) {
+		return s.String(raw[:len(raw)-keep]), raw[len(raw)-keep:]
+	}
+
+	text := s.String(raw)
+	keep = s.heldTail(text)
+
+	return text[:len(text)-keep], text[len(text)-keep:]
+}
+
 // Writer scrubs a stream before it reaches w; Flush hands over the bytes it holds back.
 func (s *Secrets) Writer(w io.Writer) *Scrubber {
 	return &Scrubber{secrets: s, w: w}
@@ -124,12 +157,10 @@ func (sc *Scrubber) Write(p []byte) (int, error) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
-	text := sc.secrets.String(sc.pending + string(p))
+	head, tail := sc.secrets.split(sc.pending + string(p))
+	sc.pending = tail
 
-	keep := sc.secrets.heldTail(text)
-	sc.pending = text[len(text)-keep:]
-
-	_, err := io.WriteString(sc.w, text[:len(text)-keep])
+	_, err := io.WriteString(sc.w, head)
 	if err != nil {
 		return 0, err //nolint:wrapcheck // the stream's own error
 	}
