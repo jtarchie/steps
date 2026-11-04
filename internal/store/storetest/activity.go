@@ -122,3 +122,26 @@ func readActivity(t *testing.T, st store.Store, filter store.ActivityFilter) []s
 
 	return got
 }
+
+// TestActivityKeepsItsDetailAndDefaultsItToAnEmptyObject: what an entry says beyond who, what and to what comes back as written, and an entry with nothing to add reads as an empty JSON object, not an empty string.
+func (s suite) TestActivityKeepsItsDetailAndDefaultsItToAnEmptyObject(t *testing.T) {
+	t.Parallel()
+
+	app := s.open(t, "app")
+
+	recordActivity(t, app, store.ActivityEntry{Action: "set", Detail: `{"reason":"because"}`}, 0)
+	recordActivity(t, app, store.ActivityEntry{Action: "pause"}, 0)
+
+	got := readActivity(t, app, store.ActivityFilter{})
+	if len(got) != 2 || got[0].Action != "pause" || got[1].Action != "set" {
+		t.Fatalf("Activity = %+v, want pause then set", got)
+	}
+
+	if got[1].Detail != `{"reason":"because"}` {
+		t.Errorf("an entry's detail = %q, want it back as written", got[1].Detail)
+	}
+
+	if got[0].Detail != "{}" {
+		t.Errorf("an entry with no detail reads %q, want an empty JSON object", got[0].Detail)
+	}
+}

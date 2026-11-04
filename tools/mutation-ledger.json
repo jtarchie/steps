@@ -907,14 +907,14 @@
       ]
     },
     "./internal/store/sqlite": {
-      "swept_at": "824ba22",
-      "date": "2026-10-09",
-      "killed": 348,
-      "lived": 23,
-      "timed_out": 9,
-      "not_covered": 6,
-      "efficacy": 93.8,
-      "note": "Fell from 100 (6645ad0) to 93.80: 23 survivors on code added since — transcript truncation past the cap (its fuzz seed skipped itself), zero-history prune and delivery paths, the memory cap. Triaged 2026-10-09: tests in storetest and sqlite for each real gap, equivalents below; the 9 TIMED OUT confirmed as real hangs (a transaction left open holds the write lock).",
+      "swept_at": "ecf0fd5c",
+      "date": "2026-11-04",
+      "killed": 446,
+      "lived": 5,
+      "timed_out": 0,
+      "not_covered": 9,
+      "efficacy": 98.89,
+      "note": "Re-measured and triaged 2026-11-04 by `tools/mutants sweep` (13m20s first pass, 11m26s after the new tests; efficacy 98.44 -> 98.89). Three real gaps got tests: RecordActivity's detail default and round trip (storetest, both drivers), a current-version database taking no backup on open (migrate_test.go), and Attach's success and unknown-pipeline paths (attach_schemaversion_test.go). The NOT COVERED on schemaversion.go's two `case` lines is a tool limit (a case expression has no coverage block): applied by hand, the negations and the oldestUpgradable boundary are killed (TestOpenStoreRefusesAnOlderSchema, TestOpenReaderLeavesTheUpgradeToAWriter, TestOpenStoreRefusesANewerSchema); only found > schemaVersion survives, as equivalent below. The four NOT COVERED in runs.go are `+` between string constants in runColumns/runColumnsR, which cannot compile as `-`. migrate.go:79 is the text of an error no test can provoke (migrations is not injectable). Previous triage (2026-10-09 at 824ba22, efficacy 93.8): Fell from 100 (6645ad0) to 93.80: 23 survivors on code added since — transcript truncation past the cap (its fuzz seed skipped itself), zero-history prune and delivery paths, the memory cap. Triaged 2026-10-09: tests in storetest and sqlite for each real gap, equivalents below; the 9 TIMED OUT confirmed as real hangs (a transaction left open holds the write lock).",
       "equivalent": [
         {
           "mutant": "versions.go | CONDITIONALS_BOUNDARY | if order <= 0 {",
@@ -935,6 +935,14 @@
         {
           "mutant": "retention.go | CONDITIONALS_BOUNDARY | return deleted > 0, nil",
           "why": "Always-true only commits an empty transaction instead of rolling it back; the stored rows are identical."
+        },
+        {
+          "mutant": "schemaversion.go | CONDITIONALS_BOUNDARY | case found > schemaVersion:",
+          "why": "schemaVersionError is only called inside a found != schemaVersion guard (schemaversion.go, reader.go Attach and OpenReader), so found == schemaVersion never reaches it"
+        },
+        {
+          "mutant": "migrate.go | ARITHMETIC_BASE | path, version, version+1, backupPath(path, found), err)",
+          "why": "the text of a failing-step error message; migrations is not injectable, so no test can provoke it"
         }
       ]
     },

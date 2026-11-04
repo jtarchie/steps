@@ -329,3 +329,31 @@ func TestABackupSweepTouchesOnlyItsOwnFile(t *testing.T) {
 
 	assertBackedUp(t, path+".v28.bak")
 }
+
+// A file already at the current schema is not backed up on open: upgrade is for older files, and a copy of every database each time steps started would fill the disk beside it.
+func TestOpeningACurrentDatabaseTakesNoBackup(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
+
+	for range 2 {
+		st, err := OpenStore(path, "app")
+		if err != nil {
+			t.Fatalf("OpenStore: %v", err)
+		}
+
+		_ = st.Close()
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".bak") {
+			t.Errorf("opening a current database left %q beside it", entry.Name())
+		}
+	}
+}
