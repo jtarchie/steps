@@ -3,6 +3,7 @@ package secret
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -310,5 +311,51 @@ source:
 	err = <-owner
 	if err == nil {
 		t.Error("the owner's own lookup succeeded past its deadline")
+	}
+}
+
+// A value is cut off at maxValue so a runaway source cannot grow the daemon: exactly maxValue bytes is a value, one more is refused (and the refusal names the limit, never the value).
+func TestLookupCapsTheValueAtExactlyMaxValue(t *testing.T) {
+	t.Parallel()
+
+	resolver := resolverFor(t, fmt.Sprintf(`
+source:
+  fits:
+    command: yes a | tr -d '\n' | head -c %d
+    lookup: [{path: x}]
+  over:
+    command: yes a | tr -d '\n' | head -c %d
+    lookup: [{path: x}]
+`, maxValue, maxValue+1))
+
+	value, err := resolver.Lookup(t.Context(), Ref{Source: "fits", Name: "a"})
+	if err != nil || len(value) != maxValue {
+		t.Errorf("a value of exactly %d bytes = %d bytes, %v; want it accepted whole", maxValue, len(value), err)
+	}
+
+	_, err = resolver.Lookup(t.Context(), Ref{Source: "over", Name: "a"})
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("longer than %d bytes", maxValue)) {
+		t.Errorf("a value of %d bytes = %v, want it refused naming the limit", maxValue+1, err)
+	}
+}
+
+// A failing source's stderr reaches the error, but only its first maxStderr bytes.
+func TestLookupBoundsTheStderrAFailureCarries(t *testing.T) {
+	t.Parallel()
+
+	resolver := resolverFor(t, fmt.Sprintf(`
+source:
+  chatty:
+    command: yes b | tr -d '\n' | head -c %d >&2; exit 3
+    lookup: [{path: x}]
+`, maxStderr*4))
+
+	_, err := resolver.Lookup(t.Context(), Ref{Source: "chatty", Name: "a"})
+	if err == nil || !strings.Contains(err.Error(), "bbbb") {
+		t.Fatalf("a failing source = %v, want its stderr in the error", err)
+	}
+
+	if strings.Count(err.Error(), "b") > maxStderr {
+		t.Errorf("the error carries %d bytes of stderr, want at most %d", strings.Count(err.Error(), "b"), maxStderr)
 	}
 }

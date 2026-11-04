@@ -803,6 +803,26 @@
         }
       ]
     },
+    "./internal/secret": {
+      "swept_at": "256291f2",
+      "date": "2026-11-04",
+      "killed": 55,
+      "lived": 2,
+      "timed_out": 1,
+      "not_covered": 1,
+      "efficacy": 96.49,
+      "note": "First sweep 2026-11-04, measured and triaged. It found a real bug: capped embedded bytes.Buffer, whose promoted ReadFrom os/exec's io.Copy prefers to Write, so the 1 MiB value cap and the 1 KiB stderr cap were never enforced (the NOT COVERED mutants on capped.Write were the tell: Write never ran). Fixed with a named buffer field; TestLookupCapsTheValueAtExactlyMaxValue and TestLookupBoundsTheStderrAFailureCarries fail without it. The 1 TIMED OUT (run.lead, entry.err != nil negated) is a real kill by hang: TestRunWaiterSurvivesTheOwnersCancellation blocks forever on the never-evicted failed entry (confirmed by stack), and TestForChecksExpiresItsAnswers fails. The 1 NOT COVERED (defaultTimeout = 2 * time.Minute) is a tool limit: a constant has no executable line, and the mutant (2 / time.Minute) is killed by four tests when applied by hand. Efficacy before the fix was 96.23.",
+      "equivalent": [
+        {
+          "mutant": "secret.go | ARITHMETIC_BASE | cmd.WaitDelay = 5 * time.Second",
+          "why": "a backstop behind shell.Start's process-group kill on cancel: WaitDelay only matters if a grandchild keeps the output pipe open after the group is killed, and telling 5s from 0 apart needs a wall-clock wait of more than 5s, which the repo's no-wall-clock-assertions rule forbids"
+        },
+        {
+          "mutant": "secret.go | CONDITIONALS_BOUNDARY | return time.Since(entry.at) > run.ttl",
+          "why": "time.Since at nanosecond resolution is never exactly ttl, so > and >= agree"
+        }
+      ]
+    },
     "./internal/shell": {
       "swept_at": "824ba22",
       "date": "2026-10-09",

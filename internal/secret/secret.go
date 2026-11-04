@@ -405,27 +405,28 @@ func (s *source) failed(err error, stderr string) (string, bool, error) {
 	return "", false, fmt.Errorf("exit %d: %s", code, strings.TrimSpace(stderr))
 }
 
-// capped keeps the first max bytes and drops the rest, so a runaway source cannot grow the daemon.
+// capped keeps the first max bytes and drops the rest, so a runaway source cannot grow the daemon. The buffer is a NAMED field on purpose: embedding bytes.Buffer promotes its ReadFrom, os/exec copies output with io.Copy, and io.Copy prefers ReadFrom to Write, so the cap below was never reached.
 type capped struct {
-	bytes.Buffer
-
+	buf  bytes.Buffer
 	max  int
 	over bool
 }
 
 func (c *capped) Write(p []byte) (int, error) {
-	room := c.max - c.Len()
+	room := c.max - c.buf.Len()
 	if len(p) > room {
 		c.over = true
-		_, _ = c.Buffer.Write(p[:max(room, 0)])
+		_, _ = c.buf.Write(p[:max(room, 0)])
 
 		return len(p), nil
 	}
 
-	_, _ = c.Buffer.Write(p)
+	_, _ = c.buf.Write(p)
 
 	return len(p), nil
 }
+
+func (c *capped) String() string { return c.buf.String() }
 
 // Run memoizes one run's lookups, single-flight, so a step re-placed after a spot reclaim, or two steps asking for the same name, prompt once.
 type Run struct {
