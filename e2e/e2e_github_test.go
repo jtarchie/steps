@@ -784,6 +784,83 @@ jobs:
 	}
 }
 
+// TestEndToEndGitHubCommentIncludesWhatItAsksFor: a command that says "the
+// comments above" means comments it doesn't sit beside. include: opts a get
+// into the conversation, every inline comment and the review summaries,
+// each read whole however many pages come first. Nothing is fetched unasked,
+// and an issue, which has no reviews, writes its conversation alone.
+func TestEndToEndGitHubCommentIncludesWhatItAsksFor(t *testing.T) {
+	at := time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)
+	everything := "\n    include: [conversation, review_comments, reviews]"
+
+	for name, tc := range map[string]struct {
+		kind, source string
+		want         []string
+	}{
+		"pull request, all three": {"conversation", everything, []string{
+			`conversation: "body":"the batch drops one" "body":"/steps explain" 150 earlier.`,
+			`review_comments: "body":"why this guard?" "body":"seconded" 0 earlier.`,
+			`reviews: "body":"Request changes." 0 earlier.`,
+		}},
+		"pull request, reviews only": {"conversation", "\n    include: [reviews]", []string{
+			"conversation: none.", "review_comments: none.", `reviews: "body":"Request changes." 0 earlier.`,
+		}},
+		"pull request, nothing asked": {"conversation", "", []string{"conversation: none.", "review_comments: none.", "reviews: none."}},
+		"issue": {"issue", everything + "\n    kinds: [issue]", []string{
+			`conversation: "body":"the batch drops one" "body":"/steps explain" 150 earlier.`, "review_comments: none.", "reviews: none.",
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeGitHub(t)
+			fake.addPR(reviewablePR())
+			fake.issues = append(fake.issues, fakeIssue{Number: 7, Title: "an issue", Author: "bob"})
+
+			for i := range 150 {
+				fake.addComment(fakeComment{ID: int64(1000 + i), Number: 7, Kind: tc.kind, Author: "carol", Body: "earlier", Updated: at})
+			}
+
+			fake.addComment(fakeComment{ID: 1400, Number: 7, Kind: tc.kind, Author: "bob", Body: "the batch drops one", Updated: at})
+			fake.addComment(fakeComment{ID: 1500, Number: 7, Kind: "review", Author: "alice", Body: "why this guard?", Updated: at})
+			fake.addComment(fakeComment{ID: 1502, Number: 7, Kind: "review", Author: "carol", Body: "seconded", Updated: at, InReplyTo: 1500})
+			fake.addComment(fakeComment{ID: 1501, Number: 7, Kind: tc.kind, Author: "alice", Body: "/steps explain", Updated: at.Add(time.Minute)})
+			fake.reviews[7] = append(fake.reviews[7], fakeReview{ID: 1600, User: "alice", State: "CHANGES_REQUESTED", Body: "Request changes."})
+
+			pipeline := `
+resources:
+- name: command
+  type: github-comments
+  source:
+    repo: ` + fakeRepo + `
+    endpoint: ` + fake.URL() + `
+    author: alice
+    body: '^/steps\s'
+    checkout: false` + tc.source + `
+jobs:
+- name: act
+  plan:
+  - get: command
+  - task: read
+    inputs: [command]
+    run: |
+      for f in conversation review_comments reviews; do
+        if [ -e command/$f.json ]; then
+          echo "$f: $(grep -o '"body":"[^"]*"' command/$f.json | grep -v '"earlier"' | tr '\n' ' ')$(grep -o '"body":"earlier"' command/$f.json | wc -l | tr -d ' ') earlier."
+        else
+          echo "$f: none."
+        fi
+      done
+`
+			out := captureStdout(t, func() { mustRun(t, "run", writePipeline(t, t.TempDir(), pipeline), "--job", "act") })
+
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("output = %q, want it to contain %q", out, want)
+				}
+			}
+		})
+	}
+}
+
 // answers is everything the token's user posted, in the conversation or in
 // the thread under 500 or 501, as where: what.
 func answers(fake *fakeGitHub) []string {

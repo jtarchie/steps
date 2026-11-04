@@ -166,6 +166,8 @@ jobs:
 		"enterprise endpoint loads":   {"    endpoint: https://x.example/api/v3", ""},
 		"labels load":                 {"    labels: [factory, 'needs \"review\"']", ""},
 		"blank label":                 {"    labels: [factory, ' ']", "source.labels: a blank label"},
+		"include loads":               {"    include: [conversation, review_comments, reviews]", ""},
+		"include unknown":             {"    include: [thread]", `source.include: "thread" is not something a comment can include`},
 	} {
 		_, err := LoadConfig(writeConfig(t, pipeline(tc.source)))
 

@@ -24,6 +24,8 @@ type docGitHubFixture struct {
 	// labeledIssues are issues by number, with the labels each carries.
 	labeledIssues map[int][]string
 	issues        []fakeIssue
+	// reviews are submitted reviews by pull request number.
+	reviews map[int][]fakeReview
 }
 
 // docGitHubLogin is the token's own user on every fake, so a fixture can
@@ -130,6 +132,15 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 			}
 		},
 	},
+	"included": {
+		prs: []fakePR{docPR()},
+		comments: []fakeComment{
+			{ID: 801, Number: 42, Kind: "review", Author: "bob", Body: "this drops the batch", Updated: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)},
+			{ID: 802, Number: 42, Kind: "conversation", Author: "bob", Body: "see inline", Updated: time.Date(2026, 9, 27, 9, 1, 0, 0, time.UTC)},
+			{ID: 803, Number: 42, Kind: "conversation", Author: "alice", Body: "/steps same problem elsewhere?", Updated: time.Date(2026, 9, 27, 9, 2, 0, 0, time.UTC)},
+		},
+		reviews: map[int][]fakeReview{42: {{ID: 1, User: "bob", State: "CHANGES_REQUESTED", Body: "Two blocking, see inline."}}},
+	},
 	"label": {
 		prs:           []fakePR{func() fakePR { pr := docPR(); pr.Labels = []string{"ready-for-review", "factory:queued"}; return pr }()},
 		labeledIssues: map[int][]string{12: {"release"}},
@@ -228,6 +239,10 @@ func (fixture docGitHubFixture) serve(t *testing.T) *fakeGitHub {
 
 	for _, issue := range fixture.issues {
 		fake.addIssue(issue)
+	}
+
+	for number, reviews := range fixture.reviews {
+		fake.reviews[number] = append(fake.reviews[number], reviews...)
 	}
 
 	return fake

@@ -453,13 +453,10 @@ func githubCommentsIn(ctx context.Context, raw, version map[string]any, destDir 
 	}
 
 	if kind == config.GitHubCommentIssue {
-		issueJSON, err := client.getJSON(ctx, "/repos/"+source.Repo+"/issues/"+number, nil)
+		err = fetchCommentedIssue(ctx, client, source, number, files)
 		if err != nil {
 			return err
 		}
-
-		files["issue.json"] = issueJSON
-		files["issue.number"] = []byte(number)
 
 		return writeMetadata(destDir, files)
 	}
@@ -506,8 +503,8 @@ func (l reviewThreadLink) keep(thread, comments []json.RawMessage) ([]json.RawMe
 // to last, the comment itself included. A command written as a reply says
 // "this" about what the thread's first comment said, and the comment alone
 // carries only that comment's id. GitHub has no listing of one thread, so
-// the pull request's inline comments are read in creation order and kept
-// when they are the first comment or point at it.
+// the pull request's inline comments are read and kept when they are the
+// first comment or point at it.
 func fetchThread(ctx context.Context, client *githubClient, repo, number string, commentJSON []byte) ([]byte, error) {
 	var self reviewThreadLink
 
@@ -517,30 +514,15 @@ func fetchThread(ctx context.Context, client *githubClient, repo, number string,
 	}
 
 	listing := "/repos/" + repo + "/pulls/" + url.PathEscape(number) + "/comments"
-	query := url.Values{"sort": {"created"}, "direction": {"asc"}, "per_page": {strconv.Itoa(githubPageSize)}}
-	thread := []json.RawMessage{}
-	complete := false
 
-	for page := 1; page <= githubPageLimit && !complete; page++ {
-		query.Set("page", strconv.Itoa(page))
-
-		var comments []json.RawMessage
-
-		_, err := client.getJSON(ctx, listing+"?"+query.Encode(), &comments)
-		if err != nil {
-			return nil, err
-		}
-
-		thread, err = self.keep(thread, comments)
-		if err != nil {
-			return nil, fmt.Errorf("github: GET %s: %w", listing, err)
-		}
-
-		complete = len(comments) < githubPageSize
+	comments, err := listAll(ctx, client, listing, url.Values{"sort": {"created"}, "direction": {"asc"}})
+	if err != nil {
+		return nil, err
 	}
 
-	if !complete {
-		slog.WarnContext(ctx, "resource.github.thread.truncated", "listing", listing, "pages", githubPageLimit)
+	thread, err := self.keep([]json.RawMessage{}, comments)
+	if err != nil {
+		return nil, fmt.Errorf("github: GET %s: %w", listing, err)
 	}
 
 	encoded, err := json.Marshal(thread)
@@ -549,6 +531,71 @@ func fetchThread(ctx context.Context, client *githubClient, repo, number string,
 	}
 
 	return encoded, nil
+}
+
+// listAll reads every page of a listing, oldest first, up to the page limit.
+func listAll(ctx context.Context, client *githubClient, listing string, query url.Values) ([]json.RawMessage, error) {
+	query.Set("per_page", strconv.Itoa(githubPageSize))
+
+	all := []json.RawMessage{}
+
+	for page := 1; page <= githubPageLimit; page++ {
+		query.Set("page", strconv.Itoa(page))
+
+		var listed []json.RawMessage
+
+		_, err := client.getJSON(ctx, listing+"?"+query.Encode(), &listed)
+		if err != nil {
+			return nil, err
+		}
+
+		all = append(all, listed...)
+
+		if len(listed) < githubPageSize {
+			return all, nil
+		}
+	}
+
+	slog.WarnContext(ctx, "resource.github.listing.truncated", "listing", listing, "pages", githubPageLimit)
+
+	return all, nil
+}
+
+// fetchIncluded adds to files what the source asked to include. The issue
+// and pull request comment listings take no sort and already run oldest
+// first; the inline one is told to.
+func fetchIncluded(ctx context.Context, client *githubClient, source config.GitHubCommentsSource, number string, onPR bool, files map[string][]byte) error {
+	issue := "/repos/" + source.Repo + "/issues/" + url.PathEscape(number)
+	pull := "/repos/" + source.Repo + "/pulls/" + url.PathEscape(number)
+	listings := []struct {
+		what, listing string
+		query         url.Values
+		pullOnly      bool
+	}{
+		{config.GitHubIncludeConversation, issue + "/comments", url.Values{}, false},
+		{config.GitHubIncludeReviewComments, pull + "/comments", url.Values{"sort": {"created"}, "direction": {"asc"}}, true},
+		{config.GitHubIncludeReviews, pull + "/reviews", url.Values{}, true},
+	}
+
+	for _, l := range listings {
+		if !source.Includes(l.what) || (l.pullOnly && !onPR) {
+			continue
+		}
+
+		listed, err := listAll(ctx, client, l.listing, l.query)
+		if err != nil {
+			return err
+		}
+
+		encoded, err := json.Marshal(listed)
+		if err != nil {
+			return fmt.Errorf("github: %s: %w", l.what, err)
+		}
+
+		files[l.what+".json"] = encoded
+	}
+
+	return nil
 }
 
 // fetchComment is one comment, as the files a get writes for it.
@@ -570,11 +617,29 @@ func fetchComment(ctx context.Context, client *githubClient, repo, id, kind stri
 	}, nil
 }
 
+// fetchCommentedIssue adds the issue a comment sits on to files.
+func fetchCommentedIssue(ctx context.Context, client *githubClient, source config.GitHubCommentsSource, number string, files map[string][]byte) error {
+	issueJSON, err := client.getJSON(ctx, "/repos/"+source.Repo+"/issues/"+number, nil)
+	if err != nil {
+		return err
+	}
+
+	files["issue.json"] = issueJSON
+	files["issue.number"] = []byte(number)
+
+	return fetchIncluded(ctx, client, source, number, false, files)
+}
+
 // fetchCommentedPR lays down the pull request a comment sits on. The version
 // names a comment, not a commit, so the pull request comes as it is now: a
-// command written on it is about what it says today. An inline comment's
-// thread is added to files.
+// command written on it is about what it says today. What the source
+// includes, and an inline comment's thread, are added to files.
 func fetchCommentedPR(ctx context.Context, client *githubClient, source config.GitHubCommentsSource, number, kind string, files map[string][]byte, destDir string) error {
+	err := fetchIncluded(ctx, client, source, number, true, files)
+	if err != nil {
+		return err
+	}
+
 	if kind == config.GitHubCommentReview {
 		thread, err := fetchThread(ctx, client, source.Repo, number, files["comment.json"])
 		if err != nil {
@@ -590,7 +655,7 @@ func fetchCommentedPR(ctx context.Context, client *githubClient, source config.G
 		} `json:"head"`
 	}
 
-	_, err := client.getJSON(ctx, "/repos/"+source.Repo+"/pulls/"+number, &pull)
+	_, err = client.getJSON(ctx, "/repos/"+source.Repo+"/pulls/"+number, &pull)
 	if err != nil {
 		return err
 	}

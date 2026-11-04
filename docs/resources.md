@@ -386,11 +386,40 @@ jobs:
 | `checkout` | no | `false` skips the pull request's tree; default `true`. An issue has no tree |
 | `labels` | no | labels that must all be on the issue or pull request the comment sits on, compared without regard to case as GitHub compares label names |
 | `skip_reacted` | no | a reaction (`+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes`) that, left by the token's own user, marks a comment done: it is not reported |
+| `include` | no | what around the comment a get also writes: `conversation`, `review_comments`, `reviews`, each as `<name>.json`; default none |
 | `token_env`, `endpoint` | no | as for `github-prs` |
 
 A get writes `comment.json`, `comment.body`, `comment.id`, `comment.kind`, `comment.author` and `comment.url`. A comment on a pull request brings the pull request with it, every `pr.*` file above plus the tree at its current head, because a get cannot be told which pull request to fetch by another get's output. A comment on an issue writes `issue.json` and `issue.number` instead.
 
 **An inline comment arrives with its thread.** `thread.json` is the review thread the comment was written in, as GitHub's comment objects: the thread's first comment, then every reply in the order they were written, the fetched comment among them. A command written as a reply says "this" about whatever the first comment said, and `comment.json` alone carries none of it. GitHub has no listing of one thread, so the get reads the pull request's inline comments and keeps the thread's; past 1000 of them the rest are not read. A conversation or an issue is not threaded, so a comment there writes no `thread.json`.
+
+**`include` opts a get into what surrounds the comment.** A command like "the comments above are a problem elsewhere too, right?" is about comments it does not sit beside: a conversation comment pointing at inline ones, or at a review's verdict. `conversation.json` is the pull request's or issue's conversation, `review_comments.json` every inline comment on the pull request, and `reviews.json` the summaries reviewers submitted, each as GitHub's objects, oldest first, read as they are at the get and so including anything written after the command. Each listing stops at 1000 entries. An issue has no diff and no reviews, so it writes `conversation.json` alone. Nothing is read unasked, since every listing is pages of requests a bot that only reads its own command does not need.
+
+```yaml github=included
+resources:
+- name: command
+  type: github-comments
+  source:
+    repo: acme/app
+    body: '^/steps\s'
+    checkout: false
+    include: [conversation, reviews]   # review_comments too, for every inline comment
+
+jobs:
+- name: answer
+  plan:
+  - get: command
+    trigger: true
+  - task: read
+    inputs: [command]
+    run: |
+      echo "$(grep -o '"body"' command/conversation.json | wc -l | tr -d ' ') comments, review said $(grep -o '"body":"[^"]*"' command/reviews.json)"
+    assert:
+      stdout: '2 comments, review said "body":"Two blocking, see inline."'
+  assert:
+    execution: [command, read]
+    outcome: succeeded
+```
 
 **The version is `{id, kind, number, updated}`**, and `updated` is there on purpose, against the usual rule that a version carries identity only. The text is the payload here, so a comment edited from one instruction to another is new work, and an edit that stops matching `body` is not. It is also the [cursor](#the-check-cursor): each check asks GitHub only for comments written since five minutes before the newest version it last reported, newest first, one page when there is no cursor yet. The five minutes are because GitHub can list a comment a little after a newer one: asked from the cursor exactly, a comment that showed up late would sit behind it for good. What the overlap reports again is already in [version history](#version-history), which records a version once, so it starts no second build. Every page is a conditional request, and GitHub answers an unchanged listing without charging the rate limit, so a quiet repository costs nothing to poll. Inline review comments and the rest are two separate listings, so a check watching both reads them until two rounds in a row agree: read once each, a comment landing in the first after it was read could be older than one the second shows, and the cursor would pass it for good. The second round is conditional too, and a check whose listings never settle fails rather than guess, so the next one tries again. Review summaries, the text a reviewer writes when submitting, are not watched: GitHub has no listing of them across a repository.
 

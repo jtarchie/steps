@@ -382,7 +382,7 @@ func (f *fakeGitHub) servePullSub(w http.ResponseWriter, r *http.Request) {
 	case r.PathValue("number") == "comments":
 		f.serveComment(w, int64(atoi(r.PathValue("sub"))), "review")
 	case r.PathValue("sub") == "reviews":
-		f.listReviews(w, atoi(r.PathValue("number")))
+		f.listReviews(w, r, atoi(r.PathValue("number")))
 	case r.PathValue("sub") == "comments":
 		f.serveCommentsOn(w, r, atoi(r.PathValue("number")), "review")
 	default:
@@ -1047,10 +1047,16 @@ func (f *fakeGitHub) replyInThread(w http.ResponseWriter, r *http.Request, numbe
 	respondJSON(w, http.StatusCreated, map[string]any{"id": f.nextID, "in_reply_to_id": id, "html_url": f.html("pull", number)})
 }
 
-func (f *fakeGitHub) listReviews(w http.ResponseWriter, number int) {
-	out := make([]map[string]any, 0, len(f.reviews[number]))
-	for _, review := range f.reviews[number] {
-		out = append(out, map[string]any{"id": review.ID, "state": review.State, "user": map[string]any{"login": review.User}})
+// listReviews pages oldest first, the one order GitHub lists reviews in.
+func (f *fakeGitHub) listReviews(w http.ResponseWriter, r *http.Request, number int) {
+	reviews := f.reviews[number]
+	perPage := max(atoi(r.URL.Query().Get("per_page")), 1)
+	start := min((max(atoi(r.URL.Query().Get("page")), 1)-1)*perPage, len(reviews))
+	end := min(start+perPage, len(reviews))
+
+	out := make([]map[string]any, 0, end-start)
+	for _, review := range reviews[start:end] {
+		out = append(out, map[string]any{"id": review.ID, "state": review.State, "body": review.Body, "user": map[string]any{"login": review.User}})
 	}
 
 	respondJSON(w, http.StatusOK, out)

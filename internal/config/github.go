@@ -53,6 +53,11 @@ const (
 	GitHubCommentConversation = "conversation"
 	GitHubCommentReview       = "review"
 	GitHubCommentIssue        = "issue"
+
+	// What a github-comments get may include besides the comment, each its own file.
+	GitHubIncludeConversation   = "conversation"
+	GitHubIncludeReviewComments = "review_comments"
+	GitHubIncludeReviews        = "reviews"
 )
 
 // GitHubConnection is where a github-* resource talks to and as whom, common
@@ -155,7 +160,15 @@ type GitHubCommentsSource struct {
 	SkipReacted string `yaml:"skip_reacted,omitempty"`
 	// Labels must all be on the issue or pull request a comment sits on, compared without regard to case as GitHub compares label names.
 	Labels []string `yaml:"labels,omitempty"`
+	// Include opts a get into what surrounds the comment, as of the get:
+	// conversation (the timeline it sits in), review_comments (every inline
+	// comment) and reviews (the summaries reviewers submitted). An issue has
+	// only a conversation. Nothing unasked, since each is pages of requests.
+	Include []string `yaml:"include,omitempty"`
 }
+
+// Includes reports whether a get was asked to include what.
+func (s GitHubCommentsSource) Includes(what string) bool { return slices.Contains(s.Include, what) }
 
 // GitHubLogins is one login or a list of them: `author: alice` predates the list form and still loads.
 type GitHubLogins []string
@@ -411,12 +424,14 @@ func ParseGitHubCommentsSource(raw map[string]any) (GitHubCommentsSource, *regex
 		return source, nil, err
 	}
 
-	known := []string{GitHubCommentConversation, GitHubCommentReview, GitHubCommentIssue}
+	err = oneOfEach("source.kinds", "a comment kind", source.Kinds, GitHubCommentConversation, GitHubCommentReview, GitHubCommentIssue)
+	if err != nil {
+		return source, nil, err
+	}
 
-	for _, kind := range source.Kinds {
-		if !slices.Contains(known, kind) {
-			return source, nil, fmt.Errorf("source.kinds: %q is not a comment kind (%s)", kind, strings.Join(known, ", "))
-		}
+	err = oneOfEach("source.include", "something a comment can include", source.Include, GitHubIncludeConversation, GitHubIncludeReviewComments, GitHubIncludeReviews)
+	if err != nil {
+		return source, nil, err
 	}
 
 	pattern, err := regexp.Compile(source.Body)
@@ -429,6 +444,17 @@ func ParseGitHubCommentsSource(raw map[string]any) (GitHubCommentsSource, *regex
 	}
 
 	return source, pattern, validateGitHubReaction("source.skip_reacted", source.SkipReacted)
+}
+
+// oneOfEach refuses the first of values that is not among known.
+func oneOfEach(field, noun string, values []string, known ...string) error {
+	for _, value := range values {
+		if !slices.Contains(known, value) {
+			return fmt.Errorf("%s: %q is not %s (%s)", field, value, noun, strings.Join(known, ", "))
+		}
+	}
+
+	return nil
 }
 
 // unquotedReaction refuses a reaction YAML has already read as a number:
