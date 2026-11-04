@@ -1,5 +1,16 @@
 {
   "packages": {
+    "./internal/actor": {
+      "swept_at": "014f3512",
+      "date": "2026-11-04",
+      "killed": 12,
+      "lived": 0,
+      "timed_out": 0,
+      "not_covered": 0,
+      "efficacy": 100,
+      "note": "",
+      "equivalent": []
+    },
     "./internal/agent": {
       "swept_at": "aae67fc",
       "date": "2026-10-11",
@@ -299,6 +310,17 @@
           "why": "multiCloser still closes every closer either way, and its only consumer is closeAll, which discards the joined error"
         }
       ]
+    },
+    "./internal/agent/tree": {
+      "swept_at": "014f3512",
+      "date": "2026-11-04",
+      "killed": 209,
+      "lived": 36,
+      "timed_out": 2,
+      "not_covered": 26,
+      "efficacy": 85.31,
+      "note": "Measured only. The survivors are NOT triaged: package mode never runs ./e2e, so some will die there, and nobody has looked.",
+      "equivalent": []
     },
     "./internal/blobstore": {
       "swept_at": "824ba22",
@@ -719,6 +741,30 @@
         }
       ]
     },
+    "./internal/redact": {
+      "swept_at": "014f3512",
+      "date": "2026-11-04",
+      "killed": 49,
+      "lived": 3,
+      "timed_out": 0,
+      "not_covered": 0,
+      "efficacy": 94.23,
+      "note": "First sweep 2026-11-04 (66.67 -> 94.23). Found a real leak: a write boundary right after a registered secret that is a proper prefix of another registered secret (tokenabcdefgh / tokenabcdefgh-and-the-rest) masked the shorter one at once and let the longer one's remainder through unmasked, because the held tail was judged on the already-masked text. Scrubber.Write now judges the tail on the raw text and falls back to the masked text only when the cut would land inside a complete occurrence (Secrets.split, insideValue); TestScrubberOutputEqualsStringAtEverySplit checks every one- and two-point split against Secrets.String for unrelated, prefix-related and self-overlapping secrets. Also pinned: the 8-byte minLine boundary, longest-first masking in either Add order, Empty, the exact held prefix, a failing stream, and Error. Multi-line values were never affected: each line is its own entry.",
+      "equivalent": [
+        {
+          "mutant": "secrets.go | CONDITIONALS_BOUNDARY | for i := start; i < len(text)-held; i++ {",
+          "why": "at i == len(text)-held the slice text[i:len(text)-held] is empty, IndexByte returns -1 and the loop breaks, so < and <= end the same way"
+        },
+        {
+          "mutant": "secrets.go | ARITHMETIC_BASE | for pos := max(i-len(value)+1, 0); pos < i; pos++ {",
+          "why": "the one extra position is an occurrence that ENDS at i rather than containing it; calling that inside only sends split to the masked-text path, which holds the same suffix"
+        },
+        {
+          "mutant": "secrets.go | CONDITIONALS_BOUNDARY | if keep > 0 && !s.insideValue(raw, len(raw)-keep) {",
+          "why": "with keep == 0 the raw path returns String(raw) and no tail, which the masked path also does unless a registered secret begins with the mask text *** itself"
+        }
+      ]
+    },
     "./internal/resource": {
       "swept_at": "824ba22",
       "date": "2026-10-09",
@@ -800,6 +846,33 @@
         {
           "mutant": "runview.go | CONDITIONALS_BOUNDARY | if row.Seq > f.run.LastSeq {",
           "why": "On equality, >= assigns LastSeq the value it already has."
+        }
+      ]
+    },
+    "./internal/scheduler": {
+      "swept_at": "014f3512",
+      "date": "2026-11-04",
+      "killed": 41,
+      "lived": 5,
+      "timed_out": 1,
+      "not_covered": 7,
+      "efficacy": 89.13,
+      "note": "Measured only. The survivors are NOT triaged: package mode never runs ./e2e, so some will die there, and nobody has looked.",
+      "equivalent": []
+    },
+    "./internal/sealbox": {
+      "swept_at": "014f3512",
+      "date": "2026-11-04",
+      "killed": 22,
+      "lived": 1,
+      "timed_out": 0,
+      "not_covered": 0,
+      "efficacy": 95.65,
+      "note": "First sweep 2026-11-04 (91.30 -> 95.65). Open(len 0) is 'not a sealed value' and Open(version byte only) is ErrWrongKey; TestOpenTellsAnUnsealedValueFromATruncatedOne pins the len(sealed) < 1 boundary.",
+      "equivalent": [
+        {
+          "mutant": "sealbox.go | CONDITIONALS_BOUNDARY | if len(body) < aead.NonceSize() {",
+          "why": "a body of exactly the nonce size reaches aead.Open with no ciphertext, which fails authentication, and Open maps every failure here to ErrWrongKey, the same answer as the truncated error"
         }
       ]
     },
@@ -946,6 +1019,17 @@
         }
       ]
     },
+    "./internal/telemetry": {
+      "swept_at": "014f3512",
+      "date": "2026-11-04",
+      "killed": 32,
+      "lived": 10,
+      "timed_out": 0,
+      "not_covered": 7,
+      "efficacy": 76.19,
+      "note": "Measured only. The survivors are NOT triaged: package mode never runs ./e2e, so some will die there, and nobody has looked.",
+      "equivalent": []
+    },
     "./internal/template": {
       "swept_at": "824ba22",
       "date": "2026-10-09",
@@ -955,6 +1039,17 @@
       "not_covered": 0,
       "efficacy": 100,
       "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": []
+    },
+    "./internal/testpostgres": {
+      "swept_at": "014f3512",
+      "date": "2026-11-04",
+      "killed": 5,
+      "lived": 2,
+      "timed_out": 0,
+      "not_covered": 8,
+      "efficacy": 71.43,
+      "note": "Measured only. The survivors are NOT triaged: package mode never runs ./e2e, so some will die there, and nobody has looked.",
       "equivalent": []
     },
     "./internal/testsshd": {
@@ -993,6 +1088,17 @@
       "not_covered": 14,
       "efficacy": 97.4,
       "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": []
+    },
+    "./internal/usage": {
+      "swept_at": "014f3512",
+      "date": "2026-11-04",
+      "killed": 22,
+      "lived": 0,
+      "timed_out": 0,
+      "not_covered": 6,
+      "efficacy": 100,
+      "note": "",
       "equivalent": []
     },
     "./internal/venue": {

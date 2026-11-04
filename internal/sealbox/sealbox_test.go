@@ -108,3 +108,27 @@ func TestMalformedKeysAreRefusedUpFront(t *testing.T) {
 		}
 	}
 }
+
+// A value too short to be sealed at all is not a wrong-key answer, and one that is sealed but cut off after its version byte is: the first is never ours, the second is ours and damaged, and callers treat the two differently.
+func TestOpenTellsAnUnsealedValueFromATruncatedOne(t *testing.T) {
+	t.Parallel()
+
+	b := box(t, map[string]string{sealbox.KeyEnv: newKey(t)})
+
+	sealed, err := b.Seal([]byte("refresh-token-value"), []byte("aad"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, value := range map[string][]byte{"nil": nil, "empty": {}} {
+		_, _, err = b.Open(value, []byte("aad"))
+		if err == nil || errors.Is(err, sealbox.ErrWrongKey) {
+			t.Errorf("Open(%s) = %v, want an error that is not ErrWrongKey", name, err)
+		}
+	}
+
+	_, _, err = b.Open(sealed[:1], []byte("aad"))
+	if !errors.Is(err, sealbox.ErrWrongKey) {
+		t.Errorf("Open of just the version byte = %v, want ErrWrongKey", err)
+	}
+}
