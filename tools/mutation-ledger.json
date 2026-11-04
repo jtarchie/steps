@@ -312,15 +312,100 @@
       ]
     },
     "./internal/agent/tree": {
-      "swept_at": "014f3512",
+      "swept_at": "4ddbf1d0",
       "date": "2026-11-04",
-      "killed": 209,
-      "lived": 36,
+      "killed": 222,
+      "lived": 37,
       "timed_out": 2,
-      "not_covered": 26,
-      "efficacy": 85.31,
-      "note": "Measured only. The survivors are NOT triaged: package mode never runs ./e2e, so some will die there, and nobody has looked.",
-      "equivalent": []
+      "not_covered": 12,
+      "efficacy": 85.71,
+      "note": "First sweep 2026-11-04 (85.31 -> 85.71 measured in package mode). Package mode UNDERSTATES this package: it cannot run internal/agent's tool tests, which kill most of the remaining survivors, and that was verified by applying each by hand against ./internal/agent/ with its read, write, search, list and container tests: toolpath.go (6, incl. the TIMED OUT closestExisting loop, which hangs TestExecWriteFile), treewalk.go search accounting and budgets (11: the file-scan budget, the exact file-size limit, Total and head-limit counts, the NUL-byte skip), treehost.go (5), lost.go (5), treesetup.go (3), treecontainer.go ReadBytes (2); and ere.go 153/182/184/358 are killed by the tree package's own ere tests (a case line and a loop have no coverage block, so they score NOT COVERED). Real gaps that got tests: a search root that cannot be read finds nothing instead of crashing (treewalk_mutation_test.go), and the container half of OpenRange and ListDir (the sed line limit, a missing path as not-exist, a runner failure as a lost tree, rows sorted by name) in treecontainer_mutation_test.go, over a fake runner so they need no docker.",
+      "equivalent": [
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if len(out) > 1 && out[1] < out[0] {",
+          "why": "the < to <= form is equivalent: out[1] is a case fold of out[0] and a rune is never equal to its own distinct fold, so the branch never sees equality"
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if lo > next {",
+          "why": "When lo == next the extra pair is the empty range (next, next-1), which liftClassSpecials drops."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if hi+1 > next {",
+          "why": "When hi+1 == next the assignment writes the value next already holds."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if next > asciiMax {",
+          "why": "next == 0x7F means the following range starts at 0x80 (RE2 merges adjacent ranges), and the early break appends the same (0x7F,0x7F) pair."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if next <= asciiMax {",
+          "why": "The loop always breaks with next > asciiMax, so the tail check never runs with next == 0x7F."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_NEGATION | if next <= asciiMax {",
+          "why": "After the loop next is always unicodeMax+1, so the flipped branch appends an inverted range that liftClassSpecials drops."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | for lo <= hi && strings.ContainsRune(classSpecials, lo) {",
+          "why": "the <= to < form changes nothing observable for a single-rune range: an unlifted special is still written as a one-rune range and renders to the same bracket body, checked against both greps by the bracket-specials parity case"
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | for lo <= hi && strings.ContainsRune(classSpecials, hi) {",
+          "why": "After the lo loop, lo == hi implies the rune is not special, so the loop body cannot run either way."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if lo < '\\n' {",
+          "why": "When lo == '\\n' the extra pair is the empty range ('\\n', '\\n'-1), which liftClassSpecials drops."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if hi > '\\n' {",
+          "why": "When hi == '\\n' the extra pair is the empty range ('\\n'+1, '\\n'), which liftClassSpecials drops."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if r <= asciiMax && strings.ContainsRune(ereSpecial, r) {",
+          "why": "differs only for U+007F, which is not in ereSpecial, so the second half of the conjunction decides either way"
+        },
+        {
+          "mutant": "treecontainer.go | ARITHMETIC_BASE | scripts := make([]string, 0, len(quoted)+1)",
+          "why": "Only a capacity hint; chunkQuoted always returns at least one chunk, so the capacity is never negative."
+        },
+        {
+          "mutant": "treecontainer.go | CONDITIONALS_BOUNDARY | if size+cost > maxWriteChunkBytes && i > start {",
+          "why": "For the i > start operand: i == start only right after a split, when size is 0 and one rune's cost cannot exceed the limit. The size+cost operand's boundary mutant is killed by TestChunkQuotedSplitsPastTheLimitOnly."
+        },
+        {
+          "mutant": "treepath.go | CONDITIONALS_BOUNDARY | for ancestor := path.Dir(resolved); ancestor != c.dir && len(ancestor) > len(c.dir); ancestor = path.Dir(ancestor) {",
+          "why": "An ancestor of a path under c.dir with the same length as c.dir is c.dir, which the first operand already stops on."
+        },
+        {
+          "mutant": "treesearch.go | CONDITIONALS_BOUNDARY | return walkOrderKey(paths[i]) < walkOrderKey(paths[j])",
+          "why": "find prints each path once, so no two keys are equal."
+        },
+        {
+          "mutant": "treesearch.go | CONDITIONALS_BOUNDARY | if len(full) > len(best) && strings.HasPrefix(row, full+\":\") {",
+          "why": "Two equal-length paths that are both followed by ':' as prefixes of one row are the same path."
+        },
+        {
+          "mutant": "treesearch.go | CONDITIONALS_BOUNDARY | if len(out) >= headLimit {",
+          "why": "addMatches caps result.matches at headLimit itself, and total counts len(rows), so one extra row per file is never shown."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | for i := 0; i < len(pairs); i += 2 {",
+          "why": "in complementASCII, which renderCharClass calls only for a class whose last range reaches the top of the rune space: the loop leaves through the next > asciiMax break at the final pair, so i never reaches len(pairs) and < and <= agree"
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | case re.Max < 0:",
+          "why": "Max == 0 with Min != 0 is impossible (Min <= Max) and Max == Min is matched by the case above it, so < 0 and <= 0 select the same spelling"
+        },
+        {
+          "mutant": "treecontainer.go | CONDITIONALS_BOUNDARY | sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })",
+          "why": "directory entry names are unique, so < and <= order them identically; the descending form is killed by TestContainerListDirReturnsTheRowsSortedByName"
+        },
+        {
+          "mutant": "treewalk.go | CONDITIONALS_BOUNDARY | if opts.Mode == \"content\" && len(matches) < opts.HeadLimit {",
+          "why": "the one extra match kept per file is discarded by addMatches, which enforces HeadLimit across all files"
+        }
+      ]
     },
     "./internal/blobstore": {
       "swept_at": "824ba22",
@@ -1068,15 +1153,24 @@
       "equivalent": []
     },
     "./internal/testpostgres": {
-      "swept_at": "014f3512",
+      "swept_at": "4ddbf1d0",
       "date": "2026-11-04",
-      "killed": 5,
+      "killed": 13,
       "lived": 2,
       "timed_out": 0,
-      "not_covered": 8,
-      "efficacy": 71.43,
-      "note": "Measured only. The survivors are NOT triaged: package mode never runs ./e2e, so some will die there, and nobody has looked.",
-      "equivalent": []
+      "not_covered": 0,
+      "efficacy": 86.67,
+      "note": "First sweep 2026-11-04 (71.43 -> 86.67). The stale-postmaster cleanup signals processes and had no test: sweep, alive and stopPostmaster (sweep_test.go) now cover that a dead run's directory is removed and its postmaster signalled, a live process's directory and a foreign name are left alone, a pid file that is empty, garbage, 0, 1, negative or names a gone pid is ignored, and only a process whose ps name ends in postgres is signalled. A `terminate` seam (beside startDB) records the pids instead of signalling, so the tests start only sleep processes of their own, run through a symlink named postgres.",
+      "equivalent": [
+        {
+          "mutant": "testpostgres.go | ARITHMETIC_BASE | StartTimeout(3 * time.Minute).",
+          "why": "a startup deadline for the embedded server; a test cannot tell it from 0 without a wall-clock assertion"
+        },
+        {
+          "mutant": "testpostgres.go | CONDITIONALS_BOUNDARY | if err != nil || pid <= 1 {",
+          "why": "defence in depth behind the process-name check just below: pid 1 is never named postgres outside a postgres container, where a test must not signal it, so < 1 and <= 1 refuse the same pids"
+        }
+      ]
     },
     "./internal/testsshd": {
       "swept_at": "824ba22",

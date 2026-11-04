@@ -58,6 +58,9 @@ func (s *Server) URL() string {
 // workRoot holds one directory per test process, named by pid so a later run can tell a dead process's server from a live one's.
 func workRoot() string { return filepath.Join(os.TempDir(), "steps-testpg") }
 
+// terminate is a seam so a test can see which pids a sweep would signal without signalling any.
+var terminate = func(pid int) { _ = syscall.Kill(pid, syscall.SIGTERM) }
+
 // startDB is a seam so a test can simulate a failed fetch or a taken port without depending on the machine's binaries.
 var startDB = func(db *embeddedpostgres.EmbeddedPostgres) error { return db.Start() }
 
@@ -185,5 +188,5 @@ func stopPostmaster(pidFile string) {
 		return
 	}
 
-	_ = syscall.Kill(pid, syscall.SIGTERM)
+	terminate(pid)
 }
