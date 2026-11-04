@@ -175,7 +175,7 @@ func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec,
 			return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve put: %w", err)
 		}
 
-		return shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env, User: resourceType.User, Network: resourceType.Network, Sandbox: resourceType.Sandbox},
+		return withIsolation(shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env}, resourceType.Isolation()),
 			guardInputs{inputs: step.InputNames(), all: step.InputsAll()}, nil
 	default: // config.StepKindGet, or a malformed step — nothing to resolve here
 		return shell.RunnerSpec{}, guardInputs{}, nil

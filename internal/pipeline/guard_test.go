@@ -245,7 +245,7 @@ func TestResolveStepImage(t *testing.T) {
 	}
 }
 
-// The guard's spec carries every container setting of the step it guards, and carries each in its own field (user and network are both strings).
+// The guard's spec carries every container setting of the step it guards (a put's from its resource type, like the put runner itself), and carries each in its own field (user and network are both strings).
 func TestResolveStepRuntimeCarriesEveryIsolationField(t *testing.T) {
 	t.Parallel()
 
@@ -255,11 +255,14 @@ func TestResolveStepRuntimeCarriesEveryIsolationField(t *testing.T) {
 		Agents: []config.Agent{
 			{Name: "a", Source: config.AgentSource{Model: "lmstudio/qwen"}, Image: "img", User: "uid", Network: "net", Privileged: true, Limits: limits, Sandbox: true},
 		},
+		ResourceTypes: []config.ResourceType{{Name: "rt", Image: "img", User: "uid", Network: "net", Privileged: true, Limits: limits, Sandbox: true}},
+		Resources:     []config.Resource{{Name: "r", Type: "rt"}},
 	}
 
 	for name, step := range map[string]config.Step{
 		"task":  {Task: "built"},
 		"agent": {Agent: "a", Messages: []string{"x"}},
+		"put":   {Put: "r"},
 	} {
 		spec, _, err := resolveStepRuntime(cfg, step)
 		if err != nil {
