@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -218,6 +219,13 @@ func mcpToolImpl(client stepsmcp.Client, name string, limit int, pins *mcpPins) 
 
 		result, err := client.CallTool(ctx, name, args)
 		if err != nil {
+			// The model still gets the result, in case nothing above can end
+			// the step; where something can (abort.go), it never reads it.
+			var refusal *stepsmcp.ScopeRefusal
+			if errors.As(err, &refusal) {
+				abortStep(ctx, refusal)
+			}
+
 			return errorResult(err.Error())
 		}
 

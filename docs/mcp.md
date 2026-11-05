@@ -659,8 +659,26 @@ Either one runs the OAuth 2.1 authorization-code + PKCE flow: discovers the serv
   ```
 
   A token with no expiry at all is fine and reports nothing: there is nothing to renew.
-- **`auth.scopes:` is what gets requested.** Left unset, steps asks for every scope the server's protected-resource metadata advertises, which is the right default for a server the pipeline has no opinion about. Setting it narrows the authorization request to exactly those scopes — worth doing against a server whose scope list includes writes you never intend to make.
+- **`auth.scopes:` is what gets requested.** Left unset, steps asks for every scope the server's protected-resource metadata advertises, which is the right default for a server the pipeline has no opinion about. Setting it narrows the authorization request to exactly those scopes — worth doing against a server whose scope list includes writes you never intend to make. It is also what a login is checked against afterwards: see [When a login stops being enough](#when-a-login-stops-being-enough).
 - **Trust boundary**: nothing token-shaped is ever cache-hashed, and nothing token-shaped reaches the state database unencrypted. What a database thief gets is ciphertext; what somebody with the running process gets is everything, as it always was — the key is in its environment and the token in its memory.
+
+### When a login stops being enough
+
+A saved login can be valid and still not be allowed to do the work. `tools/list` answers for any token the server accepts, so without more than that, a login looked "connected" in every check while each tool call a model made came back 403. Two ways this happens in practice: the server renames its permissions, and every login made before keeps the old names; or `auth.scopes:` changes and nobody logs in again.
+
+steps records what each login asked for and, from the token response, what it was **granted** (refreshed whenever a refresh names a scope; a server may omit it, which RFC 6749 says means "what was asked for"). Preflight, for an agent's grant and for a resource's MCP backend alike, then refuses a run when:
+
+- **`auth.scopes:` differs from what the login asked for** — added, removed, or changed since. Read from the saved login alone.
+- **the login was not granted a scope `auth.scopes:` asks for.** Also from the saved login.
+- **a tool call was already refused** this login, below. Also from the saved login.
+- **`auth.scopes:` names a scope the server does not offer** — its protected-resource metadata's `scopes_supported`. Not a login problem: no login can be granted it, so the error says to change the pipeline.
+- **the login holds none of the scopes the server now offers** — the rename case. Holding *some* of them is normal, since a grant is meant to be narrower than everything.
+
+The first three cost a vault read and run ahead of the preflight cache, so a refusal is acted on by the very next run rather than after the cache window. The last two cost one unauthenticated request for the metadata and live behind the cache, like the rest of a probe. A server that publishes no `scopes_supported` skips them.
+
+**A tool call refused for want of a scope ends the step as errored.** A 403 that says `insufficient_scope` — RFC 6750's challenge, or a body saying "insufficient scope" in words, as Metabase's does — is not handed to the model as a tool result, the way every other tool failure is: no argument the model could change makes it succeed, and a model told about it keeps trying. The conversation stops, the step errors with the server, the tool, the scope and the login to make, and `on_error` fires rather than `on_failure`. A 403 about anything else is still the model's to read.
+
+The refusal is remembered against the login that earned it, in the process that saw it, so the next preflight refuses the run before a turn is spent and the **mcp** tab marks the server as needing a login, naming the tool and scope. A new login clears it; a restart forgets it, and the next refused call teaches it again.
 
 ### Authorizing a daemon
 

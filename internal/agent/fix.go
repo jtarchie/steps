@@ -186,7 +186,9 @@ func RunFix(
 	started := time.Now()
 
 	invokedCtx, invoked := startInvocation(ctx, ri)
-	result, err := runOneConversation(invokedCtx, ri, llm, conv, timeout)
+	abortCtx, settle := withStepAbort(invokedCtx)
+	result, err := runOneConversation(abortCtx, ri, llm, conv, timeout)
+	err = settle(err)
 	invoked.end(invokedCtx, conv.usage.snapshot(), err)
 	printAgentResponse(ctx, result)
 

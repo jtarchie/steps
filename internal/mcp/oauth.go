@@ -45,11 +45,15 @@ var ErrNeedsLogin = errors.New("run `steps mcp login`")
 //
 // Never merkle-hashed, and never reaches the state database unsealed: the vault internal/cli installs encrypts it first. See docs/mcp.md's "Trust boundary" section.
 type TokenFile struct {
-	Endpoint     string    `json:"endpoint"`
-	ClientID     string    `json:"client_id"`
-	ClientSecret string    `json:"client_secret,omitempty"`
-	TokenURL     string    `json:"token_url"`
-	Scopes       []string  `json:"scopes,omitempty"`
+	Endpoint     string   `json:"endpoint"`
+	ClientID     string   `json:"client_id"`
+	ClientSecret string   `json:"client_secret,omitempty"`
+	TokenURL     string   `json:"token_url"`
+	Scopes       []string `json:"scopes,omitempty"`
+	// Granted is what the authorization server said the token holds, from the token response's scope at login and at every refresh that names one. Scopes is only what was ASKED for, and a server is free to grant less, or rename what it grants; this is the one record of what the login can actually do. Nil when the server never said: RFC 6749 §5.1 lets it omit scope when it granted exactly what was asked.
+	Granted []string `json:"granted,omitempty"`
+	// LoggedIn is when this login was made, carried unchanged through every refresh. A refusal a server gave this login (scopes.go) belongs to it, and a login with a different LoggedIn is a different login that has not been refused yet.
+	LoggedIn     time.Time `json:"logged_in,omitempty"`
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token,omitempty"`
 	TokenType    string    `json:"token_type,omitempty"`
@@ -451,6 +455,11 @@ func (s *sharedToken) persist(ctx context.Context, tok *oauth2.Token) {
 	updated.AccessToken = tok.AccessToken
 	updated.TokenType = tok.TokenType
 	updated.Expiry = tok.Expiry
+
+	// A refresh that names no scope keeps what the login was granted (RFC 6749 §5.1: omitted means unchanged).
+	if granted := grantedScopes(tok); granted != nil {
+		updated.Granted = granted
+	}
 
 	if tok.RefreshToken != "" {
 		updated.RefreshToken = tok.RefreshToken

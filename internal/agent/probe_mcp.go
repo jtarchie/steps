@@ -82,6 +82,14 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 		identity = append(identity, cfg.Name)
 	}
 
+	// Ahead of the cache: a server can refuse a login mid-run, after this
+	// cache vouched for it, and the next run must hear about that now rather
+	// than when the entry expires. A vault read, as checkCredential's is.
+	err = stepsmcp.StaleLogin(ctx, cfg.Name, *srv)
+	if err != nil {
+		return err //nolint:wrapcheck // StaleLogin names the server, the scopes and the login to make
+	}
+
 	key := strings.Join(append(
 		identity,
 		append(append([]string{}, srv.Args...), spec.MCPTool, strings.Join(spec.MCPTools, ","), pinsKey(spec))...,
@@ -169,9 +177,14 @@ func probeServer(ctx context.Context, pipeline string, srv config.MCPServer, spe
 	// minute, so it stays unmarked: a watcher refuses rather than retries.
 	if spec.MCPTool != "" {
 		_, _, err = pinMCPArgs(spec, selected[0])
+		if err != nil {
+			return err
+		}
 	}
 
-	return err
+	// Last, because it is the one question tools/list cannot answer: the
+	// server listed every tool to a login it will refuse to let call them.
+	return stepsmcp.CheckScopes(probeCtx, pipeline, srv) //nolint:wrapcheck // CheckScopes names the server and the scopes
 }
 
 // pinsKey folds a grant's args: pins into a probe key. The verdict on a pin

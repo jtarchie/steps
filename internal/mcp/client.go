@@ -45,6 +45,9 @@ type Client interface {
 
 type sessionClient struct {
 	session *sdkmcp.ClientSession
+	// pipeline and server are whose credential a refusal speaks for.
+	pipeline string
+	server   config.MCPServer
 }
 
 // handshakeTimeout bounds connecting to a server and negotiating a protocol
@@ -138,8 +141,21 @@ func (c *sessionClient) CallTool(ctx context.Context, name string, args map[stri
 		}
 	}
 
+	ctx, slot := withRefusalSlot(ctx)
+
 	result, err := c.session.CallTool(ctx, params)
 	if err != nil {
+		if challenge := slot.get(); challenge != nil {
+			refusal := &ScopeRefusal{
+				Pipeline: c.pipeline, Server: c.server.Name, Tool: name,
+				Required: challenge.required, Detail: challenge.detail,
+				oauth: c.server.Auth.OAuth(), envVar: c.server.Auth.APIKeyEnv,
+			}
+			noteRefusal(ctx, c.pipeline, c.server, refusal)
+
+			return nil, fmt.Errorf("mcp: call tool %q: %w", name, refusal)
+		}
+
 		return nil, fmt.Errorf("mcp: call tool %q: %w", name, err)
 	}
 
@@ -184,7 +200,7 @@ func Connect(ctx context.Context, pipeline string, srv config.MCPServer) (Client
 		return nil, fmt.Errorf("mcp: connect to %q: %w", srv.Name, err)
 	}
 
-	return &sessionClient{session: session}, nil
+	return &sessionClient{session: session, pipeline: pipeline, server: srv}, nil
 }
 
 // newTransport selects the transport srv is configured for.
@@ -201,6 +217,13 @@ func newTransport(ctx context.Context, pipeline string, srv config.MCPServer) (s
 	if err != nil {
 		return nil, err
 	}
+
+	base := httpClient.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+
+	httpClient.Transport = scopeWatch{base: base}
 
 	// No standalone SSE stream: the go-sdk client otherwise opens a long-lived
 	// GET straight after initialize, and a server that serves one request per

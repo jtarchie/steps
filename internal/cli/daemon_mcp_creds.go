@@ -76,7 +76,7 @@ func (c *credentials) of(ctx context.Context, pipeline string, srv config.MCPSer
 		endpoint: srv.Endpoint,
 		saves:    saves,
 		readAt:   time.Now(),
-		state:    web.MCPCredential{Connected: token.Connected, Detail: token.Detail},
+		state:    web.MCPCredential{Connected: token.Connected, Stale: token.Stale, Detail: token.Detail},
 	}
 
 	c.mu.Lock()

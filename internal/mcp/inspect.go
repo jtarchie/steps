@@ -14,6 +14,8 @@ import (
 type TokenState struct {
 	// Connected is a token that can be used right now, whether or not it can renew itself.
 	Connected bool
+	// Stale is a connected token that still needs a login: it was refused a tool call, or no longer matches the scopes the pipeline asks for (scopes.go). The server still answers it, so it can be Tested; it just cannot do the work.
+	Stale bool
 	// Renews is a refresh token in hand, which is what makes a credential survive unattended.
 	Renews bool
 	// Detail is the sentence a person acts on: what is wrong, or that nothing is.
@@ -38,6 +40,12 @@ func InspectToken(ctx context.Context, pipeline string, srv config.MCPServer) To
 
 	state.Connected = true
 	state.Renews = tf.RefreshToken != ""
+
+	if reason := staleReason(pipeline, srv, tf); reason != "" {
+		state.Stale, state.Detail = true, "needs login: "+reason
+
+		return state
+	}
 
 	switch {
 	case state.Renews:

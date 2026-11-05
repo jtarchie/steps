@@ -21,6 +21,8 @@ const mcpAuthorizePoll = 25 * time.Millisecond
 // MCPCredential is what the daemon knows about an oauth server's saved token without spending it. It carries no part of the token: a page renders this.
 type MCPCredential struct {
 	Connected bool
+	// Stale is connected but needing a login anyway — refused a call, or not matching the scopes the pipeline asks for. The Detail says which.
+	Stale bool
 	// Detail is the sentence a reader acts on — "connected, renews automatically", "authorized for a different endpoint".
 	Detail string
 }
@@ -186,7 +188,7 @@ func (s *Server) mcpRowFor(pipeline *Pipeline, server config.MCPServer) mcpRow {
 		row.Status = state.Credential.Detail
 		row.Mark = markFor(config.MCPMissing)
 
-		if state.Credential.Connected {
+		if state.Credential.Connected && !state.Credential.Stale {
 			row.Mark = markFor(config.MCPReady)
 		}
 	}

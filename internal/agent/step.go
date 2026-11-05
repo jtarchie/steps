@@ -544,7 +544,9 @@ func fallbackModel(prepared preparedAgentStep) string {
 // recorded fallback_model to say so — one of the three channels
 // docs/agents.md's "Loudly visible" promises.
 func runAndAnnounceFailover(ctx context.Context, name string, prepared *preparedAgentStep) (conversationResult, error) {
-	res, served, err := runPreparedWithFailover(ctx, *prepared)
+	abortCtx, settle := withStepAbort(ctx)
+	res, served, err := runPreparedWithFailover(abortCtx, *prepared)
+	err = settle(err)
 
 	// Both halves of the served source, not just its invocation: leaving llm
 	// pointing at the source the cascade abandoned would make the struct

@@ -483,6 +483,8 @@ func persistLoginResult(ctx context.Context, pipeline string, srv config.MCPServ
 		ClientSecret: reg.ClientSecret,
 		TokenURL:     asm.TokenEndpoint,
 		Scopes:       srv.Auth.Scopes,
+		Granted:      grantedScopes(tok),
+		LoggedIn:     time.Now(),
 		AccessToken:  tok.AccessToken,
 		RefreshToken: tok.RefreshToken,
 		TokenType:    tok.TokenType,

@@ -454,6 +454,17 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 		return nil, err
 	}
 
+	// Ahead of the cache, for internal/agent's probeServerCached's reason: a
+	// refusal mid-run must not be vouched for by an entry made before it.
+	err = stepsmcp.StaleLogin(ctx, cfg.Name, *srv)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // StaleLogin names the server, the scopes and the login to make
+	}
+
+	return listServerToolsCached(ctx, cfg, srv, settings)
+}
+
+func listServerToolsCached(ctx context.Context, cfg *config.Config, srv *config.MCPServer, settings *config.Preflight) ([]*sdkmcp.Tool, error) {
 	// Keyed on what the connection actually IS, not on the name it is
 	// configured under: two pipelines (or two tests) can each call their
 	// server "slack" while pointing at different endpoints. A stdio server's
@@ -471,7 +482,7 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 
 	entry, found := toolsCache.lookup(key, settings.CacheWindow(), now)
 	if found {
-		slog.DebugContext(ctx, "preflight.cached", "mcp_server", server)
+		slog.DebugContext(ctx, "preflight.cached", "mcp_server", srv.Name)
 
 		return entry.tools, entry.err
 	}
@@ -479,7 +490,7 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 	probeCtx, cancel := context.WithTimeout(ctx, settings.ProbeTimeout())
 	defer cancel()
 
-	tools, err := stepsmcp.ListServerTools(probeCtx, cfg.Name, *srv)
+	tools, err := listAndCheckScopes(probeCtx, cfg.Name, *srv)
 
 	// Only OUR deadline is a timeout. When the caller's own context is the
 	// one that ended, the run is being torn down (Ctrl-C, a canceled job) and
@@ -510,4 +521,15 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 	toolsCache.store(key, toolListEntry{at: now, tools: tools, err: err})
 
 	return tools, err
+}
+
+// listAndCheckScopes is the probe: the tools, then whether the login may call
+// them, which tools/list alone cannot say.
+func listAndCheckScopes(ctx context.Context, pipeline string, srv config.MCPServer) ([]*sdkmcp.Tool, error) {
+	tools, err := stepsmcp.ListServerTools(ctx, pipeline, srv)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // ListServerTools names the server
+	}
+
+	return tools, stepsmcp.CheckScopes(ctx, pipeline, srv) //nolint:wrapcheck // CheckScopes names the server and the scopes
 }
