@@ -440,10 +440,15 @@ td.faint, .faint { color: var(--faint); }
  * pipeline holds, but saying nothing has happened. */
 .jobchips { white-space: normal; }
 .cellrow { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
-.cell { display: inline-grid; place-items: center; width: 26px; height: 22px; border-radius: 2px; text-decoration: none; background: color-mix(in srgb, currentColor 16%, transparent); }
-.cell:hover { text-decoration: none; background: color-mix(in srgb, currentColor 28%, transparent); }
-.cell.st-passed { background: color-mix(in srgb, currentColor 9%, transparent); }
+/* 10% is as far as a tint goes: the red glyph on a red row's red tint is
+   4.6:1 there, and under 4.5 at 12%. Hover outlines rather than darkens, for
+   the same reason. */
+.cell { display: inline-grid; place-items: center; width: 26px; height: 22px; border-radius: 2px; text-decoration: none; background: color-mix(in srgb, currentColor 10%, transparent); }
+.cell:hover { text-decoration: none; outline: 1px solid color-mix(in srgb, currentColor 60%, transparent); outline-offset: -1px; }
+.cell.st-passed { background: color-mix(in srgb, currentColor 7%, transparent); }
 .cell.st-none, .cell.st-queued { background: none; outline: 1px dashed var(--faint-line); outline-offset: -1px; }
+/* Aborted is dim, and dim on any tint falls under 4.5:1: a solid hairline box instead, since it did run. */
+.cell.st-aborted { background: none; outline: 1px solid var(--faint-line); outline-offset: -1px; }
 /* The favicon's ring, per job: red under a yellow ring is "broken, and a fix is building". */
 .cell.live { box-shadow: inset 0 0 0 1px var(--yellow); }
 /* The red cells again, in words, so which job is wrong never rests on a tooltip. */
@@ -466,8 +471,9 @@ td.faint, .faint { color: var(--faint); }
 .pipelines tr.red .pname > a { color: var(--fg); font-weight: 700; }
 .pipelines tr:not(.red) .lastrun, .pipelines tr:not(.red) .lastrun .st { color: var(--dim); }
 /* The row the keys are on, so j/k show where they landed even on a cell. */
-.pipelines tr:focus-within { background: var(--panel2); }
-.pipelines tr.red:focus-within { background: color-mix(in srgb, var(--red) 10%, var(--panel2)); }
+/* A red row keeps its own wash: a lighter ground under a red cell would take
+   its glyph below 4.5:1, and the focused element's outline already says where. */
+.pipelines tr:not(.red):focus-within { background: var(--panel2); }
 .pipelines .pname[tabindex]:focus-visible { outline: 1px solid var(--yellow); }
 /* Pause and the file path wait for the row. Opacity, not visibility: a
    hidden button cannot take focus, so a keyboard could never reveal it. A

@@ -1865,6 +1865,16 @@ func TestTheRootAnnouncesOnlyWhatTurnedRed(t *testing.T) {
 	if strings.Contains(region, "infra") {
 		t.Errorf("a passing pipeline has a line in the red region:\n%s", region)
 	}
+
+	// The same line is what the row's name says when j/k land on it, so a
+	// screen reader walking the table hears why a row is red, not only its name.
+	if !strings.Contains(pipelineRow(t, loud, "app"), `<a href="/p/app" aria-describedby="red-app">app</a>`) {
+		t.Errorf("a red row's name is not described by its line:\n%s", pipelineRow(t, loud, "app"))
+	}
+
+	if strings.Contains(pipelineRow(t, loud, "infra"), "aria-describedby") {
+		t.Error("a passing row's name is described by a line that does not exist")
+	}
 }
 
 // TestARedCellStaysRedWhileItsFixRuns: a cell is colored by the job's latest
