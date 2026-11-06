@@ -7,8 +7,11 @@
 {{if .Nav.AllPaused}}<div class="pauseall"><span class="st st-paused">everything is paused</span> <span class="dim">each pipeline returns to its own state on resume</span>{{if .Nav.CanPauseAll}} <form class="inline" method="post" action="/unpause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn primary" type="submit">▶ Resume all</button></form>{{end}}</div>
 {{else if .Nav.CanPauseAll}}<div class="pauseall"><form class="inline" method="post" action="/pause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="stop polling and starting runs in every pipeline until resumed; each keeps its own pause state">⏸ Pause all</button></form></div>{{end}}
 
+{{/* The keys drive the rows below; said in words for a screen reader too, since the hint itself is hidden from one. */}}
+<div class="transcripthead"><div class="keyhint" aria-hidden="true"><span><kbd>j</kbd>/<kbd>k</kbd> pipelines</span><span><kbd>h</kbd>/<kbd>l</kbd> jobs</span><span><kbd>enter</kbd> open</span></div></div>
+<p class="visually-hidden" id="pipelines-keys">j and k, or the up and down arrows, move between pipelines; h and l, or the left and right arrows, move between a pipeline's jobs.</p>
 <div class="tablewrap" id="pipelines-table">
-  <table class="pipelines">
+  <table class="pipelines" aria-describedby="pipelines-keys">
     <thead>
       <tr><th>Pipeline</th><th>Jobs</th><th>Last run</th><th><span class="visually-hidden">Pause</span></th></tr>
     </thead>
@@ -16,18 +19,21 @@
       {{range .Pipelines}}
       {{if .Broken}}
       {{/* Held and not served: no pages behind it, so no links and no pause, and the state said in words rather than only in red. */}}
-      <tr>
+      <tr class="red" data-slug="{{.Slug}}">
         <td class="pname">{{template "markglyph" .Mark}}{{.Slug}} <span class="st st-failed">broken</span></td>
         <td colspan="3" class="broken-reason">{{.Broken}}</td>
       </tr>
       {{else}}
-      <tr{{if .Paused}} class="paused"{{end}}>
+      {{/* Red rows carry weight; the rest step back. Order never changes, so emphasis, not position, is what finds the red one. */}}
+      <tr{{if or .Paused .Red}} class="{{if .Paused}}paused{{end}}{{if and .Paused .Red}} {{end}}{{if .Red}}red{{end}}"{{end}} data-slug="{{.Slug}}">
         {{/* Only what is not normal gets a word: a healthy row is its mark, name, jobs and last run. The mark already draws a pause unless a failure outranks it, so the chip is only for then. */}}
         <td class="pname">{{template "markglyph" .Mark}}<a href="/p/{{.Slug}}">{{.Slug}}</a>{{template "counts" .}}{{if and .Paused (ne .Mark.Word "paused")}} <span class="st st-paused">paused</span>{{end}}{{if .Held}} <span class="st st-held">{{.Held}} held</span>{{end}}</td>
-        {{/* Every job, colored by its latest run: which one is red, from
-             the root, and the link is the transcript. */}}
-        <td class="jobchips" title="{{.Jobs}} jobs">{{$slug := .Slug}}{{range .Chips}}<a class="st {{.Class}}" href="/p/{{$slug}}/jobs/{{.Name}}">{{.Name}}</a>{{end}}</td>
-        <td>
+        {{/* One cell per job, colored by its latest finished run, ringed
+             while one is in flight: the strip's shape tells pipelines apart
+             and a red cell reads before any word does. A cell names its job
+             only on hover, so the red ones are named again in words. */}}
+        <td class="jobchips">{{$slug := .Slug}}<span class="cellrow">{{range .Chips}}<a class="cell {{.Class}}{{if .Running}} live{{end}}" href="/p/{{$slug}}/jobs/{{.Name}}" title="{{.Name}}: {{.Word}}{{if .Running}}, running{{end}}" aria-label="{{.Name}}, {{.Word}}{{if .Running}}, running{{end}}" tabindex="-1">{{.Glyph}}</a>{{end}}{{range .Chips}}{{if .Red}}<a class="named {{.Class}}" href="/p/{{$slug}}/jobs/{{.Name}}" tabindex="-1" aria-hidden="true">{{.Name}}</a>{{end}}{{end}}</span></td>
+        <td class="lastrun">
           {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{.Slug}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a> <span class="dim">{{agoTag .Latest.StartedAt}}</span>
           {{else}}<span class="faint">never ran</span>{{end}}
         </td>

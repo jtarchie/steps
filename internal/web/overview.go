@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/labstack/echo/v5"
 
@@ -85,6 +86,13 @@ type overviewPipeline struct {
 	Broken string
 }
 
+// Red is a row that wants a person: a job failed, the breaker holds one, or
+// the daemon cannot serve it. Read off the mark, so the stripe agrees with the
+// glyph beside it; a paused pipeline that is also failing is red, as its mark is.
+func (p overviewPipeline) Red() bool {
+	return p.Broken != "" || p.Held > 0 || p.Mark.Disc == discFailed
+}
+
 // overviewTally is the overview header's count of rows that want a person.
 // Failing is read off the mark, so it agrees with the glyph on each row.
 type overviewTally struct {
@@ -115,15 +123,30 @@ func tallyOverview(rows []overviewPipeline) overviewTally {
 	return tally
 }
 
-// jobChip is one job on an overview row: its name and the st-* class the
-// graph gives the same job.
+// jobChip is one job on an overview row: a cell colored the way the graph
+// colors the same node — by its latest FINISHED run, so a red job being
+// rebuilt stays red and wears the ring, the rule the pipeline's mark folds by.
+// Held outranks the run: the breaker is why it will not move on its own.
 type jobChip struct {
 	Name  string
 	Class string
+	// Glyph is the cell's whole visible content; Word is what the cell says
+	// to a reader who cannot see it.
+	Glyph   string
+	Word    string
+	Running bool
+	Held    bool
+}
+
+// Red is a chip the row names in words beside the strip, so which job is
+// wrong never depends on a tooltip.
+func (c jobChip) Red() bool {
+	return c.Held || c.Class == "st-failed" || c.Class == "st-errored"
 }
 
 // jobChips reads a pipeline's jobs through the board's own view of them, so
-// the root and the graph cannot color one job two ways.
+// the root and the graph cannot color one job two ways. Every read here is
+// one the pipeline's mark already made, memoized on reads.
 func jobChips(ctx context.Context, reads *pipelineReads) []jobChip {
 	pipeline := reads.target
 
@@ -132,12 +155,48 @@ func jobChips(ctx context.Context, reads *pipelineReads) []jobChip {
 		latest = nil
 	}
 
+	// A read that fails leaves every cell unheld rather than failing the row.
+	held, err := reads.HeldJobs(ctx)
+	if err != nil {
+		held = nil
+	}
+
+	heldBy := map[string]store.HeldJob{}
+	for _, job := range held {
+		heldBy[job.Name] = job
+	}
+
 	jobs := pipeline.Config().Jobs
-	chips := make([]jobChip, 0, len(jobs))
+	views := make([]jobView, 0, len(jobs))
 
 	for _, job := range jobs {
-		_, _, class := nodeStatus(buildJobView(job, latest, nil))
-		chips = append(chips, jobChip{Name: job.Name, Class: class})
+		views = append(views, buildJobView(job, latest, heldBy))
+	}
+
+	withLastFinished(ctx, reads, views)
+
+	chips := make([]jobChip, 0, len(views))
+
+	for _, view := range views {
+		chip := jobChip{
+			Name:    view.Name,
+			Class:   finishedClass(view),
+			Running: view.HasRun && statusWord(view.Latest.Status) == "running",
+			Held:    view.Held,
+		}
+
+		chip.Word = strings.TrimPrefix(chip.Class, "st-")
+		if chip.Word == "none" {
+			chip.Word = "never ran"
+		}
+
+		chip.Glyph = statusMark(chip.Word)
+
+		if chip.Held {
+			chip.Class, chip.Glyph, chip.Word = "st-held", "⊘", "held"
+		}
+
+		chips = append(chips, chip)
 	}
 
 	return chips

@@ -1511,14 +1511,14 @@ func TestTheOverviewSaysWhatEachPipelineIsDoing(t *testing.T) {
 
 	// One queued row, as a number: the count is what says the queue is not
 	// being drained, and nothing else on this page does. It is the switcher's
-	// in-flight count, drawn beside the name. The job count rides on the
-	// chips cell, which names the job rather than counting it.
+	// in-flight count, drawn beside the name. The job count is the strip's
+	// length: one cell per job.
 	if !strings.Contains(app, `<span class="inflight" title="1 running or queued">`) {
 		t.Errorf("the row does not count its queued run:\n\t%s", app)
 	}
 
-	if !strings.Contains(app, `title="1 jobs"`) {
-		t.Errorf("the chips cell does not carry the job count:\n\t%s", app)
+	if got := strings.Count(app, `<a class="cell `); got != 1 {
+		t.Errorf("the strip has %d cells for a pipeline of 1 job:\n\t%s", got, app)
 	}
 
 	infra := pipelineRow(t, page, "infra")
@@ -1611,7 +1611,7 @@ func TestAPausedRowKeepsItsUnpauseInView(t *testing.T) {
 	_, page := get(t, server, "/")
 	table := between(t, page, `id="pipelines-table"`, "</table>")
 
-	if !strings.Contains(table, `<tr class="paused">`) || strings.Count(table, `<tr class="paused">`) != 1 {
+	if !strings.Contains(table, `<tr class="paused" data-slug="held">`) || strings.Count(table, `<tr class="paused"`) != 1 {
 		t.Errorf("exactly the paused row should be marked paused:\n%s", table)
 	}
 
@@ -1785,12 +1785,13 @@ func TestLiveStreamCarriesCompacted(t *testing.T) {
 	}
 }
 
-// TestRootShowsEachPipelinesJobsAsChips: the root is where an operator looks
-// first, and the one page that can rank pipelines — so each row names its
-// jobs colored by their latest run, and a red one is the link to its
-// transcript. A job that never ran is faint, not absent: the row must say
-// what the pipeline holds, not only what has happened to it.
-func TestRootShowsEachPipelinesJobsAsChips(t *testing.T) {
+// TestRootShowsEachPipelinesJobsAsCells: the root is where an operator looks
+// first, and the one page that can rank pipelines — so each row is a strip of
+// its jobs, one cell each, colored by its latest run and linked to its
+// transcript. A red job is named again in words, since a cell names its job
+// only on hover. A job that never ran is an empty cell, not absent: the row
+// must say what the pipeline holds, not only what has happened to it.
+func TestRootShowsEachPipelinesJobsAsCells(t *testing.T) {
 	t.Parallel()
 
 	server, pipelines := testPipelines(t, "app", "infra")
@@ -1798,13 +1799,62 @@ func TestRootShowsEachPipelinesJobsAsChips(t *testing.T) {
 
 	_, body := get(t, server, "/")
 
-	for chip, cost := range map[string]string{
-		`<a class="st st-failed" href="/p/app/jobs/app-job">app-job</a>`:     "a failed job is not a red chip",
-		`<a class="st st-none" href="/p/infra/jobs/infra-job">infra-job</a>`: "a job that never ran is not a faint chip",
+	for cell, cost := range map[string]string{
+		`<a class="cell st-failed" href="/p/app/jobs/app-job" title="app-job: failed" aria-label="app-job, failed" tabindex="-1">✗</a>`:            "a failed job is not a red cell",
+		`<a class="named st-failed" href="/p/app/jobs/app-job"`:                                                                                    "a failed job is not named beside the strip",
+		`<a class="cell st-none" href="/p/infra/jobs/infra-job" title="infra-job: never ran" aria-label="infra-job, never ran" tabindex="-1"></a>`: "a job that never ran is not an empty cell",
 	} {
-		if !strings.Contains(body, chip) {
-			t.Errorf("%s: missing %s in %s", cost, chip, body)
+		if !strings.Contains(body, cell) {
+			t.Errorf("%s: missing %s in %s", cost, cell, body)
 		}
+	}
+
+	if strings.Contains(pipelineRow(t, body, "infra"), `class="named`) {
+		t.Error("a pipeline with nothing red names a job beside its strip")
+	}
+}
+
+// TestARedRowCarriesTheWeight: the root keeps its rows in name order through
+// every refresh, so emphasis is the only thing that finds the red one. A row
+// with a failed job is marked red; a healthy one is not, and steps back.
+func TestARedRowCarriesTheWeight(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "app", "infra")
+	startFinishedRun(t, pipelines[0], "run-1", "app-job", "failed")
+	startFinishedRun(t, pipelines[1], "run-2", "infra-job", "passed")
+
+	_, body := get(t, server, "/")
+
+	if !strings.Contains(pipelineRow(t, body, "app"), `<tr class="red" data-slug="app">`) {
+		t.Errorf("a pipeline with a failed job is not a red row:\n%s", pipelineRow(t, body, "app"))
+	}
+
+	if strings.Contains(pipelineRow(t, body, "infra"), `class="red`) {
+		t.Errorf("a passing pipeline is a red row:\n%s", pipelineRow(t, body, "infra"))
+	}
+}
+
+// TestARedCellStaysRedWhileItsFixRuns: a cell is colored by the job's latest
+// FINISHED run and ringed while another is in flight, the rule the
+// pipeline's mark folds by. Colored by the running one, a red job would read
+// as merely busy the moment someone retried it, beside a mark still red.
+func TestARedCellStaysRedWhileItsFixRuns(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "app", "infra")
+	startFinishedRun(t, pipelines[0], "run-1", "app-job", "failed")
+
+	err := pipelines[0].Store.StartRun(t.Context(), store.NewRun{ID: "run-2", JobName: "app-job", Workspace: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_, body := get(t, server, "/")
+
+	want := `<a class="cell st-failed live" href="/p/app/jobs/app-job" title="app-job: failed, running" aria-label="app-job, failed, running" tabindex="-1">✗</a>`
+	if !strings.Contains(body, want) {
+		t.Errorf("a failed job being rebuilt is not a red, ringed cell:\n%s", pipelineRow(t, body, "app"))
 	}
 }
 
@@ -1856,6 +1906,10 @@ func TestTheOverviewCountsHeldJobs(t *testing.T) {
 
 	if !strings.Contains(pipelineRow(t, page, "app"), `<span class="st st-held">1 held</span>`) {
 		t.Errorf("the overview does not count app's held job:\n%s", pipelineRow(t, page, "app"))
+	}
+
+	if !strings.Contains(pipelineRow(t, page, "app"), `<a class="cell st-held" href="/p/app/jobs/app-job" title="app-job: held" aria-label="app-job, held" tabindex="-1">⊘</a>`) {
+		t.Errorf("app's held job is not a held cell:\n%s", pipelineRow(t, page, "app"))
 	}
 
 	if strings.Contains(pipelineRow(t, page, "infra"), "held") {

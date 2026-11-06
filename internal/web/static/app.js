@@ -353,6 +353,81 @@
     e.preventDefault();
   });
 
+  // Keyboard navigation over the root's pipeline table.
+  //
+  // j/k walk pipelines and h/l walk a row's job cells, so the table is one
+  // Tab stop per pipeline rather than one per job. Enter needs nothing here:
+  // what has focus is a link. Where the reader is, is kept as a slug and a
+  // cell index rather than a node, because the 2.5s morph can replace the
+  // node under them, and focus that falls to the body would start the walk
+  // over from the top.
+  var spot = null;
+
+  function pipelineRows() {
+    var wrap = document.getElementById('pipelines-table');
+    return wrap ? Array.from(wrap.querySelectorAll('tbody tr[data-slug]')) : [];
+  }
+
+  // cell -1 is the row's name. A broken row has no link to land on, so its
+  // name cell takes focus itself.
+  function spotTarget(row, cell) {
+    var cells = row.querySelectorAll('.cell');
+    if (cell >= 0 && cells.length) return cells[Math.min(cell, cells.length - 1)];
+    var name = row.querySelector('.pname > a') || row.querySelector('.pname');
+    if (name.tagName !== 'A') name.setAttribute('tabindex', '-1');
+    return name;
+  }
+
+  function spotOf(node) {
+    var wrap = document.getElementById('pipelines-table');
+    var row = wrap && node.closest && node.closest('tr[data-slug]');
+    if (!row || !wrap.contains(row)) return null;
+    return { slug: row.dataset.slug, cell: Array.prototype.indexOf.call(row.querySelectorAll('.cell'), node) };
+  }
+
+  document.addEventListener('focusin', function (e) {
+    if (pipelineRows().length) spot = spotOf(e.target) || spot;
+  });
+  // Leaving for somewhere else forgets the spot; a node the morph removed
+  // blurs with nowhere to go, and that is the case the spot is kept for.
+  document.addEventListener('focusout', function (e) {
+    if (e.relatedTarget && !spotOf(e.relatedTarget)) spot = null;
+  });
+
+  document.addEventListener('htmx:after:swap', function () {
+    if (!spot || (document.activeElement && document.activeElement !== document.body)) return;
+    var row = pipelineRows().filter(function (r) { return r.dataset.slug === spot.slug; })[0];
+    if (row) spotTarget(row, spot.cell).focus({preventScroll: true});
+  });
+
+  document.addEventListener('keydown', function (e) {
+    var rows = pipelineRows();
+    if (!rows.length || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (!e.target.closest || e.target.closest('input, textarea, select, button, [role="option"]')) return;
+
+    // The arrows only once inside the table: elsewhere they scroll the page.
+    var inside = spotOf(e.target);
+    var by = { j: [1, 0], k: [-1, 0], h: [0, -1], l: [0, 1] }[e.key];
+    if (!by && inside) by = { ArrowDown: [1, 0], ArrowUp: [-1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
+    if (!by) return;
+
+    var at = inside || spot;
+    var index = at ? rows.findIndex(function (r) { return r.dataset.slug === at.slug; }) : -1;
+    var cell = at ? at.cell : -1;
+
+    if (index < 0) {
+      index = 0;
+    } else {
+      index = Math.min(Math.max(index + by[0], 0), rows.length - 1);
+      var cells = rows[index].querySelectorAll('.cell').length;
+      cell = Math.min(Math.max(cell + by[1], -1), cells - 1);
+    }
+
+    e.preventDefault();
+    spotTarget(rows[index], cell).focus();
+    rows[index].scrollIntoView({block: 'nearest'});
+  });
+
   var backdrop = document.getElementById('palette-backdrop');
   var palette = document.getElementById('palette');
   var input = document.getElementById('palette-input');

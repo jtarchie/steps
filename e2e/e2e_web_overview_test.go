@@ -12,11 +12,12 @@ import (
 )
 
 // TestColdTabReachesAFailingTranscriptInTwoClicks: the whole reason for the
-// overview's job chips. A daemon holding several pipelines used to answer a
+// overview's job cells. A daemon holding several pipelines used to answer a
 // cold tab with a table that said which pipeline last ran and nothing about
 // which JOB is red — so finding a failure was switcher, board, job, run.
-// Now each row carries its jobs colored by their latest run, a red one is a
-// link, and the link lands on the transcript with the broken step named.
+// Now each row is a strip of its jobs colored by their latest run, a red
+// one is a link, and the link lands on the transcript with the broken step
+// named.
 func TestColdTabReachesAFailingTranscriptInTwoClicks(t *testing.T) {
 	dir := t.TempDir()
 	green := filepath.Join(dir, "green.yml")
@@ -56,21 +57,22 @@ jobs:
 		t.Fatalf("GET / = %d, want the overview", code)
 	}
 
-	for _, want := range []struct{ chip, cost string }{
-		{`<a class="st st-passed" href="/p/green/jobs/ok">ok</a>`, "a green job is not a chip"},
-		{`<a class="st st-passed" href="/p/red/jobs/fine">fine</a>`, "a green job beside a red one is not a chip"},
-		{`<a class="st st-failed" href="/p/red/jobs/broken">broken</a>`, "the red job is not a red chip"},
+	for _, want := range []struct{ cell, cost string }{
+		{`<a class="cell st-passed" href="/p/green/jobs/ok"`, "a green job is not a green cell"},
+		{`<a class="cell st-passed" href="/p/red/jobs/fine"`, "a green job beside a red one is not a green cell"},
+		{`<a class="cell st-failed" href="/p/red/jobs/broken"`, "the red job is not a red cell"},
+		{`<a class="named st-failed" href="/p/red/jobs/broken"`, "the red job is not named beside the strip"},
 	} {
-		if !strings.Contains(root, want.chip) {
-			t.Errorf("%s: missing %s", want.cost, want.chip)
+		if !strings.Contains(root, want.cell) {
+			t.Errorf("%s: missing %s", want.cost, want.cell)
 		}
 	}
 
-	if fine, broken := strings.Index(root, `jobs/fine">`), strings.Index(root, `jobs/broken">`); fine > broken {
-		t.Error("chips are not in the pipeline's own order")
+	if fine, broken := strings.Index(root, `jobs/fine"`), strings.Index(root, `jobs/broken"`); fine > broken {
+		t.Error("cells are not in the pipeline's own order")
 	}
 
-	// Click one: the chip is the job link, which is the latest run.
+	// Click one: the cell is the job link, which is the latest run.
 	runs, err := openStoreFor(t, red).ListRuns(t.Context(), "broken", 1)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("ListRuns: %v (%d rows)", err, len(runs))
@@ -81,7 +83,7 @@ jobs:
 
 	transcript := expectPage(t, server, run, "steps run broken")
 	if !strings.Contains(transcript, `failed at <a href="#step-`) {
-		t.Error("the transcript a red chip lands on does not name the step that broke")
+		t.Error("the transcript a red cell lands on does not name the step that broke")
 	}
 }
 

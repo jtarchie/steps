@@ -731,7 +731,7 @@ func (g *layout) placed(node *layoutNode, views []jobView) graphNode {
 	switch node.kind {
 	case kindJob:
 		view := views[node.view]
-		word, glyph, _ := nodeStatus(view)
+		word, glyph := nodeStatus(view)
 
 		placed.Kind = "job"
 		placed.Status, placed.Glyph, placed.StatusClass = word, glyph, finishedClass(view)
@@ -780,7 +780,7 @@ const dagAgeChars = 4
 // did, how long ago it started, and the breaker when it holds the job. now
 // zero leaves the age out, which is how nodeWidth measures the rest.
 func statusLine(view jobView, now time.Time) string {
-	word, glyph, _ := nodeStatus(view)
+	word, glyph := nodeStatus(view)
 
 	line := glyph + " " + word
 

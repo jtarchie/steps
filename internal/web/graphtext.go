@@ -56,7 +56,7 @@ func jobLabel(view jobView, now time.Time) string {
 
 // spokenStatus is what a node's status line and ring say, in words.
 func spokenStatus(view jobView, now time.Time) []string {
-	word, _, _ := nodeStatus(view)
+	word, _ := nodeStatus(view)
 	parts := []string{word}
 
 	if view.HasRun && !view.Latest.StartedAt.IsZero() {
@@ -157,14 +157,14 @@ func lastFinished(view jobView) (store.RunRow, bool) {
 }
 
 // nodeStatus is the graph's reading of a job's latest run: the shared status
-// word, its glyph, and the st-* class that colors the node.
-func nodeStatus(view jobView) (word, glyph, class string) {
+// word and its glyph. The node's color is finishedClass's, not this.
+func nodeStatus(view jobView) (word, glyph string) {
 	if !view.HasRun && view.Queued != nil {
-		return "queued", "○", "st-queued"
+		return "queued", "○"
 	}
 
 	if !view.HasRun {
-		return "never ran", "○", "st-none"
+		return "never ran", "○"
 	}
 
 	word = statusWord(view.Latest.Status)
@@ -175,7 +175,7 @@ func nodeStatus(view jobView) (word, glyph, class string) {
 		glyph = "○"
 	}
 
-	return word, glyph, "st-" + word
+	return word, glyph
 }
 
 // queuedSuffix is what a queued run adds to a node's status line, counted for its width.

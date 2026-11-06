@@ -432,10 +432,23 @@ td.faint, .faint { color: var(--faint); }
 .hash::before { content: "["; color: var(--faint); }
 .hash::after { content: "]"; color: var(--faint); }
 
-/* ---- overview job chips ---- */
+/* ---- overview job cells ----
+ * The heat strip: one cell per job, its glyph on a tint of its own status
+ * color, so shape and color read before any word. A passed cell is tinted
+ * less than a red one; the strip is quiet unless something is not. A job that
+ * never ran is an empty dashed cell — present, since the row says what the
+ * pipeline holds, but saying nothing has happened. */
 .jobchips { white-space: normal; }
-.jobchips a { display: inline-block; margin-right: 10px; line-height: 24px; text-decoration: none; }
-.jobchips a:hover { text-decoration: underline; }
+.cellrow { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+.cell { display: inline-grid; place-items: center; width: 26px; height: 22px; border-radius: 2px; text-decoration: none; background: color-mix(in srgb, currentColor 16%, transparent); }
+.cell:hover { text-decoration: none; background: color-mix(in srgb, currentColor 28%, transparent); }
+.cell.st-passed { background: color-mix(in srgb, currentColor 9%, transparent); }
+.cell.st-none, .cell.st-queued { background: none; outline: 1px dashed var(--faint-line); outline-offset: -1px; }
+/* The favicon's ring, per job: red under a yellow ring is "broken, and a fix is building". */
+.cell.live { box-shadow: inset 0 0 0 1px var(--yellow); }
+/* The red cells again, in words, so which job is wrong never rests on a tooltip. */
+.jobchips .named { margin-left: 7px; text-decoration: none; }
+.jobchips .named:hover { text-decoration: underline; }
 /* The root's rows: a pipeline's badges follow its name, and only when
    something is not normal. */
 .pipelines .pname { white-space: nowrap; }
@@ -443,6 +456,19 @@ td.faint, .faint { color: var(--faint); }
 .pipelines .pname .counts { display: inline-flex; gap: 8px; margin-left: 10px; font-variant-numeric: tabular-nums; }
 .pipelines .pname .counts .badge { margin-left: 0; }
 .pipelines .pname .st { margin-left: 6px; }
+/* Red rows carry the weight: a stripe, a faint wash, the name in full
+   weight. Every other row's last run steps back to dim, since a column of
+   green "passed" is the noise that hid the red one; its glyph still says it. */
+/* The wash is the row's, not its cells': the Pause cell waits at opacity 0,
+   and a cell's own background would vanish with it. */
+.pipelines tr.red { background: color-mix(in srgb, var(--red) 5%, transparent); }
+.pipelines tr.red td:first-child { box-shadow: inset 2px 0 0 var(--red); }
+.pipelines tr.red .pname > a { color: var(--fg); font-weight: 700; }
+.pipelines tr:not(.red) .lastrun, .pipelines tr:not(.red) .lastrun .st { color: var(--dim); }
+/* The row the keys are on, so j/k show where they landed even on a cell. */
+.pipelines tr:focus-within { background: var(--panel2); }
+.pipelines tr.red:focus-within { background: color-mix(in srgb, var(--red) 10%, var(--panel2)); }
+.pipelines .pname[tabindex]:focus-visible { outline: 1px solid var(--yellow); }
 /* Pause and the file path wait for the row. Opacity, not visibility: a
    hidden button cannot take focus, so a keyboard could never reveal it. A
    touch screen has no hover, so there they are always shown. */
@@ -466,6 +492,9 @@ td.faint, .faint { color: var(--faint); }
   .pipelines .pname ~ td:nth-child(3) { grid-row: 1; grid-column: 2; text-align: right; }
   .pipelines .jobchips, .pipelines .rowextra, .pipelines .broken-reason { grid-column: 1 / -1; width: auto; }
   .pipelines .rowextra { text-align: left; opacity: 1; }
+  /* Stacked, the row is the box: the stripe moves from its first cell to it. */
+  .pipelines tr.red { box-shadow: inset 2px 0 0 var(--red); }
+  .pipelines tr.red td:first-child { box-shadow: none; }
 }
 
 /* ---- run strip ----
