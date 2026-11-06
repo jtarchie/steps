@@ -61,12 +61,12 @@ var docsCodeStyle = chroma.MustNewStyle("steps", chroma.StyleEntries{
 //
 // Two values rather than one, because goldmark has no combined Markdown type any more — an extension declares its parser half and its renderer half separately.
 var docsParser = parser.New(
-	parser.WithExtensions(extension.GFMParser),
+	parser.WithExtensions(extension.NewGFMParser()),
 	parser.WithAutoHeadingID(),
 )
 
 var docsRenderer = html.New(
-	html.WithExtensions(extension.GFMHTMLRenderer),
+	html.WithExtensions(extension.NewGFMHTMLRenderer()),
 	html.WithNodeRendererDecorator(ast.KindCodeBlock, highlightDocsFence),
 )
 

@@ -70,12 +70,12 @@ var codeFormatter = chromahtml.New(chromahtml.WithClasses(false), chromahtml.Pre
 //
 // A parser and a renderer rather than one converter, which goldmark no longer has; the subtractions this file exists for are now split across the two, and the renderer half is where every override lives.
 var agentParser = parser.New(
-	parser.WithExtensions(extension.GFMParser),
+	parser.WithExtensions(extension.NewGFMParser()),
 	parser.WithASTTransformers(util.Prioritized[parser.ASTTransformer](inertImages{}, 100)),
 )
 
 var agentRenderer = html.New(
-	html.WithExtensions(extension.GFMHTMLRenderer),
+	html.WithExtensions(extension.NewGFMHTMLRenderer()),
 	// Decorators rather than plain node renderers, which goldmark applies BEFORE every extension's own and which the built-in CommonMark extension therefore silently takes back — link, autolink and code block all rendered as goldmark's defaults, which is to say with none of the subtractions this file exists for. A decorator is applied to whatever won and composes with any other, so the override cannot be undone by adding an extension.
 	html.WithNodeRendererDecorators(map[ast.NodeKind]html.NodeRendererDecorator{
 		ast.KindLink:      instead(renderSafeLink),
