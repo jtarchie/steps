@@ -449,8 +449,11 @@ td.faint, .faint { color: var(--faint); }
 .cell.st-none, .cell.st-queued { background: none; outline: 1px dashed var(--faint-line); outline-offset: -1px; }
 /* Aborted is dim, and dim on any tint falls under 4.5:1: a solid hairline box instead, since it did run. */
 .cell.st-aborted { background: none; outline: 1px solid var(--faint-line); outline-offset: -1px; }
-/* The favicon's ring, per job: red under a yellow ring is "broken, and a fix is building". */
-.cell.live { box-shadow: inset 0 0 0 1px var(--yellow); }
+/* A run in flight, per job: red over a yellow bar is "broken, and a fix is
+   building", the favicon's ring in a cell's shape. A bar and not a box,
+   because the focus ring is a yellow box too, and a focused cell must not
+   read as a running one. */
+.cell.live { box-shadow: inset 0 -2px 0 var(--yellow); }
 /* The red cells again, in words, so which job is wrong never rests on a tooltip. */
 .jobchips .named { margin-left: 7px; text-decoration: none; }
 .jobchips .named:hover { text-decoration: underline; }

@@ -30,7 +30,7 @@
       <tr{{if or .Paused .Red}} class="{{if .Paused}}paused{{end}}{{if and .Paused .Red}} {{end}}{{if .Red}}red{{end}}"{{end}} data-slug="{{.Slug}}">
         {{/* Only what is not normal gets a word: a healthy row is its mark, name, jobs and last run. The mark already draws a pause unless a failure outranks it, so the chip is only for then. */}}
         <td class="pname">{{template "markglyph" .Mark}}<a href="/p/{{.Slug}}"{{if .Red}} aria-describedby="red-{{.Slug}}"{{end}}>{{.Slug}}</a>{{template "counts" .}}{{if and .Paused (ne .Mark.Word "paused")}} <span class="st st-paused">paused</span>{{end}}{{if .Held}} <span class="st st-held">{{.Held}} held</span>{{end}}</td>
-        {{/* One cell per job, colored by its latest finished run, ringed
+        {{/* One cell per job, colored by its latest finished run, barred
              while one is in flight: the strip's shape tells pipelines apart
              and a red cell reads before any word does. A cell names its job
              only on hover, so the red ones are named again in words. */}}

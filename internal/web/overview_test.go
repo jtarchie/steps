@@ -1878,7 +1878,7 @@ func TestTheRootAnnouncesOnlyWhatTurnedRed(t *testing.T) {
 }
 
 // TestARedCellStaysRedWhileItsFixRuns: a cell is colored by the job's latest
-// FINISHED run and ringed while another is in flight, the rule the
+// FINISHED run and barred while another is in flight, the rule the
 // pipeline's mark folds by. Colored by the running one, a red job would read
 // as merely busy the moment someone retried it, beside a mark still red.
 func TestARedCellStaysRedWhileItsFixRuns(t *testing.T) {
@@ -1896,7 +1896,7 @@ func TestARedCellStaysRedWhileItsFixRuns(t *testing.T) {
 
 	want := `<a class="cell st-failed live" href="/p/app/jobs/app-job" title="app-job: failed, running" aria-label="app-job, failed, running" tabindex="-1">✗</a>`
 	if !strings.Contains(body, want) {
-		t.Errorf("a failed job being rebuilt is not a red, ringed cell:\n%s", pipelineRow(t, body, "app"))
+		t.Errorf("a failed job being rebuilt is not a red, barred cell:\n%s", pipelineRow(t, body, "app"))
 	}
 }
 

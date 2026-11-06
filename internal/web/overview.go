@@ -143,7 +143,8 @@ func tallyOverview(rows []overviewPipeline) overviewTally {
 
 // jobChip is one job on an overview row: a cell colored the way the graph
 // colors the same node — by its latest FINISHED run, so a red job being
-// rebuilt stays red and wears the ring, the rule the pipeline's mark folds by.
+// rebuilt stays red with a running bar under it, the rule the pipeline's
+// mark folds by.
 // Held outranks the run: the breaker is why it will not move on its own.
 type jobChip struct {
 	Name  string
