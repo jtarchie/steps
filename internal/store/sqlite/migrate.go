@@ -43,6 +43,10 @@ INSERT INTO run_steps_v33 (run_id, build_id, step_index, step_name, hash)
 DROP TABLE run_steps;
 ALTER TABLE run_steps_v33 RENAME TO run_steps;`),
 	execStep(`CREATE INDEX idx_run_inputs_version ON run_inputs(resource_name, version_json)`),
+	execStep(`CREATE TABLE pause_all (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    paused_at TEXT NOT NULL
+);`),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {

@@ -120,6 +120,8 @@ var notRecorded = map[string]string{ //nolint:gosec // route keys and reasons, n
 	"POST /oauth/register":              "an agent registering itself is nobody acting; the person who later lets it connect is recorded then",
 	"POST /oauth/token":                 "an agent exchanging what a person already granted; the grant was recorded when it was given",
 	"POST /oauth/authorize":             "recorded by handleConsent itself, which knows the export the consent named — this route carries no pipeline in its path",
+	"POST " + pauseAllPath:              "recorded by setAllPausedFromPage itself, against every pipeline it paused — this route carries none in its path",
+	"POST " + unpauseAllPath:            "as POST /pause-all",
 	"POST /p/:pipeline/hooks/:resource": "a webhook delivery is automatic: the run it starts already says webhook: <resource>",
 }
 

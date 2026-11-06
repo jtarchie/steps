@@ -28,6 +28,10 @@ var migrations = []string{
     DROP CONSTRAINT run_steps_pkey,
     ADD PRIMARY KEY (run_id, build_id, step_index, visit)`,
 	`CREATE INDEX idx_run_inputs_version ON run_inputs(resource_name, version_json)`,
+	`CREATE TABLE pause_all (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    paused_at TIMESTAMPTZ NOT NULL
+)`,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

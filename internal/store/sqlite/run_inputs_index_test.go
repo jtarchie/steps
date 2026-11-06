@@ -54,7 +54,7 @@ func TestTheRunInputsIndexStepCreatesTheIndex(t *testing.T) {
 
 	defer func() { _ = tx.Rollback() }()
 
-	err = migrations[len(migrations)-1](ctx, tx)
+	err = migrations[33-oldestUpgradable](ctx, tx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +63,6 @@ func TestTheRunInputsIndexStepCreatesTheIndex(t *testing.T) {
 
 	err = tx.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_run_inputs_version'`).Scan(&found)
 	if err != nil {
-		t.Fatalf("the last migration step left no idx_run_inputs_version: %v", err)
+		t.Fatalf("the step to 34 left no idx_run_inputs_version: %v", err)
 	}
 }

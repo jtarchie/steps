@@ -92,6 +92,8 @@ func (s *Server) nav(c *echo.Context) navData {
 
 	nav.MarkURL = "/mark"
 	nav.SwitchMark = nav.Mark
+	nav.AllPaused = s.allPaused(ctx)
+	nav.CanPauseAll = !nav.ReadOnly && nav.Role >= RoleAdmin
 
 	sort.Slice(nav.Pipelines, func(i, j int) bool {
 		return nav.Pipelines[i].Slug < nav.Pipelines[j].Slug
@@ -115,6 +117,7 @@ func (s *Server) nav(c *echo.Context) navData {
 		}
 	}
 	nav.Paused = readsOf(c, current).Paused(ctx)
+	nav.OwnPaused = readsOf(c, current).PipelinePaused(ctx)
 	nav.Attention = gathered[current.Slug]
 	// The tab appears only for a pipeline that declares servers: most do not, and a dead tab on every one of them is nav space spent on a feature they never use.
 	nav.HasMCP = len(current.Config().MCPServers) > 0 || len(current.Config().MCPExports) > 0
@@ -145,8 +148,12 @@ type navData struct {
 	ReadOnly bool
 	// HasMCP is whether the current pipeline declares mcp_servers:, which is the only thing that draws the mcp tab.
 	HasMCP bool
-	// Paused is whether the current pipeline is paused, which the action bar says on every page.
-	Paused bool
+	// Paused is whether the current pipeline admits nothing, which the action bar says on every page; OwnPaused is its own pause alone, which the pause button toggles.
+	Paused    bool
+	OwnPaused bool
+	// AllPaused is the daemon-wide pause; CanPauseAll is whether this reader may throw or lift it.
+	AllPaused   bool
+	CanPauseAll bool
 	// Mark is what this page's title and favicon say: the narrowest run or
 	// pipeline the page is about, every pipeline above one, zero on a page
 	// that is about none (docs, an error).

@@ -46,6 +46,73 @@ func (s suite) TestPauseIsTheWholePipelinesBreaker(t *testing.T) {
 	}
 }
 
+// TestPauseAllLeavesEachPipelinesOwnPause: thrown through one handle it stops every pipeline in the database, and lifting it returns each to the pause it had — one paused on purpose before stays paused.
+func (s suite) TestPauseAllLeavesEachPipelinesOwnPause(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	held := s.open(t, "held")
+	running := s.open(t, "running")
+
+	err := held.Pause(ctx)
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	// Twice, because a second press must not fail on the row the first wrote.
+	for range 2 {
+		err = held.PauseAll(ctx)
+		if err != nil {
+			t.Fatalf("PauseAll: %v", err)
+		}
+	}
+
+	pausedAs(t, running, "running under PauseAll", true, false, true)
+	pausedAs(t, held, "held under PauseAll", true, true, true)
+
+	// Its own unpause is still its own: the daemon-wide pause holds it regardless.
+	err = held.Unpause(ctx)
+	if err != nil {
+		t.Fatalf("Unpause: %v", err)
+	}
+
+	pausedAs(t, held, "held unpaused under PauseAll", true, false, true)
+
+	err = held.Pause(ctx)
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	err = running.UnpauseAll(ctx)
+	if err != nil {
+		t.Fatalf("UnpauseAll: %v", err)
+	}
+
+	pausedAs(t, running, "running after UnpauseAll", false, false, false)
+	pausedAs(t, held, "held after UnpauseAll", true, true, false)
+}
+
+func pausedAs(t *testing.T, st store.Store, what string, paused, own, all bool) {
+	t.Helper()
+
+	ctx := ctxFor(t)
+
+	gotPaused, err := st.Paused(ctx)
+	if err != nil || gotPaused != paused {
+		t.Errorf("%s: Paused = (%v, %v), want %v", what, gotPaused, err, paused)
+	}
+
+	gotOwn, err := st.PipelinePaused(ctx)
+	if err != nil || gotOwn != own {
+		t.Errorf("%s: PipelinePaused = (%v, %v), want %v", what, gotOwn, err, own)
+	}
+
+	gotAll, err := st.AllPaused(ctx)
+	if err != nil || gotAll != all {
+		t.Errorf("%s: AllPaused = (%v, %v), want %v", what, gotAll, err, all)
+	}
+}
+
 // TestRenameKeepsTheHistoryUnderTheNewName: every scoped row reaches the pipeline by id, so a rename is one UPDATE rather than a new identity with empty state.
 func (s suite) TestRenameKeepsTheHistoryUnderTheNewName(t *testing.T) {
 	t.Parallel()

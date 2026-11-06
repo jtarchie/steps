@@ -331,6 +331,8 @@ func (s *Server) routes() error {
 	e.GET("/docs", s.handleDocsIndex)
 	e.GET("/docs/:page", s.handleDocs)
 	e.GET("/activity", s.handleActivity)
+	e.POST(pauseAllPath, s.handlePauseAll)
+	e.POST(unpauseAllPath, s.handleUnpauseAll)
 
 	if s.sessions != nil {
 		e.GET(loginPath, s.handleLoginPage)

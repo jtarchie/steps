@@ -3,6 +3,9 @@
 <div id="overview-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#overview-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph">
 {{/* The feed below shows its own length; the header counts only what wants a person. */}}
 <p class="metaline">{{len .Pipelines}} pipelines{{with .Tally.Paused}}<span class="sep">·</span><span class="st-paused">{{.}} paused</span>{{end}}{{with .Tally.Failing}}<span class="sep">·</span><span class="st-failed">{{.}} failing</span>{{end}}{{with .Tally.Broken}}<span class="sep">·</span><span class="st-failed">{{.}} broken</span>{{end}}</p>
+{{/* A stop gap over every pipeline that leaves each one's own pause alone, so the rows below keep saying what each returns to. */}}
+{{if .Nav.AllPaused}}<div class="pauseall"><span class="st st-paused">everything is paused</span> <span class="dim">each pipeline returns to its own state on resume</span>{{if .Nav.CanPauseAll}} <form class="inline" method="post" action="/unpause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn primary" type="submit">▶ Resume all</button></form>{{end}}</div>
+{{else if .Nav.CanPauseAll}}<div class="pauseall"><form class="inline" method="post" action="/pause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="stop polling and starting runs in every pipeline until resumed; each keeps its own pause state">⏸ Pause all</button></form></div>{{end}}
 
 <div class="tablewrap" id="pipelines-table">
   <table class="pipelines">

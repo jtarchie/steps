@@ -17,6 +17,7 @@ type pipelineReads struct {
 	target *Pipeline
 
 	paused      lazy[bool]
+	own         lazy[bool]
 	held        lazy[[]store.HeldJob]
 	checkErrors lazy[[]store.CheckError]
 	approvals   lazy[[]store.Approval]
@@ -90,6 +91,17 @@ func (r *pipelineReads) PausedErr(ctx context.Context) (bool, error) {
 	}
 
 	return r.paused.get(func() (bool, error) { return r.target.Store.Paused(ctx) })
+}
+
+// PipelinePaused is its own pause alone, which picks the pause button's direction: under PauseAll the pipeline is stopped either way, and the button still says what it returns to.
+func (r *pipelineReads) PipelinePaused(ctx context.Context) bool {
+	if r.target.Store == nil {
+		return false
+	}
+
+	is, err := r.own.get(func() (bool, error) { return r.target.Store.PipelinePaused(ctx) })
+
+	return err == nil && is
 }
 
 func (r *pipelineReads) HeldJobs(ctx context.Context) ([]store.HeldJob, error) {

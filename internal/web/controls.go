@@ -35,14 +35,15 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 	}
 
 	// Refused rather than queued: a pause that let the button enqueue would fill the queue with work nobody intends to run, and say nothing about why nothing happened.
-	stopped, err := pipeline.Store.Paused(c.Request().Context())
+	ctx := c.Request().Context()
+
+	stopped, err := pipeline.Store.Paused(ctx)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
 	if stopped {
-		return echo.NewHTTPError(http.StatusConflict,
-			"this pipeline is paused; unpause it with steps pipeline unpause -p "+pipeline.Slug)
+		return pausedRefusal(ctx, pipeline)
 	}
 
 	force := c.FormValue("force") == forceAll
@@ -57,7 +58,7 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 	// drainer started in between.
 	since := time.Now().UTC()
 
-	_, err = s.runner.Enqueue(c.Request().Context(), pipeline.Pipeline, name, reason, force)
+	_, err = s.runner.Enqueue(ctx, pipeline.Pipeline, name, reason, force)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
@@ -126,11 +127,21 @@ func refuseRerun(ctx context.Context, pipeline *Pipeline, run store.RunRow) erro
 	}
 
 	if stopped {
-		return echo.NewHTTPError(http.StatusConflict,
-			"this pipeline is paused; unpause it with steps pipeline unpause -p "+pipeline.Slug)
+		return pausedRefusal(ctx, pipeline)
 	}
 
 	return nil
+}
+
+// pausedRefusal names which pause to lift: telling somebody to unpause a pipeline that is not itself paused sends them to a switch that does nothing.
+func pausedRefusal(ctx context.Context, pipeline *Pipeline) error {
+	all, err := pipeline.Store.AllPaused(ctx)
+	if err == nil && all {
+		return echo.NewHTTPError(http.StatusConflict, "everything is paused; resume it from the overview")
+	}
+
+	return echo.NewHTTPError(http.StatusConflict,
+		"this pipeline is paused; unpause it with steps pipeline unpause -p "+pipeline.Slug)
 }
 
 // handleRelease clears the breaker holding a job, so new versions trigger it again.
@@ -188,6 +199,80 @@ func (s *Server) setPausedFromPage(c *echo.Context, pause bool) error {
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim
 	return c.Redirect(http.StatusSeeOther, returnTo(c, "/p/"+pipeline.Slug))
+}
+
+// Paths of the daemon-wide pause, which belongs to no pipeline.
+const (
+	pauseAllPath   = "/pause-all"
+	unpauseAllPath = "/unpause-all"
+)
+
+func (s *Server) handlePauseAll(c *echo.Context) error { return s.setAllPausedFromPage(c, true) }
+
+func (s *Server) handleUnpauseAll(c *echo.Context) error { return s.setAllPausedFromPage(c, false) }
+
+// Admin, because it stops pipelines whose own access rules may not let this person operate them. Written to every database a served pipeline lives in, since they need not share one, and recorded against every served pipeline, since the log is written through a pipeline's handle and each of them was stopped.
+func (s *Server) setAllPausedFromPage(c *echo.Context, pause bool) error {
+	err := s.requireControls()
+	if err != nil {
+		return err
+	}
+
+	ctx := c.Request().Context()
+
+	for _, handle := range s.databases() {
+		if pause {
+			err = handle.PauseAll(ctx)
+		} else {
+			err = handle.UnpauseAll(ctx)
+		}
+
+		if err != nil {
+			return fmt.Errorf("web: %w", err)
+		}
+	}
+
+	route := activityRoute{action: verb("unpause all"), target: nothing}
+	if pause {
+		route.action = verb("pause all")
+	}
+
+	for _, pipeline := range s.Served() {
+		s.writeActivity(c, pipeline, route)
+	}
+
+	//nolint:wrapcheck // echo's redirect error is returned verbatim
+	return c.Redirect(http.StatusSeeOther, returnTo(c, "/"))
+}
+
+// databases is one handle per database the served pipelines live in.
+func (s *Server) databases() []store.Store {
+	seen := map[string]bool{}
+
+	var handles []store.Store
+
+	for _, pipeline := range s.Served() {
+		if pipeline.Store == nil || seen[pipeline.Store.Description()] {
+			continue
+		}
+
+		seen[pipeline.Store.Description()] = true
+		handles = append(handles, pipeline.Store)
+	}
+
+	return handles
+}
+
+// allPaused is whether any database served from is under PauseAll; false when none can say, as a missing banner beats a page that will not draw.
+func (s *Server) allPaused(ctx context.Context) bool {
+	for _, handle := range s.databases() {
+		paused, err := handle.AllPaused(ctx)
+		if err == nil && paused {
+			return true
+		}
+	}
+
+	return false
 }
 
 // returnTo is where a control sends the reader back to.

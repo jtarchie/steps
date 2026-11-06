@@ -543,6 +543,73 @@ func TestTheOverviewSaysWhatStateAPipelineIsInAndReleasesIt(t *testing.T) {
 	}
 }
 
+// TestPauseAllStopsEveryPipelineAndHandsEachItsOwnStateBack: a stop gap for
+// the whole daemon in one press rather than one per pipeline, and releasing
+// it is not "unpause everything" — a pipeline somebody paused on purpose
+// before stays paused, because the daemon-wide pause never touched it.
+func TestPauseAllStopsEveryPipelineAndHandsEachItsOwnStateBack(t *testing.T) {
+	fixture := newWatchFixture(t, cursorFeed)
+	fixture.items(t, 1)
+
+	served := startWebFor(t, fixture.pipeline, "--interval", "100ms")
+	defer served.stop(t)
+
+	name := cli.PipelineName(fixture.pipeline)
+
+	served.set(t, "held", flagFixture(t))
+	served.pipeline(t, "pause", "-p", "held")
+
+	waitForDid(t, fixture, "1")
+
+	if _, page := served.get(t, "/"); !strings.Contains(page, `action="/pause-all"`) {
+		t.Fatalf("the overview offers no way to pause everything:\n%s", page)
+	}
+
+	if status := served.post(t, "/pause-all"); status != http.StatusSeeOther {
+		t.Fatalf("pause all answered %d, want 303", status)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	fixture.items(t, 2)
+
+	trigger := fmt.Sprintf("http://%s/p/%s/jobs/build/trigger", served.addr, name)
+	if status := postEmpty(t, trigger); status != http.StatusConflict {
+		t.Errorf("manual trigger under pause all answered %d, want 409", status)
+	}
+
+	enqueueDirectly(t, served.state, name, "build")
+
+	time.Sleep(drainIdleWindow)
+
+	if did := fixture.did(t); strings.Join(did, " ") != "1" {
+		t.Fatalf("pause all let a pipeline build %v, want nothing after 1", did)
+	}
+
+	_, page := served.get(t, "/")
+	if !strings.Contains(page, `action="/unpause-all"`) {
+		t.Errorf("the overview under pause all does not offer to resume:\n%s", page)
+	}
+
+	if _, board := served.get(t, "/p/"+name); !strings.Contains(board, "everything is paused") {
+		t.Error("a pipeline's own page does not say the daemon is paused")
+	}
+
+	if status := served.post(t, "/unpause-all"); status != http.StatusSeeOther {
+		t.Fatalf("unpause all answered %d, want 303", status)
+	}
+
+	waitForDid(t, fixture, "1", "2")
+
+	_, page = served.get(t, "/")
+	if !strings.Contains(overviewRow(t, page, "held"), "paused") {
+		t.Error("unpause all released a pipeline that was paused on its own before")
+	}
+
+	if strings.Contains(overviewRow(t, page, name), "paused") {
+		t.Error("unpause all left a pipeline paused that was running before")
+	}
+}
+
 // overviewRow slices the row the overview's pipeline table draws for one
 // slug. Scoped to that table rather than to the page: the run feed below it
 // links every pipeline too, so a page-wide search would let one pipeline's

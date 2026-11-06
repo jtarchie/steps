@@ -8,6 +8,8 @@ package postgres
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was DROP SCHEMA.
 //
+// 21 added pause_all, as sqlite's 35 did.
+//
 // 20 indexed run_inputs(resource_name, version_json), as sqlite's 34 did.
 //
 // 19 rekeyed run_steps per visit and added outcome, as sqlite's 33 did.
@@ -26,7 +28,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 20
+const schemaVersion = 21
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -69,6 +71,11 @@ CREATE TABLE IF NOT EXISTS pipelines (
 CREATE TABLE IF NOT EXISTS identity (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     owner     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pause_all (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    paused_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS pipeline_revisions (

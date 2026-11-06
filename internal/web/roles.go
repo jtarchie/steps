@@ -189,7 +189,8 @@ func neededRole(c *echo.Context) Role {
 		return route.role
 	}
 
-	if c.Path() == "/activity" {
+	switch c.Path() {
+	case "/activity", pauseAllPath, unpauseAllPath:
 		return RoleAdmin
 	}
 

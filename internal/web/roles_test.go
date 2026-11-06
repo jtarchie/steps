@@ -107,12 +107,23 @@ func TestAnExclusionRuleReadsTheStoredGroups(t *testing.T) {
 	if body := postAs(t, server, "dan-token"); strings.Contains(body, "needs the operator role") {
 		t.Errorf("an engineer was refused the operator role: %s", body)
 	}
+
+	// Pausing everything stops pipelines whose own rules may not let an operator touch them.
+	if body := postPathAs(t, server, "/pause-all", "dan-token"); !strings.Contains(body, "needs the admin role") {
+		t.Errorf("an operator reached pause all: %s", body)
+	}
 }
 
 func postAs(t *testing.T, server *Server, token string) string {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/p/demo/jobs/build/trigger", nil)
+	return postPathAs(t, server, "/p/demo/jobs/build/trigger", token)
+}
+
+func postPathAs(t *testing.T, server *Server, path, token string) string {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 
 	rec := httptest.NewRecorder()

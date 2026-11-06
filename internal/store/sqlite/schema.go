@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 35 added pause_all, the daemon-wide pause (store.Control.PauseAll).
+//
 // 34 indexed run_inputs(resource_name, version_json), which VersionRuns filters on and only the (run_id, input_name) key covered, so each call scanned every input ever recorded.
 //
 // 33 rekeyed run_steps per visit and added outcome, so a resume replays the route each pass took (steps#231). Rows from before carry visit 1 and no outcome: a resume skips them without routing on them, as it always did.
@@ -100,7 +102,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 34
+const schemaVersion = 35
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -148,6 +150,14 @@ CREATE INDEX IF NOT EXISTS idx_pipelines_revision ON pipelines(current_revision_
 CREATE TABLE IF NOT EXISTS identity (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     owner     TEXT NOT NULL
+);
+
+-- PauseAll: a row while every pipeline here is paused, none otherwise. Not a
+-- bulk write of pipelines.paused_at, which would forget which pipelines were
+-- paused on their own before, so lifting it could not hand them back.
+CREATE TABLE IF NOT EXISTS pause_all (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    paused_at TEXT NOT NULL
 );
 
 -- The interned merkle preimage: what each node's hash was computed FROM.

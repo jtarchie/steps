@@ -4,8 +4,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // runnableServer is the ordinary daemon: one that holds a pipeline AND is
@@ -170,4 +173,119 @@ func TestARebindingPageCannotPauseWhatItDidNotOpen(t *testing.T) {
 	}
 
 	pausedIs(t, pipeline, false)
+}
+
+// TestPauseAllLeavesEachPipelinesOwnPauseAndSaysWhichToLift: the daemon-wide
+// pause stops a running pipeline without writing its own pause, so lifting it
+// hands each back what it had; a refused trigger names the pause that is
+// actually in force; and the act is logged against every pipeline it stopped,
+// because the log is read per pipeline.
+func TestPauseAllLeavesEachPipelinesOwnPauseAndSaysWhichToLift(t *testing.T) {
+	t.Parallel()
+
+	_, pipelines := testPipelines(t, "alpha", "beta")
+
+	server, err := New(pipelines, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	alpha, beta := pipelines[0], pipelines[1]
+
+	err = beta.Store.Pause(t.Context())
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	code, where := postForm(t, server, "/pause-all", map[string]string{"return": "/p/alpha"})
+	if code != http.StatusSeeOther || where != "/p/alpha" {
+		t.Fatalf("pause all answered %d to %q, want 303 back to the page it was pressed on", code, where)
+	}
+
+	pausedIs(t, alpha, true)
+
+	triggerNamesPauseAll(t, server)
+
+	// The button on alpha's own page still says Pause: that is the switch its own state is on.
+	pageCarries(t, server, "/p/alpha", `action="/p/alpha/pause"`, `action="/unpause-all"`)
+
+	if code, _ := postForm(t, server, "/unpause-all", nil); code != http.StatusSeeOther {
+		t.Fatalf("unpause all answered %d, want 303", code)
+	}
+
+	pausedIs(t, alpha, false)
+	pausedIs(t, beta, true)
+
+	for _, pipeline := range pipelines {
+		actions := activityActions(t, pipeline)
+		if !slices.Contains(actions, "pause all") || !slices.Contains(actions, "unpause all") {
+			t.Errorf("%s's activity is %v, want pause all and unpause all", pipeline.Slug, actions)
+		}
+	}
+}
+
+func activityActions(t *testing.T, pipeline *Pipeline) []string {
+	t.Helper()
+
+	entries, err := pipeline.Store.Reader().Activity(t.Context(), store.ActivityFilter{Pipeline: pipeline.Slug})
+	if err != nil {
+		t.Fatalf("Activity: %v", err)
+	}
+
+	actions := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		actions = append(actions, entry.Action)
+	}
+
+	return actions
+}
+
+// TestPauseAllIsWithheldWhereItMayNotBeUsed: a read-only server refuses it and
+// draws no button, and a page on another origin cannot press it.
+func TestPauseAllIsWithheldWhereItMayNotBeUsed(t *testing.T) {
+	t.Parallel()
+
+	readOnly, pipelines := testPipelines(t, "alpha", "beta")
+
+	if code, _ := postForm(t, readOnly, "/pause-all", nil); code != http.StatusForbidden {
+		t.Errorf("POST /pause-all on a read-only server = %d, want 403", code)
+	}
+
+	if _, page := get(t, readOnly, "/"); strings.Contains(page, `action="/pause-all"`) {
+		t.Error("a read-only server draws a pause all it refuses")
+	}
+
+	server, err := New(pipelines, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if code := postWithOrigin(t, server, "/pause-all", "http://rebind.attacker.tld"); code != http.StatusForbidden {
+		t.Errorf("a cross-origin pause all answered %d, want 403", code)
+	}
+
+	pausedIs(t, pipelines[0], false)
+}
+
+func triggerNamesPauseAll(t *testing.T, server *Server) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/p/alpha/jobs/alpha-job/trigger", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "resume it from the overview") {
+		t.Errorf("a trigger under pause all answered %d without naming it:\n%s", rec.Code, rec.Body.String())
+	}
+}
+
+func pageCarries(t *testing.T, server *Server, path string, controls ...string) {
+	t.Helper()
+
+	_, page := get(t, server, path)
+	for _, control := range controls {
+		if !strings.Contains(page, control) {
+			t.Errorf("%s does not carry %s:\n%s", path, control, page)
+		}
+	}
 }

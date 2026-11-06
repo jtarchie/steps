@@ -531,6 +531,13 @@ Nine controls, each doing what a CLI verb does:
   The action bar carries it on every page of the pipeline, and the root lists
   it for every pipeline at once. Each puts you back on the page you pressed it
   from.
+- **Pause all / Resume all** from the root stops every pipeline at once, as a
+  stop gap. It does not touch any pipeline's own pause: while it holds, each
+  row and each pipeline's button still say that pipeline's own state, and
+  **Resume all** hands every pipeline back exactly that — one paused before
+  stays paused. It survives a restart, needs the admin role (it stops
+  pipelines whose own rules may not let an operator touch them), and is
+  logged as `pause all` / `unpause all` against every pipeline it reached.
 - **Abort** a running run from its page's bar, or a queued one from the page a
   trigger lands on — what `steps runs abort` asks for. See
   [Aborting a run](#aborting-a-run).

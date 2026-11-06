@@ -220,9 +220,10 @@ func (s *Server) overviewPipelines(c *echo.Context, nav navData) []overviewPipel
 		summary := summaries[pipeline.Slug]
 		reads := readsOf(c, pipeline)
 		row := overviewPipeline{
-			Slug:      pipeline.Slug,
-			Jobs:      len(pipeline.Config().Jobs),
-			Paused:    reads.Paused(ctx),
+			Slug: pipeline.Slug,
+			Jobs: len(pipeline.Config().Jobs),
+			// Its own pause, not Paused: under PauseAll every row would say paused, and the row is where a reader sees what each returns to.
+			Paused:    reads.PipelinePaused(ctx),
 			Mark:      summary.Mark,
 			Attention: summary.Attention,
 			InFlight:  summary.InFlight,
