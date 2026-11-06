@@ -93,6 +93,24 @@ func (p overviewPipeline) Red() bool {
 	return p.Broken != "" || p.Held > 0 || p.Mark.Disc == discFailed
 }
 
+// RedWords is what the root's live region says of a red row: the jobs that
+// made it red, or that it is not being served at all.
+func (p overviewPipeline) RedWords() string {
+	if p.Broken != "" {
+		return "not being served"
+	}
+
+	words := []string{}
+
+	for _, chip := range p.Chips {
+		if chip.Red() {
+			words = append(words, chip.Name+" "+chip.Word)
+		}
+	}
+
+	return strings.Join(words, ", ")
+}
+
 // overviewTally is the overview header's count of rows that want a person.
 // Failing is read off the mark, so it agrees with the glyph on each row.
 type overviewTally struct {

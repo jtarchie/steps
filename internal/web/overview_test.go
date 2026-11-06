@@ -1835,6 +1835,38 @@ func TestARedRowCarriesTheWeight(t *testing.T) {
 	}
 }
 
+// TestTheRootAnnouncesOnlyWhatTurnedRed: the live region holds one keyed
+// line per red pipeline, inside the region the page refreshes, so a morph
+// adds a line only when a pipeline newly turns red and that addition is what
+// a screen reader hears. A healthy pipeline never has a line, and the region
+// is on the page even when empty, or the first failure is announced to nobody.
+func TestTheRootAnnouncesOnlyWhatTurnedRed(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "app", "infra")
+
+	_, quiet := get(t, server, "/")
+	region := between(t, quiet, `id="overview-region"`, `id="pipelines-table"`)
+
+	if !strings.Contains(region, `<div class="visually-hidden" id="red-news" role="status" aria-atomic="false" aria-relevant="additions" aria-label="Pipelines that turned red"></div>`) {
+		t.Errorf("an all-green root has no empty live region inside the refreshed one:\n%s", region)
+	}
+
+	startFinishedRun(t, pipelines[0], "run-1", "app-job", "failed")
+	startFinishedRun(t, pipelines[1], "run-2", "infra-job", "passed")
+
+	_, loud := get(t, server, "/")
+	region = between(t, loud, `id="red-news"`, `</div>`)
+
+	if !strings.Contains(region, `<p id="red-app">app is failing: app-job failed</p>`) {
+		t.Errorf("a pipeline that turned red has no line of its own:\n%s", region)
+	}
+
+	if strings.Contains(region, "infra") {
+		t.Errorf("a passing pipeline has a line in the red region:\n%s", region)
+	}
+}
+
 // TestARedCellStaysRedWhileItsFixRuns: a cell is colored by the job's latest
 // FINISHED run and ringed while another is in flight, the rule the
 // pipeline's mark folds by. Colored by the running one, a red job would read
