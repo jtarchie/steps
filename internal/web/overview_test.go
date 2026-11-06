@@ -1932,9 +1932,12 @@ func TestTheRootShowsABrokenPipeline(t *testing.T) {
 	}
 }
 
-// TestTheOverviewCountsHeldJobs: the breaker holding a job is a pipeline not
+// TestTheOverviewShowsHeldJobs: the breaker holding a job is a pipeline not
 // moving on its own, which the root used to say only on the pipeline's board.
-func TestTheOverviewCountsHeldJobs(t *testing.T) {
+// The row says it once, in the strip: a ⊘ cell, the job named beside it and
+// the red row. A separate "1 held" beside the name was a fourth saying of it,
+// counting what the attention badge already counts.
+func TestTheOverviewShowsHeldJobs(t *testing.T) {
 	t.Parallel()
 
 	server, pipelines := testPipelines(t, "app", "infra")
@@ -1945,17 +1948,24 @@ func TestTheOverviewCountsHeldJobs(t *testing.T) {
 	}
 
 	_, page := get(t, server, "/")
+	app := pipelineRow(t, page, "app")
 
-	if !strings.Contains(pipelineRow(t, page, "app"), `<span class="st st-held">1 held</span>`) {
-		t.Errorf("the overview does not count app's held job:\n%s", pipelineRow(t, page, "app"))
+	for want, cost := range map[string]string{
+		`<a class="cell st-held" href="/p/app/jobs/app-job" title="app-job: held" aria-label="app-job, held" tabindex="-1">⊘</a>`: "app's held job is not a held cell",
+		`<a class="named st-held" href="/p/app/jobs/app-job"`:                                                                     "app's held job is not named beside the strip",
+		`<tr class="red" data-slug="app">`:                                                                                        "a pipeline with a held job is not a red row",
+	} {
+		if !strings.Contains(app, want) {
+			t.Errorf("%s:\n%s", cost, app)
+		}
 	}
 
-	if !strings.Contains(pipelineRow(t, page, "app"), `<a class="cell st-held" href="/p/app/jobs/app-job" title="app-job: held" aria-label="app-job, held" tabindex="-1">⊘</a>`) {
-		t.Errorf("app's held job is not a held cell:\n%s", pipelineRow(t, page, "app"))
+	if strings.Contains(app, " held</span>") {
+		t.Errorf("the row still counts its held jobs beside the name, a fourth saying of one fact:\n%s", app)
 	}
 
 	if strings.Contains(pipelineRow(t, page, "infra"), "held") {
-		t.Error("the overview counts a held job on a pipeline with none")
+		t.Error("the overview shows a held job on a pipeline with none")
 	}
 }
 
