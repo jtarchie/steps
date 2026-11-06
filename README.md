@@ -148,7 +148,7 @@ Every YAML example in [`docs/`](docs/README.md) is also a complete pipeline the 
 | Command | What it does |
 |---|---|
 | `steps run <pipeline>` | Run one job once (`--job` when there is more than one). `--resume <id>` continues a failed run; `--replay <id> --from <step>` re-runs one step of one. |
-| `steps validate <pipeline>` | Check the file, and that this machine can run it: model names, `api_key_env:`, MCP binaries. `--live` probes the models too. |
+| `steps validate <pipeline>` | Check the file, and that this machine can run it: model names, `api_key_env:`, MCP binaries. `--live` probes the models too, and with `--config <daemon file>` resolves every secret reference. |
 | `steps plan <pipeline>` | Show which steps a run would execute and which are cached. |
 | `steps test <pipeline>` | Run every job and check the `assert:` directives. |
 | `steps runs -p <name>` | What past runs recorded (`steps`, `queue`, `cost`, `where` for the other views). |

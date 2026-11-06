@@ -252,9 +252,23 @@ func pathData(ref Ref) map[string]any {
 
 // Lookup resolves one reference: the first lookup path its source finds wins, "missing" tries the next, anything else stops. The value never appears in an error.
 func (r *Resolver) Lookup(ctx context.Context, ref Ref) (string, error) {
+	value, _, err := r.resolve(ctx, ref)
+
+	return value, err
+}
+
+// Locate is Lookup without the value: the location that answered, for `steps validate --live` to show a fall-through, or a lapsed login, before a job is half paid for.
+func (r *Resolver) Locate(ctx context.Context, ref Ref) (string, error) {
+	_, location, err := r.resolve(ctx, ref)
+
+	return location, err
+}
+
+// resolve answers with the value and the location that held it; the first lookup path its source finds wins, "missing" tries the next, anything else stops.
+func (r *Resolver) resolve(ctx context.Context, ref Ref) (string, string, error) {
 	src, err := r.sourceFor(ref)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	var tried []string
@@ -262,7 +276,7 @@ func (r *Resolver) Lookup(ctx context.Context, ref Ref) (string, error) {
 	for _, path := range src.lookup {
 		applies, err := path.applies(ref)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", ref, err)
+			return "", "", fmt.Errorf("%s: %w", ref, err)
 		}
 
 		if !applies {
@@ -271,31 +285,31 @@ func (r *Resolver) Lookup(ctx context.Context, ref Ref) (string, error) {
 
 		err = path.safeFor(ref)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", ref, err)
+			return "", "", fmt.Errorf("%s: %w", ref, err)
 		}
 
 		location, err := template.Render(path.template, pathData(ref))
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", ref, err)
+			return "", "", fmt.Errorf("%s: %w", ref, err)
 		}
 
 		value, found, err := src.fetch(ctx, location)
 		if err != nil {
-			return "", fmt.Errorf("%s at %s: %w", ref, location, err)
+			return "", "", fmt.Errorf("%s at %s: %w", ref, location, err)
 		}
 
 		if found {
-			return value, nil
+			return value, location, nil
 		}
 
 		tried = append(tried, location)
 	}
 
 	if len(tried) == 0 {
-		return "", fmt.Errorf("%w: %s: no lookup path applies to pipeline %q", ErrNotFound, ref, ref.Pipeline)
+		return "", "", fmt.Errorf("%w: %s: no lookup path applies to pipeline %q", ErrNotFound, ref, ref.Pipeline)
 	}
 
-	return "", fmt.Errorf("%w: %s is not at %s", ErrNotFound, ref, strings.Join(tried, ", "))
+	return "", "", fmt.Errorf("%w: %s is not at %s", ErrNotFound, ref, strings.Join(tried, ", "))
 }
 
 // safeFor refuses a job or resource name that would climb out of, or across, a path segment: those names are the pipeline author's, unlike the pipeline's own, which set already holds to this rule.

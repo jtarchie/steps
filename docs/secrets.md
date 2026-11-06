@@ -170,6 +170,23 @@ so a retried attempt asks again.
 and never runs one. `steps run` and `steps test` refuse a pipeline with a
 reference, since sources exist only on the daemon; `steps validate` accepts it.
 
+**`steps validate --live --config steps.yml` resolves every reference** the
+way the daemon would, given the daemon's own config file, and prints the path
+that answered, never the value:
+
+```
+secret ((ci:gh_token)) for job "release" is at op://ci/shared/gh_token
+secret ((ci:npm_token)) for job "release" is at op://ci/deploy/npm_token
+ok: pipeline.yml (1 job(s), 0 resource(s), 0 agent(s)) — every model and MCP server responded, 2 secret(s) found
+```
+
+Since resolution is lazy, this is the one way to learn that an `op signin` has
+lapsed before a job is half paid for, and how an admin sees a name fall
+through to the shared folder. A reference no path has is reported with the
+paths tried. `--job` narrows it to that job's references; a polled resource's
+is no job's. Run it on the daemon's machine as the daemon's user, since the
+source commands run as whoever invokes it.
+
 **A resource polled by `steps web` resolves outside any run.** Its answers are
 cached for one `--interval`, so a `trigger: true` resource does not prompt every
 poll and a rotated credential reaches the poller within one interval. A check

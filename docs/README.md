@@ -48,7 +48,8 @@ steps test <pipeline>       run every job and check assert: directives
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
 steps validate --live       also probe the models and MCP servers themselves
-                            (--job <name> narrows it to one job)
+                            (--job <name> narrows it to one job; --config <daemon file>
+                            resolves every secret reference as the daemon would)
 
 steps web                   the daemon: serve the UI, hold the pipelines set
                             into it, poll trigger: true resources, run jobs

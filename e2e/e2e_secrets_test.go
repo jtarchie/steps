@@ -21,20 +21,7 @@ func secretDaemon(t *testing.T, dir string, items map[string]string, args ...str
 	t.Helper()
 
 	vault := filepath.Join(dir, "vault")
-
-	for path, value := range items {
-		file := filepath.Join(vault, filepath.FromSlash(path))
-
-		err := os.MkdirAll(filepath.Dir(file), 0o700)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		err = os.WriteFile(file, []byte(value), 0o600)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+	writeVault(t, vault, items)
 
 	config := filepath.Join(dir, "steps.yml")
 	writeConfigFile(t, config, `
@@ -651,5 +638,169 @@ jobs:
 
 	if strings.Contains(logs(), e2eSecretValue) {
 		t.Error("the daemon log carries the secret from a failed get")
+	}
+}
+
+// writeVault lays items out as files under dir, the layout a 1Password vault with a folder per pipeline would have.
+func writeVault(t *testing.T, dir string, items map[string]string) {
+	t.Helper()
+
+	for path, value := range items {
+		file := filepath.Join(dir, filepath.FromSlash(path))
+
+		err := os.MkdirAll(filepath.Dir(file), 0o700)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = os.WriteFile(file, []byte(value), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+const e2eNpmValue = "npm-value-for-validate-3b1d"
+
+// validateSecretsFixture is a pipeline whose npm_token sits in its own folder and whose gh_token falls through to the shared one, with the daemon's config file naming both paths.
+func validateSecretsFixture(t *testing.T) (path, config, vault string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	path = pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	vault = filepath.Join(dir, "vault")
+	writeVault(t, vault, map[string]string{
+		name + "/npm_token": e2eNpmValue,
+		"shared/gh_token":   e2eSecretValue,
+	})
+
+	config = filepath.Join(dir, "steps.yml")
+	writeConfigFile(t, config, `
+web:
+  secret:
+    source:
+      ci:
+        command: cat {{ .path | shellquote }}
+        missing: exit_code == 1
+        lookup:
+        - path: `+vault+`/{{ .pipeline }}/{{ .name }}
+        - path: `+vault+`/shared/{{ .name }}
+`)
+
+	writePipelineFile(t, path, `
+resource_types:
+- name: guarded
+  config:
+    check: echo '[{"n":"1"}]'
+    in: "true"
+
+resources:
+- name: feed
+  type: guarded
+  source: {}
+  secrets:
+    GH_TOKEN: ((ci:gh_token))
+
+jobs:
+- name: build
+  plan:
+  - get: feed
+    trigger: true
+  - task: publish
+    secrets:
+      NPM_TOKEN: ((ci:npm_token))
+    run: "true"
+`)
+
+	return path, config, vault
+}
+
+// steps validate --live --config <the daemon's file> resolves every reference the way the daemon would, names the path that answered and keeps the values to itself: the one way to learn a login has lapsed, or a name falls through to the shared folder, before a job is half paid for.
+//
+// Not t.Parallel(): captureStdout swaps os.Stdout.
+func TestValidateLiveResolvesEverySecretAndNamesItsPath(t *testing.T) {
+	path, config, vault := validateSecretsFixture(t)
+	name := cli.PipelineName(path)
+
+	var err error
+
+	out := captureStdout(t, func() { err = cli.Run([]string{"validate", "--live", "--config", config, path}) })
+	if err != nil {
+		t.Fatalf("validate --live: %v", err)
+	}
+
+	for _, want := range []string{
+		`secret ((ci:npm_token)) for job "build" is at ` + vault + "/" + name + "/npm_token",
+		`secret ((ci:gh_token)) for resource "feed" in job "build" is at ` + vault + "/shared/gh_token",
+		`secret ((ci:gh_token)) for resource "feed" when polled is at ` + vault + "/shared/gh_token",
+		"2 secret(s) found",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("validate --live printed:\n%s\nwant %q", out, want)
+		}
+	}
+
+	for _, value := range []string{e2eSecretValue, e2eNpmValue} {
+		if strings.Contains(out, value) {
+			t.Errorf("validate --live printed a secret's value:\n%s", out)
+		}
+	}
+
+	// --job narrows the probe to that job's references, as it does its models and servers.
+	out = captureStdout(t, func() { err = cli.Run([]string{"validate", "--live", "--job", "build", "--config", config, path}) })
+	if err != nil {
+		t.Fatalf("validate --live --job build: %v", err)
+	}
+
+	if strings.Contains(out, "when polled") {
+		t.Errorf("validate --live --job build resolved the poll's reference, which is no job's:\n%s", out)
+	}
+}
+
+// A name no path has is a problem naming where it looked, not a half-vouched ok; and --config is the live depth's input: alone it binds nothing, and --live with references and no sources cannot vouch for them.
+func TestValidateLiveRefusesWhatItCannotVouchFor(t *testing.T) {
+	t.Parallel()
+
+	path, config, vault := validateSecretsFixture(t)
+
+	err := cli.Run([]string{"validate", "--config", config, path})
+	if err == nil || !strings.Contains(err.Error(), "--live") {
+		t.Fatalf("validate --config without --live = %v, want a refusal naming --live", err)
+	}
+
+	err = cli.Run([]string{"validate", "--live", path})
+	if err == nil || !strings.Contains(err.Error(), "--config") {
+		t.Fatalf("validate --live with references and no --config = %v, want a refusal naming --config", err)
+	}
+
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: publish
+    secrets:
+      TOKEN: ((ci:absent))
+    run: "true"
+`)
+
+	err = cli.Run([]string{"validate", "--live", "--config", config, path})
+	if err == nil || !strings.Contains(err.Error(), "((ci:absent))") || !strings.Contains(err.Error(), vault+"/shared/absent") {
+		t.Fatalf("validate --live with a missing secret = %v, want a problem naming the reference and the paths tried", err)
+	}
+
+	// A --config that cannot be read is wrong before the pipeline has its first reference, not only after.
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: publish
+    run: "true"
+`)
+
+	err = cli.Run([]string{"validate", "--live", "--config", filepath.Join(t.TempDir(), "absent.yml"), path})
+	if err == nil || !strings.Contains(err.Error(), "absent.yml") {
+		t.Fatalf("validate --live --config <missing file> on a pipeline without references = %v, want a refusal naming the file", err)
 	}
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 )
@@ -18,5 +19,62 @@ func TestResourceHashedEnvIsNamesOnly(t *testing.T) {
 
 	if !slices.Equal(r.HashedEnv(), other.HashedEnv()) {
 		t.Error("a different reference under the same name changed what the resource keys on")
+	}
+}
+
+// SecretUses is what validate --live resolves in the daemon's stead, so it has to name every (reference, where) the daemon would: a get that aliases its resource resolves the resource's secrets, not a resource named by the alias, and a passed: get is polled the way a trigger: true one is.
+func TestSecretUsesFollowAliasesAndPassedGets(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+defaults:
+  preflight:
+    disabled: true
+
+resource_types:
+- name: dummy
+  config: {check: "echo []", in: "true", out: "true"}
+resources:
+- name: feed
+  type: dummy
+  source: {}
+  secrets:
+    TOKEN: ((ci:feed_token))
+- name: gate
+  type: dummy
+  source: {}
+  secrets:
+    TOKEN: ((ci:gate_token))
+jobs:
+- name: build
+  plan:
+  - get: alias
+    resource: feed
+    trigger: true
+  - get: gate
+- name: downstream
+  plan:
+  - get: gate
+    passed: [build]
+  - put: out
+    resource: feed
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	want := []SecretUse{
+		{Ref: SecretRef{Source: "ci", Name: "feed_token"}, Resource: "feed", Polled: true},
+		{Ref: SecretRef{Source: "ci", Name: "feed_token"}, Job: "build", Resource: "feed"},
+		{Ref: SecretRef{Source: "ci", Name: "feed_token"}, Job: "downstream", Resource: "feed"},
+		{Ref: SecretRef{Source: "ci", Name: "gate_token"}, Resource: "gate", Polled: true},
+		{Ref: SecretRef{Source: "ci", Name: "gate_token"}, Job: "build", Resource: "gate"},
+		{Ref: SecretRef{Source: "ci", Name: "gate_token"}, Job: "downstream", Resource: "gate"},
+	}
+
+	if got := cfg.SecretUses(); !reflect.DeepEqual(got, want) {
+		t.Errorf("SecretUses = %+v, want %+v", got, want)
 	}
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"reflect"
@@ -135,7 +136,7 @@ func (c *Config) checkStepSecrets(label string, step *Step) error {
 		return nil
 	}
 
-	// ponytail: resource secrets are a later rung of #98; get/put steps are refused rather than silently ignored until then.
+	// A get or put step carries no secrets: map of its own; its resource's applies, so one written there would be silently ignored rather than honoured.
 	kind, _ := step.Kind()
 	if kind != StepKindTask && kind != StepKindAgent {
 		return fmt.Errorf("%s: secrets: is valid on task and agent steps only", label)
@@ -345,4 +346,59 @@ func (c *Config) effectiveEnvAndSecrets(step *Step) ([]string, map[string]string
 	}
 
 	return env, secrets
+}
+
+// SecretUse is one place a run or poll resolves a reference from. The same reference resolves separately for each, because a lookup path's template and when: see the job and resource names.
+type SecretUse struct {
+	Ref           SecretRef
+	Job, Resource string
+	// Polled is a trigger: true resource's check outside any run, where there is no job name to scope on.
+	Polled bool
+}
+
+// SecretUses is every (reference, where) pair the pipeline would resolve, deduplicated and in a stable order: what `steps validate --live` resolves in the daemon's stead.
+func (c *Config) SecretUses() []SecretUse {
+	seen := map[SecretUse]bool{}
+
+	add := func(secrets map[string]string, use SecretUse) {
+		for _, value := range secrets {
+			ref, err := ParseSecretRef(value)
+			if err == nil {
+				use.Ref = ref
+				seen[use] = true
+			}
+		}
+	}
+
+	for _, job := range c.Jobs {
+		_ = job.visitSteps(func(_ string, step *Step) error {
+			switch kind, _ := step.Kind(); kind {
+			case StepKindTask, StepKindAgent:
+				_, secrets := c.effectiveEnvAndSecrets(step)
+				add(secrets, SecretUse{Job: job.Name})
+			case StepKindGet, StepKindPut:
+				// The resolved name, since a get: or put: may alias its resource; stepIsPolled, since a passed: get is checked by the poller as a trigger: true one is.
+				r, err := c.FindResource(cmp.Or(step.GetResourceName(), step.PutResourceName()))
+				if err == nil && r != nil {
+					add(r.Secrets, SecretUse{Job: job.Name, Resource: r.Name})
+
+					if stepIsPolled(*step) {
+						add(r.Secrets, SecretUse{Resource: r.Name, Polled: true})
+					}
+				}
+			case StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+				// A block's members are visited on their own; the rest carry no secrets: map.
+			}
+
+			return nil
+		})
+	}
+
+	return slices.SortedFunc(maps.Keys(seen), func(a, b SecretUse) int {
+		return cmp.Or(
+			strings.Compare(a.Ref.String(), b.Ref.String()),
+			strings.Compare(a.Resource, b.Resource),
+			strings.Compare(a.Job, b.Job),
+		)
+	})
 }

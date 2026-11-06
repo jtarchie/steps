@@ -359,3 +359,43 @@ source:
 		t.Errorf("the error carries %d bytes of stderr, want at most %d", strings.Count(err.Error(), "b"), maxStderr)
 	}
 }
+
+// Locate is what validate --live reports: the path that answered, so a fall-through to the shared folder is visible before a job runs with it.
+func TestLocateNamesThePathThatAnswered(t *testing.T) {
+	t.Parallel()
+
+	dir := fakeOp(t, map[string]string{
+		"deploy/gh_token": "deploy-token",
+		"shared/gh_token": "shared-token",
+	})
+
+	resolver := resolverFor(t, opSource(dir, `
+    - path: "{{ .pipeline }}/{{ .name }}"
+    - path: shared/{{ .name }}
+`))
+
+	for _, tc := range []struct {
+		pipeline, want string
+	}{
+		{"deploy", "deploy/gh_token"},
+		{"docs", "shared/gh_token"},
+	} {
+		location, err := resolver.Locate(t.Context(), Ref{Pipeline: tc.pipeline, Source: "ci", Name: "gh_token"})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.pipeline, err)
+		}
+
+		if location != tc.want {
+			t.Errorf("%s located at %q, want %q", tc.pipeline, location, tc.want)
+		}
+
+		if strings.Contains(location, "token\n") || strings.HasSuffix(location, "-token") {
+			t.Errorf("%s: Locate returned a value, not a location: %q", tc.pipeline, location)
+		}
+	}
+
+	_, err := resolver.Locate(t.Context(), Ref{Pipeline: "docs", Source: "ci", Name: "absent"})
+	if !errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "shared/absent") {
+		t.Fatalf("Locate of an absent name = %v, want ErrNotFound naming the paths tried", err)
+	}
+}

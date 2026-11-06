@@ -164,3 +164,20 @@ func (r fileResolver) Resolve(_ *kong.Context, _ *kong.Path, flag *kong.Flag) (a
 }
 
 func (r fileResolver) Validate(*kong.Application) error { return nil }
+
+// secretsFromConfigFile reads only the secret: section, for `steps validate --live` to resolve references as the daemon would. The file is held to the same ownership and mode rules, since it names commands this user then runs.
+func secretsFromConfigFile(path string) (*secret.Resolver, error) {
+	top, err := readConfigFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	web, _ := top["web"].(map[string]any)
+
+	raw, ok := web["secret"]
+	if !ok {
+		return nil, fmt.Errorf("--config %s has no secret: section under web:, so there are no sources to resolve references with", path)
+	}
+
+	return parseSecrets(path, raw)
+}
