@@ -133,7 +133,7 @@ Only a state file the daemon cannot read at all stops it from starting.
 
 | Route | Answers |
 |---|---|
-| `/` | With several pipelines served, or any held [broken](#what-a-restart-does): what this process holds, one quiet row each — its mark, its jobs colored by their latest run (a red one is one click from its transcript), and its last run. A row says more only when something is not normal: what waits on you, what its queue still owes, paused, or how many jobs the breaker holds. Its pause button sits at the end of the row, shown when you hover or tab into it. Below is one run feed across every pipeline, newest first: the latest ten, or fifty with `?runs=50` (the **show 50 runs** link). A broken pipeline is a row with its reason and no links. With one served and none broken, it redirects straight through |
+| `/` | With several pipelines served, or any held [broken](#what-a-restart-does): what this process holds, one quiet row each, in name order — its mark, a strip with one cell per job, and its last run. A cell is its job's status glyph on a tint of its color, taken from the job's latest *finished* run like the [tab mark](#the-tab-mark), with a yellow ring while a run is in flight and `⊘` while the breaker holds it; an empty dashed cell never ran. Every cell is one click from that job's transcript, and a red one is named beside the strip. A red row — a job failed, the breaker holds one, or the pipeline is broken — carries a red stripe, and every other row's last run is dim. A row says more only when something is not normal: what waits on you, what its queue still owes, paused, or how many jobs the breaker holds. Its pause button sits at the end of the row, shown when you hover or tab into it. Below is one run feed across every pipeline, newest first: the latest ten, or fifty with `?runs=50` (the **show 50 runs** link). A broken pipeline is a row with its reason and no links. With one served and none broken, it redirects straight through |
 | `/p/:pipeline` | [The pipeline graph](#the-pipeline-graph): which jobs exist, how each last run went and how long ago, and what feeds each one. Hover a job for how long its run took, why the breaker holds it, or what a queued run waits on |
 | `…/runs` | One run history across every job of the pipeline, newest first — the cross-job view the per-job history can't give |
 | `…/jobs/:job` | Where the job stands, without another click: it forwards to the job's **latest run**, running included; with no run but a trigger queued, to the [follow page](#following-a-run-you-started) for that trigger; with neither, to the detail page. Every link that names a job goes here, so a job is one click from its transcript from anywhere. It is a temporary redirect on purpose — a bookmark to it re-resolves on every visit |
@@ -182,6 +182,14 @@ the docs and an error page sit above any pipeline, so they offer only the
 switcher and no tabs. On a phone the tabs become one strip that scrolls
 sideways, with the current one brought into view. **jump** (or `/`) opens a
 palette that searches jobs, runs and pipelines across everything served.
+
+On the root, `j`/`k` (or the up and down arrows, once inside the table) move
+between pipelines, `h`/`l` (or left and right) move along a row's job cells,
+and Enter opens what is focused. The cells are not Tab stops, so Tab passes
+one pipeline at a time. Where you are survives the page refreshing itself.
+A screen reader hears a pipeline once, when it turns red, and the same line
+again when the keys land on its name; a page opened on a red fleet, a
+recovery, and runs starting stay quiet.
 
 The footer carries the docs, the source and the version this daemon was built
 from — the thing to quote in a bug report.
