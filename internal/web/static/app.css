@@ -272,6 +272,11 @@ tr.checkfail pre { margin: 0 0 4px; }
   .statusline .brand { display: inline-flex; align-items: center; gap: 0.4em; }
   .jumpbtn { min-height: 40px; padding: 4px 12px; }
   .actionbar .btn { min-height: 36px; }
+  /* A cell is a link; at 26x22 a thumb hits its neighbour. Scoped to the
+     row so it outranks the cell's own size, defined further down. */
+  .cellrow .cell { width: 34px; height: 30px; }
+  .pipelines .cellrow { gap: 6px; }
+  .pipelines .btn { min-height: 36px; }
 }
 
 /* On a phone the path and the tabs are two rows: brand and switcher first,
@@ -460,7 +465,11 @@ td.faint, .faint { color: var(--faint); }
 /* The root's rows: a pipeline's badges follow its name, and only when
    something is not normal. */
 .pipelines .pname { white-space: nowrap; }
-.pipelines .jobchips { width: 100%; }
+/* The strip gets room for about a dozen cells and wraps past that; the spare
+   width goes to the pause column, so a row's last run sits near its strip
+   instead of across an empty middle on a wide screen. */
+.pipelines .cellrow { width: max-content; max-width: 30em; }
+.pipelines .rowextra { width: 100%; }
 .pipelines .pname .counts { display: inline-flex; gap: 8px; margin-left: 10px; font-variant-numeric: tabular-nums; }
 .pipelines .pname .counts .badge { margin-left: 0; }
 .pipelines .pname .st { margin-left: 6px; }
@@ -502,7 +511,10 @@ td.faint, .faint { color: var(--faint); }
   .pipelines td { display: block; padding: 2px 0; border: 0; }
   .pipelines .pname { white-space: normal; }
   .pipelines .jobchips, .pipelines .lastrun, .pipelines .rowextra, .pipelines .broken-reason { width: auto; }
+  .pipelines .cellrow { width: auto; max-width: none; }
   .pipelines .rowextra { text-align: left; opacity: 1; }
+  /* Flush with the cells above it, not indented by the form's margin. */
+  .pipelines .rowextra .inline { margin-left: 0; }
   /* Stacked, the row is the box: the stripe moves from its first cell to it. */
   .pipelines tr.red { box-shadow: inset 2px 0 0 var(--red); }
   .pipelines tr.red td:first-child { box-shadow: none; }
