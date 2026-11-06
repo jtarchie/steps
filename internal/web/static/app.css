@@ -485,18 +485,20 @@ td.faint, .faint { color: var(--faint); }
 @media (hover: none) {
   .pipelines .rowextra { opacity: 1; }
 }
-/* On a phone a row stacks rather than scrolls: the name and its last run on
-   one line, the chips under them, then pause — shown, since a
-   hidden line here would only be a gap. The header row says nothing a
-   stacked row does not, so it is kept for assistive tech only. */
+/* On a phone a row stacks rather than scrolls: the name, the cells under
+   it, the last run under those, then pause — shown, since a hidden line
+   here would only be a gap. The last run used to share the name's line, and
+   at 375px a name beside "failed 17m 34s ago" came to 416px in a 341px box:
+   the table scrolled sideways and clipped the time. One fact per line needs
+   no truncation. The header row says nothing a stacked row does not, so it
+   is kept for assistive tech only. */
 @media (max-width: 640px) {
   .pipelines thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  .pipelines tr { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line-soft); }
+  .pipelines tr { display: grid; grid-template-columns: minmax(0, 1fr); padding: 8px 14px; border-bottom: 1px solid var(--line-soft); }
   .pipelines tbody tr:last-child { border-bottom: 0; }
   .pipelines td { display: block; padding: 2px 0; border: 0; }
-  .pipelines .pname { grid-row: 1; grid-column: 1; }
-  .pipelines .pname ~ td:nth-child(3) { grid-row: 1; grid-column: 2; text-align: right; }
-  .pipelines .jobchips, .pipelines .rowextra, .pipelines .broken-reason { grid-column: 1 / -1; width: auto; }
+  .pipelines .pname { white-space: normal; }
+  .pipelines .jobchips, .pipelines .lastrun, .pipelines .rowextra, .pipelines .broken-reason { width: auto; }
   .pipelines .rowextra { text-align: left; opacity: 1; }
   /* Stacked, the row is the box: the stripe moves from its first cell to it. */
   .pipelines tr.red { box-shadow: inset 2px 0 0 var(--red); }
