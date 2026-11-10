@@ -305,6 +305,8 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]stor
 // A rerun counts only when it reruns the job's latest other run, which is
 // Concourse's rule (updateLatestCompletedBuildForJob): a green retry of an old
 // build must not turn a job that is red today green.
+// A running rerun counts whatever it reruns, as Concourse's next_build does:
+// the job is busy, and the board colors a busy job by its last finished run.
 func (s *Store) LatestRunByJob(ctx context.Context) (map[string]store.RunRow, error) {
 	// Ties broken by rowid, as ListRuns breaks them, so the jobs board and a job's history agree on which run is latest.
 	rows, err := collect(ctx, s.reads, "latest runs", `
@@ -312,7 +314,7 @@ func (s *Store) LatestRunByJob(ctx context.Context) (map[string]store.RunRow, er
 		    SELECT *, ROW_NUMBER() OVER (PARTITION BY job_name ORDER BY started_at DESC, rowid DESC) AS recency
 		    FROM runs
 		    WHERE pipeline_id = ?
-		      AND (rerun_of IS NULL OR rerun_of IN (
+		      AND (rerun_of IS NULL OR status = 'running' OR rerun_of IN (
 		          SELECT id FROM (
 		              SELECT id, ROW_NUMBER() OVER (PARTITION BY job_name ORDER BY started_at DESC, rowid DESC) AS recency
 		              FROM runs WHERE pipeline_id = ? AND rerun_of IS NULL

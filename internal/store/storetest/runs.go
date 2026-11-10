@@ -146,6 +146,8 @@ func (s suite) TestARerunOfAnOldBuildDoesNotBecomeTheJobsStatus(t *testing.T) {
 		t.Fatalf("RecordRunRerun: %v", err)
 	}
 
+	finishRuns(t, st, "OLD", "CURRENT", "RETRYOLD")
+
 	if latest := mustLatest(t, st); latest != "CURRENT" {
 		t.Errorf("latest = %s, want CURRENT: a rerun of an older build became the job's status", latest)
 	}
@@ -157,8 +159,41 @@ func (s suite) TestARerunOfAnOldBuildDoesNotBecomeTheJobsStatus(t *testing.T) {
 		t.Fatalf("RecordRunRerun: %v", err)
 	}
 
+	finishRuns(t, st, "RETRYCURRENT")
+
 	if latest := mustLatest(t, st); latest != "RETRYCURRENT" {
 		t.Errorf("latest = %s, want RETRYCURRENT: a rerun of the latest build is the job's status", latest)
+	}
+}
+
+// TestARunningRerunOfAnOldBuildIsTheJobsLatestUntilItFinishes is Concourse's next_build: a job is busy while any of its builds runs, a rerun of an old one included, and the board reads busy from the latest run. Its color comes from LatestFinishedRunByJob meanwhile, so the rule above still holds once the rerun is over.
+func (s suite) TestARunningRerunOfAnOldBuildIsTheJobsLatestUntilItFinishes(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	seedRuns(t, st, "build", "OLD", "CURRENT")
+	finishRuns(t, st, "OLD", "CURRENT")
+
+	seedRuns(t, st, "build", "RETRYOLD")
+
+	err := st.RecordRunRerun(ctx, "RETRYOLD", "OLD")
+	if err != nil {
+		t.Fatalf("RecordRunRerun: %v", err)
+	}
+
+	if latest := mustLatest(t, st); latest != "RETRYOLD" {
+		t.Errorf("latest = %s, want RETRYOLD: a running rerun of an older build left the job looking idle", latest)
+	}
+
+	err = st.FinishRun(ctx, "RETRYOLD", store.RunFailed)
+	if err != nil {
+		t.Fatalf("FinishRun(RETRYOLD): %v", err)
+	}
+
+	if latest := mustLatest(t, st); latest != "CURRENT" {
+		t.Errorf("latest = %s, want CURRENT: a finished rerun of an older build became the job's status", latest)
 	}
 }
 
@@ -198,6 +233,17 @@ func (s suite) TestLatestFinishedRunByJobLooksPastWhatIsRunning(t *testing.T) {
 
 	if len(latest) != 1 || latest["build"].ID != "B2" || latest["build"].Status != store.RunSucceeded {
 		t.Errorf("LatestFinishedRunByJob = %+v; want only build's B2, succeeded", latest)
+	}
+}
+
+func finishRuns(t *testing.T, st store.Store, ids ...string) {
+	t.Helper()
+
+	for _, id := range ids {
+		err := st.FinishRun(ctxFor(t), id, store.RunSucceeded)
+		if err != nil {
+			t.Fatalf("FinishRun(%s): %v", id, err)
+		}
 	}
 }
 

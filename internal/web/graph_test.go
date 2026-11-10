@@ -428,6 +428,44 @@ func TestJobsBoardDrawsAJobByItsLastFinishedRun(t *testing.T) {
 	}
 }
 
+// TestJobsBoardRingsARetryOfAnOldRun: Concourse keeps a job's color
+// (finished_build) apart from whether it is busy (next_build). A retry of an
+// older run does not become the job's status, but while it runs the job is
+// running, and the board said otherwise until the retry finished.
+func TestJobsBoardRingsARetryOfAnOldRun(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	seedRun(t, pipeline, "old", "build", "failed")
+	seedRun(t, pipeline, "current", "build", "succeeded")
+	seedRun(t, pipeline, "retry", "build", "")
+
+	err := pipeline.Store.RecordRunRerun(t.Context(), "retry", "old")
+	if err != nil {
+		t.Fatalf("RecordRunRerun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo")
+
+	build := dagNodeMarkup(t, dagSVG(t, body), "job:build")
+	if !strings.Contains(build, `class="dagnode st-passed running"`) || !strings.Contains(build, "◐ running") {
+		t.Errorf("a job running a retry of an old run is not drawn passed with the ring: %s", build)
+	}
+
+	err = pipeline.Store.FinishRun(t.Context(), "retry", store.RunFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, body = get(t, server, "/p/demo")
+
+	build = dagNodeMarkup(t, dagSVG(t, body), "job:build")
+	if !strings.Contains(build, `class="dagnode st-passed"`) || strings.Contains(build, "dagring") {
+		t.Errorf("a finished retry of an old run became the job's status: %s", build)
+	}
+}
+
 // seedRun starts a run of job and, unless status is empty, finishes it so.
 func seedRun(t *testing.T, pipeline *Pipeline, id, job, status string) {
 	t.Helper()

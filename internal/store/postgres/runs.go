@@ -221,14 +221,15 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]stor
 }
 
 // LatestRunByJob returns the most recent run for every job that has one,
-// counting a rerun only when it reruns the job's latest other run.
+// counting a rerun only when it reruns the job's latest other run or is still
+// running.
 func (s *Store) LatestRunByJob(ctx context.Context) (map[string]store.RunRow, error) {
 	rows, err := collect(ctx, s.db, "latest runs", `
 		SELECT `+runColumns+` FROM (
 		    SELECT *, ROW_NUMBER() OVER (PARTITION BY job_name ORDER BY started_at DESC, seq DESC) AS recency
 		    FROM runs
 		    WHERE pipeline_id = $1
-		      AND (rerun_of IS NULL OR rerun_of IN (
+		      AND (rerun_of IS NULL OR status = 'running' OR rerun_of IN (
 		          SELECT id FROM (
 		              SELECT id, ROW_NUMBER() OVER (PARTITION BY job_name ORDER BY started_at DESC, seq DESC) AS recency
 		              FROM runs WHERE pipeline_id = $1 AND rerun_of IS NULL
