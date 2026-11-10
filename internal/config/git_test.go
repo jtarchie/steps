@@ -89,3 +89,83 @@ jobs:
 		})
 	}
 }
+
+func gitCredentialPipeline(resource, put string) string {
+	return `
+resources:
+- name: repo
+  type: git
+` + resource + `
+jobs:
+- name: j
+  plan:
+  - get: repo
+` + put
+}
+
+func TestGitCredentialRefused(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct{ resource, put, want string }{
+		"token unseen": {`  source: { uri: "https://h/x.git", token_env: T }`, "", "cannot see; list it in the resource's env or secrets"},
+		"key unseen":   {`  source: { uri: "git@h:x", private_key_env: K }`, "", "cannot see"},
+		"both":         {"  env: [T, K]\n  source: { uri: \"https://h/x.git\", token_env: T, private_key_env: K }", "", "both set"},
+		"bad name":     {"  env: [T]\n  source: { uri: \"https://h/x.git\", token_env: \"T-1\" }", "", "not an environment variable name"},
+		"token ssh":    {"  env: [T]\n  source: { uri: \"git@h:x\", token_env: T }", "", "not an https uri"},
+		"key https":    {"  env: [K]\n  source: { uri: \"https://h/x.git\", private_key_env: K }", "", "not an ssh uri"},
+		"key local":    {"  env: [K]\n  source: { uri: /x, private_key_env: K }", "", "not an ssh uri"},
+		"no repository": {"  source: { uri: \"https://h/x.git\", branch: main }",
+			"  - put: repo\n    inputs: [repo]\n    params: { branch: b }", "params.repository is required"},
+		"undeclared repository": {"  source: { uri: \"https://h/x.git\", branch: main }",
+			"  - put: repo\n    inputs: [other]\n    params: { repository: repo }", "does not list in its inputs"},
+		"no branch": {"  source: { uri: \"https://h/x.git\" }",
+			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo }", "params.branch is required"},
+		"bad branch": {"  source: { uri: \"https://h/x.git\" }",
+			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, branch: \"a..b\" }", "not a plain branch name"},
+		"force and lease": {"  source: { uri: \"https://h/x.git\", branch: main }",
+			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, force: true, force_with_lease: abc123 }", "both set"},
+		"lease not a sha": {"  source: { uri: \"https://h/x.git\", branch: main }",
+			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, force_with_lease: main }", "not a commit sha"},
+		"unknown param": {"  source: { uri: \"https://h/x.git\", branch: main }",
+			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, rebase: true }", "rebase"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := LoadConfig(writeConfig(t, gitCredentialPipeline(tc.resource, tc.put)))
+			if err == nil {
+				t.Fatalf("loaded, want an error containing %q", tc.want)
+			}
+
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestGitCredentialLoads(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct{ resource, put string }{
+		"token in env":     {"  env: [T]\n  source: { uri: \"https://h/x.git\", token_env: T }", ""},
+		"token in secrets": {"  secrets: { T: \"((ci:t))\" }\n  source: { uri: \"https://h/x.git\", token_env: T }", ""},
+		"key scp":          {"  env: [K]\n  source: { uri: \"git@h:x\", private_key_env: K }", ""},
+		"token fetch":      {"  env: [T]\n  source: { uri: /x, branch: main, fetch: true, token_env: T }", ""},
+		"put": {"  env: [T]\n  source: { uri: \"https://h/x.git\", branch: main, token_env: T }",
+			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo/sub, force_with_lease: 0123abcd }"},
+		"lease from load_var": {"  source: { uri: \"https://h/x.git\", branch: main }",
+			"  - task: t\n    outputs: [m]\n    run: echo abc > m/sha\n  - load_var: lease\n    inputs: [m]\n    file: m/sha\n  - put: repo\n    inputs: [repo]\n    params: { repository: repo, force_with_lease: ((lease)) }"},
+		"put branch param": {"  source: { uri: \"https://h/x.git\" }",
+			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, branch: feature/x, force: true }"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := LoadConfig(writeConfig(t, gitCredentialPipeline(tc.resource, tc.put)))
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+		})
+	}
+}

@@ -691,6 +691,7 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"GitHubLabelParams":    reflect.TypeOf(config.GitHubLabelParams{}),
 		"GitHubIssueParams":    reflect.TypeOf(config.GitHubIssueParams{}),
 		"GitSource":            reflect.TypeOf(config.GitSource{}),
+		"GitPutParams":         reflect.TypeOf(config.GitPutParams{}),
 		"SlackMentionsSource":  reflect.TypeOf(config.SlackMentionsSource{}),
 		"SlackReplySource":     reflect.TypeOf(config.SlackReplySource{}),
 		"SlackReactionSource":  reflect.TypeOf(config.SlackReactionSource{}),
@@ -847,6 +848,7 @@ var githubParamDefs = map[any]string{ //nolint:gochecknoglobals // read-only tab
 	config.GitHubReactionType:  "GitHubReactionParams",
 	config.GitHubLabelType:     "GitHubLabelParams",
 	config.GitHubIssueType:     "GitHubIssueParams",
+	"git":                      "GitPutParams",
 	"slack-reply":              "SlackReplyParams",
 	"slack-reaction":           "SlackReactionParams",
 }

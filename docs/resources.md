@@ -32,6 +32,8 @@ jobs:
 | `uri` | yes | anything `git` can clone — https, ssh, or a local path |
 | `branch` | no | omitted follows the remote's `HEAD` |
 | `fetch` | no | `true` refreshes a local-path `uri` before each check; default `false` |
+| `token_env` | no | the variable holding an https token; see [Credentials](#credentials) |
+| `private_key_env` | no | the variable holding an ssh private key; see [Credentials](#credentials) |
 
 A local-path `uri` costs no network clone — the right call for a large repository — but the check reads that clone's refs as they are, so the version is whatever the clone last fetched, however long ago that was. `fetch: true` fixes that: each check first fetches `branch` from the clone's remote (`branch.<name>.remote`, else `origin`) into `refs/remotes/<remote>/<branch>` and reports that ref, so the version is the remote's head. It moves exactly that one ref — never the working tree, a local branch, tags or `FETCH_HEAD` — so a developer's own `main` sitting behind changes nothing. It needs an absolute path and a `branch:` (both checked at load; a remote `uri` is refused, being fresh already), git 2.29 or newer, a clone owned by the user running steps, and auth that never prompts (an ssh agent, a credential helper) — a poll has no terminal, so a prompt fails the fetch instead of waiting. A failed fetch fails the check, so `steps web` reports no version rather than a stale one; like any failing check, it holds back only this resource until a later check succeeds, and the pipeline's other resources keep triggering. Turning `fetch:` on changes which commit is reported, and `source:` is part of the cache key, so expect one fresh build. The built-in type refuses any other `source:` key, so a misspelled `fecth:` is a load error rather than a flag nobody reads.
 
@@ -54,7 +56,81 @@ jobs:
     run: cd repo && go build ./...
 ```
 
-It fetches the exact commit the plan pinned, shallowly, so a branch that moves mid-run still gives you the version that was planned. It has **no `out:`** — `put: repo` against it is a load error, because what "publish" means (which branch, which credentials, force or not) is a decision only you can make. Write your own type for that.
+It fetches the exact commit the plan pinned, shallowly, so a branch that moves mid-run still gives you the version that was planned.
+
+### Credentials
+
+Without `token_env` or `private_key_env`, git authenticates the way it does in your terminal: your `~/.gitconfig`, its credential helpers and `url.<base>.insteadOf` rewrites, `~/.ssh/config` and your ssh agent. Naming either one makes the resource use **that credential and nothing else**, as Concourse's git resource does by running in a container:
+
+- Your global and system git config are not read, so an `insteadOf` that turns `https://github.com/` into ssh, or a keychain helper, never joins in.
+- `token_env` answers git's https credential request with `x-access-token` and the variable's value. It needs an https `uri`. With `fetch: true` the clone's remote is fetched at its https form even when it is spelled `git@host:path` or `ssh://`, into the same `refs/remotes/<remote>/<branch>`, so a developer's ssh origin never reaches the ssh agent.
+- `private_key_env` writes the key to a file only the step's user can read, removed when the command ends, and runs ssh with no config file, no agent and that key alone. It needs an ssh `uri`. Host keys are not checked, as Concourse's git resource does not check them.
+- The variable must be one the resource's commands can see: listed in its `env:`, or a key of its [`secrets:`](secrets.md), which keeps the value out of the daemon's own environment and masks it in output. Either way it is read inside the shell, never written into the rendered command. Unset or empty fails the command by name.
+
+Setting both is a load error: a resource authenticates one way.
+
+### Pushing: `put`
+
+A put pushes `HEAD` of a directory in its inputs to `uri`. The names are Concourse's git resource's, plus `force_with_lease`:
+
+| `params:` field | required | meaning |
+|---|---|---|
+| `repository` | yes | the repository to push, a path inside the put's `inputs:` |
+| `branch` | unless `source.branch` | the branch to push to; overrides `source.branch` |
+| `force` | no | push even if the branch is not an ancestor of `HEAD` |
+| `force_with_lease` | no | a commit sha the remote branch must still be on, or the push fails; a forced push that cannot overwrite someone else's |
+
+It never runs the tree's hooks (`--no-verify`): an earlier step may have run the repository's own setup, and a pre-push hook would run holding the credential. The put's version is `{ref}`, the sha it pushed, and lands in this resource's history like any put's — so as in Concourse, a pipeline that triggers on one branch and pushes another uses two resources, one to read and one to write.
+
+```yaml noexec=credentials
+resources:
+- name: app
+  type: git
+  env: [GH_TOKEN]
+  source:
+    uri: https://github.com/acme/app.git
+    branch: main
+    token_env: GH_TOKEN          # this token only: ~/.gitconfig is not read
+- name: release
+  type: git
+  env: [GH_TOKEN]
+  source:
+    uri: https://github.com/acme/app.git
+    branch: release
+    token_env: GH_TOKEN
+- name: mirror
+  type: git
+  env: [MIRROR_KEY]
+  source:
+    uri: git@git.example.com:acme/app.git
+    private_key_env: MIRROR_KEY  # this key only: no ~/.ssh/config, no agent
+
+jobs:
+- name: promote
+  plan:
+  - get: app
+    trigger: true
+  - get: release
+  - task: lease
+    inputs: [release]
+    outputs: [meta]
+    run: git -C release rev-parse HEAD > meta/lease
+  - load_var: lease
+    inputs: [meta]
+    file: meta/lease
+  # Move release to main's head, unless someone pushed to release since the get above.
+  - put: release
+    inputs: [app]
+    params:
+      repository: app
+      force_with_lease: ((lease))
+  - put: mirror
+    inputs: [app]
+    params:
+      repository: app
+      branch: main
+      force: true
+```
 
 ## The built-in `slack-mentions`, `slack-reply` and `slack-reaction` types
 
@@ -166,7 +242,7 @@ Where each put type aims comes from a fetched `slack-mentions` input (or the one
 | `target/channel` | `slack-reaction` | without a fetched input | the channel id of the message to mark |
 | `target/ts` | `slack-reaction` | without a fetched input | the `ts` of the message to mark |
 
-There is deliberately no `check:`/`in:` on `slack-reply` and no `out:` on `slack-mentions` — `get: reply` or `put: mentions` are both load errors, the same rule `git`'s missing `out:` follows.
+There is deliberately no `check:`/`in:` on `slack-reply` and no `out:` on `slack-mentions` — `get: reply` or `put: mentions` are both load errors, as a `put` is against any type without an `out:`.
 
 ### Watching for a reaction: a `slack-reaction` get
 
@@ -848,7 +924,7 @@ jobs:
     run: echo "report for $(cat nightly/timestamp)"
 ```
 
-There is deliberately no `out:` — `put: tick` is a load error, as it is for `git`. A step that wants the current time has `date`; a version whose only meaning is "now" is not something to publish. `tags:` is refused too, as for every type that runs inside this process: there is nothing to place.
+There is deliberately no `out:` — `put: tick` is a load error. A step that wants the current time has `date`; a version whose only meaning is "now" is not something to publish. `tags:` is refused too, as for every type that runs inside this process: there is nothing to place.
 
 ## Writing a resource type
 

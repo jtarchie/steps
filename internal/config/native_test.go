@@ -15,7 +15,7 @@ func TestNativeYAMLTypesReadExactlyTheirShape(t *testing.T) {
 	t.Parallel()
 
 	shapes := map[string]struct{ source, params any }{
-		gitType:           {source: GitSource{}},
+		gitType:           {source: GitSource{}, params: GitPutParams{}},
 		slackMentionsType: {source: SlackMentionsSource{}},
 		slackReplyType:    {source: SlackReplySource{}, params: SlackReplyParams{}},
 		slackReactionType: {source: SlackReactionSource{}, params: SlackReactionParams{}},

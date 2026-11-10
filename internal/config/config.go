@@ -198,6 +198,7 @@ func (c *Config) validate() error {
 		c.validateSlackResources,
 		c.validateNativeGets,
 		c.validateGitResources,
+		c.validateGitPuts,
 		c.validateApprovals,
 		c.validateAgentEndpoints,
 		c.validateMCPServers,

@@ -37,9 +37,8 @@ jobs:
 		t.Error("built-in git is missing a check or in command")
 	}
 
-	// Read-only by design: publishing is policy, so there is no out:.
-	if resourceType.Config.Out != "" {
-		t.Errorf("built-in git declares out: %q, want none", resourceType.Config.Out)
+	if resourceType.Config.Out == "" {
+		t.Error("built-in git is missing its out command")
 	}
 }
 
@@ -196,19 +195,6 @@ func TestPutRequiresAnOutCommand(t *testing.T) {
 		want     string
 	}{
 		{
-			name: "built-in git has no out",
-			pipeline: `
-resources:
-- name: repo
-  type: git
-  source: { uri: https://example.com/repo.git }
-jobs:
-- name: j
-  plan: [{ put: repo }]
-`,
-			want: `put "repo" targets resource type "git", which declares no out: command`,
-		},
-		{
 			name: "user type with no out",
 			pipeline: `
 resource_types:
@@ -229,15 +215,20 @@ jobs:
 		{
 			name: "renamed put checks the resource it names",
 			pipeline: `
+resource_types:
+- name: readonly
+  config:
+    check: 'echo ''[{"ref":"1"}]'''
+    in: "true"
 resources:
 - name: repo
-  type: git
-  source: { uri: https://example.com/repo.git }
+  type: readonly
+  source: {}
 jobs:
 - name: j
   plan: [{ put: publish, resource: repo }]
 `,
-			want: `put "publish" targets resource type "git", which declares no out: command`,
+			want: `put "publish" targets resource type "readonly", which declares no out: command`,
 		},
 	}
 

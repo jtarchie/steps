@@ -668,6 +668,14 @@
         "fetch": {
           "type": "boolean",
           "description": "Fetch branch from a local clone's remote before each check, so the version is the remote's head rather than whatever the clone last fetched. Local absolute uri only, and needs branch."
+        },
+        "token_env": {
+          "type": "string",
+          "description": "The variable (listed in the resource's env: or secrets:) holding an https token. Every git command then uses it alone, ignoring the operator's global and system git config; with fetch, the clone's remote is fetched over https."
+        },
+        "private_key_env": {
+          "type": "string",
+          "description": "The variable (listed in the resource's env: or secrets:) holding an ssh private key. Every git command then uses it alone: no ssh config, no agent, no global or system git config."
         }
       }
     },

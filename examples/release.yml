@@ -11,8 +11,8 @@
 #   steps approvals -p release --db .steps/release.yml.db    # ...approve <id>
 #   steps web --worker ... && steps pipeline set -c examples/release.yml  # polls for the next tag
 #
-# Needs: git, task, goreleaser, jq, go, a docker+ssh worker for docker-box, gh logged in with
-# `repo` scope. GITHUB_TOKEN comes from `gh auth token`.
+# Needs: git, task, goreleaser, jq, go, a docker+ssh worker for docker-box, and GH_TOKEN with
+# `repo` scope (`export GH_TOKEN=$(gh auth token)`); nothing reads gh's keyring or ~/.gitconfig.
 #
 # The tag is the trigger: pushing it is the decision, and this pipeline never
 # writes to the source repo. Built from github.com, not the local clone,
@@ -26,8 +26,10 @@ resource_types:
   config:
     # Oldest first. The ref is in the version so a moved tag re-runs — and
     # goreleaser then refuses the existing release.
+    # No global or system git config: an operator's https-to-ssh insteadOf would send this 30s poll to the ssh agent.
     check: |
       set -e
+      export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
       refs=$(git ls-remote --tags --refs {{ .source.uri | shellquote }} 'refs/tags/v*')
       if [ -z "$refs" ]; then
         echo '[]'
@@ -39,6 +41,7 @@ resource_types:
         | jq -Rn '[inputs | split("\t") | {tag: .[0], ref: .[1]}]'
     in: |
       set -e
+      export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
       git clone -q {{ .source.uri | shellquote }} .
       git checkout -q {{ .version.tag | shellquote }}
       if [ "$(git rev-parse refs/tags/{{ .version.tag | shellquote }})" != {{ .version.ref | shellquote }} ]; then
@@ -48,20 +51,23 @@ resource_types:
 
 # A put, not a task: a succeeded task is cached and skipped, a publish must not be.
 - name: github-release
+  env: [GH_TOKEN]
   config:
     out: |
       set -e
       cd repo
       tag=$(git describe --tags --exact-match)
-      GITHUB_TOKEN=$(gh auth token) goreleaser release --clean --skip=before 1>&2
+      GITHUB_TOKEN=$GH_TOKEN goreleaser release --clean --skip=before 1>&2
       printf '{"tag":"%s"}\n' "$tag"
 
 resources:
 - name: main
   type: git
+  env: [GH_TOKEN]
   source:
     uri: https://github.com/jtarchie/steps.git
     branch: main
+    token_env: GH_TOKEN   # public, but a credential is what keeps the operator's git config out
 - name: tag
   type: git-tag
   source:
@@ -191,6 +197,7 @@ jobs:
     inputs: [repo]
   # Checks what GitHub serves, not the local dist. 4 archives + checksums.txt.
   - task: verify
+    env: [GH_TOKEN]
     inputs: [repo]
     run: |
       set -e
