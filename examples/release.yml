@@ -10,7 +10,7 @@
 #   steps web --config steps.yml --worker docker-box=docker+ssh://me@box && steps pipeline set -c examples/release.yml
 #
 # Needs: git, task, goreleaser, jq, go, a docker+ssh worker for docker-box, and a daemon secret source named `op` answering `gh_token` (`repo` scope).
-# Served only: `steps run` refuses a ((source:name)) reference, since sources exist on the daemon (docs/secrets.md).
+# `steps run`/`steps test` refuse a ((source:name)) reference without `--config steps.yml`, the daemon's file: it alone defines `op` (docs/secrets.md).
 #
 # The tag is the trigger: pushing it is the decision, and this pipeline never
 # writes to the source repo. Built from github.com, not the local clone,

@@ -44,6 +44,7 @@ steps run <pipeline>        run one job (--resume <id> continues a failed one,
                             --replay <id> --from <step> re-runs one step of one)
                             --worker <tag>=<url> places tags: steps on a machine
                             --progress tty|plain|auto draws it live or as lines
+                            --config <daemon file> resolves its secret references
 steps test <pipeline>       run every job and check assert: directives
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip

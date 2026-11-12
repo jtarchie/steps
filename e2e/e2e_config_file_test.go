@@ -57,12 +57,14 @@ func TestConfigFileEnvIsWebsAlone(t *testing.T) {
 	path := pipelinePath(t, dir)
 	writePipelineFile(t, path, "jobs:\n- name: hi\n  plan:\n  - task: say\n    run: echo hi\n")
 
-	err := cli.Run([]string{"validate", path})
-	if err != nil {
-		t.Fatalf("steps validate with STEPS_CONFIG set to an absent file: %v", err)
+	for _, command := range []string{"validate", "run", "test"} {
+		err := cli.Run([]string{command, "--db", filepath.Join(dir, command+".db"), path})
+		if err != nil {
+			t.Fatalf("steps %s with STEPS_CONFIG set to an absent file: %v", command, err)
+		}
 	}
 
-	err = cli.Run([]string{"web", "--listen", "127.0.0.1:1"})
+	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1"})
 	if err == nil || !strings.Contains(err.Error(), "absent.yml") {
 		t.Fatalf("steps web with STEPS_CONFIG set to an absent file = %v, want a refusal naming it", err)
 	}

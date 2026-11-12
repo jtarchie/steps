@@ -36,7 +36,7 @@ func CheckSecretSources(ctx context.Context, cfg *config.Config) error {
 
 	for _, ref := range cfg.SecretRefs() {
 		if resolver == nil || !resolver.Has(ref.Source) {
-			return fmt.Errorf("%s: no secret source %q is configured on this daemon (steps web --config, secret: section)", ref, ref.Source)
+			return fmt.Errorf("%s: no secret source %q is configured (the secret: section of the config file given to steps web or steps run --config)", ref, ref.Source)
 		}
 	}
 

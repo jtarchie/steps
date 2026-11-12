@@ -16,6 +16,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/pipeline"
+	"github.com/jtarchie/steps/internal/secret"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/postgres"
 	"github.com/jtarchie/steps/internal/trigger"
@@ -446,4 +447,34 @@ func resolveVars(flags map[string]string, varsFile string) (map[string]string, e
 	}
 
 	return vars, nil
+}
+
+// SecretFlags give a local run the daemon's secret sources.
+type SecretFlags struct {
+	Config string `help:"the daemon's config file (steps web --config): its web.secret section resolves ((source:name)) references, every other key is the daemon's and ignored; never read from STEPS_CONFIG" name:"config" placeholder:"FILE" type:"path"`
+}
+
+// resolveSecrets is the file's resolver, or nil for a pipeline with no reference. A reference with no file, or naming a source the file lacks, is refused before anything is opened: a step run with the variable unset is worse than not running.
+func (s SecretFlags) resolveSecrets(cfg *config.Config) (*secret.Resolver, error) {
+	refs := cfg.SecretRefs()
+
+	if s.Config == "" {
+		if len(refs) > 0 {
+			return nil, fmt.Errorf("%s: sources are defined in the daemon's config file; pass it with --config, or set this pipeline into a daemon with `steps pipeline set`", refs[0])
+		}
+
+		return nil, nil //nolint:nilnil // no file and no reference: nothing to resolve with
+	}
+
+	resolver, err := secretsFromConfigFile(s.Config)
+	if err != nil {
+		return nil, err
+	}
+
+	err = pipeline.CheckSecretSources(pipeline.WithSecrets(context.Background(), resolver), cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	return resolver, nil
 }

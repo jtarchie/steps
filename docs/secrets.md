@@ -168,7 +168,8 @@ so a retried attempt asks again.
 
 `steps pipeline set` checks that every source a pipeline names is configured,
 and never runs one. `steps run` and `steps test` refuse a pipeline with a
-reference, since sources exist only on the daemon; `steps validate` accepts it.
+reference unless given the daemon's config file with `--config` (see [Running
+from the CLI](#running-from-the-cli)); `steps validate` accepts it.
 
 **`steps validate --live --config steps.yml` resolves every reference** the
 way the daemon would, given the daemon's own config file, and prints the path
@@ -192,6 +193,56 @@ cached for one `--interval`, so a `trigger: true` resource does not prompt every
 poll and a rotated credential reaches the poller within one interval. A check
 whose resource has secrets never shares its answer with another pipeline's
 identical check, since the same name can resolve to a different credential.
+
+## Running from the CLI
+
+`steps run` and `steps test` take the same `--config steps.yml` the daemon
+does, so a pipeline that has adopted secrets can still be iterated on with
+`--replay <run> --from <step>`, `--resume` and `steps test`:
+
+```
+steps run --config steps.yml --job release pipeline.yml
+steps run --config steps.yml --replay 4F2K --from publish pipeline.yml
+steps test --config steps.yml pipeline.yml
+```
+
+- **Only the `secret:` section is read.** Every other key under `web:` is the
+  daemon's and is ignored, not an error, so one committed file serves both. A
+  file with no `secret:` section is refused, as `validate --live` refuses it.
+- **The file is held to the daemon's checks**: refused if it is writable by
+  group or others, or owned by another user, since it names commands this user
+  then runs.
+- **The same resolver.** A reference is fetched lazily by the step that needs
+  it, once per reference per run, with the same lookup paths, `missing:` and
+  `timeout:` as on the daemon. Nothing is remembered between invocations, so a
+  `--resume` or `--replay` asks the source again.
+- **`pipeline` in a lookup path** is the name the CLI files the pipeline's
+  state under, the one `steps runs -p` shows: the YAML's file name without its
+  extension, or what `--name` gives it. Scope rules on it the way you would
+  for the name an admin gives `steps pipeline set`.
+- **Without `--config`** a pipeline with a reference is refused, and the
+  message names the flag. A reference to a source the file does not define is
+  refused too, naming the source, before the first step runs.
+- **`STEPS_CONFIG` is not read** by `run` or `test`, as `validate` does not:
+  resolving a reference runs the commands the file names, which only an
+  explicit flag should start.
+- The restrictions are unchanged: `secrets:` is still refused on a CLI agent,
+  a `fix:` agent and a sub-agent, and a `fix:` agent still does not receive the
+  task's secrets.
+
+Everything under [Where the value goes](#where-the-value-goes) holds for a
+CLI run, and the terminal is covered too: a task's or an `in:`/`out:`
+script's output is masked on its way to what `steps run` prints, in the live
+view as well as the plain lines, and in the run's log lines.
+
+**A CLI run needs no login, though a daemon with a source does.** The daemon
+demands one because every step is handed `STEPS_URL`, so any step could set a
+pipeline named after another and print its secrets. A CLI run has no daemon
+for a step to reach and no other pipelines: `steps run` hands no step
+`STEPS_URL`, and it holds one pipeline's references and nothing else. It also
+runs as the person who invoked it, who could run the source command
+themselves; it grants no one anything they lacked. A step that dials a daemon
+anyway does so with whatever credentials that user's own environment has.
 
 ## Where the value goes
 

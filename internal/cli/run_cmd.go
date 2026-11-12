@@ -24,6 +24,7 @@ type RunCmd struct {
 	DeliverFlags  `embed:""`
 	HistoryFlags  `embed:""`
 	ProgressFlags `embed:""`
+	SecretFlags   `embed:""`
 	Path          string            `arg:""                                                                                                                         help:"path to the pipeline YAML file" name:"pipeline"`
 	Job           string            `help:"job name to run (defaults to the pipeline's only job)"`
 	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                                        name:"pin"`
@@ -114,6 +115,11 @@ func (r *RunCmd) Run() error {
 		return err
 	}
 
+	resolver, err := r.resolveSecrets(cfg)
+	if err != nil {
+		return err
+	}
+
 	st, provider, cleanup, err := setup(cfg, r.Path, r.StateFlags, r.ExecFlags)
 	if err != nil {
 		return err
@@ -122,6 +128,8 @@ func (r *RunCmd) Run() error {
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
+
+	ctx = pipeline.WithSecrets(ctx, resolver)
 
 	r.HistoryFlags.Apply(cfg)
 
@@ -217,6 +225,7 @@ type TestCmd struct {
 	ExecFlags     `embed:""`
 	DeliverFlags  `embed:""`
 	ProgressFlags `embed:""`
+	SecretFlags   `embed:""`
 	Pipeline      string `arg:""   help:"path to the pipeline YAML file"`
 }
 
@@ -230,6 +239,11 @@ func (t *TestCmd) Run() error {
 		return err
 	}
 
+	resolver, err := t.resolveSecrets(cfg)
+	if err != nil {
+		return err
+	}
+
 	st, provider, cleanup, err := setup(cfg, t.Pipeline, t.StateFlags, t.ExecFlags)
 	if err != nil {
 		return err
@@ -238,6 +252,8 @@ func (t *TestCmd) Run() error {
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
+
+	ctx = pipeline.WithSecrets(ctx, resolver)
 
 	ctx, opts, err := t.prepare(ctx, t.ExecFlags, cfg, st)
 	if err != nil {
@@ -279,8 +295,9 @@ func (t *TestCmd) Run() error {
 
 	slog.Info("pipeline.test.done", "pipeline", t.Pipeline, "jobs", len(executed), "failed", len(failures))
 
-	if cfg.Assert != nil && len(cfg.Assert.Execution) > 0 && !slices.Equal(cfg.Assert.Execution, executed) {
-		return fmt.Errorf("pipeline assert.execution mismatch:\n  want: %v\n  got:  %v", cfg.Assert.Execution, executed)
+	err = checkExecution(cfg, executed)
+	if err != nil {
+		return err
 	}
 
 	if len(failures) > 0 {
@@ -318,12 +335,10 @@ func applyResume(
 	return ctx, jobName, nil
 }
 
-// refuseSecretsLocally: sources live in `steps web --config` alone, so a local run has nowhere to resolve a reference, and a step run with the variable unset is worse than not running.
-func refuseSecretsLocally(cfg *config.Config) error {
-	refs := cfg.SecretRefs()
-	if len(refs) == 0 {
-		return nil
+func checkExecution(cfg *config.Config, executed []string) error {
+	if cfg.Assert != nil && len(cfg.Assert.Execution) > 0 && !slices.Equal(cfg.Assert.Execution, executed) {
+		return fmt.Errorf("pipeline assert.execution mismatch:\n  want: %v\n  got:  %v", cfg.Assert.Execution, executed)
 	}
 
-	return fmt.Errorf("%s: secrets are resolved only by steps web, from its --config file's secret: section; set this pipeline into a daemon with `steps pipeline set`", refs[0])
+	return nil
 }

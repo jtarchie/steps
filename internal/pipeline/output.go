@@ -65,26 +65,28 @@ func recordOutput(ctx context.Context, label string, withStdout bool) (context.C
 		prefixed, flush := shell.NewPrefixedStream(label, inner)
 		rec.flushes = append(rec.flushes, flush)
 
-		if !stderr && !withStdout {
-			return prefixed
-		}
+		sink := prefixed
 
-		if stderr {
-			rec.stderr = chunks
-		} else {
-			rec.stdout = chunks
+		if stderr || withStdout {
+			if stderr {
+				rec.stderr = chunks
+			} else {
+				rec.stdout = chunks
+			}
+
+			sink = io.MultiWriter(prefixed, chunks)
 		}
 
 		secrets := redact.SecretsFrom(ctx)
 		if secrets.Empty() {
-			return io.MultiWriter(prefixed, chunks)
+			return sink
 		}
 
-		// In front of the chunker, which feeds both the live stream and the record: a value split across two chunks is whole here.
-		scrubbed := secrets.Writer(chunks)
+		// In front of the terminal and the chunker alike: a CLI run prints what the daemon discards, and a value split across two chunks is whole here.
+		scrubbed := secrets.Writer(sink)
 		rec.scrubbers = append(rec.scrubbers, scrubbed)
 
-		return io.MultiWriter(prefixed, scrubbed)
+		return scrubbed
 	})
 
 	return ctx, rec

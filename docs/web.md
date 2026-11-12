@@ -970,8 +970,12 @@ included: a daemon nobody signs in to treats every request as admin, and every
 step is handed `STEPS_URL`, so any step could set a pipeline that reads another
 pipeline's secrets.
 
-Only `steps web` reads it. `steps run`, `steps pipeline set` and the rest take
-their flags on the command line as before.
+`steps web` reads all of it. `steps run`, `steps test` and `steps validate
+--live` take `--config` too (and never `STEPS_CONFIG`) but read only `secret:`,
+so a pipeline with secrets can be run without a daemon; see
+[secrets.md](secrets.md#running-from-the-cli).
+`steps pipeline set` and the rest take their flags on the command line as
+before.
 
 ## Flags
 

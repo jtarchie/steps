@@ -97,7 +97,7 @@ func assertNotInDatabase(t *testing.T, state, value string) {
 	}
 }
 
-// Sources are configured on the daemon only, so a local run has nowhere to resolve a reference from; failing at load beats a step that runs with an empty variable.
+// Without --config a local run has nowhere to resolve a reference from; failing at load beats a step that runs with an empty variable.
 func TestLocalRunRefusesASecretReference(t *testing.T) {
 	t.Parallel()
 
@@ -107,8 +107,8 @@ func TestLocalRunRefusesASecretReference(t *testing.T) {
 
 	for _, command := range []string{"run", "test"} {
 		err := cli.Run([]string{command, "--db", filepath.Join(dir, command+".db"), path})
-		if err == nil || !strings.Contains(err.Error(), "steps web") {
-			t.Errorf("steps %s = %v, want a refusal pointing at steps web", command, err)
+		if err == nil || !strings.Contains(err.Error(), "--config") {
+			t.Errorf("steps %s = %v, want a refusal naming --config", command, err)
 		}
 	}
 
