@@ -663,7 +663,11 @@
         },
         "branch": {
           "type": "string",
-          "description": "The branch whose head is the version; the remote's default branch when unset."
+          "description": "The branch whose head is the version; the remote's default branch when unset. Not with tag_pattern."
+        },
+        "tag_pattern": {
+          "type": "string",
+          "description": "A glob such as v* that makes the resource track tags instead of a branch: one version {tag, ref} per matching tag, oldest first by version order, ref the commit the tag points at. A get checks out that commit and fails if the tag has moved. Read-only: not with branch, fetch or a put."
         },
         "fetch": {
           "type": "boolean",

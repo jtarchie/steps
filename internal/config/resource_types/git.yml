@@ -10,6 +10,7 @@
 #       uri: https://github.com/jtarchie/steps.git
 #       branch: main          # optional; omitted follows the remote's HEAD
 #       fetch: true           # optional; local uri only — refresh it first
+#       tag_pattern: "v*"     # optional; track tags matching this glob instead of a branch
 #       token_env: GH_TOKEN   # optional; https auth from this variable only
 #
 # Requires the `git` binary. Set image: on your own copy of this type to run
@@ -114,6 +115,26 @@ config:
       GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=30'
       export GIT_SSH_COMMAND
     fi
+    {{- if index .source "tag_pattern" }}
+    # ls-remote WITHOUT --refs: an annotated tag prints its own object and, on a
+    # second line, `<tag>^{}` — the commit it points at, which is the version's
+    # ref. sort -V is version order (v2 before v10), where ls-remote's is lexical.
+    # No match is an empty list, not an error: a repository's first tag is yet
+    # to come. The listing is taken before the pipe so that an unreachable uri
+    # fails the check under set -e instead of reading as no tags. A tag name
+    # holding a double quote would break the JSON; none is expected.
+    refs=$(git ls-remote {{ .source.uri | shellquote }} {{ printf "refs/tags/%s" .source.tag_pattern | shellquote }})
+    printf '%s\n' "$refs" \
+      | awk -F'\t' '
+        NF == 2 {
+          name = $2; sub("^refs/tags/", "", name)
+          if (name ~ /\^\{\}$/) { sub(/\^\{\}$/, "", name); peeled[name] = $1 } else { sha[name] = $1 }
+        }
+        END { for (name in sha) print name "\t" (name in peeled ? peeled[name] : sha[name]) }' \
+      | sort -V \
+      | awk -F'\t' 'BEGIN { printf "[" } { printf "%s{\"tag\":\"%s\",\"ref\":\"%s\"}", (NR > 1 ? "," : ""), $1, $2 } END { print "]" }'
+    exit 0
+    {{- else }}
     refs=$(git ls-remote {{ .source.uri | shellquote }} {{ index .source "branch" | default "HEAD" | shellquote }})
     # ls-remote takes a PATTERN, not a name, and prints one line per match.
     # Against a local clone `HEAD` also matches refs/remotes/origin/HEAD and
@@ -125,6 +146,7 @@ config:
     ref=$(printf '%s\n' "$refs" | awk -v want={{ index .source "branch" | default "HEAD" | shellquote }} '
       $2 == want || $2 == "refs/heads/" want { print $1; exit }')
     [ -n "$ref" ] || ref=$(printf '%s\n' "$refs" | awk 'NR == 1 { print $1 }')
+    {{- end }}
     {{- end }}
     if [ -z "$ref" ]; then
       # shellquote here too, via printf's arguments rather than an echo of one
@@ -172,9 +194,25 @@ config:
     fi
     git init -q .
     git remote add origin {{ .source.uri | shellquote }}
+    {{- if index .source "tag_pattern" }}
+    # The tag ref itself is fetched, so `git describe --tags --exact-match` works
+    # on the checkout; and it must still name the commit check saw, or a tag
+    # moved since then would build something nobody planned.
+    tag={{ .version.tag | shellquote }}
+    git fetch -q --no-tags --depth 1 origin "+refs/tags/$tag:refs/tags/$tag" || {
+      printf 'git: could not fetch tag %s from %s\n' "$tag" {{ .source.uri | shellquote }} >&2
+      exit 1
+    }
+    if [ "$(git rev-parse "refs/tags/$tag^{commit}")" != {{ .version.ref | shellquote }} ]; then
+      printf 'git: tag %s moved since it was checked\n' "$tag" >&2
+      exit 1
+    fi
+    git checkout -q {{ .version.ref | shellquote }}
+    {{- else }}
     git fetch -q --no-tags --depth 1 origin {{ .version.ref | shellquote }} 2>/dev/null \
       || git fetch -q --no-tags origin {{ index .source "branch" | default "HEAD" | shellquote }}
     git checkout -q {{ .version.ref | shellquote }}
+    {{- end }}
 
   # Pushes the sha, not the name HEAD, so the version printed is what went.
   # --no-verify: a step before this one may have run the tree's own setup,

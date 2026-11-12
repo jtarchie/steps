@@ -18,35 +18,6 @@
 # repo has no CI); --skip=before stops goreleaser's own `go test` running twice.
 
 resource_types:
-# The built-in git type fetches --no-tags. goreleaser needs the tag checked
-# out and a clean tree.
-- name: git-tag
-  config:
-    # Oldest first. The ref is in the version so a moved tag re-runs — and
-    # goreleaser then refuses the existing release.
-    # No global or system git config: an operator's https-to-ssh insteadOf would send this 30s poll to the ssh agent.
-    check: |
-      set -e
-      export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-      refs=$(git ls-remote --tags --refs {{ .source.uri | shellquote }} 'refs/tags/v*')
-      if [ -z "$refs" ]; then
-        echo '[]'
-        exit 0
-      fi
-      printf '%s\n' "$refs" \
-        | awk -F'[\t/]' '{ print $NF "\t" $1 }' \
-        | sort -V \
-        | jq -Rn '[inputs | split("\t") | {tag: .[0], ref: .[1]}]'
-    in: |
-      set -e
-      export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-      git clone -q {{ .source.uri | shellquote }} .
-      git checkout -q {{ .version.tag | shellquote }}
-      if [ "$(git rev-parse refs/tags/{{ .version.tag | shellquote }})" != {{ .version.ref | shellquote }} ]; then
-        echo tag {{ .version.tag | shellquote }} moved since it was checked >&2
-        exit 1
-      fi
-
 # A put, not a task: a succeeded task is cached and skipped, a publish must not be.
 - name: github-release
   config:
@@ -66,10 +37,15 @@ resources:
     uri: https://github.com/jtarchie/steps.git
     branch: main
     token_env: GH_TOKEN   # public, but a credential is what keeps the operator's git config out
+# Oldest first, and the commit is in the version, so a moved tag re-runs — and goreleaser then refuses the existing release.
 - name: tag
-  type: git-tag
+  type: git
+  secrets:
+    GH_TOKEN: ((op:gh_token))
   source:
     uri: https://github.com/jtarchie/steps.git
+    tag_pattern: "v*"
+    token_env: GH_TOKEN   # public, but a credential is what keeps the operator's git config out: an https-to-ssh insteadOf would send this 30s poll to the ssh agent
 - name: release
   type: github-release
   source: {}

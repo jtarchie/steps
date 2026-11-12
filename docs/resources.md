@@ -32,6 +32,7 @@ jobs:
 | `uri` | yes | anything `git` can clone — https, ssh, or a local path |
 | `branch` | no | omitted follows the remote's `HEAD` |
 | `fetch` | no | `true` refreshes a local-path `uri` before each check; default `false` |
+| `tag_pattern` | no | a glob such as `v*`: track tags instead of a branch; see [Tags](#tags) |
 | `token_env` | no | the variable holding an https token; see [Credentials](#credentials) |
 | `private_key_env` | no | the variable holding an ssh private key; see [Credentials](#credentials) |
 
@@ -57,6 +58,30 @@ jobs:
 ```
 
 It fetches the exact commit the plan pinned, shallowly, so a branch that moves mid-run still gives you the version that was planned.
+
+### Tags
+
+`tag_pattern` makes the resource follow tags, not a branch. A check lists the remote's tags matching the glob and returns one version per tag, oldest first by version order (`v2` before `v10`, where plain sorting would put `v10` first), each `{tag, ref}` with `ref` the commit the tag points at: an annotated tag is peeled to its commit, so `ref` is the same sha a branch version carries. A repository with no matching tag has no versions yet, which is not an error. A get checks out that commit with the tag present, so `git describe --tags --exact-match` names it, and fails with `tag <name> moved since it was checked` if the tag now points elsewhere: a moved tag would otherwise build a commit nobody planned. The version carries `ref`, so a tag that is moved to a new commit is a new version.
+
+Tags are read-only here. `tag_pattern` is refused at load together with `branch`, with `fetch: true` (which refreshes a clone's branch; tags are listed from the `uri` itself, local path or remote) and on a resource a job puts to. `token_env` and `private_key_env` apply to the check and the get exactly as they do for a branch. Concourse's `tag_filter` and `tag_regex` instead walk a branch's history for tagged commits; this is steps' own.
+
+```yaml noexec=network
+resources:
+- name: release-tag
+  type: git
+  source:
+    uri: https://github.com/jtarchie/steps.git
+    tag_pattern: "v*"        # v1.2.0, v1.10.0, ...: one version per tag, oldest first
+
+jobs:
+- name: build
+  plan:
+  - get: release-tag
+    trigger: true
+  - task: show
+    inputs: [release-tag]
+    run: git -C release-tag describe --tags --exact-match
+```
 
 ### Credentials
 

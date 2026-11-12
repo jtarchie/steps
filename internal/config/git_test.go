@@ -40,6 +40,11 @@ func TestGitSourceRefused(t *testing.T) {
 		"trailing slash":    {`{ uri: /x, branch: a/, fetch: true }`, "not a valid branch name"},
 		"control character": {`{ uri: /x, branch: "a\tb", fetch: true }`, "not a valid branch name"},
 		"typo":              {`{ uri: /x, branch: main, fecth: true }`, `did you mean "fetch"?`},
+		"tags and branch":   {`{ uri: /x, branch: main, tag_pattern: "v*" }`, "source.tag_pattern and source.branch"},
+		"tags and fetch":    {`{ uri: /x, tag_pattern: "v*", fetch: true }`, "source.fetch refreshes a clone's branch"},
+		"tag dash":          {`{ uri: /x, tag_pattern: "-v*" }`, "source.tag_pattern"},
+		"tag space":         {`{ uri: /x, tag_pattern: "v *" }`, "source.tag_pattern"},
+		"tag not a string":  {`{ uri: /x, tag_pattern: 1 }`, "source.tag_pattern must be a string"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -63,6 +68,8 @@ func TestGitSourceLoads(t *testing.T) {
 		"local fetch":      gitPipeline(`{ uri: /Users/me/repo, branch: feature/x-1, fetch: true }`),
 		"fetch off remote": gitPipeline(`{ uri: "https://github.com/x/y.git", fetch: false }`),
 		"no fetch":         gitPipeline(`{ uri: "https://github.com/x/y.git", branch: main }`),
+		"tags":             gitPipeline(`{ uri: "https://github.com/x/y.git", tag_pattern: "v*" }`),
+		"tags, fetch off":  gitPipeline(`{ uri: /x, tag_pattern: "v[0-9]*.?", fetch: false }`),
 		// A user's own git type replaces the built-in, and so do its rules.
 		"user git type": `
 resource_types:
@@ -128,6 +135,8 @@ func TestGitCredentialRefused(t *testing.T) {
 			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, force_with_lease: main }", "not a commit sha"},
 		"dash ref": {"  source: { uri: \"https://h/x.git\", branch: main }",
 			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, ref: \"--upload-pack=x\" }", "starts with a dash"},
+		"put to tags": {"  source: { uri: \"https://h/x.git\", tag_pattern: \"v*\" }",
+			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, branch: b }", "source.tag_pattern"},
 		"unknown param": {"  source: { uri: \"https://h/x.git\", branch: main }",
 			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, rebase: true }", "rebase"},
 	} {

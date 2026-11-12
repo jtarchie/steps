@@ -18,6 +18,8 @@ type GitSource struct {
 	URI    string `yaml:"uri"`
 	Branch string `yaml:"branch,omitempty"`
 	Fetch  bool   `yaml:"fetch,omitempty"`
+	// TagPattern is a glob (v*) that makes the resource track tags instead of a branch: one version per matching tag on the remote. Steps' own; concourse's tag_filter and tag_regex walk a branch's history instead.
+	TagPattern string `yaml:"tag_pattern,omitempty"`
 	// TokenEnv names the variable holding an https token. Setting it, or PrivateKeyEnv, makes every git command ignore the operator's global and system config: a resource handed a credential uses that credential and nothing else. Concourse's git resource is always that isolated, by running in a container; making it the default here would break every remote that today authenticates through the operator's own credential helper or ssh agent.
 	TokenEnv string `yaml:"token_env,omitempty"`
 	// PrivateKeyEnv names the variable holding an ssh private key; see TokenEnv.
@@ -160,6 +162,10 @@ func checkGitPut(step *Step, resource *Resource) error {
 		branch, _ = resource.Source["branch"].(string)
 	}
 
+	if tags, _ := resource.Source["tag_pattern"].(string); tags != "" {
+		return errors.New("the resource has source.tag_pattern, which makes it read-only: tags are listed and checked out, never pushed")
+	}
+
 	switch {
 	case branch == "":
 		return errors.New("params.branch is required when the resource has no source.branch: the branch to push to")
@@ -211,6 +217,11 @@ func validateGitSource(name string, source map[string]any) error {
 		}
 	}
 
+	err := validateGitTagPattern(name, source)
+	if err != nil {
+		return err
+	}
+
 	raw, present := source["fetch"]
 	if !present {
 		return nil
@@ -229,6 +240,30 @@ func validateGitSource(name string, source map[string]any) error {
 	branch, _ := source["branch"].(string)
 
 	return validateGitFetch(name, uri, branch)
+}
+
+func validateGitTagPattern(name string, source map[string]any) error {
+	raw, present := source["tag_pattern"]
+	if !present {
+		return nil
+	}
+
+	pattern, isString := raw.(string)
+	fetch, _ := source["fetch"].(bool)
+	branch, _ := source["branch"].(string)
+
+	switch {
+	case !isString || pattern == "":
+		return fmt.Errorf("resource %q: source.tag_pattern must be a string glob such as \"v*\", not %v", name, raw)
+	case strings.HasPrefix(pattern, "-") || strings.ContainsFunc(pattern, func(r rune) bool { return r <= ' ' || r == 0x7f }):
+		return fmt.Errorf("resource %q: source.tag_pattern %q has a leading dash, a space or a control character, which no tag name has", name, pattern)
+	case branch != "":
+		return fmt.Errorf("resource %q: source.tag_pattern and source.branch are both set; a resource tracks tags or one branch, so name one", name)
+	case fetch:
+		return fmt.Errorf("resource %q: source.fetch refreshes a clone's branch, and tag_pattern lists the tags of the uri itself, so the two cannot combine", name)
+	}
+
+	return nil
 }
 
 func validateGitFetch(name, uri, branch string) error {
