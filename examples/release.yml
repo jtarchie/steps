@@ -93,7 +93,7 @@ tasks:
       *) echo "no toolchain mapping for $(uname -m)" >&2; exit 1 ;;
     esac
     # ponytail: toolchain installed per run (~1-2 min); bake it into an image FROM docker:dind when that hurts.
-    apk add -q gcc musl-dev git curl tar procps   # -race needs cgo; procps because busybox ps has no -p, which the ssh tests use
+    apk add -q gcc musl-dev git git-daemon curl tar procps   # -race needs cgo; git-daemon holds http-backend, which the git tests serve a remote with; procps because busybox ps has no -p, which the ssh tests use
     go=$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1)
     curl -fsSL "https://go.dev/dl/$go.linux-$arch.tar.gz" | tar -xz -C /usr/local
     curl -fsSL "https://github.com/go-task/task/releases/latest/download/task_linux_$arch.tar.gz" \

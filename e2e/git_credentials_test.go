@@ -24,6 +24,12 @@ func gitHTTPRemote(t *testing.T) (string, string) {
 		t.Skip("git binary not installed; skipping built-in git resource type test")
 	}
 
+	// Alpine ships http-backend in git-daemon, not git, and without it every request to the remote is a 500.
+	_, err = os.Stat(filepath.Join(gitOut(t, t.TempDir(), "--exec-path"), "git-http-backend"))
+	if err != nil {
+		t.Skip("git http-backend not installed (alpine: apk add git-daemon); skipping built-in git resource type test")
+	}
+
 	root := t.TempDir()
 	bare := filepath.Join(root, "x.git")
 	gitIn(t, root, "clone", "-q", "--bare", fixtureRepo(t, "served\n"), bare)
@@ -131,7 +137,7 @@ func TestEndToEndBuiltinGitPushLeaseRefusesAMovedBranch(t *testing.T) {
 	t.Setenv("GIT_TOKEN", gitTestToken)
 
 	stale := gitOut(t, bare, "rev-parse", "refs/heads/main")
-	moved := gitOut(t, bare, "commit-tree", "-p", stale, "-m", "a teammate's", stale+"^{tree}")
+	moved := gitOut(t, bare, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit-tree", "-p", stale, "-m", "a teammate's", stale+"^{tree}")
 	gitIn(t, bare, "update-ref", "refs/heads/main", moved)
 
 	// The get sees moved; the lease still names stale, as one taken before the teammate pushed would.

@@ -126,7 +126,7 @@ var stepOperators = []stepOperator{
 	// budget-exhausted data, the model writes the answer it does not have, and
 	// the file the next step reads goes wrong.
 	{tag: "max_questions", apply: capToOne("max_questions")},
-	{tag: "timeout", apply: setString("timeout", "1ms")},
+	{tag: "timeout", apply: setString("timeout", "1ns")},
 	// Delete the placement and the step runs here instead, so STEPS_WORKER is
 	// unset and the example's own stdout assertion goes red. The falsifiable
 	// claim is "it ran somewhere else", which is the whole of what tags: means.
