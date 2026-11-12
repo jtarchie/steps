@@ -5,14 +5,12 @@
 #   snapshot   main: gate, goreleaser snapshot, run the binary. Publishes nothing.
 #   release    new v* tag: gate, approval, goreleaser release, check the published archive.
 #
-#   steps run examples/release.yml --job snapshot --worker docker-box=docker+ssh://me@box
 #   git tag v0.1.0 && git push origin v0.1.0
-#   steps run examples/release.yml --job release --worker ...   # parks at the approval
-#   steps approvals -p release --db .steps/release.yml.db    # ...approve <id>
-#   steps web --worker ... && steps pipeline set -c examples/release.yml  # polls for the next tag
+#   steps approvals list -p release                          # the release job parks here; approve <id>
+#   steps web --config steps.yml --worker docker-box=docker+ssh://me@box && steps pipeline set -c examples/release.yml
 #
-# Needs: git, task, goreleaser, jq, go, a docker+ssh worker for docker-box, and GH_TOKEN with
-# `repo` scope (`export GH_TOKEN=$(gh auth token)`); nothing reads gh's keyring or ~/.gitconfig.
+# Needs: git, task, goreleaser, jq, go, a docker+ssh worker for docker-box, and a daemon secret source named `op` answering `gh_token` (`repo` scope).
+# Served only: `steps run` refuses a ((source:name)) reference, since sources exist on the daemon (docs/secrets.md).
 #
 # The tag is the trigger: pushing it is the decision, and this pipeline never
 # writes to the source repo. Built from github.com, not the local clone,
@@ -51,7 +49,6 @@ resource_types:
 
 # A put, not a task: a succeeded task is cached and skipped, a publish must not be.
 - name: github-release
-  env: [GH_TOKEN]
   config:
     out: |
       set -e
@@ -63,7 +60,8 @@ resource_types:
 resources:
 - name: main
   type: git
-  env: [GH_TOKEN]
+  secrets:
+    GH_TOKEN: ((op:gh_token))
   source:
     uri: https://github.com/jtarchie/steps.git
     branch: main
@@ -75,6 +73,8 @@ resources:
 - name: release
   type: github-release
   source: {}
+  secrets:
+    GH_TOKEN: ((op:gh_token))
 
 tasks:
 # Runs on a docker+ssh worker (tag docker-box, mapped by --worker): the laptop VM's daemon timed out under the parallel -race shards.
@@ -197,7 +197,8 @@ jobs:
     inputs: [repo]
   # Checks what GitHub serves, not the local dist. 4 archives + checksums.txt.
   - task: verify
-    env: [GH_TOKEN]
+    secrets:
+      GH_TOKEN: ((op:gh_token))
     inputs: [repo]
     run: |
       set -e
