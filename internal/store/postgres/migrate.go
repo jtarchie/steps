@@ -32,6 +32,14 @@ var migrations = []string{
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     paused_at TIMESTAMPTZ NOT NULL
 )`,
+	`CREATE TABLE run_step_outputs (
+    run_id  TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    step_id BIGINT NOT NULL,
+    n       INTEGER NOT NULL,
+    seq     INTEGER NOT NULL,
+    chunk   BYTEA NOT NULL,
+    PRIMARY KEY (run_id, step_id, n, seq)
+)`,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

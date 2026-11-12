@@ -32,6 +32,12 @@ type outputRecorder struct {
 	flushes        []func()
 	record         headTail
 	mu             sync.Mutex
+	// kept stores an output the record elides whole; nil outside a run that keeps them.
+	kept   *keptOutputs
+	stepID int64
+	out    *keptOutput
+	// spillFailed stops an output that could not be stored from being offered as whole.
+	spillFailed bool
 }
 
 // recordTaskOutput installs a recorder over ctx's output for a command about to run under label, returning the ctx to run it with. finish publishes the record.
@@ -45,7 +51,10 @@ func recordResourceOutput(ctx context.Context, label string) (context.Context, *
 }
 
 func recordOutput(ctx context.Context, label string, withStdout bool) (context.Context, *outputRecorder) {
-	rec := &outputRecorder{}
+	rec := &outputRecorder{stepID: events.StepID(ctx)}
+	if rec.stepID != 0 {
+		rec.kept = keptOutputsFrom(ctx)
+	}
 
 	ctx = events.Tee(ctx, func(stderr bool, inner io.Writer) io.Writer {
 		stream := events.StreamStdout
@@ -55,6 +64,7 @@ func recordOutput(ctx context.Context, label string, withStdout bool) (context.C
 
 		chunks := newChunker(time.Now, func(text string) {
 			rec.mu.Lock()
+			rec.spill(ctx, text)
 			rec.record.write(text)
 			rec.mu.Unlock()
 
@@ -109,10 +119,48 @@ func (r *outputRecorder) finish(ctx context.Context) {
 	}
 
 	r.mu.Lock()
-	text := r.record.String()
+	detail := r.keep(ctx)
+	text := r.record.String(detail != "")
 	r.mu.Unlock()
 
-	publishForCurrentStep(ctx, events.TypeStepOutput, "", strings.TrimRight(text, "\n"))
+	publishStepText(ctx, events.TypeStepOutput, "", strings.TrimRight(text, "\n"), detail)
+}
+
+// spill appends what the record is about to take to the store, starting only once the record would elide: nothing is trimmed before the bound, so what it holds is then every byte so far.
+func (r *outputRecorder) spill(ctx context.Context, text string) {
+	if r.kept == nil || r.spillFailed {
+		return
+	}
+
+	if r.out == nil {
+		if r.record.total+len(text) <= maxPublishedOutputBytes {
+			return
+		}
+
+		if len(r.record.head)+len(r.record.tail) != r.record.total {
+			r.spillFailed = true
+
+			return
+		}
+
+		r.out = &keptOutput{keptOutputs: r.kept, stepID: r.stepID, n: r.kept.claim(r.stepID)}
+		r.out.write(ctx, r.record.head)
+		r.out.write(ctx, r.record.tail)
+	}
+
+	r.out.write(ctx, []byte(text))
+}
+
+// keep finishes the stored output, returning what the event names it by, or "" when none was stored whole.
+func (r *outputRecorder) keep(ctx context.Context) string {
+	out := r.out
+	r.out = nil
+
+	if out == nil || !out.finish(ctx) {
+		return ""
+	}
+
+	return out.detail()
 }
 
 // chunker cuts one stream into published pieces.
@@ -240,7 +288,8 @@ func (h *headTail) write(text string) {
 	}
 }
 
-func (h *headTail) String() string {
+// String is the record; kept says the elided middle is whole in the state database.
+func (h *headTail) String(kept bool) string {
 	tailMax := maxPublishedOutputBytes - publishedHeadBytes
 
 	tail := h.tail
@@ -257,6 +306,9 @@ func (h *headTail) String() string {
 	}
 
 	marker := fmt.Sprintf("... [elided %d bytes]\n", elided)
+	if kept {
+		marker = fmt.Sprintf("... [elided %d bytes; full output kept]\n", elided)
+	}
 	if !bytes.HasSuffix(h.head, []byte("\n")) {
 		marker = "\n" + marker
 	}

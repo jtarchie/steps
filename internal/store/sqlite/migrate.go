@@ -47,6 +47,14 @@ ALTER TABLE run_steps_v33 RENAME TO run_steps;`),
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     paused_at TEXT NOT NULL
 );`),
+	execStep(`CREATE TABLE run_step_outputs (
+    run_id  TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    step_id INTEGER NOT NULL,
+    n       INTEGER NOT NULL,
+    seq     INTEGER NOT NULL,
+    chunk   BLOB NOT NULL,
+    PRIMARY KEY (run_id, step_id, n, seq)
+);`),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {

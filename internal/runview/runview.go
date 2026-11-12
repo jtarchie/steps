@@ -133,6 +133,8 @@ type Step struct {
 	// a single overwritten string, the page a reader watched three attempts on
 	// would silently drop two of them at the closing reload.
 	Outputs []string
+	// KeptOutputs is, beside each of Outputs, the ordinal its whole is stored under when the record elided it, or "".
+	KeptOutputs []string
 	// Streaming is what a running step has printed so far, a chunk per event (TypeStepOutputChunk). Emptied by the step's TypeStepOutput, which records the same bytes whole.
 	Streaming []string
 	// Notes is what the step's machinery said about it, in order.
@@ -945,6 +947,7 @@ func attachOutput(view *Transcript, index map[string]int, row store.RunEventRow)
 	// The record holds what the chunks showed, so the chunks go: a reader keeps one copy of the output, and a reload — where the store has already dropped the chunks — draws the same.
 	view.Steps[position].Streaming = nil
 	view.Steps[position].Outputs = append(view.Steps[position].Outputs, row.Text)
+	view.Steps[position].KeptOutputs = append(view.Steps[position].KeptOutputs, row.Detail)
 }
 
 // attachStep finds the row an event belongs on, opening one when the event arrived before the step's start did.

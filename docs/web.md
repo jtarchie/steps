@@ -326,6 +326,17 @@ what it spent and where it ran on its own row.
   expectation — neither carries the output that explains either. A step that
   printed nothing is not expandable at all, so a chevron never promises detail
   that is not there.
+- **An output the record cut keeps its middle, in the state database.** When a step
+  prints past the 32KB record, the whole of it is stored as it prints, and the
+  record's line says `full output kept`. The step's row then links `full
+  output`, served as plain text at
+  `/p/<pipeline>/runs/<run>/steps/<step>/output/<n>` behind the same
+  sign-in, role and `access:` checks as the run page: a viewer who may not see
+  the run gets the answer the run page gives them. What is stored is written
+  after the secret scrubber, so a value masked in the record is `***` there
+  too, and it stops at 64MiB with a line saying how much more was dropped. A
+  step that fits in the record stores nothing. How, and for how long, is under
+  [Live runs](#live-runs).
 - **An agent step expands into its conversation**: the model's text each turn,
   every tool call, and any sub-agent delegation nested underneath, closing with
   the step's `answer`. Each model reply carries how long the request behind it
@@ -457,6 +468,20 @@ that dies mid-step keeps them, as the only record of what that step said. A
 progress bar's carriage returns are collapsed to the value a terminal would
 show, one per piece, rather than kept as the thousands of lines they would
 otherwise be.
+
+What the bound leaves out is not lost. A step that prints past it has every
+byte the record would have held without the bound stored in the state
+database, in 256KiB rows keyed by run, step and `n` (which counts that step's
+kept outputs, one per attempt), and the run page's `full output` link streams
+them back in order. Nothing is stored until the output has outgrown the
+record, so a step that fits costs no extra rows, and there is no file or
+directory to configure: sqlite and Postgres hold it alike, and `steps run` and
+`steps test` keep it in the state file beside the pipeline the same way. The
+rows go with their run (a run `run_history:` reaps, or a destroyed pipeline's
+runs; see [infra.md](infra.md#how-much-history-to-keep-run_history)), so
+nothing sweeps them separately. They are real database rows: a runaway step
+costs up to 64MiB of state until its run is reaped, and a lower `run_history:`
+bounds that.
 
 ## Following a run you started
 

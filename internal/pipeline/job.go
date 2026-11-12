@@ -65,6 +65,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	// can still stamp it on their events — internal/agent, tagging every
 	// conversation turn with the run it belongs to.
 	ctx = events.WithRunID(ctx, resume.id)
+	ctx = withKeptOutputs(ctx, st, resume.id)
 
 	ctx = shell.WithBuildMetadata(ctx, shell.BuildMetadata{
 		RunID: resume.id, JobName: job.Name, PipelineName: cfg.Name, PipelineRevision: cfg.Revision.SHA, URL: opts.ExternalURL,

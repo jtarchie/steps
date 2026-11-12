@@ -134,7 +134,7 @@ func TestHeadTailKeepsBothEndsInOrder(t *testing.T) {
 	short.write("hello\n")
 	short.write("world\n")
 
-	if got := short.String(); got != "hello\nworld\n" {
+	if got := short.String(false); got != "hello\nworld\n" {
 		t.Errorf("short = %q, want it whole", got)
 	}
 
@@ -144,7 +144,7 @@ func TestHeadTailKeepsBothEndsInOrder(t *testing.T) {
 		long.write(fmt.Sprintf("%d\n", i))
 	}
 
-	got := long.String()
+	got := long.String(false)
 
 	switch {
 	case !strings.HasPrefix(got, "0\n1\n2\n"):
@@ -204,7 +204,7 @@ func TestHeadTailKeepsAnOutputThatExactlyFits(t *testing.T) {
 		h.write(whole[i : i+len(line)])
 	}
 
-	if got := h.String(); got != whole {
+	if got := h.String(false); got != whole {
 		t.Errorf("an output that fits was not kept whole: %d bytes, marker at %d", len(got), strings.Index(got, "... [elided"))
 	}
 }
@@ -222,7 +222,7 @@ func TestHeadTailStartsItsTailOnAWholeLine(t *testing.T) {
 
 		h.write(strings.Repeat("z", pad) + "\n")
 
-		got := h.String()
+		got := h.String(false)
 
 		at := strings.Index(got, "]\n")
 		if at < 0 {
@@ -245,7 +245,7 @@ func TestHeadTailKeepsTheEndOfOneLongLine(t *testing.T) {
 	h.write(strings.Repeat("h", publishedHeadBytes))
 	h.write(strings.Repeat("l", maxPublishedOutputBytes) + "end\n")
 
-	got := h.String()
+	got := h.String(false)
 	if !strings.HasSuffix(got, strings.Repeat("l", 1000)+"end\n") {
 		t.Errorf("the long last line was not kept: record ends %q", got[max(0, len(got)-40):])
 	}

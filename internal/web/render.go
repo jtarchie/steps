@@ -217,8 +217,9 @@ func templateFuncs() template.FuncMap {
 		"messageValue": messageValue,
 		// hx-get is a plain attribute to html/template: HTML-escaped, never
 		// URL-encoded, so a name's `#` or `?` would end the path early.
-		"pathseg": url.PathEscape,
-		"jsonPre": jsonPre,
+		"pathseg":       url.PathEscape,
+		"keptOutputURL": keptOutputURL,
+		"jsonPre":       jsonPre,
 		// A version arrives as a store.VersionKey and a payload as a string;
 		// a template refuses either for a func taking the other.
 		"jsonLine": func(raw reflect.Value) template.HTML { return jsonLine(raw.String()) },

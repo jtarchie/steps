@@ -700,6 +700,7 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 	for _, want := range []struct{ table, column, target, onDelete string }{
 		{"run_events", "run_id", "runs", "CASCADE"},
 		{"run_steps", "run_id", "runs", "CASCADE"},
+		{"run_step_outputs", "run_id", "runs", "CASCADE"},
 		{"agent_usage", "run_id", "runs", "CASCADE"},
 		{"questions", "run_id", "runs", "CASCADE"},
 		{"agent_usage", "node_hash", "nodes", "CASCADE"},

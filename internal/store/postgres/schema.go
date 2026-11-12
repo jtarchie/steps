@@ -8,6 +8,8 @@ package postgres
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was DROP SCHEMA.
 //
+// 22 added run_step_outputs, as sqlite's 36 did.
+//
 // 21 added pause_all, as sqlite's 35 did.
 //
 // 20 indexed run_inputs(resource_name, version_json), as sqlite's 34 did.
@@ -28,7 +30,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 21
+const schemaVersion = 22
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -362,6 +364,15 @@ CREATE TABLE IF NOT EXISTS run_events (
 );
 CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq);
 CREATE INDEX IF NOT EXISTS idx_run_events_hash ON run_events(hash);
+
+CREATE TABLE IF NOT EXISTS run_step_outputs (
+    run_id  TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    step_id BIGINT NOT NULL,
+    n       INTEGER NOT NULL,
+    seq     INTEGER NOT NULL,
+    chunk   BYTEA NOT NULL,
+    PRIMARY KEY (run_id, step_id, n, seq)
+);
 
 CREATE TABLE IF NOT EXISTS agent_usage (
     seq               BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE,

@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 36 added run_step_outputs, the whole of a step output its run event elided, in chunks.
+//
 // 35 added pause_all, the daemon-wide pause (store.Control.PauseAll).
 //
 // 34 indexed run_inputs(resource_name, version_json), which VersionRuns filters on and only the (run_id, input_name) key covered, so each call scanned every input ever recorded.
@@ -102,7 +104,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 35
+const schemaVersion = 36
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -584,6 +586,17 @@ CREATE TABLE IF NOT EXISTS run_steps (
     visit      INTEGER NOT NULL DEFAULT 1,
     outcome    TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (run_id, build_id, step_index, visit)
+);
+
+CREATE TABLE IF NOT EXISTS run_step_outputs (
+    run_id  TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    -- step_id is no key (every event of a step carries it), so the run is the only reference and the chunks die with it.
+    step_id INTEGER NOT NULL,
+    -- Which of the step's outputs: an attempt records one each.
+    n       INTEGER NOT NULL,
+    seq     INTEGER NOT NULL,
+    chunk   BLOB NOT NULL,
+    PRIMARY KEY (run_id, step_id, n, seq)
 );
 
 -- Human decisions on approval: steps. The row IS the audit trail; it must not

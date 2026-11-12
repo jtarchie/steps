@@ -103,3 +103,56 @@ func (s *Store) RunEvents(ctx context.Context, runID string, afterSeq int64, lim
 		return row, err //nolint:wrapcheck // collect wraps with the thing being read
 	})
 }
+
+// AppendStepOutput stores one piece of a kept output. One statement that reads nothing first, so it needs no write() lock.
+func (s *Store) AppendStepOutput(ctx context.Context, runID string, stepID int64, n, seq int, chunk []byte) error {
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO run_step_outputs (run_id, step_id, n, seq, chunk)
+		SELECT $1, $2, $3, $4, $5
+		WHERE EXISTS (SELECT 1 FROM runs WHERE id = $6 AND pipeline_id = $7)
+	`, runID, stepID, n, seq, chunk, runID, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not append output %d of step %d in %q: %w", n, stepID, runID, describe(err))
+	}
+
+	return s.requireRun(ctx, result, runID)
+}
+
+// StepOutput streams the pieces in seq order, joined to runs for the pipeline as RunEvents is.
+func (s *Store) StepOutput(ctx context.Context, runID string, stepID int64, n int, yield func(chunk []byte) error) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT o.chunk
+		FROM run_step_outputs o
+		JOIN runs r ON r.id = o.run_id
+		WHERE o.run_id = $1 AND r.pipeline_id = $2 AND o.step_id = $3 AND o.n = $4
+		ORDER BY o.seq
+	`, runID, s.pipelineID, stepID, n)
+	if err != nil {
+		return false, fmt.Errorf("could not read output %d of step %d in %q: %w", n, stepID, runID, describe(err))
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	found := false
+
+	for rows.Next() {
+		var chunk []byte
+
+		err = rows.Scan(&chunk)
+		if err == nil {
+			found = true
+			err = yield(chunk)
+		}
+
+		if err != nil {
+			return found, fmt.Errorf("could not read output %d of step %d in %q: %w", n, stepID, runID, describe(err))
+		}
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return found, fmt.Errorf("could not read output %d of step %d in %q: %w", n, stepID, runID, describe(err))
+	}
+
+	return found, nil
+}

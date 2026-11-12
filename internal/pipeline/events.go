@@ -289,6 +289,11 @@ func currentStepRef(ctx context.Context) (jobName string, index int) {
 
 // publishForCurrentStep publishes text of one output type against whichever step the context says is running, and does nothing at all when no run put an identity on the context; a hook body's output goes to the hook's own row, named and kinded like the row runMatchedHook opened. An empty text publishes nothing: an empty log block is worse than no log block.
 func publishForCurrentStep(ctx context.Context, eventType, status, text string) {
+	publishStepText(ctx, eventType, status, text, "")
+}
+
+// publishStepText is publishForCurrentStep with a Detail: for a step's output, the file its whole was kept in.
+func publishStepText(ctx context.Context, eventType, status, text, detail string) {
 	identity, ok := ctx.Value(stepIdentityKey{}).(stepIdentity)
 	if !ok || text == "" {
 		return
@@ -309,6 +314,7 @@ func publishForCurrentStep(ctx context.Context, eventType, status, text string) 
 		StepID:    events.StepID(ctx),
 		Status:    status,
 		Text:      text,
+		Detail:    detail,
 	})
 }
 

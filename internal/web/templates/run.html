@@ -206,7 +206,7 @@
     {{if $run.MCPBlamedOn $step}}{{template "mcphint" $page}}{{end}}
     {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · content hash {{short $step.Hash}}{{end}}</div>{{end}}
     {{range $step.Notes}}{{template "notice" .}}{{end}}
-    {{range $step.Outputs}}<pre class="log output">{{jsonPre .}}</pre>{{end}}
+    {{range $i, $out := $step.Outputs}}<pre class="log output">{{jsonPre $out}}</pre>{{with keptOutputURL $page.Nav.Current $run.Run.ID $step $i}}<div class="log"><a href="{{.}}">full output</a>, as text: the record above elides its middle</div>{{end}}{{end}}
     {{if $step.Streaming}}<pre class="log output" id="{{$anchor}}_live">{{range $step.Streaming}}{{template "chunk" .}}{{end}}</pre>{{end}}
 
     {{range $step.Conversation}}{{template "turn" (turnctx $page $step .)}}{{end}}

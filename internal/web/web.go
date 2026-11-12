@@ -366,6 +366,7 @@ func (s *Server) routes() error {
 	group.GET(strings.TrimPrefix(runMarkRoute, "/p/:pipeline"), s.handleRunMark)
 	group.GET(strings.TrimPrefix(eventsRoute, "/p/:pipeline"), s.handleRunEvents)
 	group.GET(strings.TrimPrefix(turnRoute, "/p/:pipeline"), s.handleTurn)
+	group.GET(strings.TrimPrefix(keptOutputRoute, "/p/:pipeline"), s.handleKeptOutput)
 	group.GET("/nodes/:hash", s.handleNode)
 	group.GET("/config/:sha", s.handleConfig)
 	group.GET("/approvals", s.handleApprovals)
@@ -451,6 +452,27 @@ func startConfig(addr string) echo.StartConfig {
 	}
 }
 
+// answeredBare answers the routes whose error must not be a page.
+func answeredBare(c *echo.Context, status int, message string) bool {
+	switch {
+	// A mark's carrier declines an error swap, so the body is never read;
+	// empty keeps a page from being rendered for nobody.
+	case isMarkRoute(c.Path()):
+		_ = c.NoContent(status)
+	// A result's body is swapped into its box, and htmx swaps an error too:
+	// a whole page there would nest the nav and its scripts in a <pre>.
+	case c.Path() == turnRoute:
+		_ = c.HTML(status, template.HTMLEscapeString(message))
+	// A link that opens plain text answers in text, so an output reaped with its run reads as a sentence rather than a page.
+	case c.Path() == keptOutputRoute:
+		_ = c.String(status, message)
+	default:
+		return false
+	}
+
+	return true
+}
+
 // handleError renders a failure as a page rather than echo's JSON default —
 // this server only ever talks to a browser.
 func (s *Server) handleError(c *echo.Context, err error) {
@@ -484,19 +506,7 @@ func (s *Server) handleError(c *echo.Context, err error) {
 		return
 	}
 
-	// A result's body is swapped into its box, and htmx swaps an error too:
-	// a whole page there would nest the nav and its scripts in a <pre>.
-	// A mark's carrier declines an error swap, so the body is never read;
-	// empty keeps a page from being rendered for nobody.
-	if isMarkRoute(c.Path()) {
-		_ = c.NoContent(status)
-
-		return
-	}
-
-	if c.Path() == turnRoute {
-		_ = c.HTML(status, template.HTMLEscapeString(message))
-
+	if answeredBare(c, status, message) {
 		return
 	}
 
