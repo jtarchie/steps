@@ -71,7 +71,7 @@ Setting both is a load error: a resource authenticates one way.
 
 ### Pushing: `put`
 
-A put pushes `HEAD` of a directory in its inputs to `uri`. The names are Concourse's git resource's, plus `force_with_lease`:
+A put pushes `HEAD` of a directory in its inputs to `uri`, or the commit `ref` names. The names are Concourse's git resource's, plus `force_with_lease` and `ref`:
 
 | `params:` field | required | meaning |
 |---|---|---|
@@ -79,8 +79,9 @@ A put pushes `HEAD` of a directory in its inputs to `uri`. The names are Concour
 | `branch` | unless `source.branch` | the branch to push to; overrides `source.branch` |
 | `force` | no | push even if the branch is not an ancestor of `HEAD` |
 | `force_with_lease` | no | a commit sha the remote branch must still be on, or the push fails; a forced push that cannot overwrite someone else's |
+| `ref` | no | a commit sha, or any revision `git rev-parse --verify <ref>^{commit}` accepts, inside `repository`, pushed instead of `HEAD`; one that is no commit fails the put naming `params.ref` before anything is sent. Combines with `force` and `force_with_lease`, so a put can push exactly the sha an earlier step checked, under a lease |
 
-It never runs the tree's hooks (`--no-verify`): an earlier step may have run the repository's own setup, and a pre-push hook would run holding the credential. The put's version is `{ref}`, the sha it pushed, and lands in this resource's history like any put's — so as in Concourse, a pipeline that triggers on one branch and pushes another uses two resources, one to read and one to write.
+It never runs the tree's hooks (`--no-verify`): an earlier step may have run the repository's own setup, and a pre-push hook would run holding the credential. The put's version is `{ref}`, the sha it pushed (the one `params.ref` resolved to, when set), and lands in this resource's history like any put's — so as in Concourse, a pipeline that triggers on one branch and pushes another uses two resources, one to read and one to write.
 
 ```yaml noexec=credentials
 resources:
@@ -129,6 +130,7 @@ jobs:
     params:
       repository: app
       branch: main
+      ref: HEAD~1       # the commit before HEAD; a sha an earlier step checked works the same
       force: true
 ```
 

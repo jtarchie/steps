@@ -126,6 +126,8 @@ func TestGitCredentialRefused(t *testing.T) {
 			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, force: true, force_with_lease: abc123 }", "both set"},
 		"lease not a sha": {"  source: { uri: \"https://h/x.git\", branch: main }",
 			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, force_with_lease: main }", "not a commit sha"},
+		"dash ref": {"  source: { uri: \"https://h/x.git\", branch: main }",
+			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, ref: \"--upload-pack=x\" }", "starts with a dash"},
 		"unknown param": {"  source: { uri: \"https://h/x.git\", branch: main }",
 			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, rebase: true }", "rebase"},
 	} {
@@ -156,6 +158,10 @@ func TestGitCredentialLoads(t *testing.T) {
 			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo/sub, force_with_lease: 0123abcd }"},
 		"lease from load_var": {"  source: { uri: \"https://h/x.git\", branch: main }",
 			"  - task: t\n    outputs: [m]\n    run: echo abc > m/sha\n  - load_var: lease\n    inputs: [m]\n    file: m/sha\n  - put: repo\n    inputs: [repo]\n    params: { repository: repo, force_with_lease: ((lease)) }"},
+		"put ref": {"  source: { uri: \"https://h/x.git\", branch: main }",
+			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, ref: 0123abcd, force_with_lease: 4567 }"},
+		"put ref from load_var": {"  source: { uri: \"https://h/x.git\", branch: main }",
+			"  - task: t\n    outputs: [m]\n    run: echo abc > m/sha\n  - load_var: sha\n    inputs: [m]\n    file: m/sha\n  - put: repo\n    inputs: [repo]\n    params: { repository: repo, ref: ((sha)) }"},
 		"put branch param": {"  source: { uri: \"https://h/x.git\" }",
 			"  - put: repo\n    inputs: [repo]\n    params: { repository: repo, branch: feature/x, force: true }"},
 	} {

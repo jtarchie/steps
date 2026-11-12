@@ -30,6 +30,8 @@ type GitPutParams struct {
 	Branch         string `yaml:"branch,omitempty"`
 	Force          bool   `yaml:"force,omitempty"`
 	ForceWithLease string `yaml:"force_with_lease,omitempty"`
+	// Ref is a revision inside Repository to push instead of its HEAD; steps' own, so a put can push the exact sha an earlier step verified.
+	Ref string `yaml:"ref,omitempty"`
 }
 
 // gitType is the built-in git type.
@@ -176,6 +178,8 @@ func checkGitPutParams(step *Step, params GitPutParams) error {
 		return fmt.Errorf("params.repository %q names artifact %q, which the put does not list in its inputs", params.Repository, root)
 	case params.Force && params.ForceWithLease != "":
 		return errors.New("params.force and params.force_with_lease are both set; a lease exists to make a force push conditional, so set one")
+	case strings.HasPrefix(params.Ref, "-"):
+		return fmt.Errorf("params.ref %q starts with a dash, which git would read as an option", params.Ref)
 	case params.ForceWithLease != "" && !strings.Contains(params.ForceWithLease, "((") && !isHexSHA(params.ForceWithLease):
 		return fmt.Errorf("params.force_with_lease %q is not a commit sha", params.ForceWithLease)
 	}

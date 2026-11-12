@@ -23,8 +23,8 @@
 # remotes today. The credential is read from the environment inside the shell,
 # never templated, so it is in no argv and no rendered command.
 #
-# out: pushes HEAD of params.repository. Concourse's git resource takes the
-# same param names; force_with_lease is steps'. Its version is the pushed sha,
+# out: pushes HEAD of params.repository, or params.ref when set. Concourse's
+# git resource takes the same param names; force_with_lease and ref are steps'. Its version is the pushed sha,
 # recorded in this resource's history like any put's, so a pipeline that both
 # triggers on a branch and pushes elsewhere uses two resources.
 #
@@ -210,7 +210,14 @@ config:
     fi
     branch={{ index .params "branch" | default (index .source "branch") | shellquote }}
     cd {{ .params.repository | shellquote }}
+    {{- if index .params "ref" }}
+    sha=$(git rev-parse --verify --quiet {{ printf "%s^{commit}" .params.ref | shellquote }}) || {
+      printf 'git: params.ref %s is not a commit in %s\n' {{ .params.ref | shellquote }} {{ .params.repository | shellquote }} >&2
+      exit 1
+    }
+    {{- else }}
     sha=$(git rev-parse HEAD)
+    {{- end }}
     set -- --no-verify
     {{- if index .params "force" }}
     set -- "$@" --force
