@@ -4,6 +4,7 @@ package testpostgres
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -18,12 +19,13 @@ import (
 	"time"
 
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
+	_ "github.com/jackc/pgx/v5/stdlib" // the driver canary dials with
 )
 
-// ErrUnavailable means the server's binaries could not be had (the first run on a machine downloads them), which a caller treats as a skip. Anything else Start returns is a failure.
+// ErrUnavailable means the server's binaries could not be had (the first run on a machine downloads them) or cannot be trusted (canary), which a caller treats as a skip. Anything else Start returns is a failure.
 var ErrUnavailable = errors.New("postgres binaries unavailable")
 
-// RequireEnv names the variable that, set to 1, turns unobtainable binaries from a skip into a failure, for a run that must not pass by not testing Postgres.
+// RequireEnv names the variable that, set to 1, turns unobtainable or untrustworthy binaries from a skip into a failure, for a run that must not pass by not testing Postgres.
 const RequireEnv = "STEPS_REQUIRE_POSTGRES"
 
 // Fast trades durability for speed, for tests whose database dies with the run. A measurement leaves it out: Postgres' own defaults are what an operator gets.
@@ -63,6 +65,38 @@ var terminate = func(pid int) { _ = syscall.Kill(pid, syscall.SIGTERM) }
 
 // startDB is a seam so a test can simulate a failed fetch or a taken port without depending on the machine's binaries.
 var startDB = func(db *embeddedpostgres.EmbeddedPostgres) error { return db.Start() }
+
+// canary is a seam so a test can stand in for a server that miscomputes. The linux-arm64 alpine build of 17.5 (gcc 6.3, musl) sums two bigints of 200 as 400<<64, so every SUM or AVG over a BIGINT column is wrong there and the tests that fail are not the ones at fault.
+var canary = func(ctx context.Context, url string) error {
+	db, err := sql.Open("pgx", url)
+	if err != nil {
+		return fmt.Errorf("opening the test postgres: %w", err)
+	}
+
+	defer func() { _ = db.Close() }()
+
+	var sum string
+
+	err = db.QueryRowContext(ctx, `SELECT SUM(x)::text FROM (VALUES (200::bigint), (200::bigint)) v(x)`).Scan(&sum)
+	if err != nil {
+		return fmt.Errorf("asking the test postgres to add: %w", err)
+	}
+
+	if sum != "400" {
+		return fmt.Errorf("this build of postgres sums the bigints 200 and 200 as %s", sum)
+	}
+
+	return nil
+}
+
+// unavailable is a skip for a caller, and a failure for a run that set RequireEnv.
+func unavailable(err error) error {
+	if os.Getenv(RequireEnv) == "1" {
+		return fmt.Errorf("%s=1 but the postgres binaries are unavailable: %w", RequireEnv, err)
+	}
+
+	return fmt.Errorf("%w: %w", ErrUnavailable, err)
+}
 
 // startAttempts bounds the retry for a port that was free when probed and taken before Postgres bound it.
 const startAttempts = 3
@@ -121,17 +155,22 @@ func startOnce(settings map[string]string) (*Server, error) {
 		_ = os.RemoveAll(root)
 
 		if strings.Contains(err.Error(), "unable to connect to") || strings.Contains(err.Error(), "error fetching postgres") {
-			if os.Getenv(RequireEnv) == "1" {
-				return nil, fmt.Errorf("%s=1 but the postgres binaries are unavailable: %w", RequireEnv, err)
-			}
-
-			return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+			return nil, unavailable(err)
 		}
 
 		return nil, fmt.Errorf("starting the test postgres: %w", err)
 	}
 
-	return &Server{Host: host, Password: password, db: db, root: root}, nil
+	server := &Server{Host: host, Password: password, db: db, root: root}
+
+	err = canary(context.Background(), server.URL())
+	if err != nil {
+		server.Stop()
+
+		return nil, unavailable(err)
+	}
+
+	return server, nil
 }
 
 // Stop is nil-safe so a deferred Stop works after a start that was skipped.

@@ -650,6 +650,8 @@ linters:
           allow:
             - "$gostd"
             - "github.com/fergusstrange/embedded-postgres"
+            # the driver Start dials the server with, to ask it a sum before any test trusts it
+            - "github.com/jackc/pgx/v5"
         # treedigest must stay stdlib-only: its twin is a busybox script with nothing else to lean on (steps#206).
         TreeDigest:
           files:
