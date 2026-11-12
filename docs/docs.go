@@ -15,6 +15,10 @@
 //	```yaml github=<id>    executed with every github-* resource's endpoint
 //	                       pointed at the in-process fake GitHub fixture
 //	                       named <id> (docs_github_test.go)
+//	```yaml slack=<id>     executed with every slack-* resource's base_url
+//	                       pointed at the in-process fake Slack workspace,
+//	                       whose fixture named <id> checks what was posted
+//	                       (docs_slack_test.go)
 //	```yaml noexec=<why>   schema-validated and loaded, not executed, because
 //	                       this host cannot run it — the reason is mandatory
 //	                       and drawn from a fixed vocabulary (see NoexecReason)
@@ -56,7 +60,7 @@ func (b Block) Mode() string {
 			return field
 		case field == "noexec" || strings.HasPrefix(field, "noexec="):
 			return "noexec"
-		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="), strings.HasPrefix(field, "deliver="), strings.HasPrefix(field, "github="):
+		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="), strings.HasPrefix(field, "deliver="), strings.HasPrefix(field, "github="), strings.HasPrefix(field, "slack="):
 			return "run"
 		}
 	}
@@ -139,6 +143,18 @@ func (b Block) GitHubID() string {
 	return ""
 }
 
+// SlackID is the fake Slack fixture this block's slack-* resources are
+// pointed at during execution (docs_slack_test.go), "" when none.
+func (b Block) SlackID() string {
+	for _, field := range strings.Fields(b.Info) {
+		if id, ok := strings.CutPrefix(field, "slack="); ok {
+			return id
+		}
+	}
+
+	return ""
+}
+
 // Name identifies the block in test output: page, line, and scenario or MCP
 // fixture if any.
 func (b Block) Name() string {
@@ -151,6 +167,10 @@ func (b Block) Name() string {
 	}
 
 	if id := b.GitHubID(); id != "" {
+		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
+	}
+
+	if id := b.SlackID(); id != "" {
 		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
 	}
 

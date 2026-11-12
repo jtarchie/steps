@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // The built-in Slack type names.
@@ -27,6 +28,8 @@ type SlackMentionsSource struct {
 type SlackReplySource struct {
 	TokenEnv string `yaml:"token_env,omitempty"`
 	BaseURL  string `yaml:"base_url,omitempty"`
+	// Channel is where a put with no input and no thread/channel file posts: a channel id, or a user id for a DM.
+	Channel string `yaml:"channel,omitempty"`
 }
 
 // SlackReactionSource is a slack-reaction resource's source:. Emoji makes it a watcher a get can read; without it the resource only marks.
@@ -42,6 +45,8 @@ type SlackReactionSource struct {
 // SlackReplyParams is a slack-reply put's params:.
 type SlackReplyParams struct {
 	From string `yaml:"from,omitempty"`
+	// Text is the message, for a put with no answer/reply.md; a pointer so an explicit empty string is told from none.
+	Text *string `yaml:"text,omitempty"`
 }
 
 // SlackReactionParams is a slack-reaction put's params:.
@@ -96,13 +101,29 @@ func (c *Config) checkSlackStep(label string, step *Step) error {
 
 	switch c.nativeResourceType(step.PutResourceName()) {
 	case slackReplyType:
-		err = decodeParams(step.Params, &SlackReplyParams{})
+		err = checkSlackReplyPut(step)
 	case slackReactionType:
 		err = c.checkSlackReactionPut(step)
 	}
 
 	if err != nil {
 		return fmt.Errorf("%s: put %q: %w", label, step.Put, err)
+	}
+
+	return nil
+}
+
+// checkSlackReplyPut refuses an empty params.text: Slack rejects no_text at run time, which a hook's put would only log.
+func checkSlackReplyPut(step *Step) error {
+	var params SlackReplyParams
+
+	err := decodeParams(step.Params, &params)
+	if err != nil {
+		return err
+	}
+
+	if params.Text != nil && strings.TrimSpace(*params.Text) == "" {
+		return errors.New("params.text is empty: give the message to post, or omit it and write answer/reply.md")
 	}
 
 	return nil

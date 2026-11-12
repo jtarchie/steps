@@ -717,6 +717,10 @@
         "base_url": {
           "type": "string",
           "description": "The API root, https://slack.com when unset; exists so a test can point the type at a fake."
+        },
+        "channel": {
+          "type": "string",
+          "description": "Where a put with no fetched input and no thread/channel file posts, as a top-level message: a channel id, or a user id for a DM. What a job-level hook uses."
         }
       }
     },

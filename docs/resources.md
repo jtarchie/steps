@@ -209,6 +209,7 @@ All three need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for 
 | `done` (`slack-reaction`) | no | an emoji that, left by the token's user, means "answered": the message is no longer reported |
 | `limit` (`slack-reaction`) | no | `reactions.list` page size, default `100` |
 | `pages` (`slack-reaction`) | no | how many pages a check reads, default `5` |
+| `channel` (`slack-reply`) | no | where a put with no fetched input and no `thread/channel` file posts, as a top-level message: a channel id, or a user id for a DM |
 | `base_url` (any) | no | overrides `https://slack.com` — for pointing a test at a fake server |
 | `token_env` (any) | no | overrides `SLACK_BOT_TOKEN` as the env var name to read the token from |
 
@@ -232,15 +233,42 @@ A `slack-reaction` put takes `params.add` (an emoji name, no colons), `params.re
 - `mentions/thread.json` is truncated at its *newest* end for a thread longer than 1000 messages — Slack returns a thread oldest-first — so the mention itself can be missing from a very long thread.
 - More than `limit` new top-level messages in one channel between two checks lose the overflow *permanently*, not just delayed — the cursor advances to the newest `ts` seen anywhere, so whatever `limit` cut off now sits below the new cursor and is never asked for again.
 
-Where each put type aims comes from a fetched `slack-mentions` input (or the one `params.from` names). With no fetched input — a top-level post to a fixed channel, or a message that did not come from a mention — it reads files an upstream step wrote instead. Job-level hooks take no `inputs:` and run outside any one build, so a ❌ belongs on a step's `on_failure:`, as above. The text is always a file: `file()` takes what `inputs:` put on disk directly, so a reply containing backticks or `$(…)` is data, never something a shell might run.
+Where each put type aims comes from a fetched `slack-mentions` input (or the one `params.from` names). With no fetched input — a top-level post to a fixed channel, or a message that did not come from a mention — it reads files an upstream step wrote instead. The text is a file: `file()` takes what `inputs:` put on disk directly, so a reply containing backticks or `$(…)` is data, never something a shell might run. Job-level hooks take no `inputs:` and run outside any one build, so a ❌ belongs on a step's `on_failure:`, as above, and a hook posts with [`source.channel` and `params.text`](#a-job-level-hook-posts-with-sourcechannel-and-paramstext) instead.
 
 | file | read by | required | meaning |
 |---|---|---|---|
-| `answer/reply.md` | `slack-reply` | yes | the message text |
-| `thread/channel` | `slack-reply` | without a fetched input | the channel id to post to |
+| `answer/reply.md` | `slack-reply` | unless `params.text` | the message text |
+| `thread/channel` | `slack-reply` | without a fetched input or `source.channel` | the channel id to post to |
 | `thread/ts` | `slack-reply` | no | a parent message's `ts` — posts as a reply in that thread; omit to post a new top-level message |
 | `target/channel` | `slack-reaction` | without a fetched input | the channel id of the message to mark |
 | `target/ts` | `slack-reaction` | without a fetched input | the `ts` of the message to mark |
+
+**Where a `slack-reply` posts, in order:** the fetched input's version (a thread reply), else the `thread/` files, else `source.channel` (a top-level message). A put with none of the three fails naming all of them.
+
+### A job-level hook posts with `source.channel` and `params.text`
+
+A job's `on_failure`/`on_error` hook runs in an empty workspace: no `inputs:`, so no mention and no files. `source.channel` is where it posts instead, and `params.text` is the message, so a hook can DM you when a build breaks. Slack takes a user id (the `U…` in a profile's "Copy member ID") as a channel and opens the DM with the bot, so `source.channel` is either one. `params.text` is data like the file, sent as JSON and never through a shell, and it is refused when empty or when the put also carries `answer/reply.md`. A hook's own fields take no `((var))`, but a resource's `source:` does, so `channel:` is where a per-machine user id goes. This job fails on purpose and its `assert:` clears that, to show the hook ran.
+
+```yaml slack=hook-dm
+resources:
+- name: operator-dm
+  type: slack-reply
+  source:
+    channel: U024BE7LH   # a user id DMs; a channel id (C…) posts to the channel
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    run: "false"
+  on_failure:
+    put: notify
+    resource: operator-dm
+    params: {text: "the build job failed; `steps runs -p build` knows more"}
+  assert:
+    execution: [compile, notify]
+    outcome: failed
+```
 
 There is deliberately no `check:`/`in:` on `slack-reply` and no `out:` on `slack-mentions` — `get: reply` or `put: mentions` are both load errors, as a `put` is against any type without an `out:`.
 

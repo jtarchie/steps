@@ -182,12 +182,17 @@ func checkDocFixtures(t *testing.T, block docs.Block, servers docServers) {
 	if fixture, ok := docGitHubFixtures[block.GitHubID()]; ok && fixture.check != nil {
 		fixture.check(t, servers.github)
 	}
+
+	if check, ok := docSlackFixtures[block.SlackID()]; ok {
+		check(t, servers.slack)
+	}
 }
 
 // docServers are the in-process fixtures one block's execution was pointed at.
 type docServers struct {
 	mcp    *docMCPServer
 	github *fakeGitHub
+	slack  *fakeSlackWorkspace
 }
 
 // executeDocBlock is the run-mode half: full validate of the block's ORIGINAL
@@ -249,6 +254,7 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 
 	body, mcpServer := injectDocMCPFixture(t, block, block.Body)
 	body, githubServer := injectDocGitHubFixture(t, block, body)
+	body, slackWorkspace := injectDocSlackFixture(t, block, body)
 
 	if usesAgents(t, body) {
 		if block.Mode() == "run" && scenario.fake == nil {
@@ -273,7 +279,7 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 		t.Fatal(err)
 	}
 
-	return path, docServers{mcp: mcpServer, github: githubServer}
+	return path, docServers{mcp: mcpServer, github: githubServer, slack: slackWorkspace}
 }
 
 // pipelinePath is where a test's pipeline goes: inside dir, under a file name

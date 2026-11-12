@@ -22,8 +22,8 @@
 #     inputs: [mentions, docs, answer]
 #     params: {from: mentions}
 #
-# With no fetched input — a top-level post to a fixed channel, or a job-level
-# hook, which runs outside any one build — it reads files instead:
+# With no fetched input — a top-level post to a fixed channel — it reads files
+# instead:
 #
 #   thread/channel   the channel id (the C… in a channel URL)
 #   thread/ts        optional — a parent message's ts; when present this
@@ -31,10 +31,20 @@
 #                     file does not exist) this posts a new top-level
 #                     message in the channel
 #
-# The text is always a file, so a reply containing backticks or $(…) is
-# data, never something a shell might run:
+# Failing both, source.channel is the destination: a channel id, or a user id,
+# which Slack treats as a DM. It is the only one a job-level hook can use, since
+# a hook runs outside any one build with no inputs and no files, and the same
+# goes for its text, which params.text carries inline. Precedence is the
+# input's version, then the thread/ files, then source.channel.
 #
-#   answer/reply.md  required — the message text
+# The text is a file, so a reply containing backticks or $(…) is data, never
+# something a shell might run:
+#
+#   answer/reply.md  the message text, unless params.text is given
+#
+# params.text is the same data: it reaches Slack as JSON, never a shell. It
+# and answer/reply.md together are refused rather than one silently winning,
+# and an empty params.text is refused at load.
 #
 # Needs SLACK_BOT_TOKEN (a bot token, xoxb-) in the environment, for an app
 # with chat:write, installed to the workspace and INVITED to every channel
@@ -77,17 +87,24 @@ config:
     # thread_ts is included only when there is a ts — that is what picks
     # reply-in-thread vs. new-top-level-message. A missing thread/ts is not an
     # error, since a top-level post legitimately has none; a missing channel
-    # is, and says both ways to supply one, because the likeliest cause is a
-    # put that forgot inputs: [mentions].
+    # is, and says every way to supply one, because the likeliest cause is a
+    # put that forgot inputs: [mentions]. source.channel is the last resort so
+    # a thread/ file written by an upstream task can still override it.
     out: |
       let base = source.base_url ?? "https://slack.com";
       let v = params.from != nil ? version(params.from) : version();
-      let channel = v != nil ? string(v.channel ?? "") : trim(file("thread/channel", ""));
+      let routed = v != nil ? string(v.channel ?? "") : trim(file("thread/channel", ""));
       let ts = v != nil ? string(v.thread_ts ?? v.ts ?? "") : trim(file("thread/ts", ""));
 
-      channel == "" ? fail("slack-reply: no channel — give this put its slack-mentions get as an input (inputs: [mentions], or params.from), or write thread/channel") :
+      let channel = routed != "" ? routed : trim(string(source.channel ?? ""));
 
-      let text = file("answer/reply.md");
+      channel == "" ? fail("slack-reply: no channel — give this put its slack-mentions get as an input (inputs: [mentions], or params.from), write thread/channel, or set source.channel") :
+
+      // Both texts is a pipeline that means one and wrote the other; picking
+      // either would post the wrong words with no error.
+      params.text != nil && file("answer/reply.md", "") != "" ? fail("slack-reply: both params.text and answer/reply.md give the text; use one") :
+
+      let text = params.text != nil ? string(params.text) : file("answer/reply.md");
 
       let payload = ts != "" ?
         {channel: channel, thread_ts: ts, text: text, unfurl_links: false} :
