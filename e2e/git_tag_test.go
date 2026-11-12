@@ -139,3 +139,45 @@ jobs:
 		t.Errorf("checked out %q, want the tag v1", got)
 	}
 }
+
+// Release tooling finds the previous tag and the changelog from the checkout's own history, so a tag get is not shallow.
+func TestEndToEndBuiltinGitTagPatternGetKeepsHistoryAndTags(t *testing.T) {
+	origin := tagFixture(t)
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+resources:
+- name: repo
+  type: git
+  source:
+    uri: `+origin+`
+    tag_pattern: "v*"
+jobs:
+- name: build
+  plan:
+  - get: repo
+    version: every
+  - task: record
+    inputs: [repo]
+    run: |
+      git -C repo describe --tags --exact-match > `+filepath.Join(dir, "exact")+`
+      git -C repo describe --tags --abbrev=0 HEAD^ > `+filepath.Join(dir, "previous")+` || true
+`)
+
+	logs := captureStderr(t)
+
+	// Builds v1, v2, then v10; the last run is the one whose previous tag is v2.
+	for range 3 {
+		err := cli.Run([]string{path})
+		if err != nil {
+			t.Fatalf("run: %v\n%s", err, logs())
+		}
+	}
+
+	if got := readSHA(t, filepath.Join(dir, "exact")); got != "v10" {
+		t.Errorf("describe --exact-match = %q, want v10", got)
+	}
+
+	if got := readSHA(t, filepath.Join(dir, "previous")); got != "v2" {
+		t.Errorf("describe --abbrev=0 HEAD^ = %q, want v2: the checkout lacks the history or the older tags", got)
+	}
+}

@@ -13,6 +13,9 @@
 #       tag_pattern: "v*"     # optional; track tags matching this glob instead of a branch
 #       token_env: GH_TOKEN   # optional; https auth from this variable only
 #
+# A get of a tag_pattern resource fetches full history and every tag, because
+# release tooling reads both; it is the one place this type is not shallow.
+#
 # Requires the `git` binary. Set image: on your own copy of this type to run
 # it in a container instead.
 #
@@ -195,14 +198,21 @@ config:
     git init -q .
     git remote add origin {{ .source.uri | shellquote }}
     {{- if index .source "tag_pattern" }}
-    # The tag ref itself is fetched, so `git describe --tags --exact-match` works
-    # on the checkout; and it must still name the commit check saw, or a tag
-    # moved since then would build something nobody planned.
+    # Not shallow, unlike the branch path: release tooling (goreleaser's
+    # changelog) finds the previous tag and the commits between from the
+    # checkout's own history, so every tag and its ancestry come along, and
+    # `git describe --tags --exact-match` works. The tag must still name the
+    # commit check saw, or a tag moved since then would build something nobody planned.
     tag={{ .version.tag | shellquote }}
-    git fetch -q --no-tags --depth 1 origin "+refs/tags/$tag:refs/tags/$tag" || {
+    git fetch -q --no-tags origin "+refs/tags/*:refs/tags/*" || {
       printf 'git: could not fetch tag %s from %s\n' "$tag" {{ .source.uri | shellquote }} >&2
       exit 1
     }
+    # Only the tags the pattern names stay, or an unrelated tag on the same commit makes describe name it instead.
+    keep=$(git tag -l {{ .source.tag_pattern | shellquote }})
+    git tag -l | while read -r other; do
+      printf '%s\n' "$keep" | grep -qxF -- "$other" || git tag -d "$other" >/dev/null
+    done
     if [ "$(git rev-parse "refs/tags/$tag^{commit}")" != {{ .version.ref | shellquote }} ]; then
       printf 'git: tag %s moved since it was checked\n' "$tag" >&2
       exit 1
