@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../steps.schema.json
-# steps-test: skip -- needs a live LLM (OPENROUTER_API_KEY), `gh` authenticated
-# against a real repo, `node` for the skill's own validators, and a docker
+# steps-test: skip -- needs a live LLM (OPENROUTER_API_KEY), GH_TOKEN
+# for a real repo, `node` for the skill's own validators, and a docker
 # daemon for the hunters' sandbox. Its pass/fail depends on what the audit
 # finds, so it can never be a deterministic fixture.
 #
@@ -33,7 +33,7 @@
 #   steps validate examples/security-audit.yml
 #   PR_REPO=owner/name steps run examples/security-audit.yml --job audit
 #
-# Needs: `gh` (authenticated, or GH_TOKEN set), `node`, a docker daemon, a model.
+# Needs: GH_TOKEN (`export GH_TOKEN=$(gh auth token)`), `node`, a docker daemon, a model.
 
 workspace:
   strategy: copy    # the default, stated because the collecting matrices below require it
@@ -44,50 +44,6 @@ defaults:
   model: opencode/glm-5.2
 
 # ─── what gets audited, and what audits it ──────────────────────────────────
-resource_types:
-- name: github-pr
-  config:
-    # One version per open PR. The ref carries the head SHA, so a new push is
-    # a new version — a new audit, not a cache hit on the PR number.
-    check: |
-      set -e
-      gh pr list --repo {{ .source.repo | shellquote }} --state open \
-        --json number,headRefOid \
-        --jq '[.[] | {ref: ((.number|tostring) + "@" + .headRefOid)}]'
-    # Fetches the diff, the metadata, the base ref, AND the code at the commit
-    # under review. The audit is a SCOPED run in the skill's sense — the diff
-    # between two refs — and a scoped run has to see both the change and the
-    # code it lands in, or "is this reachable" has no answer.
-    in: |
-      set -e
-      ref={{ .version.ref | shellquote }}
-      number="${ref%%@*}"
-      sha="${ref##*@}"
-      gh pr diff --repo {{ .source.repo | shellquote }} "$number" > pr.diff
-      gh pr view --repo {{ .source.repo | shellquote }} "$number" \
-        --json title,body,files,baseRefName > pr.json
-      printf '%s' "$number" > pr.number
-      printf '%s' "$sha" > pr.sha
-
-      # `checkout <sha> -- .` restores the tree without moving HEAD, so the
-      # four files above survive.
-      git init -q .
-      git remote add origin https://github.com/{{ .source.repo | shellquote }}.git
-      git fetch -q --no-tags --depth 1 origin "$sha" 2>/dev/null \
-        || git fetch -q --no-tags origin
-      git checkout -q --force "$sha" -- . 2>/dev/null \
-        || git checkout -q --force FETCH_HEAD -- .
-
-- name: github-comment
-  config:
-    check: 'echo ''[{"ref":"latest"}]'''
-    in: "true"
-    out: |
-      set -e
-      test -s report/REPORT.md || { echo "no report was written" >&2; exit 1; }
-      gh pr comment --repo {{ .source.repo | shellquote }} "$(cat pr/pr.number)" \
-        --body-file report/REPORT.md
-
 resources:
 # The skill itself, fetched rather than vendored: it is somebody else's
 # methodology under their own version control, and the audit should say which
@@ -98,13 +54,14 @@ resources:
   source:
     uri: https://github.com/cloudflare/security-audit-skill
 
+# Built-in, like audit-comment: steps talks to GitHub itself, so neither needs `gh` (docs/resources.md).
 - name: pr
-  type: github-pr
+  type: github-prs
   source:
     repo: ((pr_repo))
 
 - name: audit-comment
-  type: github-comment
+  type: github-pr-comment
   source:
     repo: ((pr_repo))
 
@@ -530,6 +487,8 @@ jobs:
 
   - put: audit-comment
     inputs: [pr, report]
+    params:
+      body_file: report/REPORT.md
 
   # Best-effort: a failing notification must not fail an audit that succeeded.
   on_failure:

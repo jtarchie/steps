@@ -488,8 +488,8 @@
       "properties": {
         "repo": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
-          "description": "The repository, owner/name."
+          "pattern": "^([A-Za-z0-9-]+/[A-Za-z0-9._-]+|\\(\\([A-Za-z0-9_.-]+\\)\\))$",
+          "description": "The repository, owner/name, or one ((var)) that holds it."
         },
         "token_env": {
           "type": "string",
@@ -541,8 +541,8 @@
       "properties": {
         "repo": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
-          "description": "The repository, owner/name."
+          "pattern": "^([A-Za-z0-9-]+/[A-Za-z0-9._-]+|\\(\\([A-Za-z0-9_.-]+\\)\\))$",
+          "description": "The repository, owner/name, or one ((var)) that holds it."
         },
         "token_env": {
           "type": "string",
@@ -600,8 +600,8 @@
       "properties": {
         "repo": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
-          "description": "The repository, owner/name."
+          "pattern": "^([A-Za-z0-9-]+/[A-Za-z0-9._-]+|\\(\\([A-Za-z0-9_.-]+\\)\\))$",
+          "description": "The repository, owner/name, or one ((var)) that holds it."
         },
         "token_env": {
           "type": "string",
@@ -636,8 +636,8 @@
       "properties": {
         "repo": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
-          "description": "The repository, owner/name."
+          "pattern": "^([A-Za-z0-9-]+/[A-Za-z0-9._-]+|\\(\\([A-Za-z0-9_.-]+\\)\\))$",
+          "description": "The repository, owner/name, or one ((var)) that holds it."
         },
         "token_env": {
           "type": "string",

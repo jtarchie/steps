@@ -120,6 +120,8 @@ func TestValidatePRReviewExample(t *testing.T) {
 		t.Setenv(key, "test-key-not-used-for-any-call")
 	}
 
+	t.Setenv("GH_TOKEN", fakeGitHubToken)
+
 	path := repoFile("examples", "pr-review.yml")
 
 	err := loadSchema(t).Validate(yamlAsJSONValue(t, path))
@@ -127,7 +129,7 @@ func TestValidatePRReviewExample(t *testing.T) {
 		t.Errorf("%s does not match steps.schema.json:\n%v", path, err)
 	}
 
-	err = cli.Run([]string{"validate", path})
+	err = cli.Run([]string{"validate", path, "--var", "pr_repo=" + fakeRepo})
 	if err != nil {
 		t.Errorf("validate %s: %v", path, err)
 	}
@@ -146,6 +148,8 @@ func TestValidateSecurityAuditExample(t *testing.T) {
 		t.Setenv(key, "test-key-not-used-for-any-call")
 	}
 
+	t.Setenv("GH_TOKEN", fakeGitHubToken)
+
 	path := repoFile("examples", "security-audit.yml")
 
 	err := loadSchema(t).Validate(yamlAsJSONValue(t, path))
@@ -153,7 +157,7 @@ func TestValidateSecurityAuditExample(t *testing.T) {
 		t.Errorf("%s does not match steps.schema.json:\n%v", path, err)
 	}
 
-	err = cli.Run([]string{"validate", path})
+	err = cli.Run([]string{"validate", path, "--var", "pr_repo=" + fakeRepo})
 	if err != nil {
 		t.Errorf("validate %s: %v", path, err)
 	}

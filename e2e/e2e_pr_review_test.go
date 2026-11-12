@@ -3,7 +3,7 @@ package e2e
 // The deterministic half of examples/pr-review.yml — run against THE FILE,
 // not a copy of it.
 //
-// That example needs a live model, an authenticated `gh`, and a real PR, and
+// That example needs a live model, a GitHub token, and a real PR, and
 // its pass/fail depends on what the reviewers find. What is deterministic is
 // the shape: a planner decides the width of a matrix, one reviewer cell per
 // dimension runs concurrently, what they produce comes back as one collected
@@ -14,8 +14,8 @@ package e2e
 // and one of them untested — by the time it was replaced the paraphrase had
 // grown a verdicts:/max_visits: loop the real example does not have. So the
 // example itself is what runs here: read from disk, pointed at a scripted
-// provider through the same source: seam the doc corpus uses, with `gh` and
-// `git` stubbed on PATH so the resource type's real check/in text executes.
+// provider through the same source: seam the doc corpus uses, and at the fake
+// GitHub the doc corpus uses, since its github-* resources are built-ins.
 //
 // The division of labour with the file's own assert: blocks is deliberate.
 // The YAML asserts what must hold on a REAL run (each agent WROTE the
@@ -32,7 +32,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -45,9 +44,11 @@ import (
 func TestEndToEndPRReviewExample(t *testing.T) {
 	dir := t.TempDir()
 	fake := newRoutedFakeLLM(t, reviewScript())
-	path := writeExampleAgainstFake(t, dir, repoFile("examples", "pr-review.yml"), fake.URL)
+	github := newFakeGitHub(t)
+	github.addPR(docPR())
+	t.Setenv("GH_TOKEN", fakeGitHubToken)
 
-	stubGitHubCLI(t, dir)
+	path := writeExampleAgainstFake(t, dir, repoFile("examples", "pr-review.yml"), fake.URL, github.URL())
 
 	// Create and migrate the state db before anything races for it. Two
 	// store opens in one process is the shape this test needs — the run
@@ -62,7 +63,7 @@ func TestEndToEndPRReviewExample(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- cli.Run([]string{"test", path, "--var", "pr_repo=jtarchie/steps"})
+		done <- cli.Run([]string{"test", path, "--var", "pr_repo=" + fakeRepo})
 	}()
 
 	// Answer the gate, but never outlive the run: if the plan died before it
@@ -108,6 +109,11 @@ func TestEndToEndPRReviewExample(t *testing.T) {
 
 	assertSucceeded(t, nodes, "task", "check-draft")
 	assertSucceeded(t, nodes, "put", "pr-review")
+
+	reviews := github.reviewsOn(docPR().Number)
+	if len(reviews) != 1 || !strings.Contains(reviews[0].Body, "one confirmed finding") {
+		t.Errorf("reviews on the pull request = %+v, want the synthesizer's summary posted once", reviews)
+	}
 
 	assertCollectedFindings(t, fake)
 }
@@ -245,9 +251,9 @@ func approveWhenPending(pipelinePath string, stop <-chan struct{}) error {
 }
 
 // writeExampleAgainstFake copies a repo example into dir with every agent
-// pointed at the fake provider — the same structural rewrite docs_test.go
-// applies to a doc block, so the file on disk stays the one a reader runs.
-func writeExampleAgainstFake(t *testing.T, dir, examplePath, endpoint string) string {
+// pointed at the scripted provider and every github-* resource at the fake
+// GitHub, so the file under test is the one a reader would run.
+func writeExampleAgainstFake(t *testing.T, dir, examplePath, endpoint, github string) string {
 	t.Helper()
 
 	body, err := os.ReadFile(examplePath) //nolint:gosec // a repo path this test names itself
@@ -255,56 +261,14 @@ func writeExampleAgainstFake(t *testing.T, dir, examplePath, endpoint string) st
 		t.Fatal(err)
 	}
 
-	return writePipeline(t, dir, injectFakeProvider(t, string(body), endpoint, "", false))
-}
-
-// stubGitHubCLI puts a fake `gh` and a no-op `git` at the front of PATH, so
-// the example's real check:/in:/out: shell text runs against canned data
-// instead of a network and an authenticated account.
-//
-// Stubbing the BINARIES rather than rewriting the resource type keeps the
-// thing under test the text a reader would run: the `in:` script still parses
-// the ref, still splits number from sha, still writes the three files the
-// planner's context_paths: name.
-func stubGitHubCLI(t *testing.T, dir string) {
-	t.Helper()
-
-	bin := filepath.Join(dir, "bin")
-
-	err := os.MkdirAll(bin, 0o750)
-	if err != nil {
-		t.Fatal(err)
+	const repo = "repo: ((pr_repo))\n"
+	if !strings.Contains(string(body), repo) {
+		t.Fatalf("%s names no %q to point at the fake GitHub", examplePath, strings.TrimSpace(repo))
 	}
 
-	stubs := map[string]string{
-		// $2 is gh's subcommand under `pr`; every path the example takes is
-		// answered, and anything else is a loud failure rather than empty
-		// output that would surface much later as a missing file.
-		"gh": `#!/bin/sh
-case "$2" in
-  list)   printf '[{"ref": "7@abc123def456"}]' ;;
-  diff)   printf 'diff --git a/store.go b/store.go\n+func Set(k string) {}\n' ;;
-  view)   printf '{"title":"Add Set","body":"adds a setter","files":[{"path":"store.go"}],"baseRefName":"main"}' ;;
-  review) printf 'review posted\n' ;;
-  *)      echo "fake gh: unexpected argv: $*" >&2; exit 1 ;;
-esac
-`,
-		// The example clones the PR's code so reviewers can read the source.
-		// The fixture's model never reads it, and a real fetch would make
-		// this test need the network.
-		"git": `#!/bin/sh
-exit 0
-`,
-	}
+	pointed := strings.ReplaceAll(string(body), repo, repo+"    endpoint: "+github+"\n")
 
-	for name, body := range stubs {
-		err = os.WriteFile(filepath.Join(bin, name), []byte(body), 0o700) //nolint:gosec // a stub this test invokes
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return writePipeline(t, dir, injectFakeProvider(t, pointed, endpoint, "", false))
 }
 
 // reviewScript is the model this fixture runs against: one function
