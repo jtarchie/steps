@@ -92,7 +92,7 @@ func readIssueTitle(srcDir, name string) (string, error) {
 
 	switch {
 	case strings.TrimSpace(title) == "":
-		return "", fmt.Errorf("params.title_file: %s is empty, so the issue would have no title", name)
+		return "", fmt.Errorf("params.title_file: %s is empty, so there would be no title", name)
 	case strings.ContainsAny(title, "\r\n"):
 		return "", fmt.Errorf("params.title_file: %s is %d lines; a title is one line, so put the rest in params.body_file", name, strings.Count(title, "\n")+1)
 	}

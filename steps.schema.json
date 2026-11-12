@@ -873,7 +873,7 @@
           "then": { "properties": { "source": { "$ref": "#/$defs/githubIssuesSource" } } }
         },
         {
-          "if": { "properties": { "type": { "enum": ["github-pr-comment", "github-pr-review", "github-reaction", "github-label", "github-issue"] } }, "required": ["type"] },
+          "if": { "properties": { "type": { "enum": ["github-pr-comment", "github-pr-review", "github-reaction", "github-label", "github-issue", "github-pr"] } }, "required": ["type"] },
           "then": { "properties": { "source": { "$ref": "#/$defs/githubPostSource" } } }
         }
       ]

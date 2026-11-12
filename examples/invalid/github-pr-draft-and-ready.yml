@@ -1,0 +1,17 @@
+# draft opens a pull request as a draft and ready takes one out of draft, so asking for both in one put contradicts itself and is refused at load.
+# expect: params.draft and params.ready contradict
+
+resources:
+- name: pr
+  type: github-pr
+  source:
+    repo: acme/app
+
+jobs:
+- name: publish
+  plan:
+  - put: pr
+    params:
+      head: feature/widgets
+      draft: true
+      ready: true

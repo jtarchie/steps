@@ -2,7 +2,7 @@ package config
 
 // The built-in github-* resource types: their names, the shape of each one's source: and put params:, and the load-time rules that need no network.
 
-// Several types rather than one, split by what they do, the way the Slack built-ins are: three that FIND work (a pull request, an issue, a comment) and have no out, and the rest PUBLISH (a comment, a review, a reaction, a label, an issue) and have no check. A put records its version in the resource's own history (recordPutOrder), so a type that both watched and posted would mint a comment-shaped version into the history it fans out over — and under trigger: true, a post would trigger the build that posts again.
+// Several types rather than one, split by what they do, the way the Slack built-ins are: three that FIND work (a pull request, an issue, a comment) and have no out, and the rest PUBLISH (a comment, a review, a reaction, a label, an issue, a pull request) and have no check. A put records its version in the resource's own history (recordPutOrder), so a type that both watched and posted would mint a comment-shaped version into the history it fans out over — and under trigger: true, a post would trigger the build that posts again.
 
 // All of them are Go rather than YAML: steps calls GitHub itself and unpacks the tree itself, so nothing needs gh, git or curl on any machine, and a fetched tree is an ordinary artifact on this one — placed and containerized steps read it the way they read any other.
 
@@ -31,7 +31,7 @@ const (
 
 // GitHubTypes is every github-* type, in the order the docs list them.
 func GitHubTypes() []string {
-	return []string{GitHubPRsType, GitHubCommentsType, GitHubIssuesType, GitHubPRCommentType, GitHubPRReviewType, GitHubReactionType, GitHubLabelType, GitHubIssueType}
+	return []string{GitHubPRsType, GitHubCommentsType, GitHubIssuesType, GitHubPRCommentType, GitHubPRReviewType, GitHubReactionType, GitHubLabelType, GitHubIssueType, GitHubPRType}
 }
 
 // GitHubFinds reports whether kind is one of the types a get reads.
@@ -848,6 +848,10 @@ func checkGitHubPut(kind string, step *Step, comments, gets []string) error {
 		return checkLabelStep(step, gets)
 	case GitHubIssueType:
 		_, err := ParseGitHubIssueParams(step.Params)
+
+		return err
+	case GitHubPRType:
+		_, err := ParseGitHubPRParams(step.Params)
 
 		return err
 	}

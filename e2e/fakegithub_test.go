@@ -53,6 +53,13 @@ type fakePR struct {
 	Reviewers []string
 	Labels    []string
 	Files     []fakeFile
+	// Closed hides it from an open listing.
+	Closed bool
+	// Head is the branch it is from; empty for a pull request a test files without caring.
+	Head string
+	Body string
+	// Opened says a put opened it, rather than the test filing it.
+	Opened bool
 }
 
 type fakeIssue struct {
@@ -150,12 +157,18 @@ type fakeGitHub struct {
 	clock time.Time
 	// refuseLabelRemoval answers every label removal as a token without write access is answered.
 	refuseLabelRemoval bool
+	// defaultBranch is what the repository answers for itself, "main" unless a test says otherwise.
+	defaultBranch string
+	// branches is each pushed branch's head commit; a pull request cannot be opened from one that is not here.
+	branches map[string]string
+	// patched counts PATCHes to pull requests, so a test can tell "changed nothing" from "changed it to the same".
+	patched int
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
 	t.Helper()
 
-	fake := &fakeGitHub{t: t, repo: fakeRepo, login: docGitHubLogin, reviews: map[int][]fakeReview{}, nextID: 9000, clock: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)}
+	fake := &fakeGitHub{t: t, repo: fakeRepo, login: docGitHubLogin, reviews: map[int][]fakeReview{}, defaultBranch: "main", branches: map[string]string{}, nextID: 9000, clock: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)}
 	fake.server = httptest.NewServer(fake.routes())
 	t.Cleanup(fake.server.Close)
 
@@ -323,7 +336,14 @@ func (f *fakeGitHub) routes() http.Handler {
 		})
 	}
 
-	handle("POST /graphql", f.serveSearch)
+	handle("POST /graphql", f.serveGraphQL)
+	handle("GET "+repo, func(w http.ResponseWriter, _ *http.Request) {
+		respondJSON(w, http.StatusOK, map[string]any{"full_name": f.repo, "default_branch": f.defaultBranch})
+	})
+	handle("GET "+repo+"/pulls", f.listPulls)
+	handle("POST "+repo+"/pulls", f.createPull)
+	handle("PATCH "+repo+"/pulls/{number}", func(w http.ResponseWriter, r *http.Request) { f.patchPull(w, r, atoi(r.PathValue("number"))) })
+	handle("POST "+repo+"/issues/{number}/assignees", func(w http.ResponseWriter, r *http.Request) { f.addAssignees(w, r, atoi(r.PathValue("number"))) })
 	handle("GET /user", func(w http.ResponseWriter, _ *http.Request) {
 		respondJSON(w, http.StatusOK, map[string]any{"login": f.login})
 	})
@@ -592,12 +612,17 @@ func (f *fakeGitHub) servePull(w http.ResponseWriter, r *http.Request, number in
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{
-		"number": pr.Number, "title": pr.Title, "draft": pr.Draft, "html_url": f.html("pull", pr.Number),
-		"user": map[string]any{"login": pr.Author},
-		"head": map[string]any{"sha": pr.SHA},
-		"base": map[string]any{"ref": pr.Base},
-	})
+	respondJSON(w, http.StatusOK, f.pullJSON(pr))
+}
+
+func (f *fakeGitHub) pullJSON(pr fakePR) map[string]any {
+	return map[string]any{
+		"number": pr.Number, "title": pr.Title, "body": pr.Body, "draft": pr.Draft, "html_url": f.html("pull", pr.Number),
+		"node_id": fmt.Sprintf("PR_node_%d", pr.Number),
+		"user":    map[string]any{"login": pr.Author},
+		"head":    map[string]any{"sha": pr.SHA, "ref": pr.Head, "repo": map[string]any{"full_name": f.repo}},
+		"base":    map[string]any{"ref": pr.Base},
+	}
 }
 
 func (f *fakeGitHub) serveCompare(w http.ResponseWriter, r *http.Request, basehead string) {
@@ -972,6 +997,24 @@ func (f *fakeGitHub) postComment(w http.ResponseWriter, r *http.Request, number 
 	respondJSON(w, http.StatusCreated, map[string]any{"id": f.nextID, "html_url": f.html("pull", number)})
 }
 
+// lastNumber is the highest number any pull request, issue or comment holds: GitHub numbers them from one sequence.
+func (f *fakeGitHub) lastNumber() int {
+	number := 0
+	for _, pr := range f.prs {
+		number = max(number, pr.Number)
+	}
+
+	for _, comment := range f.comments {
+		number = max(number, comment.Number)
+	}
+
+	for _, filed := range f.issues {
+		number = max(number, filed.Number)
+	}
+
+	return number
+}
+
 // createIssue numbers past every pull request and issue the fake knows, since GitHub numbers both from one sequence.
 func (f *fakeGitHub) createIssue(w http.ResponseWriter, r *http.Request) {
 	var issue struct {
@@ -988,18 +1031,7 @@ func (f *fakeGitHub) createIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	number := 0
-	for _, pr := range f.prs {
-		number = max(number, pr.Number)
-	}
-
-	for _, comment := range f.comments {
-		number = max(number, comment.Number)
-	}
-
-	for _, filed := range f.issues {
-		number = max(number, filed.Number)
-	}
+	number := f.lastNumber()
 
 	number++
 	f.nextID++
@@ -1337,4 +1369,197 @@ func atoi(s string) int {
 	n, _ := strconv.Atoi(s)
 
 	return n
+}
+
+// pushBranch makes head a branch of the repository at sha, as the git put that ran before a github-pr put would have.
+func (f *fakeGitHub) pushBranch(head, sha string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.branches[head] = sha
+}
+
+// movePush moves a pushed branch to sha, and a pull request from it with it, as GitHub does.
+func (f *fakeGitHub) movePush(head, sha string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.branches[head] = sha
+
+	for i := range f.prs {
+		if f.prs[i].Head == head {
+			f.prs[i].SHA = sha
+		}
+	}
+}
+
+// openedPRs are the pull requests a put opened, in order.
+func (f *fakeGitHub) openedPRs() []fakePR {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.DeleteFunc(slices.Clone(f.prs), func(pr fakePR) bool { return !pr.Opened })
+}
+
+func (f *fakeGitHub) prNamed(number int) fakePR {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	pr, _ := f.pr(number)
+
+	return pr
+}
+
+func (f *fakeGitHub) patchCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.patched
+}
+
+// listPulls answers as GitHub's list does: open pull requests, narrowed by head=owner:branch, which is how a branch is looked up.
+func (f *fakeGitHub) listPulls(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	head := query.Get("head")
+	listed := []map[string]any{}
+
+	for _, pr := range f.prs {
+		if query.Get("state") != "open" || pr.Closed {
+			continue
+		}
+
+		if head != "" && head != strings.Split(f.repo, "/")[0]+":"+pr.Head {
+			continue
+		}
+
+		listed = append(listed, f.pullJSON(pr))
+	}
+
+	respondJSON(w, http.StatusOK, listed)
+}
+
+func (f *fakeGitHub) createPull(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Title string `json:"title"`
+		Head  string `json:"head"`
+		Base  string `json:"base"`
+		Body  string `json:"body"`
+		Draft bool   `json:"draft"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil || body.Title == "" || body.Base == "" {
+		respondJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "Validation Failed", "errors": []map[string]any{{"code": "missing_field", "field": "title or base"}}})
+
+		return
+	}
+
+	sha, pushed := f.branches[body.Head]
+	if !pushed {
+		respondJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "Validation Failed", "errors": []map[string]any{{"code": "invalid", "field": "head"}}})
+
+		return
+	}
+
+	pr := fakePR{Number: f.lastNumber() + 1, SHA: sha, Title: body.Title, Body: body.Body, Author: f.login, Base: body.Base, Head: body.Head, Draft: body.Draft, Opened: true}
+	f.prs = append(f.prs, pr)
+	respondJSON(w, http.StatusCreated, f.pullJSON(pr))
+}
+
+func (f *fakeGitHub) patchPull(w http.ResponseWriter, r *http.Request, number int) {
+	var body struct {
+		Title *string `json:"title"`
+		Body  *string `json:"body"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+
+		return
+	}
+
+	f.patched++
+
+	for i := range f.prs {
+		if f.prs[i].Number != number {
+			continue
+		}
+
+		if body.Title != nil {
+			f.prs[i].Title = *body.Title
+		}
+
+		if body.Body != nil {
+			f.prs[i].Body = *body.Body
+		}
+
+		respondJSON(w, http.StatusOK, f.pullJSON(f.prs[i]))
+
+		return
+	}
+
+	respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
+}
+
+func (f *fakeGitHub) addAssignees(w http.ResponseWriter, r *http.Request, number int) {
+	var body struct {
+		Assignees []string `json:"assignees"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+
+		return
+	}
+
+	for i := range f.prs {
+		if f.prs[i].Number == number {
+			f.prs[i].Assignees = append(f.prs[i].Assignees, body.Assignees...)
+			respondJSON(w, http.StatusCreated, map[string]any{"number": number})
+
+			return
+		}
+	}
+
+	respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
+}
+
+// serveGraphQL is the search github-prs sends, or the one mutation a github-pr put sends.
+func (f *fakeGitHub) serveGraphQL(w http.ResponseWriter, r *http.Request) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+
+		return
+	}
+
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+
+	var request struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+
+	_ = json.Unmarshal(raw, &request)
+
+	if !strings.Contains(request.Query, "markPullRequestReadyForReview") {
+		f.serveSearch(w, r)
+
+		return
+	}
+
+	id, _ := request.Variables["id"].(string)
+
+	for i := range f.prs {
+		if id == fmt.Sprintf("PR_node_%d", f.prs[i].Number) {
+			f.prs[i].Draft = false
+			respondJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"markPullRequestReadyForReview": map[string]any{"pullRequest": map[string]any{"number": f.prs[i].Number, "isDraft": false}}}})
+
+			return
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"errors": []map[string]any{{"message": "Could not resolve to a node with the global id of '" + id + "'"}}})
 }

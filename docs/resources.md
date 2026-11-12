@@ -300,11 +300,11 @@ Besides `version.json`, `thread.json` and `user` (who wrote the reacted message)
 
 ## The built-in GitHub types
 
-Eight built-ins, split by what they do, the way the Slack ones are. `github-prs`, `github-comments` and `github-issues` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction`, `github-label` and `github-issue` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
+Nine built-ins, split by what they do, the way the Slack ones are. `github-prs`, `github-comments` and `github-issues` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction`, `github-label`, `github-issue` and `github-pr` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
 
-steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the eight can be placed with `tags:` themselves, as for every type that runs inside this process.
+steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the nine can be placed with `tags:` themselves, as for every type that runs inside this process.
 
-All eight read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
+All nine read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
 
 ### `github-prs`: open pull requests
 
@@ -859,6 +859,87 @@ jobs:
 A get of a `github-issue` resource is refused at load, as for every publisher. The put's version is `{id, number}`: the issue GitHub opened, by its id and by the number people write as `#N`.
 
 **Nothing dedupes.** A put that is retried or run again opens a second issue, exactly as a retried `github-pr-comment` posts a second comment: GitHub has no "open this unless it exists", and a title is no identity, since two children may share one. Guard it in the pipeline, where the identity is known: have the step that writes the list search the repository first and leave out any child already open, for instance one whose body carries the same `Part of #42` marker, so a re-run opens only what is missing.
+
+### `github-pr`: opening or updating a pull request
+
+`github-pr` opens a pull request for a branch that is already pushed, or updates the one that is already open for it. Pushing is the [`git`](#the-built-in-git-type) type's put; this is the step after, so no `gh pr create` is needed. The put looks for an **open** pull request in `source.repo` whose head is `params.head`, and then does one of two things:
+
+- **None is open:** it opens one, from `title_file` and `body_file`, onto `base` (or the repository's default branch), as a draft when `draft` is set, with the `labels` and `assignees` given. Both files are required here, and the put fails naming the one that is missing.
+- **One is open:** it rewrites the title and the description from whichever of the two files were given, and with neither given it changes nothing. `draft`, `labels` and `assignees` are not applied again, so a person's edits to them survive the next put.
+
+Then, when `ready` is set and the pull request is still a draft, it is marked ready for review.
+
+```yaml github=pr
+resources:
+- name: pr
+  type: github-pr
+  source:
+    repo: acme/app
+    token_env: GH_TOKEN              # the default; who opens the pull request
+    endpoint: https://api.github.com # the default
+
+jobs:
+- name: publish
+  plan:
+  - task: describe
+    outputs: [description]
+    run: |
+      echo "Add the widget cache" > description/title
+      printf 'Widgets are now cached.\n' > description/body.md
+  - put: pr
+    inputs: [description]
+    params:
+      head: feature/widget-cache     # already pushed to acme/app
+      base: main                     # unset: the repository's default branch
+      title_file: description/title
+      body_file: description/body.md
+      draft: true
+      labels: [factory]
+      assignees: [octocat]
+  assert:
+    execution:
+    - describe
+    - pr
+    outcome: succeeded
+```
+
+A later put for the same branch is an update, not a second pull request. `ready` is how a pipeline that opens a draft, reviews it, and only then asks people to look, finishes:
+
+```yaml github=pr-ready
+resources:
+- name: pr
+  type: github-pr
+  source:
+    repo: acme/app
+
+jobs:
+- name: publish
+  plan:
+  - put: pr
+    params:
+      head: feature/widget-cache
+      ready: true
+  assert:
+    execution:
+    - pr
+    outcome: succeeded
+```
+
+| `params:` field | meaning |
+|---|---|
+| `head` | required. The branch the pull request is from, already pushed to `source.repo`. A fork's `owner:branch` is refused at load: only branches of the repository itself |
+| `base` | the branch it merges into. Unset, a new pull request targets the repository's default branch. Given for an open pull request, it must be the base it already has, or the put fails: a put never retargets |
+| `title_file` | the title, a path inside the put's inputs. One line, as for `github-issue` |
+| `body_file` | the description, a path inside the put's inputs; an empty file is refused |
+| `draft` | opens a new pull request as a draft. Default false. With `ready` it is a load error: one asks for a draft and the other for none |
+| `labels`, `assignees` | as for `github-issue`, applied when the put opens the pull request |
+| `ready` | when true and the pull request is a draft, marks it ready for review. Default false |
+
+A get of a `github-pr` resource is refused at load, as for every publisher. The put's version is `{number, sha}`: the pull request's number and its head commit as GitHub reports it, the same shape `github-prs` uses, in the `github-pr` resource's own history.
+
+**This put is idempotent, which `github-issue` is not.** A title is no identity, so an issue put that runs twice opens two. A head branch is one: GitHub allows one open pull request per head and base, so a retried or repeated put finds the pull request it opened and updates it. A closed or merged one is not found, so pushing the branch again after a merge and putting opens a new one. A head with several open pull requests (onto different bases) is refused rather than guessed at.
+
+Marking ready is a GraphQL mutation, since REST cannot do it; the token needs the same write access to pull requests as for the rest.
 
 ## The built-in `cron` type
 

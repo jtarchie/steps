@@ -54,6 +54,7 @@ var githubTypes = map[string]githubStages{
 	config.GitHubReactionType:  {out: githubReactionOut},
 	config.GitHubLabelType:     {out: githubLabelOut},
 	config.GitHubIssueType:     {out: githubIssueOut},
+	config.GitHubPRType:        {out: githubPROut},
 	config.GitHubIssuesType:    {check: githubIssuesCheck, in: githubIssuesIn},
 }
 

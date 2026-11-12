@@ -26,6 +26,8 @@ type docGitHubFixture struct {
 	issues        []fakeIssue
 	// reviews are submitted reviews by pull request number.
 	reviews map[int][]fakeReview
+	// branches are the pushed branches a pull request can be opened from, with the commit each is at.
+	branches map[string]string
 }
 
 // docGitHubLogin is the token's own user on every fake, so a fixture can
@@ -177,6 +179,36 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 			}
 		},
 	},
+	"pr": {
+		branches: map[string]string{"feature/widget-cache": "5151515151515151515151515151515151515151"},
+		check: func(t *testing.T, fake *fakeGitHub) {
+			t.Helper()
+
+			opened := fake.openedPRs()
+			if len(opened) != 1 {
+				t.Fatalf("opened %+v, want one pull request", opened)
+			}
+
+			pr := opened[0]
+			if pr.Title != "Add the widget cache" || pr.Body != "Widgets are now cached.\n" || pr.Head != "feature/widget-cache" || pr.Base != "main" || !pr.Draft || !slices.Equal(pr.Labels, []string{"factory"}) || !slices.Equal(pr.Assignees, []string{"octocat"}) {
+				t.Errorf("opened %+v, want the described draft from feature/widget-cache onto main, labelled factory and assigned to octocat", pr)
+			}
+		},
+	},
+	"pr-ready": {
+		prs: []fakePR{{Number: 7, SHA: "7171717171717171717171717171717171717171", Title: "Add the widget cache", Author: "octocat", Base: "main", Head: "feature/widget-cache", Draft: true}},
+		check: func(t *testing.T, fake *fakeGitHub) {
+			t.Helper()
+
+			if fake.prNamed(7).Draft {
+				t.Error("#7 is still a draft, want it marked ready for review")
+			}
+
+			if fake.patchCount() != 0 {
+				t.Errorf("%d edits, want none: no title_file or body_file was given", fake.patchCount())
+			}
+		},
+	},
 	"labeled-issue": {
 		// #5 is bob's and #42 a pull request, both labeled: the author filter and is:issue keep them out.
 		prs: []fakePR{docPR()},
@@ -239,6 +271,10 @@ func (fixture docGitHubFixture) serve(t *testing.T) *fakeGitHub {
 
 	for _, issue := range fixture.issues {
 		fake.addIssue(issue)
+	}
+
+	for branch, sha := range fixture.branches {
+		fake.pushBranch(branch, sha)
 	}
 
 	for number, reviews := range fixture.reviews {
