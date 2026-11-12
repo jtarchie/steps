@@ -262,10 +262,15 @@ func (c *Client) SettleFor(ctx context.Context, id string, bound time.Duration) 
 		Condition: container.WaitConditionNotRunning,
 	})
 
+	return settled(ctx, waitCtx, id, result.Result, result.Error)
+}
+
+// settled has no case for waitCtx ending, deliberately: the wait answers its own context on failed, and returning ahead of it strands the wait on an unbuffered send when the container exits right at the bound.
+func settled(ctx, waitCtx context.Context, id string, exited <-chan container.WaitResponse, failed <-chan error) (died bool, exitCode int, err error) {
 	select {
-	case status := <-result.Result:
+	case status := <-exited:
 		return true, int(status.StatusCode), nil
-	case waitErr := <-result.Error:
+	case waitErr := <-failed:
 		// The bound elapsing is the ANSWER — the container is still up — and
 		// arrives here as the wait's context ending. Anything else is a
 		// daemon that could not be asked, which is not a reason to fail a
@@ -275,12 +280,6 @@ func (c *Client) SettleFor(ctx context.Context, id string, bound time.Duration) 
 		}
 
 		return false, 0, fmt.Errorf("waiting on container %s: %w", id, waitErr)
-	case <-waitCtx.Done():
-		if ctx.Err() != nil {
-			return false, 0, fmt.Errorf("waiting on container %s: %w", id, ctx.Err())
-		}
-
-		return false, 0, nil
 	}
 }
 
