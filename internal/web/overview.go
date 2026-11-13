@@ -186,9 +186,7 @@ func (c jobChip) Red() bool {
 	return c.Held || c.Class == "st-failed" || c.Class == "st-errored"
 }
 
-// jobChips reads a pipeline's jobs through the board's own view of them, so
-// the root and the graph cannot color one job two ways. Every read here is
-// one the pipeline's mark already made, memoized on reads.
+// jobChips reads a pipeline's jobs through the board's own view of them, so the root and the graph cannot color one job two ways. Every read here but the strips' is one the pipeline's mark already made, memoized on reads.
 func jobChips(ctx context.Context, reads *pipelineReads) []jobChip {
 	pipeline := reads.target
 
@@ -280,27 +278,41 @@ func jobHistory(ctx context.Context, pipeline *Pipeline, job string) []store.Run
 	return runs
 }
 
-// redRun is the run that made a red row red, so Latest cannot report a later green run of another job beside a red mark.
+// redRun is the run that made a red row red, so Latest cannot report a later green run of another job beside a red mark. With several red jobs it is the newest, not the first in config order: a days-old failure would otherwise stand as Latest beside a fresh one.
 func redRun(chips []jobChip) (store.RunRow, bool) {
+	var (
+		newest store.RunRow
+		found  bool
+	)
+
 	for _, chip := range chips {
-		if chip.Red() && chip.HasRun {
-			return chip.Run, true
+		if chip.Red() && chip.HasRun && (!found || chip.Run.StartedAt.After(newest.StartedAt)) {
+			newest, found = chip.Run, true
 		}
 	}
 
-	return store.RunRow{}, false
+	return newest, found
 }
 
-// nextFor reads the pipeline's triggers off its config: cron resources become a time through cronNext, the rest are named. A cron that cannot answer is named instead, so the cell never claims manual for a triggered pipeline.
-func nextFor(cfg *config.Config, cronNext CronNext, now time.Time) nextView {
-	var next nextView
+// nextFor reads the pipeline's triggers off its config: cron resources become a time through cronNext, the rest are named. A cron that cannot answer is named instead, so the cell never claims manual for a triggered pipeline. A job the breaker holds is skipped: its automatic triggers are dropped at dispatch, so only a person moves it.
+func nextFor(cfg *config.Config, held map[string]bool, cronNext CronNext, now time.Time) nextView {
+	var (
+		next nextView
+		seen []string
+	)
 
 	for _, job := range cfg.Jobs {
+		if held[job.Name] {
+			continue
+		}
+
 		for _, input := range job.Inputs() {
 			// A passed: input is handed over by an upstream job, not something the pipeline waits on from outside.
-			if !input.Trigger || len(input.Passed) > 0 || slices.Contains(next.On, input.Resource) {
+			if !input.Trigger || len(input.Passed) > 0 || slices.Contains(seen, input.Resource) {
 				continue
 			}
+
+			seen = append(seen, input.Resource)
 
 			at, ok := cronAt(cfg, input.Resource, cronNext, now)
 			if !ok {
@@ -336,7 +348,8 @@ func nextLayout(now, at time.Time) string {
 	switch {
 	case at.Sub(now) < 24*time.Hour && at.YearDay() == now.YearDay():
 		return "15:04"
-	case at.Sub(now) < 7*24*time.Hour:
+	// Same weekday as today but not today is next week's: "Wed 07:00" read on a Wednesday says this morning.
+	case at.Sub(now) < 7*24*time.Hour && at.Weekday() != now.Weekday():
 		return "Mon 15:04"
 	default:
 		return "Jan 2"
@@ -406,11 +419,7 @@ func (s *Server) handleIndex(c *echo.Context) error {
 
 // overviewPipelines describes what this process serves, sorted by slug.
 //
-// Four reads per pipeline rather than one cross-pipeline query: a daemon
-// holds a handful, they need not share a database, and a Reader can only
-// answer what it can name. A read that fails leaves its field zero rather
-// than failing the page — a root that will not render says less about a
-// pipeline than a row missing one column.
+// A few reads per pipeline, plus one per job strip, rather than one cross-pipeline query: a daemon holds a handful, they need not share a database, and a Reader can only answer what it can name. A read that fails leaves its field zero rather than failing the page — a root that will not render says less about a pipeline than a row missing one column.
 func (s *Server) overviewPipelines(c *echo.Context, nav navData) []overviewPipeline {
 	ctx := c.Request().Context()
 	served := s.servedTo(c)
@@ -434,21 +443,27 @@ func (s *Server) overviewPipelines(c *echo.Context, nav navData) []overviewPipel
 			Attention: summary.Attention,
 			InFlight:  summary.InFlight,
 			Chips:     jobChips(ctx, reads),
-			Next:      nextFor(pipeline.Config(), s.cronNext, time.Now()),
 		}
 
-		runs, err := pipeline.Store.ListRuns(ctx, "", 1)
-		if err == nil && len(runs) > 0 {
-			row.Latest, row.HasRun = runs[0], true
-		}
+		heldJob := map[string]bool{}
 
 		held, err := reads.HeldJobs(ctx)
 		if err == nil {
 			row.Held = len(held)
+
+			for _, job := range held {
+				heldJob[job.Name] = true
+			}
 		}
 
-		if run, ok := redRun(row.Chips); ok {
-			row.Latest, row.HasRun = run, true
+		row.Next = nextFor(pipeline.Config(), heldJob, s.cronNext, time.Now())
+
+		row.Latest, row.HasRun = redRun(row.Chips)
+		if !row.HasRun {
+			runs, err := pipeline.Store.ListRuns(ctx, "", 1)
+			if err == nil && len(runs) > 0 {
+				row.Latest, row.HasRun = runs[0], true
+			}
 		}
 
 		out = append(out, row)

@@ -37,7 +37,7 @@
           {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{.Slug}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a> <span class="dim">{{.Latest.JobName}} {{if .Latest.FinishedAt.IsZero}}{{elapsedTag .Latest}}{{else}}{{agoCompact .Latest.StartedAt}}{{end}}</span>
           {{else}}<span class="faint">never ran</span>{{end}}
         </td>
-        <td class="next">{{if or .Paused $.Nav.AllPaused}}<span class="faint">paused</span>{{else}}{{with .Next.At}}{{if not .IsZero}}{{nextTag .}}{{end}}{{end}}{{if .Next.On}}{{if not .Next.At.IsZero}} · {{end}}on {{range $i, $r := .Next.On}}{{if $i}}, {{end}}{{$r}}{{end}}{{else if .Next.At.IsZero}}<span class="faint">manual</span>{{end}}{{end}}</td>
+        <td class="next">{{if or .Paused $.Nav.AllPaused}}<span class="faint">paused</span>{{else}}{{if not .Next.At.IsZero}}{{nextTag .Next.At}}{{end}}{{if .Next.On}}{{if not .Next.At.IsZero}} · {{end}}on {{range $i, $r := .Next.On}}{{if $i}}, {{end}}{{$r}}{{end}}{{else if .Next.At.IsZero}}<span class="faint">manual</span>{{end}}{{end}}</td>
         {{/* Out of the way until the row is hovered or focused: not what the
              root is looked at for, and a click from the pipeline's own page. */}}
         <td class="rowextra">

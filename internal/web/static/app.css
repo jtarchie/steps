@@ -443,7 +443,8 @@ td.faint, .faint { color: var(--faint); }
  * a dashed cell with no glyph: present, since the row says what the pipeline
  * holds, but saying nothing has happened. */
 .jobchips { white-space: normal; }
-.cellrow { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+/* start, not center: a job with a strip under it is taller than one without, and centered their cells sat at two heights. */
+.cellrow { display: flex; flex-wrap: wrap; align-items: start; gap: 3px; }
 /* 10% is as far as a tint goes: the red glyph on a red row's red tint is
    4.6:1 there, and under 4.5 at 12%. Hover outlines rather than darkens, for
    the same reason. */

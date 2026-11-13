@@ -398,9 +398,76 @@ func TestNextLayoutCoarsensWithDistance(t *testing.T) {
 		{now.Add(3 * time.Hour), "12:00"},
 		{now.Add(48 * time.Hour), "Sun 09:00"},
 		{now.Add(10 * 24 * time.Hour), "Nov 23"},
+		// A weekly cron on its own day, after firing: next week's slot named by weekday reads as this morning.
+		{now.Add(7*24*time.Hour - 2*time.Hour), "Nov 20"},
 	} {
 		if got := tc.at.Format(nextLayout(now, tc.at)); got != tc.want {
 			t.Errorf("a fire at %s reads %q, want %q", tc.at, got, tc.want)
 		}
+	}
+}
+
+// TestLatestIsTheNewestRedRun: with two red jobs, the first in config order was Latest however old its failure, so a fresh break read as days old.
+func TestLatestIsTheNewestRedRun(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := lanePipelines(t, nil, "app", twoJobs, "other", oneManualJob)
+	seedRun(t, pipelines[0], "run-old", "build", "failed")
+	seedRun(t, pipelines[0], "run-new", "deploy", "failed")
+
+	_, page := get(t, server, "/")
+
+	if cell := lastRunCell(t, page, "app"); !strings.Contains(cell, `href="/p/app/runs/run-new"`) {
+		t.Errorf("a row with two red jobs does not report the newer failure as Latest:\n%s", cell)
+	}
+}
+
+// TestAHeldJobPromisesNoCronSlot: the breaker drops a held job's automatic triggers at dispatch, so its cron slot is a time nothing will happen at.
+func TestAHeldJobPromisesNoCronSlot(t *testing.T) {
+	t.Parallel()
+
+	var asked []string
+
+	server, pipelines := lanePipelines(t, []Option{WithCronNext(askedAbout(&asked, time.Now().Add(time.Hour)))},
+		"cron", weeklyCron, "other", oneManualJob)
+
+	held, _, err := pipelines[0].Store.RecordJobOutcome(t.Context(), "build", false, 1)
+	if err != nil || !held {
+		t.Fatalf("RecordJobOutcome = %v, %v: the job was not held", held, err)
+	}
+
+	_, page := get(t, server, "/")
+
+	if cell := between(t, pipelineRow(t, page, "cron"), `<td class="next">`, "</td>"); strings.Contains(cell, "<time") || !strings.Contains(cell, "manual") {
+		t.Errorf("a pipeline whose only cron job is held promises a slot:\n%s", cell)
+	}
+}
+
+// TestACronFeedingTwoJobsIsReadOnce: Next is drawn every poll, and a cron named by N jobs was compiled N times to answer one question.
+func TestACronFeedingTwoJobsIsReadOnce(t *testing.T) {
+	t.Parallel()
+
+	var asked []string
+
+	server, _ := lanePipelines(t, []Option{WithCronNext(askedAbout(&asked, time.Now().Add(time.Hour)))}, "cron", `
+resources:
+  - name: weekly
+    type: cron
+    source: {expression: "0 7 * * 0"}
+jobs:
+  - name: a
+    plan:
+      - get: weekly
+        trigger: true
+  - name: b
+    plan:
+      - get: weekly
+        trigger: true
+`, "other", oneManualJob)
+
+	get(t, server, "/")
+
+	if len(asked) != 1 {
+		t.Errorf("the cron reader was asked %d times for one resource: %v", len(asked), asked)
 	}
 }
