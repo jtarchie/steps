@@ -641,3 +641,25 @@ func TestAScrollingTableHoldsItsHiddenWords(t *testing.T) {
 		t.Error("a .tablewrap is not the containing block of the hidden words inside it")
 	}
 }
+
+// TestTheRootStacksOnATablet: three ten-slot lanes, Latest, Next and the Pause column needed 907px in a 711px box at 768 and still 883 in 863 at 920, so the table scrolled sideways on every tablet. The stacked row already read well on a phone; it now starts where the table stops fitting.
+func TestTheRootStacksOnATablet(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "app", "infra")
+
+	_, css := get(t, server, "/static/app.css")
+
+	stack := strings.Index(css, ".pipelines tr { display: grid;")
+	if stack < 0 {
+		t.Fatal("app.css no longer stacks the root's rows")
+	}
+
+	query := css[strings.LastIndex(css[:stack], "@media"):stack]
+
+	var width int
+	_, err := fmt.Sscanf(query, "@media (max-width: %dpx)", &width)
+	if err != nil || width < 960 {
+		t.Errorf("the root's rows stack only at %q, want up to at least 960px", query[:min(len(query), 40)])
+	}
+}

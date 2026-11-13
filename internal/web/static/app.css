@@ -507,14 +507,16 @@ td.faint, .faint { color: var(--faint); }
 @media (hover: none) {
   .pipelines .rowextra { opacity: 1; }
 }
-/* On a phone a row stacks rather than scrolls: the name, the cells under
+/* Narrow, a row stacks rather than scrolls: the name, the cells under
    it, the last run under those, then pause — shown, since a hidden line
    here would only be a gap. The last run used to share the name's line, and
    at 375px a name beside "failed 17m 34s ago" came to 416px in a 341px box:
    the table scrolled sideways and clipped the time. One fact per line needs
    no truncation. The header row says nothing a stacked row does not, so it
-   is kept for assistive tech only. */
-@media (max-width: 640px) {
+   is kept for assistive tech only. Up to a tablet, not just a phone: three
+   ten-slot lanes beside Latest, Next and Pause need ~880px of table, which
+   a window has from about 940px. */
+@media (max-width: 960px) {
   .pipelines thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   .pipelines tr { display: grid; grid-template-columns: minmax(0, 1fr); padding: 8px 14px; border-bottom: 1px solid var(--line-soft); }
   .pipelines tbody tr:last-child { border-bottom: 0; }
