@@ -9,20 +9,21 @@ import (
 	"strings"
 
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// RunsOutputCmd prints a step's output whole: the run page links it, and a script or an agent reading a failed gate has no browser.
+// RunsOutputCmd prints a step's output whole: the run page links it, and a script or an agent reading a failed gate has no browser. With no step named it answers which steps recorded output, for the same audience — someone holding a run id and not the names under it.
 type RunsOutputCmd struct {
 	ReadFlags `embed:""`
 	RunID     string `arg:""   help:"the run the step belongs to"`
-	Step      string `arg:""   help:"the step's name; every output it recorded is printed, oldest first"`
+	Step      string `arg:""   help:"the step's name; every output it recorded is printed, oldest first (leave it off to list the steps that recorded output)" optional:""`
 }
 
 // outputBatch is how many events one read asks for, as a follow's is.
 const outputBatch = 500
 
-// Run prints every output the named step recorded in the run.
+// Run prints every output the named step recorded in the run, or the steps that recorded one.
 func (r *RunsOutputCmd) Run() error {
 	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
 		return r.print(ctx, st)
@@ -41,6 +42,10 @@ func (r *RunsOutputCmd) print(ctx context.Context, st interface {
 
 	if len(names) == 0 {
 		return fmt.Errorf("run %q of pipeline %q recorded no step output", r.RunID, st.Pipeline())
+	}
+
+	if r.Step == "" {
+		return printStepNames(names)
 	}
 
 	if len(outputs) == 0 {
@@ -91,6 +96,18 @@ func (r *RunsOutputCmd) recorded(ctx context.Context, st store.Events) ([]store.
 			return outputs, names, nil
 		}
 	}
+}
+
+// printStepNames lists the steps that recorded output, in the store's seq order — what the run recorded, first to last — and scrubbed, because a step's name is pipeline-authored text going onto an operator's terminal. Not elided, unlike a table cell: a line's whole point is being passable back as <step>.
+func printStepNames(names []string) error {
+	for _, name := range names {
+		_, err := fmt.Fprintln(os.Stdout, runview.Scrub(name))
+		if err != nil {
+			return fmt.Errorf("could not write the step names: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // printOutput writes the stored whole when the record elided it, and the record otherwise: a reaped or refused store leaves only the record.
