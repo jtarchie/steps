@@ -15,6 +15,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
@@ -488,6 +489,49 @@ jobs:
 	})
 	if err != nil || got != "chatty\nquiet\n" {
 		t.Errorf("runs output with no step = %q, %v; want the steps that recorded output, one per line", got, err)
+	}
+}
+
+// An id nobody recorded is not a run that printed nothing: the sentence names the run and pipeline the way `runs steps` does, under both spellings of the command.
+func TestRunsOutputWithAnUnknownRunSaysSo(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: chatty
+    run: echo first
+`)
+
+	err := runSilently(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{{"runs", "output", "NOSUCHRUN"}, {"runs", "output", "NOSUCHRUN", "chatty"}} {
+		out, err := stdoutOf(t, func() error {
+			return cli.Run(append(args, readArgs(path)...))
+		})
+		if err == nil {
+			t.Errorf("steps %s = nil, want an unknown run refused", strings.Join(args, " "))
+
+			continue
+		}
+
+		if got := outcome.ExitCode(err); got != outcome.ExitErrored {
+			t.Errorf("steps %s exited %d, want %d: an unknown id is not a red build", strings.Join(args, " "), got, outcome.ExitErrored)
+		}
+
+		if !strings.Contains(err.Error(), `no run "NOSUCHRUN" was recorded`) {
+			t.Errorf("steps %s = %v, want the run named unrecorded", strings.Join(args, " "), err)
+		}
+
+		if strings.Contains(err.Error(), "recorded no step output") {
+			t.Errorf("steps %s = %v, want the unknown run said so, not a run that printed nothing", strings.Join(args, " "), err)
+		}
+
+		if out != "" {
+			t.Errorf("steps %s printed %q to stdout, want nothing", strings.Join(args, " "), out)
+		}
 	}
 }
 
