@@ -479,6 +479,7 @@ func TestDODropletWithoutDockerIsRefused(t *testing.T) {
 
 	fake := newFakeDO(t)
 	resolved, machine := launchedMachine(t)
+	doReadyTimeout = 300 * time.Millisecond
 
 	_, err := doSSHClient(context.Background(), resolved)
 	if err == nil || !strings.Contains(err.Error(), "docker never answered") {
@@ -487,6 +488,65 @@ func TestDODropletWithoutDockerIsRefused(t *testing.T) {
 
 	if machine.ready.Load() || fake.dials() == 0 {
 		t.Errorf("ready = %v after %d dials, want a droplet whose docker never answered left un-ready", machine.ready.Load(), fake.dials())
+	}
+}
+
+// DigitalOcean expires the root password of a keyless droplet, and until cloud-init's last step every login is answered with a refusal instead of the command: the wait must outlast that on fresh connections.
+func TestDODockerWaitReconnectsPastARefusedLogin(t *testing.T) {
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	mustWrite(t, filepath.Join(bin, "docker"), "#!/bin/sh\necho x >> "+calls+"\n[ \"$(/usr/bin/wc -l < "+calls+")\" -ge 5 ] && exit 0\necho 'WARNING: Your password has expired.' >&2\nexit 1\n")
+	mustWrite(t, filepath.Join(bin, "sleep"), "#!/bin/sh\nexit 0\n")
+
+	for _, name := range []string{"docker", "sleep"} {
+		err := os.Chmod(filepath.Join(bin, name), 0o700) //nolint:gosec // a test stub on PATH
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Setenv("PATH", bin+":/bin:/usr/bin")
+
+	fake := newFakeDO(t)
+	resolved, machine := launchedMachine(t)
+	// One try a session, so each refusal costs a connection, as an expired login does.
+	doReadyTimeout = 2 * time.Second
+
+	client, err := doSSHClient(context.Background(), resolved)
+	if err != nil {
+		t.Fatalf("doSSHClient = %v, want the refusals waited out", err)
+	}
+
+	_ = client.Close()
+
+	if !machine.ready.Load() || fake.dials() < 3 {
+		t.Errorf("ready = %v after %d dials, want fresh connections until docker answered", machine.ready.Load(), fake.dials())
+	}
+}
+
+// Without this the droplet refuses every command a minute into its life: sshd will not run one for an account whose password has expired.
+func TestDOUserDataClearsTheExpiredRootPassword(t *testing.T) {
+	t.Parallel()
+
+	_, userData, err := doUserData()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := parseCloudConfig(userData)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(config.RunCmd) != 1 || !slices.Equal(config.RunCmd[0], []string{"usermod", "-p", "*", "root"}) {
+		t.Errorf("runcmd = %v, want the root password replaced with one that cannot expire a login", config.RunCmd)
+	}
+}
+
+// ufw on the Docker 1-Click drops a source at its sixth new connection in 30s, and stays shut while that source keeps trying.
+func TestDOBootPollStaysUnderTheImageRateLimit(t *testing.T) {
+	if perWindow := int(30 * time.Second / doReadyPoll); perWindow >= 6 {
+		t.Errorf("a %s poll opens %d connections in 30s, want fewer than ufw's six", doReadyPoll, perWindow)
 	}
 }
 

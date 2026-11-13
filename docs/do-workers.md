@@ -29,8 +29,9 @@ your laptop ──ssh :22──▶ droplet's public IPv4 ──▶ sshd
 1. steps mints a fresh **host key** for the droplet — the key a server proves its identity with over SSH — and writes it into the create request's `user_data` as cloud-init configuration, together with the public half of this process's login key. No key is uploaded to your DigitalOcean account.
 2. It creates the droplet, waits until it is `active` **and** has a public IPv4 address (it is assigned after the create answers), and connects as `root`.
 3. The connection accepts **only the host key steps minted**. A droplet that has just booted still offers its image's own host key until cloud-init swaps it, so steps refuses that and retries for up to four minutes; a key it never minted is never accepted.
-4. Every placed step runs in a container on the droplet's docker daemon, reached over the ssh connection exactly as `docker+ssh://` reaches one.
-5. When the job ends the droplet is deleted, or kept for `?idle=`.
+4. It waits for docker, reconnecting every ten seconds. DigitalOcean gives a droplet created without an account key a root password that has already **expired**, and sshd refuses every command to an expired account, so the same `user_data` ends boot with `usermod -p '*' root`: no password works, and a key login is no longer turned away. Ten seconds is deliberate: the Docker 1-Click's `ufw` blocks an address that opens six connections to port 22 inside thirty seconds.
+5. Every placed step runs in a container on the droplet's docker daemon, reached over the ssh connection exactly as `docker+ssh://` reaches one.
+6. When the job ends the droplet is deleted, or kept for `?idle=`.
 
 Two honest differences from the other clouds:
 

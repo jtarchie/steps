@@ -53,8 +53,14 @@ var (
 		return (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", address)
 	}
 	doReadyTimeout = 4 * time.Minute
-	doReadyPoll    = 5 * time.Second
+	// The Docker 1-Click's ufw drops a source that opens six connections to port 22 inside 30s, and a 5s poll is exactly six.
+	doReadyPoll = 10 * time.Second
 )
+
+// doReadyMark is what the docker wait prints, spelled so no login banner can contain it.
+const doReadyMark = "steps-docker-ready"
+
+var errDockerNotReady = errors.New("the docker wait ended without docker")
 
 // doMachine is what this process knows about a droplet it launched: where it answers, which host key it was given, and whether a dial has ever got through.
 type doMachine struct {
@@ -419,6 +425,8 @@ type doCloudConfig struct {
 	Authorized   []string `json:"ssh_authorized_keys"`
 	DisableRoot  bool     `json:"disable_root"`
 	PasswordAuth bool     `json:"ssh_pwauth"`
+	// RunCmd is cloud-init's last step: DigitalOcean expires the root password of a droplet created with no account key, and sshd refuses every command to an expired account, key or not.
+	RunCmd [][]string `json:"runcmd"`
 }
 
 // doUserData mints the droplet's host key and writes it, with this process's login key, into the cloud-config that installs both. Password login is turned off, because DigitalOcean mails a root password for a droplet created with no account key.
@@ -443,7 +451,7 @@ func doUserData() (ssh.PublicKey, string, error) {
 		return nil, "", err
 	}
 
-	config := doCloudConfig{DeleteKeys: true, GenKeyTypes: []string{}}
+	config := doCloudConfig{DeleteKeys: true, GenKeyTypes: []string{}, RunCmd: [][]string{{"usermod", "-p", "*", "root"}}}
 	config.SSHKeys.ED25519Private = string(pem.EncodeToMemory(block))
 	config.SSHKeys.ED25519Public = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostKey)))
 	config.Authorized = []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))}
@@ -598,7 +606,7 @@ func doReadyScript() string {
 	tries := strconv.Itoa(max(1, int(doReadyTimeout/(2*time.Second))))
 
 	return `i=0; until docker info >/dev/null 2>&1; do i=$((i + 1)); [ "$i" -ge ` + tries + ` ] && break; sleep 2; done
-docker info >/dev/null 2>&1 && echo ready`
+docker info >/dev/null 2>&1 && echo ` + doReadyMark
 }
 
 // doSSHClient reaches a launched droplet's sshd, pinned to the host key its user_data carried. Until the first dial gets through, every failure is waited out inside doReadyTimeout — a booting droplet refuses connections and, until cloud-init swaps it, offers the image's own host key, which is refused every time and never accepted.
@@ -627,36 +635,68 @@ func doSSHClient(ctx context.Context, worker Worker) (*ssh.Client, error) {
 		return doConnect(ctx, worker, machine, config)
 	}
 
-	client, err := doAwaitBoot(ctx, worker, machine, config)
-	if err != nil {
-		return nil, err
-	}
+	return doAwaitDocker(ctx, worker, machine, config)
+}
 
+// doAwaitDocker reconnects until docker answers: a login that lands between the password's expiry and cloud-init's last step is refused, and that connection stays refused for as long as it lives.
+func doAwaitDocker(ctx context.Context, worker Worker, machine *doMachine, config *ssh.ClientConfig) (*ssh.Client, error) {
+	deadline := time.Now().Add(doReadyTimeout)
+
+	for {
+		client, err := doAwaitBoot(ctx, worker, machine, config)
+		if err != nil {
+			return nil, err
+		}
+
+		out, err := doDockerReady(ctx, client)
+		if err == nil {
+			machine.ready.Store(true)
+
+			return client, nil
+		}
+
+		_ = client.Close()
+
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("waiting for docker on droplet %s for %q: %w", worker.Instance, worker.URL, context.Cause(ctx))
+		}
+
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("%w %q: docker never answered on droplet %s — the image must ship docker, as the default %s does (last answer: %s)", ErrWorker, worker.URL, worker.Instance, doDefaultImage, cmp.Or(lastLine(out), err.Error()))
+		}
+
+		select {
+		case <-time.After(doReadyPoll):
+		case <-ctx.Done():
+		}
+	}
+}
+
+// doDockerReady runs the docker wait in one session and hands back what it printed, the only account of why a droplet refused.
+func doDockerReady(ctx context.Context, client *ssh.Client) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
-		_ = client.Close()
-
-		return nil, fmt.Errorf("worker %q: %w", worker.URL, err)
+		return "", fmt.Errorf("opening a session: %w", err)
 	}
 
-	// session.Output takes no context: closing the client is what ends a wait the job no longer wants.
+	// CombinedOutput takes no context: closing the client is what ends a wait the job no longer wants.
 	stop := context.AfterFunc(ctx, func() { _ = client.Close() })
-	out, _ := session.Output(doReadyScript())
+	out, err := session.CombinedOutput(doReadyScript())
 	_ = session.Close()
 
-	if !stop() {
-		return nil, fmt.Errorf("waiting for docker on droplet %s for %q: %w", worker.Instance, worker.URL, context.Cause(ctx))
+	stop()
+
+	if strings.Contains(string(out), doReadyMark) {
+		return string(out), nil
 	}
 
-	if !strings.Contains(string(out), "ready") {
-		_ = client.Close()
+	return string(out), cmp.Or(err, errDockerNotReady)
+}
 
-		return nil, fmt.Errorf("%w %q: docker never answered on droplet %s — the image must ship docker, as the default %s does", ErrWorker, worker.URL, worker.Instance, doDefaultImage)
-	}
+func lastLine(out string) string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
 
-	machine.ready.Store(true)
-
-	return client, nil
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 func doAwaitBoot(ctx context.Context, worker Worker, machine *doMachine, config *ssh.ClientConfig) (*ssh.Client, error) {
