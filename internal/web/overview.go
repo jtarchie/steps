@@ -103,11 +103,9 @@ const stripJobs = 4
 // laneRuns is how many of a job's runs its strip shows.
 const laneRuns = 10
 
-// Red is a row that wants a person: a job failed, the breaker holds one, or
-// the daemon cannot serve it. Read off the mark, so the stripe agrees with the
-// glyph beside it; a paused pipeline that is also failing is red, as its mark is.
+// Red is a row that wants a person: a job failed or errored, the breaker holds one, or the daemon cannot serve it. Read off the mark with the header tally's own >= discFailed, so the stripe, the glyph and the "failing" count agree; a paused pipeline that is also failing is red, as its mark is.
 func (p overviewPipeline) Red() bool {
-	return p.Broken != "" || p.Held > 0 || p.Mark.Disc == discFailed
+	return p.Broken != "" || p.Held > 0 || p.Mark.Disc >= discFailed
 }
 
 // RedWords is what the root's live region says of a red row: the jobs that

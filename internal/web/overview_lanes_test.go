@@ -471,3 +471,21 @@ jobs:
 		t.Errorf("the cron reader was asked %d times for one resource: %v", len(asked), asked)
 	}
 }
+
+// TestAnErroredRowIsRed: the header counted an errored pipeline as failing while its row had no stripe and the live region never announced it, so the one count that said "look" pointed at a row that did not.
+func TestAnErroredRowIsRed(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := lanePipelines(t, nil, "app", oneManualJob, "other", oneManualJob)
+	seedRun(t, pipelines[0], "run-err", "audit", "errored")
+
+	_, page := get(t, server, "/")
+
+	if row := pipelineRow(t, page, "app"); !strings.Contains(row, `<tr class="red" data-slug="app">`) {
+		t.Errorf("an errored pipeline is not a red row:\n%s", row)
+	}
+
+	if news := between(t, page, `id="red-news"`, `</div>`); !strings.Contains(news, `<p id="red-app">app is failing: audit errored</p>`) {
+		t.Errorf("an errored pipeline has no line in the live region:\n%s", news)
+	}
+}
