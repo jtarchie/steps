@@ -186,6 +186,11 @@ tasks:
     cmds:
       - STEPS_BENCH_ARTIFACTS=1 go test ./e2e -run TestBenchArtifacts -count=1 -v -timeout 3h
 
+  bench:default-path:
+    desc: "Opt-in (steps#246): an untagged image: step through today's bind mount against the same step on a local: worker's volumes, first and again, reading a tree and rewriting one file of it as a declared output. FILES (default 100000) and FILE_BYTES (default 10240) size the tree. TMPDIR must be a path the docker VM shares, or the bind side reads an empty directory."
+    cmds:
+      - STEPS_BENCH_DEFAULT_PATH=1 go test ./e2e -run TestBenchDefaultPath -count=1 -v -timeout 2h
+
   cover-diff:
     desc: "Advisory: which changed lines (vs BASE, default HEAD) did no test execute. Born from a measured failure: a whole eviction layer landed uncovered and its deletion shipped green. Run before committing; triage every line it names — add the test, or know exactly why not."
     cmds:
