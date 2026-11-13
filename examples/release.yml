@@ -101,6 +101,7 @@ tasks:
     cat > /tmp/asuser.sh <<'INNER'
     set -e
     export HOME=/home/tester PATH="/usr/local/go/bin:/home/tester/go/bin:/usr/local/bin:$PATH"
+    export GOMEMLIMIT=6GiB   # golangci-lint took 9 GiB in 40s on a 12 GiB worker with no swap, which stopped answering ssh; a soft limit trades that for GC time
     # Skipped in this container only (the laptop's `task` runs them): the probe test rm's /usr/bin/find, which a
     # non-root container user cannot; the two ssh tests time TERM/KILL against a process tree dind changes; the
     # keep-workspace test hangs to the 10m timeout here and takes a whole e2e shard with it.
