@@ -266,6 +266,8 @@ type capturedRequest struct {
 	Tools      []capturedTool    `json:"tools"`
 	ToolChoice json.RawMessage   `json:"tool_choice"`
 	Raw        string            `json:"-"`
+	// Authorization is the header the request carried: which credential the model client was handed.
+	Authorization string `json:"-"`
 }
 
 // toolNames returns the names of every tool offered on this request, in
@@ -512,6 +514,7 @@ func (f *fakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 	req := capturedRequest{Raw: string(data)}
 
 	err = json.Unmarshal(data, &req)
+	req.Authorization = r.Header.Get("Authorization")
 	if err != nil {
 		f.t.Errorf("fake provider: request is not valid JSON: %v\n%s", err, data)
 		http.Error(w, "unparseable body", http.StatusBadRequest)

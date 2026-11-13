@@ -55,6 +55,32 @@ jobs:
     messages: [Label the open issues with gh.]
 ```
 
+The model's own key is a second, separate map, under the agent's `source:`.
+`api_key_env:` names its one key, and the value goes to the model's HTTP client
+and nowhere else: not to `run_shell`, not to a custom tool, so a model can
+never use its own key. A `fallback:` source takes its own:
+
+```yaml noexec=secrets
+agents:
+- name: reviewer
+  source:
+    model: openrouter/deepseek/deepseek-v4.1-flash
+    api_key_env: OPENROUTER_API_KEY
+    secrets:
+      OPENROUTER_API_KEY: ((ci:openrouter_api_key))
+  fallback:
+  - source:
+      model: openai/gpt-4.1
+      secrets:
+        OPENAI_API_KEY: ((ci:openai_api_key))
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    messages: [Review the diff.]
+```
+
 A resource takes it too. Its `check`, `in` and `out` see the variables, an
 `expr:` type's `env()` reads them by name, and a native type's `token_env:` may
 name one:
@@ -78,12 +104,20 @@ jobs:
 
 ## Where a reference may appear
 
-Only in a `secrets:` map, on a `tasks:` entry, an `agents:` entry, a
-`resources:` entry, or a task or agent step. A get or put step has no
+Only in a `secrets:` map, on a `tasks:` entry, an `agents:` entry, an agent's
+`source:` (and each `fallback:` source), a `resources:` entry, or a task or
+agent step. A get or put step has no
 `secrets:` of its own; its resource's apply. Each key is the
 environment variable the step's commands see; each value is exactly one
 `((source:name))`. A step's own `secrets:` replaces its task's, the way `env:`
 does. A name may not be in both `env:` and `secrets:`.
+
+A `source:`'s map is the exception to "the step's commands see it": it holds
+exactly one key, the one `api_key_env:` names, and only the model client reads
+it. `api_key_env:` may be left out where the provider has a default variable
+(`openrouter/` reads `OPENROUTER_API_KEY`) and the map's key is that name. A
+second key is a load error, since nothing would read it; a tool's credential
+goes in the agent's own `secrets:`.
 
 A reference anywhere else is a load error: written into `run:` it would be
 hashed, stored and put on a command line. That includes a resource's
@@ -94,8 +128,14 @@ hashed, stored and put on a command line. That includes a resource's
 own tools and shows their output to its own model, which steps cannot scrub. It
 is refused on an agent used as a `fix:` agent or a sub-agent too: only an agent
 step resolves secrets, and a silently missing variable is worse than a load
-error. An agent's `api_key_env:` still names a variable in the daemon's own
-environment, not a `secrets:` key.
+error. Neither applies to `source.secrets:`: a `fix:` agent and a sub-agent
+each need a model key, and it never reaches a tool. It is refused on a CLI
+source for a different reason: a CLI's key is handed to the subprocess's
+environment, where the hooks of a `settings: project` repo run. And it is
+refused on an agent an `mcp_exports:` entry reaches, directly or through a
+sub-agent, because an export server has no run to resolve it in. Without
+`source.secrets:`, `api_key_env:` names a variable in the daemon's own
+environment, as before.
 
 A bare `((x))` is always a var, never a secret. Whether a reference is a secret
 is decided by its text alone, before anything is fetched. Concourse differs here:
@@ -161,13 +201,17 @@ auth and no roles, every signed-in person is admin and can set any pipeline.
 ## When a secret is fetched
 
 Lazily, by the step that needs it, after the step's worker is acquired and
-before its first command. A branch that never runs fetches nothing. Each run
+before its first command. A branch that never runs fetches nothing. **A model's
+key (`source.secrets:`) is the exception**: preflight probes every agent a job
+names before the job's first step, so the key is fetched then, even for an
+agent on a branch that never runs. Each run
 asks the source once per reference, so a step re-placed after a spot reclaim
 reuses the value instead of prompting again. A failed lookup is not remembered,
 so a retried attempt asks again.
 
 `steps pipeline set` checks that every source a pipeline names is configured,
-and never runs one. `steps run` and `steps test` refuse a pipeline with a
+and never runs one. It does not ask the daemon's environment for a model key
+that `source.secrets:` holds. `steps run` and `steps test` refuse a pipeline with a
 reference unless given the daemon's config file with `--config` (see [Running
 from the CLI](#running-from-the-cli)); `steps validate` accepts it.
 
@@ -184,7 +228,7 @@ ok: pipeline.yml (1 job(s), 0 resource(s), 0 agent(s)) — every model and MCP s
 Since resolution is lazy, this is the one way to learn that an `op signin` has
 lapsed before a job is half paid for, and how an admin sees a name fall
 through to the shared folder. A reference no path has is reported with the
-paths tried. `--job` narrows it to that job's references; a polled resource's
+paths tried. A model whose key is a reference is probed with the resolved key. `--job` narrows it to that job's references; a polled resource's
 is no job's. Run it on the daemon's machine as the daemon's user, since the
 source commands run as whoever invokes it.
 
@@ -193,6 +237,13 @@ cached for one `--interval`, so a `trigger: true` resource does not prompt every
 poll and a rotated credential reaches the poller within one interval. A check
 whose resource has secrets never shares its answer with another pipeline's
 identical check, since the same name can resolve to a different credential.
+
+**The poller's preflight resolves a model's key with no job.** Before the
+first poll of a pipeline with a `trigger: true` resource, `steps web` probes
+every model its jobs name. There is no job then, so a lookup path or `when:` that uses `job` sees it empty for
+that one lookup; scope a model key's path on `pipeline` if the poller should
+find it. A model's probe is cached per pipeline and reference, so one
+pipeline's answer never vouches for another's key.
 
 ## Running from the CLI
 
@@ -228,7 +279,8 @@ steps test --config steps.yml pipeline.yml
   explicit flag should start.
 - The restrictions are unchanged: `secrets:` is still refused on a CLI agent,
   a `fix:` agent and a sub-agent, and a `fix:` agent still does not receive the
-  task's secrets.
+  task's secrets. `source.secrets:` resolves here as on the daemon, for a
+  `fix:` agent and a sub-agent too.
 
 Everything under [Where the value goes](#where-the-value-goes) holds for a
 CLI run, and the terminal is covered too: a task's or an `in:`/`out:`
@@ -246,12 +298,16 @@ anyway does so with whatever credentials that user's own environment has.
 
 ## Where the value goes
 
-Into the step's environment, and nowhere else steps writes:
+Into the step's environment, and nowhere else steps writes. A model's key
+(`source.secrets:`) goes to the request's `Authorization` header instead, and
+into no environment at all:
 
 - **Never hashed.** A task or agent step keys on the reference, so rotating a
   credential re-runs nothing, and neither does editing a lookup path. A
   resource keys on the secret's name only, like `env:`: which credential answers
-  decides whether a version can be fetched, not what the version is.
+  decides whether a version can be fetched, not what the version is. A
+  `source.secrets:` map is not keyed at all, like `api_key_env:`: pointing an
+  agent at a different key re-runs nothing either.
 - **Never in a container's configuration.** On a docker-backed worker the value
   is passed with each command, not when the container is created, so it is not
   in `docker inspect` or on the daemon's disk, even though the container is kept
@@ -267,6 +323,9 @@ result an agent's model is sent, and in a failed check's recorded error. A value
 multi-line value (a PEM key) is masked on its own. A value shorter than 8 bytes
 is masked too, with a warning in the daemon's log, since it may also mask
 ordinary text.
+
+A model's key is masked the same way once resolved, which a key read from the
+daemon's environment is not.
 
 A sub-agent does not receive its parent step's secrets either.
 A `fix:` agent does not receive the task's secrets. Its tools, including its

@@ -486,7 +486,7 @@ func probeModel(ctx context.Context, ri config.ResolvedInvocation, timeout time.
 		return probeCLI(ctx, ri, timeout)
 	}
 
-	apiKey, err := llmclient.LookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
+	apiKey, err := apiKeyFor(ctx, ri)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

@@ -1058,10 +1058,19 @@
         },
         "api_key_env": {
           "type": "string",
-          "description": "Environment variable holding the key. Never the key itself."
+          "description": "Environment variable holding the key, or the one key of this source's secrets:. Never the key itself."
         },
         "string_tool_choice": {
           "type": "boolean"
+        },
+        "secrets": {
+          "type": "object",
+          "maxProperties": 1,
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^\\(\\([a-z0-9_-]+:[A-Za-z0-9_./-]+\\)\\)$"
+          },
+          "description": "The model's key as NAME: ((source:name)), where NAME is what api_key_env names (or the provider's default variable). Resolved from the daemon's secret sources and handed to the model client only, never to the agent's tools. Hosted sources only."
         }
       }
     },

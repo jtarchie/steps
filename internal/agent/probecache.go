@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -98,7 +99,7 @@ func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, setting
 	// rotation shape (see nextViableFallback), and without this the fallback
 	// read the PRIMARY's cached failure: a source that was serving runs
 	// looked dead to reconsiderPin and to failOver alike.
-	key := "model|" + ri.BaseURL + "|" + ri.ModelName + "|" + ri.APIKeyEnv
+	key := "model|" + ri.BaseURL + "|" + ri.ModelName + "|" + ri.APIKeyEnv + keyProbeScope(ctx, ri)
 	if ri.CLI != "" {
 		key = cliProbeKey(ri)
 	}
@@ -120,7 +121,7 @@ func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, setting
 	// describeProbeError renders both identically, so without this an
 	// aborted build left a healthy model looking dead for the whole cache
 	// window.
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || errors.Is(err, errKeyLookup) {
 		return now, err
 	}
 

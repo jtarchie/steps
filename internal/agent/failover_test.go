@@ -148,7 +148,7 @@ func TestNextViableFallbackSkipsAMissingCredential(t *testing.T) {
 
 	var ri config.ResolvedInvocation
 
-	next, apiKey, nextIndex, ok := nextViableFallback(agent, ri, -1)
+	next, apiKey, nextIndex, ok := nextViableFallback(t.Context(), agent, ri, -1)
 	if !ok {
 		t.Fatal("nextViableFallback(-1) = false, want true — index 1's credential is present, so it must not be walled off by index 0's missing one")
 	}
@@ -169,7 +169,7 @@ func TestNextViableFallbackSkipsAMissingCredential(t *testing.T) {
 		},
 	}
 
-	_, _, _, ok = nextViableFallback(agentAllMissing, ri, -1)
+	_, _, _, ok = nextViableFallback(t.Context(), agentAllMissing, ri, -1)
 	if ok {
 		t.Error("nextViableFallback with every candidate's credential missing = true, want false")
 	}

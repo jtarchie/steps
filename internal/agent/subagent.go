@@ -74,7 +74,7 @@ func buildSubAgentTool(ctx context.Context, cfg *config.Config, spec config.Tool
 		return nil, nil, nil, fmt.Errorf("sub-agent %q: %w", spec.Agent, err)
 	}
 
-	apiKey, err := llmclient.LookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
+	apiKey, err := apiKeyFor(ctx, ri)
 	if err != nil {
 		closeAll(childClosers)
 

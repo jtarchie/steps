@@ -166,6 +166,8 @@ type ResolvedInvocation struct {
 	ModelName   string
 	APIKeyEnv   string
 	RequiresKey bool
+	// APIKeySecret is the ((source:name)) reference the key resolves through; "" reads APIKeyEnv from the daemon's environment.
+	APIKeySecret string
 	// CLI, when non-empty, names the coding-agent CLI that runs this
 	// invocation as a subprocess instead of an HTTP conversation (see
 	// cliagent.go). BaseURL is empty in that case, and ModelName is the model
@@ -361,6 +363,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		ModelName:            target.ModelName,
 		APIKeyEnv:            target.APIKeyEnv,
 		RequiresKey:          target.RequiresKey,
+		APIKeySecret:         target.APIKeySecret,
 		CLI:                  target.CLI,
 		CLISettings:          agent.Settings,
 		Persona:              agent.System,
@@ -423,6 +426,7 @@ func (ri ResolvedInvocation) WithSource(source AgentSource, agent *Agent) (Resol
 	ri.ModelName = target.ModelName
 	ri.APIKeyEnv = target.APIKeyEnv
 	ri.RequiresKey = target.RequiresKey
+	ri.APIKeySecret = target.APIKeySecret
 	ri.StringOnlyToolChoice = target.StringOnlyToolChoice
 	// Set AND cleared: failing over between a CLI and a hosted provider in
 	// either direction has to change which machinery runs the conversation.

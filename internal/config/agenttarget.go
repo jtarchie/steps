@@ -39,10 +39,12 @@ var agentProviders = map[string]agentProvider{
 // CLI was the first — reaches every caller by name instead of by counting
 // blanks at five call sites.
 type agentTarget struct {
-	BaseURL              string
-	ModelName            string
-	APIKeyEnv            string
-	RequiresKey          bool
+	BaseURL     string
+	ModelName   string
+	APIKeyEnv   string
+	RequiresKey bool
+	// APIKeySecret is the ((source:name)) reference behind APIKeyEnv; "" reads the daemon's environment.
+	APIKeySecret         string
 	StringOnlyToolChoice bool
 	// CLI names a cliProviders entry when this source runs a coding-agent CLI
 	// instead of reaching an endpoint; "" for every HTTP source. See
@@ -85,6 +87,7 @@ func resolveAgentTarget(source AgentSource) (agentTarget, error) {
 		ModelName:            source.Model,
 		APIKeyEnv:            source.APIKeyEnv,
 		RequiresKey:          source.APIKeyEnv != "",
+		APIKeySecret:         source.Secrets[source.APIKeyEnv],
 		StringOnlyToolChoice: stringToolChoice(source, false),
 	}, nil
 }
@@ -107,6 +110,7 @@ func providerTarget(source AgentSource, provider agentProvider, modelName string
 		ModelName:            modelName,
 		APIKeyEnv:            apiKeyEnv,
 		RequiresKey:          provider.requiresKey || source.APIKeyEnv != "",
+		APIKeySecret:         source.Secrets[apiKeyEnv],
 		StringOnlyToolChoice: stringToolChoice(source, !provider.requiresKey),
 	}
 }

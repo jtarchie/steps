@@ -300,6 +300,7 @@ func keyProbes() []keyProbe {
 		"Settings":                "source: refused at load on a hosted agent (validateCLIAgents), and keyed as cli_settings on a CLI one — the 'Agent/cli' probe holds it to that. This probe's agent is hosted, which is why an earlier reading of it wrongly reported settings: as outside the key",
 		"Source.StringToolChoice": "source: config.AgentSource — how one request is spelled for a server that cannot parse the precise form, not what is asked",
 		"Source.APIKeyEnv":        secretNamed,
+		"Source.Secrets":          secretNamed,
 		"File":                    loadedInto, "SystemFile": loadedInto, "Description": loadedInto,
 		"Caches": "source: config.TaskCache — a speed-up only, never hashed, or a warm cache would make identical work look different",
 	}

@@ -1222,6 +1222,40 @@ Things worth knowing:
 - **A sub-agent has its own budget**, from its own `agents:` entry; its spend rolls into the job total.
 - **Tokens only, deliberately.** A money ceiling would need a per-model price table that goes stale every time any provider changes its rates. (CLI agents are the exception — see below.)
 
+## The model's key: `api_key_env:` and `source.secrets:`
+
+`source.api_key_env:` names the variable holding the model's API key. A
+provider prefix supplies a default (`openrouter/` reads `OPENROUTER_API_KEY`),
+and by itself the name is read from the environment of the `steps` process.
+
+With a `secrets:` map beside it, the key comes from one of the daemon's
+[secret sources](secrets.md) instead, and the daemon's environment never
+holds it:
+
+```yaml noexec=secrets
+agents:
+- name: reviewer
+  source:
+    model: openrouter/qwen/qwen3.7-flash
+    api_key_env: OPENROUTER_API_KEY
+    secrets:
+      OPENROUTER_API_KEY: ((ci:openrouter_api_key))
+  tools: [run_shell]
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    messages: [Review the diff.]
+```
+
+- **The model client is the only reader.** The value is sent as the request's bearer token. It is not in the environment of `run_shell` or a custom tool, which is why this is not the agent's own `secrets:` map: that one is exported to the agent's tools, and a model must not be able to use its own key.
+- **One key, the one `api_key_env:` names.** `api_key_env:` may be omitted when the map's key is the provider's default name. Any other key is a load error.
+- **Hosted sources only**, including an agent used as a `fix:` agent or a sub-agent, and each `fallback:` source with a map of its own. A CLI source (`@claude/…`) refuses it: its key is handed to the CLI subprocess's environment, where the hooks of a `settings: project` repo run. An agent an `mcp_exports:` entry reaches refuses it too, since an export has no run to resolve a secret in.
+- **Masked once resolved**, in recorded output and in every tool result the model is sent. A key read from the environment is not.
+- **Fetched before the job's first step**, by the pre-run probe, even for an agent on a branch that never runs. See [secrets.md](secrets.md#when-a-secret-is-fetched).
+- **Never hashed**, like `api_key_env:`: re-pointing or rotating a key re-runs nothing.
+
 ## Failover: `fallback:`
 
 When an agent's model is unreachable, try a backup instead of retrying a dead connection:

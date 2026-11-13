@@ -127,7 +127,7 @@ func RunFix(
 		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
 	}
 
-	apiKey, err := llmclient.LookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
+	apiKey, err := apiKeyFor(ctx, ri)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

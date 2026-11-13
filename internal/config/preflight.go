@@ -87,6 +87,11 @@ func (c *Config) checkAgentCredentials() []Problem {
 			continue
 		}
 
+		// A key the daemon resolves from a secret source is never read from its environment.
+		if target.APIKeySecret != "" {
+			continue
+		}
+
 		if value, ok := os.LookupEnv(target.APIKeyEnv); !ok || value == "" {
 			problems = append(problems, Problem{
 				Target: fmt.Sprintf("agent %q", name),

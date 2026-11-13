@@ -194,6 +194,14 @@ func (v *ValidateCmd) liveProblems(cfg *config.Config) ([]config.Problem, int, e
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
+	// Before the probes: a model whose key is a reference is asked with that key, so the sources have to be open, and a pipeline they cannot vouch for is refused before anything is dialled.
+	resolver, secretProblems, found, err := v.secretProblems(ctx, cfg)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	ctx = pipeline.WithProbeSecrets(pipeline.WithSecrets(ctx, resolver), resolvePipelineName(v.Pipeline, v.Name))
+
 	var problems []config.Problem
 
 	if v.Job != "" {
@@ -212,18 +220,13 @@ func (v *ValidateCmd) liveProblems(cfg *config.Config) ([]config.Problem, int, e
 		problems = pipeline.PreflightPipeline(ctx, cfg, names)
 	}
 
-	secretProblems, found, err := v.secretProblems(ctx, cfg)
-	if err != nil {
-		return nil, 0, err
-	}
-
 	return append(problems, secretProblems...), found, nil
 }
 
 // secretProblems resolves every reference the way the daemon would and says which lookup path answered, discarding the values. Resolution is lazy at run time, so this is the only way to learn that a login has lapsed, or that a name falls through to the shared folder, before a job is half paid for.
 //
 // Under --job, the job's own references: a trigger: true resource's poll is no job's, so it is left out the way the job's probe leaves out the other jobs' models.
-func (v *ValidateCmd) secretProblems(ctx context.Context, cfg *config.Config) ([]config.Problem, int, error) {
+func (v *ValidateCmd) secretProblems(ctx context.Context, cfg *config.Config) (*secret.Resolver, []config.Problem, int, error) {
 	uses := cfg.SecretUses()
 	if v.Job != "" {
 		uses = slices.DeleteFunc(uses, func(use config.SecretUse) bool { return use.Job != v.Job })
@@ -237,17 +240,17 @@ func (v *ValidateCmd) secretProblems(ctx context.Context, cfg *config.Config) ([
 
 		resolver, err = secretsFromConfigFile(v.Config)
 		if err != nil {
-			return nil, 0, err
+			return nil, nil, 0, err
 		}
 	}
 
 	if len(uses) == 0 {
-		return nil, 0, nil
+		return resolver, nil, 0, nil
 	}
 
 	// Refused rather than skipped, for the reason the preflight refusal gives: an ok line that vouched for the pipeline having resolved none of its secrets would be vouching for nothing.
 	if resolver == nil {
-		return nil, 0, fmt.Errorf("--live cannot vouch for %d secret reference(s) without the daemon's sources: pass --config with the file steps web --config reads", len(uses))
+		return nil, nil, 0, fmt.Errorf("--live cannot vouch for %d secret reference(s) without the daemon's sources: pass --config with the file steps web --config reads", len(uses))
 	}
 
 	pipelineName := resolvePipelineName(v.Pipeline, v.Name)
@@ -271,7 +274,7 @@ func (v *ValidateCmd) secretProblems(ctx context.Context, cfg *config.Config) ([
 		fmt.Printf("%s is at %s\n", target, location)
 	}
 
-	return problems, len(found), nil
+	return resolver, problems, len(found), nil
 }
 
 func describeSecretUse(use config.SecretUse) string {

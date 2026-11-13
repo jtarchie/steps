@@ -67,6 +67,11 @@ func (c *Config) SecretRefs() []SecretRef {
 
 	for _, agent := range c.Agents {
 		add(agent.Secrets)
+		add(agent.Source.Secrets)
+
+		for _, fallback := range agent.Fallback {
+			add(fallback.Source.Secrets)
+		}
 	}
 
 	for _, r := range c.Resources {
@@ -155,7 +160,7 @@ func (c *Config) agentIsCLI(name string) bool {
 	return err == nil && agent != nil && agentUsesCLI(*agent)
 }
 
-// validateAgentSecrets refuses every place an agent's secrets would be silently dropped: only an agent step resolves them.
+// validateAgentSecrets refuses every place an agent's secrets would be silently dropped: only an agent step resolves them. A source's own map goes to the model client instead, so it is held to different rules, last.
 func (c *Config) validateAgentSecrets() error {
 	for _, agent := range c.Agents {
 		err := checkAgentSecrets(agent)
@@ -181,7 +186,7 @@ func (c *Config) validateAgentSecrets() error {
 		}
 	}
 
-	return nil
+	return c.validateSourceSecrets()
 }
 
 func checkAgentSecrets(agent Agent) error {
@@ -206,6 +211,114 @@ func (c *Config) refuseSecretSubAgents(withSecrets func(string) bool) error {
 	}
 
 	return nil
+}
+
+// validateSourceSecrets holds a source's secrets: to the one key its model client reads, since nothing else would read another.
+func (c *Config) validateSourceSecrets() error {
+	for _, agent := range c.Agents {
+		err := checkSourceSecrets(fmt.Sprintf("agent %q source", agent.Name), agent.Source)
+		if err != nil {
+			return err
+		}
+
+		for i, fallback := range agent.Fallback {
+			err = checkSourceSecrets(fmt.Sprintf("agent %q fallback[%d] source", agent.Name, i), fallback.Source)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return c.refuseExportedSourceSecrets()
+}
+
+func checkSourceSecrets(label string, source AgentSource) error {
+	if len(source.Secrets) == 0 {
+		return nil
+	}
+
+	if IsCLISource(source) {
+		return fmt.Errorf("%s: secrets: on a cli source — the key is handed to the CLI subprocess's environment, where a settings: project repo's hooks run", label)
+	}
+
+	err := checkSecretsMap(label, source.Secrets, nil)
+	if err != nil {
+		return err
+	}
+
+	// The provider's default name counts, so openrouter/… needs no api_key_env beside its one key.
+	name := source.APIKeyEnv
+
+	target, err := resolveAgentTarget(source)
+	if err == nil {
+		name = target.APIKeyEnv
+	}
+
+	if name == "" {
+		return fmt.Errorf("%s: secrets: needs api_key_env to name the key it holds", label)
+	}
+
+	if _, held := source.Secrets[name]; !held {
+		return fmt.Errorf("%s: api_key_env %s is not a key of its secrets: map", label, name)
+	}
+
+	for _, extra := range slices.Sorted(maps.Keys(source.Secrets)) {
+		if extra != name {
+			return fmt.Errorf("%s: secrets: holds the model's key and no other; nothing would read %s (a tool's variables go in the agent's own secrets:)", label, extra)
+		}
+	}
+
+	return nil
+}
+
+// refuseExportedSourceSecrets is a load error because an export server has no run, and so no memo to resolve a key through.
+func (c *Config) refuseExportedSourceSecrets() error {
+	// ponytail: refused outright; give an export server its own expiring memo (secret.Resolver.ForChecks) and install the key lookup on its context to lift this.
+	for _, export := range c.MCPExports {
+		for _, spec := range export.Tools {
+			if spec.Agent == "" {
+				continue
+			}
+
+			for _, name := range c.withSubAgents([]string{spec.Agent}) {
+				agent, err := c.FindAgent(name)
+				if err == nil && agent != nil && agentHasSourceSecrets(*agent) {
+					return fmt.Errorf("mcp_exports %q: tool %q reaches agent %q, whose source has secrets:; an export has no run to resolve them in", export.Name, spec.Agent, name)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func agentHasSourceSecrets(agent Agent) bool {
+	return len(agent.Source.Secrets) > 0 || slices.ContainsFunc(agent.Fallback, func(fallback AgentFallback) bool {
+		return len(fallback.Source.Secrets) > 0
+	})
+}
+
+// withSubAgents is names plus every agent they delegate to, however deep; seen bounds a cycle.
+func (c *Config) withSubAgents(names []string) []string {
+	out := slices.Clone(names)
+	seen := map[string]bool{}
+
+	for i := 0; i < len(out); i++ {
+		agent, err := c.FindAgent(out[i])
+		if err != nil || agent == nil || seen[out[i]] {
+			continue
+		}
+
+		seen[out[i]] = true
+
+		for _, spec := range agent.Tools {
+			if spec.Agent != "" {
+				out = append(out, spec.Agent)
+			}
+		}
+	}
+
+	return out
 }
 
 // fixSpecs is every fix: in the pipeline, on tasks: entries and on steps.
@@ -356,6 +469,22 @@ type SecretUse struct {
 	Polled bool
 }
 
+// modelKeyUses adds the key of every model a job reaches, under the job: that is where a run resolves it, and the poller's preflight asks with no job at all.
+func (c *Config) modelKeyUses(job Job, add func(map[string]string, SecretUse)) {
+	for _, name := range c.withSubAgents(job.AgentNames()) {
+		agent, err := c.FindAgent(name)
+		if err != nil || agent == nil {
+			continue
+		}
+
+		add(agent.Source.Secrets, SecretUse{Job: job.Name})
+
+		for _, fallback := range agent.Fallback {
+			add(fallback.Source.Secrets, SecretUse{Job: job.Name})
+		}
+	}
+}
+
 // SecretUses is every (reference, where) pair the pipeline would resolve, deduplicated and in a stable order: what `steps validate --live` resolves in the daemon's stead.
 func (c *Config) SecretUses() []SecretUse {
 	seen := map[SecretUse]bool{}
@@ -371,6 +500,8 @@ func (c *Config) SecretUses() []SecretUse {
 	}
 
 	for _, job := range c.Jobs {
+		c.modelKeyUses(job, add)
+
 		_ = job.visitSteps(func(_ string, step *Step) error {
 			switch kind, _ := step.Kind(); kind {
 			case StepKindTask, StepKindAgent:

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/redact"
@@ -63,12 +64,31 @@ func WithPollSecrets(ctx context.Context, pipelineName string, ttl time.Duration
 	return withSecretMemo(ctx, resolver.ForChecks(ttl), pipelineName)
 }
 
+// WithProbeSecrets is validate --live's resolution: no run and no poll, so one memo for the invocation, which is what lets a model whose key is a reference be probed with it.
+func WithProbeSecrets(ctx context.Context, pipelineName string) context.Context {
+	resolver, _ := ctx.Value(secretsKey{}).(*secret.Resolver)
+	if resolver == nil {
+		return ctx
+	}
+
+	return withSecretMemo(ctx, resolver.ForRun(), pipelineName)
+}
+
 // withSecretMemo installs memo for steps and resources alike; pipelineName is for a context with no build metadata to read it from (a poll).
 func withSecretMemo(ctx context.Context, memo *secret.Run, pipelineName string) context.Context {
 	secrets := &redact.Secrets{}
 	ctx = redact.WithSecrets(ctx, secrets)
 	ctx = events.WithScrub(ctx, secrets.String)
 	ctx = context.WithValue(ctx, runSecretsKey{}, memo)
+
+	// A model's key goes to its HTTP client alone: resolved and masked like a step's secret, never exported to a shell. Job is empty under a poll, which has no job to name.
+	ctx = agent.WithKeyLookup(ctx, pipelineName, func(ctx context.Context, name, ref string) (string, error) {
+		meta := shell.MetadataFrom(ctx)
+
+		env, err := lookupSecrets(ctx, secret.Ref{Pipeline: cmp.Or(meta.PipelineName, pipelineName), Job: meta.JobName}, map[string]string{name: ref})
+
+		return env[name], err
+	})
 
 	return resource.WithSecretLookup(ctx, func(ctx context.Context, name string, secrets map[string]string) (map[string]string, error) {
 		return lookupSecrets(ctx, secret.Ref{Pipeline: cmp.Or(shell.MetadataFrom(ctx).PipelineName, pipelineName), Job: shell.MetadataFrom(ctx).JobName, Resource: name}, secrets)

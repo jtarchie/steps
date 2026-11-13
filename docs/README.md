@@ -98,7 +98,7 @@ A third answers "did the pipeline change?" — `steps runs` carries a `CONFIG` c
 `steps validate` answers a fourth: *will this run at all?* It checks the file — syntax, references, field placement — and then the things the file depends on that live outside it:
 
 - every model name resolves to a known provider (a typo like `opencoder/` for `opencode/` is a load error, not a failed run)
-- every `api_key_env:` the pipeline names is actually set
+- every `api_key_env:` the pipeline names is actually set, unless `source.secrets:` holds it ([secrets.md](secrets.md))
 - every variable an expr-backed resource the plan uses reads by literal name (`env("LINEAR_API_KEY")`) is actually set: a computed name is a runtime answer and is not checked, and a type's `env:` list alone requires nothing, since it only allows
 - every stdio `mcp_servers:` command is actually on `PATH`
 

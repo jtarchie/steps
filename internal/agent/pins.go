@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"reflect"
 	"sync"
 	"time"
 
@@ -21,6 +22,11 @@ import (
 type sourceSelection struct {
 	source config.AgentSource
 	index  int
+}
+
+// is replaces ==, which a source lost when it gained a map; by value, so the same fallback re-read from an identical config still matches.
+func (s sourceSelection) is(other sourceSelection) bool {
+	return reflect.DeepEqual(s, other)
 }
 
 // pinRecord is a selection plus the two clocks that bound it. They are
@@ -157,7 +163,7 @@ func selectSource(scope pinScope, source config.AgentSource, index int) {
 	if existing, ok := selectedSources.by[scope]; ok {
 		record.since = existing.since
 
-		if existing.selection == record.selection {
+		if existing.selection.is(record.selection) {
 			record.decided = existing.decided
 		}
 	}
@@ -188,7 +194,7 @@ func renewPinIf(scope pinScope, expected sourceSelection) bool {
 	defer selectedSources.mu.Unlock()
 
 	current, ok := selectedSources.by[scope]
-	if !ok || current.selection != expected {
+	if !ok || !current.selection.is(expected) {
 		return false
 	}
 
@@ -234,7 +240,7 @@ func clearSourceIf(scope pinScope, expected sourceSelection) clearOutcome {
 		return pinAlreadyGone
 	}
 
-	if current.selection != expected {
+	if !current.selection.is(expected) {
 		return pinReplaced
 	}
 

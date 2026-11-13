@@ -97,7 +97,7 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (_
 		// the error itself are gathered before it is made. Resolving the next
 		// candidate up front costs nothing: it is a config walk and an
 		// environment lookup, no request.
-		next, apiKey, nextIndex, hasNext := nextViableFallback(agent, ri, index)
+		next, apiKey, nextIndex, hasNext := nextViableFallback(ctx, agent, ri, index)
 
 		verdict := llmclient.DecideCascade(llmclient.ClassifySource(ctx, runErr), hasNext, cascadeCtx.Err() != nil, swapped)
 
@@ -208,14 +208,14 @@ func releaseSource(scope pinScope) {
 // false once nextHostedFallback runs out of candidates to try, which also
 // covers a CLI-typed candidate — see nextHostedFallback's own doc comment
 // for why that one stops the walk rather than being skipped past.
-func nextViableFallback(agent *config.Agent, ri config.ResolvedInvocation, index int) (config.ResolvedInvocation, string, int, bool) {
+func nextViableFallback(ctx context.Context, agent *config.Agent, ri config.ResolvedInvocation, index int) (config.ResolvedInvocation, string, int, bool) {
 	for {
 		next, nextIndex, ok := nextHostedFallback(agent, ri, index)
 		if !ok {
 			return config.ResolvedInvocation{}, "", 0, false
 		}
 
-		apiKey, err := llmclient.LookupAPIKey(next.APIKeyEnv, next.RequiresKey)
+		apiKey, err := apiKeyFor(ctx, next)
 		if err == nil {
 			return next, apiKey, nextIndex, true
 		}

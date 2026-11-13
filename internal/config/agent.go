@@ -204,6 +204,13 @@ type AgentSource struct {
 	Model            string `yaml:"model"`
 	APIKeyEnv        string `yaml:"api_key_env,omitempty"`
 	StringToolChoice *bool  `yaml:"string_tool_choice,omitempty"`
+	// Secrets holds the one reference api_key_env names, handed to the model client and never to a tool, which is why it is not the agent's own secrets: map. Never hashed: like api_key_env, re-pointing or rotating a key changes whether the model answers, not what the step asks, so it invalidates no cache.
+	Secrets map[string]string `secret:"ref" yaml:"secrets,omitempty"`
+}
+
+// unset replaces ==, which a struct holding a map does not have.
+func (s AgentSource) unset() bool {
+	return s.Endpoint == "" && s.Model == "" && s.APIKeyEnv == "" && s.StringToolChoice == nil && len(s.Secrets) == 0
 }
 
 // AgentFallback is one alternate model to fall over to when the primary is

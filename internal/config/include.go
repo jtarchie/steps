@@ -347,7 +347,7 @@ func mergeAgentDocument(a *Agent, doc Agent) {
 }
 
 func mergeAgentIdentity(a *Agent, doc Agent) {
-	if a.Source == (AgentSource{}) {
+	if a.Source.unset() {
 		a.Source = doc.Source
 	}
 

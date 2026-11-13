@@ -268,7 +268,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	// container down through the same closeAll the success path uses.
 	closers = append(closers, runner)
 
-	apiKey, err := llmclient.LookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
+	apiKey, err := apiKeyFor(ctx, ri)
 	if err != nil {
 		abandon()
 		closeAll(closers)
