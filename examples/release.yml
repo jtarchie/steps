@@ -79,9 +79,10 @@ tasks:
       | tar -xz -C /usr/local/bin --strip-components=1 "golangci-lint-$lint-linux-$arch/golangci-lint"
     export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"   # $HOME/go/bin: govulncheck, nilaway
 
-    # The suite is not written for root: initdb refuses it and the chmod-based tests pass as root. dockerd
-    # stays root (dind needs it); the tests run as tester, who reaches its socket through the docker group.
-    # Docker lets any user bind port 0 and up; the suite uses 127.0.0.1:1 as a port nothing answers, and a parallel test's server took it.
+    # The postgres tests skip under root (initdb refuses it — #251) and the rest of the suite is exercised as
+    # written, so dockerd stays root (dind needs it) while the tests run as tester, who reaches its socket
+    # through the docker group. Docker lets any user bind port 0 and up; the suite uses 127.0.0.1:1 as a port
+    # nothing answers, and a parallel test's server took it.
     sysctl -w net.ipv4.ip_unprivileged_port_start=1024
     adduser -D -h /home/tester tester
     addgroup tester docker 2>/dev/null || { addgroup -S docker && addgroup tester docker; }

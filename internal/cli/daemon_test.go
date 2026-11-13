@@ -245,14 +245,9 @@ func TestARefusedRenameLeavesThePipelineWhereItWas(t *testing.T) {
 
 	setPipeline(t, held, "app", onRoot(root, "", "echo built > out/x"))
 
-	err := os.Chmod(root, 0o500) //nolint:gosec // read-only is the point: the workspace probe writes, and this root refuses it
-	if err != nil {
-		t.Fatal(err)
-	}
+	breakRoot(t, root)
 
-	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
-
-	err = held.Rename(t.Context(), "app", "renamed")
+	err := held.Rename(t.Context(), "app", "renamed")
 	if !errors.Is(err, web.ErrRefused) {
 		t.Fatalf("a rename whose new name this machine cannot serve = %v, want refused", err)
 	}
@@ -269,10 +264,7 @@ func TestARefusedRenameLeavesThePipelineWhereItWas(t *testing.T) {
 		t.Errorf("after a refused rename the database holds %v, want app and not renamed", names)
 	}
 
-	err = os.Chmod(root, 0o700) //nolint:gosec // the root is the test's own
-	if err != nil {
-		t.Fatal(err)
-	}
+	repairRoot(t, root)
 
 	enqueue(t, held, "app")
 
@@ -887,7 +879,7 @@ func TestARestartClosesTheRunAKilledDaemonLeftRunning(t *testing.T) {
 	}
 }
 
-// brokenOnRestart leaves "app" held and unserved by a restarted daemon, its workspace root read-only.
+// brokenOnRestart leaves "app" held and unserved by a restarted daemon, its workspace root a regular file where the provider needs the directory — a break no user writes through, root included (#251).
 func brokenOnRestart(t *testing.T) (*daemon, string) {
 	t.Helper()
 
@@ -897,12 +889,7 @@ func brokenOnRestart(t *testing.T) (*daemon, string) {
 	setPipeline(t, held, "app", onRoot(root, "", "true"))
 	held.Close()
 
-	err := os.Chmod(root, 0o500) //nolint:gosec // read-only is the point: the workspace probe writes, and this root refuses it
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
+	breakRoot(t, root)
 
 	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, 1)
 
@@ -959,12 +946,7 @@ func TestAFailedRestoreDoesNotCompactTheFile(t *testing.T) {
 
 	_ = scratch.Release()
 
-	err = os.Chmod(root, 0o500) //nolint:gosec // read-only is the point: the workspace probe writes, and this root refuses it
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
+	breakRoot(t, root)
 
 	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, 1)
 
@@ -1035,10 +1017,7 @@ func TestASetRepairsABrokenPipeline(t *testing.T) {
 
 	restarted, root := brokenOnRestart(t)
 
-	err := os.Chmod(root, 0o700) //nolint:gosec // the root is the test's own
-	if err != nil {
-		t.Fatal(err)
-	}
+	repairRoot(t, root)
 
 	result, err := restarted.Set(t.Context(), "app", web.SetRequest{Source: onRoot(root, "", "true")})
 	if err != nil {

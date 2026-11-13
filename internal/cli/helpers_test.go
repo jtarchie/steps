@@ -104,6 +104,39 @@ func writePipelineFile(t *testing.T, path, pipeline string) {
 	}
 }
 
+// breakRoot leaves a workspace root this machine cannot supply for ANY user: a
+// regular file where the provider needs the directory, so the MkdirAll it does
+// there fails with ENOTDIR. A read-only mode cannot stand in for this — root
+// writes through one, so the "broken" state never happens and the test passes
+// vacuously (#251). root must be a path this test made, since it is removed
+// first.
+func breakRoot(t *testing.T, root string) {
+	t.Helper()
+
+	err := os.RemoveAll(root) // whatever the first provider made there, its caches included
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writePipelineFile(t, root, "") // 0o600, so no //nolint:gosec is needed (G306 asks for <= 0600)
+}
+
+// repairRoot puts the directory back, so a test can go on to prove the pipeline
+// runs once its workspace can be supplied again.
+func repairRoot(t *testing.T, root string) {
+	t.Helper()
+
+	err := os.RemoveAll(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Mkdir(root, 0o700) // G301 asks for <= 0750
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // flagFixture writes the smallest pipeline a command can be pointed at: one
 // job, one task, nothing to fetch. What the tests using it assert happens
 // before any of it executes.

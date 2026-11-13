@@ -578,12 +578,17 @@ func TestProbeChecksTheRootWithoutSweepingIt(t *testing.T) {
 		t.Errorf("Probe swept a build directory in flight: %v", err)
 	}
 
-	err = os.Chmod(root, 0o500) //nolint:gosec // read-only is the point: the probe writes, and this root refuses it
+	// A regular file where the root was: the probe's own MkdirTemp then fails with ENOTDIR for every user,
+	// which a read-only mode cannot make it do for root (#251).
+	err = os.RemoveAll(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
+	err = os.WriteFile(root, nil, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if provider.Probe() == nil {
 		t.Error("Probe accepted a root it cannot write to")

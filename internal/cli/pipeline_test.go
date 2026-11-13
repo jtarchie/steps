@@ -270,10 +270,7 @@ func TestARepairIsCompareAndSet(t *testing.T) {
 		t.Fatalf("get = %q, %v; want app held broken", broken, err)
 	}
 
-	err = os.Chmod(root, 0o700) //nolint:gosec // the root is the test's own
-	if err != nil {
-		t.Fatal(err)
-	}
+	repairRoot(t, root)
 
 	_, err = restarted.Set(t.Context(), "app", web.SetRequest{Source: onRoot(root, "", "echo theirs")})
 	if err != nil {
