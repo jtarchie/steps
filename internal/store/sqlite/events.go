@@ -6,6 +6,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -118,41 +119,34 @@ func (s *Store) AppendStepOutput(ctx context.Context, runID string, stepID int64
 	return s.requireRun(ctx, result, runID)
 }
 
-// StepOutput streams the pieces in seq order, joined to runs for the pipeline as RunEvents is.
+// StepOutput is one query per piece, so no connection is held for as long as the reader takes: a slow browser pulling 64 MiB would otherwise sit on one.
 func (s *Store) StepOutput(ctx context.Context, runID string, stepID int64, n int, yield func(chunk []byte) error) (bool, error) {
-	rows, err := s.reads.QueryContext(ctx, `
-		SELECT o.chunk
-		FROM run_step_outputs o
-		JOIN runs r ON r.id = o.run_id
-		WHERE o.run_id = ? AND r.pipeline_id = ? AND o.step_id = ? AND o.n = ?
-		ORDER BY o.seq
-	`, runID, s.pipelineID, stepID, n)
-	if err != nil {
-		return false, fmt.Errorf("could not read output %d of step %d in %q: %w", n, stepID, runID, err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
 	found := false
 
-	for rows.Next() {
+	for seq := -1; ; {
 		var chunk []byte
 
-		err = rows.Scan(&chunk)
-		if err == nil {
-			found = true
-			err = yield(chunk)
+		err := s.reads.QueryRowContext(ctx, `
+			SELECT o.seq, o.chunk
+			FROM run_step_outputs o
+			JOIN runs r ON r.id = o.run_id
+			WHERE o.run_id = ? AND r.pipeline_id = ? AND o.step_id = ? AND o.n = ? AND o.seq > ?
+			ORDER BY o.seq
+			LIMIT 1
+		`, runID, s.pipelineID, stepID, n, seq).Scan(&seq, &chunk)
+		if errors.Is(err, sql.ErrNoRows) {
+			return found, nil
 		}
 
 		if err != nil {
 			return found, fmt.Errorf("could not read output %d of step %d in %q: %w", n, stepID, runID, err)
 		}
-	}
 
-	err = rows.Err()
-	if err != nil {
-		return found, fmt.Errorf("could not read output %d of step %d in %q: %w", n, stepID, runID, err)
-	}
+		found = true
 
-	return found, nil
+		err = yield(chunk)
+		if err != nil {
+			return found, fmt.Errorf("could not hand on output %d of step %d in %q: %w", n, stepID, runID, err)
+		}
+	}
 }

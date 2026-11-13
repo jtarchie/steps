@@ -37,6 +37,7 @@ type RunsCmd struct {
 	Queue  RunsQueueCmd  `cmd:"" help:"what the trigger loop has queued"`
 	Cost   RunsCostCmd   `cmd:"" help:"what a pipeline's agent steps spent"`
 	Where  RunsWhereCmd  `cmd:"" help:"the machines a run's placed steps ran on"`
+	Output RunsOutputCmd `cmd:"" help:"what a step of a run printed, whole"`
 	Abort  RunsAbortCmd  `cmd:"" help:"stop a run on a steps web daemon, or drop a queued one"`
 	Follow RunsFollowCmd `cmd:"" help:"watch a run to its end: live on a terminal, lines elsewhere"`
 }

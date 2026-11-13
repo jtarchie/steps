@@ -335,7 +335,9 @@ what it spent and where it ran on its own row.
   the run gets the answer the run page gives them. What is stored is written
   after the secret scrubber, so a value masked in the record is `***` there
   too, and it stops at 64MiB with a line saying how much more was dropped. A
-  step that fits in the record stores nothing. How, and for how long, is under
+  step that fits in the record stores nothing. `steps runs output <run> <step>
+  -p <pipeline>` prints the same whole output in a terminal, and the record
+  itself for a step that stored nothing. How, and for how long, is under
   [Live runs](#live-runs).
 - **An agent step expands into its conversation**: the model's text each turn,
   every tool call, and any sub-agent delegation nested underneath, closing with

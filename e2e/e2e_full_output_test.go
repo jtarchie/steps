@@ -400,3 +400,66 @@ jobs:
 		t.Errorf("the placed step's full output was not kept (found %v, %d bytes)", found, len(whole))
 	}
 }
+
+// stdoutOf runs fn with stdout in a file: a kept output is larger than a pipe holds unread.
+func stdoutOf(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+
+	file, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	orig := os.Stdout
+	os.Stdout = file
+	err = fn()
+	os.Stdout = orig
+
+	_ = file.Close()
+
+	data, readErr := os.ReadFile(file.Name())
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+
+	return string(data), err
+}
+
+// The whole output is a command away, not only a link: a script or an agent reading a failed gate has no browser.
+func TestRunsOutputPrintsAStepsWholeOutput(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:`+chattyTask+`
+  - task: quiet
+    run: echo small
+`)
+
+	err := runSilently(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run := stepOutput(t, recordedEvents(t, path), "chatty").RunID
+
+	got, err := stdoutOf(t, func() error {
+		return cli.Run(append([]string{"runs", "output", run, "chatty"}, readArgs(path)...))
+	})
+	if err != nil || got != chattyOutput() {
+		t.Errorf("runs output chatty = %d bytes, %v; want the %d the step printed", len(got), err, len(chattyOutput()))
+	}
+
+	got, err = stdoutOf(t, func() error {
+		return cli.Run(append([]string{"runs", "output", run, "quiet"}, readArgs(path)...))
+	})
+	if err != nil || got != "small\n" {
+		t.Errorf("runs output quiet = %q, %v; want the record of a step that stored nothing", got, err)
+	}
+
+	_, err = stdoutOf(t, func() error {
+		return cli.Run(append([]string{"runs", "output", run, "nobody"}, readArgs(path)...))
+	})
+	if err == nil || !strings.Contains(err.Error(), "chatty") || !strings.Contains(err.Error(), "quiet") {
+		t.Errorf("runs output nobody = %v, want the steps that did record output named", err)
+	}
+}

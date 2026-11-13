@@ -190,6 +190,38 @@ func (s suite) TestStepOutputComesBackWholeInOrder(t *testing.T) {
 	}
 }
 
+// TestStepOutputReadsWhatArrivesMidRead: a read is a query per piece, never one cursor held open for as long as its reader takes, so a piece appended during the read is in it.
+func (s suite) TestStepOutputReadsWhatArrivesMidRead(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	seedStepOutputs(ctx, t, st)
+
+	var whole []byte
+
+	_, err := st.StepOutput(ctx, "run-1", 1, 0, func(chunk []byte) error {
+		if len(whole) == 0 {
+			appendErr := st.AppendStepOutput(ctx, "run-1", 1, 0, 2, []byte("and more\n"))
+			if appendErr != nil {
+				return appendErr //nolint:wrapcheck // the test reports it
+			}
+		}
+
+		whole = append(whole, chunk...)
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StepOutput: %v", err)
+	}
+
+	if string(whole) != "hello world\nand more\n" {
+		t.Errorf("read %q, want the piece appended mid-read as well", whole)
+	}
+}
+
 // TestStepOutputIsScopedToThePipeline: a run of another pipeline reads as nothing, and cannot be written to.
 func (s suite) TestStepOutputIsScopedToThePipeline(t *testing.T) {
 	t.Parallel()
