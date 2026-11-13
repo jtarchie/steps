@@ -1800,17 +1800,12 @@ func TestRootShowsEachPipelinesJobsAsCells(t *testing.T) {
 	_, body := get(t, server, "/")
 
 	for cell, cost := range map[string]string{
-		`<a class="cell st-failed" href="/p/app/jobs/app-job" title="app-job: failed" aria-label="app-job, failed" tabindex="-1">✗</a>`:            "a failed job is not a red cell",
-		`<a class="named st-failed" href="/p/app/jobs/app-job"`:                                                                                    "a failed job is not named beside the strip",
-		`<a class="cell st-none" href="/p/infra/jobs/infra-job" title="infra-job: never ran" aria-label="infra-job, never ran" tabindex="-1"></a>`: "a job that never ran is not an empty cell",
+		`<a class="cell st-failed" href="/p/app/jobs/app-job" title="app-job: failed" aria-label="app-job, failed" tabindex="-1"><span class="glyph" aria-hidden="true">✗</span>`:            "a failed job is not a red cell",
+		`<a class="cell st-none" href="/p/infra/jobs/infra-job" title="infra-job: never ran" aria-label="infra-job, never ran" tabindex="-1"><span class="glyph" aria-hidden="true"></span>`: "a job that never ran is not a cell with no glyph",
 	} {
 		if !strings.Contains(body, cell) {
 			t.Errorf("%s: missing %s in %s", cost, cell, body)
 		}
-	}
-
-	if strings.Contains(pipelineRow(t, body, "infra"), `class="named`) {
-		t.Error("a pipeline with nothing red names a job beside its strip")
 	}
 }
 
@@ -1894,7 +1889,7 @@ func TestARedCellStaysRedWhileItsFixRuns(t *testing.T) {
 
 	_, body := get(t, server, "/")
 
-	want := `<a class="cell st-failed live" href="/p/app/jobs/app-job" title="app-job: failed, running" aria-label="app-job, failed, running" tabindex="-1">✗</a>`
+	want := `<a class="cell st-failed live" href="/p/app/jobs/app-job" title="app-job: failed, running" aria-label="app-job, failed, running" tabindex="-1"><span class="glyph" aria-hidden="true">✗</span>`
 	if !strings.Contains(body, want) {
 		t.Errorf("a failed job being rebuilt is not a red, barred cell:\n%s", pipelineRow(t, body, "app"))
 	}
@@ -1951,9 +1946,8 @@ func TestTheOverviewShowsHeldJobs(t *testing.T) {
 	app := pipelineRow(t, page, "app")
 
 	for want, cost := range map[string]string{
-		`<a class="cell st-held" href="/p/app/jobs/app-job" title="app-job: held" aria-label="app-job, held" tabindex="-1">⊘</a>`: "app's held job is not a held cell",
-		`<a class="named st-held" href="/p/app/jobs/app-job"`:                                                                     "app's held job is not named beside the strip",
-		`<tr class="red" data-slug="app">`:                                                                                        "a pipeline with a held job is not a red row",
+		`<a class="cell st-held" href="/p/app/jobs/app-job" title="app-job: held" aria-label="app-job, held" tabindex="-1"><span class="glyph" aria-hidden="true">⊘</span><span aria-hidden="true">app-job</span></a>`: "app's held job is not a held, named cell",
+		`<tr class="red" data-slug="app">`: "a pipeline with a held job is not a red row",
 	} {
 		if !strings.Contains(app, want) {
 			t.Errorf("%s:\n%s", cost, app)

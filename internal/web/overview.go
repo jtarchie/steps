@@ -3,13 +3,17 @@ package web
 import (
 	"context"
 	"fmt"
+	"html/template"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v5"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -65,7 +69,7 @@ type overviewPipeline struct {
 	Slug   string
 	Jobs   int
 	Paused bool
-	// Latest is the pipeline's newest run across every job, zero when it has never run.
+	// Latest is the run that made the row red, else its newest run across every job; zero when it has never run.
 	Latest store.RunRow
 	HasRun bool
 	// Mark, Attention and InFlight are the switcher's own reading of the
@@ -84,7 +88,20 @@ type overviewPipeline struct {
 	Chips []jobChip
 	// Broken is why the daemon holds this pipeline and does not serve it; every other field is zero then.
 	Broken string
+	Next   nextView
 }
+
+// nextView is what makes the pipeline move next without a person: the earliest cron slot, and the other resources whose new versions trigger it.
+type nextView struct {
+	At time.Time
+	On []string
+}
+
+// stripJobs is the widest pipeline whose every job gets a run strip; past it a strip per job wraps the row, so only red jobs keep theirs.
+const stripJobs = 4
+
+// laneRuns is how many of a job's runs its strip shows.
+const laneRuns = 10
 
 // Red is a row that wants a person: a job failed, the breaker holds one, or
 // the daemon cannot serve it. Read off the mark, so the stripe agrees with the
@@ -155,10 +172,16 @@ type jobChip struct {
 	Word    string
 	Running bool
 	Held    bool
+	// Fed is a job that gets a resource passed: by the job drawn before it, which is what earns the arrow between them.
+	Fed bool
+	// Run is the finished run the cell is colored by, for Latest to follow on a red row.
+	Run    store.RunRow
+	HasRun bool
+	// History is the job's last laneRuns runs, oldest first.
+	History []store.RunRow
 }
 
-// Red is a chip the row names in words beside the strip, so which job is
-// wrong never depends on a tooltip.
+// Red is a chip whose run Latest reports and whose strip survives the wide-pipeline cap.
 func (c jobChip) Red() bool {
 	return c.Held || c.Class == "st-failed" || c.Class == "st-errored"
 }
@@ -196,29 +219,134 @@ func jobChips(ctx context.Context, reads *pipelineReads) []jobChip {
 
 	chips := make([]jobChip, 0, len(views))
 
-	for _, view := range views {
-		chip := jobChip{
-			Name:    view.Name,
-			Class:   finishedClass(view),
-			Running: view.HasRun && statusWord(view.Latest.Status) == "running",
-			Held:    view.Held,
-		}
+	for i, view := range views {
+		chip := chipFor(view)
+		chip.Fed = i > 0 && fedBy(view, views[i-1].Name)
 
-		chip.Word = strings.TrimPrefix(chip.Class, "st-")
-		if chip.Word == "none" {
-			chip.Word = "never ran"
-		}
-
-		chip.Glyph = statusMark(chip.Word)
-
-		if chip.Held {
-			chip.Class, chip.Glyph, chip.Word = "st-held", "⊘", "held"
+		if view.HasRun && (len(views) <= stripJobs || chip.Red()) {
+			chip.History = jobHistory(ctx, pipeline, view.Name)
 		}
 
 		chips = append(chips, chip)
 	}
 
 	return chips
+}
+
+func chipFor(view jobView) jobChip {
+	chip := jobChip{
+		Name:    view.Name,
+		Class:   finishedClass(view),
+		Running: view.HasRun && statusWord(view.Latest.Status) == "running",
+		Held:    view.Held,
+	}
+
+	chip.Run, chip.HasRun = lastFinished(view)
+
+	chip.Word = strings.TrimPrefix(chip.Class, "st-")
+	if chip.Word == "none" {
+		chip.Word = "never ran"
+	}
+
+	chip.Glyph = statusMark(chip.Word)
+
+	if chip.Held {
+		chip.Class, chip.Glyph, chip.Word = "st-held", "⊘", "held"
+	}
+
+	return chip
+}
+
+func fedBy(view jobView, upstream string) bool {
+	for _, input := range view.Inputs {
+		if slices.Contains(input.Passed, upstream) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// jobHistory is one read per job per poll, the job page's own ListRuns; a read that fails draws no strip rather than failing the row.
+// ponytail: per-job reads; a grouped "last N per job" store query if a daemon's poll ever shows up in a profile.
+func jobHistory(ctx context.Context, pipeline *Pipeline, job string) []store.RunRow {
+	runs, err := pipeline.Store.ListRuns(ctx, job, laneRuns)
+	if err != nil {
+		return nil
+	}
+
+	slices.Reverse(runs)
+
+	return runs
+}
+
+// redRun is the run that made a red row red, so Latest cannot report a later green run of another job beside a red mark.
+func redRun(chips []jobChip) (store.RunRow, bool) {
+	for _, chip := range chips {
+		if chip.Red() && chip.HasRun {
+			return chip.Run, true
+		}
+	}
+
+	return store.RunRow{}, false
+}
+
+// nextFor reads the pipeline's triggers off its config: cron resources become a time through cronNext, the rest are named. A cron that cannot answer is named instead, so the cell never claims manual for a triggered pipeline.
+func nextFor(cfg *config.Config, cronNext CronNext, now time.Time) nextView {
+	var next nextView
+
+	for _, job := range cfg.Jobs {
+		for _, input := range job.Inputs() {
+			// A passed: input is handed over by an upstream job, not something the pipeline waits on from outside.
+			if !input.Trigger || len(input.Passed) > 0 || slices.Contains(next.On, input.Resource) {
+				continue
+			}
+
+			at, ok := cronAt(cfg, input.Resource, cronNext, now)
+			if !ok {
+				next.On = append(next.On, input.Resource)
+
+				continue
+			}
+
+			if next.At.IsZero() || at.Before(next.At) {
+				next.At = at
+			}
+		}
+	}
+
+	return next
+}
+
+func cronAt(cfg *config.Config, name string, cronNext CronNext, now time.Time) (time.Time, bool) {
+	res, err := cfg.FindResource(name)
+	if err != nil || res.Type != config.CronType || cronNext == nil {
+		return time.Time{}, false
+	}
+
+	at, err := cronNext(*res, now)
+
+	return at, err == nil && !at.IsZero()
+}
+
+// nextLayout coarsens a fire time with distance: the clock later today, the weekday within a week, the date past that.
+func nextLayout(now, at time.Time) string {
+	now = now.In(at.Location())
+
+	switch {
+	case at.Sub(now) < 24*time.Hour && at.YearDay() == now.YearDay():
+		return "15:04"
+	case at.Sub(now) < 7*24*time.Hour:
+		return "Mon 15:04"
+	default:
+		return "Jan 2"
+	}
+}
+
+func nextTag(at time.Time) template.HTML {
+	//nolint:gosec // G203: every interpolation is machine-formatted, not input
+	return template.HTML(fmt.Sprintf(`<time datetime=%q title=%q>%s</time>`,
+		at.UTC().Format(time.RFC3339), at.Format("Mon Jan 2 15:04 MST"), at.Format(nextLayout(time.Now(), at))))
 }
 
 // handleIndex answers the bare root, and its answer depends on how many
@@ -306,6 +434,7 @@ func (s *Server) overviewPipelines(c *echo.Context, nav navData) []overviewPipel
 			Attention: summary.Attention,
 			InFlight:  summary.InFlight,
 			Chips:     jobChips(ctx, reads),
+			Next:      nextFor(pipeline.Config(), s.cronNext, time.Now()),
 		}
 
 		runs, err := pipeline.Store.ListRuns(ctx, "", 1)
@@ -316,6 +445,10 @@ func (s *Server) overviewPipelines(c *echo.Context, nav navData) []overviewPipel
 		held, err := reads.HeldJobs(ctx)
 		if err == nil {
 			row.Held = len(held)
+		}
+
+		if run, ok := redRun(row.Chips); ok {
+			row.Latest, row.HasRun = run, true
 		}
 
 		out = append(out, row)

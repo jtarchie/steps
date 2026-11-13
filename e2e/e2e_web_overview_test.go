@@ -61,7 +61,7 @@ jobs:
 		{`<a class="cell st-passed" href="/p/green/jobs/ok"`, "a green job is not a green cell"},
 		{`<a class="cell st-passed" href="/p/red/jobs/fine"`, "a green job beside a red one is not a green cell"},
 		{`<a class="cell st-failed" href="/p/red/jobs/broken"`, "the red job is not a red cell"},
-		{`<a class="named st-failed" href="/p/red/jobs/broken"`, "the red job is not named beside the strip"},
+		{`<span aria-hidden="true">broken</span></a>`, "the red job's cell does not carry its name"},
 	} {
 		if !strings.Contains(root, want.cell) {
 			t.Errorf("%s: missing %s", want.cost, want.cell)
@@ -188,4 +188,49 @@ func between(t *testing.T, text, start, end string) string {
 	inside, _, _ := strings.Cut(after, end)
 
 	return inside
+}
+
+// TestTheDaemonsOverviewSaysWhenACronFiresNext: the cron reader lives in internal/resource, which web may not import, so only the daemon wiring it in makes the Next column a time rather than the resource's name.
+func TestTheDaemonsOverviewSaysWhenACronFiresNext(t *testing.T) {
+	dir := t.TempDir()
+	cron := filepath.Join(dir, "nightly.yml")
+	manual := filepath.Join(dir, "manual.yml")
+
+	writePipelineFile(t, cron, `
+resources:
+- name: nightly
+  type: cron
+  source: {expression: "0 3 * * *"}
+jobs:
+- name: build
+  plan:
+  - get: nightly
+    trigger: true
+  - task: work
+    run: "true"
+`)
+	writePipelineFile(t, manual, `
+jobs:
+- name: audit
+  plan:
+  - task: work
+    run: "true"
+`)
+
+	served := startWebFor(t, cron, "--interval", "1h")
+	defer served.stop(t)
+
+	served.set(t, cli.PipelineName(manual), manual)
+
+	code, root := served.get(t, "/")
+	if code != 200 {
+		t.Fatalf("GET / = %d, want the overview", code)
+	}
+
+	_, row, _ := strings.Cut(root, `data-slug="nightly"`)
+	next, _, _ := strings.Cut(row, "</tr>")
+
+	if !strings.Contains(next, `<td class="next"><time datetime=`) || strings.Contains(next, "on nightly") {
+		t.Errorf("the daemon's overview does not say when the nightly cron fires next:\n%s", next)
+	}
 }

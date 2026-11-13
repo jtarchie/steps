@@ -272,9 +272,8 @@ tr.checkfail pre { margin: 0 0 4px; }
   .statusline .brand { display: inline-flex; align-items: center; gap: 0.4em; }
   .jumpbtn { min-height: 40px; padding: 4px 12px; }
   .actionbar .btn { min-height: 36px; }
-  /* A cell is a link; at 26x22 a thumb hits its neighbour. Scoped to the
-     row so it outranks the cell's own size, defined further down. */
-  .cellrow .cell { width: 34px; height: 30px; }
+  /* A cell is a link; at 22px tall a thumb hits its neighbour. Scoped to the row so it outranks the cell's own size, defined further down. */
+  .cellrow .cell { min-height: 30px; }
   .pipelines .cellrow { gap: 6px; }
   .pipelines .btn { min-height: 36px; }
 }
@@ -438,17 +437,20 @@ td.faint, .faint { color: var(--faint); }
 .hash::after { content: "]"; color: var(--faint); }
 
 /* ---- overview job cells ----
- * The heat strip: one cell per job, its glyph on a tint of its own status
- * color, so shape and color read before any word. A passed cell is tinted
- * less than a red one; the strip is quiet unless something is not. A job that
- * never ran is an empty dashed cell — present, since the row says what the
- * pipeline holds, but saying nothing has happened. */
+ * One named cell per job, its glyph on a tint of its own status color, so
+ * shape and color read before the name. A passed cell is tinted less than a
+ * red one; the row is quiet unless something is not. A job that never ran is
+ * a dashed cell with no glyph: present, since the row says what the pipeline
+ * holds, but saying nothing has happened. */
 .jobchips { white-space: normal; }
 .cellrow { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
 /* 10% is as far as a tint goes: the red glyph on a red row's red tint is
    4.6:1 there, and under 4.5 at 12%. Hover outlines rather than darkens, for
    the same reason. */
-.cell { display: inline-grid; place-items: center; width: 26px; height: 22px; border-radius: 2px; text-decoration: none; background: color-mix(in srgb, currentColor 10%, transparent); }
+.cell { display: inline-flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 8px; border-radius: 2px; text-decoration: none; background: color-mix(in srgb, currentColor 10%, transparent); }
+/* The glyph carries the status color; the name stays body text, so a column of green names is not the noise that hides the red one. */
+.cell > span + span { color: var(--fg); }
+.cell .glyph:empty { display: none; }
 .cell:hover { text-decoration: none; outline: 1px solid color-mix(in srgb, currentColor 60%, transparent); outline-offset: -1px; }
 .cell.st-passed { background: color-mix(in srgb, currentColor 7%, transparent); }
 .cell.st-none, .cell.st-queued { background: none; outline: 1px dashed var(--faint-line); outline-offset: -1px; }
@@ -459,15 +461,21 @@ td.faint, .faint { color: var(--faint); }
    because the focus ring is a yellow box too, and a focused cell must not
    read as a running one. */
 .cell.live { box-shadow: inset 0 -2px 0 var(--yellow); }
-/* The red cells again, in words, so which job is wrong never rests on a tooltip. */
-.jobchips .named { margin-left: 7px; text-decoration: none; }
-.jobchips .named:hover { text-decoration: underline; }
+/* A job is its cell over its last runs, oldest first; an errored run is hollow, since the machine saying no is a different fix from a step saying no. */
+.lanejob { display: inline-grid; gap: 3px; }
+.hist { display: flex; gap: 2px; padding-left: 1px; }
+.tick { display: block; width: 7px; height: 7px; border-radius: 1px; background: currentColor; }
+.tick.st-errored { background: none; box-shadow: inset 0 0 0 1.5px currentColor; }
+.tick.st-aborted { background: var(--faint-line); }
+.tick.st-running { animation: tick-pulse 1.4s ease-in-out infinite; }
+@keyframes tick-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .tick.st-running { animation: none; } }
+.jobsep { color: var(--faint); padding: 0 3px; align-self: start; line-height: 22px; }
+.pipelines .next { white-space: nowrap; color: var(--dim); }
 /* The root's rows: a pipeline's badges follow its name, and only when
    something is not normal. */
 .pipelines .pname { white-space: nowrap; }
-/* The strip gets room for about a dozen cells and wraps past that; the spare
-   width goes to the pause column, so a row's last run sits near its strip
-   instead of across an empty middle on a wide screen. */
+/* Four named jobs with their strips fit before the row wraps; the spare width goes to the pause column, so Latest sits near the jobs instead of across an empty middle. */
 .pipelines .cellrow { width: max-content; max-width: 30em; }
 .pipelines .rowextra { width: 100%; }
 .pipelines .pname .counts { display: inline-flex; gap: 8px; margin-left: 10px; font-variant-numeric: tabular-nums; }
@@ -510,7 +518,7 @@ td.faint, .faint { color: var(--faint); }
   .pipelines tbody tr:last-child { border-bottom: 0; }
   .pipelines td { display: block; padding: 2px 0; border: 0; }
   .pipelines .pname { white-space: normal; }
-  .pipelines .jobchips, .pipelines .lastrun, .pipelines .rowextra, .pipelines .broken-reason { width: auto; }
+  .pipelines .jobchips, .pipelines .lastrun, .pipelines .next, .pipelines .rowextra, .pipelines .broken-reason { width: auto; }
   .pipelines .cellrow { width: auto; max-width: none; }
   .pipelines .rowextra { text-align: left; opacity: 1; }
   /* Flush with the cells above it, not indented by the form's margin. */

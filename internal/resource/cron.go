@@ -97,6 +97,16 @@ func (s *Schedule) Check(previous map[string]any, now time.Time) ([]map[string]a
 	return []map[string]any{cronVersion(now)}, nil
 }
 
+// NextFire is the first slot after now, in the resource's own location, or the zero time when none falls within robfig's five-year reach. A poll mints the version at its first tick past that slot, so this is when the job becomes due, not to the second when it starts.
+func NextFire(res config.Resource, now time.Time) (time.Time, error) {
+	schedule, err := Cron(res)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return schedule.schedule.Next(now.In(schedule.location)), nil
+}
+
 func cronVersion(at time.Time) map[string]any {
 	return map[string]any{cronVersionField: at.UTC().Format(time.RFC3339)}
 }

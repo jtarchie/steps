@@ -143,6 +143,8 @@ type Server struct {
 	hostsImplied bool
 	// version is what the footer prints, so a bug report can name the build.
 	version string
+	// cronNext turns a cron resource into its next slot for the overview's Next column; nil names the resource instead.
+	cronNext CronNext
 	// tracing is the outermost middleware when set, so a request any later one refuses is still traced. Nil in page tests, which keep talking to a bare echo.
 	tracing echo.MiddlewareFunc
 }
@@ -161,6 +163,14 @@ func WithCapacity(capacity Capacity) Option {
 // WithTracing installs m ahead of every other middleware; it is how internal/cli traces requests without this package importing a telemetry SDK.
 func WithTracing(m echo.MiddlewareFunc) Option {
 	return func(s *Server) { s.tracing = m }
+}
+
+// CronNext is when a cron resource next makes its jobs due; the zero time for never.
+type CronNext func(res config.Resource, now time.Time) (time.Time, error)
+
+// WithCronNext is how internal/cli hands over the cron reader, which lives in internal/resource where this package may not reach.
+func WithCronNext(next CronNext) Option {
+	return func(s *Server) { s.cronNext = next }
 }
 
 // Capacity is the daemon-wide run limit (0 when unlimited) and how many builds hold it.

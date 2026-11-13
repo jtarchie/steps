@@ -15,7 +15,7 @@
 <div class="tablewrap" id="pipelines-table">
   <table class="pipelines" aria-describedby="pipelines-keys">
     <thead>
-      <tr><th>Pipeline</th><th>Jobs</th><th>Last run</th><th><span class="visually-hidden">Pause</span></th></tr>
+      <tr><th>Pipeline</th><th>Jobs</th><th>Latest</th><th>Next</th><th><span class="visually-hidden">Pause</span></th></tr>
     </thead>
     <tbody>
       {{range .Pipelines}}
@@ -23,22 +23,21 @@
       {{/* Held and not served: no pages behind it, so no links and no pause, and the state said in words rather than only in red. */}}
       <tr class="red" data-slug="{{.Slug}}">
         <td class="pname">{{template "markglyph" .Mark}}{{.Slug}} <span class="st st-failed">broken</span></td>
-        <td colspan="3" class="broken-reason">{{.Broken}}</td>
+        <td colspan="4" class="broken-reason">{{.Broken}}</td>
       </tr>
       {{else}}
       {{/* Red rows carry weight; the rest step back. Order never changes, so emphasis, not position, is what finds the red one. */}}
       <tr{{if or .Paused .Red}} class="{{if .Paused}}paused{{end}}{{if and .Paused .Red}} {{end}}{{if .Red}}red{{end}}"{{end}} data-slug="{{.Slug}}">
         {{/* Only what is not normal gets a word: a healthy row is its mark, name, jobs and last run. The mark already draws a pause unless a failure outranks it, so the chip is only for then. */}}
         <td class="pname">{{template "markglyph" .Mark}}<a href="/p/{{.Slug}}"{{if .Red}} aria-describedby="red-{{.Slug}}"{{end}}>{{.Slug}}</a>{{template "counts" .}}{{if and .Paused (ne .Mark.Word "paused")}} <span class="st st-paused">paused</span>{{end}}</td>
-        {{/* One cell per job, colored by its latest finished run, barred
-             while one is in flight: the strip's shape tells pipelines apart
-             and a red cell reads before any word does. A cell names its job
-             only on hover, so the red ones are named again in words. */}}
-        <td class="jobchips">{{$slug := .Slug}}<span class="cellrow">{{range .Chips}}<a class="cell {{.Class}}{{if .Running}} live{{end}}" href="/p/{{$slug}}/jobs/{{.Name}}" title="{{.Name}}: {{.Word}}{{if .Running}}, running{{end}}" aria-label="{{.Name}}, {{.Word}}{{if .Running}}, running{{end}}" tabindex="-1">{{.Glyph}}</a>{{end}}{{range .Chips}}{{if .Red}}<a class="named {{.Class}}" href="/p/{{$slug}}/jobs/{{.Name}}" tabindex="-1" aria-hidden="true">{{.Name}}</a>{{end}}{{end}}</span></td>
+        {{/* One cell per job, named, colored by its latest finished run and barred while one is in flight; under it the job's last runs, oldest first, so a job that broke once reads apart from one that keeps breaking. An arrow joins a job to the one whose passed: it takes. */}}
+        <td class="jobchips">{{$slug := .Slug}}<span class="cellrow">{{range $i, $c := .Chips}}{{if $i}}<span class="jobsep" aria-hidden="true">{{if .Fed}}→{{else}}·{{end}}</span>{{end}}<span class="lanejob"><a class="cell {{.Class}}{{if .Running}} live{{end}}" href="/p/{{$slug}}/jobs/{{.Name}}" title="{{.Name}}: {{.Word}}{{if .Running}}, running{{end}}" aria-label="{{.Name}}, {{.Word}}{{if .Running}}, running{{end}}" tabindex="-1"><span class="glyph" aria-hidden="true">{{.Glyph}}</span><span aria-hidden="true">{{.Name}}</span></a>{{with .History}}<span class="hist" aria-hidden="true">{{range .}}<i class="tick st-{{statusWord .Status}}"></i>{{end}}</span>{{end}}</span>{{end}}</span></td>
+        {{/* On a red row, the run that made it red; otherwise the newest. Running counts up; finished is one coarse unit. */}}
         <td class="lastrun">
-          {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{.Slug}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a> <span class="dim">{{agoTag .Latest.StartedAt}}</span>
+          {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{.Slug}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a> <span class="dim">{{.Latest.JobName}} {{if .Latest.FinishedAt.IsZero}}{{elapsedTag .Latest}}{{else}}{{agoCompact .Latest.StartedAt}}{{end}}</span>
           {{else}}<span class="faint">never ran</span>{{end}}
         </td>
+        <td class="next">{{if or .Paused $.Nav.AllPaused}}<span class="faint">paused</span>{{else}}{{with .Next.At}}{{if not .IsZero}}{{nextTag .}}{{end}}{{end}}{{if .Next.On}}{{if not .Next.At.IsZero}} · {{end}}on {{range $i, $r := .Next.On}}{{if $i}}, {{end}}{{$r}}{{end}}{{else if .Next.At.IsZero}}<span class="faint">manual</span>{{end}}{{end}}</td>
         {{/* Out of the way until the row is hovered or focused: not what the
              root is looked at for, and a click from the pipeline's own page. */}}
         <td class="rowextra">

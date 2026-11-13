@@ -19,6 +19,7 @@ import (
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/telemetry"
+	"github.com/jtarchie/steps/internal/trigger"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -382,7 +383,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 
 	defer closeAccounts()
 
-	server, err := web.New(nil, runner, append(append(opts, w.hostOptions()...), web.WithVersion(version()), web.WithCapacity(local), web.WithTracing(telemetry.Middleware(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory), web.WithExternalURL(w.published))...)
+	server, err := web.New(nil, runner, append(append(opts, w.hostOptions()...), web.WithVersion(version()), web.WithCronNext(trigger.NextFire), web.WithCapacity(local), web.WithTracing(telemetry.Middleware(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory), web.WithExternalURL(w.published))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

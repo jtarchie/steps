@@ -197,6 +197,7 @@ func templateFuncs() template.FuncMap {
 		"duration":   formatDuration,
 		"ago":        formatAgo,
 		"agoTag":     agoTag,
+		"nextTag":    nextTag,
 		"agoCompact": agoCompactTag,
 		"elapsedTag": elapsedTag,
 		"stamp":      formatStamp,

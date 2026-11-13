@@ -261,3 +261,34 @@ func TestPreflightCompilesACronResource(t *testing.T) {
 		t.Errorf("a bad expression raised %v, want one problem on the resource, not transient, naming the field", problems)
 	}
 }
+
+// TestNextFireIsTheNextSlotInTheResourcesZone: what the overview says a cron
+// pipeline does next. The slot is read in the source's location and returned
+// there, so a page prints the hour the expression names.
+func TestNextFireIsTheNextSlotInTheResourcesZone(t *testing.T) {
+	t.Parallel()
+
+	res := config.Resource{Name: "weekly", Type: config.CronType, Source: map[string]any{"expression": "0 7 * * 0", "location": "America/Denver"}}
+
+	// Wednesday 2026-11-11, noon UTC: the next Sunday 07:00 Denver is the 15th.
+	next, err := NextFire(res, at(t, "2026-11-11T12:00:00Z"))
+	if err != nil {
+		t.Fatalf("NextFire: %v", err)
+	}
+
+	if got := next.Format("Mon 2006-01-02 15:04 MST"); got != "Sun 2026-11-15 07:00 MST" {
+		t.Errorf("next fire = %s, want Sunday 07:00 in Denver", got)
+	}
+
+	never := config.Resource{Name: "never", Type: config.CronType, Source: map[string]any{"expression": "0 0 30 2 *"}}
+
+	next, err = NextFire(never, at(t, "2026-11-11T12:00:00Z"))
+	if err != nil || !next.IsZero() {
+		t.Errorf("a slot that never comes = %v, %v; want the zero time and no error", next, err)
+	}
+
+	_, err = NextFire(config.Resource{Name: "bad", Type: config.CronType, Source: map[string]any{"expression": "nope"}}, time.Now())
+	if err == nil {
+		t.Error("a bad expression has a next fire")
+	}
+}
