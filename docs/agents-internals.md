@@ -195,7 +195,7 @@ The CLI's own **version is deliberately not hashed**. It drifts under the operat
 
 A CLI target's probe is `exec.LookPath`, nothing more. The HTTP probe sends a real request because an endpoint can be reachable and still reject the model or the key; a CLI has no equivalent cheap failure, and spawning one to find out would put a process launch in every `steps web` poll. A CLI that is installed but broken fails at the step with the CLI's own error, which beats anything a probe would synthesize.
 
-The probe cache is keyed `cli|<cli>|<model>` rather than `model|<baseURL>|<model>`: `""` is a perfectly ordinary `BaseURL` for a CLI source, so a shared key space would let a CLI agent collide with an endpoint-less hosted one.
+The probe cache is keyed `cli|<cli>|<model>` rather than the hosted key `model|<baseURL>|<model>|<api_key_env>` — and, when the source's key comes from `source.secrets`, an additional `|<pipeline>|<secret_ref>` (`keyProbeScope` in `internal/agent/apikey.go`). `""` is a perfectly ordinary `BaseURL` for a CLI source, so a shared key space would let a CLI agent collide with an endpoint-less hosted one. The credential parts are in the key on purpose, and they are names and references, never resolved values: a probe exercises the credential too, so two agents on the same endpoint and model with different keys must not share a probe result; and with secret-backed keys the same variable name can resolve to a different credential per pipeline, so one pipeline's probe must not vouch for another's.
 
 ## Compacting long conversations
 
