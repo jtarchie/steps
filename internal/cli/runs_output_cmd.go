@@ -32,9 +32,20 @@ func (r *RunsOutputCmd) Run() error {
 
 func (r *RunsOutputCmd) print(ctx context.Context, st interface {
 	store.Meta
+	store.Runs
 	store.Events
 },
 ) error {
+	// A typo or another pipeline's run is not "a run that printed nothing".
+	_, ok, err := st.FindRunRow(ctx, r.RunID)
+	if err != nil {
+		return fmt.Errorf("could not read run %q: %w", r.RunID, err)
+	}
+
+	if !ok {
+		return fmt.Errorf("no run %q was recorded for pipeline %q", r.RunID, st.Pipeline())
+	}
+
 	outputs, names, err := r.recorded(ctx, st)
 	if err != nil {
 		return err
