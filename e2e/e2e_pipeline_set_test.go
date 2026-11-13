@@ -210,21 +210,16 @@ jobs:
 // read that row, failed the same check, and exited — with no endpoint left to
 // fix it through, because the endpoint is what the daemon was going to serve.
 //
-// A read-only directory is the lever, because `workspace.root:` is probed by
-// actually writing to it.
+// A regular file where `workspace.root:` names a directory is the lever: the
+// provider's MkdirAll there fails with ENOTDIR for every user, root included —
+// so the workspace check still refuses, as the last thing that can, before the
+// durable record.
 func TestARefusedSetLeavesNothingForTheNextRestartToChokeOn(t *testing.T) {
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	root := filepath.Join(dir, "unwritable")
 
-	err := os.Mkdir(root, 0o500)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Restored before the temp dir is reaped, which cannot remove what it
-	// cannot write into.
-	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable, and this one holds nothing
+	breakRoot(t, root)
 
 	writePipelineFile(t, path, `
 workspace:
@@ -239,9 +234,9 @@ jobs:
 
 	served := startWebFor(t, path, "--interval", "1h", "--skip-set")
 
-	err = cli.Run([]string{"pipeline", "set", "-p", "app", "-c", path, "-n", "--target", served.target()})
+	err := cli.Run([]string{"pipeline", "set", "-p", "app", "-c", path, "-n", "--target", served.target()})
 	if err == nil {
-		t.Fatal("a set whose workspace root this machine cannot write to was accepted")
+		t.Fatal("a set whose workspace root is a file, not a directory, was accepted")
 	}
 
 	if !strings.Contains(err.Error(), "workspace") {
@@ -293,10 +288,7 @@ func TestARestartServesTheRestAndShowsTheBrokenOne(t *testing.T) {
 func assertASetRepairs(t *testing.T, restarted *webProcess, root, path string) {
 	t.Helper()
 
-	err := os.Chmod(root, 0o700) //nolint:gosec // the root is the test's own
-	if err != nil {
-		t.Fatal(err)
-	}
+	repairRoot(t, root)
 
 	out := captureStdout(t, func() { restarted.set(t, "onroot", path) })
 	if !strings.Contains(out, "repaired") {
@@ -312,7 +304,7 @@ func assertASetRepairs(t *testing.T, restarted *webProcess, root, path string) {
 	}
 }
 
-// restartWithABrokenPipeline sets healthy and onroot, stops, makes onroot's workspace root read-only — the workspace probe writes — and restarts, returning the root and onroot's pipeline file.
+// restartWithABrokenPipeline sets healthy and onroot, stops, makes onroot's workspace root a file where a directory belongs — so the provider's MkdirAll fails with ENOTDIR for every user, root included — and restarts, returning the root and onroot's pipeline file.
 func restartWithABrokenPipeline(t *testing.T) (*webProcess, string, string) {
 	t.Helper()
 
@@ -331,8 +323,6 @@ func restartWithABrokenPipelineOn(t *testing.T, state string) (*webProcess, stri
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
 
 	writePipelineFile(t, path, `
 workspace:
@@ -353,12 +343,42 @@ jobs:
 	served.set(t, "onroot", path)
 	served.stop(t)
 
-	err = os.Chmod(root, 0o500) //nolint:gosec // read-only is the point
+	breakRoot(t, root)
+
+	return startWeb(t, "--db", state, "--interval", "1h"), root, path
+}
+
+// breakRoot leaves a workspace root this machine cannot supply for ANY user: a
+// regular file where the provider needs the directory, so the MkdirAll it does
+// there fails with ENOTDIR. A read-only mode cannot stand in for this — root
+// writes through one, so the "broken" state never happens and the test passes
+// vacuously (#251). root must be a path this test made, since it is removed
+// first.
+func breakRoot(t *testing.T, root string) {
+	t.Helper()
+
+	err := os.RemoveAll(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return startWeb(t, "--db", state, "--interval", "1h"), root, path
+	writePipelineFile(t, root, "") // 0o600, so no //nolint:gosec is needed (G306 asks for <= 0600)
+}
+
+// repairRoot puts the directory back, so a test can go on to prove the pipeline
+// runs once its workspace can be supplied again.
+func repairRoot(t *testing.T, root string) {
+	t.Helper()
+
+	err := os.RemoveAll(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Mkdir(root, 0o700) // G301 asks for <= 0750
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // onrootBrokenReason is why /api/pipelines lists onroot as held and not served, empty when it does not.
