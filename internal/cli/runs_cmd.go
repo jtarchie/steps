@@ -32,12 +32,12 @@ import (
 // command that distinction was a runtime table of which combinations to
 // refuse; as subcommands it is the grammar, and kong enforces it.
 type RunsCmd struct {
-	List   RunsListCmd   `cmd:"" default:"withargs"                                                 help:"runs, newest first"`
+	List   RunsListCmd   `cmd:"" default:"withargs"                                                      help:"runs, newest first"`
 	Steps  RunsStepsCmd  `cmd:"" help:"individual steps, with what each one recorded"`
 	Queue  RunsQueueCmd  `cmd:"" help:"what the trigger loop has queued"`
 	Cost   RunsCostCmd   `cmd:"" help:"what a pipeline's agent steps spent"`
 	Where  RunsWhereCmd  `cmd:"" help:"the machines a run's placed steps ran on"`
-	Output RunsOutputCmd `cmd:"" help:"what a step of a run printed, whole"`
+	Output RunsOutputCmd `cmd:"" help:"what a step printed, whole; with no step, the steps that printed"`
 	Abort  RunsAbortCmd  `cmd:"" help:"stop a run on a steps web daemon, or drop a queued one"`
 	Follow RunsFollowCmd `cmd:"" help:"watch a run to its end: live on a terminal, lines elsewhere"`
 }

@@ -337,8 +337,11 @@ what it spent and where it ran on its own row.
   too, and it stops at 64MiB with a line saying how much more was dropped. A
   step that fits in the record stores nothing. `steps runs output <run> <step>
   -p <pipeline>` prints the same whole output in a terminal, and the record
-  itself for a step that stored nothing. How, and for how long, is under
-  [Live runs](#live-runs).
+  itself for a step that stored nothing. Leaving the step off — `steps runs
+  output <run> -p <pipeline>` — lists the steps that recorded output
+  instead, one per line, in the order each first did; a step still printing
+  joins the list when it finishes, the list naming only what this command can
+  print. How, and for how long, is under [Live runs](#live-runs).
 - **An agent step expands into its conversation**: the model's text each turn,
   every tool call, and any sub-agent delegation nested underneath, closing with
   the step's `answer`. Each model reply carries how long the request behind it

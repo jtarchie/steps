@@ -463,3 +463,57 @@ jobs:
 		t.Errorf("runs output nobody = %v, want the steps that did record output named", err)
 	}
 }
+
+// Held a run id and not the step names: the names come back one per line, in the order each first recorded, and nothing else on stdout, so a shell can loop over them.
+func TestRunsOutputWithNoStepListsTheStepsThatPrinted(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: chatty
+    run: echo first
+  - task: quiet
+    run: echo second
+`)
+
+	err := runSilently(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run := stepOutput(t, recordedEvents(t, path), "chatty").RunID
+
+	got, err := stdoutOf(t, func() error {
+		return cli.Run(append([]string{"runs", "output", run}, readArgs(path)...))
+	})
+	if err != nil || got != "chatty\nquiet\n" {
+		t.Errorf("runs output with no step = %q, %v; want the steps that recorded output, one per line", got, err)
+	}
+}
+
+// No step named is not a way around the refusal: a run that recorded nothing is an error under both spellings, not an empty list and exit 0.
+func TestRunsOutputWithNothingRecordedIsStillAnError(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: silent
+    run: "true"
+`)
+
+	err := runSilently(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run := newestRun(t, string(cli.StatePath(path, "")), cli.PipelineName(path), "build").ID
+
+	for _, args := range [][]string{{"runs", "output", run}, {"runs", "output", run, "silent"}} {
+		_, err := stdoutOf(t, func() error {
+			return cli.Run(append(args, readArgs(path)...))
+		})
+		if err == nil || !strings.Contains(err.Error(), "recorded no step output") {
+			t.Errorf("steps %s = %v, want the run's recorded no step output", strings.Join(args, " "), err)
+		}
+	}
+}
