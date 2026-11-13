@@ -248,6 +248,13 @@ func (e stepExpectation) owed(trajectory []recordedToolCall) (unmet []string, me
 // the procedure — or nil when the step opted out or owes nothing. It reuses
 // the post-hoc wording so an operator reads the same sentence whichever path
 // reached the failure.
+// bringHomeWith names how the files check reaches a container's deferred writes.
+func (e stepExpectation) bringHomeWith(bring func() error) {
+	if e.files.home != nil {
+		e.files.home.bring = bring
+	}
+}
+
 func (e stepExpectation) mismatch(trajectory []recordedToolCall) error {
 	if !e.nudge {
 		return nil
@@ -300,6 +307,21 @@ type assertFilesExpectation struct {
 	files    []string
 	dir      string
 	agentDir string
+	// home brings a container's deferred writes here before dir is read; shared by every copy, since the verdict tool holds one made before the container existed.
+	home *homeward
+}
+
+// homeward is how the files check asks for the tree; bring is nil until a container defers its writes.
+type homeward struct {
+	bring func() error
+}
+
+func (h *homeward) fetch() error {
+	if h == nil || h.bring == nil {
+		return nil
+	}
+
+	return h.bring()
 }
 
 // newAssertFilesExpectation reads the contract off a step. The zero value is
@@ -310,7 +332,7 @@ func newAssertFilesExpectation(assert *config.Assert, dir, agentDir string) asse
 		return assertFilesExpectation{}
 	}
 
-	return assertFilesExpectation{files: assert.Files, dir: dir, agentDir: agentDir}
+	return assertFilesExpectation{files: assert.Files, dir: dir, agentDir: agentDir, home: &homeward{}}
 }
 
 // unmet reports the entries not satisfied right now — nothing when the step
@@ -323,6 +345,9 @@ func newAssertFilesExpectation(assert *config.Assert, dir, agentDir string) asse
 // telling the truth about its intent while the pipeline has nothing to carry
 // forward. Everything downstream reads files.
 func (e assertFilesExpectation) unmet() []string {
+	// A failed fetch is reported by the step's own at the end; here it only risks one needless nudge.
+	_ = e.home.fetch()
+
 	return config.AssertFilesMismatches(e.files, e.dir)
 }
 
@@ -331,6 +356,11 @@ func (e assertFilesExpectation) unmet() []string {
 // reworded, so an operator reads the same sentence whichever path reached the
 // failure.
 func (e assertFilesExpectation) mismatch() error {
+	err := e.home.fetch()
+	if err != nil {
+		return err
+	}
+
 	//nolint:wrapcheck // the config package owns this message; rewording it here is the bug
 	return config.AssertFilesMismatch(e.files, e.dir)
 }

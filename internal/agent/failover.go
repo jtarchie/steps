@@ -8,6 +8,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/agent/llmclient"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // runPreparedWithFailover runs prepared's conversation and, on a transient
@@ -48,11 +50,25 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (_
 	ctx, invoked := startInvocation(ctx, prepared.ri)
 	defer func() { invoked.end(ctx, prepared.conv.usage.snapshot(), err) }()
 
+	// One fetch per step rather than per write, the probe included; the files check and the step's end are the only readers of this machine's copy before it is done.
+	ctx = shell.DeferFetch(ctx)
+
 	// Here rather than at preparation, so a cached step never pays for the container its tools would have used — see preparedAgentStep.openTree. prepared is a value, so this settles the copy the conversation below actually runs from.
+
 	prepared, err = prepared.openTree(ctx)
 	if err != nil {
 		return conversationResult{}, servedSource{ri: prepared.ri, llm: prepared.llm}, err
 	}
+
+	runner := prepared.conv.env.runner
+	prepared.conv.expect.bringHomeWith(func() error { return shell.Sync(ctx, runner) })
+
+	defer func() {
+		syncErr := shell.Sync(ctx, runner)
+		if syncErr != nil {
+			err = errors.Join(err, syncErr)
+		}
+	}()
 
 	timeout := agentTimeout(prepared.ri.Timeout)
 

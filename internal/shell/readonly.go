@@ -22,3 +22,33 @@ func IsReadOnly(ctx context.Context) bool {
 
 	return marked
 }
+
+// deferFetchKey marks a context whose commands leave the outputs on the worker until Sync.
+type deferFetchKey struct{}
+
+// DeferFetch marks ctx so a venue keeps a write's outputs where they were made until Sync: an agent writes dozens of times, and bringing a repository home after each one cost a full transfer per edit (steps#246).
+func DeferFetch(ctx context.Context) context.Context {
+	return context.WithValue(ctx, deferFetchKey{}, true)
+}
+
+// IsFetchDeferred reports whether ctx was marked by DeferFetch.
+func IsFetchDeferred(ctx context.Context) bool {
+	marked, _ := ctx.Value(deferFetchKey{}).(bool)
+
+	return marked
+}
+
+// Syncer is a runner whose outputs can lag this machine's copy of the tree.
+type Syncer interface {
+	Sync(ctx context.Context) error
+}
+
+// Sync brings home whatever runner deferred; a runner that never defers has nothing to bring.
+func Sync(ctx context.Context, runner Runner) error {
+	syncer, ok := runner.(Syncer)
+	if !ok {
+		return nil
+	}
+
+	return syncer.Sync(ctx) //nolint:wrapcheck // the venue's error names what failed to arrive
+}

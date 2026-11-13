@@ -78,7 +78,9 @@ type plusSession struct {
 	// kept are volumes now named by a digest, which outlive the session.
 	kept map[string]bool
 	// fetchMu serializes fetches: an agent's concurrent tool calls would otherwise swap the same local paths and write kept at once.
-	fetchMu   sync.Mutex
+	fetchMu sync.Mutex
+	// stale is a write whose fetch was deferred, owed by the next Sync.
+	stale     atomic.Bool
 	heldMu    sync.Mutex
 	held      map[string]string
 	heldSizes map[string]int64
@@ -145,6 +147,21 @@ func (r plusRunner) WithLabel(label string) shell.Runner {
 
 func (r plusRunner) Close() error { return r.s.close() }
 
+// Sync brings home the outputs of every write since the last one.
+func (r plusRunner) Sync(ctx context.Context) error {
+	if !r.s.stale.Swap(false) {
+		return nil
+	}
+
+	err := r.s.fetch(ctx)
+	if err != nil {
+		r.s.stale.Store(true)
+		r.s.conn.suspect.Store(true)
+	}
+
+	return err
+}
+
 func (r plusRunner) placement() (Placement, bool) { return r.s.placement() }
 
 func (r plusRunner) reclaimed() (string, bool) {
@@ -177,6 +194,12 @@ func (r plusRunner) around(ctx context.Context, run func(shell.Runner) error) (e
 	runErr := run(inner)
 	if runErr != nil && !shell.IsExitError(runErr) {
 		r.s.conn.suspect.Store(true)
+
+		return runErr
+	}
+
+	if shell.IsFetchDeferred(ctx) && !shell.IsReadOnly(ctx) {
+		r.s.stale.Store(true)
 
 		return runErr
 	}
