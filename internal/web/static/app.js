@@ -554,6 +554,15 @@
     document.querySelectorAll('time[data-elapsed-since]').forEach(function (node) {
       node.textContent = fmt(now - Date.parse(node.dataset.elapsedSince));
     });
+    // A tool call is still running while its step is and no turn has come after it; the server cannot say so, because the call is appended once and never re-sent.
+    document.querySelectorAll('time[data-call-since]').forEach(function (node) {
+      var turn = node.closest('.turn');
+      var step = node.closest('.step');
+      var later = turn && turn.nextElementSibling;
+      while (later && !later.classList.contains('turn')) later = later.nextElementSibling;
+      var running = step && step.classList.contains('running') && turn && !later;
+      node.textContent = running ? 'running ' + fmt(now - Date.parse(node.dataset.callSince)) : '';
+    });
     // The countdown counterpart: how long until a running agent step's
     // resolved timeout: expires, rather than how long it has run. Floored at
     // "expired" instead of ticking on into a negative duration, which fmt

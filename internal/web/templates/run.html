@@ -312,9 +312,15 @@
         {{end}}
         {{if .Detail}}{{if .IsLazy}}{{template "jsonvalue" (lazyValue $src .Seq .Detail)}}{{else}}{{template "jsonvalue" (jsonValue .Detail)}}{{end}}{{end}}
       </div>
-      {{template "took" .}}
+      {{template "took" .}}{{template "ran" .}}{{template "toolclock" .}}
     </div>{{end}}
 {{end}}
+
+{{/* How long a response's tools ran, on the first result of the batch (see runview.Turn.Ran). */}}
+{{define "ran"}}{{if .Ran}}<span class="ran" title="called {{rfc3339 .Called}} · answered {{rfc3339 .At}}">ran {{duration .Ran}}</span>{{end}}{{end}}
+
+{{/* Empty on purpose: a call does not know whether its result has come, and the stream appends it once, so app.js decides whether it is still running and ticks it. Server text here would be stale on the reload the stream must equal. */}}
+{{define "toolclock"}}{{if and (eq .Type "agent_call") (not .At.IsZero)}}<time class="toolclock" data-call-since="{{rfc3339 .At}}"></time>{{end}}{{end}}
 
 {{/* How long the request a turn answered was in flight, from a turnctx.
      Drawn on the first model turn of a response only (the fold decides), so

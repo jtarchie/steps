@@ -151,6 +151,8 @@ type Step struct {
 	// ponytail: two sub-agents running concurrently at one depth share a
 	// slot and can misattribute; key it by delegation if that shows up.
 	pending map[int]time.Time
+	// calling is when each depth's unanswered tool batch was called, for Ran; on the step for pending's reason.
+	calling map[int]time.Time
 }
 
 // slowShare is the fraction of a step's timeout (1/slowShare) above which one
@@ -174,12 +176,11 @@ func observe(s *Step, turn *Turn) {
 		// A depth speaking again means every conversation below it is over:
 		// a sub-agent that died mid-request never answers, and its slot
 		// would otherwise be what Unanswered blames for the parent's end.
-		for depth := range s.pending {
-			if depth > turn.Depth {
-				delete(s.pending, depth)
-			}
-		}
+		forgetDeeper(s.pending, turn.Depth)
+		forgetDeeper(s.calling, turn.Depth)
 	}
+
+	timeTool(s, turn)
 
 	switch turn.Type {
 	case events.TypeAgentText, events.TypeAgentCall, events.TypeAgentCompaction:
@@ -209,6 +210,41 @@ func observe(s *Step, turn *Turn) {
 		}
 
 		s.pending[turn.Depth] = turn.At
+	}
+}
+
+func forgetDeeper(sent map[int]time.Time, depth int) {
+	for d := range sent {
+		if d > depth {
+			delete(sent, d)
+		}
+	}
+}
+
+// timeTool sets Ran on the first result after a batch of calls; a zero timestamp on either side times nothing.
+func timeTool(s *Step, turn *Turn) {
+	switch turn.Type {
+	case events.TypeAgentCall:
+		if _, open := s.calling[turn.Depth]; open || turn.At.IsZero() {
+			return
+		}
+
+		if s.calling == nil {
+			s.calling = map[int]time.Time{}
+		}
+
+		s.calling[turn.Depth] = turn.At
+	case events.TypeAgentResult:
+		called, ok := s.calling[turn.Depth]
+		if !ok {
+			return
+		}
+
+		delete(s.calling, turn.Depth)
+
+		if !turn.At.IsZero() {
+			turn.Ran = max(turn.At.Sub(called), 0)
+		}
 	}
 }
 
@@ -767,10 +803,15 @@ type Turn struct {
 	// set by the fold on the first model turn after the request was sent;
 	// zero on every other turn and whenever a timestamp is missing.
 	Took time.Duration
+	// Ran is how long the tools of one response ran, on the first result of the batch only, as Took is.
+	Ran time.Duration
 }
 
 // Sent is when the request this turn answered went out.
 func (t Turn) Sent() time.Time { return t.At.Add(-t.Took) }
+
+// Called is when the batch a result's Ran measures was called.
+func (t Turn) Called() time.Time { return t.At.Add(-t.Ran) }
 
 // Nested reports a turn belonging to a delegated sub-agent rather than the
 // step's own conversation.

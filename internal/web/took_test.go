@@ -277,3 +277,51 @@ func TestTimeoutSurvivesTheStepFinishing(t *testing.T) {
 		t.Errorf("a drifted config left Timeout = %v, want 0", reviewer.Timeout)
 	}
 }
+
+// A finished tool batch says how long it ran; the open call carries a clock the page ticks, never server-rendered text a reload would disagree with.
+func TestRunPageShowsHowLongToolsRanAndWhichIsRunning(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline, sha := tookPipeline(t)
+	ctx := t.Context()
+	t0 := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-ran", JobName: "review", Workspace: t.TempDir(), ConfigSHA: sha})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	user := reviewerRow(t0, events.TypeAgentUser, 0)
+	user.Text = "Run the suite."
+	call := reviewerRow(t0, events.TypeAgentCall, 2*time.Second)
+	call.Name = "run_shell"
+	result := reviewerRow(t0, events.TypeAgentResult, 274*time.Second)
+	result.Name = "run_shell"
+	open := reviewerRow(t0, events.TypeAgentCall, 280*time.Second)
+	open.Name = "run_shell"
+
+	appendEvents(t, pipeline.Store, "run-ran", []store.RunEventRow{
+		reviewerRow(t0, events.TypeStepStarted, 0), user, call, result, open,
+	})
+
+	_, body := get(t, server, "/p/demo/runs/run-ran")
+	turns := turnsIn(t, body)
+
+	if len(turns) != 4 {
+		t.Fatalf("drew %d turns, want user, call, result, call:\n%s", len(turns), strings.Join(turns, "\n---\n"))
+	}
+
+	if want := `<span class="ran" title="called 2026-09-24T12:00:02Z · answered 2026-09-24T12:04:34Z">ran 4m 32s</span>`; !strings.Contains(turns[2], want) {
+		t.Errorf("the result does not say its tool ran 4m 32s:\n%s", turns[2])
+	}
+
+	if want := `<time class="toolclock" data-call-since="2026-09-24T12:04:40Z"></time>`; !strings.Contains(turns[3], want) {
+		t.Errorf("the open call carries no empty clock for the page to tick:\n%s", turns[3])
+	}
+
+	for _, i := range []int{0, 3} {
+		if strings.Contains(turns[i], `class="ran"`) {
+			t.Errorf("turn %d is not a result, and says how long a tool ran:\n%s", i, turns[i])
+		}
+	}
+}

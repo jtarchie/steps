@@ -78,3 +78,25 @@ func TestGraphTraceIsDelegatedAndSurvivesAPoll(t *testing.T) {
 		t.Errorf("the after-swap handler does not re-apply the trace:\n%s", body)
 	}
 }
+
+// The toolclock template draws nothing on purpose, so a page whose script never fills it shows no running call at all.
+func TestTheRunningToolCallIsTickedByTheScript(t *testing.T) {
+	t.Parallel()
+
+	js, err := assets.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	script := string(js)
+
+	for _, want := range []string{
+		"document.querySelectorAll('time[data-call-since]')",
+		"step.classList.contains('running')",
+		"'running ' + fmt(now - Date.parse(node.dataset.callSince))",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+}

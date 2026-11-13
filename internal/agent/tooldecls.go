@@ -45,7 +45,10 @@ func runShellDescription(image string) string {
 		" If a stream's output is too large to return inline, it's instead saved to a file under the working directory and a" +
 		" pointer message (an absolute path, size, and a preview) is returned in its place — read that file back with" +
 		" run_shell (e.g. grep/sed on the absolute path), or with read_file, which accepts the absolute path from the" +
-		" pointer message directly, using start_line/end_line to page through it."
+		" pointer message directly, using start_line/end_line to page through it." +
+		" A call has no time limit of its own unless this step sets one (an expired call then comes back as an error); the step's own deadline still holds." +
+		" So run a long command — a full test suite, a build — in the foreground and read its result from this one call;" +
+		" never background a command and poll it with sleep, which spends a call per poll and tells you less."
 	if image != "" {
 		desc += fmt.Sprintf(" Runs inside the %s container image, not on the host — only what that image provides is available."+
 			" Every call in this step shares one container, so a package you install, a variable you export, or a directory you cd into stays in effect for later calls.", image)

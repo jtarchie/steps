@@ -862,6 +862,10 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 .turn.nested .who::before { content: "└ "; color: var(--faint); }
 .turn .dur { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .turn .dur.warn { color: var(--yellow); }
+.turn .ran { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.turn .dur ~ .ran, .turn .dur ~ .toolclock { margin-left: 8px; }
+.turn .toolclock { margin-left: auto; color: var(--yellow); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.turn .toolclock:empty { display: none; }
 .turn.pending .who, .turn.pending .say { color: var(--faint); }
 
 .subtrace { margin: 4px 0 4px 84px; padding: 6px 12px; border-left: 1px solid var(--line); }
