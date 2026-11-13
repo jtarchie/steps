@@ -65,7 +65,7 @@ func buildFixMessages(ctx context.Context, fix *config.FixSpec, rt config.Resolv
 // loop incoherent.
 func RunFix(
 	ctx context.Context, cfg *config.Config, jobName string, stepIndex int,
-	rt config.ResolvedTask, st StepStore, failureOutput, workspaceDir string,
+	rt config.ResolvedTask, st StepStore, failureOutput, workspaceDir string, taskRunner shell.Runner,
 ) error {
 	fix := rt.Fix
 
@@ -111,13 +111,14 @@ func RunFix(
 	}
 	defer closeAll(closers)
 
-	runner, err := shell.NewRunner(containerSpec(rt.Image, dir, rt.Env, rt.Isolation()))
+	// The task's own runner, so the repair lands in the tree the re-run reads; the task closes it.
+	runner, err := shell.InSubdir(taskRunner, fix.Dir)
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
 	}
 
 	runner = runner.WithLabel(fix.Agent)
-	defer shell.CloseRunner(runner, fix.Agent)
+	rerunAtTheTasksRoot(tools, rt.Name, taskRunner.WithLabel(fix.Agent))
 
 	// A repair agent follows the same rule a step agent does: with an image:, its file tools go where its shell commands already go. It is the case the ownership mismatch bites hardest, since the task's own command has just written into the tree as the container's user.
 	lost := &tree.Lost{}
@@ -204,4 +205,14 @@ func RunFix(
 	}
 
 	return nil
+}
+
+// rerunAtTheTasksRoot runs the injected rerun tool where the task runs its command, not in the fix agent's dir:.
+func rerunAtTheTasksRoot(tools agentTools, name string, root shell.Runner) {
+	impl := tools.registry[name]
+	tools.registry[name] = func(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
+		env.runner = root
+
+		return impl(ctx, args, env)
+	}
 }

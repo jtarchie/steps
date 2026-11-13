@@ -60,6 +60,15 @@ type DockerRunner struct {
 	Image   string
 	label   string
 	session *dockerSession
+	// subdir runs this copy's commands below the session's workdir; the container is the same one.
+	subdir string
+}
+
+// InSubdir runs d's commands in rel below the session's workdir, in the same container.
+func (d DockerRunner) InSubdir(rel string) Runner {
+	d.subdir = path.Join(d.subdir, rel)
+
+	return d
 }
 
 // WithLabel returns a copy of d that prefixes its live-streamed output —
@@ -624,6 +633,10 @@ func (d DockerRunner) dockerExec(ctx context.Context, cmd Command) (Result, erro
 		Stdout: out.Stdout,
 		Stderr: out.Stderr,
 		Env:    buildEnvPairs(ctx),
+	}
+
+	if d.subdir != "" {
+		opts.WorkingDir = path.Join(d.session.workingDir(), d.subdir)
 	}
 
 	if cmd.Stdin {

@@ -337,6 +337,8 @@ type ExecOptions struct {
 	Stdout, Stderr io.Writer
 	// Env adds NAME=value pairs for this command only, over the container's own.
 	Env []string
+	// WorkingDir runs this command elsewhere than the container's own workdir; empty keeps it.
+	WorkingDir string
 }
 
 // Exec runs one command in a running container and returns its exit status.
@@ -350,6 +352,7 @@ func (c *Client) Exec(ctx context.Context, containerID string, opts ExecOptions)
 	created, err := c.api.ExecCreate(ctx, containerID, client.ExecCreateOptions{
 		Cmd:          opts.Cmd,
 		Env:          opts.Env,
+		WorkingDir:   opts.WorkingDir,
 		AttachStdin:  opts.Stdin != nil,
 		AttachStdout: true,
 		AttachStderr: true,

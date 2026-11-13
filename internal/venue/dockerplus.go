@@ -44,6 +44,8 @@ var (
 type plusRunner struct {
 	label string
 	s     *plusSession
+	// subdir runs this copy's commands below the step's tree, in the same session.
+	subdir string
 }
 
 type plusSession struct {
@@ -147,6 +149,13 @@ func (r plusRunner) WithLabel(label string) shell.Runner {
 
 func (r plusRunner) Close() error { return r.s.close() }
 
+// InSubdir runs r's commands in rel below the step's tree, through the same volumes.
+func (r plusRunner) InSubdir(rel string) shell.Runner {
+	r.subdir = path.Join(r.subdir, rel)
+
+	return r
+}
+
 // Sync brings home the outputs of every write since the last one.
 func (r plusRunner) Sync(ctx context.Context) error {
 	if !r.s.stale.Swap(false) {
@@ -189,6 +198,11 @@ func (r plusRunner) around(ctx context.Context, run func(shell.Runner) error) (e
 
 	if r.label != "" {
 		inner = inner.WithLabel(r.label)
+	}
+
+	inner, err = shell.InSubdir(inner, r.subdir)
+	if err != nil {
+		return fmt.Errorf("%w", err)
 	}
 
 	runErr := run(inner)

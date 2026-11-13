@@ -38,7 +38,9 @@ func TestRunFixAsksTheModelWithTheBuiltinsAndTheTask(t *testing.T) {
 
 	ctx, _ := captured()
 
-	err := RunFix(ctx, cfg, "job", 0, task, nil, "boom", t.TempDir())
+	dir := t.TempDir()
+
+	err := RunFix(ctx, cfg, "job", 0, task, nil, "boom", dir, hostRunner(t, dir))
 	if err != nil {
 		t.Fatalf("RunFix: %v", err)
 	}

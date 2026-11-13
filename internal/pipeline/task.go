@@ -367,7 +367,7 @@ func runFixTask(
 	// Without the task's secrets: nobody granted them to the fix agent, and every tool it runs (its rerun of the task included) reads the context's env, prints into its transcript and answers to the model.
 	fixCtx := shell.WithSecretEnv(ctx, nil)
 
-	err = agent.RunFix(fixCtx, cfg, jobName, stepIndex, rt, st, taskFailureOutput(failure, stdout, stderr, exitCode), workspaceDir)
+	err = agent.RunFix(fixCtx, cfg, jobName, stepIndex, rt, st, taskFailureOutput(failure, stdout, stderr, exitCode), workspaceDir, runner)
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", rt.Fix.Agent, err)
 	}

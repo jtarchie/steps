@@ -14,6 +14,7 @@ import (
 	"github.com/jtarchie/steps/internal/agent/tree"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // TestFixMessagesAreSeparateTurns pins that a fix: gets the same messages:
@@ -100,7 +101,7 @@ func TestRunFixLeavesNoSpillDirInTheTask(t *testing.T) {
 
 	ctx, _ := captured()
 
-	err := RunFix(ctx, cfg, "job", 0, task, nil, "boom", dir)
+	err := RunFix(ctx, cfg, "job", 0, task, nil, "boom", dir, hostRunner(t, dir))
 	if err != nil {
 		t.Fatalf("RunFix: %v", err)
 	}
@@ -109,4 +110,18 @@ func TestRunFixLeavesNoSpillDirInTheTask(t *testing.T) {
 	if !os.IsNotExist(err) {
 		t.Errorf("the fix agent's spill dir is still in the task's directory (stat: %v)", err)
 	}
+}
+
+// hostRunner is the failing task's runner a fix agent shares, here on this machine.
+func hostRunner(t *testing.T, dir string) shell.Runner {
+	t.Helper()
+
+	runner, err := shell.NewRunner(shell.RunnerSpec{Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	return runner
 }

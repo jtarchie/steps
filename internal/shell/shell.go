@@ -576,6 +576,13 @@ func (h HostRunner) WithLabel(label string) Runner {
 	return h
 }
 
+// InSubdir runs h's commands in rel below its directory.
+func (h HostRunner) InSubdir(rel string) Runner {
+	h.cwd = filepath.Join(h.cwd, rel)
+
+	return h
+}
+
 // Close removes a fenced runner's private TMPDIR; an unfenced one holds nothing open.
 func (h HostRunner) Close() error {
 	if h.fence == nil {
