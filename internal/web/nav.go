@@ -154,6 +154,8 @@ type navData struct {
 	// AllPaused is the daemon-wide pause; CanPauseAll is whether this reader may throw or lift it.
 	AllPaused   bool
 	CanPauseAll bool
+	// Fleet is the root, whose action bar holds the daemon-wide pause where a pipeline's holds its own.
+	Fleet bool
 	// Mark is what this page's title and favicon say: the narrowest run or
 	// pipeline the page is about, every pipeline above one, zero on a page
 	// that is about none (docs, an error).

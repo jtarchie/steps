@@ -108,6 +108,28 @@ jobs:
         run: "true"
 `
 
+const threeTriggers = `
+resources:
+  - name: alpha
+    type: git
+    source: {uri: /tmp/nowhere}
+  - name: beta
+    type: git
+    source: {uri: /tmp/nowhere}
+  - name: gamma
+    type: git
+    source: {uri: /tmp/nowhere}
+jobs:
+  - name: answer
+    plan:
+      - get: alpha
+        trigger: true
+      - get: beta
+        trigger: true
+      - get: gamma
+        trigger: true
+`
+
 const oneManualJob = `
 jobs:
   - name: audit
@@ -144,6 +166,27 @@ func TestEveryJobIsNamedOnItsCell(t *testing.T) {
 
 	if strings.Contains(row, `class="named`) {
 		t.Errorf("a red job is still named a second time beside the strip:\n%s", row)
+	}
+}
+
+// TestOnlyARedCellKeepsItsGlyph: a green row said ✓ once per job on top of its mark. The mark speaks for the row; a cell draws a glyph only when it is the reason the row is red, since red-against-green tint is the one difference red-green colour blindness cannot see.
+func TestOnlyARedCellKeepsItsGlyph(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := lanePipelines(t, nil, "app", twoJobs, "other", oneManualJob)
+	seedRun(t, pipelines[0], "run-1", "build", "succeeded")
+	seedRun(t, pipelines[0], "run-2", "deploy", "failed")
+
+	_, page := get(t, server, "/")
+	row := pipelineRow(t, page, "app")
+
+	for _, want := range []string{
+		`<a class="cell st-passed" href="/p/app/jobs/build" title="build: passed" aria-label="build, passed" tabindex="-1"><span class="glyph" aria-hidden="true"></span>`,
+		`<a class="cell st-failed" href="/p/app/jobs/deploy" title="deploy: failed" aria-label="deploy, failed" tabindex="-1"><span class="glyph" aria-hidden="true">✗</span>`,
+	} {
+		if !strings.Contains(row, want) {
+			t.Errorf("the row lacks %s:\n%s", want, row)
+		}
 	}
 }
 
@@ -206,7 +249,7 @@ func TestLatestFollowsAnErroredJobToo(t *testing.T) {
 	}
 }
 
-// TestAGreenRowsLatestNamesItsJob: off a red row, Latest is still the newest run, now with the job it belongs to.
+// TestAGreenRowsLatestNamesItsJob: off a red row, Latest is still the newest run, named by job, and says only which and when: the row mark and every cell already say passed, so a third ✓ made the healthy column the loudest one.
 func TestAGreenRowsLatestNamesItsJob(t *testing.T) {
 	t.Parallel()
 
@@ -219,6 +262,33 @@ func TestAGreenRowsLatestNamesItsJob(t *testing.T) {
 
 	if !strings.Contains(cell, `href="/p/app/runs/run-2"`) || !strings.Contains(cell, "deploy") {
 		t.Errorf("a green row's Latest is not its newest run, named by job:\n%s", cell)
+	}
+
+	if strings.Contains(cell, "st-passed") || strings.Contains(cell, "✓") {
+		t.Errorf("a green row's Latest repeats passed in color or glyph:\n%s", cell)
+	}
+
+	if strings.Count(cell, "passed") != 1 || !strings.Contains(cell, `<span class="visually-hidden">passed </span>`) {
+		t.Errorf("a green row's Latest shows passed, or stops telling a screen reader:\n%s", cell)
+	}
+}
+
+// TestARedRowsLatestStillSaysWhat: quieting the green row must not quiet the red one, but the word is enough: the mark and the red cell already drew ✗.
+func TestARedRowsLatestStillSaysWhat(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := lanePipelines(t, nil, "app", oneManualJob, "other", oneManualJob)
+	seedRun(t, pipelines[0], "run-1", "audit", "failed")
+
+	_, page := get(t, server, "/")
+
+	cell := lastRunCell(t, page, "app")
+	if !strings.Contains(cell, `<a class="st-failed" href="/p/app/runs/run-1">failed</a>`) {
+		t.Errorf("a red row's Latest lost its red word:\n%s", cell)
+	}
+
+	if strings.Contains(cell, `class="st `) {
+		t.Errorf("a red row's Latest draws a third glyph beside the mark's and the cell's:\n%s", cell)
 	}
 }
 
@@ -273,6 +343,77 @@ func TestEachJobCarriesItsRecentRuns(t *testing.T) {
 	}
 }
 
+// TestEveryStripHoldsTenSlots: a strip as long as a job's runs read as a progress bar, and a new job's single tick as a stray dot. Ten slots, newest at the right, unfilled ones faint, so a short strip says new rather than broken.
+func TestEveryStripHoldsTenSlots(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := lanePipelines(t, nil, "app", oneManualJob, "other", oneManualJob)
+	seedRun(t, pipelines[0], "run-1", "audit", "succeeded")
+
+	_, page := get(t, server, "/")
+	hist := between(t, pipelineRow(t, page, "app"), `<span class="hist" aria-hidden="true">`, "</span>")
+
+	if got := strings.Count(hist, `<i class="tick`); got != laneRuns {
+		t.Errorf("a one-run strip holds %d slots, want %d:\n%s", got, laneRuns, hist)
+	}
+
+	if got := strings.Count(hist, `<i class="tick empty"></i>`); got != laneRuns-1 {
+		t.Errorf("a one-run strip has %d empty slots, want %d:\n%s", got, laneRuns-1, hist)
+	}
+
+	if !strings.HasSuffix(hist, `<i class="tick st-passed"></i>`) {
+		t.Errorf("the one run is not the newest slot, at the right:\n%s", hist)
+	}
+}
+
+// TestAPipelineWithNoJobsSaysSo: a blank Jobs cell reads as a page that failed to draw.
+func TestAPipelineWithNoJobsSaysSo(t *testing.T) {
+	t.Parallel()
+
+	server, _ := lanePipelines(t, nil, "ghost", "jobs: []\n", "other", oneManualJob)
+
+	_, page := get(t, server, "/")
+
+	if cell := between(t, pipelineRow(t, page, "ghost"), `<td class="jobchips">`, "</td>"); !strings.Contains(cell, "no jobs") {
+		t.Errorf("an empty pipeline's Jobs cell does not say so:\n%s", cell)
+	}
+
+	if cell := between(t, pipelineRow(t, page, "other"), `<td class="jobchips">`, "</td>"); strings.Contains(cell, "no jobs") {
+		t.Errorf("a pipeline with a job says it has none:\n%s", cell)
+	}
+}
+
+// TestNextNamesOneTriggerAndCountsTheRest: three trigger names pushed the table sideways. The first is named, the rest counted, and the whole list is still there for a pointer and a screen reader.
+func TestNextNamesOneTriggerAndCountsTheRest(t *testing.T) {
+	t.Parallel()
+
+	server, _ := lanePipelines(t, nil, "bots", threeTriggers, "other", oneManualJob)
+
+	_, page := get(t, server, "/")
+	cell := between(t, pipelineRow(t, page, "bots"), `<td class="next">`, "</td>")
+
+	if !strings.Contains(cell, `title="on alpha, beta, gamma"`) {
+		t.Errorf("Next does not keep the whole list in its title:\n%s", cell)
+	}
+
+	if !strings.Contains(cell, `on alpha<span aria-hidden="true"> +2</span><span class="visually-hidden">, beta, gamma</span>`) {
+		t.Errorf("Next does not name the first trigger and count the rest:\n%s", cell)
+	}
+}
+
+// TestNextNamesALoneTriggerWhole: a count of zero is noise.
+func TestNextNamesALoneTriggerWhole(t *testing.T) {
+	t.Parallel()
+
+	server, _ := lanePipelines(t, nil, "git", twoJobs, "other", oneManualJob)
+
+	_, page := get(t, server, "/")
+
+	if cell := between(t, pipelineRow(t, page, "git"), `<td class="next">`, "</td>"); !strings.Contains(cell, "on repo") || strings.Contains(cell, "+") {
+		t.Errorf("a single trigger is not named alone:\n%s", cell)
+	}
+}
+
 // TestAWidePipelineStripsOnlyItsRedJobs: past four jobs a strip on every one wraps the row, so only the jobs that want a person keep theirs.
 func TestAWidePipelineStripsOnlyItsRedJobs(t *testing.T) {
 	t.Parallel()
@@ -304,7 +445,7 @@ func TestAWidePipelineStripsOnlyItsRedJobs(t *testing.T) {
 func TestTheOverviewSaysWhatHappensNext(t *testing.T) {
 	t.Parallel()
 
-	fire := time.Date(2030, 1, 6, 7, 0, 0, 0, time.UTC)
+	fire := time.Now().Add(5*time.Hour + 30*time.Minute).Truncate(time.Second)
 
 	var asked []string
 
@@ -326,8 +467,8 @@ func TestTheOverviewSaysWhatHappensNext(t *testing.T) {
 		return between(t, pipelineRow(t, page, slug), `<td class="next">`, "</td>")
 	}
 
-	if cell := nextCell("cron"); !strings.Contains(cell, `datetime="2030-01-06T07:00:00Z"`) || !strings.Contains(cell, fire.Format(nextLayout(time.Now(), fire))) {
-		t.Errorf("a cron pipeline does not say when it fires next:\n%s", cell)
+	if cell := nextCell("cron"); !strings.Contains(cell, fmt.Sprintf(`datetime=%q`, fire.UTC().Format(time.RFC3339))) || !strings.Contains(cell, ">in 5h<") || !strings.Contains(cell, fire.Format("Mon Jan 2 15:04 MST")) {
+		t.Errorf("a cron pipeline does not say how long until it fires, with the clock time beside:\n%s", cell)
 	}
 
 	if cell := nextCell("git"); !strings.Contains(cell, "on repo") {
@@ -355,7 +496,7 @@ func TestAHandOffIsNotAnOutsideTrigger(t *testing.T) {
 	}
 }
 
-// TestAPausedPipelinePromisesNoTime: its cron slot passes with nothing minted, so a time there would be a lie.
+// TestAPausedPipelinePromisesNoTime: its cron slot passes with nothing minted, so a time there would be a lie; and the row mark already says paused, so the cell says nothing.
 func TestAPausedPipelinePromisesNoTime(t *testing.T) {
 	t.Parallel()
 
@@ -371,7 +512,7 @@ func TestAPausedPipelinePromisesNoTime(t *testing.T) {
 
 	_, page := get(t, server, "/")
 
-	if cell := between(t, pipelineRow(t, page, "held"), `<td class="next">`, "</td>"); !strings.Contains(cell, "paused") || strings.Contains(cell, "<time") {
+	if cell := between(t, pipelineRow(t, page, "held"), `<td class="next">`, "</td>"); cell != `<td class="next">` {
 		t.Errorf("a paused cron pipeline promises a time:\n%s", cell)
 	}
 }
@@ -385,24 +526,23 @@ func askedAbout(asked *[]string, fire time.Time) CronNext {
 	}
 }
 
-// TestNextLayoutCoarsensWithDistance: a clock time a week out names the wrong day, and a weekday further out names the wrong week.
-func TestNextLayoutCoarsensWithDistance(t *testing.T) {
+// TestUntilCompactCountsDown: a clock time named the wrong day a week out, and needed a today/tomorrow to read at all. How long until, in one coarse unit, is right at any distance; the clock time is in the title.
+func TestUntilCompactCountsDown(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
-
 	for _, tc := range []struct {
-		at   time.Time
-		want string
+		in          time.Duration
+		short, said string
 	}{
-		{now.Add(3 * time.Hour), "12:00"},
-		{now.Add(48 * time.Hour), "Sun 09:00"},
-		{now.Add(10 * 24 * time.Hour), "Nov 23"},
-		// A weekly cron on its own day, after firing: next week's slot named by weekday reads as this morning.
-		{now.Add(7*24*time.Hour - 2*time.Hour), "Nov 20"},
+		{5*time.Hour + 47*time.Minute, "in 5h", "in 5 hours"},
+		{12 * time.Minute, "in 12m", "in 12 minutes"},
+		{7*24*time.Hour - 2*time.Hour, "in 6d", "in 6 days"},
+		{time.Hour, "in 1h", "in 1 hour"},
+		{30 * time.Second, "in 30s", "in 30 seconds"},
+		{-time.Second, "now", "now"},
 	} {
-		if got := tc.at.Format(nextLayout(now, tc.at)); got != tc.want {
-			t.Errorf("a fire at %s reads %q, want %q", tc.at, got, tc.want)
+		if short, said := untilCompact(tc.in); short != tc.short || said != tc.said {
+			t.Errorf("untilCompact(%s) = %q, %q; want %q, %q", tc.in, short, said, tc.short, tc.said)
 		}
 	}
 }
@@ -487,5 +627,17 @@ func TestAnErroredRowIsRed(t *testing.T) {
 
 	if news := between(t, page, `id="red-news"`, `</div>`); !strings.Contains(news, `<p id="red-app">app is failing: audit errored</p>`) {
 		t.Errorf("an errored pipeline has no line in the live region:\n%s", news)
+	}
+}
+
+// TestAScrollingTableHoldsItsHiddenWords: a visually-hidden span is absolutely positioned, so inside a table that scrolls sideways it escaped the scroller to the nearest positioned ancestor and widened the whole page — measured at 768px, a page 830px wide in a 753px window.
+func TestAScrollingTableHoldsItsHiddenWords(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "app", "infra")
+
+	_, css := get(t, server, "/static/app.css")
+	if !cssRule(css, ".tablewrap", "position: relative") {
+		t.Error("a .tablewrap is not the containing block of the hidden words inside it")
 	}
 }
