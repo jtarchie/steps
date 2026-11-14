@@ -140,7 +140,10 @@ func RunFix(
 		defer func() { _ = os.RemoveAll(spillDir) }()
 	}
 
+	env := toolEnv{dir: dir, runner: runner, tree: files, lost: lost, spillDir: spillDir, spillShown: shownSpill(dir, modelDir), ask: askContext(st, jobName, fix.Agent), sight: sightFor(ri)}
+
 	messages := buildFixMessages(ctx, fix, rt, failureOutput, spillDir)
+	messages[0] = env.showSpill(messages[0])
 
 	// Computed here, before buildSystemMessage, rather than just before
 	// runOneConversation below (where it used to live): the disclosure needs
@@ -151,7 +154,7 @@ func RunFix(
 		system:        buildSystemMessage(ri.Persona, modelDir, timeout),
 		messages:      messages,
 		contextBlocks: contextBlocks,
-		env:           toolEnv{dir: dir, runner: runner, tree: files, lost: lost, spillDir: spillDir, ask: askContext(st, jobName, fix.Agent), sight: sightFor(ri)},
+		env:           env,
 		tools:         tools,
 		params: llmclient.GenParams{
 			Temperature: ri.Temperature,

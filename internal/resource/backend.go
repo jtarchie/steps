@@ -49,6 +49,8 @@ func backendFor(rt config.ResourceType) backend {
 		return cronBackend{}
 	case config.BackendGitHub:
 		return githubBackend{}
+	case config.BackendConcourse:
+		return concourseBackend{}
 	case config.BackendShell:
 	}
 

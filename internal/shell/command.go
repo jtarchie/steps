@@ -21,6 +21,8 @@ type Command struct {
 	// timeout instead of getting EOF. An ssh:// worker cannot honour it — its
 	// stdin carries the step's env, never the operator's terminal.
 	Stdin bool
+	// Input, when set, is the command's whole stdin instead: bytes this process hands it, never the terminal's. How a Concourse resource script is given its request without it ever being on a command line.
+	Input string
 	// Stream sends the named streams live to events.Stdout/Stderr, prefixed
 	// when WithLabel was used.
 	Stream Streams
@@ -76,6 +78,16 @@ func Run(ctx context.Context, r Runner, script string) error {
 // RunCapture returns stdout while streaming stderr live, stdin attached as Run attaches it; any nonzero exit is an error. The captured output is logged at debug on both outcomes, so a failing check/out command's output is not lost to the terse "exit status N".
 func RunCapture(ctx context.Context, r Runner, script string) ([]byte, error) {
 	res, err := r.Exec(ctx, Command{Script: script, Stdin: !events.Headless(ctx), Stream: StreamStderr, Capture: true})
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the runner's error is the command's
+	}
+
+	return []byte(res.Stdout), nil
+}
+
+// RunCaptureInput is RunCapture with input as the command's stdin.
+func RunCaptureInput(ctx context.Context, r Runner, script, input string) ([]byte, error) {
+	res, err := r.Exec(ctx, Command{Script: script, Input: input, Stream: StreamStderr, Capture: true})
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the runner's error is the command's
 	}

@@ -165,7 +165,7 @@ func preflightResource(
 		}
 
 		return nil
-	case config.BackendShell:
+	case config.BackendShell, config.BackendConcourse:
 		// Nothing to prove ahead of time: a shell type's tools are whatever
 		// is on PATH when it runs, which preflight cannot know from here.
 		return nil
@@ -211,7 +211,7 @@ func compileBuiltin(backend config.ResourceBackend, resource config.Resource) er
 		// The load rules already parsed the source:; what is left to know —
 		// that the token works, that the repository exists — takes a request,
 		// and the run's own first call answers it as fast.
-	case config.BackendMCP, config.BackendExpr, config.BackendShell:
+	case config.BackendMCP, config.BackendExpr, config.BackendShell, config.BackendConcourse:
 	}
 
 	return nil

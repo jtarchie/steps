@@ -1392,6 +1392,52 @@ jobs:
 
 The explicit get fetches the version `check` reported **when the plan was built** — check runs once, before any step, so the version the put publishes mid-run is not what the same run's get fetches (the example above pins exactly that: `out:` prints `v1.4.2`, the get still fetches `v1.4.1`). The version a put prints is recorded with the run; it reaches a `passed:`-gated get in a later run whether or not a check ever reports it (see [`passed:`](infra.md#a-version-a-job-put-counts-as-having-passed-it)); an ungated get still needs the check to report it. A put whose output nothing reads simply has no get after it.
 
+## Running a stock Concourse resource image
+
+A resource type can be one of Concourse's own resource images, spelled as Concourse spells it: `type: registry-image`, with the image in `source.repository`. steps runs the image's own `/opt/resource/check`, `in` and `out`, and hands each one Concourse's request — `{source, version, params}` — as JSON on its standard input, the way Concourse does.
+
+```yaml noexec=docker
+resource_types:
+- name: git
+  type: registry-image
+  source:
+    repository: concourse/git-resource
+    tag: "1.18"                       # pin it: latest is pulled once and never refreshed
+  defaults:                           # source: keys every git resource gets; its own keys win
+    branch: main
+
+resources:
+- name: repo
+  type: git
+  source:
+    uri: git@github.com:acme/app.git
+  secrets:
+    private_key: ((ci:deploy_key))    # becomes source.private_key, on stdin only
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+    params: {depth: 1}
+  - task: look
+    inputs: [repo]
+    run: git -C repo log -1 --oneline
+  - put: repo
+    inputs: [repo]
+    params: {repository: repo}
+```
+
+What steps does, and where it differs from Concourse:
+
+- **`check`** is sent no `version` the first time, and the version it last reported after that. Its answer is the usual array of versions, oldest first.
+- **`in`** runs in `/tmp/build/get` and is handed that directory as its first argument; **`out`** runs in `/tmp/build/put`, each input a directory beneath it. Both answer `{version, metadata}`: steps records the `version`, and shows each `metadata` entry as a note on the step. An answer with no version fails the step, as it does in Concourse.
+- **Credentials go in `secrets:`, not `source:`.** A resource's `secrets:` entries are laid over its `source:` in the request, under the same key, so `secrets: {private_key: ((ci:deploy_key))}` arrives as `source.private_key`. They are resolved from a [secret source](secrets.md) when the script runs, never hashed or stored, and masked in output. A credential written straight into `source:` is stored with every version, as any `source:` value is.
+- **`in` and `out` see Concourse's build variables**, spelled from steps' own: `BUILD_ID` and `BUILD_NAME` are the run id, `BUILD_JOB_NAME` and `BUILD_PIPELINE_NAME` the job and pipeline, `ATC_EXTERNAL_URL` is `STEPS_URL`, and `BUILD_TEAM_NAME` is always `main`, since steps has no teams. `check` sees none of them, as in Concourse.
+- **A `put` gets only the inputs it lists.** Concourse guesses them from `params:` when none are listed; steps does not guess, so list the ones `out` reads.
+- **Each check starts a fresh container**, so a resource that keeps a clone between checks (git does) clones again every poll.
+- **No `type:` other than `registry-image`**, and the type takes no `image:` or `config:`: the image's scripts are the config. `source:` on a type takes `repository` and `tag` only.
+
+## Shell safety
 ## Shell safety
 
 Anything interpolated into a command is text substitution, so quote it:

@@ -41,8 +41,12 @@ type ResourceType struct {
 	// container_limits:; container-only for the same reason Privileged is.
 	Limits *ContainerLimits `yaml:"container_limits,omitempty"`
 	// Sandbox fences this entity's host commands with the OS sandbox: writes only under the step's workspace and a private TMPDIR, credential directories unreadable, and network: none becomes legal on the host. See internal/config/sandbox.go for the rules and docs/infra.md for the policy.
-	Sandbox bool               `yaml:"sandbox,omitempty"`
-	Config  ResourceTypeConfig `yaml:"config"`
+	Sandbox bool `yaml:"sandbox,omitempty"`
+	// Type, Source and Defaults are Concourse's spelling of a resource type that is a resource image: `type: registry-image` with `source: {repository, tag}` (steps#237). Rewritten at load into Image and Config (see desugarConcourseTypes), which is what is hashed; Defaults is laid under each of this type's resources' source:, which is hashed there.
+	Type     string             `yaml:"type,omitempty"`
+	Source   map[string]any     `yaml:"source,omitempty"`
+	Defaults map[string]any     `yaml:"defaults,omitempty"`
+	Config   ResourceTypeConfig `yaml:"config"`
 }
 
 // ResourceTypeConfig holds the check/in/out shell command templates.
@@ -61,6 +65,8 @@ type ResourceTypeConfig struct {
 	Webhook bool `yaml:"-"`
 	// Cron marks the built-in cron type, which no YAML can declare either: its check reads a clock against an expression, and runs nothing.
 	Cron bool `yaml:"-"`
+	// Concourse marks a type: registry-image entry, whose Check, In and Out are fixed scripts that read Concourse's request on stdin; no YAML can set it directly.
+	Concourse bool `yaml:"-"`
 	// GitHub names which built-in github-* type this is (see github.go), which no YAML can declare: steps calls the API itself. Keyed, unlike Cron and Webhook, because several share a source: shape and do different things with it.
 	GitHub string `yaml:"-"`
 }
@@ -85,6 +91,8 @@ const (
 	BackendWebhook ResourceBackend = "webhook"
 	// BackendCron has a check that reads the clock and no out: a version is a moment its expression named.
 	BackendCron ResourceBackend = "cron"
+	// BackendConcourse runs a Concourse resource image's own /opt/resource scripts, handing each Concourse's JSON request on stdin.
+	BackendConcourse ResourceBackend = "concourse"
 	// BackendGitHub calls GitHub's API from this process: two of its types find work and have no out, three publish and have no check (see github.go).
 	BackendGitHub ResourceBackend = "github"
 )
@@ -104,6 +112,8 @@ func (c ResourceTypeConfig) Backend() ResourceBackend {
 		return BackendCron
 	case c.GitHub != "":
 		return BackendGitHub
+	case c.Concourse:
+		return BackendConcourse
 	case c.MCP != nil:
 		return BackendMCP
 	case c.Expr != nil:
@@ -187,7 +197,7 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 		if strings.TrimSpace(resourceType.Config.Expr.Out) == "" {
 			return fmt.Errorf("%s: put %q targets expr-backed resource type %q, which sets no expr.out; add one to describe what publishing means for this type", label, put, resourceType.Name)
 		}
-	case BackendShell:
+	case BackendShell, BackendConcourse:
 		if strings.TrimSpace(resourceType.Config.Out) == "" {
 			return fmt.Errorf("%s: put %q targets resource type %q, which declares no out: command; add one to describe what publishing means for this type", label, put, resourceType.Name)
 		}
@@ -224,7 +234,7 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 				"%s: get %q targets expr-backed resource type %q, which sets no expr.check; that type can only be published to (put:), so either add a check expression or fetch this from a type that has one",
 				label, get, resourceType.Name)
 		}
-	case BackendShell:
+	case BackendShell, BackendConcourse:
 		// A shell type with no check: is not rejected here: an empty command
 		// runs, prints nothing, and fails as "could not parse JSON output",
 		// which names the real problem. The mcp arm above cannot do that —

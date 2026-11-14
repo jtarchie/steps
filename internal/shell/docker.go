@@ -635,7 +635,10 @@ func (d DockerRunner) dockerExec(ctx context.Context, cmd Command) (Result, erro
 		opts.WorkingDir = path.Join(d.session.workingDir(), d.subdir)
 	}
 
-	if cmd.Stdin {
+	switch {
+	case cmd.Input != "":
+		opts.Stdin = strings.NewReader(cmd.Input)
+	case cmd.Stdin:
 		opts.Stdin = os.Stdin
 	}
 

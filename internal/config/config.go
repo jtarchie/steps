@@ -114,7 +114,7 @@ func parseSource(source []byte, name string, label string, fsys Files) (*Config,
 	}
 
 	// Desugar before validate() so the across: it writes is checked like a hand-written matrix; joined so a desugar mistake does not hide validate()'s own findings.
-	err = errors.Join(cfg.desugarParallelism(), cfg.validate())
+	err = errors.Join(cfg.desugarParallelism(), cfg.desugarConcourseTypes(), cfg.validate())
 	if err != nil {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", label, err)
 	}

@@ -365,7 +365,8 @@ func (p PlacementView) Machine() string {
 // ImageRef is the image the step named and the digest it resolved to there, shortened the way a commit is: enough to tell two pulls of one tag apart, with the whole digest in the store for whoever needs it.
 func (p PlacementView) ImageRef() string {
 	algorithm, hex, found := strings.Cut(p.ImageDigest, ":")
-	if p.Image == "" || !found || len(hex) < shortDigest {
+	// An image already named by digest (one a get fetched, or pinned by hand) says which bytes ran as written.
+	if p.Image == "" || !found || len(hex) < shortDigest || strings.Contains(p.Image, "@") {
 		return p.Image
 	}
 

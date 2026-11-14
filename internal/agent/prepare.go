@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -64,6 +65,7 @@ type preparedAgentStep struct {
 	// opened, and the shell runner (whose container, under image:, fetches
 	// its outputs back into that very directory).
 	closers  []io.Closer
+	workdir  string // the container path the step's tree is mounted at when it has an image; see shell.RunnerSpec.Workdir
 	spillDir string // run_shell/custom tool output spill dir — see toolEnv.spillDir; "" if it couldn't be created
 	// dir is the step's working directory on THIS machine, kept so openTree can ask the container where its own copy is.
 	dir string
@@ -86,7 +88,13 @@ func (p preparedAgentStep) openTree(ctx context.Context) (preparedAgentStep, err
 		return p, fmt.Errorf("agent %q: %w", p.ri.AgentName, err)
 	}
 
+	// An image: agent granted nothing that reaches its container starts none, and is still not told a path on this machine: it is told the one its container would have.
+	if p.ri.Image != "" && modelDir == p.dir && p.workdir != "" {
+		modelDir = p.workdir
+	}
+
 	p.conv.env.tree = files
+	p.conv.env.spillShown = shownSpill(p.dir, modelDir)
 	p.conv.system = buildSystemMessage(p.ri.Persona, modelDir, agentTimeout(p.ri.Timeout))
 
 	return p, nil
@@ -253,6 +261,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	// Cwd is the whole step directory and Subdir is where the model works, even though dir: is the only thing that makes them differ. The step's outputs: are named relative to the SPACE, so a placed agent that sent only its subdirectory would fetch them from a path that does not exist and come home with nothing.
 	spec := containerSpec(ri.Image, space.Dir(), ri.Env, ri.Isolation())
 	spec.Subdir, spec.Caches, spec.Fetch, spec.Keep = step.Dir, caches, step.Outputs, workspace.Kept(space)
+	spec.Workdir = shell.BuildDir(step.Agent)
 	spec.InputDigests, _ = space.(shell.InputDigests)
 
 	runner, err := newRunner.build(ctx, spec)
@@ -323,7 +332,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		step: step, resolvedAgent: resolved,
 		pin:   agentPinScope(cfg, ri.AgentName),
 		space: space, conv: conv, llm: invocationLLM(ri, apiKey),
-		closers: closers, spillDir: spillDir,
+		closers: closers, spillDir: spillDir, workdir: path.Join(spec.Workdir, step.Dir),
 	}, nil
 }
 

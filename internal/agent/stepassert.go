@@ -384,6 +384,16 @@ func (e assertFilesExpectation) nudge(unmet []string) string {
 	return text + " " + e.whereToWrite()
 }
 
+// rootFromAgentDir spells the step's directory from where the model works, never as a path on this machine: a containerized agent has no such path, and one on the host learns nothing from the operator's layout.
+func (e assertFilesExpectation) rootFromAgentDir() string {
+	rel, err := filepath.Rel(e.agentDir, e.dir)
+	if err != nil {
+		return "the step's directory"
+	}
+
+	return filepath.ToSlash(rel)
+}
+
 // whereToWrite translates the declared paths into the model's own frame.
 //
 // A path that lands outside the working directory has no such translation:
@@ -398,7 +408,7 @@ func (e assertFilesExpectation) whereToWrite() string {
 	for _, file := range e.files {
 		rel, err := filepath.Rel(e.agentDir, filepath.Join(e.dir, file))
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return fmt.Sprintf("Those paths are relative to %s, which is not your working directory.", e.dir)
+			return fmt.Sprintf("Those paths are relative to %s (from your working directory), which is not your working directory.", e.rootFromAgentDir())
 		}
 
 		relative = append(relative, rel)

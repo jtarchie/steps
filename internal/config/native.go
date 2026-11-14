@@ -21,7 +21,7 @@ func (c *Config) nativeType(typeName string) string {
 		return CronType
 	case BackendGitHub:
 		return resourceType.Config.GitHub
-	case BackendShell, BackendExpr, BackendMCP:
+	case BackendShell, BackendExpr, BackendMCP, BackendConcourse:
 	}
 
 	builtin, err := ReadBuiltinResourceType(resourceType.Name)

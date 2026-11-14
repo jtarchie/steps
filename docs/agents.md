@@ -1426,7 +1426,7 @@ These are load errors, not silent no-ops, because a setting that reads as config
 | `budget.tokens:` | nothing counts tokens until the subprocess exits (use `budget.usd:`) |
 | a CLI agent as another agent's sub-agent | the child of a delegation is driven by steps' own turn loop, which a CLI source replaces wholesale |
 | a CLI agent as a task's `fix:` agent | same reason |
-| `tags:` on a step running a CLI agent | the CLI runs here, in this machine's copy of the step; placing its tools on a worker would split the tree |
+| `tags:` on a step running a CLI agent **without `image:`** | its tools run in this machine's copy of the step, so there is no container to place (the same rule a hosted agent has) |
 
 **Granting a sub-agent is accepted**, and it is the same tool grant a hosted agent gets: a sub-agent tool is an ordinary tool implementation, and every tool a CLI agent calls reaches it over the bridge. The child's conversation runs in *this* process, under steps' own model, persona, tools and `image:`, and its answer comes back as the tool result. So a CLI parent can delegate to a cheap hosted model on another provider, which the CLI's own subagents cannot do. Two things follow from the child being ours rather than the CLI's: its spend folds into the step's total (so a job `budget:` still bounds the subtree, even though the CLI parent itself meters in dollars), and preflight probes it before the parent process starts, so an unreachable child costs seconds rather than a whole conversation. Only the reverse remains refused, above: the *child* of a delegation cannot itself be a CLI agent.
 

@@ -238,7 +238,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 		return venue.Worker{}, nil, err
 	}
 
-	runner, err := newRunner(worker, withIsolation(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env,
+	runner, err := newRunner(worker, withIsolation(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Workdir: shell.BuildDir(step.Task), Env: rt.Env,
 		WorkerTag: placementTag(step), Fetch: rt.Outputs, ReusedWarm: reusedWarm(ctx, step),
 		// Untagged steps bring outputs home as before, so capture, --replay and --artifact-store never see a tree held in a local volume.
 		DeferFetch:   placementTag(step) != "" && deferrable(step, rt),

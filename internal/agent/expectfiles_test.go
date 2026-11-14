@@ -352,7 +352,8 @@ func TestNudgeAdmitsAPathTheModelCannotReach(t *testing.T) {
 		t.Errorf("nudge tells the model to write a path write_file will refuse: %q", nudge)
 	}
 
-	if !strings.Contains(nudge, space) {
-		t.Errorf("nudge does not say what the paths are rooted in: %q", nudge)
+	// Spelled from where the model works, never as this machine's path (#247): a containerized agent has no such path.
+	if !strings.Contains(nudge, "relative to .. (from your working directory)") || strings.Contains(nudge, space) {
+		t.Errorf("nudge does not say what the paths are rooted in, in the model's own frame: %q", nudge)
 	}
 }

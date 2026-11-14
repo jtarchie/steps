@@ -328,7 +328,7 @@ mcp_exports:
 
 		_ = json.Unmarshal([]byte(textOf(callTool(t, session, "whereami", nil))), &out)
 
-		if !strings.Contains(out.Stdout, "3.") || !strings.Contains(out.Stdout, "offline") || strings.Count(out.Stdout, "marker") != 1 || !strings.Contains(out.Stdout, "/steps/work") {
+		if !strings.Contains(out.Stdout, "3.") || !strings.Contains(out.Stdout, "offline") || strings.Count(out.Stdout, "marker") != 1 || !strings.Contains(out.Stdout, "/tmp/build/") {
 			t.Fatalf("the command did not run in a fresh, offline alpine container over volumes:\n%s", out.Stdout)
 		}
 	}

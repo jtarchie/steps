@@ -25,6 +25,7 @@ var shareKeyed = map[string]bool{
 var shareUnkeyed = map[string]string{
 	"Cwd":          "a check has no tree",
 	"MountPath":    "a check has no tree",
+	"Workdir":      "a check has no tree",
 	"Subdir":       "a check has no tree",
 	"Fetch":        "a check has no tree",
 	"FetchAll":     "a check has no tree",

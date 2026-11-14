@@ -326,14 +326,6 @@ jobs:
   - agent: bare
     messages: [hi]
 `, []string{`job "build" step 0 (line 29) (tags: [gpu] inherited from job "build") (agent "bare"): tags: needs image:`, hint}},
-		{"cli agent", `
-jobs:
-- name: build
-  tags: [gpu]
-  plan:
-  - agent: claude
-    messages: [hi]
-`, []string{`inherited from job "build"`, "tags: is not valid on a CLI agent", hint}},
 		{"task with a tasks: entry's fix:", `
 tasks:
 - name: compile
@@ -514,4 +506,42 @@ jobs:
 			t.Errorf("cwd %q: %v", strings.TrimSpace(cwd), err)
 		}
 	}
+}
+
+// TestACLIAgentIsPlacedByTheRuleAHostedOneIs is steps#241: with image: a CLI agent's tools all run in the step's container, so tags: moves that container and the CLI stays here; without image: it is refused for the reason any agent is.
+func TestACLIAgentIsPlacedByTheRuleAHostedOneIs(t *testing.T) {
+	t.Parallel()
+
+	const job = `
+jobs:
+- name: build
+  plan:
+  - agent: claude
+    tags: [gpu]
+    messages: [hi]
+`
+
+	_, err := LoadConfig(writeConfig(t, inheritedTagAgents+job))
+	if err != nil {
+		t.Errorf("a CLI agent with image: and tags: was refused: %v", err)
+	}
+
+	wantLoadError(t, writeConfig(t, `
+agents:
+- name: claude
+  source: { model: "@claude/sonnet" }
+`+job), "tags: needs image:")
+
+	wantLoadError(t, writeConfig(t, `
+agents:
+- name: helper
+  description: helps
+  image: alpine:3.20
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+- name: claude
+  image: alpine:3.20
+  source: { model: "@claude/sonnet" }
+  tools:
+  - agent: helper
+`+job), "tags: is not valid on an agent granting the sub-agent")
 }

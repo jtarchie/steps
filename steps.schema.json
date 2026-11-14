@@ -279,12 +279,50 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "name",
-        "config"
+        "name"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "config"
+          ]
+        },
+        {
+          "required": [
+            "type"
+          ]
+        }
       ],
       "properties": {
         "name": {
           "type": "string"
+        },
+        "type": {
+          "const": "registry-image",
+          "description": "A Concourse resource image, named in source.repository, whose own /opt/resource/check, in and out run with Concourse's request on stdin. Takes no image: or config:."
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository"
+          ],
+          "properties": {
+            "repository": {
+              "type": "string"
+            },
+            "tag": {
+              "type": [
+                "string",
+                "number"
+              ]
+            }
+          },
+          "description": "With type: registry-image, the image: repository and tag (default latest)."
+        },
+        "defaults": {
+          "type": "object",
+          "description": "source: keys laid under every resource of this type; a resource's own keys win."
         },
         "image": {
           "type": "string",
