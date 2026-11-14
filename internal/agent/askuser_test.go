@@ -77,12 +77,13 @@ func TestAskUserPutsNothingToAHeadlessTerminal(t *testing.T) {
 		fixture.env.ask.prompt = func(context.Context, store.Question) (string, bool) { return "typed", true }
 		fixture.ctx = events.WithOutput(fixture.ctx, events.Output{Headless: headless})
 
-		result := fixture.ask(askGrant{defaultAnswer: "fallback", wait: 200 * time.Millisecond}, "Ship it?")
-
-		want := "typed"
+		// The prompter answers at once, so its wait only has to outlast a loaded scheduler (#257); the headless case is the one that really waits its deadline out.
+		want, wait := "typed", 30*time.Second
 		if headless {
-			want = "fallback"
+			want, wait = "fallback", 200*time.Millisecond
 		}
+
+		result := fixture.ask(askGrant{defaultAnswer: "fallback", wait: wait}, "Ship it?")
 
 		if result["answer"] != want {
 			t.Errorf("headless=%v: answer = %v, want %q", headless, result, want)
