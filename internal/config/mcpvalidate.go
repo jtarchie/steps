@@ -84,16 +84,24 @@ func validateMCPServerAuth(srv MCPServer) error {
 	return validateMCPServerClientCredentials(srv)
 }
 
-// validateMCPAuthSecrets holds a server's secrets: to the one key its HTTP client reads, since nothing else would read another.
+// validateMCPAuthSecrets holds a server's secrets: to the one credential its auth reads, since nothing else would read another: a bearer server's token, or an oauth server's pre-registered client secret.
 func validateMCPAuthSecrets(srv MCPServer) error {
 	if len(srv.Auth.Secrets) == 0 {
 		return nil
 	}
 
 	label := fmt.Sprintf("mcp server %q auth", srv.Name)
+	field, name := "api_key_env", srv.Auth.APIKeyEnv
 
-	if srv.Auth.Type != MCPAuthBearer {
-		return fmt.Errorf("%s: secrets: applies to auth.type: bearer, whose token it holds", label)
+	switch srv.Auth.Type {
+	case MCPAuthBearer:
+	case MCPAuthOAuth:
+		field, name = "client_secret_env", srv.Auth.ClientSecretEnv
+		if name == "" {
+			return fmt.Errorf("%s: secrets: on an oauth server holds the secret client_secret_env names, and there is none", label)
+		}
+	default:
+		return fmt.Errorf("%s: secrets: applies to auth.type: bearer, whose token it holds, or oauth, whose client secret it holds", label)
 	}
 
 	err := checkSecretsMap(label, srv.Auth.Secrets, nil)
@@ -101,13 +109,13 @@ func validateMCPAuthSecrets(srv MCPServer) error {
 		return err
 	}
 
-	if _, held := srv.Auth.Secrets[srv.Auth.APIKeyEnv]; !held {
-		return fmt.Errorf("%s: api_key_env %s is not a key of its secrets: map", label, srv.Auth.APIKeyEnv)
+	if _, held := srv.Auth.Secrets[name]; !held {
+		return fmt.Errorf("%s: %s %s is not a key of its secrets: map", label, field, name)
 	}
 
 	for _, extra := range slices.Sorted(maps.Keys(srv.Auth.Secrets)) {
-		if extra != srv.Auth.APIKeyEnv {
-			return fmt.Errorf("%s: secrets: holds the server's token and no other; nothing would read %s", label, extra)
+		if extra != name {
+			return fmt.Errorf("%s: secrets: holds the one credential %s names and no other; nothing would read %s", label, field, extra)
 		}
 	}
 

@@ -122,7 +122,10 @@ goes in the agent's own `secrets:`.
 An `mcp_servers:` entry's `auth:` takes a map of the same shape, holding the
 one key its `api_key_env:` names: the server's bearer token, which only the
 HTTP client reads. See
-[mcp.md](mcp.md#a-token-from-a-secret-source).
+[mcp.md](mcp.md#a-token-from-a-secret-source). On an `oauth` server the one key
+is the one `client_secret_env:` names, and it is the exception to "never
+stored": `steps mcp login` fetches it once and keeps it sealed with the login,
+because every token refresh presents it.
 
 A webhook resource's `secrets:` holds one key too, the one its
 `source.secret_env:` names: the secret its deliveries are verified against. See

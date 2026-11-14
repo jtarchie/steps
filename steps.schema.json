@@ -1351,7 +1351,7 @@
                 "type": "string",
                 "pattern": "^\\(\\([a-z0-9_-]+:[A-Za-z0-9_./-]+\\)\\)$"
               },
-              "description": "bearer only. The server's token as NAME: ((source:name)), where NAME is what api_key_env names. Resolved from the daemon's secret sources and handed to the HTTP client only."
+              "description": "The server's one credential as NAME: ((source:name)). bearer: NAME is what api_key_env names, resolved from the daemon's secret sources and handed to the HTTP client only. oauth: NAME is what client_secret_env names, fetched once by `steps mcp login` and kept sealed with the login."
             },
             "client_id": {
               "type": "string",
@@ -1359,7 +1359,7 @@
             },
             "client_secret_env": {
               "type": "string",
-              "description": "oauth only, requires client_id. Names the environment variable holding the registered client's secret."
+              "description": "oauth only, requires client_id. Names the environment variable holding the registered client's secret, or the one key of this block's secrets:."
             },
             "callback_port": {
               "type": "integer",

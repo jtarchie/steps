@@ -184,7 +184,9 @@ func TestMCPAuthSecretsAreRefusedWhereNothingWouldReadThem(t *testing.T) {
 	for _, tc := range []struct{ name, auth, want string }{
 		{"a key api_key_env does not name", "{ type: bearer, api_key_env: TOKEN, secrets: { OTHER: ((ci:x)) } }", "api_key_env TOKEN is not a key of its secrets: map"},
 		{"a second key", "{ type: bearer, api_key_env: TOKEN, secrets: { TOKEN: ((ci:x)), OTHER: ((ci:y)) } }", "nothing would read OTHER"},
-		{"an oauth server", "{ type: oauth, secrets: { TOKEN: ((ci:x)) } }", "secrets: applies to auth.type: bearer"},
+		{"an oauth server with no client secret", "{ type: oauth, secrets: { TOKEN: ((ci:x)) } }", "holds the secret client_secret_env names, and there is none"},
+		{"an oauth server's other key", "{ type: oauth, client_id: app, client_secret_env: CLIENT, secrets: { TOKEN: ((ci:x)) } }", "client_secret_env CLIENT is not a key of its secrets: map"},
+		{"a server with no auth", "{ type: none, secrets: { TOKEN: ((ci:x)) } }", "secrets: applies to auth.type: bearer"},
 		{"a literal", "{ type: bearer, api_key_env: TOKEN, secrets: { TOKEN: hunter2 } }", "((source:name))"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

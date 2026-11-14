@@ -135,7 +135,7 @@ func discoverAndRegister(ctx context.Context, srv config.MCPServer, redirectURL 
 	}
 
 	if srv.Auth.ClientID != "" {
-		reg, credErr := preregisteredClient(srv)
+		reg, credErr := preregisteredClient(ctx, srv)
 		if credErr != nil {
 			return nil, nil, credErr
 		}
@@ -179,10 +179,22 @@ func discoverAndRegister(ctx context.Context, srv config.MCPServer, redirectURL 
 // way the credentials were obtained. A named-but-unset secret variable is
 // an error: proceeding would attempt a public-client exchange the server
 // will reject, reported as an opaque 401 far from its cause.
-func preregisteredClient(srv config.MCPServer) (*oauthex.ClientRegistrationResponse, error) {
+func preregisteredClient(ctx context.Context, srv config.MCPServer) (*oauthex.ClientRegistrationResponse, error) {
 	reg := &oauthex.ClientRegistrationResponse{ClientID: srv.Auth.ClientID}
 
 	if srv.Auth.ClientSecretEnv == "" {
+		return reg, nil
+	}
+
+	// A reference is fetched here, once: the secret is then kept sealed with the login, because every refresh presents it and no run could prompt for it.
+	if ref := srv.Auth.ClientSecretRef(); ref != "" {
+		secret, err := lookupCredential(ctx, srv.Auth.ClientSecretEnv, ref)
+		if err != nil {
+			return nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
+		}
+
+		reg.ClientSecret = secret
+
 		return reg, nil
 	}
 

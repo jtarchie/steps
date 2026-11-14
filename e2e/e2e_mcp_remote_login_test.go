@@ -3,6 +3,7 @@ package e2e
 // A login against a daemon crosses three boundaries at once — the CLI starts it, a browser finishes it on a route with no credentials, and a poll later spends the token — so the first test walks all three rather than any one.
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -28,6 +29,8 @@ type oauthFixture struct {
 	redirectURIs atomic.Value
 	// authorized counts MCP requests that arrived carrying the issued token.
 	authorized atomic.Int64
+	// clientSecret is what the last code exchange presented as the client's secret, by either method an authorization server accepts.
+	clientSecret atomic.Value
 }
 
 const oauthFixtureToken = "issued-to-the-daemon"
@@ -105,7 +108,11 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		http.Redirect(w, r, query.Get("redirect_uri")+"?code=fixture-code&state="+query.Get("state"), http.StatusFound) //nolint:gosec // redirecting to the caller's redirect_uri is what an authorization server IS; this one is a test fixture
 	})
 
-	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		_, basic, _ := r.BasicAuth()
+		fixture.clientSecret.Store(cmp.Or(basic, r.PostForm.Get("client_secret")))
+
 		writeJSON(w, map[string]any{"access_token": oauthFixtureToken, "refresh_token": "fixture-refresh", "token_type": "Bearer", "expires_in": 3600})
 	})
 
@@ -666,4 +673,105 @@ func TestALegacyLoginIsSealedOnFirstUse(t *testing.T) {
 	}
 
 	noFileHoldsTheToken(t, dir)
+}
+
+const vaultedClientValue = "client-value-from-the-vault-6f0a"
+
+func preregisteredTrackerPipeline(endpoint string) string {
+	return `
+defaults:
+  preflight:
+    disabled: true
+mcp_servers:
+- name: tracker
+  endpoint: ` + endpoint + `/mcp
+  auth:
+    type: oauth
+    client_id: registered-app
+    client_secret_env: STEPS_TEST_CLIENT_ONLY_IN_VAULT
+    secrets:
+      STEPS_TEST_CLIENT_ONLY_IN_VAULT: ((ci:client_value))
+jobs:
+- name: noop
+  plan:
+  - task: noop
+    run: "true"
+`
+}
+
+func theExchangePresented(t *testing.T, fixture *oauthFixture, want string) {
+	t.Helper()
+
+	if got, _ := fixture.clientSecret.Load().(string); got != want {
+		t.Errorf("the code exchange presented client secret %q, want the vault's value", got)
+	}
+}
+
+// A pre-registered client's secret is fetched from the secret source once, at login: the variable is in no environment, the authorization server is shown the vault's value, and what is kept of it is sealed.
+//
+// Not t.Parallel(): the token directory, the key and $BROWSER are process environment.
+func TestALocalLoginTakesItsClientSecretFromASecretSource(t *testing.T) {
+	dir, path, config, vault := cliSecretsFixture(t, nil)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("STEPS_ENCRYPTION_KEY", testEncryptionKey)
+	t.Setenv("HOME", dir)
+	fakeBrowser(t)
+
+	writeVault(t, vault, map[string]string{cli.PipelineName(path) + "/client_value": vaultedClientValue + "\n"})
+
+	fixture := newOAuthFixture(t)
+	writePipelineFile(t, path, preregisteredTrackerPipeline(fixture.server.URL))
+
+	printed, err := runAndCapture(t, "mcp", "login", "tracker", "-c", path)
+	if err == nil || !strings.Contains(printed, "--secrets") {
+		t.Fatalf("a login with no secret source = %v, want it refused naming --secrets\n%s", err, printed)
+	}
+
+	printed, err = runAndCapture(t, "mcp", "login", "tracker", "-c", path, "--secrets", config)
+	if err != nil {
+		t.Fatalf("mcp login --secrets: %v\n%s", err, printed)
+	}
+
+	theExchangePresented(t, fixture, vaultedClientValue)
+	assertNotInDatabase(t, string(cli.StatePath(path, "")), vaultedClientValue)
+}
+
+// The daemon's half: a login started with -p runs on the daemon, which resolves the client secret through the pipeline's own lookup paths.
+//
+// Not t.Parallel(): startWeb backgrounds cli.Run in this process, and the token directory and $BROWSER are process environment.
+func TestADaemonLoginTakesItsClientSecretFromASecretSource(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("STEPS_ENCRYPTION_KEY", testEncryptionKey)
+	t.Setenv("HOME", dir)
+	fakeBrowser(t)
+
+	path := pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	fixture := newOAuthFixture(t)
+	writePipelineFile(t, path, preregisteredTrackerPipeline(fixture.server.URL))
+
+	served := secretDaemon(t, dir, map[string]string{name + "/client_value": vaultedClientValue})
+	defer served.stopIfRunning(t)
+
+	target := authTarget(served.addr, "ops", "pw")
+
+	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
+	if err != nil {
+		t.Fatalf("pipeline set: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		err = cli.Run([]string{"mcp", "login", "tracker", "-p", name, "--target", target})
+	})
+	if err != nil {
+		t.Fatalf("steps mcp login against the daemon: %v\n%s", err, out)
+	}
+
+	theExchangePresented(t, fixture, vaultedClientValue)
+
+	served.stop(t)
+
+	assertNotInDatabase(t, served.state, vaultedClientValue)
 }

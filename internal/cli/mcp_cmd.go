@@ -283,6 +283,21 @@ type MCPLoginCmd struct {
 	// Name is which pipeline a -c login is filed under, the same name `steps run --name` gives its state.
 	Name map[string]string `help:"name the pipeline a file's mcp logins are filed under, e.g. --name infra=infra/pipeline.yml (repeatable)"                                    name:"name"`
 	DB   DB                `help:"state database the logins are sealed into: a sqlite file path, sqlite:// or postgres:// url (default: .steps/<pipeline>.db beside the YAML)" name:"db"   placeholder:"URL"`
+	// Secrets is the other commands' --config, which here is already the pipeline's file.
+	Secrets string `help:"with -c: the daemon's config file (steps web --config), whose web.secret section resolves a client secret written as a ((source:name)) reference" name:"secrets" placeholder:"FILE" type:"path"`
+}
+
+// loginSecrets gives a local login of an oauth server the sources of --secrets, refusing before anything opens: the secret is fetched mid-login, and a login that cannot fetch it should not get as far as a browser.
+func (m *MCPLoginCmd) loginSecrets(ctx context.Context, pipelineName string, srv config.MCPServer) (context.Context, error) {
+	if !srv.Auth.OAuth() {
+		return ctx, fmt.Errorf("mcp server %q is not auth: {type: oauth}; nothing to log in to", m.Server)
+	}
+
+	if srv.Auth.ClientSecretRef() != "" && m.Secrets == "" {
+		return ctx, fmt.Errorf("mcp server %q: client_secret_env %s is a secret; pass the daemon's config file with --secrets to resolve it", m.Server, srv.Auth.ClientSecretEnv)
+	}
+
+	return SecretFlags{Config: m.Secrets}.probeSecrets(ctx, pipelineName)
 }
 
 // Run is one of two logins, chosen by which pipeline was named. -c is a file here, so the login runs here: a loopback listener catches the redirect and the token lands in this user's config dir. -p is a pipeline a DAEMON serves, so the daemon runs it (daemon_login.go) — it is the machine that will spend the token, and one with no browser cannot be the loopback a redirect comes back to.
@@ -313,8 +328,9 @@ func (m *MCPLoginCmd) Run() error {
 		return fmt.Errorf("could not find mcp server: %w", err)
 	}
 
-	if !srv.Auth.OAuth() {
-		return fmt.Errorf("mcp server %q is not auth: {type: oauth}; nothing to log in to", m.Server)
+	ctx, err = m.loginSecrets(ctx, cfg.Name, *srv)
+	if err != nil {
+		return err
 	}
 
 	state := StatePath(m.Config, m.DB)

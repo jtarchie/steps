@@ -355,7 +355,7 @@ func (c *Config) refuseExportedMCPSecrets() error {
 // secretBackedGrant names the first server these grants draw from whose token is a reference, or "".
 func (c *Config) secretBackedGrant(tools []ToolSpec) string {
 	for _, server := range c.MCPServers {
-		if len(server.Auth.Secrets) > 0 && grantsMCPServer(tools, server.Name) {
+		if server.Auth.TokenSecret() != "" && grantsMCPServer(tools, server.Name) {
 			return server.Name
 		}
 	}
@@ -559,7 +559,8 @@ func (c *Config) modelKeyUses(job Job, add func(map[string]string, SecretUse)) {
 // mcpTokenUses adds the token of every secret-backed server a job reaches: through an agent's grant, a fix: block's, or a resource whose type is backed by the server. The resource's name is left out, as the lookup has only the job to scope on.
 func (c *Config) mcpTokenUses(job Job, add func(map[string]string, SecretUse)) {
 	for _, server := range c.MCPServers {
-		if len(server.Auth.Secrets) == 0 {
+		// The token only: an oauth server's client secret is fetched by a login, never by a run.
+		if server.Auth.TokenSecret() == "" {
 			continue
 		}
 

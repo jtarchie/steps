@@ -417,6 +417,42 @@ jobs:
 - **A token that could not be fetched is not remembered.** A lapsed login in the secret store fails the run, and the next run asks again rather than waiting out the probe cache.
 - **Refused on a server an `mcp_exports:` entry reaches**, since an export has no run to resolve a secret in.
 
+### An OAuth client secret from a secret source
+
+An `oauth` server with a pre-registered client takes the same map, holding the
+one key `client_secret_env:` names:
+
+```yaml noexec=secrets
+mcp_servers:
+- name: slack
+  endpoint: https://mcp.slack.com/mcp
+  auth:
+    type: oauth
+    client_id: "1234567890.9876543210"
+    client_secret_env: SLACK_CLIENT_SECRET
+    secrets:
+      SLACK_CLIENT_SECRET: ((ci:slack_client_secret))
+
+agents:
+- name: helper
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools:
+  - mcp: slack
+    tool: slack_search_public
+
+jobs:
+- name: search
+  plan:
+  - agent: helper
+    messages:
+    - What was decided in the release channel?
+```
+
+- **Fetched once, by `steps mcp login`, and then kept.** This is the one secret steps stores: every token refresh presents it, and no run could stop to ask for it. It is sealed with the login under `STEPS_ENCRYPTION_KEY`, as the tokens are.
+- **Rotating it in the secret store needs a new login.** Until then steps keeps presenting the copy it holds.
+- **`steps mcp login -p`** resolves it on the daemon, through that pipeline's lookup paths. **`steps mcp login -c`** runs on this machine and takes the daemon's config file with `--secrets`, since `-c`/`--config` is already the pipeline's file there.
+- **No run fetches it**, so `steps validate --live` does not list it. A pipeline holding the reference is still one with a secret reference: `steps pipeline set` checks its source exists, and `steps run` asks for `--config`.
+
 ## Backing a resource type with MCP
 
 ```yaml mcp=mcp-linear-issues

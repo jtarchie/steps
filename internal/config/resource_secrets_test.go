@@ -106,3 +106,45 @@ jobs:
 		t.Errorf("SecretUses = %+v, want %+v", got, want)
 	}
 }
+
+// An oauth server's client secret is fetched by a login and never by a run: an export may reach the server, and no job lists the reference among what it resolves.
+func TestAnOAuthClientSecretIsNoRunsToResolve(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+mcp_servers:
+- name: tracker
+  endpoint: https://example.com/mcp
+  auth: { type: oauth, client_id: app, client_secret_env: CLIENT, secrets: { CLIENT: ((ci:client)) } }
+mcp_exports:
+- name: support
+  access: '"acme/support" in Groups'
+  tools:
+  - mcp: tracker
+    tool: read_items
+agents:
+- name: reader
+  source: { model: openai/test-model, api_key_env: KEY }
+  tools:
+  - mcp: tracker
+    tool: read_items
+jobs:
+- name: read
+  plan:
+  - agent: reader
+    messages: [hi]
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	if got := cfg.SecretUses(); len(got) != 0 {
+		t.Errorf("SecretUses = %+v, want none: the client secret is a login's", got)
+	}
+
+	if got := cfg.SecretRefs(); len(got) != 1 {
+		t.Errorf("SecretRefs = %+v, want the one reference, so a set still checks its source exists", got)
+	}
+}

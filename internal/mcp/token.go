@@ -35,17 +35,22 @@ func bearerTokenFor(ctx context.Context, srv config.MCPServer) (string, error) {
 		return lookupBearerToken(srv.Auth.APIKeyEnv)
 	}
 
+	return lookupCredential(ctx, srv.Auth.APIKeyEnv, ref)
+}
+
+// lookupCredential resolves the reference behind the variable name through the context's lookup: a bearer token for a connection, a client secret for a login.
+func lookupCredential(ctx context.Context, name, ref string) (string, error) {
 	source, _ := ctx.Value(tokenLookupKey{}).(tokenSource)
 	if source.lookup == nil {
-		return "", fmt.Errorf("%w: $%s is a secret, and there is no secret source here: pass --config", ErrTokenLookup, srv.Auth.APIKeyEnv)
+		return "", fmt.Errorf("%w: $%s is a secret, and there is no secret source here: pass --config", ErrTokenLookup, name)
 	}
 
-	token, err := source.lookup(ctx, srv.Auth.APIKeyEnv, ref)
+	value, err := source.lookup(ctx, name, ref)
 	if err != nil {
 		return "", fmt.Errorf("%w: auth.%w", ErrTokenLookup, err)
 	}
 
-	return token, nil
+	return value, nil
 }
 
 // TokenScope is what a secret-backed server adds to a probe cache key: the same definition resolves to a different credential per pipeline, so one pipeline's verdict must not vouch for another's.

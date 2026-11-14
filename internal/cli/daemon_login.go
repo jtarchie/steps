@@ -15,6 +15,7 @@ import (
 	"time"
 
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	runs "github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -145,7 +146,8 @@ func (l *logins) StartLogin(pipeline *web.Pipeline, server string, req web.Login
 		}()
 		defer cancel()
 
-		loginErr := stepsmcp.LoginHosted(ctx, name, *srv, pending.hosted)
+		// One memo for the login: a pre-registered client's secret that is a reference resolves through this pipeline's own lookup paths.
+		loginErr := stepsmcp.LoginHosted(runs.WithProbeSecrets(ctx, name), name, *srv, pending.hosted)
 
 		pending.set(func(status *web.LoginStatus) {
 			if loginErr != nil {

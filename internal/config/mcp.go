@@ -167,12 +167,15 @@ type MCPServerAuth struct {
 	ClientSecretEnv string   `yaml:"client_secret_env,omitempty"`
 	CallbackPort    int      `yaml:"callback_port,omitempty"`
 	Scopes          []string `yaml:"scopes,omitempty"`
-	// Secrets holds the one reference api_key_env names, handed to the HTTP client and nothing else. Never hashed: like the token's value, re-pointing or rotating it changes whether the server answers, not what the step asks; the NAME is hashed through api_key_env.
+	// Secrets holds the one reference api_key_env names (bearer), handed to the HTTP client and nothing else, or the one client_secret_env names (oauth), fetched once by `steps mcp login` and kept sealed with the login. Never hashed: like the token's value, re-pointing or rotating it changes whether the server answers, not what the step asks; the NAME is hashed through api_key_env.
 	Secrets map[string]string `secret:"ref" yaml:"secrets,omitempty"`
 }
 
 // TokenSecret is the ((source:name)) reference behind api_key_env; "" reads the daemon's environment.
 func (a MCPServerAuth) TokenSecret() string { return a.Secrets[a.APIKeyEnv] }
+
+// ClientSecretRef is the ((source:name)) reference behind client_secret_env; "" reads the environment of whoever runs the login.
+func (a MCPServerAuth) ClientSecretRef() string { return a.Secrets[a.ClientSecretEnv] }
 
 // The auth.type spellings. An empty Type is "none".
 const (
