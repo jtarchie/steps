@@ -369,6 +369,58 @@ jobs:
 	assertFixAgentSawNoSecret(t, fixer)
 }
 
+// An agent tool streams live past recordOutput, so its terminal copy needs masking of its own (#255), whole or split across two writes.
+func TestRunConfigAgentToolStreamIsScrubbedOnTheTerminal(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+
+	for _, progress := range []string{"plain", "tty"} {
+		t.Run(progress, func(t *testing.T) {
+			dir, path, config, _ := cliSecretsFixture(t, nil)
+			writeVault(t, filepath.Join(dir, "vault"), map[string]string{cli.PipelineName(path) + "/gh_token": e2eSecretValue})
+
+			fake := newFakeLLM(t,
+				callsTool("run_shell", map[string]any{"command": `head=${TOKEN%??????????}; printf 'tok=%s' "$head"; sleep 0.2; printf '%s done\n' "${TOKEN#"$head"}"; echo "err=$TOKEN" >&2`}),
+				says("done"),
+			)
+
+			writePipelineFile(t, path, `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: hand
+  source:
+    endpoint: `+fake.URL+`/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell]
+  secrets:
+    TOKEN: ((ci:gh_token))
+
+jobs:
+- name: build
+  plan:
+  - agent: hand
+    messages: [go]
+`)
+
+			printed, err := runAndCapture(t, "run", "--config", config, "--progress", progress, path)
+			if err != nil {
+				t.Fatalf("run --config: %v\n%s", err, printed)
+			}
+
+			if strings.Contains(printed, e2eSecretValue) || strings.Contains(printed, e2eSecretValue[:10]) {
+				t.Errorf("the terminal was shown the secret:\n%s", printed)
+			}
+
+			if !strings.Contains(printed, "err=***") || !strings.Contains(printed, "*** done") {
+				t.Errorf("the terminal lost the tool's output instead of masking it:\n%s", printed)
+			}
+		})
+	}
+}
+
 func assertFixAgentSawNoSecret(t *testing.T, fixer *fakeLLM) {
 	t.Helper()
 

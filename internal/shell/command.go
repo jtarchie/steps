@@ -143,29 +143,37 @@ func (o *Output) sink(c Command, which Streams, label string, dst io.Writer) (io
 	var capture *Capture
 	if c.Capture {
 		capture = NewCapture(c.Limit, c.SpillDir)
-
-		// In front of the capture, so its truncation and its spill file only ever hold masked bytes: masking a truncated result afterwards misses a value cut at the limit.
-		if o.secrets.Empty() {
-			writers = append(writers, capture)
-		} else {
-			scrubbed := o.secrets.Writer(capture)
-			o.scrubbers = append(o.scrubbers, scrubbed)
-			writers = append(writers, scrubbed)
-		}
+		writers = append(writers, capture)
 	}
+
+	var w io.Writer
 
 	switch len(writers) {
 	case 0:
 		return io.Discard, nil
 	case 1:
-		return writers[0], capture
+		w = writers[0]
 	default:
-		return io.MultiWriter(writers...), capture
+		w = io.MultiWriter(writers...)
 	}
+
+	if o.secrets.Empty() {
+		return w, capture
+	}
+
+	// In front of the live stream too, which an agent tool's output reaches without recordOutput (#255); and of the capture, so its truncation and spill file only ever hold masked bytes.
+	scrubbed := o.secrets.Writer(w)
+	o.scrubbers = append(o.scrubbers, scrubbed)
+
+	return scrubbed, capture
 }
 
-// Flush emits whatever partial line a live stream is still holding.
+// Flush emits whatever partial line a live stream is still holding, after the tail a scrubber held back reaches it.
 func (o *Output) Flush() {
+	for _, scrubbed := range o.scrubbers {
+		_ = scrubbed.Flush()
+	}
+
 	for _, flush := range o.flushes {
 		flush()
 	}
