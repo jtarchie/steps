@@ -23,6 +23,8 @@ import (
 // resolves versions with lands on the same machine as the in: that follows —
 // a source only reachable from a worker has to be asked from there too.
 func WithResourcePlacement(ctx context.Context) context.Context {
+	ctx = rsrc.WithHere(ctx, hereRunner)
+
 	return rsrc.WithPlacerFor(ctx, func(ctx context.Context, step config.Step) (rsrc.Placer, error) {
 		tag := placementTag(step)
 		if tag == "" {
@@ -60,6 +62,16 @@ func WithResourcePlacement(ctx context.Context) context.Context {
 			return runner, nil
 		}, nil
 	})
+}
+
+// hereRunner builds an untagged stage's runner through the venue, which puts a container stage with a tree on the implicit local: worker.
+func hereRunner(ctx context.Context, spec shell.RunnerSpec) (shell.Runner, error) {
+	runner, err := newRunner(venue.Worker{}, spec)
+	if err != nil {
+		return nil, err
+	}
+
+	return closingRunner{Runner: runner, onClose: func(r shell.Runner) { notePlacement(ctx, r) }}, nil
 }
 
 // placedRunner builds one stage's runner on its worker, reading what the

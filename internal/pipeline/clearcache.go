@@ -29,7 +29,7 @@ type ClearedCache struct {
 // ClearTaskCaches empties the caches of the task or agent step named step in job, on this machine and on every worker it is placed on; cachePath, when set, picks one. Refusals come back before anything is removed, so a refused clear removes nothing; per-cache failures are each result's Err.
 func ClearTaskCaches(ctx context.Context, cfg *config.Config, jobName, step, cachePath string, start bool) ([]ClearedCache, error) {
 	// ponytail: run from a terminal against the file and its --worker mappings only; a steps web route, clearing with the daemon's own pipelines and workers, is the upgrade.
-	paths, tags, err := stepCaches(cfg, jobName, step, cachePath)
+	paths, tags, implicit, err := stepCaches(cfg, jobName, step, cachePath)
 	if err != nil {
 		return nil, err
 	}
@@ -69,11 +69,22 @@ func ClearTaskCaches(ctx context.Context, cfg *config.Config, jobName, step, cac
 		return cleared, err
 	}
 
-	for _, tag := range slices.Sorted(maps.Keys(workers)) {
-		cleared = append(cleared, clearOnWorker(ctx, tag, workers[tag], paths, keys, start)...)
+	return append(cleared, clearOnWorkers(ctx, implicit, workers, paths, keys, start)...), nil
+}
+
+// clearOnWorkers clears every worker a step is placed on, and this machine's docker when an untagged image: step keeps its caches there on the implicit local: worker.
+func clearOnWorkers(ctx context.Context, implicit bool, workers map[string]string, paths, keys []string, start bool) []ClearedCache {
+	var cleared []ClearedCache
+
+	if implicit {
+		cleared = clearOnWorker(ctx, "this machine's docker", "local:", paths, keys, start)
 	}
 
-	return cleared, nil
+	for _, tag := range slices.Sorted(maps.Keys(workers)) {
+		cleared = append(cleared, clearOnWorker(ctx, "worker "+tag, workers[tag], paths, keys, start)...)
+	}
+
+	return cleared
 }
 
 func clearLocal(ws *config.WorkspaceConfig, paths, keys []string) ([]ClearedCache, error) {
@@ -97,9 +108,7 @@ func clearLocal(ws *config.WorkspaceConfig, paths, keys []string) ([]ClearedCach
 	return cleared, nil
 }
 
-func clearOnWorker(ctx context.Context, tag, url string, paths, keys []string, start bool) []ClearedCache {
-	where := "worker " + tag
-
+func clearOnWorker(ctx context.Context, where, url string, paths, keys []string, start bool) []ClearedCache {
 	removed, err := venue.ClearTaskCaches(ctx, url, keys, start)
 	if errors.Is(err, venue.ErrKeepsNoCache) {
 		return []ClearedCache{{Where: where, Note: "nothing to clear: " + err.Error()}}
@@ -118,50 +127,50 @@ func clearOnWorker(ctx context.Context, tag, url string, paths, keys []string, s
 	return cleared
 }
 
-// stepCaches finds every step of the job the cache key names step (its task: or agent:), and returns their cache paths, the one asked for when cachePath is set, and the tags they are placed by.
-func stepCaches(cfg *config.Config, jobName, step, cachePath string) ([]string, []string, error) {
+// stepCaches finds every step of the job the cache key names step (its task: or agent:), and returns their cache paths, the one asked for when cachePath is set, the tags they are placed by, and whether one is an untagged image: step.
+func stepCaches(cfg *config.Config, jobName, step, cachePath string) ([]string, []string, bool, error) {
 	job, err := cfg.FindJob(jobName)
 	if err != nil {
-		return nil, nil, err //nolint:wrapcheck // FindJob names the job and lists the others
+		return nil, nil, false, err //nolint:wrapcheck // FindJob names the job and lists the others
 	}
 
 	found := matchedSteps{cfg: cfg, step: step}
 
 	err = job.VisitSteps(found.visit)
 	if err != nil {
-		return nil, nil, fmt.Errorf("job %q: %w", jobName, err)
+		return nil, nil, false, fmt.Errorf("job %q: %w", jobName, err)
 	}
 
 	if !found.matched {
-		return nil, nil, fmt.Errorf("job %q has no task or agent step named %q (it has: %s)", jobName, step, strings.Join(slices.Compact(slices.Sorted(slices.Values(found.names))), ", "))
+		return nil, nil, false, fmt.Errorf("job %q has no task or agent step named %q (it has: %s)", jobName, step, strings.Join(slices.Compact(slices.Sorted(slices.Values(found.names))), ", "))
 	}
 
 	if len(found.paths) == 0 {
-		return nil, nil, fmt.Errorf("job %q: step %q declares no caches", jobName, step)
+		return nil, nil, false, fmt.Errorf("job %q: step %q declares no caches", jobName, step)
 	}
 
 	if cachePath == "" {
-		return found.paths, found.tags, nil
+		return found.paths, found.tags, found.implicit, nil
 	}
 
 	want := path.Clean(cachePath)
 	if !slices.Contains(found.paths, want) {
-		return nil, nil, fmt.Errorf("job %q: step %q has no cache at %q (its caches: %s)", jobName, step, want, strings.Join(found.paths, ", "))
+		return nil, nil, false, fmt.Errorf("job %q: step %q has no cache at %q (its caches: %s)", jobName, step, want, strings.Join(found.paths, ", "))
 	}
 
-	return []string{want}, found.tags, nil
+	return []string{want}, found.tags, found.implicit, nil
 }
 
 // matchedSteps gathers, across every step a job runs under one name, what a clear of that name reaches.
 type matchedSteps struct {
 	cfg                *config.Config
 	step               string
-	matched            bool
+	matched, implicit  bool
 	paths, tags, names []string
 }
 
 func (m *matchedSteps) visit(_ string, s *config.Step) error {
-	caches, name, ok := cachesFor(m.cfg, *s)
+	caches, name, image, ok := cachesFor(m.cfg, *s)
 	if !ok {
 		return nil
 	}
@@ -179,9 +188,12 @@ func (m *matchedSteps) visit(_ string, s *config.Step) error {
 		}
 	}
 
-	if tag := placementTag(*s); tag != "" && !slices.Contains(m.tags, tag) {
+	tag := placementTag(*s)
+	if tag != "" && !slices.Contains(m.tags, tag) {
 		m.tags = append(m.tags, tag)
 	}
+
+	m.implicit = m.implicit || (tag == "" && image != "")
 
 	return nil
 }
@@ -192,7 +204,7 @@ func liveTaskCacheKeys(cfg *config.Config) []string {
 
 	for i := range cfg.Jobs {
 		_ = cfg.Jobs[i].VisitSteps(func(_ string, s *config.Step) error {
-			caches, name, _ := cachesFor(cfg, *s)
+			caches, name, _, _ := cachesFor(cfg, *s)
 			keys = append(keys, slices.Collect(maps.Values(workspace.TaskCacheKeys(cfg.Name, cfg.Jobs[i].Name, name, caches)))...)
 
 			return nil
@@ -202,26 +214,26 @@ func liveTaskCacheKeys(cfg *config.Config) []string {
 	return keys
 }
 
-// cachesFor is a step's resolved caches and the name they are keyed by, for a task or agent step.
-func cachesFor(cfg *config.Config, s config.Step) ([]config.TaskCache, string, bool) {
+// cachesFor is a step's resolved caches, the name they are keyed by and its image, for a task or agent step.
+func cachesFor(cfg *config.Config, s config.Step) ([]config.TaskCache, string, string, bool) {
 	switch kind, _ := s.Kind(); kind {
 	case config.StepKindTask:
 		resolved, err := cfg.ResolveTask(s)
 		if err != nil {
-			return nil, s.Task, true
+			return nil, s.Task, "", true
 		}
 
-		return resolved.Caches, s.Task, true
+		return resolved.Caches, s.Task, resolved.Image, true
 	case config.StepKindAgent:
 		resolved, err := cfg.ResolveAgentInvocation(s)
 		if err != nil {
-			return nil, s.Agent, true
+			return nil, s.Agent, "", true
 		}
 
-		return resolved.Caches, s.Agent, true
+		return resolved.Caches, s.Agent, resolved.Image, true
 	case config.StepKindGet, config.StepKindPut, config.StepKindTry, config.StepKindInParallel, config.StepKindRace,
 		config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
 	}
 
-	return nil, "", false
+	return nil, "", "", false
 }

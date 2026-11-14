@@ -241,7 +241,13 @@ func (s *plusSession) ensure(ctx context.Context) (shell.Runner, error) {
 		s.attempted = true
 
 		err := s.connect(ctx)
-		if err != nil {
+
+		switch {
+		case err == nil:
+		case s.spec.WorkerTag == "":
+			// An untagged image: step named no worker, so the error names the docker it actually asked.
+			s.startErr = fmt.Errorf("this machine's docker (an untagged image: step runs there through volumes): %w", err)
+		default:
 			s.startErr = fmt.Errorf("%w %q: %w", ErrWorker, s.worker.URL, err)
 		}
 

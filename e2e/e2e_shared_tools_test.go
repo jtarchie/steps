@@ -303,7 +303,7 @@ jobs:
 	}
 }
 
-// An export that names an image runs its commands there, as the container's user and with no network if it says so, each call in a fresh container over a directory of its own.
+// An export that names an image runs its commands there, as the container's user and with no network if it says so, each call in a fresh container over a volume of its own.
 func TestAnExportedCommandRunsInTheContainerTheExportNames(t *testing.T) {
 	testdocker.Require(t)
 	t.Setenv("TMPDIR", testdocker.MountableDir(t))
@@ -317,7 +317,7 @@ mcp_exports:
   tools:
   - name: whereami
     description: Say where this runs
-    run: 'cat /etc/alpine-release; echo kept > marker; ls; wget -q -T 2 -O- http://example.com >/dev/null 2>&1 && echo online || echo offline'
+    run: 'pwd; cat /etc/alpine-release; echo kept > marker; ls; wget -q -T 2 -O- http://example.com >/dev/null 2>&1 && echo online || echo offline'
 `)
 
 	session := served.connect(t, "shell")
@@ -329,8 +329,8 @@ mcp_exports:
 
 		_ = json.Unmarshal([]byte(textOf(callTool(t, session, "whereami", nil))), &out)
 
-		if !strings.Contains(out.Stdout, "3.") || !strings.Contains(out.Stdout, "offline") || strings.Count(out.Stdout, "marker") != 1 {
-			t.Fatalf("the command did not run in a fresh, offline alpine container:\n%s", out.Stdout)
+		if !strings.Contains(out.Stdout, "3.") || !strings.Contains(out.Stdout, "offline") || strings.Count(out.Stdout, "marker") != 1 || !strings.Contains(out.Stdout, "/steps/work") {
+			t.Fatalf("the command did not run in a fresh, offline alpine container over volumes:\n%s", out.Stdout)
 		}
 	}
 }

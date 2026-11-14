@@ -164,13 +164,13 @@ func noteHeld(ctx context.Context, runner shell.Runner) {
 	sink.held, sink.holder = held, holder
 }
 
-// attachTaskCaches puts a step's caches: in its directory. Not for a placed step: its worker holds the cache, and a local one attached here would be packed into the tree sent over.
-func attachTaskCaches(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, space workspace.StepSpace, name string, caches []config.TaskCache) func() {
-	if len(caches) == 0 || placementTag(step) != "" {
+// attachTaskCaches puts a step's caches: in its directory. Not for a placed or image: step: its worker (the implicit local: one for an untagged image) holds the cache, and a local one attached here would be packed into the tree sent over.
+func attachTaskCaches(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, space workspace.StepSpace, rt config.ResolvedTask) func() {
+	if len(rt.Caches) == 0 || placementTag(step) != "" || rt.Image != "" {
 		return func() {}
 	}
 
-	return bw.AttachCaches(ctx, space.Dir(), taskCacheKeys(ctx, name, caches))
+	return bw.AttachCaches(ctx, space.Dir(), taskCacheKeys(ctx, step.Task, rt.Caches))
 }
 
 func taskCacheKeys(ctx context.Context, name string, caches []config.TaskCache) map[string]string {

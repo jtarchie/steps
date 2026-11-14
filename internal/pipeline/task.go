@@ -107,7 +107,7 @@ func executeTask(
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 	defer workspace.CloseSpace(space, rt.Name)
-	defer attachTaskCaches(ctx, bw, step, space, step.Task, rt.Caches)()
+	defer attachTaskCaches(ctx, bw, step, space, rt)()
 
 	// A shell command cannot be handed a synthetic tool result, so a task that
 	// declared context: from: gets each demanded decision as a file it can
@@ -240,7 +240,8 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 
 	runner, err := newRunner(worker, withIsolation(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env,
 		WorkerTag: placementTag(step), Fetch: rt.Outputs, ReusedWarm: reusedWarm(ctx, step),
-		DeferFetch:   deferrable(step, rt),
+		// Untagged steps bring outputs home as before, so capture, --replay and --artifact-store never see a tree held in a local volume.
+		DeferFetch:   placementTag(step) != "" && deferrable(step, rt),
 		RemoteInputs: remote,
 		Caches:       taskCacheKeys(ctx, step.Task, rt.Caches),
 		// The same postmortem, on the machine that actually ran the step: a

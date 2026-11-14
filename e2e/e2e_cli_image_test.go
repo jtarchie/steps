@@ -112,3 +112,58 @@ jobs:
 
 	assertSucceeded(t, storeNodes(t, path), "agent", "sandboxed")
 }
+
+// TestE2ECLIAgentImageWritesThenReadsThroughVolumes is security-audit's shape on the default path: a CLI agent with no network writes a file, a custom tool reads it in the container, and the file arrives on this machine for the next step (steps#246).
+func TestE2ECLIAgentImageWritesThenReadsThroughVolumes(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	captured := filepath.Join(t.TempDir(), "check.json")
+	home := filepath.Join(dir, "home.txt")
+
+	writeFakeClaude(t, strings.Join([]string{
+		"echo '" + cliInitEvent("mcp__steps__write_file", "mcp__steps__check") + "'",
+		captureBridgeScript(filepath.Join(t.TempDir(), "write.json"), "write_file", `{"path":"report/notes.txt","content":"written\n"}`),
+		captureBridgeScript(captured, "check", `{}`),
+		"echo '" + cliResultEvent("wrote and checked", 1) + "'",
+	}, "\n"))
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: recorder
+  image: %s
+  network: none
+  source:
+    model: "@claude/sonnet"
+  tools:
+  - write_file
+  - name: check
+    description: Read the report back.
+    run: pwd && cat report/notes.txt
+
+jobs:
+- name: build
+  plan:
+  - agent: recorder
+    outputs: [report]
+    messages:
+      - Write the report.
+  - task: publish
+    inputs: [report]
+    run: cp report/notes.txt %s
+`, dockerE2EImage, home))
+
+	mustRun(t, path)
+
+	if got := readFileString(t, captured); !strings.Contains(got, "/steps/work") || !strings.Contains(got, "written") {
+		t.Errorf("check answered %q, want the file write_file made, read in the volume workdir", got)
+	}
+
+	if got := readFileString(t, home); got != "written\n" {
+		t.Errorf("the next step read %q, want what the agent wrote", got)
+	}
+}

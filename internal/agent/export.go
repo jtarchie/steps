@@ -34,6 +34,8 @@ type ExportHooks struct {
 	Before func(ctx context.Context, tool string) error
 	// After is told every call that ran: the tool, the NAMES of the arguments it was sent (never their values, which can hold anything a caller pasted), whether it succeeded, and, when a rule refused it, that rule's name.
 	After func(ctx context.Context, tool string, argNames []string, ok bool, rule string)
+	// Runner builds an image: call's runner; nil is shell.NewRunner.
+	Runner RunnerFactory
 }
 
 // ExportServer is one export, built and connected to its upstreams.
@@ -59,7 +61,7 @@ func NewExportServer(ctx context.Context, cfg *config.Config, export config.MCPE
 		return nil, fmt.Errorf("export %q: %w", export.Name, err)
 	}
 
-	calls := callSpace{export: export, kinds: callKinds(export.Tools), env: callEnv(export.Tools)}
+	calls := callSpace{export: export, kinds: callKinds(export.Tools), env: callEnv(export.Tools), runner: hooks.Runner}
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: cfg.Name + "/" + export.Name, Version: "v1"}, nil)
 	served := &ExportServer{closers: closers}
 
@@ -163,7 +165,8 @@ type callSpace struct {
 	export config.MCPExport
 	kinds  map[string]callKind
 	// env is each command's env: — what its runner passes through, and what is masked in what it returns.
-	env map[string][]string
+	env    map[string][]string
+	runner RunnerFactory
 }
 
 // secrets are the values of tool's env: as they are now, the ones its result must not carry.
@@ -179,7 +182,7 @@ func (c callSpace) secrets(tool string) []string {
 	return values
 }
 
-func (c callSpace) open(tool string) (toolEnv, func(), error) {
+func (c callSpace) open(ctx context.Context, tool string) (toolEnv, func(), error) {
 	kind := c.kinds[tool]
 	if kind == remoteCall {
 		return toolEnv{}, func() {}, nil
@@ -196,7 +199,7 @@ func (c callSpace) open(tool string) (toolEnv, func(), error) {
 		return toolEnv{dir: dir}, remove, nil
 	}
 
-	runner, err := shell.NewRunner(containerSpec(c.export.Image, dir, c.env[tool], c.export.Isolation()))
+	runner, err := c.runner.build(ctx, containerSpec(c.export.Image, dir, c.env[tool], c.export.Isolation()))
 	if err != nil {
 		remove()
 
@@ -235,7 +238,7 @@ func exportHandler(name string, impl toolImpl, calls callSpace, hooks ExportHook
 
 		slices.Sort(names)
 
-		env, done, err := calls.open(name)
+		env, done, err := calls.open(ctx, name)
 		if err != nil {
 			// A call that could not even start is still a call: the caller was told no, and the log and the page should say so.
 			if hooks.After != nil {

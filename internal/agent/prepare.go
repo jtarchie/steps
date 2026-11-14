@@ -203,7 +203,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	// Before anything reads the directory (prompt files, context_paths:, a stdio MCP server's cwd), as Concourse mounts a cache before the task starts.
 	meta := shell.MetadataFrom(ctx)
 	caches := workspace.TaskCacheKeys(meta.PipelineName, meta.JobName, step.Agent, ri.Caches)
-	detachCaches := attachAgentCaches(ctx, bw, step, space.Dir(), caches)
+	detachCaches := attachAgentCaches(ctx, bw, step, ri.Image, space.Dir(), caches)
 	label := step.Agent
 	abandon := func() {
 		detachCaches()
@@ -326,9 +326,9 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}, nil
 }
 
-// attachAgentCaches puts the step's caches: in its directory, unless the step is placed: its worker holds them, and one attached here would be packed into the tree sent over. resolveTags stamped the effective placement onto step.Tags at load.
-func attachAgentCaches(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, dir string, caches map[string]string) func() {
-	if len(step.Tags) > 0 {
+// attachAgentCaches puts the step's caches: in its directory, unless the step is placed or has an image: its worker (the implicit local: one for an untagged image) holds them, and one attached here would be packed into the tree sent over. resolveTags stamped the effective placement onto step.Tags at load.
+func attachAgentCaches(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, image, dir string, caches map[string]string) func() {
+	if len(step.Tags) > 0 || image != "" {
 		return func() {}
 	}
 

@@ -670,7 +670,7 @@ func (r *RunsWhereCmd) printPlacements(ctx context.Context, st placementReader) 
 		view := web.PlacementView{Placement: placed}
 
 		fmt.Printf("%-24s  %-12s  %-13s  %9s  %9s  %9s  %-11s  %s\n",
-			truncateName(placed.StepName, 24), truncateName(placed.Tag, 12),
+			truncateName(placed.StepName, 24), cmp.Or(truncateName(placed.Tag, 12), "-"),
 			view.Platform(), view.Sent(), view.Received(), view.Disk(), cmp.Or(view.Identity(), "-"), view.Machine())
 	}
 

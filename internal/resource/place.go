@@ -23,10 +23,19 @@ type Placer func(shell.RunnerSpec) (shell.Runner, error)
 // that runs here. The step carries the tag; the caller maps it to a machine.
 type PlacerFor func(ctx context.Context, step config.Step) (Placer, error)
 
+// Here builds the runner of a stage that runs on this machine; it takes the stage's ctx, where the step's placement record lives.
+type Here func(ctx context.Context, spec shell.RunnerSpec) (shell.Runner, error)
+
 type (
 	placerForKey struct{}
 	placerKey    struct{}
+	hereKey      struct{}
 )
+
+// WithHere installs how a stage with no worker builds its runner. Its own key, not a placer: a placer turns off check sharing, and a check here still shares.
+func WithHere(ctx context.Context, here Here) context.Context {
+	return context.WithValue(ctx, hereKey{}, here)
+}
 
 // WithPlacerFor installs how every resource stage under ctx finds its worker.
 func WithPlacerFor(ctx context.Context, fn PlacerFor) context.Context {
@@ -58,9 +67,13 @@ func Place(ctx context.Context, step config.Step) (context.Context, error) {
 // newRunner builds a stage's runner wherever ctx says it runs.
 func newRunner(ctx context.Context, spec shell.RunnerSpec) (shell.Runner, error) {
 	placer, _ := ctx.Value(placerKey{}).(Placer)
-	if placer == nil {
-		return shell.NewRunner(spec) //nolint:wrapcheck // the local path is shell's answer, returned as shell phrased it
+	if placer != nil {
+		return placer(spec)
 	}
 
-	return placer(spec)
+	if here, _ := ctx.Value(hereKey{}).(Here); here != nil {
+		return here(ctx, spec)
+	}
+
+	return shell.NewRunner(spec) //nolint:wrapcheck // the local path is shell's answer, returned as shell phrased it
 }

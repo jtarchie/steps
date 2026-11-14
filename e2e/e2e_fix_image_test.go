@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -63,4 +64,52 @@ jobs:
 	}
 
 	assertSucceeded(t, storeNodes(t, path), "task", "check")
+}
+
+// TestAFixAgentsRepairReachesTheRerunAndComesHome: under volumes the repair has to land in the tree the rerun reads, and the repaired outputs have to reach this machine for the next step.
+func TestAFixAgentsRepairReachesTheRerunAndComesHome(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	home := filepath.Join(dir, "fixed.txt")
+
+	fake := newFakeLLM(t,
+		callsTool("write_file", map[string]any{"path": "out/fixed", "content": "yes\n"}),
+		callsTool("check", map[string]any{}),
+		says("fixed"),
+	)
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: fixer
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [write_file]
+
+jobs:
+- name: build
+  plan:
+  - task: check
+    image: %[2]s
+    outputs: [out]
+    run: test -f out/fixed
+    fix:
+      agent: fixer
+  - task: publish
+    inputs: [out]
+    run: cp out/fixed %[3]s
+`, fake.URL, dockerE2EImage, home))
+
+	// Succeeding is the rerun passing: a task still failing after its fix fails the run.
+	mustRun(t, path)
+
+	if got := readFileString(t, home); got != "yes\n" {
+		t.Errorf("the next step read %q, want the repair", got)
+	}
 }

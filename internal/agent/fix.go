@@ -122,6 +122,8 @@ func RunFix(
 
 	// A repair agent follows the same rule a step agent does: with an image:, its file tools go where its shell commands already go. It is the case the ownership mismatch bites hardest, since the task's own command has just written into the tree as the container's user.
 	lost := &tree.Lost{}
+	// The task's image is the fix agent's (validateFixAgentImages refuses one of its own), so the file tools reach the tree in the task's container, which under volumes is the only copy the rerun reads.
+	ri.Image = rt.Image
 
 	files, modelDir, contextBlocks, err := prepareStepTree(ctx, runner, ri, dir, tools.decls, lost)
 	if err != nil {
