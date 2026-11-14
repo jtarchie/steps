@@ -173,15 +173,19 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		return errorResult(err.Error())
 	}
 
-	runner, err := shell.NewRunner(containerSpec(c.ri.Image, env.dir, c.ri.Env, c.ri.Isolation()))
-	if err != nil {
-		return errorResult(err.Error())
+	// A containerized child uses the parent's runner, so it edits the same copy of the tree: under volumes a second container would start from what this machine last fetched (#246). Load refuses one that reaches the tree from a different container, and one that does not never runs a command. A host child keeps its own, for its own sandbox: fence.
+	runner := env.runner
+	if c.ri.Image == "" || runner == nil {
+		runner, err = shell.NewRunner(containerSpec(c.ri.Image, env.dir, c.ri.Env, c.ri.Isolation()))
+		if err != nil {
+			return errorResult(err.Error())
+		}
+
+		defer shell.CloseRunner(runner, c.ri.AgentName)
 	}
 
 	runner = runner.WithLabel(c.ri.AgentName)
-	defer shell.CloseRunner(runner, c.ri.AgentName)
 
-	// The child's own image decides where ITS file tools run, not the parent's: a hosted child of a containerized parent reads this machine, and a containerized child of a host parent reads its container. tags: on an agent granting a sub-agent is refused at load, so these are always the same machine and there is one tree either way.
 	childTree, childDir, err := tree.ForStep(ctx, runner, c.ri.Image, env.dir, c.ri.ToolSpecs, env.lost)
 	if err != nil {
 		return errorResult(err.Error())

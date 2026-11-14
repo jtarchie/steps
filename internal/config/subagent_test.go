@@ -270,3 +270,115 @@ func TestSubAgentDepthLimit(t *testing.T) {
 	path := writeConfig(t, b.String())
 	wantLoadError(t, path, "nesting depth exceeded")
 }
+
+// TestSubAgentTreeSharing: a child that reaches the tree shares the parent's container, so one whose container would differ is refused at load (#246).
+func TestSubAgentTreeSharing(t *testing.T) {
+	t.Parallel()
+
+	pipeline := func(parent, child string) string {
+		return `
+agents:
+- name: lead
+  source: { model: lmstudio/qwen }
+` + parent + `
+  tools:
+  - agent: helper
+    description: Delegate.
+- name: helper
+  source: { model: lmstudio/qwen }
+` + child + `
+jobs:
+- name: j
+  plan:
+  - agent: lead
+    messages: [x]
+`
+	}
+
+	tests := map[string]struct {
+		pipeline string
+		want     string
+	}{
+		"same image":                    {pipeline("  image: busybox", "  image: busybox"), ""},
+		"both on the host":              {pipeline("", ""), ""},
+		"host child with its own fence": {pipeline("", "  sandbox: true"), ""},
+		"different image":               {pipeline("  image: busybox", "  image: alpine"), `sub-agent "helper"`},
+		"host child of an image parent": {pipeline("  image: busybox", ""), `sub-agent "helper"`},
+		"different network":             {pipeline("  image: busybox", "  image: busybox\n  network: none"), `sub-agent "helper"`},
+		"a child with no tree":          {pipeline("  image: busybox", "  image: alpine\n  tools: [web_fetch]"), ""},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeConfig(t, tc.pipeline)
+			if tc.want == "" {
+				_, err := LoadConfig(path)
+				if err != nil {
+					t.Fatalf("LoadConfig: %v", err)
+				}
+
+				return
+			}
+
+			wantLoadError(t, path, tc.want)
+		})
+	}
+}
+
+// TestImageAgentRefusesRelativeMCPCwd: a stdio server runs on this machine, so a relative cwd: names a tree the containerized agent's edits never reach (#246).
+func TestImageAgentRefusesRelativeMCPCwd(t *testing.T) {
+	t.Parallel()
+
+	pipeline := func(image, cwd string) string {
+		return `
+mcp_servers:
+- name: lsp
+  command: gopls
+  cwd: ` + cwd + `
+agents:
+- name: bot
+  source: { model: lmstudio/qwen }
+` + image + `
+  tools: [{ mcp: lsp }]
+- name: fixer
+  source: { model: lmstudio/qwen }
+  tools: [{ mcp: lsp }]
+jobs:
+- name: j
+  plan:
+  - agent: bot
+    messages: [x]
+`
+	}
+
+	path := writeConfig(t, pipeline("  image: busybox", "repo"))
+	wantLoadError(t, path, "cwd: repo")
+
+	for _, ok := range []string{pipeline("", "repo"), pipeline("  image: busybox", "/abs/repo")} {
+		_, err := LoadConfig(writeConfig(t, ok))
+		if err != nil {
+			t.Errorf("LoadConfig: %v", err)
+		}
+	}
+
+	fix := `
+mcp_servers:
+- name: lsp
+  command: gopls
+  cwd: repo
+agents:
+- name: fixer
+  source: { model: lmstudio/qwen }
+  tools: [{ mcp: lsp }]
+jobs:
+- name: j
+  plan:
+  - task: t
+    image: busybox
+    run: "true"
+    fix: fixer
+`
+	wantLoadError(t, writeConfig(t, fix), "cwd: repo")
+}

@@ -209,7 +209,8 @@ func mcpSession(t *testing.T, endpoint, token string) *sdkmcp.ClientSession {
 	t.Helper()
 
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "e2e-agent", Version: "v0"}, nil)
-	transport := &sdkmcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: &http.Client{Transport: bearer{token: token}, Timeout: 30 * time.Second}}
+	// ponytail: 90s fits an image export's call under the suite's load, now that each call starts a holder over a fresh volume (~11s idle, past 30s loaded; #246 S4). Reusing one holder across an export's calls (S6) brings it back under 30s.
+	transport := &sdkmcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: &http.Client{Transport: bearer{token: token}, Timeout: 90 * time.Second}}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	t.Cleanup(cancel)

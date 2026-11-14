@@ -335,3 +335,23 @@ func resolveEffectiveTools(agentTools, stepTools []ToolSpec) ([]ToolSpec, error)
 
 	return effective, nil
 }
+
+// ReachesTree reports whether any grant acts on the step's directory: a file tool, run_shell, or a custom tool, whose run: is a shell command like any other. No grant means the default file tools.
+func ReachesTree(specs []ToolSpec) bool {
+	if len(specs) == 0 {
+		return true
+	}
+
+	for _, spec := range specs {
+		switch spec.Builtin {
+		case ReadFileBuiltinName, ListDirBuiltinName, WriteFileBuiltinName, EditFileBuiltinName, SearchFilesBuiltinName, RunShellBuiltinName:
+			return true
+		}
+
+		if spec.Run != "" {
+			return true
+		}
+	}
+
+	return false
+}

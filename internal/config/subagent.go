@@ -5,6 +5,9 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -197,4 +200,113 @@ func (c *Config) walkAgentGraph(name string, path []string) error {
 	}
 
 	return nil
+}
+
+// validateSharedTrees refuses the agent grants whose tools would act on a different copy of the step's tree than the container's (#246): a sub-agent shares its parent's container only when it would build the same one, and a stdio MCP server with a relative cwd: runs on this machine, where an image agent's edits never land.
+func (c *Config) validateSharedTrees() error {
+	for _, job := range c.Jobs {
+		err := job.visitSteps(func(label string, step *Step) error {
+			if step.Fix != nil {
+				err := c.checkFixMCPCwd(label, *step)
+				if err != nil {
+					return err
+				}
+			}
+
+			if step.Agent == "" {
+				return nil
+			}
+
+			ri, err := c.ResolveAgentInvocation(*step)
+			if err != nil {
+				return nil //nolint:nilerr // an unresolvable agent is reported by its own check
+			}
+
+			return c.checkTreeSharers(label, ri, 0)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkFixMCPCwd: a fix agent works in its task's container, so the relative-cwd refusal follows the task's image.
+func (c *Config) checkFixMCPCwd(label string, step Step) error {
+	rt, err := c.ResolveTask(step)
+	if err != nil || rt.Image == "" || rt.Fix == nil {
+		return nil //nolint:nilerr // an unresolvable task is reported by its own check
+	}
+
+	specs := rt.Fix.Tools
+
+	agent, err := c.FindAgent(rt.Fix.Agent)
+	if err == nil && len(specs) == 0 {
+		specs = agent.Tools
+	}
+
+	return c.checkMCPCwd(fmt.Sprintf("%s: fix agent %q", label, rt.Fix.Agent), specs)
+}
+
+// checkTreeSharers walks ri's sub-agents, refusing one that reaches the tree from a different container; two host agents share this machine's tree whatever their fences. depth stops at a cycle, which validateAgentGraph reports.
+func (c *Config) checkTreeSharers(label string, ri ResolvedInvocation, depth int) error {
+	if depth > maxSubAgentDepth {
+		return nil
+	}
+
+	if ri.Image != "" {
+		err := c.checkMCPCwd(fmt.Sprintf("%s: agent %q", label, ri.AgentName), ri.ToolSpecs)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, spec := range ri.ToolSpecs {
+		if spec.Agent == "" {
+			continue
+		}
+
+		child, err := c.ResolveAgentInvocation(Step{Agent: spec.Agent})
+		if err != nil {
+			continue
+		}
+
+		if splitsTree(ri, child) {
+			return fmt.Errorf("%s: sub-agent %q works on agent %q's files but would run in a different container (image, env, user, network, privileged, container_limits and sandbox must match); see jtarchie/steps#246", label, spec.Agent, ri.AgentName)
+		}
+
+		err = c.checkTreeSharers(label, child, depth+1)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkMCPCwd refuses a stdio server with a relative cwd: among specs.
+func (c *Config) checkMCPCwd(context string, specs []ToolSpec) error {
+	for _, spec := range specs {
+		srv, err := c.FindMCPServer(spec.MCP)
+		if spec.MCP == "" || err != nil {
+			continue
+		}
+
+		if srv.IsStdio() && srv.Cwd != "" && !filepath.IsAbs(srv.Cwd) {
+			return fmt.Errorf("%s runs in a container, but mcp server %q (cwd: %s) runs on this machine against a copy of the tree its edits never reach; use an absolute cwd: or an HTTP server (jtarchie/steps#246)", context, spec.MCP, srv.Cwd)
+		}
+	}
+
+	return nil
+}
+
+// splitsTree reports a child whose tools would act on another copy of the parent's tree: one of the two is containerized, the child reaches the tree, and their containers differ.
+func splitsTree(parent, child ResolvedInvocation) bool {
+	return (parent.Image != "" || child.Image != "") && ReachesTree(child.ToolSpecs) && !sameContainer(parent, child)
+}
+
+// sameContainer: the settings a child's runner is built from, so equal ones can share the parent's.
+func sameContainer(a, b ResolvedInvocation) bool {
+	return a.Image == b.Image && slices.Equal(a.Env, b.Env) && reflect.DeepEqual(a.Isolation(), b.Isolation())
 }

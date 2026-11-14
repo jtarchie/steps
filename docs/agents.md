@@ -644,7 +644,7 @@ jobs:
 ```
 
 - Each call runs the child's own fresh conversation (its own model, persona, dials, `max_turns`, tool grant) and returns its final text as the tool result, capped at 32,000 bytes like any other tool output.
-- The child runs in the **caller's** working directory but under the **child's own** resolved image — a sub-agent is a different worker, unlike a fix agent (which reproduces the failing task's image).
+- The child works in the **caller's** container, on the same copy of the tree. A child granted a file tool, `run_shell` or a custom `run:` tool must therefore resolve to the same container as its parent (`image:`, `env:`, `user:`, `network:`, `privileged:`, `container_limits:`, `sandbox:`); one that would differ is a load error. A child granted none of them (`web_fetch`, a verdict) may differ freely, and so may a host child of a host parent: both work on this machine's tree, each under its own `sandbox:`.
 - The child's LLM client and tool tree are built eagerly during the parent step's preparation, so a bad credential fails before the first call, not during it.
 - No cache node, `job_run`, or execution-log entry is recorded for the child conversation — same no-record contract as `fix:` agents and hook steps.
 - A child failure comes back to the parent as `{"error": ...}`, never a Go error that aborts the parent conversation.

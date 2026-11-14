@@ -166,6 +166,7 @@ func (c *Config) validate() error {
 		c.validateCLIAgents,
 		c.validateHooks,
 		c.validateAgentGraph,
+		c.validateSharedTrees,
 		c.validateToolCallGuards,
 		c.validateAskUserResponders,
 		c.validateStepGuards,
