@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/labstack/echo-otel/v5"
@@ -117,6 +118,10 @@ func Start(ctx context.Context, version string) (func(context.Context), error) {
 		return nil, err
 	}
 
+	// Never put back: otel's getter returns its own delegating holder, and handing that to its setter would make it delegate to itself.
+	exportWarned.Store(false)
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(warnExportOnce))
+
 	previous := events.SetTracer(recorder)
 
 	return func(ctx context.Context) {
@@ -129,10 +134,22 @@ func Start(ctx context.Context, version string) (func(context.Context), error) {
 		for _, shutdown := range []func(context.Context) error{stopTraces, stopMetrics} {
 			err := shutdown(ctx)
 			if err != nil {
-				slog.WarnContext(ctx, "telemetry.shutdown", "error", err)
+				warnExportOnce(err)
 			}
 		}
 	}, nil
+}
+
+// exportWarned is reset by each Start, so every command gets one warning of its own.
+var exportWarned atomic.Bool
+
+// warnExportOnce says a collector is failing once per command (#236): the SDK reports every batch it could not send and the final flush fails the same way, and none of the later lines says anything the first did not.
+func warnExportOnce(err error) {
+	if exportWarned.Swap(true) {
+		return
+	}
+
+	slog.Warn("telemetry.export_failed", "error", err, "note", "telemetry is not reaching its collector; later failures are not logged")
 }
 
 // unwind shuts down what Start already installed when a later step fails, under a context of its own because the caller's may be the reason Start failed.

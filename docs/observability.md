@@ -32,6 +32,8 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 steps run pipeline.yml
 
 Everything else the OpenTelemetry SDK reads (headers, sampling, resource attributes, batching) applies as documented there.
 
+A collector that cannot be reached never fails a run. It is logged once per command, as a `telemetry.export_failed` warning naming the first error; the failed exports after it, and the final flush, are not logged again.
+
 ## What is traced
 
 - **Every run is a trace.** The job is the root span, `RUN <job>`, carrying the pipeline, revision and run id. Each step is a span under the container it ran in — the same tree the [web transcript](web.md) draws — named by kind and name (`task test`, `do`, `try notify`). A step's span says how it ended (`cicd.pipeline.task.run.result`: `success`, `failure`, `error`, `cancellation` or `skip`); a failed step's span is marked as an error even when a `try:` tolerated it, and a skipped step's says why (`steps.skip.reason`, such as a cache hit or a false `when:`).
