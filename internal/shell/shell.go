@@ -69,24 +69,16 @@ type RunnerSpec struct {
 	// Image runs commands in a container from this image; empty runs them on
 	// the host.
 	Image string
-	// Cwd is the working directory. For a container it is bind-mounted at its
-	// own resolved host path and set as the workdir; empty (only a resource
-	// check:) mounts nothing — and, with a Worker, sends and fetches nothing.
+	// Cwd is the working directory on this machine. A host command runs in it; a container never mounts it — a venue copies it into Volumes and fetches the outputs back. Empty (a resource check:) has no tree.
 	Cwd string
-	// MountPath is where Cwd's tree lives on the DAEMON's filesystem, when
-	// that is not this machine. Set it and Cwd is not resolved locally —
-	// EvalSymlinks would fail on a path that exists on a worker and not here.
-	//
-	// This is the seam a placed containerized step turns on: the tree was
-	// sent to the worker, and the bind mount has to name the worker's copy,
-	// because that is the filesystem the daemon resolves `-v` against.
+	// MountPath is where the tree's volume is mounted inside the container, and its working directory. Required beside Cwd for a container: without it the tree would have to be a bind mount, which steps never makes (steps#246).
 	MountPath string
 	// DockerHost is the daemon to run this step's containers on. Empty is
 	// this machine's; a venue sets it to a socket it forwards to a worker.
 	DockerHost string
 	// DockerDial reaches DockerHost through a connection the caller makes, for a socket with no address here (a docker+ worker's, over ssh); DockerHost then only names it in errors.
 	DockerDial func(ctx context.Context) (net.Conn, error)
-	// Volumes are daemon-side named volumes as `name:target`; with MountPath they REPLACE the tree bind, because a docker+ worker's tree lives in volumes and never at a path.
+	// Volumes are daemon-side named volumes as `name:target`: the tree at MountPath, and whatever else the venue mounts.
 	Volumes []dockerapi.Bind
 	// EnvValues are variables the CALLER supplies with their values rather
 	// than by name, for the ones that exist nowhere in this process's own
@@ -100,10 +92,10 @@ type RunnerSpec struct {
 	// a pipeline name an optional variable without every operator having to
 	// define it.
 	Env []string
-	// User is the container's user:, passed straight to the daemon.
-	// Empty takes the platform default — see defaultContainerUser, which is
-	// where the Linux file-ownership problem is actually handled. Ignored for
-	// host execution, which always runs as whoever started steps.
+	// User is the container's user:, passed straight to the daemon. Empty
+	// takes the image's own: with no bind mount there is no host ownership
+	// to match. Ignored for host execution, which always runs as whoever
+	// started steps.
 	User string
 	// Network is the container's network mode; "none" cuts the container off
 	// from the network entirely.
@@ -167,6 +159,9 @@ type RunnerSpec struct {
 	RemoteInputs map[string]RemoteInput
 }
 
+// errTreeOutsideVolume is a container asked to work in a directory of this machine's, which only a bind mount could give it.
+var errTreeOutsideVolume = errors.New("a container reaches its tree through volumes, never a bind mount; build the runner with venue.NewRunner (steps#246)")
+
 // RemoteInput is where an input's bytes are when they are on a worker.
 type RemoteInput struct {
 	Digest string
@@ -176,9 +171,8 @@ type RemoteInput struct {
 
 // NewRunner returns a DockerRunner scoped to spec, or a HostRunner when
 // spec.Image is empty — the single decision point every shell-out caller
-// (task, agent, resource) funnels through. For a DockerRunner, Cwd is
-// resolved and validated once here (see ResolveMountPath). HostRunner never
-// errors — cwd needs no resolution for host execution. The returned runner
+// (task, agent, resource) funnels through. A DockerRunner with a tree needs
+// it in Volumes (errTreeOutsideVolume). The returned runner
 // has no label (see WithLabel) until a caller that wants prefixed output
 // opts in explicitly.
 func NewRunner(spec RunnerSpec) (Runner, error) {
@@ -200,29 +194,12 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 		return host, nil
 	}
 
-	var resolvedCwd string
-
-	switch {
-	case spec.MountPath != "":
-		// Already resolved, and resolvable only where it exists — this path is
-		// on the WORKER. Still checked for the one thing that is not about
-		// resolution: a bind mount is spelled `source:target`, so a colon here
-		// misparses the mount rather than failing, which is the shape a
-		// silently-empty bind mount takes.
-		err := checkMountPath(spec.MountPath)
-		if err != nil {
-			return nil, fmt.Errorf("worker mount path: %w", err)
-		}
-
-		resolvedCwd = spec.MountPath
-	case spec.Cwd != "":
-		var err error
-
-		resolvedCwd, err = ResolveMountPath(spec.Cwd)
-		if err != nil {
-			return nil, fmt.Errorf("resolve working directory %q: %w", spec.Cwd, err)
-		}
+	// A tree reaches a container through volumes, which a venue builds (steps#246); a working directory without them would be a bind mount.
+	if spec.Cwd != "" && spec.MountPath == "" {
+		return nil, fmt.Errorf("working directory %q: %w", spec.Cwd, errTreeOutsideVolume)
 	}
+
+	resolvedCwd := spec.MountPath
 
 	return DockerRunner{
 		Image: spec.Image,
@@ -235,7 +212,7 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 			volumes:     spec.Volumes,
 			envNames:    spec.Env,
 			envValues:   spec.EnvValues,
-			user:        containerUser(spec.User, spec.DockerHost == ""),
+			user:        spec.User,
 			network:     spec.Network,
 			privileged:  spec.Privileged,
 			cpuShares:   spec.CPUShares,

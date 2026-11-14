@@ -4,8 +4,11 @@ package pipeline
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/venue"
 )
 
 // TestPlacedImageNeedsNoDockerOnTheOrchestrator is the inverse of the test it
@@ -60,5 +63,36 @@ jobs:
 
 	if strings.Contains(err.Error(), "docker CLI not found on PATH") {
 		t.Errorf("error = %v; a placed containerized step needs no docker binary on this machine", err)
+	}
+}
+
+// TestLocalImagesBringTheHolderImage: an untagged image step's tree goes through a holder container, so its image is pulled with the step's, before any step, and never inside one's timeout: (#246).
+func TestLocalImagesBringTheHolderImage(t *testing.T) {
+	t.Parallel()
+
+	cfg, _, st, provider := fixtureFrom(t, `
+jobs:
+  - name: build
+    plan:
+      - task: local
+        image: alpine:3
+        run: "true"
+`)
+
+	defer func() { _ = st.Close() }()
+	defer func() { _ = provider.Close() }()
+
+	got := imagesToPrepare(cfg)
+	if !slices.Contains(got, "alpine:3") || !slices.Contains(got, venue.HolderImage) {
+		t.Errorf("imagesToPrepare = %v, want the step's image and %s", got, venue.HolderImage)
+	}
+
+	none, _, st2, provider2 := fixtureFrom(t, "jobs: [{name: build, plan: [{task: t, run: \"true\"}]}]\n")
+
+	defer func() { _ = st2.Close() }()
+	defer func() { _ = provider2.Close() }()
+
+	if got := imagesToPrepare(none); len(got) != 0 {
+		t.Errorf("imagesToPrepare with no image: = %v, want nothing to pull", got)
 	}
 }

@@ -54,23 +54,10 @@ func New(host string) (*Client, error) {
 		host = resolved
 	}
 
-	// Refused rather than dialled, and the reason is about steps rather than
-	// about ssh. Reaching a remote daemon is the easy half — an ssh tunnel to
-	// its socket is a few lines. The hard half is that the daemon resolves a
-	// bind mount against ITS OWN filesystem, so a step whose tree lives here
-	// would mount a path that does not exist there, and docker answers that
-	// by creating an empty directory rather than by failing. The step then
-	// succeeds and produces nothing. That was equally true when this shelled
-	// out to a docker CLI that did support ssh://, which is to say the
-	// support was never the part that worked.
-	//
-	// A worker is the mechanism for this, and it is a different mechanism
-	// rather than a nicer spelling of the same one: it sends the tree, runs
-	// the command against the copy that arrived, and brings the results back.
+	// Refused rather than dialled: the engine client has no ssh transport, and a docker+ssh:// worker already is one — it forwards the daemon's socket over its own ssh connection, so the mapping is the one place an ssh daemon is spelled.
 	if strings.HasPrefix(host, "ssh://") {
-		return nil, fmt.Errorf("%q: %w; a remote daemon would resolve this step's bind mount against its own "+
-			"filesystem and find nothing there. Run the step on that machine with a worker (--worker ssh://...), "+
-			"which sends the tree and fetches the results, or point DOCKER_HOST at a local socket", host, errSSHHost)
+		return nil, fmt.Errorf("%q: %w; map a tag to docker+ssh://%s with --worker, which reaches that daemon by forwarding its socket, or point DOCKER_HOST at a local socket",
+			host, errSSHHost, strings.TrimPrefix(host, "ssh://"))
 	}
 
 	api, err := client.New(client.WithHost(host))

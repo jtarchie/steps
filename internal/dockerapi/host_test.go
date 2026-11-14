@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -259,23 +260,37 @@ func TestBindStringIsDockersBindSyntax(t *testing.T) {
 	}
 }
 
-func TestBindsMountTheTreeUnlessVolumesStandIn(t *testing.T) {
-	tests := []struct {
-		name string
-		spec ContainerSpec
-		want []string
-	}{
-		{"tree at its own path", ContainerSpec{WorkingDir: "/w", Mounts: []Bind{{Source: "/a", Target: "/a"}}}, []string{"/w:/w", "/a:/a"}},
-		{"mount dir outranks the working dir", ContainerSpec{MountDir: "/m", WorkingDir: "/m/sub"}, []string{"/m:/m"}},
-		{"volumes replace the tree", ContainerSpec{WorkingDir: "/w", Volumes: []Bind{{Source: "v", Target: "/w"}}, Mounts: []Bind{{Source: "/a", Target: "/a"}}}, []string{"v:/w", "/a:/a"}},
-		{"no tree", ContainerSpec{Mounts: []Bind{{Source: "/a", Target: "/a"}}}, []string{"/a:/a"}},
-	}
+func TestBindsAreTheVolumesThenTheMounts(t *testing.T) {
+	spec := ContainerSpec{WorkingDir: "/w", Volumes: []Bind{{Source: "v", Target: "/w"}}, Mounts: []Bind{{Source: "c", Target: "/c"}}}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.spec.binds()
-			if !slices.Equal(got, tt.want) {
-				t.Errorf("binds() = %v, want %v", got, tt.want)
+	if got, want := spec.binds(), []string{"v:/w", "c:/c"}; !slices.Equal(got, want) {
+		t.Errorf("binds() = %v, want %v: the working directory is never mounted from a path", got, want)
+	}
+}
+
+// A container reaches a tree through volumes only (#246): a host path handed to the daemon is a bind mount, refused before the daemon is asked, so no caller can bring one back.
+func TestNoContainerMountsAHostPath(t *testing.T) {
+	client := &Client{host: "unused"}
+
+	for name, bind := range map[string]Bind{
+		"absolute": {Source: "/etc", Target: "/x"},
+		"relative": {Source: "./work", Target: "/x"},
+		"windows":  {Source: `C:\work`, Target: "/x"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := client.CreateContainer(t.Context(), ContainerSpec{Image: "alpine:3", Mounts: []Bind{bind}})
+			if !errors.Is(err, errHostPath) {
+				t.Errorf("CreateContainer with mount %+v = %v, want errHostPath", bind, err)
+			}
+
+			_, err = client.CreateContainer(t.Context(), ContainerSpec{Image: "alpine:3", Volumes: []Bind{bind}})
+			if !errors.Is(err, errHostPath) {
+				t.Errorf("CreateContainer with volume %+v = %v, want errHostPath", bind, err)
+			}
+
+			_, err = client.CreateHolder(t.Context(), "h", "alpine:3", nil, []Bind{bind})
+			if !errors.Is(err, errHostPath) {
+				t.Errorf("CreateHolder with %+v = %v, want errHostPath", bind, err)
 			}
 		})
 	}

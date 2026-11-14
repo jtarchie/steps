@@ -24,7 +24,7 @@ type ResourceType struct {
 	// credential or deploy token without it being written into the pipeline.
 	Env []string `yaml:"env,omitempty"`
 	// User is the container user check/in/out execute as (docker's --user).
-	// Empty takes the platform default — see shell's defaultContainerUser.
+	// Empty takes the image's own user.
 	User string `yaml:"user,omitempty"`
 	// Network is the container network check/in/out join (docker's
 	// --network); "none" cuts off egress entirely. Requires Image (except

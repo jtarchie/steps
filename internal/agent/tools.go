@@ -22,9 +22,8 @@ import (
 )
 
 // toolEnv is the execution environment tool impls run against: the step's
-// working directory (also the bind-mount source when runner is a
-// DockerRunner, so host-side tools like read_file/list_dir keep seeing what
-// a containerized run_shell/custom tool wrote), the runner shell-backed
+// working directory on this machine (where a container's outputs come home),
+// the runner shell-backed
 // tools execute commands through, and spillDir — a per-step temp directory
 // (created and cleaned up by prepareAgentStep/RunFix) that run_shell/custom
 // tool output too large to return inline is streamed to instead of being

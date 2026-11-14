@@ -187,7 +187,7 @@ tasks:
       - STEPS_BENCH_ARTIFACTS=1 go test ./e2e -run TestBenchArtifacts -count=1 -v -timeout 3h
 
   bench:default-path:
-    desc: "Opt-in (steps#246): an untagged image: step through today's bind mount against the same step on a local: worker's volumes, first and again, reading a tree and rewriting one file of it as a declared output. FILES (default 100000) and FILE_BYTES (default 10240) size the tree. TMPDIR must be a path the docker VM shares, or the bind side reads an empty directory."
+    desc: "Opt-in (steps#246): an untagged image: step against the same step tagged for a local: worker, both through volumes since #246, first and again, reading a tree and rewriting one file of it as a declared output. FILES (default 100000) and FILE_BYTES (default 10240) size the tree."
     cmds:
       - STEPS_BENCH_DEFAULT_PATH=1 go test ./e2e -run TestBenchDefaultPath -count=1 -v -timeout 2h
 

@@ -78,7 +78,7 @@ func (c *Config) validateImages() error {
 // inserts a literal "--" before the image argument as defense in depth, but
 // this check is what turns a mistyped or supply-chain-tainted image string
 // into a clear LoadConfig error instead of docker silently granting whatever
-// the flag means (privileged mode, an arbitrary bind mount, host
+// the flag means (privileged mode, a mount, host
 // networking). Checked wherever image: can be set: resource_types, agents,
 // tasks, and steps (a step's own image: override).
 func (c *Config) validateImageValues() error {

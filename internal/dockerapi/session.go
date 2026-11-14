@@ -36,11 +36,8 @@ type ContainerSpec struct {
 	// and overriding the entrypoint here would hide it.
 	Cmd  []string
 	Name string
-	// WorkingDir is also the bind mount's path on both sides; empty mounts
-	// nothing and takes the image's own workdir.
+	// WorkingDir is where commands start; empty takes the image's own. It mounts nothing: a tree reaches a container through Volumes.
 	WorkingDir string
-	// MountDir is the tree to bind when it is not WorkingDir itself, for a step whose commands run in a SUBDIRECTORY of what has to be mounted. A placed agent with dir: is the case: the whole step directory must cross to the worker so its declared outputs resolve, while the model works one level down. Empty keeps WorkingDir as both, which is every other step.
-	MountDir string
 	// Env are already-resolved NAME=value pairs. A variable the caller could
 	// not resolve is simply absent from this, which is what makes naming an
 	// optional variable safe.
@@ -63,9 +60,9 @@ type ContainerSpec struct {
 	// ExtraHosts are `name:address` entries, for reaching the host from
 	// inside by a name that works on Docker Desktop and Linux alike.
 	ExtraHosts []string
-	// Mounts are bind mounts beyond WorkingDir.
+	// Mounts are further named volumes (caches, a holder's view); a host path is refused (volumesOnly).
 	Mounts []Bind
-	// Volumes are named volumes; set, they replace the tree bind, since their tree is on the daemon already.
+	// Volumes are the named volumes holding the tree.
 	Volumes []Bind
 	// OpenStdin keeps the container's stdin open for a caller that attaches
 	// to it, which a foreground run does and a session container does not.
@@ -81,6 +78,11 @@ type ContainerSpec struct {
 // An image the daemon does not have fails HERE, naming the image, rather than
 // later as a container that would not start.
 func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (string, error) {
+	err := volumesOnly(slices.Concat(spec.Volumes, spec.Mounts))
+	if err != nil {
+		return "", err
+	}
+
 	config := &container.Config{
 		Image:      spec.Image,
 		Cmd:        spec.Cmd,
@@ -112,7 +114,7 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 		hostConfig.Init = &enabled
 	}
 
-	err := spec.publish(config, hostConfig)
+	err = spec.publish(config, hostConfig)
 	if err != nil {
 		return "", err
 	}
@@ -209,26 +211,23 @@ func (c *Client) PublishedPort(ctx context.Context, id, port string) (string, er
 // container that is not running.
 var errNotPublished = errors.New("the port is not published")
 
-// binds is the working directory plus whatever else the caller asked for.
-//
-// The working directory is mounted at its own path on both sides so host-side
-// readers of the same tree stay coherent with what a containerized command
-// wrote.
+// binds are the volumes, then whatever else the caller mounted.
 func (spec ContainerSpec) binds() []string {
-	if len(spec.Volumes) > 0 {
-		return bindStrings(slices.Concat(spec.Volumes, spec.Mounts))
+	return bindStrings(slices.Concat(spec.Volumes, spec.Mounts))
+}
+
+// errHostPath is a mount naming a path on a filesystem rather than a volume.
+var errHostPath = errors.New("is a host path; a container mounts named volumes only (steps#246)")
+
+// volumesOnly refuses any bind whose source is a path: a bind mount names a path on the DAEMON's filesystem, which is this machine's only by coincidence, and an unshared one is mounted empty rather than refused.
+func volumesOnly(binds []Bind) error {
+	for _, bind := range binds {
+		if strings.ContainsAny(bind.Source, `/\`) {
+			return fmt.Errorf("mount source %q %w", bind.Source, errHostPath)
+		}
 	}
 
-	tree := spec.MountDir
-	if tree == "" {
-		tree = spec.WorkingDir
-	}
-
-	if tree == "" {
-		return bindStrings(spec.Mounts)
-	}
-
-	return bindStrings(slices.Concat([]Bind{{Source: tree, Target: tree}}, spec.Mounts))
+	return nil
 }
 
 // StartContainer runs a created container.

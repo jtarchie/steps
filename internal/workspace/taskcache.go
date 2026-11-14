@@ -52,7 +52,7 @@ func TaskCacheKeys(pipeline, job, step string, caches []config.TaskCache) map[st
 	return keyed
 }
 
-// AttachCaches moves each kept cache into dir at its path, by rename, and returns what moves them back. A rename rather than a mount or a copy: the cache and every step directory share the root's filesystem, so it costs nothing at any size and works the same for a host command and a bind-mounted container. A concurrent run of the same step finds the entry gone and starts empty (in Concourse both start warm); whichever finishes last is kept, as there.
+// AttachCaches moves each kept cache into dir at its path, by rename, and returns what moves them back. A rename rather than a mount or a copy: the cache and every step directory share the root's filesystem, so it costs nothing at any size and works the same for every host command. A concurrent run of the same step finds the entry gone and starts empty (in Concourse both start warm); whichever finishes last is kept, as there.
 func (b *isolatingBuild) AttachCaches(ctx context.Context, dir string, caches map[string]string) func() {
 	type attached struct{ entry, dir, rel string }
 

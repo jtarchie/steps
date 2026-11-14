@@ -44,8 +44,8 @@ type Task struct {
 	// Secrets maps an environment variable to a ((source:name)) reference the daemon resolves when the step runs; a step's own Secrets, if non-nil, replaces it (declared-wins, like Env). Hashed as the reference, never the value, so rotating a credential re-runs nothing.
 	Secrets map[string]string `secret:"ref" yaml:"secrets,omitempty"`
 	// User is the container user this task's run: executes as (docker's
-	// --user). Empty takes the platform default — see shell's
-	// defaultContainerUser. Only meaningful alongside Image.
+	// --user). Empty takes the image's own user. Only meaningful alongside
+	// Image.
 	User string `yaml:"user,omitempty"`
 	// Network is the container network this task's run: joins (docker's
 	// --network); "none" cuts off egress entirely. Requires Image, except

@@ -295,12 +295,22 @@ func prepareImages(ctx context.Context, cfg *config.Config, jobName string) erro
 	// Best-effort and silent when there is nothing to do.
 	shell.SweepOrphanedContainers(ctx, "")
 
-	err = shell.PrepareImages(ctx, cfg.Images())
+	err = shell.PrepareImages(ctx, imagesToPrepare(cfg))
 	if err != nil {
 		return fmt.Errorf("job %q: %w", jobName, err)
 	}
 
 	return nil
+}
+
+// imagesToPrepare are the pipeline's local images plus the holder image their volumes are filled through, so its first pull is startup cost rather than a step's timeout: (#246).
+func imagesToPrepare(cfg *config.Config) []string {
+	images := cfg.Images()
+	if len(images) == 0 {
+		return nil
+	}
+
+	return append(images, venue.HolderImage)
 }
 
 // runJobPlan plans (unless skipCache) and runs a job's steps, returning the

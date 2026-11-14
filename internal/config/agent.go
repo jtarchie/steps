@@ -44,8 +44,8 @@ type Agent struct {
 	// Secrets maps an environment variable this agent's run_shell/custom-tool commands see to a ((source:name)) reference the daemon resolves when the step runs; a tool result carrying a value is scrubbed before the model sees it. A step's own Secrets, if non-nil, replaces it. Hashed as the reference, never the value.
 	Secrets map[string]string `secret:"ref" yaml:"secrets,omitempty"`
 	// User is the container user this agent's run_shell/custom-tool commands
-	// execute as (docker's --user). Empty takes the platform default — see
-	// shell's defaultContainerUser. Only meaningful alongside Image.
+	// execute as (docker's --user). Empty takes the image's own user. Only
+	// meaningful alongside Image.
 	User string `yaml:"user,omitempty"`
 	// Network is the container network this agent's run_shell/custom-tool
 	// commands join (docker's --network); "none" cuts off egress entirely.

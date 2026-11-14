@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -51,10 +50,8 @@ const dockerSessionLifetime = 24 * time.Hour
 // conversation pays dozens of times. And a container the caller lost track of
 // was reaped only much later, because nothing on our side knew its name.
 //
-// The working directory is bind-mounted at its own (resolved) host path and
-// set as the container's workdir, so host-side readers (agent
-// read_file/list_dir, workspace Capture) see the same files a containerized
-// command wrote. No host variables are passed through except the pipeline's env: names — the
+// A tree is a volume the venue mounted at MountPath, which is also the
+// container's workdir; nothing of this machine's filesystem is mounted. No host variables are passed through except the pipeline's env: names — the
 // container otherwise starts from the image's own env.
 type DockerRunner struct {
 	Image   string
@@ -287,7 +284,6 @@ func (s *dockerSession) start(ctx context.Context, name string) (string, error) 
 		Cmd:        []string{"sh", "-c", keepAliveCommand()},
 		Name:       name,
 		WorkingDir: s.workingDir(),
-		MountDir:   s.resolvedCwd,
 		Volumes:    s.volumes,
 		// Build metadata is NOT fixed here but sent with each exec: a session can outlive the context that started it.
 		Env:         s.containerEnv(nil),
@@ -744,47 +740,6 @@ func (s *dockerSession) containerEnv(extra map[string]string) []string {
 // running any command through `sh -c` already assumes.
 func keepAliveCommand() string {
 	return fmt.Sprintf("sleep %d", int(dockerSessionLifetime.Seconds()))
-}
-
-// ResolveMountPath returns cwd as an absolute path with symlinks resolved,
-// so the host path handed to the daemon as a bind mount matches the real
-// filesystem location Docker Desktop (or the daemon) actually shares. Rejects
-// a resolved path containing ':' — a bind mount is spelled `host:container`,
-// so a path containing one would be silently misparsed into the wrong mount
-// (or rejected with a confusing error) rather than failing clearly here.
-//
-// Exported for a caller outside this package that mounts the same directory
-// at the same resolved path a step's session container uses.
-func ResolveMountPath(cwd string) (string, error) {
-	abs, err := filepath.Abs(cwd)
-	if err != nil {
-		return "", fmt.Errorf("%w", err)
-	}
-
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", fmt.Errorf("%w", err)
-	}
-
-	return resolved, checkMountPath(resolved)
-}
-
-// errMountPathColon is a bind mount source docker cannot be told about.
-var errMountPathColon = errors.New("contains ':', which is not supported for a docker bind mount")
-
-// checkMountPath refuses a path a bind mount cannot express.
-//
-// Separate from ResolveMountPath because a REMOTE mount path skips the
-// resolution — only the worker can follow its own symlinks — but not this:
-// a bind mount is `source:target`, so a colon anywhere turns one mount into a
-// misparsed two, which the daemon either refuses confusingly or honours as
-// something nobody asked for.
-func checkMountPath(path string) error {
-	if strings.Contains(path, ":") {
-		return fmt.Errorf("path %q %w", path, errMountPathColon)
-	}
-
-	return nil
 }
 
 // ValidateDocker fails fast when a pipeline configures image: but the daemon

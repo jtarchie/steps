@@ -19,12 +19,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -86,44 +83,28 @@ func TestKeepaliveIsBounded(t *testing.T) {
 	}
 }
 
-// TestResolveMountPathRejectsColonInPath guards against docker's
-// `host:container` volume spec silently misparsing a host path that itself
-// contains a ':' (a valid POSIX path character). It must fail loudly at
-// construction rather than produce a mount nobody asked for.
-func TestResolveMountPathRejectsColonInPath(t *testing.T) {
+// TestNewRunnerRefusesATreeOutsideAVolume: a container reaches its tree through volumes (#246), so a working directory with no MountPath and Volumes would be a bind mount, and that is refused rather than made.
+func TestNewRunnerRefusesATreeOutsideAVolume(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	cwd := filepath.Join(dir, "weird:name")
-
-	err := os.Mkdir(cwd, 0o700)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = ResolveMountPath(cwd)
-	if err == nil {
-		t.Error("expected an error for a working directory containing ':'")
+	_, err := NewRunner(RunnerSpec{Image: "alpine", Cwd: t.TempDir()})
+	if !errors.Is(err, errTreeOutsideVolume) {
+		t.Errorf("NewRunner with a host tree = %v, want errTreeOutsideVolume", err)
 	}
 }
 
-// TestNewRunnerRejectsColonInPath confirms the colon rejection surfaces
-// through NewRunner (where it's actually triggered in production), not just
-// the internal ResolveMountPath helper.
-func TestNewRunnerRejectsColonInPath(t *testing.T) {
+// TestContainerUserDefaultsToTheImages: with no bind mount there is no host ownership to match, so an unset user: is the image's own on every platform.
+func TestContainerUserDefaultsToTheImages(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	cwd := filepath.Join(dir, "weird:name")
-
-	err := os.Mkdir(cwd, 0o700)
+	runner, err := NewRunner(RunnerSpec{Image: "alpine"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = NewRunner(RunnerSpec{Image: "alpine", Cwd: cwd})
-	if err == nil {
-		t.Error("expected an error for a working directory containing ':'")
+	docker, ok := runner.(DockerRunner)
+	if !ok || docker.session.user != "" {
+		t.Errorf("runner %T with user %q, want a DockerRunner deferring to the image's user", runner, docker.session.user)
 	}
 }
 
@@ -139,7 +120,7 @@ func TestNewRunner(t *testing.T) {
 		t.Error("NewRunner(\"\", ...) should return a HostRunner")
 	}
 
-	dockerRunnerIface, err := NewRunner(RunnerSpec{Image: "alpine", Cwd: t.TempDir()})
+	dockerRunnerIface, err := NewRunner(RunnerSpec{Image: "alpine"})
 	if err != nil {
 		t.Fatalf("NewRunner(\"alpine\", ...): %v", err)
 	}
@@ -151,34 +132,6 @@ func TestNewRunner(t *testing.T) {
 
 	if runner.Image != "alpine" {
 		t.Errorf("Image = %q, want alpine", runner.Image)
-	}
-}
-
-// TestNewRunnerResolvesCwdOnce guards the whole point of construction-time
-// resolution: NewRunner's returned DockerRunner carries an already-resolved
-// cwd, so Run/RunCapture/RunCaptureFull never need to re-resolve it.
-func TestNewRunnerResolvesCwdOnce(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-
-	runnerIface, err := NewRunner(RunnerSpec{Image: "alpine", Cwd: dir})
-	if err != nil {
-		t.Fatalf("NewRunner: %v", err)
-	}
-
-	runner, ok := runnerIface.(DockerRunner)
-	if !ok {
-		t.Fatal("expected a DockerRunner")
-	}
-
-	want, err := ResolveMountPath(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if runner.session.resolvedCwd != want {
-		t.Errorf("resolvedCwd = %q, want %q", runner.session.resolvedCwd, want)
 	}
 }
 
@@ -742,85 +695,18 @@ func TestValidateDockerNeedsOnlyADaemon(t *testing.T) {
 	}
 }
 
-// TestContainerUserPrefersTheConfiguredValue pins that user: always wins over
-// the platform default — it is the documented escape hatch for an image that
-// needs root, so a platform default silently overriding it would make the
-// knob useless exactly where it matters.
-func TestContainerUserPrefersTheConfiguredValue(t *testing.T) {
+// TestContainerUserPassesTheConfiguredValueThrough: user: is the documented escape hatch for an image that needs root, so it reaches the container verbatim.
+func TestContainerUserPassesTheConfiguredValueThrough(t *testing.T) {
 	t.Parallel()
 
-	if got := containerUser("root", true); got != "root" {
-		t.Errorf("containerUser(\"root\") = %q, want root", got)
-	}
-
-	if got := containerUser("1234:5678", true); got != "1234:5678" {
-		t.Errorf("containerUser(\"1234:5678\") = %q, want it passed through verbatim", got)
-	}
-}
-
-// TestDefaultContainerUserIsPlatformSpecific pins the split that the whole fix
-// rests on: Linux bind mounts carry host uids, so a default is required there;
-// Docker Desktop maps ownership already, so forcing a uid would only break
-// images whose own files belong to the user they expect.
-func TestDefaultContainerUserIsPlatformSpecific(t *testing.T) {
-	t.Parallel()
-
-	got := defaultContainerUser()
-
-	if runtime.GOOS == "linux" {
-		want := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
-		if got != want {
-			t.Errorf("defaultContainerUser() = %q, want %q on linux", got, want)
-		}
-
-		return
-	}
-
-	if got != "" {
-		t.Errorf("defaultContainerUser() = %q, want empty off linux (the image's own user)", got)
-	}
-}
-
-func TestContainerUserForEachPlatform(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		goos     string
-		uid, gid int
-		want     string
-	}{
-		{goos: "linux", uid: 1000, gid: 1001, want: "1000:1001"},
-		{goos: "linux", uid: 0, gid: 0, want: "0:0"},
-		{goos: "linux", uid: -1, gid: 1001, want: ""},
-		{goos: "linux", uid: 1000, gid: -1, want: ""},
-		{goos: "darwin", uid: 501, gid: 20, want: ""},
-	} {
-		if got := containerUserFor(tc.goos, tc.uid, tc.gid); got != tc.want {
-			t.Errorf("containerUserFor(%q, %d, %d) = %q, want %q", tc.goos, tc.uid, tc.gid, got, tc.want)
-		}
-	}
-}
-
-// Why only local: a remote daemon's tree lives in its own volumes, where this machine's uid:gid names nobody.
-func TestNewRunnerDefaultsTheUserOnlyForALocalDaemon(t *testing.T) {
-	previous := defaultContainerUser
-	defaultContainerUser = func() string { return "4242:4343" }
-
-	t.Cleanup(func() { defaultContainerUser = previous })
-
-	for host, want := range map[string]string{"": "4242:4343", "tcp://127.0.0.1:1": ""} {
-		runner, err := NewRunner(RunnerSpec{Image: testImage, DockerHost: host})
+	for _, user := range []string{"root", "1234:5678"} {
+		runner, err := NewRunner(RunnerSpec{Image: testImage, User: user})
 		if err != nil {
-			t.Fatalf("NewRunner: %v", err)
+			t.Fatal(err)
 		}
 
-		docker, ok := runner.(DockerRunner)
-		if !ok {
-			t.Fatalf("runner is %T, want a DockerRunner", runner)
-		}
-
-		if docker.session.user != want {
-			t.Errorf("DockerHost %q: user = %q, want %q", host, docker.session.user, want)
+		if docker, ok := runner.(DockerRunner); !ok || docker.session.user != user {
+			t.Errorf("user %q reached the session as %q", user, docker.session.user)
 		}
 	}
 }

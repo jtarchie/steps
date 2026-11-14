@@ -57,7 +57,7 @@ tasks:
 - name: gate
   inputs: [repo]
   image: docker:dind                   # stock, not prebuilt: a placed step's image is pulled every run, so a worker-local image fails
-  privileged: true                     # the tests bind-mount temp dirs, so they need a daemon inside this container
+  privileged: true                     # the docker-backed tests need a daemon inside this container, and dind only runs privileged
   user: root                           # dind's daemon will not start unprivileged
   network: bridge                      # modules, toolchain, the tests' images
   timeout: 40m                         # module, build and image caches start cold every run

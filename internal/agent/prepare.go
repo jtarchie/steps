@@ -61,8 +61,8 @@ type preparedAgentStep struct {
 	llm   model.LLM
 	// closers holds everything opened for this step that must be released
 	// before its directory goes away: the MCP connections buildAgentTools
-	// opened, and the shell runner (whose container, under image:, bind-mounts
-	// that very directory).
+	// opened, and the shell runner (whose container, under image:, fetches
+	// its outputs back into that very directory).
 	closers  []io.Closer
 	spillDir string // run_shell/custom tool output spill dir — see toolEnv.spillDir; "" if it couldn't be created
 	// dir is the step's working directory on THIS machine, kept so openTree can ask the container where its own copy is.
@@ -107,8 +107,8 @@ func containerSpec(image, cwd string, env []string, iso config.Isolation) shell.
 // time it runs.
 //
 // The closers go first, before the space: both a containerized runner and a
-// stdio MCP server hold the step's directory (as a bind mount, as a working
-// directory), and tearing the directory out from under either is a worse
+// stdio MCP server hold the step's directory (as where outputs come home, as
+// a working directory), and tearing the directory out from under either is a worse
 // failure than the ordinary case this runs in.
 func (p preparedAgentStep) close(stepLabel string) {
 	closeAll(p.closers)

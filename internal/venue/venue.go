@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/treedigest"
 )
 
 // NewRunner returns a runner for spec on worker, which is dialed exactly as handed in: the struct a lease resolved, never a URL parsed back from text. The zero Worker means this machine.
@@ -34,6 +35,9 @@ func NewRunner(worker Worker, spec shell.RunnerSpec) (shell.Runner, error) {
 
 	return newBareRunner(worker, spec)
 }
+
+// HolderImage is the image every volume's holder and digest run in, pulled up front with a pipeline's own (steps#246).
+const HolderImage = treedigest.Image
 
 // implicitLocal is the worker an untagged container step runs on: the same cache namespace as an explicit bare local:.
 var implicitLocal = Worker{URL: "local:", Scheme: SchemeLocal} //nolint:gochecknoglobals // a constant struct

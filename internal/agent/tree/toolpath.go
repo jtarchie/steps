@@ -49,9 +49,8 @@ func ResolvePath(dir, rel string) (string, error) {
 // even when leak is a symlink pointing anywhere on the host — planted, for
 // instance, via run_shell (which has no path confinement of its own) running
 // `ln -s /etc/passwd leak` before a read_file("leak") call. EvalSymlinks
-// resolves every symlink in resolved (mirroring shell/docker.go's
-// resolveMountPath) and the result is re-checked against dir's own resolved
-// form.
+// resolves every symlink in resolved and the result is re-checked against
+// dir's own resolved form.
 //
 // A resolved path that does not yet exist is not treated as an escape:
 // read_file/list_dir will fail with their own "not found" error when they try

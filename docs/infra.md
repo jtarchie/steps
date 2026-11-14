@@ -98,10 +98,6 @@ jobs:
 - **Credentials are the operator's docker credentials**, never the resource's `source:` (Concourse would use the resource's).
 - **Only a step's own `image:`** (including an agent step's override of its `agents:` entry, and a step hook's). A `tasks:`, `agents:` or `resource_types:` entry naming a resource or any job's get, and an artifact image in a job-level hook, are load errors: none of them can see a build's gets. A task's `outputs:` cannot be an image — only an earlier get of the name satisfies `steps validate` — and an artifact name arriving through a `load_var:` fails the step.
 
-### `TMPDIR` when the daemon runs in a VM
-
-Not a concern any more: a step's tree reaches the daemon in volumes, so a `$TMPDIR` the VM does not share (macOS's own `/var/folders/…` under Docker Desktop, colima or Rancher) works as it is.
-
 ### Podman
 
 steps talks to the daemon over the docker engine API, and podman serves a compatible one — so **podman works with no pipeline changes**. `image:`, `network:`, `user:`, `env:` and the rest mean what they mean under docker. Verified by running the whole docker-backed test suite, end-to-end tests included, against podman 6.1 on a macOS `podman machine`.
@@ -113,15 +109,14 @@ export DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.
 export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock"   # Linux, after: systemctl --user start podman.socket
 ```
 
-Skip it if `podman-mac-helper` or the `podman-docker` package already put a socket at `/var/run/docker.sock`. A podman connection that is an `ssh://` URI is refused for the same reason an `ssh://` `DOCKER_HOST` is: the remote side would resolve the bind mount against its own disk.
+Skip it if `podman-mac-helper` or the `podman-docker` package already put a socket at `/var/run/docker.sock`. A podman connection that is an `ssh://` URI is refused, as an `ssh://` `DOCKER_HOST` is: steps does not dial ssh itself. Map a tag to a [`docker+ssh://` worker](#two-kinds-of-worker) instead, which forwards the remote socket and works through it.
 
 - **Short image names resolve to Docker Hub**, as under docker: `image: alpine:3` works. (The `podman` command line may prompt for a registry; its docker-compatible API does not.)
 - **Private registries: log in where steps looks.** steps reads credentials from docker's `~/.docker/config.json`; `podman login` writes them somewhere else. Use `podman login --compat-auth-file ~/.docker/config.json <registry>` — and not `--authfile`, which rewrites that file in podman's own format and drops everything else in it, the selected `docker context` and any `credsStore` included. If the file names a `credsStore` (Docker Desktop sets one), steps asks that helper and nothing else, as docker does, so a login written beside it is never read: log in through the helper (`docker login`) instead.
 
 Not verified, and expected to need care:
 
-- **Rootless podman on a Linux host.** The [Linux default `user:`](#container-user-user) is the uid:gid that started steps. Rootless podman maps the *container's root* to that host user, and any other uid to a range the host user does not own — so the default likely cannot write its own working directory. If a step fails with permission errors on its workspace, set `user: root`: under rootless podman that *is* the host user, and the files come out owned correctly.
-- **SELinux hosts** (Fedora, RHEL) may deny the workspace bind mount; steps does not add a `:z` relabel.
+- **Rootless podman on a Linux host.** A step's tree is overlay volumes under the daemon's own storage, which rootless podman supports but which nothing here has run against. If a step fails mounting its inputs, that is where to look.
 
 ### CLI agents
 
@@ -205,7 +200,7 @@ Nothing is installed on a worker and no `steps` binary goes anywhere. `?binary=`
 ### Containers on a worker
 
 - **The daemon that must exist is the worker's**, so the up-front daemon check cannot cover it: a machine acquired for the job does not exist when planning happens. A worker with no daemon fails the first placed step, in the daemon's own words, rather than at load time.
-- **The tree is in volumes, so nothing is bind-mounted from a path the daemon might not see.** A path a VM-hosted daemon cannot see would mount as an empty directory; that cannot happen here, because the daemon owns every byte the step reads. An untagged `image:` step runs this way too, on this machine's docker.
+- **The tree is in volumes, so nothing is mounted from a path the daemon might not see.** steps refuses a container mount whose source is a path at all, so no step, untagged or placed, can read an empty directory where its inputs should be.
 - **`user:` is resolved in the image.** An explicit `user:` crosses verbatim, as it does for a local container — it is a name the far end resolves, which is also how Concourse treats it. Unset defers to the image's own user, never to this machine's uid: the tree is on another machine's daemon, so the ownership mismatch the local default exists to prevent does not arise. Every volume's root is opened to any user before the step starts, so a non-root `user:` can write its own outputs; files *inside* an input arrive with the modes they were cached with, so such a user reads what is world-readable and cannot overwrite an input's files — the cache is shared across users, so ownership cannot follow the step (Concourse has the same limit).
 - **An agent step needs `image:` to be placed, and so a docker+ worker**, and then its file tools travel with its shell. `read_file`, `list_dir`, `search_files`, `edit_file` and `write_file` stop running in this process and run in the same container on the worker that `run_shell` already execs into — one copy of the tree, reached the same way by both. Without `image:` there is no container to put them in, and `tags:` is refused rather than moving only the shell: a model reading one machine's filesystem while writing to another's has no way to tell, and both halves report success.
   - **The file tools use the image's own userland** — `find`, `grep`, `sed`, `cat`, `head`, `wc`, `tr`, `mkdir`, `readlink` — so nothing is mounted into the container and no binary is pushed to it. An image without them fails the step **at preparation**, naming itself and what it lacks, before a token is spent.
@@ -516,9 +511,9 @@ jobs:
 
 ## Container user (`user:`)
 
-On Linux, a bind mount carries host uids straight through. A container running as root — which most images do — writes **root-owned files into the step's working directory**, and three things break: an agent creates a file with a containerized tool and can't edit it with a host-side one, workspace capture hits permission errors, and whatever's left behind needs root to delete.
+**An unset `user:` is the image's own user**, on every platform. A step's tree reaches its container in volumes, never mounted from this machine, so there is no host ownership to match: the files a step writes come home owned by whoever runs `steps`, whatever uid wrote them in the container.
 
-So **on Linux the default is the uid:gid that started `steps`**, not the image's user. Elsewhere the mismatch doesn't arise (Docker Desktop's VM maps ownership on bind mounts), so off Linux the default stays the image's own user. A step with a tree no longer bind-mounts anything (see [container shape](#container-execution-image)), so it runs as the image's own user on every platform; the Linux default is left only on a tree-less resource `check:`.
+Set it when the image's user is wrong for the job: an image that installs packages at run time (`apt-get`, `apk add`) or writes to a root-owned path needs root, and one that runs as root by default can be made to run as anyone else.
 
 ```yaml noexec=docker
 tasks:
