@@ -1,0 +1,176 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Expression resource types · steps docs</title><meta name="description" content="expr-backed resource types in steps: talk to a JSON HTTP API in a few expressions instead of forty-five lines of curl and jq."><link rel="stylesheet" href="steps.css"><style>.hl{color:#d8d5c9;background-color:#171a16}.c{color:#83887b;font-style:italic}.k{color:#7aa4d9}.p{color:#83887b}.s{color:#84c06d}.n{color:#d9a94a}.w{color:#b98fcc}.f{color:#6fbcb4}.d{color:#e0645a}.b{font-weight:bold}.i{font-style:italic}</style><link rel="stylesheet" href="/app.css"></head><body><div class="statusline"><a class="brand" href="/"><b>steps</b> docs</a><nav class="tabs" aria-label="Sections"><a class="tab" href="/">site</a>
+<a class="tab" aria-current="page" href="index.html">docs</a>
+<a class="tab" href="https://github.com/jtarchie/steps">github</a>
+<a class="tab" href="https://github.com/jtarchie/steps/releases">releases</a></nav></div><main><div class="docsnav"><a href="index.html">start here</a>
+<span class="docsgroup"><span class="docsgrouptitle">Writing pipelines</span>
+<a href="resources.html">resources</a><a href="webhooks.html">webhooks</a><a aria-current="page" href="expr.html">expr</a><a href="control-flow.html">control-flow</a><a href="agents.html">agents</a><a href="attempts-timeout.html">attempts-timeout</a><a href="workspace.html">workspace</a><a href="infra.html">infra</a><a href="templating.html">templating</a><a href="mcp.html">mcp</a><a href="complete.html">complete</a>
+</span><span class="docsgroup"><span class="docsgrouptitle">Reference</span>
+<a href="web.html">web</a><a href="observability.html">observability</a><a href="authentication.html">authentication</a><a href="agents-internals.html">agents-internals</a><a href="aws-workers.html">aws-workers</a><a href="gcp-workers.html">gcp-workers</a><a href="do-workers.html">do-workers</a><a href="conformance.html">conformance</a></span></div><nav class="docstoc" aria-label="On this page"><span class="docsgrouptitle">on this page</span>
+<a href="#when-to-use-it">When to use it</a><a href="#the-three-stages">The three stages</a><a href="#builtins">Builtins</a><a href="#gotchas">Gotchas</a><a href="#pagination-is-a-reduce-not-a-builtin">Pagination is a reduce, not a builtin</a><a href="#a-real-one">A real one</a><a href="#expressions-belong-in-files">Expressions belong in files</a><a href="#what-it-cannot-do">What it cannot do</a></nav><article class="docs"><h1 id="expression-resource-types">Expression resource types</h1><p>A resource type is <a href="resources.html#writing-a-resource-type">three shell commands</a>. For a resource that is a JSON HTTP API, that costs about forty-five lines of <code>curl</code> and <code>jq</code> — and most of those lines have nothing to do with the API. They work around the shell.</p><p><code>expr:</code> is a second way to write the same three stages, as <strong>expressions</strong> instead of commands.</p><h2 id="when-to-use-it">When to use it</h2><blockquote><p>Reach for <code>expr:</code> when the resource is a JSON HTTP API and nothing else. Reach for <code>check:</code>/<code>in:</code>/<code>out:</code> for everything else.</p></blockquote><p>The rule is narrow on purpose. Shell is not deprecated and is not going anywhere — it is the only option, not merely the traditional one, when:</p><ul><li><strong>a real tool does the work</strong> — <code>git</code>, <code>docker</code>, <code>aws</code>, <code>kubectl</code></li><li><strong>the artifact is binary</strong>, or big enough that you would rather stream it to disk than hold it as a string (expr is text-only)</li><li><strong>the command should run in a container</strong> — <code>image:</code>, <code>network:</code>, <code>privileged:</code> and <code>container_limits:</code> are shell-only, because an expression evaluates in-process</li></ul><p>What you get in exchange, on the JSON-API case:</p><ul><li><strong>No interpreter dependency.</strong> No <code>curl</code>, no <code>jq</code>, nothing to install on the machine that polls.</li><li><strong>No quoting hazard.</strong> Values are values; nothing is spliced into a command as text, so a <code>shellquote</code> you forgot cannot become an injection.</li><li><strong>Errors that propagate.</strong> A shell loop piped into <code>jq</code> throws away its exit status, so one dead request silently shrinks the version list and reads as "no new versions". That is the failure mode the <code>mktemp</code>/<code>trap</code> dance in hand-written checks exists to work around.</li><li><strong>Concurrent, rate-limit-aware I/O.</strong> <code>http()</code> takes a list of requests and steps owns the fan-out — see below.</li></ul><p>A resource type picks <strong>exactly one</strong> backend. Mixing <code>expr:</code> with <code>check:</code>/<code>in:</code>/<code>out:</code> or with <code>mcp:</code> is a load error.</p><h2 id="the-three-stages">The three stages</h2><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> counters
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">expr</span><span class="p">:</span>
+      <span class="c"># Returns an array of version objects, OLDEST FIRST — the same contract</span>
+      <span class="c"># a shell check&#39;s stdout has, and the same responsibility for ordering.</span>
+      <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">        1..source.count | map((
+</span><span class="s">          {n: string(#)}
+</span><span class="s">        ))</span>
+
+      <span class="c"># Returns an object of artifact-relative path to file contents. steps</span>
+      <span class="c"># writes them into the get&#39;s directory.</span>
+      <span class="k">in</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">        {
+</span><span class="s">          &#34;version.json&#34;: toJSON(version),
+</span><span class="s">          &#34;n.txt&#34;: version.n,
+</span><span class="s">        }</span>
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> ticker
+  <span class="k">type</span><span class="p">:</span> counters
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">count</span><span class="p">:</span> <span class="n">3</span>
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> build
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> ticker
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>ticker]
+    <span class="k">run</span><span class="p">:</span> cat ticker/n.txt
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;3&#34;</span>          <span class="c"># check returned oldest-first, so latest is last</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>ticker, show]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><table><thead><tr><th>Stage</th><th>Sees</th><th>Returns</th></tr></thead><tbody><tr><td><code>check</code></td><td><code>source</code>, <code>version</code></td><td>an array of version objects, oldest first</td></tr><tr><td><code>in</code></td><td><code>source</code>, <code>version</code>, <code>params</code></td><td>an object of relative path → file contents</td></tr><tr><td><code>out</code></td><td><code>source</code>, <code>params</code>, <code>file()</code> and <code>version()</code></td><td>the version it published, or <code>nil</code></td></tr></tbody></table><p><code>check</code>'s <code>version</code> is the <a href="resources.html#the-check-cursor">check cursor</a>: the last version <code>steps web</code> recorded, so a poll can ask for what it has not seen. It is an <strong>empty map</strong> on the first-ever poll — and under <code>steps run</code>/<code>steps test</code>, which never receive a cursor — which is what makes <code>version.ts ?? "0"</code> both the natural spelling and the correct one rather than an incantation.</p><p><code>in</code> returns a file map rather than getting a <code>write()</code> builtin. That keeps an expression pure — no side effects, so its result is a function of its inputs, which is what the artifact cache is already built on. Paths must be relative and stay inside the artifact directory. Omit <code>in</code> entirely and steps writes <code>version.json</code> alone, which is all a type that merely detects change needs.</p><p><code>out</code> returns the version it produced, which steps records as what the put published. Returning <code>nil</code> is fine — plenty of publishing produces nothing versionable.</p><h2 id="builtins">Builtins</h2><p>Everything else is <a href="https://expr-lang.org/docs/language-definition">expr's own standard library</a>: <code>map</code>, <code>filter</code>, <code>find</code>, <code>flatten</code>, <code>sortBy</code>, <code>reduce</code>, <code>concat</code>, <code>len</code>, <code>take</code>, <code>uniq</code>, <code>first</code>, <code>last</code>, <code>toJSON</code>, <code>fromJSON</code>, <code>float</code>, <code>int</code>, <code>string</code>, <code>trim</code>, <code>keys</code>, <code>values</code>, <code>get</code>.</p><h3 id="envname--envname-default"><code>env(name)</code> / <code>env(name, default)</code></h3><p>Reads an environment variable, and <strong>only</strong> the names the resource type lists in <code>env:</code>. There is no baseline allowlist beneath that: a shell command inherits <code>PATH</code> and <code>HOME</code> because it goes on to run real tools, and an expression runs nothing.</p><p>An allowed-but-unset variable is an <strong>error</strong>, not an empty string — an unset token otherwise sends an unauthenticated request that fails later, somewhere else, as something else. Pass a default to opt into that: <code>env("TOKEN", "")</code>.</p><h3 id="filepath--filepath-default"><code>file(path)</code> / <code>file(path, default)</code></h3><p><code>out</code> only. Reads from the put's inputs — the same directory a shell <code>out:</code> gets as its cwd. Relative paths only. Files usually end in a newline, so <code>trim(file("thread/ts"))</code> is the common spelling.</p><h3 id="versionname--version"><code>version(name)</code> / <code>version()</code></h3><p><code>out</code> only. The version a get in this build fetched, by the <strong>get's</strong> name — the artifact, so <code>get: thing, resource: api</code> is <code>version("thing")</code>. It is the version steps resolved, held in memory, not <code>&lt;artifact>/version.json</code>: an <code>in:</code> need not write that file, a task may overwrite it, and a put placed on another machine reads the same value.</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> counters
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">expr</span><span class="p">:</span>
+      <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">        1..source.count | map((
+</span><span class="s">          {n: string(#)}
+</span><span class="s">        ))</span>
+      <span class="k">in</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">        {&#34;n.txt&#34;: version.n}</span>
+- <span class="k">name</span><span class="p">:</span> ledger
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">expr</span><span class="p">:</span>
+      <span class="c"># No file read and no version.json anywhere: the fetched version</span>
+      <span class="c"># comes from the build.</span>
+      <span class="k">out</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">        version(&#34;ticker&#34;).n == &#34;3&#34;
+</span><span class="s">          ? {recorded: version(&#34;ticker&#34;).n}
+</span><span class="s">          : fail(&#34;expected the third tick, got &#34; + version(&#34;ticker&#34;).n)</span>
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> ticker
+  <span class="k">type</span><span class="p">:</span> counters
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">count</span><span class="p">:</span> <span class="n">3</span>
+- <span class="k">name</span><span class="p">:</span> record
+  <span class="k">type</span><span class="p">:</span> ledger
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> build
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> ticker
+  - <span class="k">put</span><span class="p">:</span> record
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>ticker]
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>ticker, record]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><ul><li><strong>Only the put's inputs are visible</strong> — the same boundary as <code>file()</code>. <code>inputs: [a, b]</code> answers for those names; <code>inputs: all</code> for every get fetched so far; no <code>inputs:</code>, nothing. A name that is not an input is an error listing the ones that are, and so is an input a task produced rather than a get fetched.</li><li><strong><code>version()</code> with no name</strong> is the one fetched input's version, <code>nil</code> when no input was fetched, and an error naming them when several were. The <code>nil</code> is what lets a type fall back to reading files — the built-in <a href="resources.html#the-built-in-slack-mentions-slack-reply-and-slack-reaction-types">Slack put types</a> use exactly that.</li><li><strong>It is what the get fetched</strong>, even if a later task outputs an artifact of the same name.</li><li><strong>Numbers compare as numbers.</strong> A version from the state database carries exact decimal text; <code>version()</code> hands the expression a copy with numbers normalized the way <code>http()</code>'s are, so <code>version("x").n + 1</code> works and the stored version is untouched.</li><li><strong>Job-level hooks cannot use it.</strong> They take no <code>inputs:</code>, and run outside any one build. Attach the put to a step's hook instead.</li></ul><h3 id="failmessage"><code>fail(message)</code></h3><p>The only way an expression can refuse. It exists because "the request
+succeeded and the API said no" is the normal shape of a JSON API — Slack
+answers <code>200</code> with <code>{"ok": false, "error": "not_in_channel"}</code> — and <code>http()</code>
+deliberately treats a status as data. Without it, an <code>out:</code> whose post was
+rejected returns <code>nil</code>, which is indistinguishable from a put that
+legitimately published nothing: green, having done nothing.</p><p>Paired with the ternary (which short-circuits), it reads as a guard:</p><pre class="hl"><code><span class="k">out</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">  let posted = http({url: &#34;…&#34;, json: {…}}).json;
+</span><span class="s">  posted.ok ? {channel: posted.channel, ts: posted.ts} : fail(&#34;slack: &#34; + posted.error)</span>
+</code></pre><h3 id="httprequest--httprequests-settings"><code>http(request)</code> / <code>http(requests, settings)</code></h3><p><strong><code>http()</code> takes a list of requests</strong>, and a single request is sugar for a one-element list. Nearly all of this backend's leverage lives in that one decision.</p><pre class="hl"><code>http([{url: &#34;…&#34;, method: &#34;POST&#34;, query: {…}, headers: {…}, json: {…}}, …],
+     {<span class="k">headers</span><span class="p">:</span> <span class="k">auth, concurrency</span><span class="p">:</span> <span class="k">4, retry</span><span class="p">:</span> {<span class="k">on</span><span class="p">:</span> <span class="k">[429, 503], max</span><span class="p">:</span> <span class="n">3</span>}})
+<span class="c"># -&gt; [{request: {…}, status: 200, headers: {…}, json: {…}, body: &#34;…&#34;, error: nil}, …]</span>
+<span class="c">#    in REQUEST order</span>
+</code></pre><p>A check against a chat API is <code>1 + N</code> round trips, and in shell every one is serial. Expr cannot express concurrency at any price, and shell can only get it with background jobs and <code>wait</code> — which is exactly the construct that loses exit status. Batching is what makes concurrency safe to offer: steps owns the fan-out, so steps owns the error handling, the rate limiting, and the attribution.</p><p><strong>Request keys</strong>: <code>url</code> (required), <code>method</code> (default <code>GET</code>), <code>query</code>, <code>headers</code>, <code>json</code> (marshaled, implies <code>POST</code> and sets the content type), <code>body</code> (raw string, also implies <code>POST</code>); <code>json</code> and <code>body</code> together are an error. An unknown key is an error rather than ignored — a misspelled <code>header:</code> that silently sends no authorization surfaces as a 401 somewhere else entirely.</p><p><strong>Settings</strong>: <code>headers</code> (merged into every request; a request's own header wins), <code>concurrency</code> (default 4), <code>timeout</code> (default <code>"30s"</code>, per request), <code>max_response_bytes</code> (default 8 MiB), <code>retry</code>, <code>tolerate_errors</code>. A setting spelled wrong is an error, and so is one <strong>typed</strong> wrong — <code>retry: {on: ["429"]}</code> would otherwise read as configured and retry nothing.</p><p>Shared headers are a <em>setting</em> rather than something you merge into each request because <strong>expr has no <code>merge()</code></strong> — so the API is shaped to make merging unnecessary.</p><p><strong>The envelope is uniform</strong>, including for a single request: <code>.json</code>, never a bare parsed body. Slightly more to type, no special case to remember when the call later becomes a batch. <code>request</code> is your request echoed back, which is what lets an expression recover <code>#.request.query.channel</code> instead of zipping two arrays by index.</p><p><strong>A status is data.</strong> Non-2xx does not fail the call — an API that answers <code>200</code> with <code>ok: false</code>, or <code>404</code> for something that does not exist yet, is answering. Only a request that never produced a response is a failure, and that fails the whole <code>http()</code> call with a message naming the method and URL. That is the point: a check that cannot reach its API should fail loudly, not return a shorter list that reads as "nothing new".</p><p><strong>Retries</strong> apply only to the statuses you list. <code>Retry-After</code> is honored when the server sends one (seconds or an HTTP date, capped at a minute), otherwise the backoff is exponential. When retries run out the <strong>last response is returned</strong> rather than an error — a persistent 429 is something your expression gets to decide about.</p><p><strong>Partial tolerance</strong> is opt-in. <code>{tolerate_errors: true}</code> turns a failed request into an envelope with <code>status: 0</code> and an <code>error</code> string instead of failing the batch, so one channel a bot was removed from does not take out a poll over nineteen healthy ones:</p><pre class="hl"><code>http(requests, {tolerate_errors: true})
+  | filter(#.error == nil)
+  | map((
+    {…}
+  ))
+</code></pre><h2 id="gotchas">Gotchas</h2><p>These are the ones that will bite you first. They are properties of expr itself, not of steps.</p><ul><li><strong>A map literal as the first thing in an argument needs an extra pair of parentheses.</strong> <code>map({a: #})</code> does not parse; <code>map(({a: #}))</code> does. This is by far the most common surprise, and it applies anywhere a <code>{</code> opens an argument.</li><li><strong>Comments are <code>//</code> and <code>/* */</code>.</strong> A <code>#</code> starts a <em>pointer</em>, not a comment, so a <code>#</code>-commented line is a syntax error in the middle of your program.</li><li><strong><code>concat(a, b)</code> joins two lists.</strong> <code>+</code> is arithmetic and refuses them.</li><li><strong>Nested predicates shadow <code>#</code>.</strong> Capture the outer value with <code>let</code> first — <code>let ch = #.request.query.channel; …</code> — which the spec requires and is not stylistic.</li><li><strong>In <code>out</code>, <code>version</code> is a function; in <code>check</code> and <code>in</code> it is the variable.</strong> <code>version.ts</code> copied from an <code>in:</code> into an <code>out:</code> fails <code>steps validate</code>; write <code>version("mentions").ts</code>.</li><li><strong><code>not in</code> is not a thing.</strong> Write <code>!("subtype" in #)</code>.</li><li><strong><code>toJSON</code> indents.</strong> Valid JSON, just not compact.</li><li><strong>There is no <code>try</code>/<code>catch</code>, and no way to add one.</strong> Deferring an expression means compiling it separately, and a separately compiled program cannot see <code>let</code> bindings or <code>#</code> — both live on the VM's stack. So tolerance lives where the errors are born instead: <code>tolerate_errors</code> on <code>http()</code>, and the optional second argument to <code>env()</code> and <code>file()</code>.</li><li><strong><code>now()</code>, <code>date()</code>, <code>duration()</code> and <code>timezone()</code> are unavailable in <code>check</code> and <code>in</code>.</strong> A check calling <code>now()</code> returns a different "version" on every poll, and a version has to be a stable identity — that is a pipeline that re-runs forever with whatever an agent step costs attached. <code>in</code> is barred for the neighbouring reason: its output is cached across builds, so it must be a pure function of the version it fetches. <code>out</code> may still use them.</li></ul><p><code>??</code>, <code>in</code>, <code>contains</code>, <code>matches</code>, <code>..</code>, <code>?.</code>, <code>#index</code> and <code>#acc</code> are all real and all useful.</p><h2 id="pagination-is-a-reduce-not-a-builtin">Pagination is a <code>reduce</code>, not a builtin</h2><p>Expr has no loops, but <code>reduce</code> threads an accumulator — so a cursor walk is a reduce over a <strong>bounded</strong> range with an early-out. The page cap is the range itself, visible in the source, which auto-following a <code>next_cursor</code> would not be:</p><pre class="hl"><code><span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">  reduce(1..10,                                    # the range IS the max-pages cap
+</span><span class="s">    #acc.done ? #acc : (
+</span><span class="s">      let page = http({url: source.url, query: {cursor: #acc.cursor}}, {headers: auth}).json;
+</span><span class="s">      let next = page.response_metadata.next_cursor ?? &#34;&#34;;
+</span><span class="s">      {cursor: next, items: concat(#acc.items, page.items), done: next == &#34;&#34;}
+</span><span class="s">    ),
+</span><span class="s">    {cursor: &#34;&#34;, items: [], done: false}
+</span><span class="s">  ).items</span>
+</code></pre><p><strong>The <code>#acc.done</code> guard is load-bearing.</strong> Without it, <code>reduce</code> keeps calling <code>http()</code> past the end of the results — ten pages of requests for three pages of data.</p><p>Offset- and page-number APIs are simpler <em>and</em> better: the page numbers are known up front, so they go out as one batched concurrent <code>http()</code> call rather than a serial chain.</p><h2 id="a-real-one">A real one</h2><p>Answering mentions in a chat workspace: resolve who we are, list the channels we are in, then fetch each channel's history since the cursor — three dependent calls and a fan-out. <code>noexec</code> because it reaches a real host.</p><p>Slack specifically ships as a built-in — <code>type: slack-mentions</code> / <code>type: slack-reply</code> / <code>type: slack-reaction</code> need no <code>resource_types:</code> block at all, and cover more than this sketch does (1:1 DMs, thread replies, multiple bots in one pipeline). See <a href="resources.html#the-built-in-slack-mentions-slack-reply-and-slack-reaction-types">Resources</a>. What follows is kept as a worked example of the <em>shape</em> — resolve identity, discover, fan out, filter — for a chat API that isn't Slack.</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> mentions
+  <span class="k">env</span><span class="p">:</span> <span class="p">[</span>BOT_TOKEN]
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">expr</span><span class="p">:</span>
+      <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">        let auth = {Authorization: &#34;Bearer &#34; + env(&#34;BOT_TOKEN&#34;)};
+</span><span class="s">
+</span><span class="s">        let me = http({url: &#34;https://slack.com/api/auth.test&#34;}, {headers: auth}).json.user_id;
+</span><span class="s">
+</span><span class="s">        let channels = len(source.channels) &gt; 0 ? source.channels :
+</span><span class="s">          http({url: &#34;https://slack.com/api/users.conversations&#34;,
+</span><span class="s">                query: {types: &#34;public_channel&#34;, limit: &#34;1000&#34;}},
+</span><span class="s">               {headers: auth}).json.channels | map((
+</span><span class="s">            #.id
+</span><span class="s">          ));
+</span><span class="s">
+</span><span class="s">        // One batched call instead of N serial ones: concurrent, backing off
+</span><span class="s">        // politely on a 429, and each result carries the request that made it.
+</span><span class="s">        http(channels | map((
+</span><span class="s">              {url: &#34;https://slack.com/api/conversations.history&#34;,
+</span><span class="s">               query: {channel: #, oldest: version.ts ?? &#34;0&#34;, limit: string(source.limit)}}
+</span><span class="s">            )),
+</span><span class="s">            {headers: auth, concurrency: 4, retry: {on: [429, 503], max: 3}})
+</span><span class="s">        | map((
+</span><span class="s">            let ch = #.request.query.channel;
+</span><span class="s">            #.json.messages
+</span><span class="s">              | filter(!(&#34;subtype&#34; in #) &amp;&amp; !(&#34;bot_id&#34; in #) &amp;&amp; #.user != me)
+</span><span class="s">              | filter((#.text ?? &#34;&#34;) contains &#34;&lt;@&#34; + me + &#34;&gt;&#34;)
+</span><span class="s">              | map((
+</span><span class="s">                {channel: ch, ts: #.ts}
+</span><span class="s">              ))
+</span><span class="s">          ))
+</span><span class="s">        | flatten()
+</span><span class="s">        | sortBy(float(#.ts))</span>
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> asks
+  <span class="k">type</span><span class="p">:</span> mentions
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">channels</span><span class="p">:</span> <span class="p">[]</span>          <span class="c"># [] = every channel the bot is in</span>
+    <span class="k">limit</span><span class="p">:</span> <span class="n">200</span>
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> answer
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> asks
+    <span class="k">trigger</span><span class="p">:</span> <span class="w">true</span>
+    <span class="k">version</span><span class="p">:</span> every
+</code></pre><p>Note <code>version.ts ?? "0"</code>: that is the <a href="resources.html#the-check-cursor">cursor</a>, and it is why there is no <code>limit: 20</code> guess here. And <code>sortBy(float(#.ts))</code> — a Slack <code>ts</code> is a <em>string</em>, so sorting it as one silently misorders.</p><h2 id="expressions-belong-in-files">Expressions belong in files</h2><p>A twenty-line program has no business inside a YAML scalar, so each slot takes a <code>_file</code> sibling — the pattern <code>run_file:</code>, <code>system_file:</code> and <code>message_files:</code> already establish:</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> mentions
+  <span class="k">env</span><span class="p">:</span> <span class="p">[</span>BOT_TOKEN]
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">expr</span><span class="p">:</span>
+      <span class="k">check_file</span><span class="p">:</span> types/slack/check.expr
+      <span class="k">in_file</span><span class="p">:</span>    types/slack/in.expr
+      <span class="k">out_file</span><span class="p">:</span>   types/slack/out.expr
+</code></pre><p>Paths are relative to the pipeline file, and the contents are inlined before anything is validated or hashed — so a <code>_file</code> type behaves identically to one written inline, and editing the file re-runs the steps that depend on it. Setting both <code>check:</code> and <code>check_file:</code> is an error rather than one silently winning. Suggested extension <code>.expr</code>.</p><p>Beyond legibility: a real file is reviewable. A diff reads as a diff, and a comment lands on a line instead of on a blob of YAML.</p><h2 id="what-it-cannot-do">What it cannot do</h2><p>Stated plainly rather than discovered:</p><ul><li><strong>No containers.</strong> <code>image:</code>, <code>network:</code>, <code>privileged:</code> and <code>container_limits:</code> alongside <code>expr:</code> are load errors. An expression evaluates in this process; there is nothing to isolate. Per-call <code>timeout</code> and <code>max_response_bytes</code> on <code>http()</code> are what replace them.</li><li><strong>Text only.</strong> Binary artifacts are shell's job.</li><li><strong>No shell, ever.</strong> There is no builtin that runs a command, and expr has no way to reach one. That is the safety property, not an omission.</li><li><strong>Syntax errors are not load errors.</strong> A pipeline with a broken expression parses; <code>steps validate</code>, <code>steps pipeline set</code>, and a run's preflight (for the resources its job touches) are what refuse it, all before anything polls or runs. The config layer deliberately has no expression engine in it.</li></ul></article></main><script>
+(function(){
+  window.addEventListener('message', function(e){
+    if(!e.data || e.data.type !== 'topbanana:settheme') return;
+    var t = e.data.theme;
+    if(typeof t !== 'string' || !/^[a-z]{2,20}$/.test(t)) return;
+    document.documentElement.setAttribute('data-theme', t);
+  });
+})();
+</script></body></html>

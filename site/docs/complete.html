@@ -1,0 +1,73 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>A complete pipeline · steps docs</title><meta name="description" content="One complete, working steps pipeline: a fetched resource, a task preparing context, an agent that decides, its verdict routing the plan, and a put."><link rel="stylesheet" href="steps.css"><style>.hl{color:#d8d5c9;background-color:#171a16}.c{color:#83887b;font-style:italic}.k{color:#7aa4d9}.p{color:#83887b}.s{color:#84c06d}.n{color:#d9a94a}.w{color:#b98fcc}.f{color:#6fbcb4}.d{color:#e0645a}.b{font-weight:bold}.i{font-style:italic}</style><link rel="stylesheet" href="/app.css"></head><body><div class="statusline"><a class="brand" href="/"><b>steps</b> docs</a><nav class="tabs" aria-label="Sections"><a class="tab" href="/">site</a>
+<a class="tab" aria-current="page" href="index.html">docs</a>
+<a class="tab" href="https://github.com/jtarchie/steps">github</a>
+<a class="tab" href="https://github.com/jtarchie/steps/releases">releases</a></nav></div><main><div class="docsnav"><a href="index.html">start here</a>
+<span class="docsgroup"><span class="docsgrouptitle">Writing pipelines</span>
+<a href="resources.html">resources</a><a href="webhooks.html">webhooks</a><a href="expr.html">expr</a><a href="control-flow.html">control-flow</a><a href="agents.html">agents</a><a href="attempts-timeout.html">attempts-timeout</a><a href="workspace.html">workspace</a><a href="infra.html">infra</a><a href="templating.html">templating</a><a href="mcp.html">mcp</a><a aria-current="page" href="complete.html">complete</a>
+</span><span class="docsgroup"><span class="docsgrouptitle">Reference</span>
+<a href="web.html">web</a><a href="observability.html">observability</a><a href="authentication.html">authentication</a><a href="agents-internals.html">agents-internals</a><a href="aws-workers.html">aws-workers</a><a href="gcp-workers.html">gcp-workers</a><a href="do-workers.html">do-workers</a><a href="conformance.html">conformance</a></span></div><article class="docs"><h1 id="a-complete-pipeline">A complete pipeline</h1><p>Everything the other pages introduce piece by piece, in one working pipeline: a resource fetched, a task preparing context, an agent that reads, writes an artifact, and decides — its verdict routing the plan — and a put publishing what it produced. Like every example in these docs, this runs under the test suite exactly as shown:</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> notes                    <span class="c"># a self-contained stand-in for git/an API</span>
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;ref&#34;: &#34;v1&#34;}]&#39;</span>
+    <span class="k">in</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      echo &#39;The widget catalog is seeded from widgets.json on boot.&#39; &gt; NOTES.txt</span>
+    <span class="k">out</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      echo publishing:
+</span><span class="s">      cat report/summary.md</span>
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> repo
+  <span class="k">type</span><span class="p">:</span> notes
+  <span class="k">source</span><span class="p">:</span> {}
+- <span class="k">name</span><span class="p">:</span> results
+  <span class="k">type</span><span class="p">:</span> notes
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="k">agents</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> reviewer
+  <span class="k">source</span><span class="p">:</span> { <span class="k">model</span><span class="p">:</span> openrouter/qwen/qwen3.7-flash }
+  <span class="k">system</span><span class="p">:</span> You review release notes. Be terse.
+  <span class="k">tools</span><span class="p">:</span> <span class="p">[</span>read_file, write_file]
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> review
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> repo                          <span class="c"># fetch: NOTES.txt lands in repo/</span>
+    <span class="k">trigger</span><span class="p">:</span> <span class="w">true</span>                      <span class="c"># a steps web daemon re-runs this on a new version</span>
+  - <span class="k">task</span><span class="p">:</span> prepare
+    <span class="k">outputs</span><span class="p">:</span> <span class="p">[</span>guidelines]
+    <span class="k">run</span><span class="p">:</span> echo &#39;summaries must be one line&#39; &gt; guidelines/RULES.txt
+  - <span class="k">agent</span><span class="p">:</span> reviewer
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>repo, guidelines]         <span class="c"># sees exactly these two artifacts</span>
+    <span class="k">outputs</span><span class="p">:</span> <span class="p">[</span>report]                  <span class="c"># and captures this one back</span>
+    <span class="k">context_paths</span><span class="p">:</span> <span class="p">[</span>guidelines/RULES.txt]   <span class="c"># handed to the model at turn zero</span>
+    <span class="k">max_turns</span><span class="p">:</span> <span class="n">8</span>                            <span class="c"># read, write, decide, with room to spare</span>
+    <span class="k">messages</span><span class="p">:</span>
+      - <span class="s">&#34;Read repo/NOTES.txt and write a one-line summary to report/summary.md.&#34;</span>
+    <span class="k">verdicts</span><span class="p">:</span>
+      - <span class="k">approve</span><span class="p">:</span> results               <span class="c"># the verdict picks the next step</span>
+      - <span class="k">reject</span><span class="p">:</span> escalate
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">verdict</span><span class="p">:</span> approve                 <span class="c"># what it decided</span>
+      <span class="k">files</span><span class="p">:</span> <span class="p">[</span>report/summary.md]       <span class="c"># ...and that it actually wrote the thing</span>
+  - <span class="k">task</span><span class="p">:</span> escalate
+    <span class="k">run</span><span class="p">:</span> echo paging a human
+  - <span class="k">put</span><span class="p">:</span> results                       <span class="c"># out: reads the agent&#39;s artifact</span>
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>report]
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>repo, prepare, reviewer, results]   <span class="c"># escalate is absent — the</span>
+    <span class="k">outcome</span><span class="p">:</span> succeeded                              <span class="c"># approve verdict routed past it</span>
+</code></pre><p>What each piece is doing, with the page that explains it:</p><ul><li><strong><code>resource_types:</code>/<code>resources:</code></strong> — the <code>check</code>/<code>in</code>/<code>out</code> contract; here self-contained shell so the pipeline runs anywhere. <a href="resources.html">resources.md</a></li><li><strong><code>inputs:</code>/<code>outputs:</code></strong> — every step names what it reads and what it keeps; the agent cannot see anything it didn't declare. <a href="workspace.html">workspace.md</a></li><li><strong><code>context_paths:</code></strong> — the guidelines arrive as a synthetic <code>read_file</code> result, no turn spent fetching them. <a href="agents.html#context_paths--files-delivered-as-synthetic-read_file-results">agents.md</a></li><li><strong><code>verdicts:</code></strong> — the synthesized required verdict tool; <code>approve</code> jumps to the put, <code>reject</code> to the escalation. <a href="control-flow.html#step-transitions-tomax_visitsverdicts">control-flow.md</a></li><li><strong><code>trigger:</code></strong> — under <code>steps web</code>, once the pipeline has been set into it, a new version runs the job; under <code>steps run</code>/<code>steps test</code> it's inert. <a href="infra.html#downstream-triggers-trigger-true--steps-web">infra.md</a></li></ul><p>Run it:</p><pre class="hl"><code>steps run pipeline.yml               <span class="c"># one shot</span>
+steps web                            <span class="c"># the daemon: serve the UI, poll, run what triggers</span>
+steps pipeline set -c pipeline.yml   <span class="c"># upload it into that daemon</span>
+</code></pre><p>From here, the usual next steps are wiring in a real resource (the built-in <code>git</code>, or your own type against an API), swapping the model for the one you use (<a href="agents.html">agents.md</a>), and bounding the spend with <code>budget:</code> and <code>timeout:</code> (<a href="attempts-timeout.html">attempts-timeout.md</a>).</p><p>For the full-scale version — an adaptive PR review whose matrix width a planner step decides mid-run, concurrent reviewer cells, collected findings, a synthesizer, and a human approval gate — see <a href="https://github.com/jtarchie/steps/blob/main/examples/pr-review.yml"><code>examples/pr-review.yml</code></a> in the repo, the one example that runs against a real model and a real repository rather than inside the test suite.</p></article></main><script>
+(function(){
+  window.addEventListener('message', function(e){
+    if(!e.data || e.data.type !== 'topbanana:settheme') return;
+    var t = e.data.theme;
+    if(typeof t !== 'string' || !/^[a-z]{2,20}$/.test(t)) return;
+    document.documentElement.setAttribute('data-theme', t);
+  });
+})();
+</script></body></html>

@@ -1,0 +1,1353 @@
+/* steps web — the annotated transcript.
+ *
+ * The world is a terminal, committed: warm near-black ground with no glow or
+ * gradient, hairline pane rules, prompt-styled headings, and ANSI-16 as the
+ * status palette — green/red/yellow/blue mean here exactly what they mean in
+ * the terminal this product otherwise lives in, so the semantics cost no
+ * learning. Two type voices carry the hierarchy: mono for every piece of
+ * data, a compact sans for labels and annotations about that data.
+ *
+ * Single-theme on purpose. This is a terminal's UI; a light rendition would
+ * be a different product wearing the same routes.
+ */
+
+:root {
+  /* Single-theme, but say so: without this the UA paints form controls and
+     scrollbars for whatever the OS prefers, light chrome on a dark page. */
+  color-scheme: dark;
+  --bg: #111310;
+  --panel: #171a16;
+  --panel2: #1c201b;
+  --line: #262b25;
+  /* The ground every code, log, and data block sits on: a step down from
+     --panel, so a payload reads as something the page is quoting rather than
+     as more page. */
+  --code-bg: #0c0e0b;
+  --line-soft: #1e231d;
+  --fg: #d8d5c9;
+  --dim: #83887b;
+  /* Below --dim no text tone reaches 4.5:1 on --panel, so faint text is dim; the darker tone is kept only for rules and edges. */
+  --faint: var(--dim);
+  --faint-line: #565b50;
+  --green: #84c06d;
+  --red: #e0645a;
+  --yellow: #d9a94a;
+  --blue: #7aa4d9;
+  --magenta: #b98fcc;
+  --cyan: #6fbcb4;
+  /* How much of a status color fills a graph node. */
+  --dag-tint: 12%;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+  min-height: 100vh;
+  /* A column, so a short page's footer sits at the bottom rather than under
+     the last table. */
+  display: flex;
+  flex-direction: column;
+}
+
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+/* A link inside running text is underlined, because its color alone does not set it apart from the words around it. */
+.crumbs a, .metaline a:not(.hash), .deps a, .md a, .docs a { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 3px; }
+:focus-visible { outline: 1px solid var(--yellow); outline-offset: 1px; }
+
+code { font-family: var(--mono); color: var(--fg); }
+
+/* ---- top status line ----
+ *
+ * The bar is a path — steps / <pipeline> / <section> — so the pipeline sits
+ * BEFORE the tabs it scopes, drawn in the foreground weight the tabs get only
+ * when current. Each segment is a cell with a hairline on its right, the way
+ * a prompt separates its parts. */
+.statusline {
+  display: flex;
+  align-items: stretch;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.statusline .brand { padding: 8px 14px; color: var(--green); border-right: 1px solid var(--line); white-space: nowrap; }
+.statusline .brand b { color: var(--fg); font-weight: 600; }
+.statusline .brand:hover { text-decoration: none; }
+.statusline .brand:hover b { color: var(--green); }
+.tabs { display: flex; }
+.tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  color: var(--dim);
+  border-right: 1px solid var(--line-soft);
+  white-space: nowrap;
+}
+.tab:hover { color: var(--fg); text-decoration: none; }
+.tab[aria-current="page"] { color: var(--fg); background: var(--bg); box-shadow: inset 0 2px 0 var(--green); }
+/* A count of work waiting on a person. Yellow because that is already what
+   this palette means by "you" — the read-only chip and the focus ring are the
+   same hue — and because red is spoken for by things that FAILED. A badge
+   says stuck, not broken. The dot is decorative: it gives the number an edge
+   against the tab label at 12px, where a bare digit reads as part of the
+   word. */
+.badge { color: var(--yellow); margin-left: 6px; font-variant-numeric: tabular-nums; }
+
+/* Needs-attention list: the sentence behind each badge, and the only home for
+   an item no tab owns. Yellow-edged rather than red: this is a queue of
+   things working exactly as designed and waiting on a person.
+
+   No empty state, deliberately. The server renders the <ul> only when there
+   is something in it, so the surface occupies no space at rest — its presence
+   is the whole signal, and a bar that is always there is one nobody reads
+   when it fills. */
+.attention {
+  list-style: none;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  border: 1px solid #4a3d20;
+  border-left: 3px solid var(--yellow);
+  margin: 0 0 14px;
+  padding: 0;
+}
+.atitem { padding: 8px 12px; border-top: 1px solid var(--line); }
+.atitem:first-child { border-top: 0; }
+/* The item that is not a link to somewhere else: it is fixed by the button it
+   carries, so it gets the room a form needs. */
+.at-paused { color: var(--fg); }
+.at-paused b { color: var(--yellow); font-weight: 600; }
+/* An item that is a link has to LOOK like one without turning the list blue:
+   five blue lines read as navigation, which is the opposite of the urgency
+   this list is for. A dotted rule says clickable at rest; hover promotes it. */
+.attention a {
+  color: var(--fg);
+  text-decoration: underline dotted var(--faint-line);
+  text-underline-offset: 3px;
+}
+.attention a:hover { color: var(--yellow); text-decoration-color: var(--yellow); }
+.attention .decide { margin-top: 6px; }
+.attention .meta { color: var(--faint); }
+
+/* A switcher row's mark: the same badge, about a pipeline you are not looking
+   at. */
+.mk { display: inline-block; min-width: 2.2ch; margin-right: 6px; }
+.mk:empty, .mk > span:empty { margin-right: 0; }
+.pipemenu .slug { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pipemenu .counts { margin-left: auto; display: flex; gap: 10px; font-variant-numeric: tabular-nums; }
+.pipemenu .counts .badge { margin-left: 0; }
+.inflight { color: var(--dim); }
+
+/* Why a resource stopped checking. Red rather than the attention yellow: by
+   the time a reader is on this page the question is no longer "does something
+   want me" but "what broke", and the message below it is the same kind of
+   thing a failed step's output is. */
+.checkfail { font-family: var(--sans); font-size: 12.5px; }
+.checkfail b { color: var(--red); font-weight: 600; }
+.checkfail pre {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--dim);
+  background: var(--code-bg);
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+tr.checkfail td { border-top: 0; padding-top: 0; }
+tr.checkfail pre { margin: 0 0 4px; }
+.statusline .right {
+  margin-left: auto;
+  padding: 4px 10px;
+  color: var(--faint);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  white-space: nowrap;
+}
+.statusline .ro { color: var(--yellow); }
+/* One home for every action: the pipeline's pause at the left, the page's
+   job or run at the right. Paused turns the whole bar blue, as Concourse's
+   top bar does, rather than adding a banner. */
+.actionbar { flex-basis: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 14px; border-top: 1px solid var(--line-soft); }
+.actionbar .group { display: flex; flex-wrap: wrap; gap: 6px; }
+.actionbar form { margin: 0; }
+.actionbar .btn { padding: 3px 10px; font-size: 12px; white-space: nowrap; }
+.actionbar.paused { background: color-mix(in srgb, var(--blue) 16%, var(--panel)); border-top-color: var(--blue); }
+.actionbar.paused .btn[aria-pressed="true"] { color: var(--blue); border-color: var(--blue); }
+.statusline kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 5px;
+}
+/* The way into the palette. A key is a hint, not a control: a reader with no
+   keyboard needs something to press. */
+.jumpbtn {
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.jumpbtn span[aria-hidden] { font-size: 15px; line-height: 1; }
+.jumpbtn:hover { color: var(--fg); border-color: var(--line); }
+@media (hover: none) { .jumpbtn kbd { display: none; } }
+
+/* pipeline switcher: the path's middle segment */
+.pipeswitch { position: relative; display: flex; align-items: stretch; border-right: 1px solid var(--line); }
+.pipebtn {
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 8px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.pipebtn b { color: var(--fg); font-weight: 600; }
+.pipebtn:hover, .pipebtn[aria-expanded="true"] { color: var(--fg); background: var(--panel2); }
+.pipebtn .caret { color: var(--faint); font-size: 10px; }
+.pipebtn:hover .caret { color: var(--fg); }
+.pipemenu {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 100%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: 0;
+  min-width: 240px;
+  max-width: calc(100vw - 16px);
+  z-index: 30;
+}
+.pipemenu.open { display: block; }
+.pipemenu a, .pipemenu .broken {
+  display: flex;
+  gap: 0;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--fg);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.pipemenu a:last-child, .pipemenu .broken:last-child { border-bottom: 0; }
+.pipemenu .broken { color: var(--faint); cursor: default; }
+.broken-reason { white-space: pre-line; }
+.pipemenu a:hover { background: var(--panel2); text-decoration: none; }
+/* Every row reserves the marker's width, or the selected row's glyph sits a
+   column right of every other and the glyph column stops being one. */
+.pipemenu a::before, .pipemenu .broken::before { content: ""; display: inline-block; width: 1.5ch; flex: none; }
+.pipemenu a[aria-selected="true"]::before { content: "›"; color: var(--green); }
+.pipemenu .hint { margin-left: auto; color: var(--faint); font-size: 11px; }
+
+/* A finger needs more than 30px of row. Every control in the bar grows to the
+   platform minimum where the pointer is coarse; the bar's own height follows. */
+@media (pointer: coarse) {
+  .statusline .brand, .tab, .pipebtn { min-height: 44px; }
+  /* A flex box drops the space between the two words, so the gap restores it. */
+  .statusline .brand { display: inline-flex; align-items: center; gap: 0.4em; }
+  .jumpbtn { min-height: 40px; padding: 4px 12px; }
+  .actionbar .btn { min-height: 36px; }
+}
+
+/* On a phone the path and the tabs are two rows: brand and switcher first,
+   the jump control at their right, then the tabs as one strip that scrolls
+   sideways behind a fade — nothing is folded into a menu, because the
+   badges on those tabs are the whole reason to look at the bar. */
+@media (max-width: 640px) {
+  .statusline .right { order: 2; padding-right: 6px; }
+  .tabs {
+    order: 3;
+    flex-basis: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+    border-top: 1px solid var(--line-soft);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab:last-child { border-right: 0; padding-right: 28px; }
+  .actionbar { order: 4; }
+  .pipeswitch { min-width: 0; }
+  .pipebtn b { overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+}
+
+/* ---- page frame ---- */
+main { width: 100%; max-width: 1000px; margin: 0 auto; padding: 26px 20px 48px; flex: 1 0 auto; }
+@media (max-width: 640px) { main { padding: 18px 16px 40px; } }
+
+/* ---- footer ----
+ * The reference shelf: the version (data, so mono), the docs and the source,
+ * and the copyright. Hairline above, faint below the page's own voice, and
+ * clear of a phone's home indicator. */
+.foot {
+  max-width: 1000px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 14px 20px max(14px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 18px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--faint);
+}
+.foot .ver { font-family: var(--mono); color: var(--dim); }
+.foot .ver b { color: var(--fg); font-weight: 600; }
+.foot nav { display: flex; gap: 14px; }
+.foot a { color: var(--dim); }
+.foot a:hover { color: var(--fg); }
+.foot a[aria-current="page"] { color: var(--green); }
+.foot .copy { margin-left: auto; }
+@media (max-width: 640px) { .foot { padding-left: 16px; padding-right: 16px; } .foot .copy { margin-left: 0; flex-basis: 100%; } }
+
+/* What a hidden action says instead of vanishing on a read-only server. */
+.rohint { font-family: var(--sans); font-size: 12px; color: var(--dim); max-width: 340px; text-align: right; }
+
+
+/* Breadcrumbs: the way back up from a detail page. */
+.crumbs { font-size: 12px; color: var(--faint); margin: 0 0 12px; overflow-wrap: anywhere; }
+.crumbs a { color: var(--dim); }
+.crumbs a:hover { color: var(--fg); }
+.crumbs .csep { margin: 0 7px; color: var(--line); }
+.crumbs .here { color: var(--fg); }
+
+.prompt { color: var(--dim); margin: 0 0 4px; font-size: 13px; font-weight: 400; }
+.prompt::before { content: "$ "; color: var(--green); }
+.prompt b { color: var(--fg); font-weight: 600; }
+/* A workspace path is one unbreakable token tens of characters long, and this
+   line carries one. Without a break opportunity it sets the page's min-content
+   width and drags the whole document sideways on a phone. */
+.metaline { color: var(--dim); font-size: 12px; margin-bottom: 22px; overflow-wrap: anywhere; }
+.metaline .sep { margin: 0 8px; color: var(--line); }
+.actor { color: var(--fg); }
+.actor.quiet { color: var(--dim); }
+/* The run head's second line is scanned, not read: one size down, same ink. */
+.metaline.provenance { font-size: 11px; }
+.metaline.provenance > .sep:first-child { display: none; }
+
+.eyebrow {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin: 30px 0 8px;
+}
+.eyebrow .unbold { letter-spacing: 0; text-transform: none; font-weight: 400; }
+
+.pagehead { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+/* min-width:0 lets the title block shrink past its content's intrinsic width;
+   a flex item defaults to min-content and refuses to. */
+.pagehead > div { min-width: 0; }
+.pagehead .metaline { margin-bottom: 0; }
+.pagehead .actions { margin-left: auto; display: flex; gap: 8px; padding-top: 2px; }
+.pagehead .actions form { margin: 0; }
+/* Buttons that carry their consequence: one row per button, the sentence
+   beside it, wrapping under it when narrow — never hidden in a tooltip. */
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:disabled:hover { border-color: var(--line); }
+
+/* ---- tables ---- */
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  text-align: left;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+td { padding: 8px 14px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; }
+td.dim { color: var(--dim); }
+td.faint, .faint { color: var(--faint); }
+.res { color: var(--cyan); }
+
+/* ---- status ----
+   One glyph per outcome, everywhere a status word appears: color is never
+   the only signal. Glyph overrides are scoped to .st so a bare color class
+   (a breaker count, a DAG node) does not sprout a second marker. */
+.st { white-space: nowrap; }
+.st::before { content: "● "; }
+/* A person stopping something is not a failure: aborted is dim and a paused
+   pipeline blue, as Concourse draws them. held is the breaker, which failures
+   caused. Concourse's errored is amber, but amber is running here, so errored
+   keeps red and differs from failed by its glyph. */
+.st-passed, .st-succeeded { color: var(--green); }
+.st-failed, .st-errored, .st-held { color: var(--red); }
+.st-aborted { color: var(--dim); }
+.st-paused { color: var(--blue); }
+.st-running { color: var(--yellow); }
+.st-queued { color: var(--faint); }
+.st-skipped { color: var(--faint); }
+.st-none { color: var(--faint); }
+.st-waiting, .st-reaped { color: var(--faint); }
+.st.st-passed::before, .st.st-succeeded::before { content: "✓ "; }
+.st.st-failed::before { content: "✗ "; }
+.st.st-errored::before { content: "! "; }
+.st.st-aborted::before { content: "■ "; }
+.st.st-paused::before { content: "⏸ "; }
+.st.st-held::before { content: "⊘ "; }
+.st.st-running::before { content: "◐ "; }
+.st.st-queued::before { content: "○ "; }
+.st.st-skipped::before { content: "– "; }
+.st.st-waiting::before { content: "◌ "; }
+.st.st-reaped::before { content: "· "; }
+
+.hash { color: var(--blue); }
+.hash::before { content: "["; color: var(--faint); }
+.hash::after { content: "]"; color: var(--faint); }
+
+/* ---- overview job chips ---- */
+.jobchips { white-space: normal; }
+.jobchips a { display: inline-block; margin-right: 10px; line-height: 24px; text-decoration: none; }
+.jobchips a:hover { text-decoration: underline; }
+/* The root's rows: a pipeline's badges follow its name, and only when
+   something is not normal. */
+.pipelines .pname { white-space: nowrap; }
+.pipelines .jobchips { width: 100%; }
+.pipelines .pname .counts { display: inline-flex; gap: 8px; margin-left: 10px; font-variant-numeric: tabular-nums; }
+.pipelines .pname .counts .badge { margin-left: 0; }
+.pipelines .pname .st { margin-left: 6px; }
+/* Pause and the file path wait for the row. Opacity, not visibility: a
+   hidden button cannot take focus, so a keyboard could never reveal it. A
+   touch screen has no hover, so there they are always shown. */
+.pipelines .rowextra { text-align: right; white-space: nowrap; opacity: 0; }
+.pipelines tr:hover .rowextra, .pipelines tr:focus-within .rowextra { opacity: 1; }
+/* Pause is rarely wanted from a healthy row; Unpause is what a paused row is for. */
+.pipelines tr.paused .rowextra { opacity: 1; }
+@media (hover: none) {
+  .pipelines .rowextra { opacity: 1; }
+}
+/* On a phone a row stacks rather than scrolls: the name and its last run on
+   one line, the chips under them, then pause — shown, since a
+   hidden line here would only be a gap. The header row says nothing a
+   stacked row does not, so it is kept for assistive tech only. */
+@media (max-width: 640px) {
+  .pipelines thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .pipelines tr { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line-soft); }
+  .pipelines tbody tr:last-child { border-bottom: 0; }
+  .pipelines td { display: block; padding: 2px 0; border: 0; }
+  .pipelines .pname { grid-row: 1; grid-column: 1; }
+  .pipelines .pname ~ td:nth-child(3) { grid-row: 1; grid-column: 2; text-align: right; }
+  .pipelines .jobchips, .pipelines .rowextra, .pipelines .broken-reason { grid-column: 1 / -1; width: auto; }
+  .pipelines .rowextra { text-align: left; opacity: 1; }
+}
+
+/* ---- run strip ----
+   This job's recent runs on the run page. Chips are anchors carrying the
+   status vocabulary above; the current one is the only bright thing, with
+   its id shown because a hover title is unreachable on touch.
+   One line however many runs: the list scrolls sideways behind the same fade
+   the phone tabs use, and its padding is what keeps a focus outline from
+   being clipped by the scroller and the last chip clear of the fade. The
+   scrollbar stays — on a mouse without a trackpad it is the only way across. */
+.runstrip { display: flex; align-items: baseline; gap: 12px; margin: -8px 0 18px; font-size: 12px; line-height: 24px; }
+.striplist {
+  display: flex;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 2px 28px 2px 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-padding-inline: 2px 28px;
+  scrollbar-width: thin;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.striplist li { flex: none; }
+.runstrip a { color: var(--dim); text-decoration: none; }
+.runstrip a:hover { color: var(--fg); text-decoration: underline; }
+.runstrip a[aria-current] { color: var(--fg); border-bottom: 1px solid var(--fg); }
+.runstrip .stripmore { flex: none; white-space: nowrap; }
+/* Each chip already says its status in words to assistive tech, so the glyph
+   and the id's brackets get empty alt text rather than being read as "check
+   mark" and "left bracket". A browser without the alt syntax drops these
+   declarations and keeps the ones above. Every glyph in the status block is
+   mirrored, plus the default: a status missing here is still silent, but
+   drawn as the dot rather than its own glyph. */
+.striplist .st::before { content: "● " / ""; }
+.striplist .st.st-passed::before, .striplist .st.st-succeeded::before { content: "✓ " / ""; }
+.striplist .st.st-failed::before { content: "✗ " / ""; }
+.striplist .st.st-errored::before { content: "! " / ""; }
+.striplist .st.st-aborted::before { content: "■ " / ""; }
+.striplist .st.st-waiting::before { content: "◌ " / ""; }
+.striplist .st.st-reaped::before { content: "· " / ""; }
+.striplist .st.st-running::before { content: "◐ " / ""; }
+.striplist .st.st-queued::before { content: "○ " / ""; }
+.striplist .st.st-paused::before { content: "⏸ " / ""; }
+.striplist .st.st-held::before { content: "⊘ " / ""; }
+.striplist .st.st-skipped::before { content: "– " / ""; }
+.striplist .hash::before { content: "[" / ""; }
+.striplist .hash::after { content: "]" / ""; }
+
+/* ---- controls ---- */
+.btn {
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--dim); }
+.btn.primary { color: var(--green); border-color: #33452d; }
+.btn.primary:hover { border-color: var(--green); }
+.btn.danger { color: var(--red); border-color: #4a2c29; }
+.btn.danger:hover { border-color: var(--red); }
+
+/* ---- dependency graph ----
+   Server-laid-out SVG; the pane scrolls sideways like every wide table. */
+
+/* The placeholder is always in the DOM, so it is what :last-child matches on a
+   finished run — and .step:last-child is the rule that drops the transcript's
+   trailing hairline. Hand it to the last row a reader can actually see.
+   Scoped to a placeholder that really is last, because the stream appends
+   AFTER it: unscoped, a run being watched lost the hairline from whichever
+   row happened to precede the placeholder, mid-list. */
+#run-empty:not(:only-child) { display: none; }
+.step:has(+ #run-empty:last-child) { border-bottom: 0; }
+
+.dagwrap {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 14px 16px 6px;
+  overflow-x: auto;
+}
+.dagwrap .rail { color: var(--faint); font-size: 11px; }
+svg.dag { display: block; }
+.dagedge { fill: none; stroke: var(--faint-line); stroke-width: 1.5; }
+.dagedge:hover { stroke: var(--fg); }
+.dagedge.manual { stroke-dasharray: 4 3; }
+.dagres rect { fill: var(--panel); stroke: var(--faint-line); rx: 3px; }
+.dagres text { font-family: var(--mono); font-size: 12px; fill: var(--dim); }
+.dagres:hover { text-decoration: none; }
+.dagres:hover rect { stroke: var(--fg); }
+.dagres.ghost rect { fill: none; stroke-dasharray: 2 3; }
+.dagres.check-failed rect { stroke: var(--red); }
+/* An outline on an svg link is not reliably drawn, so a focused box says so
+   with its own border, in the page's focus yellow. */
+.dagnode:focus-visible, .dagres:focus-visible { outline: none; }
+.dagnode:focus-visible .dagbox, .dagres:focus-visible rect { stroke: var(--yellow); stroke-width: 2; }
+.dagres.check-failed text { fill: var(--red); }
+/* Tracing: what a hovered or focused box connects to stays, the rest steps
+   back. An instant swap, not a transition — it follows the pointer. */
+svg.dag.tracing .dagnode:not(.lit),
+svg.dag.tracing .dagres:not(.lit),
+svg.dag.tracing .dagedge:not(.lit) { opacity: 0.3; }
+svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
+/* A job is filled with its last finished run's color, mixed into --bg rather
+ * than --panel2: over the lighter ground, red status text on a red tint fell
+ * under 4.5:1 at any tint worth drawing (TestGraphNodeTintsKeepTextReadable). */
+.dagnode .dagbox { fill: var(--panel2); stroke: var(--faint-line); rx: 3px; }
+.dagnode:hover .dagbox { stroke: var(--fg); }
+.dagnode:hover { text-decoration: none; }
+.dagnode text { font-family: var(--mono); font-size: 12px; fill: var(--fg); }
+.dagnode .dagstatus { font-size: 11px; fill: var(--dim); }
+.dagnode.st-passed .dagbox { fill: color-mix(in srgb, var(--green) var(--dag-tint), var(--bg)); stroke: var(--green); }
+.dagnode.st-passed .dagstatus { fill: var(--green); }
+.dagnode.st-failed .dagbox, .dagnode.st-errored .dagbox { fill: color-mix(in srgb, var(--red) var(--dag-tint), var(--bg)); stroke: var(--red); }
+.dagnode.st-failed .dagstatus, .dagnode.st-errored .dagstatus { fill: var(--red); }
+.dagnode.st-aborted .dagbox { stroke: var(--dim); }
+.dagnode .dagqueued { fill: var(--faint); }
+.dagnode.running .dagstatus { fill: var(--yellow); }
+.dagring { fill: none; stroke: var(--yellow); stroke-width: 1.5; rx: 5px; animation: dagpulse 1.6s ease-in-out infinite; }
+@keyframes dagpulse { 50% { stroke-opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .dagring { animation: none; }
+}
+.deps { font-size: 12.5px; color: var(--dim); line-height: 2; }
+.deps .arrow { color: var(--faint); }
+
+/* ---- transcript ---- */
+.transcript { border: 1px solid var(--line); background: var(--panel); }
+.step { border-bottom: 1px solid var(--line-soft); }
+.step:last-child { border-bottom: 0; }
+.stephead {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 14px 9px 11px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+.stephead:hover { background: var(--panel2); }
+
+/* The status rail is a TICK, not a stripe.
+ *
+ * As a full-height border it butted against the next sibling's, and four
+ * passed steps in a row read as one continuous green bar — which the eye then
+ * took for a grouping rail, in exact competition with the depth rail beside
+ * it. Inset top and bottom, each row owns its own mark, and the only
+ * continuous vertical lines left on the page are the ones that mean
+ * containment. */
+.stephead { position: relative; }
+.stephead::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  background: transparent;
+}
+.step.passed  > .stephead::before { background: var(--green); }
+.step.failed  > .stephead::before { background: var(--red); }
+.step.running > .stephead::before { background: var(--yellow); }
+.step.skipped > .stephead::before { background: var(--line); }
+.step.unreported > .stephead::before { background: var(--line); }
+
+/* The rail tick's readable twin: same outcome as a glyph, so a row's status
+   survives colorblindness and screen readers. */
+.stmark { flex: none; width: 14px; text-align: center; }
+.step.passed  > .stephead > .stmark { color: var(--green); }
+.step.failed  > .stephead > .stmark { color: var(--red); }
+.step.running > .stephead > .stmark { color: var(--yellow); }
+.step.skipped > .stephead > .stmark { color: var(--faint); }
+.step.unreported > .stephead > .stmark { color: var(--dim); }
+
+/* ---- depth ----
+ *
+ * A container step (get:, across:, in_parallel:, race:, try:, do:, ensemble:)
+ * HOLDS the steps that ran inside it. The rail vocabulary is the one
+ * .subtrace already uses for a sub-agent's turns: one hairline guide per
+ * ancestor, indented to the kind column.
+ *
+ * Rails are deliberately NOT colored by depth. Color on this page is ANSI-16
+ * status semantics, and a rotating hue per level would be a second color
+ * language arguing with the first. The rail instead lights yellow along the
+ * ACTIVE path — the branch holding something still running — which is the
+ * question a reader actually has while a job is in flight. A failed branch is
+ * left alone: the rollup counts already carry red up every ancestor, and
+ * doing both is shouting. */
+.substeps { margin-left: 22px; border-left: 1px solid color-mix(in srgb, var(--faint-line) 42%, transparent); }
+.step.active > .substeps { border-left-color: color-mix(in srgb, var(--yellow) 55%, transparent); }
+.step.container:not(.open) > .substeps { display: none; }
+
+/* ---- rollup ----
+ * A folded container still has to answer "where does this stand", because the
+ * rows that would otherwise answer are folded away with it. */
+.rollup {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  display: inline-flex;
+  gap: 7px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.rollup b { font-weight: 600; }
+.rollup .r-pass { color: var(--green); }
+.rollup .r-fail { color: var(--red); }
+.rollup .r-run  { color: var(--yellow); }
+.rollup .r-skip { color: var(--faint); }
+.rollup .r-sep  { color: var(--faint); }
+
+/* The rollup and the duration are one group. display:contents on a wide
+   screen, so the row lays out exactly as it did before this existed; on a
+   narrow one the group becomes the row's second line instead of being
+   squeezed against a name it will always lose to. */
+.headmeta { display: contents; }
+
+/* A running step counts. The blinking ▍ says "alive"; it does not say "six
+   minutes in", which is the difference between a page you can leave and a
+   page you have to watch. */
+.dur .live { color: var(--yellow); font-variant-numeric: tabular-nums; }
+
+/* ---- keyboard ---- */
+.step.sel > .stephead { background: var(--panel2); box-shadow: inset 0 0 0 1px var(--line); }
+.transcripthead { display: flex; justify-content: flex-end; }
+.keyhint {
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--faint);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  background: var(--panel);
+}
+.keyhint kbd {
+  font-family: var(--mono);
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0 4px;
+}
+/* A pointer has no keys to press, and the hint would be the first thing on
+   the page for a reader who cannot act on it. */
+@media (hover: none) { .keyhint { display: none; } }
+.stephead .kind {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  width: 74px;
+  flex: none;
+  color: var(--dim);
+}
+.step.skipped .stephead .kind { color: var(--faint); }
+.stephead .name { font-weight: 600; }
+.step.skipped .stephead .name { color: var(--dim); font-weight: 400; }
+.stephead .note { color: var(--faint); }
+/* Beats .stephead .note on specificity, which the bare .spendwarn rule does
+   not — without this the "stopped early" badge renders in the same faint grey
+   as the ordinary verdict note beside it, and the distinction it exists for
+   never reaches the screen. */
+.stephead .spendwarn { color: var(--yellow); }
+.stephead .dur { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stephead .chev { color: var(--faint); width: 12px; flex: none; }
+.chev-icon::before { content: "▸"; }
+.step.open > .stephead .chev-icon::before { content: "▾"; }
+.stepbody { display: none; padding: 4px 14px 14px 88px; }
+.step.open > .stepbody { display: block; }
+.stepbody.flush { padding-left: 14px; }
+
+.log {
+  background: var(--code-bg);
+  border: 1px solid var(--line-soft);
+  padding: 10px 12px;
+  overflow-x: auto;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+.log .err { color: var(--red); }
+.log.notice.warn { color: var(--yellow); }
+.runnotes { margin: 8px 0; }
+
+.turn { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--line-soft); }
+.turn:last-of-type { border-bottom: 0; }
+.turn .who {
+  flex: none;
+  width: 74px;
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.turn.model .who { color: var(--magenta); }
+.turn.tool .who { color: var(--cyan); }
+.turn.system .who { color: var(--yellow); }
+.turn.user .who { color: var(--blue); }
+.turn .what { color: var(--dim); min-width: 0; flex: 1; overflow-wrap: anywhere; }
+/* The tool being called is the row's subject; everything else on the row is
+   about it. */
+.turn .what > code { color: var(--fg); font-weight: 600; margin-right: 8px; }
+.turn .what .say { white-space: pre-wrap; }
+/* What the model said is content, not annotation — the only turn text a
+   reader is here to read. */
+.turn.model .what .say { color: var(--fg); }
+.turn.system .what .say, .turn.user .what .say { color: var(--fg); }
+.turn.compaction { border-top: 1px dashed var(--line); }
+.turn.compaction .who { color: var(--faint); }
+.turn.compaction summary { cursor: pointer; }
+.turn.compaction .prose { color: var(--fg); }
+.turn.nested { opacity: 0.85; }
+.turn.nested .who::before { content: "└ "; color: var(--faint); }
+.turn .dur { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.turn .dur.warn { color: var(--yellow); }
+.turn.pending .who, .turn.pending .say { color: var(--faint); }
+
+.subtrace { margin: 4px 0 4px 84px; padding: 6px 12px; border-left: 1px solid var(--line); }
+
+/* ---- JSON, wherever it appears ----
+ *
+ * One vocabulary for every payload on the site: a tool call's arguments, a
+ * tool result, a node's content map, a fenced ```json block in an agent's
+ * answer. The token colors are the same ANSI-16 semantics the rest of the UI
+ * runs on and the same ones the "steps" chroma style hands fenced code
+ * (docs.go) — keys blue because they are structure, strings green, numbers
+ * yellow, and punctuation dim so the shape recedes behind the values.
+ */
+.j-key  { color: var(--blue); }
+.j-str  { color: var(--green); }
+.j-num  { color: var(--yellow); }
+.j-lit  { color: var(--magenta); }
+.j-punc { color: var(--dim); }
+/* A document that arrived escaped inside a string, shown as the document it
+   is. Foreground weight because it is the thing the row was opened for. */
+.j-doc  { color: var(--fg); }
+
+/* Inline: small enough to stay on the row it belongs to. */
+.jsonline { overflow-wrap: anywhere; }
+
+/* Folded: bulky enough that leaving it open would bury the conversation
+   around it. A <details>, so it works with scripting off and the live stream
+   gets the same element the server renders. */
+/* display:inline, deliberately, on an element whose default is block: the
+   summary then sits on the row it annotates, while the <pre> it reveals still
+   lays out as a block — starting at the data column rather than indented to
+   wherever the summary happened to end, and free to use the full width. */
+.jsonbox { display: inline; }
+.jsonbox > summary {
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--dim);
+  cursor: pointer;
+  list-style: none;
+  display: inline;
+  padding: 1px 0;
+}
+.jsonbox > summary::-webkit-details-marker { display: none; }
+/* The same chevron a step head uses: one disclosure vocabulary on the page. */
+.jsonbox > summary::before { content: "▸"; font-family: var(--mono); color: var(--faint); margin-right: 5px; }
+.jsonbox[open] > summary::before { content: "▾"; }
+.jsonbox > summary:hover { color: var(--fg); }
+.jsonbox > summary:hover::before { color: var(--dim); }
+
+pre.json {
+  background: var(--code-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 10px 12px;
+  margin: 6px 0 0;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--dim);
+  tab-size: 2;
+}
+/* A fenced block inside an answer carries its language, top-right, out of the
+   way of the first line of code. The label sits OUTSIDE the <pre>: these
+   blocks are patches and configs a reader copies, and absolute positioning
+   removes a span from the flow but not from the selection. */
+.codeblock { position: relative; margin: 0 0 10px; }
+pre.json.code { padding-top: 12px; margin: 0; }
+.codelang {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-family: var(--sans);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+/* A step's own output is a <pre> now that it may be highlighted, so it needs
+   the margin a <div> got for free. */
+pre.log { margin: 8px 0 0; font-family: var(--mono); }
+
+
+/* The step's answer, as a row: same gutter label and same data column as the
+   conversation above it, separated by a rule because it is the conclusion of
+   that conversation rather than another turn in it. */
+.turn.answer { margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--line); border-bottom: 0; }
+.turn.answer .who { color: var(--fg); }
+.response { color: var(--fg); min-width: 0; flex: 1; }
+/* .prose is the same body mid-conversation, where the model's running
+   commentary is an annotation rather than the conclusion. */
+.response .say, .prose .say { white-space: pre-wrap; margin: 0 0 10px; overflow-wrap: anywhere; }
+.turn.model .prose, .turn.system .prose, .turn.user .prose { color: var(--fg); min-width: 0; }
+.response > :last-child, .prose > :last-child { margin-bottom: 0; }
+/* Qualified past pre.json.code, which would otherwise keep its own bottom
+   margin on the answers most likely to end in a code block. */
+.response > .codeblock:last-child, .prose > .codeblock:last-child { margin-bottom: 0; }
+.agentmeta { color: var(--faint); font-size: 12px; margin-top: 8px; }
+
+/* ---- rendered agent prose ----
+ *
+ * Models write markdown, and prose.go renders it (see that file for what the
+ * renderer refuses to do with model-authored text). Everything here is about
+ * keeping a document subordinate to the page it is quoted into: an agent's
+ * heading levels are its own business, but on this page they are all
+ * annotations of one step, so they are set as labels rather than as a second
+ * outline competing with the run's. */
+.md { color: var(--fg); min-width: 0; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md h1, .md h2 {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin: 18px 0 6px;
+}
+.md h3, .md h4, .md h5, .md h6 {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--fg);
+  margin: 16px 0 5px;
+}
+.md p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.md strong { color: var(--fg); font-weight: 700; }
+.md ul, .md ol { margin: 0 0 10px; padding-left: 20px; }
+.md li { margin: 3px 0; }
+.md li::marker { color: var(--faint); }
+.md li > p { margin: 0; }
+/* Inline code is a token in a sentence, not a block: cyan, so a file name or
+   a symbol reads as data the way every other identifier on the page does. */
+.md :not(pre) > code {
+  background: var(--code-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 2px;
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--cyan);
+  overflow-wrap: anywhere;
+}
+.md blockquote {
+  margin: 0 0 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+  color: var(--dim);
+}
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+/* A model-authored table can be any width; it scrolls inside its own box
+   rather than pushing the page sideways. */
+.md table { border-collapse: collapse; margin: 0 0 10px; font-size: 12px; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 9px; text-align: left; }
+.md th {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  font-weight: 600;
+}
+.md a { color: var(--blue); }
+.md del { color: var(--faint); }
+
+.cursor { display: inline-block; width: 7px; background: var(--yellow); color: transparent; animation: blink 1.1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+
+/* ---- failure triage ---- */
+.errblock {
+  border: 1px solid #4a2c29;
+  background: #191110;
+  color: var(--red);
+  padding: 10px 14px;
+  font-size: 12.5px;
+  margin: 0 0 18px;
+  white-space: pre-wrap;
+}
+.errblock .lbl { color: var(--dim); }
+.errhint { color: var(--dim); font-size: 12px; margin: -14px 0 18px; }
+/* ---- mcp servers ---- */
+/* One row per server, and the row carries a second line: the status column is
+   the reason the page exists, so the three columns that used to hold what a
+   server IS are demoted under its name rather than competing for the width. */
+.table.mcp td, table.mcp td { vertical-align: top; }
+.mcp .name { color: var(--fg); }
+/* The width cap is load-bearing: a probe failure is a SENTENCE (a dial error
+   names what it tried and how it went, and a token path can be 60 characters),
+   and an unbroken one in a table cell sets the width of the whole table.
+   anywhere, not break-word: a URL has no spaces to break at. */
+.mcp .mcp-meta {
+  color: var(--faint);
+  font-size: 12px;
+  margin-top: 3px;
+  max-width: 62ch;
+  overflow-wrap: anywhere;
+}
+.mcp .mcp-meta.err { color: var(--red); }
+.mcp .mcp-meta a { color: var(--blue); }
+.mcp td.stat { white-space: nowrap; }
+.mcp td.uses { font-size: 12px; max-width: 26ch; overflow-wrap: anywhere; }
+/* Right-aligned so the buttons form one column down the page rather than
+   landing wherever the row above them happened to end. */
+.mcp td.acts, .mcp th.acts { text-align: right; white-space: nowrap; }
+.mcp td.acts .inline { margin-left: 6px; }
+.mcp td.acts .meta { font-size: 11px; }
+.mcp .toollist code { color: var(--dim); font-size: 12px; margin-right: 4px; }
+/* A group heading inside the table, so the two groups still share one set of
+   columns; it is a row rather than a caption because a caption cannot sit
+   between two tbodies. */
+.mcp tr.grouprow td { border-bottom: 1px solid var(--line); padding-top: 14px; padding-bottom: 4px; }
+.mcp tbody:first-of-type tr.grouprow td { padding-top: 8px; }
+.mcp-note { font-size: 12px; margin-top: 14px; max-width: 78ch; }
+
+
+.diffnote { color: var(--dim); font-size: 12px; margin: -8px 0 18px; }
+.stephead .chg { color: var(--yellow); }
+.diffnote::before { content: "Δ "; color: var(--yellow); }
+
+.callout {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--yellow);
+  background: var(--panel);
+  padding: 10px 14px;
+  color: var(--dim);
+  font-size: 12px;
+  margin-top: 22px;
+}
+.callout b { color: var(--fg); font-weight: 600; }
+
+/* ---- node detail ---- */
+/* The node page's payloads are the shared JSON block at reading size: this
+   page IS the payload, where a transcript row only quotes one. Selector
+   qualified past pre.json deliberately — these elements carry BOTH classes,
+   and at equal specificity the shared block would win on every property. */
+pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; font-size: 12.5px; line-height: 1.7; }
+.chain { color: var(--dim); font-size: 12.5px; }
+.chain .rail { color: var(--faint); }
+
+/* ---- sparkline ---- */
+.spark { vertical-align: -2px; margin-left: 10px; }
+.spark rect { fill: #4d7040; }
+.spark rect.bad { fill: #8a4038; }
+
+/* ---- approvals ---- */
+.approval { border: 1px solid var(--line); background: var(--panel); padding: 14px; margin-bottom: 10px; }
+.approval .msg { font-weight: 600; margin: 2px 0; }
+.approval .meta { color: var(--faint); font-size: 12px; }
+.approval.decided { color: var(--dim); }
+.approval .stamp { font-weight: 600; }
+.decide { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+/* A control that belongs beside the fact it acts on, rather than under it: the overview's state cell reads "paused [Unpause]" on one line. */
+.inline { display: inline-flex; gap: 8px; align-items: center; margin-left: 8px; vertical-align: middle; }
+.decide input[type="text"] {
+  flex: 1;
+  min-width: 120px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 10px;
+}
+.decide input[type="text"]::placeholder { color: var(--faint); }
+
+/* ---- jump palette ---- */
+.palette-backdrop { position: fixed; inset: 0; background: rgba(8, 9, 8, 0.72); display: none; z-index: 50; }
+.palette-backdrop.open { display: block; }
+.palette {
+  position: fixed;
+  top: 14vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, 92vw);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  z-index: 51;
+  display: none;
+}
+.palette.open { display: block; }
+.palette input {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 14px;
+  outline: none;
+}
+.palette input::placeholder { color: var(--faint); }
+.palette ul { list-style: none; margin: 0; padding: 6px 0; max-height: 300px; overflow-y: auto; }
+.palette li { padding: 7px 14px; cursor: pointer; display: flex; gap: 12px; align-items: baseline; }
+.palette li:hover, .palette li.sel { background: var(--panel2); }
+.palette li .kind {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  width: 62px;
+  flex: none;
+}
+.palette li .hint { margin-left: auto; color: var(--faint); font-size: 12px; }
+
+/* A tree costs horizontal space and a phone has none, so the indent shrinks
+ * to a thumbnail's width and the kind label gives up its fixed column — the
+ * depth rail is already doing the alignment that column was doing. Nothing is
+ * hidden: a step at depth three on a phone shows the same name, rollup,
+ * elapsed and hash it shows on a desktop, on two lines instead of one. */
+@media (max-width: 640px) {
+  /* The action column is the first thing to give: on a phone the buttons go
+     under the row they act on rather than forcing a horizontal scroll past
+     three columns to reach them. */
+  .mcp td.acts, .mcp th.acts { text-align: left; white-space: normal; }
+  .mcp td.acts .inline { margin-left: 0; margin-right: 6px; }
+  .mcp .mcp-meta, .mcp td.uses { max-width: none; }
+
+  .stepbody { padding-left: 14px; }
+  .subtrace { margin-left: 12px; }
+  .substeps { margin-left: 9px; }
+
+  .stephead { flex-wrap: wrap; gap: 6px 9px; padding: 8px 10px 8px 9px; }
+  .stephead .kind { width: auto; }
+  /* A cell name like reviewer [dim=assertion-fixture-fidelity] has no spaces
+     to break at, so it needs permission to break anywhere — otherwise it sets
+     the row's minimum width and pushes the whole page sideways. */
+  .stephead .name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .stephead .note { flex-basis: 100%; margin-left: 18px; }
+
+  .headmeta {
+    display: flex;
+    flex-basis: 100%;
+    align-items: baseline;
+    gap: 10px;
+    margin-left: 18px;
+    min-width: 0;
+  }
+  .headmeta .dur { margin-left: auto; white-space: normal; text-align: right; }
+
+  .turn { flex-wrap: wrap; gap: 2px 10px; }
+  .turn .who { width: auto; }
+}
+
+/* A step is addressable: the anchor stays out of the way until the row is
+ * hovered or focused, so "look at this step" is a pastable URL rather than
+ * a description of where to click. */
+.stephead .anchor {
+  color: var(--faint);
+  opacity: 0;
+  text-decoration: none;
+  font-weight: 400;
+}
+.stephead:hover .anchor,
+.stephead .anchor:focus-visible { opacity: 1; }
+.stephead .anchor:hover { color: var(--fg); }
+.step { scroll-margin-top: 3.2rem; }
+.step:target > .stephead { background: var(--panel2); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* The trigger-to-run waiting room. Deliberately sparse: it exists only for
+ * the seconds between a click and a run id, and anything more would be
+ * furniture the reader never gets to use. */
+.waiting {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 18px 20px;
+}
+.waitline { margin: 0 0 6px; color: var(--fg); }
+.followchecks { list-style: none; margin: 0 0 10px; padding: 0; font-size: 12.5px; }
+.followchecks .clear { color: var(--dim); }
+.followchecks .blocking { color: var(--fg); }
+.followchecks .blocking span[aria-hidden] { color: var(--yellow); }
+/* The queue table's reason is the follow page's first blocking line, drawn the same way. */
+.waiton { color: var(--fg); }
+.waiton span[aria-hidden] { color: var(--yellow); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.waiting p:last-child { margin-bottom: 0; }
+
+/* A step's own output, as it came out. Slightly brighter than the log block
+ * around it: this is the thing a reader opened the step to see, not the
+ * annotation about it. */
+.log.output { color: var(--fg); }
+
+/* Marked, not hidden: an absent price is a fact about the provider, and
+   rendering it as $0.00 would say the run was free. */
+.unpriced { font-style: italic; }
+.spendwarn { color: var(--yellow); font-size: .9em; }
+
+/* /docs — the embedded documentation, rendered server-side. Prose pages in
+ * a transcript UI: same ground, same rules, sans for the reading voice.
+ * Code blocks carry the app's own palette via the "steps" chroma style
+ * (internal/web/docs.go), never a stock theme. */
+.docsnav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 10px 0 8px; font-family: var(--sans); font-size: 12px; }
+.docsnav a, .docstoc a { color: var(--dim); }
+.docsnav a { display: inline-block; padding: 3px 0; }
+.docsnav a:hover, .docstoc a:hover { color: var(--fg); }
+.docsnav a[aria-current="page"] { color: var(--green); }
+.docsgroup { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.docsgrouptitle { color: var(--faint); text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
+.docstoc { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 18px; padding: 6px 10px; border: 1px solid var(--line-soft); border-radius: 4px; font-family: var(--sans); font-size: 12px; }
+.docs { max-width: 880px; font-family: var(--sans); font-size: 14px; line-height: 1.6; }
+/* Prose keeps a readable measure; code and tables may use the full column. */
+.docs p, .docs ul, .docs ol, .docs blockquote { max-width: 72ch; }
+.docs h1, .docs h2, .docs h3, .docs h4 { font-family: var(--mono); font-weight: 600; line-height: 1.25; scroll-margin-top: 3.2rem; }
+.docs h1 { font-size: 1.4em; }
+.docs h2 { font-size: 1.15em; margin-top: 1.8em; border-bottom: 1px solid var(--line-soft); padding-bottom: .25em; }
+.docs h3 { font-size: 1em; margin-top: 1.4em; }
+.docs h1 code, .docs h2 code, .docs h3 code, .docs h4 code { overflow-wrap: anywhere; }
+.docs pre { border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; overflow-x: auto; font-size: .92em; }
+.docs code { font-family: var(--mono); font-size: .95em; }
+.docs :not(pre) > code { background: var(--panel2); padding: 1px 4px; border-radius: 3px; overflow-wrap: anywhere; }
+/* display:block turns the table into its own scroll container, so a wide
+ * conformance matrix pans inside the column instead of dragging the whole
+ * document sideways on a phone. */
+.docs table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .92em; }
+.docs th, .docs td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; vertical-align: top; }
+.docs th { color: var(--dim); font-weight: 500; }
+.docs blockquote { border-left: 2px solid var(--line); margin-left: 0; padding-left: 14px; color: var(--dim); }
+.docs img { max-width: 100%; }
+
+/* ---- resource versions ----
+   A version's row header is data, not a column label: it reads like the
+   cells beside it rather than like the uppercase thead above. */
+table.versions tbody th {
+  font: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+  color: inherit;
+  font-weight: 400;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  white-space: nowrap;
+}
+table.versions tbody tr:last-child th { border-bottom: 0; }
+table.versions thead th a { color: inherit; }
+table.versions td .when { color: var(--dim); font-family: var(--sans); font-size: 12px; }
+/* On a phone the version wraps rather than pushing the job columns — the
+   reason anyone opened the page — off the right edge. */
+@media (max-width: 640px) {
+  table.versions td .when { display: none; }
+  table.versions tbody th { white-space: normal; overflow-wrap: anywhere; min-width: 10em; }
+}
+
+/* ---- activity ---- */
+a.plain { color: inherit; }
+a.plain:hover { color: var(--blue); }
+table.activity td:first-child { white-space: nowrap; }
+
+/* ---- user menu: the switcher's control at the line's other end ---- */
+.usermenu { position: relative; display: flex; align-self: stretch; margin: -4px -10px -4px 0; border-left: 1px solid var(--line); }
+.usermenu .pipemenu { left: auto; right: 0; min-width: 200px; }
+.userbtn .who { color: var(--fg); max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
+/* The switcher's rows reserve a marker column for the current pipeline; nothing here is current. */
+.usermenu .pipemenu a::before { content: none; }
+.usermenu .menuhead { display: block; padding: 8px 12px; font-size: 11px; color: var(--dim); border-bottom: 1px solid var(--line-soft); }
+@media (max-width: 640px) {
+  .userbtn .who { max-width: 10ch; }
+  .usermenu { position: static; }
+  .usermenu .pipemenu { left: 0; right: 0; min-width: 0; }
+}
+
+/* ---- sign in: one narrow column, the prompt above the form ---- */
+.signin { max-width: 360px; margin: 8vh auto 0; }
+.signin-form { display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; align-items: center; }
+.signin-form label { font-family: var(--sans); font-size: 12px; color: var(--dim); }
+.signin-form input[type="text"], .signin-form input[type="password"] {
+  font: inherit; color: var(--fg); background: var(--code-bg);
+  border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; min-width: 0;
+}
+.signin-form input:focus { border-color: var(--yellow); outline: none; }
+.signin-form .btn { grid-column: 2; justify-self: start; }
+.signin-problem { color: var(--red); margin-bottom: 14px; }
+.usermenu form { margin: 0; }
+.menubtn { font: inherit; font-size: 12px; color: var(--fg); background: none; border: 0; width: 100%; text-align: left; padding: 8px 12px; cursor: pointer; }
+.menubtn:hover { background: var(--panel2); }
+@media (max-width: 640px) {
+  .signin { margin-top: 4vh; }
+  .signin-form input[type="text"], .signin-form input[type="password"] { font-size: 16px; }
+}
+/* A phone reads each entry as two lines — when and who, then what was done
+   to what, where — rather than a table that scrolls sideways. */
+@media (max-width: 640px) {
+  table.activity thead { display: none; }
+  table.activity, table.activity tbody { display: block; }
+  table.activity tr { display: grid; grid-template-columns: auto 1fr auto; column-gap: 10px; row-gap: 2px; padding: 8px 12px; border-top: 1px solid var(--line-soft); }
+  table.activity tr:first-child { border-top: 0; }
+  table.activity td { padding: 0; border: 0; }
+  table.activity td:nth-child(2) { grid-column: 2 / -1; }
+  table.activity td:nth-child(4) { min-width: 0; overflow-wrap: anywhere; }
+  .tablewrap:has(> table.activity) { overflow-x: visible; }
+}
+.signin-providers { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.signin-providers .btn { text-align: center; padding: 8px 12px; }
+.signin-or { display: flex; align-items: center; gap: 10px; font-family: var(--sans); font-size: 12px; color: var(--dim); margin: 0 0 14px; }
+.signin-or::before, .signin-or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.rohint.viewonly { max-width: none; text-align: left; }
+.at-signedout a { color: var(--yellow); }
+
+/* ---- consent: the one page that hands out a credential, so it states facts plainly ---- */
+.consent { max-width: 640px; margin: 4vh auto 0; }
+.consent-ask { display: block; margin-top: 6px; font-weight: 400; color: var(--fg); overflow-wrap: anywhere; }
+.consent-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 18px 0; }
+.consent-facts dt { font-family: var(--sans); font-size: 12px; color: var(--dim); }
+.consent-facts dd { margin: 0; overflow-wrap: anywhere; }
+.consent-host { color: var(--fg); font-weight: 700; font-size: 15px; }
+.consent-tools td { white-space: normal; }
+.consent-tools td:last-child { white-space: nowrap; }
+.consent-note { font-family: var(--sans); font-size: 13px; color: var(--dim); margin: 16px 0; }
+.consent-decide { display: flex; gap: 10px; }
+
+/* ---- exports: what a pipeline shares ---- */
+.export-facts { margin-top: 0; }
+.copybtn { padding: 1px 8px; font-size: 11px; margin-left: 6px; }
+.connect-how { margin: 0 0 22px; }
+.connect-how dd code { overflow-wrap: anywhere; white-space: normal; }
+table.mcp-exports td { white-space: nowrap; }
+@media (max-width: 640px) {
+  .consent-facts, .export-facts { grid-template-columns: 1fr; gap: 2px 0; }
+  .consent-facts dd { margin-bottom: 8px; }
+  /* Each tool as a block: its name, then what is fixed, then what kind it is. */
+  table.consent-tools thead { display: none; }
+  table.consent-tools, table.consent-tools tbody, table.consent-tools tr, table.consent-tools td { display: block; }
+  table.consent-tools tr { padding: 8px 12px; border-top: 1px solid var(--line-soft); }
+  table.consent-tools tr:first-child { border-top: 0; }
+  table.consent-tools td { padding: 0; border: 0; white-space: normal; }
+  table.consent-tools td:empty { display: none; }
+  .tablewrap:has(> table.consent-tools) { overflow-x: visible; }
+}
+
+/* ---- connections ---- */
+.connections { list-style: none; padding: 0; margin: 0; border: 1px solid var(--line); background: var(--panel); }
+.connection { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 14px; border-top: 1px solid var(--line-soft); }
+.connection:first-child { border-top: 0; }
+.conn-client { color: var(--fg); font-weight: 600; }
+.conn-meta { grid-column: 1; margin: 0; }
+.conn-revoke { grid-column: 2; grid-row: 1 / span 2; align-self: start; text-align: right; }
+/* Open, the question, its Revoke and the Cancel read as one line, Cancel last. */
+.conn-revoke[open] { grid-column: 1 / -1; grid-row: 3; display: flex; flex-direction: row-reverse; justify-content: flex-start; align-items: center; gap: 10px; flex-wrap: wrap; }
+.conn-revoke[open] form { margin-top: 0; }
+.conn-revoke summary { list-style: none; cursor: pointer; display: inline-block; }
+.conn-revoke summary::-webkit-details-marker { display: none; }
+.conn-revoke .when-open, .conn-revoke[open] .when-closed { display: none; }
+.conn-revoke[open] .when-open { display: inline; }
+.conn-revoke[open] summary { color: var(--dim); border-color: var(--line); }
+.conn-revoke form { display: flex; gap: 10px; align-items: center; justify-content: flex-end; margin-top: 8px; font-family: var(--sans); font-size: 12px; text-align: left; }
+@media (max-width: 640px) {
+  .connection { grid-template-columns: 1fr; }
+  .conn-revoke, .conn-revoke[open] { grid-column: 1; grid-row: auto; }
+  .conn-revoke form { flex-wrap: wrap; }
+}
+.rohint .sep { margin: 0 8px; color: var(--line); }

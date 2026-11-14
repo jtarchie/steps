@@ -1,0 +1,90 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Template Rendering · steps docs</title><meta name="description" content="Go templates in steps: .source, .version and .args in resource commands and custom tools, and why every value goes through shellquote."><link rel="stylesheet" href="steps.css"><style>.hl{color:#d8d5c9;background-color:#171a16}.c{color:#83887b;font-style:italic}.k{color:#7aa4d9}.p{color:#83887b}.s{color:#84c06d}.n{color:#d9a94a}.w{color:#b98fcc}.f{color:#6fbcb4}.d{color:#e0645a}.b{font-weight:bold}.i{font-style:italic}</style><link rel="stylesheet" href="/app.css"></head><body><div class="statusline"><a class="brand" href="/"><b>steps</b> docs</a><nav class="tabs" aria-label="Sections"><a class="tab" href="/">site</a>
+<a class="tab" aria-current="page" href="index.html">docs</a>
+<a class="tab" href="https://github.com/jtarchie/steps">github</a>
+<a class="tab" href="https://github.com/jtarchie/steps/releases">releases</a></nav></div><main><div class="docsnav"><a href="index.html">start here</a>
+<span class="docsgroup"><span class="docsgrouptitle">Writing pipelines</span>
+<a href="resources.html">resources</a><a href="webhooks.html">webhooks</a><a href="expr.html">expr</a><a href="control-flow.html">control-flow</a><a href="agents.html">agents</a><a href="attempts-timeout.html">attempts-timeout</a><a href="workspace.html">workspace</a><a href="infra.html">infra</a><a aria-current="page" href="templating.html">templating</a><a href="mcp.html">mcp</a><a href="complete.html">complete</a>
+</span><span class="docsgroup"><span class="docsgrouptitle">Reference</span>
+<a href="web.html">web</a><a href="observability.html">observability</a><a href="authentication.html">authentication</a><a href="agents-internals.html">agents-internals</a><a href="aws-workers.html">aws-workers</a><a href="gcp-workers.html">gcp-workers</a><a href="do-workers.html">do-workers</a><a href="conformance.html">conformance</a></span></div><article class="docs"><h1 id="template-rendering">Template Rendering</h1><p>Resource <code>check</code>/<code>in</code>/<code>out</code> commands and agent custom tools are <a href="https://pkg.go.dev/text/template">Go templates</a> rendered before they run: <code>{{ .source.* }}</code>, <code>{{ .version.* }}</code> and a step's <code>{{ .params.* }}</code> for resources, plus <code>{{ .args.* }}</code> in a custom tool's <code>run:</code> (where the tool's parameter schema is inferred from exactly those references — see <a href="agents.html">agents.md</a>).</p><p>Templates have the <a href="https://github.com/go-task/slim-sprig">slim-sprig</a> function library (string/list/default/date helpers) plus our own <code>shellquote</code>. Its three host-reaching functions are removed — <code>env</code>, <code>expandenv</code> and <code>getHostByName</code> — because a template renders on the machine running the pipeline, which may be a daemon that anyone with API access can upload a pipeline to:</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> shouts
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;word&#34;: &#34;%s&#34;}]&#39; {{ .source.word | upper | shellquote }}</span>
+    <span class="k">in</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      echo {{ .version.word | shellquote }} &gt; word.txt</span>
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> shout
+  <span class="k">type</span><span class="p">:</span> shouts
+  <span class="k">source</span><span class="p">:</span> { <span class="k">word</span><span class="p">:</span> hello }
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> demo
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> shout
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>shout]
+    <span class="k">run</span><span class="p">:</span> cat shout/word.txt
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> HELLO                <span class="c"># `upper` ran in the check template, not here</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>shout, show]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><h2 id="shell-quoting-untrusted-values">Shell-quoting untrusted values</h2><p>A rendered template runs via <code>sh -c</code>, so any interpolated value that could contain shell metacharacters — backticks, <code>$(...)</code>, quotes, <code>; | &</code> — must be piped through <code>shellquote</code>, which renders it as one safely-quoted POSIX word and supplies its own quotes:</p><pre class="hl"><code><span class="k">run</span><span class="p">:</span> gh pr comment --body {{ .args.body | shellquote }}
+</code></pre><p>Don't add surrounding <code>"..."</code> — <code>shellquote</code> already quotes only when needed. This matters most for LLM- or PR-authored values (e.g. a review body): without it, a body containing <code>`replace`</code> gets command-substituted by the shell and posted with those words silently missing.</p><p><code>steps validate</code> warns — and still exits 0 — on every <code>{{ }}</code> that reaches the shell without ending in <code>shellquote</code>: in a resource <code>check</code>/<code>in</code>/<code>out</code>, one reading <code>.source</code>, <code>.version</code> or <code>.params</code>; in a custom tool's <code>run:</code>, one reading <code>.args</code>.</p><h2 id="pipeline-vars-var-and-load_var">Pipeline vars: <code>((var))</code> and <code>load_var:</code></h2><p>Separate a pipeline's <strong>shape</strong> from its <strong>parameters</strong>, so one file serves staging and production instead of being copy-pasted per environment and drifting:</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> echoes
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;ref&#34;: &#34;v1&#34;}]&#39;</span>
+    <span class="k">in</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      echo {{ .source.uri | shellquote }} &gt; uri.txt</span>
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> repo
+  <span class="k">type</span><span class="p">:</span> echoes
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">uri</span><span class="p">:</span> ((repo_uri))        <span class="c"># supplied at run time, not written in the file</span>
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> build
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> repo
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>repo]
+    <span class="k">run</span><span class="p">:</span> cat repo/uri.txt
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="c"># the exact value --var supplied (the command below) reached the template</span>
+      <span class="k">stdout</span><span class="p">:</span> github.com/acme/app-staging
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>repo, show]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><pre class="hl"><code>steps run pipeline.yml --job build --var repo_uri<span class="p">=</span>https://github.com/acme/app-staging
+steps run pipeline.yml --job build --vars-file prod.yml
+</code></pre><p>Both compose: the file is the shared, checked-in set and a <code>--var</code> flag overrides it, which is the only ordering that makes a one-off override possible.</p><p>Capturing a value the run itself produces:</p><pre class="hl"><code><span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> release
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">task</span><span class="p">:</span> pick-tag
+    <span class="k">outputs</span><span class="p">:</span> <span class="p">[</span>meta]
+    <span class="k">run</span><span class="p">:</span> printf &#39;v1.2.3\n&#39; &gt; meta/version.txt
+  - <span class="k">load_var</span><span class="p">:</span> tag
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>meta]           <span class="c"># the load_var step reads from its own declared input</span>
+    <span class="k">file</span><span class="p">:</span> meta/version.txt
+  - <span class="k">task</span><span class="p">:</span> announce
+    <span class="k">run</span><span class="p">:</span> echo &#34;releasing ((tag)) ok&#34;
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="c"># the captured value, trimmed, substituted — untrimmed, version.txt&#39;s</span>
+      <span class="c"># trailing newline would land before &#34;ok&#34; and break this line</span>
+      <span class="k">stdout</span><span class="p">:</span> releasing v1.2.3 ok
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>pick-tag, tag, announce]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><p>The <code>inputs:</code> on the <code>load_var</code> step is not optional bookkeeping: a step's directory holds only the artifacts it declares, so a bare <code>file: version.txt</code> names nothing that exists. Both halves are checked at plan time — the file must sit inside a declared input, and that input must be something an earlier step produced.</p><p>The file is read on the machine running the pipeline, so it may not leave the step's directory: an absolute <code>file:</code>, or one whose <code>..</code> climbs out, is a load error. A <code>file:</code> built from a <code>((var))</code> is checked again once rendered, a symlink pointing outside the directory is refused, and a file above 1 MiB fails the step — a var is a value, not a data transfer.</p><p><code>load_var:</code> names share the one <code>((var))</code> namespace, so a name both passed with <code>--var</code> and captured by a <code>load_var:</code> goes to <code>--var</code>: supplied vars substitute textually before the file is parsed, leaving no <code>((name))</code> for the captured value to fill — the <code>load_var:</code> step still runs, but substitutes nothing. (Concourse keeps run-captured vars in a separate <code>((.:name))</code> namespace instead; see <a href="conformance.html">conformance.md</a>.)</p><h3 id="-vars-are-config-not-secrets">⚠️ Vars are config, not secrets</h3><p>A substituted value is parsed, <strong>hashed, and stored in <code>state.db</code></strong> like anything else written in the file. Vars separate shape from parameters; they are not a secret store. Keep credentials in the env-var references that exist for them (<code>api_key_env:</code>), which are read at run time and never enter the merkle content. Neither is masked: a step that prints a secret has it stored and shown as printed (see <a href="conformance.html">conformance.md</a>).</p><h3 id="the-rest">The rest</h3><ul><li><strong>Substitution is textual and happens before the parse</strong>, so a var can appear anywhere a value does — inside a URI, mid-command, as a whole mapping value — without steps maintaining a list of fields that might contain one.</li><li><strong>An unresolved <code>((name))</code> is a load error</strong>, naming the var. Left alone it would reach a shell as that literal text and fail somewhere far from the mistake. A name a later <code>load_var:</code> produces is fine; one nothing supplies is not. Every step is checked, hooks and blocks included, and a captured name counts only where the run guarantees the capture happened: after it in plan order (<code>do:</code> children included), but not in a sibling branch of the same <code>in_parallel:</code> or <code>race:</code> — whether one branch sees another's value would be a race. After an <code>in_parallel:</code> every branch's captures are available; after a <code>race:</code> only the ones every branch makes. A <code>try:</code> body's captures stay inside it, and a hook sees what preceded its step, plus the step's own captures in <code>on_success:</code> only.</li><li><strong>A <code>load_var:</code> value is substituted before the step is hashed</strong>, so two runs that captured different values never share a cache entry. Hashing the unsubstituted text would let a step that ran against <code>v1.2.3</code> satisfy a run that meant <code>v2.0.0</code>.</li><li><strong>The captured value is trimmed.</strong> The common way to produce one is <code>git describe > version.txt</code>, whose trailing newline would otherwise land in the middle of a command.</li><li><strong><code>load_var:</code> values are scoped to one job run.</strong> A var captured in one run says nothing about the next.</li></ul></article></main><script>
+(function(){
+  window.addEventListener('message', function(e){
+    if(!e.data || e.data.type !== 'topbanana:settheme') return;
+    var t = e.data.theme;
+    if(typeof t !== 'string' || !/^[a-z]{2,20}$/.test(t)) return;
+    document.documentElement.setAttribute('data-theme', t);
+  });
+})();
+</script></body></html>

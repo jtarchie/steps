@@ -1,0 +1,650 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Resources · steps docs</title><meta name="description" content="Resources and resource types in steps: things outside the pipeline that have versions, and the check, in and out commands that talk to them."><link rel="stylesheet" href="steps.css"><style>.hl{color:#d8d5c9;background-color:#171a16}.c{color:#83887b;font-style:italic}.k{color:#7aa4d9}.p{color:#83887b}.s{color:#84c06d}.n{color:#d9a94a}.w{color:#b98fcc}.f{color:#6fbcb4}.d{color:#e0645a}.b{font-weight:bold}.i{font-style:italic}</style><link rel="stylesheet" href="/app.css"></head><body><div class="statusline"><a class="brand" href="/"><b>steps</b> docs</a><nav class="tabs" aria-label="Sections"><a class="tab" href="/">site</a>
+<a class="tab" aria-current="page" href="index.html">docs</a>
+<a class="tab" href="https://github.com/jtarchie/steps">github</a>
+<a class="tab" href="https://github.com/jtarchie/steps/releases">releases</a></nav></div><main><div class="docsnav"><a href="index.html">start here</a>
+<span class="docsgroup"><span class="docsgrouptitle">Writing pipelines</span>
+<a aria-current="page" href="resources.html">resources</a><a href="webhooks.html">webhooks</a><a href="expr.html">expr</a><a href="control-flow.html">control-flow</a><a href="agents.html">agents</a><a href="attempts-timeout.html">attempts-timeout</a><a href="workspace.html">workspace</a><a href="infra.html">infra</a><a href="templating.html">templating</a><a href="mcp.html">mcp</a><a href="complete.html">complete</a>
+</span><span class="docsgroup"><span class="docsgrouptitle">Reference</span>
+<a href="web.html">web</a><a href="observability.html">observability</a><a href="authentication.html">authentication</a><a href="agents-internals.html">agents-internals</a><a href="aws-workers.html">aws-workers</a><a href="gcp-workers.html">gcp-workers</a><a href="do-workers.html">do-workers</a><a href="conformance.html">conformance</a></span></div><nav class="docstoc" aria-label="On this page"><span class="docsgrouptitle">on this page</span>
+<a href="#the-built-in-git-type">The built-in git type</a><a href="#the-built-in-slack-mentions-slack-reply-and-slack-reaction-types">The built-in slack-mentions, slack-reply and slack-reaction types</a><a href="#the-built-in-github-types">The built-in GitHub types</a><a href="#the-built-in-cron-type">The built-in cron type</a><a href="#writing-a-resource-type">Writing a resource type</a><a href="#shell-safety">Shell safety</a><a href="#version-on-a-get-step">version: on a get step</a><a href="#trigger-true">trigger: true</a><a href="#mcp-backed-types">MCP-backed types</a><a href="#checking-your-work">Checking your work</a></nav><article class="docs"><h1 id="resources">Resources</h1><p>A <strong>resource</strong> is something outside the pipeline that has versions: a git branch, a queue of pull requests, a build artifact, a counter in a file. A <strong>resource type</strong> is the code that knows how to talk to one.</p><p>Every example on this page (and every other page) is a complete pipeline, verified by the test suite. Blocks that need the network or real credentials say so; everything else runs as shown.</p><pre class="hl"><code><span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> repo          <span class="c"># the artifact directory a get creates, and the name steps use</span>
+  <span class="k">type</span><span class="p">:</span> git           <span class="c"># which resource type</span>
+  <span class="k">source</span><span class="p">:</span>             <span class="c"># configuration for that type — free-form, type-specific</span>
+    <span class="k">uri</span><span class="p">:</span> https://github.com/jtarchie/ci.git
+    <span class="k">branch</span><span class="p">:</span> main
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> build
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> repo         <span class="c"># fetch it — the contents land in ./repo</span>
+  - <span class="k">task</span><span class="p">:</span> compile
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>repo]
+    <span class="k">run</span><span class="p">:</span> cd repo &amp;&amp; go build ./...
+</code></pre><p><code>git</code> ships with steps, so that pipeline needs no <code>resource_types:</code> block; neither do <a href="#the-built-in-github-types">the GitHub types</a>, Slack's, <code>cron</code> and <a href="webhooks.html"><code>webhook</code></a>. For anything else, you write the type yourself.</p><h2 id="the-built-in-git-type">The built-in <code>git</code> type</h2><table><thead><tr><th><code>source:</code> field</th><th>required</th><th>meaning</th></tr></thead><tbody><tr><td><code>uri</code></td><td>yes</td><td>anything <code>git</code> can clone — https, ssh, or a local path</td></tr><tr><td><code>branch</code></td><td>no</td><td>omitted follows the remote's <code>HEAD</code></td></tr><tr><td><code>fetch</code></td><td>no</td><td><code>true</code> refreshes a local-path <code>uri</code> before each check; default <code>false</code></td></tr></tbody></table><p>A local-path <code>uri</code> costs no network clone — the right call for a large repository — but the check reads that clone's refs as they are, so the version is whatever the clone last fetched, however long ago that was. <code>fetch: true</code> fixes that: each check first fetches <code>branch</code> from the clone's remote (<code>branch.&lt;name>.remote</code>, else <code>origin</code>) into <code>refs/remotes/&lt;remote>/&lt;branch></code> and reports that ref, so the version is the remote's head. It moves exactly that one ref — never the working tree, a local branch, tags or <code>FETCH_HEAD</code> — so a developer's own <code>main</code> sitting behind changes nothing. It needs an absolute path and a <code>branch:</code> (both checked at load; a remote <code>uri</code> is refused, being fresh already), git 2.29 or newer, a clone owned by the user running steps, and auth that never prompts (an ssh agent, a credential helper) — a poll has no terminal, so a prompt fails the fetch instead of waiting. A failed fetch fails the check, so <code>steps web</code> reports no version rather than a stale one; like any failing check, it holds back only this resource until a later check succeeds, and the pipeline's other resources keep triggering. Turning <code>fetch:</code> on changes which commit is reported, and <code>source:</code> is part of the cache key, so expect one fresh build. The built-in type refuses any other <code>source:</code> key, so a misspelled <code>fecth:</code> is a load error rather than a flag nobody reads.</p><p>It fetches the exact commit the plan pinned, shallowly, so a branch that moves mid-run still gives you the version that was planned. It has <strong>no <code>out:</code></strong> — <code>put: repo</code> against it is a load error, because what "publish" means (which branch, which credentials, force or not) is a decision only you can make. Write your own type for that.</p><h2 id="the-built-in-slack-mentions-slack-reply-and-slack-reaction-types">The built-in <code>slack-mentions</code>, <code>slack-reply</code> and <code>slack-reaction</code> types</h2><p>Three more built-ins, all <a href="expr.html">expression-backed</a> — Slack is a JSON HTTP API and nothing else, so there is no container and no <code>curl</code>/<code>jq</code> dependency to carry. <code>slack-mentions</code> is get-only: every unanswered <code>@mention</code> of the bot in a channel, plus every message in a 1:1 DM (no <code>@mention</code> required there — nobody types one in a 1:1 chat), oldest first, as a <code>{channel, ts, thread_ts, user}</code> version — <code>ts</code> is the message that named the bot, <code>thread_ts</code> the thread it lives in (the same value, for a top-level message), <code>user</code> who wrote it. <code>slack-reply</code> is put-only: posts a message, threaded or top-level. <code>slack-reaction</code> is put-only too: puts an emoji on a message, takes one off, or swaps one for another in a single publish.</p><p>Cold start does not mean a backlog: like every resource, the first-ever check of a freshly-deployed <code>slack-mentions</code> records everything it finds and answers only the newest of it — see <a href="#version-history">Version history</a> below. That rule is a <code>steps web</code> behavior; <code>steps run</code> has no persisted cursor, so every <code>steps run</code> check is a first check.</p><p>A cursorless check is also <strong>bounded in what it asks Slack</strong>. Finding a mention written as a reply means one <code>conversations.replies</code> call per thread, and the cursor is what normally keeps that set small — no cursor means every thread that has ever been replied to qualifies. On a workspace with more threads than the rate limit allows calls for, that check gets throttled, and a throttled check reports no version, which leaves no cursor for the next one: a watcher that can never run once. So a check with no cursor looks at the five most recently active threads and stops.</p><p>Under <code>steps web</code> that costs nothing that is ever built: everything below the newest version a first check reports is marked already-taken, and the cursor it leaves behind lifts the bound for every poll after it. Under <code>steps run</code> the bound never lifts, because no cursor is ever persisted — a mention written inside the sixth-most-recently-active thread is not delivered. Use <code>steps web</code> for a Slack bot; <code>steps run</code> is for a one-shot answer to whatever is most recent.</p><pre class="hl"><code><span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> mentions
+  <span class="k">type</span><span class="p">:</span> slack-mentions
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">channels</span><span class="p">:</span> <span class="p">[]</span>   <span class="c"># optional; [] (the default) is every channel the bot is in</span>
+    <span class="k">limit</span><span class="p">:</span> <span class="n">200</span>      <span class="c"># optional; per-channel messages fetched per check, default 200</span>
+
+- <span class="k">name</span><span class="p">:</span> reply
+  <span class="k">type</span><span class="p">:</span> slack-reply
+  <span class="k">source</span><span class="p">:</span> {}
+
+- <span class="k">name</span><span class="p">:</span> reaction
+  <span class="k">type</span><span class="p">:</span> slack-reaction
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="c"># A second bot, in the same pipeline, answering as someone else: env: adds</span>
+<span class="c"># SECOND_BOT_TOKEN to just THIS resource&#39;s own allow-list (the type&#39;s own</span>
+<span class="c"># env: still only names SLACK_BOT_TOKEN), and source.token_env picks it.</span>
+- <span class="k">name</span><span class="p">:</span> reply-as-support-bot
+  <span class="k">type</span><span class="p">:</span> slack-reply
+  <span class="k">env</span><span class="p">:</span> <span class="p">[</span>SECOND_BOT_TOKEN]
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">token_env</span><span class="p">:</span> SECOND_BOT_TOKEN
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> answer-mention
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> mentions
+    <span class="k">trigger</span><span class="p">:</span> <span class="w">true</span>
+    <span class="k">version</span><span class="p">:</span> every    <span class="c"># answer every mention found, not just the newest</span>
+  - <span class="k">put</span><span class="p">:</span> acknowledge           <span class="c"># 👀 — somebody is on it</span>
+    <span class="k">resource</span><span class="p">:</span> reaction
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>mentions]         <span class="c"># the reaction type picks the mention&#39;s ts</span>
+    <span class="k">params</span><span class="p">:</span> {<span class="k">add</span><span class="p">:</span> eyes}
+  - <span class="k">task</span><span class="p">:</span> compose
+    <span class="k">outputs</span><span class="p">:</span> <span class="p">[</span>answer]
+    <span class="k">run</span><span class="p">:</span> echo &#34;got it, working on it&#34; &gt; answer/reply.md
+    <span class="k">on_failure</span><span class="p">:</span>                <span class="c"># ❌, and the 👀 goes away</span>
+      <span class="k">put</span><span class="p">:</span> failed
+      <span class="k">resource</span><span class="p">:</span> reaction
+      <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>mentions]
+      <span class="k">params</span><span class="p">:</span> {<span class="k">add</span><span class="p">:</span> <span class="k">x, remove</span><span class="p">:</span> eyes}
+  - <span class="k">put</span><span class="p">:</span> reply
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>mentions, answer] <span class="c"># the reply type picks the mention&#39;s thread_ts</span>
+  - <span class="k">put</span><span class="p">:</span> answered              <span class="c"># ✅, and the 👀 goes away in the same publish</span>
+    <span class="k">resource</span><span class="p">:</span> reaction
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>mentions]
+    <span class="k">params</span><span class="p">:</span> {<span class="k">add</span><span class="p">:</span> <span class="k">white_check_mark, remove</span><span class="p">:</span> eyes}
+</code></pre><p>All three need <code>SLACK_BOT_TOKEN</code> (a bot token, <code>xoxb-</code>) in the environment, for an app with <code>chat:write</code>, <code>reactions:write</code>, <code>channels:history</code>, <code>channels:read</code>, <code>im:history</code> and <code>im:read</code> (plus <code>groups:history</code>/<code>groups:read</code> for private channels), installed to the workspace and <strong>invited</strong> to every channel it should watch or post to. Membership is what grants both reading history and appearing in <code>users.conversations</code>, so <code>/invite</code> <em>is</em> the subscribe action — <code>app_mentions:read</code> is not needed, since this polls rather than using the Events API.</p><p>1:1 DMs are always watched too, with no <code>@mention</code> required — there is no <code>source:</code> field to turn this off. Group DMs (<code>mpim</code>) are not watched at all; a group is closer to a channel (several humans, bot is one more party) than a 1:1, so it keeps the explicit-mention rule instead.</p><table><thead><tr><th><code>source:</code> field (any of the three)</th><th>required</th><th>meaning</th></tr></thead><tbody><tr><td><code>channels</code> (<code>slack-mentions</code>)</td><td>no</td><td><code>[]</code> watches every channel (and 1:1 DM) the bot is in; a list of ids narrows it</td></tr><tr><td><code>limit</code> (<code>slack-mentions</code>)</td><td>no</td><td>per-channel messages fetched per check, default <code>200</code></td></tr><tr><td><code>base_url</code> (any)</td><td>no</td><td>overrides <code>https://slack.com</code> — for pointing a test at a fake server</td></tr><tr><td><code>token_env</code> (any)</td><td>no</td><td>overrides <code>SLACK_BOT_TOKEN</code> as the env var name to read the token from</td></tr></tbody></table><p><code>token_env</code> alone isn't enough to widen what a resource can read — <code>env()</code> only sees names its resource TYPE already declares (all three declare <code>SLACK_BOT_TOKEN</code>, shared by every resource of that type), which is what keeps a shared, possibly-external expr type from reading whatever variable a <code>source:</code> names. A resource naming a different token also needs <code>env:</code> <em>on the resource itself</em> to add that name to its own allow-list — <code>env:</code> and <code>source:</code> together, as in <code>reply-as-support-bot</code> above. Naming <code>token_env</code> without the matching <code>env:</code> entry is a run-time error (<code>env(...): not in this resource type's env:</code>), not a silent fall-back to <code>SLACK_BOT_TOKEN</code>. (<code>env:</code> on a resource only means something for an expr- or shell-backed type — an mcp-backed type authenticates via its <code>mcp_servers:</code> entry and rejects <code>env:</code> at load time.)</p><p><strong>A mention inside a thread arrives with its thread.</strong> <code>mentions/thread.json</code> is the whole conversation the mention was written in (Slack's <code>conversations.replies</code> payload: parent first, then replies), fetched by <code>thread_ts</code> — asking Slack for a <em>reply's</em> <code>ts</code> answers with that one message and nothing around it, which is an agent being handed a question with no context. <code>slack-reply</code> posts the answer back with <code>thread_ts</code> too: a reply's <code>ts</code> is not a thread id.</p><p><strong><code>mentions/user</code> is who asked</strong>: the Slack user id of the person whose message is the mention, never the author of the thread it was written in. It is the file an agent step's <a href="agents.html#memory-across-runs-memory"><code>memory: { scope_from: mentions/user }</code></a> names, so a bot's memory is filed per person. The id rides in the version (as <code>thread_ts</code> does) because <code>thread.json</code> can be cut off at exactly the end where the mention is. A version recorded before it carried one looks the author up in the thread instead, and writes an empty file if that fails, which a <code>memory:</code> step refuses rather than guessing.</p><p><strong>A reaction goes on the message; a reply goes to the thread — and the types choose.</strong> Both read the mention off the put's <code>slack-mentions</code> input with <a href="expr.html#versionname--version"><code>version()</code></a>: <code>slack-reply</code> posts to its <code>thread_ts</code>, <code>slack-reaction</code> marks its <code>ts</code>, because they want different values out of the same version — <code>thread_ts</code> is the conversation to answer in, while <code>ts</code> is the one message a person actually wrote. Hand a reaction the thread's id and the emoji lands on the parent of the thread instead — indistinguishable from correct when the mention was top-level, wrong every time somebody asked inside an existing conversation. That choice is made once, in each type, rather than in every pipeline. With more than one fetched input (<code>inputs: all</code>, or a second get), <code>params: {from: mentions}</code> names the one to answer; without it the put fails naming them.</p><p>A <code>slack-reaction</code> put takes <code>params.add</code> (an emoji name, no colons), <code>params.remove</code>, or both for a swap in one publish. At least one is required: a put with neither is refused at load, as a <a href="#the-built-in-github-types"><code>github-reaction</code></a> one is.</p><p><strong>Marking a message twice is not an error.</strong> <code>already_reacted</code> (the emoji this put wanted is already there) and <code>no_reaction</code> (the one it wanted gone is already gone) are the API saying the world is in the state being asked for, so the put succeeds. They arrive on any replay, resume, or re-run, and failing there would turn re-running a build into a red one over an emoji. Every other refusal fails the put — most usefully <code>missing_scope</code>, since <code>reactions:write</code> is not implied by <code>chat:write</code> and a bot that quietly stops marking anything is a failure nobody notices.</p><p><strong>A mention inside a thread counts</strong>, and <code>limit:</code> is what decides whether it can be found. Slack's <code>conversations.history</code> returns top-level messages only, and a reply does not change its parent's <code>ts</code> — so the window the check reads channel history over is <code>limit</code> messages, deliberately <em>wider</em> than the cursor, and the cursor decides only what inside that window is new. A thread whose parent carries a <code>latest_reply</code> newer than the cursor is read; every other thread costs nothing.</p><p><strong>Three known gaps</strong> remain, all bounded by a limit and all needing Slack pagination to close:</p><ul><li>A thread whose parent has scrolled past <code>limit</code> messages of its channel's history is invisible, however active the thread still is. How long that takes is how chatty the channel is; raising <code>limit:</code> buys more room, but only as much as Slack allows: since 2025-05-29 a bot <strong>distributed</strong> outside the Marketplace is capped at 15 messages per request and one request a minute, whatever <code>limit:</code> says. An internal app built for a single workspace — the usual case for a self-hosted pipeline — is excluded from that cap and honors <code>limit:</code> as written.</li><li><code>mentions/thread.json</code> is truncated at its <em>newest</em> end for a thread longer than 1000 messages — Slack returns a thread oldest-first — so the mention itself can be missing from a very long thread.</li><li>More than <code>limit</code> new top-level messages in one channel between two checks lose the overflow <em>permanently</em>, not just delayed — the cursor advances to the newest <code>ts</code> seen anywhere, so whatever <code>limit</code> cut off now sits below the new cursor and is never asked for again.</li></ul><p>Where each put type aims comes from a fetched <code>slack-mentions</code> input (or the one <code>params.from</code> names). With no fetched input — a top-level post to a fixed channel, or a message that did not come from a mention — it reads files an upstream step wrote instead. Job-level hooks take no <code>inputs:</code> and run outside any one build, so a ❌ belongs on a step's <code>on_failure:</code>, as above. The text is always a file: <code>file()</code> takes what <code>inputs:</code> put on disk directly, so a reply containing backticks or <code>$(…)</code> is data, never something a shell might run.</p><table><thead><tr><th>file</th><th>read by</th><th>required</th><th>meaning</th></tr></thead><tbody><tr><td><code>answer/reply.md</code></td><td><code>slack-reply</code></td><td>yes</td><td>the message text</td></tr><tr><td><code>thread/channel</code></td><td><code>slack-reply</code></td><td>without a fetched input</td><td>the channel id to post to</td></tr><tr><td><code>thread/ts</code></td><td><code>slack-reply</code></td><td>no</td><td>a parent message's <code>ts</code> — posts as a reply in that thread; omit to post a new top-level message</td></tr><tr><td><code>target/channel</code></td><td><code>slack-reaction</code></td><td>without a fetched input</td><td>the channel id of the message to mark</td></tr><tr><td><code>target/ts</code></td><td><code>slack-reaction</code></td><td>without a fetched input</td><td>the <code>ts</code> of the message to mark</td></tr></tbody></table><p>There is deliberately no <code>check:</code>/<code>in:</code> on <code>slack-reply</code> and no <code>out:</code> on <code>slack-mentions</code> — <code>get: reply</code> or <code>put: mentions</code> are both load errors, the same rule <code>git</code>'s missing <code>out:</code> follows.</p><h2 id="the-built-in-github-types">The built-in GitHub types</h2><p>Five built-ins, split by what they do, the way the Slack ones are. <code>github-prs</code> and <code>github-comments</code> <strong>find work</strong>: they have a check and an in, and no out. <code>github-pr-comment</code>, <code>github-pr-review</code> and <code>github-reaction</code> <strong>publish</strong>: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.</p><p>steps talks to GitHub itself. Nothing needs <code>gh</code>, <code>git</code> or <code>curl</code>, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under <a href="infra.html#container-execution-image"><code>image:</code></a> or <a href="infra.html#remote-workers-tags"><code>tags:</code></a> reads it the way it reads any other. That also means none of the five can be placed with <code>tags:</code> themselves, as for every type that runs inside this process.</p><p>All five read a token from <code>GH_TOKEN</code>, the variable <code>gh</code> reads first, so <code>export GH_TOKEN=$(gh auth token)</code> is the whole setup on a machine where <code>gh</code> is logged in. <code>source.token_env</code> names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. <code>steps validate</code> refuses a pipeline whose token variable is unset, before anything runs.</p><h3 id="github-prs-open-pull-requests"><code>github-prs</code>: open pull requests</h3><pre class="hl"><code><span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> pr
+  <span class="k">type</span><span class="p">:</span> github-prs
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">repo</span><span class="p">:</span> acme/app
+    <span class="k">review_requested</span><span class="p">:</span> <span class="s">&#34;@me&#34;</span>      <span class="c"># quoted: @ cannot start a plain YAML value</span>
+    <span class="k">base</span><span class="p">:</span> main
+    <span class="k">labels</span><span class="p">:</span> <span class="p">[</span>ready-for-review]
+    <span class="k">draft</span><span class="p">:</span> <span class="w">false</span>
+
+- <span class="k">name</span><span class="p">:</span> summary
+  <span class="k">type</span><span class="p">:</span> github-pr-comment
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">repo</span><span class="p">:</span> acme/app
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> review
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> pr
+    <span class="k">trigger</span><span class="p">:</span> <span class="w">true</span>
+    <span class="k">version</span><span class="p">:</span> every               <span class="c"># one build per pull request, and per push to it</span>
+  - <span class="k">task</span><span class="p">:</span> read
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>pr]
+    <span class="k">outputs</span><span class="p">:</span> <span class="p">[</span>notes]
+    <span class="k">run</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      echo &#34;#$(cat pr/pr.number) changes $(grep -c &#39;^diff --git&#39; pr/pr.diff) file(s) since $(cut -c1-7 pr/pr.mergebase)&#34; | tee notes/body.md
+</span><span class="s">      test -x pr/bin/test.sh</span>
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;#42 changes 2 file(s) since 1a2b3c4&#34;</span>
+  - <span class="k">put</span><span class="p">:</span> summary
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>pr, notes]
+    <span class="k">params</span><span class="p">:</span>
+      <span class="k">body_file</span><span class="p">:</span> notes/body.md
+      <span class="k">from</span><span class="p">:</span> pr                   <span class="c"># optional here: pr is the only input naming a pull request</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>pr, read, summary]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><p>A version is <code>{number, sha}</code>: the pull request and its head commit, so a push is a new build and a wording change to the title is not. The check reports them by number, oldest first. Every filter narrows, and a pull request is a version only while it is open and matches all of them:</p><table><thead><tr><th><code>source:</code> field</th><th>required</th><th>meaning</th></tr></thead><tbody><tr><td><code>repo</code></td><td>yes</td><td><code>owner/name</code></td></tr><tr><td><code>author</code></td><td>no</td><td>who opened it</td></tr><tr><td><code>assignee</code></td><td>no</td><td>someone it is assigned to</td></tr><tr><td><code>review_requested</code></td><td>no</td><td>someone whose review it directly requests; GitHub clears the request once they submit one, so the trigger empties itself</td></tr><tr><td><code>labels</code></td><td>no</td><td>labels that must all be on it</td></tr><tr><td><code>base</code></td><td>no</td><td>the branch it would merge into</td></tr><tr><td><code>draft</code></td><td>no</td><td><code>true</code> keeps only drafts, <code>false</code> only ready ones; both when unset</td></tr><tr><td><code>checkout</code></td><td>no</td><td><code>false</code> skips the tree and writes only the metadata files; default <code>true</code></td></tr><tr><td><code>token_env</code></td><td>no</td><td>the variable holding the token; default <code>GH_TOKEN</code></td></tr><tr><td><code>endpoint</code></td><td>no</td><td>the REST API base; default <code>https://api.github.com</code>, and <code>https://&lt;host>/api/v3</code> for GitHub Enterprise Server</td></tr></tbody></table><p><code>@me</code> in any of the three login fields is the token's own user. A get writes the tree at the version's commit, then these beside it:</p><table><thead><tr><th>file</th><th>what it holds</th></tr></thead><tbody><tr><td><code>pr.json</code></td><td>the pull request, as GitHub's API describes it</td></tr><tr><td><code>pr.diff</code></td><td>the change as of the version's commit, against where it branched from <code>base</code></td></tr><tr><td><code>pr.number</code>, <code>pr.sha</code></td><td>the version</td></tr><tr><td><code>pr.mergebase</code></td><td>the commit it branched from, for a step that wants to stage the change onto it</td></tr><tr><td><code>pr.url</code></td><td>its page</td></tr></tbody></table><p>The diff and the merge base are computed against the version's commit rather than read from the pull request, whose own diff is always of its <em>current</em> head, so a pinned or replayed version sees the change as it was. A repository that has a file of one of those names at its root is refused by name rather than overwritten; set <code>checkout: false</code> and fetch the tree with a <code>git</code> resource there.</p><p><strong>Being assigned is a trigger.</strong> An assignment brings a pull request into the filtered set, which makes it a version the resource has never seen:</p><pre class="hl"><code><span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> assigned
+  <span class="k">type</span><span class="p">:</span> github-prs
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">repo</span><span class="p">:</span> acme/app
+    <span class="k">assignee</span><span class="p">:</span> <span class="s">&#34;@me&#34;</span>
+    <span class="k">author</span><span class="p">:</span> alice
+    <span class="k">checkout</span><span class="p">:</span> <span class="w">false</span>                    <span class="c"># metadata only</span>
+    <span class="k">token_env</span><span class="p">:</span> GH_TOKEN                <span class="c"># the default, shown; name another variable to act as someone else</span>
+    <span class="k">endpoint</span><span class="p">:</span> https://api.github.com   <span class="c"># the default</span>
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> pick-up
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> assigned
+    <span class="k">trigger</span><span class="p">:</span> <span class="w">true</span>
+    <span class="k">version</span><span class="p">:</span> every
+  - <span class="k">task</span><span class="p">:</span> announce
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>assigned]
+    <span class="k">run</span><span class="p">:</span> echo &#34;picking up $(cat assigned/pr.url)&#34;
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;picking up https://github.example/acme/app/pull/42&#34;</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>assigned, announce]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><p>The check is one GraphQL search per poll, because the filters a pipeline asks about are search qualifiers and nothing else: GitHub's pull request listing filters on none of them.</p><h3 id="github-comments-a-comment-as-a-trigger"><code>github-comments</code>: a comment as a trigger</h3><pre class="hl"><code><span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> command
+  <span class="k">type</span><span class="p">:</span> github-comments
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">repo</span><span class="p">:</span> acme/app
+    <span class="k">author</span><span class="p">:</span> alice
+    <span class="k">body</span><span class="p">:</span> <span class="s">&#39;^/steps\s+review\b&#39;</span>
+    <span class="k">kinds</span><span class="p">:</span> <span class="p">[</span>conversation, review]    <span class="c"># the default; add issue for comments on issues</span>
+    <span class="k">checkout</span><span class="p">:</span> <span class="w">true</span>                   <span class="c"># the default: the pull request&#39;s tree comes with it</span>
+    <span class="k">token_env</span><span class="p">:</span> GH_TOKEN              <span class="c"># the default</span>
+    <span class="k">endpoint</span><span class="p">:</span> https://api.github.com <span class="c"># the default</span>
+
+- <span class="k">name</span><span class="p">:</span> answer
+  <span class="k">type</span><span class="p">:</span> github-pr-review
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">repo</span><span class="p">:</span> acme/app
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> act
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> command
+    <span class="k">trigger</span><span class="p">:</span> <span class="w">true</span>
+    <span class="k">version</span><span class="p">:</span> every
+  - <span class="k">task</span><span class="p">:</span> respond
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>command]
+    <span class="k">outputs</span><span class="p">:</span> <span class="p">[</span>reply]
+    <span class="k">run</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      echo &#34;asked by $(cat command/comment.author) on #$(cat command/pr.number): $(cat command/comment.body)&#34; | tee reply/body.md
+</span><span class="s">      test -f command/README.md</span>
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;asked by alice on #42: /steps review please&#34;</span>
+  - <span class="k">put</span><span class="p">:</span> answer
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>command, reply]
+    <span class="k">params</span><span class="p">:</span>
+      <span class="k">body_file</span><span class="p">:</span> reply/body.md
+      <span class="k">from</span><span class="p">:</span> command                  <span class="c"># the input whose version names the pull request</span>
+      <span class="k">event</span><span class="p">:</span> pending                 <span class="c"># a draft only you can see, until you submit it</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>command, respond, answer]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><table><thead><tr><th><code>source:</code> field</th><th>required</th><th>meaning</th></tr></thead><tbody><tr><td><code>repo</code></td><td>yes</td><td><code>owner/name</code></td></tr><tr><td><code>author</code></td><td>no</td><td>who wrote it, compared without regard to case as GitHub compares logins; <code>@me</code> is the token's own user</td></tr><tr><td><code>body</code></td><td>no</td><td>an <a href="https://github.com/google/re2/wiki/Syntax">RE2</a> pattern the text must contain a match for; <code>^</code> anchors it to the start</td></tr><tr><td><code>kinds</code></td><td>no</td><td><code>conversation</code> (a pull request's timeline), <code>review</code> (inline, on a line of its diff), <code>issue</code> (an issue's timeline); default the first two</td></tr><tr><td><code>checkout</code></td><td>no</td><td><code>false</code> skips the pull request's tree; default <code>true</code>. An issue has no tree</td></tr><tr><td><code>skip_reacted</code></td><td>no</td><td>a reaction (<code>+1</code>, <code>-1</code>, <code>laugh</code>, <code>confused</code>, <code>heart</code>, <code>hooray</code>, <code>rocket</code>, <code>eyes</code>) that, left by the token's own user, marks a comment done: it is not reported</td></tr><tr><td><code>token_env</code>, <code>endpoint</code></td><td>no</td><td>as for <code>github-prs</code></td></tr></tbody></table><p>A get writes <code>comment.json</code>, <code>comment.body</code>, <code>comment.id</code>, <code>comment.kind</code>, <code>comment.author</code> and <code>comment.url</code>. A comment on a pull request brings the pull request with it, every <code>pr.*</code> file above plus the tree at its current head, because a get cannot be told which pull request to fetch by another get's output. A comment on an issue writes <code>issue.json</code> and <code>issue.number</code> instead.</p><p><strong>An inline comment arrives with its thread.</strong> <code>thread.json</code> is the review thread the comment was written in, as GitHub's comment objects: the thread's first comment, then every reply in the order they were written, the fetched comment among them. A command written as a reply says "this" about whatever the first comment said, and <code>comment.json</code> alone carries none of it. GitHub has no listing of one thread, so the get reads the pull request's inline comments and keeps the thread's; past 1000 of them the rest are not read. A conversation or an issue is not threaded, so a comment there writes no <code>thread.json</code>.</p><p><strong>The version is <code>{id, kind, number, updated}</code></strong>, and <code>updated</code> is there on purpose, against the usual rule that a version carries identity only. The text is the payload here, so a comment edited from one instruction to another is new work, and an edit that stops matching <code>body</code> is not. It is also the <a href="#the-check-cursor">cursor</a>: each check asks GitHub only for comments written since five minutes before the newest version it last reported, newest first, one page when there is no cursor yet. The five minutes are because GitHub can list a comment a little after a newer one: asked from the cursor exactly, a comment that showed up late would sit behind it for good. What the overlap reports again is already in <a href="#version-history">version history</a>, which records a version once, so it starts no second build. Every page is a conditional request, and GitHub answers an unchanged listing without charging the rate limit, so a quiet repository costs nothing to poll. Inline review comments and the rest are two separate listings, so a check watching both reads them until two rounds in a row agree: read once each, a comment landing in the first after it was read could be older than one the second shows, and the cursor would pass it for good. The second round is conditional too, and a check whose listings never settle fails rather than guess, so the next one tries again. Review summaries, the text a reviewer writes when submitting, are not watched: GitHub has no listing of them across a repository.</p><p>A pipeline that comments as the same user it watches must make sure what it posts cannot match <code>body</code>, or its own reply is the next build.</p><p><strong><code>skip_reacted</code> makes a mark on GitHub the record of what is done.</strong> The cursor keeps a running daemon from reporting a comment twice, but the cursor lives in the state database, and a check with no cursor reads a page of recent comments and builds the newest of them. That is a command already answered — a deploy, a model run, a reply — run again because a file was deleted. A reaction the job leaves on its comment outlasts any database, so a comment carrying <code>skip_reacted</code> from the token's own user is not reported at all. Put it on with a <a href="#github-reaction-marking-a-comment"><code>github-reaction</code></a> put as the job's last step. Only the token's own user counts, because anybody can react with anything.</p><p>It stays cheap. A comment is looked at only after it has passed <code>author</code> and <code>body</code>, and only when GitHub's own summary on it counts at least one of that reaction; only then are its reactions of that kind listed, to see whose they are, as a conditional request like every other page. A lookup that fails fails the check, since reporting a done comment as new is exactly what the field is there to prevent. While every comment on a cursorless first page carries the mark, the check reports nothing and so keeps no cursor, and each poll reads that page again until a new command arrives.</p><p><strong>A reaction does not change a comment's <code>updated</code>.</strong> Adding the mark makes no new version, so marking a comment never triggers the job again. Removing it does not bring the comment back by itself either: with a cursor, the check asks only for comments written since five minutes before the newest version it reported, so an older comment is not among them, and one inside those five minutes is already in version history. It is work again when it is edited, which is a new version anyway, or when a check with no cursor finds it on its first page.</p><h3 id="github-pr-comment-and-github-pr-review-publishing"><code>github-pr-comment</code> and <code>github-pr-review</code>: publishing</h3><p>Both take <code>repo</code>, <code>token_env</code> and <code>endpoint</code> in <code>source:</code> and nothing else, and find which pull request a put is about in its inputs: the one input whose version names a pull request, which every <code>github-prs</code> and <code>github-comments</code> get's does. <code>params.from</code> picks one when several do, and <code>params.number</code> names one outright for a put with none:</p><pre class="hl"><code><span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> tracking
+  <span class="k">type</span><span class="p">:</span> github-pr-comment
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">repo</span><span class="p">:</span> acme/app
+    <span class="k">token_env</span><span class="p">:</span> GH_TOKEN                <span class="c"># the default; name another variable to post as someone else</span>
+    <span class="k">endpoint</span><span class="p">:</span> https://api.github.com   <span class="c"># the default</span>
+- <span class="k">name</span><span class="p">:</span> verdict
+  <span class="k">type</span><span class="p">:</span> github-pr-review
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">repo</span><span class="p">:</span> acme/app
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> report
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">task</span><span class="p">:</span> summarize
+    <span class="k">outputs</span><span class="p">:</span> <span class="p">[</span>report]
+    <span class="k">run</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      echo &#34;all green&#34; &gt; report/body.md
+</span><span class="s">      echo &#39;[{&#34;path&#34;: &#34;app/a.rb&#34;, &#34;line&#34;: 12, &#34;body&#34;: &#34;nice guard&#34;}]&#39; &gt; report/comments.json</span>
+  - <span class="k">put</span><span class="p">:</span> tracking
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>report]
+    <span class="k">params</span><span class="p">:</span>
+      <span class="k">body_file</span><span class="p">:</span> report/body.md
+      <span class="k">number</span><span class="p">:</span> <span class="s">&#34;42&#34;</span>
+  - <span class="k">put</span><span class="p">:</span> verdict
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>report]
+    <span class="k">params</span><span class="p">:</span>
+      <span class="k">body_file</span><span class="p">:</span> report/body.md
+      <span class="k">number</span><span class="p">:</span> <span class="s">&#34;42&#34;</span>
+      <span class="k">event</span><span class="p">:</span> approve
+      <span class="k">comments_file</span><span class="p">:</span> report/comments.json   <span class="c"># each comment on its line of the diff</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>summarize, tracking, verdict]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><table><thead><tr><th><code>params:</code> field</th><th>put</th><th>meaning</th></tr></thead><tbody><tr><td><code>body_file</code></td><td>both</td><td>the text to post, a path inside the put's inputs; an empty file is refused, since posting nothing is how a step that wrote nothing would otherwise look</td></tr><tr><td><code>from</code></td><td>both</td><td>the input whose version names the pull request, when more than one does; with <code>in_thread</code>, the <code>github-comments</code> get whose comment it answers</td></tr><tr><td><code>number</code></td><td>both</td><td>the pull request, when no input names it; not with <code>in_thread</code></td></tr><tr><td><code>in_thread</code></td><td><code>github-pr-comment</code></td><td><code>true</code> answers the comment a <code>github-comments</code> get fetched where it was written: an inline comment in its thread, any other kind in the conversation</td></tr><tr><td><code>event</code></td><td><code>github-pr-review</code></td><td><code>comment</code> (the default), <code>approve</code>, <code>request_changes</code>, or <code>pending</code></td></tr><tr><td><code>comments_file</code></td><td><code>github-pr-review</code></td><td>a JSON array of comments on lines of the diff, posted in the same review: <code>[{"path": "app/a.rb", "line": 12, "body": "..."}]</code>, with <code>start_line</code> for a range and <code>side: LEFT</code> for a removed line; an empty array posts the body alone</td></tr></tbody></table><p><code>github-pr-comment</code> posts to the pull request's conversation, or with <code>in_thread</code> to an inline comment's thread, as below. <code>github-pr-review</code> posts a review on the commit its input fetched when the input is a <code>github-prs</code> get, so a push after the fetch does not move the review onto code nobody read. <strong><code>event: pending</code> drafts a review only the token's user can see</strong> until they submit it, and replaces that user's own earlier draft, since GitHub allows one per user per pull request, so a new push's draft takes the old one's place. Nobody else's draft is touched. GitHub refuses an approval or a change request from a pull request's own author; post a comment there instead.</p><p><strong><code>comments_file</code> puts each comment on its line</strong>, so the author reads it beside the code instead of looking a <code>path:line</code> up. <code>line</code> is the line in the file, not a position in the diff. The file is read and checked before anything is sent, unknown fields included, so a <code>file:</code> written for <code>path:</code> fails the put by name, and a pending put never deletes the last draft only to fail on the next. Whether a line is in the diff is GitHub's call, since only it knows which lines a review may sit on, and it refuses the whole review if one is not: check the lines against <code>pr.diff</code> in a task before the put when a model chose them.</p><p><strong><code>in_thread: true</code> answers a comment where it was asked.</strong> A command written on a line of the diff gets its answer in that line's thread, beside the code, rather than in a conversation the asker has to go and find:</p><pre class="hl"><code><span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> question
+  <span class="k">type</span><span class="p">:</span> github-comments
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">repo</span><span class="p">:</span> acme/app
+    <span class="k">body</span><span class="p">:</span> <span class="s">&#39;^/steps\s+explain\b&#39;</span>
+    <span class="k">checkout</span><span class="p">:</span> <span class="w">false</span>
+- <span class="k">name</span><span class="p">:</span> answer
+  <span class="k">type</span><span class="p">:</span> github-pr-comment
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">repo</span><span class="p">:</span> acme/app
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> explain
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> question
+    <span class="k">trigger</span><span class="p">:</span> <span class="w">true</span>
+    <span class="k">version</span><span class="p">:</span> every
+  - <span class="k">task</span><span class="p">:</span> write
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>question]
+    <span class="k">outputs</span><span class="p">:</span> <span class="p">[</span>reply]
+    <span class="k">run</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      echo &#34;looking into $(cat question/comment.kind) comment $(cat question/comment.id)&#34; | tee reply/body.md</span>
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;looking into review comment 702&#34;</span>
+  - <span class="k">put</span><span class="p">:</span> answer
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>question, reply]
+    <span class="k">params</span><span class="p">:</span>
+      <span class="k">body_file</span><span class="p">:</span> reply/body.md
+      <span class="k">in_thread</span><span class="p">:</span> <span class="w">true</span>                <span class="c"># an inline comment&#39;s thread; the conversation for any other kind</span>
+      <span class="k">from</span><span class="p">:</span> question                 <span class="c"># optional here: question is the only input naming a comment</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>question, write, answer]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><p>The comment comes from a <code>github-comments</code> input and nothing else, as for <a href="#github-reaction-marking-a-comment"><code>github-reaction</code></a>: a put whose inputs hold no such get is refused at load, as is a <code>from</code> naming one that is not, and so is <code>number</code>, which names a pull request with no comment in it to answer. <strong>Only an inline comment has a thread.</strong> A pull request's conversation and an issue's are flat, so a comment there is answered in the conversation, exactly as without the flag. That is deliberate: a pipeline watching both kinds sets <code>in_thread</code> once and gets the right place for each. GitHub's reply route takes only a thread's first comment, while a command is as often written as a reply further down, so the put reads the comment first and answers under the comment that started its thread; the answer lands at the bottom of the same thread either way. The put's version is <code>{id, number}</code> with or without the flag: the comment it posted, and the pull request or issue it is on.</p><h3 id="github-reaction-marking-a-comment"><code>github-reaction</code>: marking a comment</h3><p>A reaction is how a bot says "seen" and "done" on the comment that asked, without a reply in the conversation for every command. <code>github-reaction</code> puts one on, takes the token's own one off, or both in one put, on the comment a <code>github-comments</code> get fetched:</p><pre class="hl"><code><span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> command
+  <span class="k">type</span><span class="p">:</span> github-comments
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">repo</span><span class="p">:</span> acme/app
+    <span class="k">author</span><span class="p">:</span> alice
+    <span class="k">body</span><span class="p">:</span> <span class="s">&#39;^/steps\s+deploy\b&#39;</span>
+    <span class="k">checkout</span><span class="p">:</span> <span class="w">false</span>
+    <span class="k">skip_reacted</span><span class="p">:</span> rocket             <span class="c"># the done mark, when the token&#39;s own user left it</span>
+- <span class="k">name</span><span class="p">:</span> mark
+  <span class="k">type</span><span class="p">:</span> github-reaction
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">repo</span><span class="p">:</span> acme/app
+    <span class="k">token_env</span><span class="p">:</span> GH_TOKEN              <span class="c"># the default; whose reactions these are</span>
+    <span class="k">endpoint</span><span class="p">:</span> https://api.github.com <span class="c"># the default</span>
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> deploy
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> command
+    <span class="k">trigger</span><span class="p">:</span> <span class="w">true</span>
+    <span class="k">version</span><span class="p">:</span> every
+  - <span class="k">put</span><span class="p">:</span> seen
+    <span class="k">resource</span><span class="p">:</span> mark
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>command]
+    <span class="k">params</span><span class="p">:</span>
+      <span class="k">add</span><span class="p">:</span> eyes                      <span class="c"># picked up, before the work starts</span>
+  - <span class="k">task</span><span class="p">:</span> work
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>command]
+    <span class="k">run</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      echo &#34;deploying for $(cat command/comment.author): $(cat command/comment.body)&#34;</span>
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;deploying for alice: /steps deploy prod&#34;</span>
+  - <span class="k">put</span><span class="p">:</span> done
+    <span class="k">resource</span><span class="p">:</span> mark
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>command]
+    <span class="k">params</span><span class="p">:</span>
+      <span class="k">add</span><span class="p">:</span> rocket                    <span class="c"># done, and the mark skip_reacted reads</span>
+      <span class="k">remove</span><span class="p">:</span> eyes                   <span class="c"># the token&#39;s own eyes; anybody else&#39;s stay</span>
+      <span class="k">from</span><span class="p">:</span> command                  <span class="c"># optional here: command is the only input naming a comment</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>command, seen, work, done]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><table><thead><tr><th><code>params:</code> field</th><th>meaning</th></tr></thead><tbody><tr><td><code>add</code></td><td>a reaction to put on: <code>+1</code>, <code>-1</code>, <code>laugh</code>, <code>confused</code>, <code>heart</code>, <code>hooray</code>, <code>rocket</code> or <code>eyes</code>. Quote <code>"+1"</code> and <code>"-1"</code>: unquoted, YAML reads them as numbers</td></tr><tr><td><code>remove</code></td><td>a reaction of the token's own user to take off, from the same set</td></tr><tr><td><code>from</code></td><td>the <code>github-comments</code> get whose comment this marks, when more than one input names one</td></tr></tbody></table><p>At least one of <code>add</code> and <code>remove</code> is required, and the set is GitHub's, not Slack's: <code>white_check_mark</code> is a load error naming the eight there are. <strong>The comment comes from a <code>github-comments</code> input and nothing else</strong>, so a put whose inputs hold no such get is refused at load, as is a <code>from</code> naming one that is not. The version carries the comment's kind as well as its id, and the kind picks the route: an inline review comment's reactions live under the pull request's comments, every other kind's under the issue's, and the same id on the wrong route is somebody else's comment or none.</p><p><strong><code>add</code> goes before <code>remove</code></strong>, so a swap from <code>eyes</code> to <code>rocket</code> that fails halfway leaves both marks rather than neither, and a comment with no mark reads as one nobody picked up. <strong><code>remove</code> touches only the token user's own reaction</strong>: the put lists that reaction on the comment, finds the one the token's user left, and deletes that one by id, so somebody else's <code>eyes</code> stays where they put it. <strong>Marking twice is not an error.</strong> GitHub answers an add that is already there with the reaction that is, and a remove finds nothing when it is already gone; both are the comment in the state asked for, which a replay or a resume always finds, the way <code>slack-reaction</code> reads <code>already_reacted</code>. Any other answer fails the put with GitHub's status, its words and the route.</p><p>A put's version is <code>{comment, add, remove}</code>, recorded in the reaction resource's own history and never in the comments one, which is why a mark cannot trigger anything.</p><h2 id="the-built-in-cron-type">The built-in <code>cron</code> type</h2><p><code>type: cron</code> mints a version when a slot of a crontab expression passes — the trigger for a nightly report, an hourly sweep, a job that should run whether or not anything else changed. Nothing is fetched: the artifact is the moment itself. A port of <a href="https://github.com/govuk-pay/cron-resource">govuk-pay/cron-resource</a>, kept to its rules.</p><pre class="hl"><code><span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> tick
+  <span class="k">type</span><span class="p">:</span> cron
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">expression</span><span class="p">:</span> <span class="s">&#34;*/15 * * * *&#34;</span>     <span class="c"># every quarter hour</span>
+    <span class="k">location</span><span class="p">:</span> America/New_York     <span class="c"># optional; the zone the expression is read in, UTC otherwise</span>
+    <span class="k">fire_immediately</span><span class="p">:</span> <span class="w">true</span>         <span class="c"># optional; the first-ever check mints a version instead of waiting</span>
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> sweep
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> tick
+    <span class="k">trigger</span><span class="p">:</span> <span class="w">true</span>
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>tick]
+    <span class="k">run</span><span class="p">:</span> test -s tick/epoch &amp;&amp; test -s tick/timestamp &amp;&amp; grep -c &#39;&#34;time&#34;&#39; tick/version.json
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;1&#34;</span>          <span class="c"># one line holds the version; the two files before it are non-empty</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>tick, show]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><table><thead><tr><th><code>source:</code> field</th><th>required</th><th>meaning</th></tr></thead><tbody><tr><td><code>expression</code></td><td>yes</td><td>a crontab: five fields (<code>minute hour day-of-month month day-of-week</code>), six with seconds in front (<code>*/30 * * * * *</code>), or a descriptor (<code>@hourly</code>, <code>@daily</code>, <code>@weekly</code>)</td></tr><tr><td><code>location</code></td><td>no</td><td>the zone the expression is read in, an IANA name such as <code>Europe/London</code>; UTC when unset</td></tr><tr><td><code>fire_immediately</code></td><td>no</td><td>the first-ever check mints a version at once, instead of only when a slot fell in the last hour</td></tr></tbody></table><p><strong>A poll is what wakes it.</strong> There is no timer inside the resource: <code>steps web</code> reads the clock on every <code>--interval</code> (30s unless said otherwise), and the first poll after a slot passes mints the version. So a slot fires within one poll of its time, and a seconds field is honored in the expression but cannot fire faster than the poll — <code>*/5 * * * * *</code> under a 30s interval is a version every 30s. One version per poll at most: several slots between two polls fire once, and a daemon that was stopped over the nightly slot does not run it when it comes back.</p><p><strong>The version is <code>{time}</code></strong>, the moment the check ran (RFC3339, UTC) rather than the slot it answered — <code>02:00:17Z</code> for a <code>0 2 * * *</code> polled at seventeen seconds past. That is what <code>epoch</code> means: when the job was released. A get writes three files:</p><table><thead><tr><th>file</th><th>what it holds</th></tr></thead><tbody><tr><td><code>version.json</code></td><td>the version, <code>{"time": "2026-09-25T02:00:17Z"}</code></td></tr><tr><td><code>timestamp</code></td><td>the same moment in the resource's <code>location</code>, RFC3339 — <code>2026-09-24T22:00:17-04:00</code></td></tr><tr><td><code>epoch</code></td><td>seconds since the Unix epoch, an integer</td></tr></tbody></table><p><strong>A first check is careful.</strong> With nothing recorded there is no "since", so the check fires only if a slot fell in the <strong>last hour</strong> — a nightly pipeline set at three in the afternoon waits for two in the morning, and an every-ten-minutes one starts within its first poll. <code>fire_immediately: true</code> fires at once instead. This is a <code>steps web</code> behavior: <code>steps run</code> and <code>steps test</code> have no cursor, so every run of theirs is a first check — a get of a resource with no slot in the last hour fails as <code>no versions available</code>, which is the truth, and <code>fire_immediately</code> is how a one-shot run asks for the time regardless.</p><pre class="hl"><code><span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> nightly
+  <span class="k">type</span><span class="p">:</span> cron
+  <span class="k">source</span><span class="p">:</span>
+    <span class="k">expression</span><span class="p">:</span> <span class="s">&#34;0 2 * * 1-5&#34;</span>      <span class="c"># two in the morning, Monday to Friday</span>
+    <span class="k">location</span><span class="p">:</span> America/New_York
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> report
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> nightly
+    <span class="k">trigger</span><span class="p">:</span> <span class="w">true</span>
+  - <span class="k">task</span><span class="p">:</span> summarize
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>nightly]
+    <span class="k">run</span><span class="p">:</span> echo &#34;report for $(cat nightly/timestamp)&#34;
+</code></pre><p>There is deliberately no <code>out:</code> — <code>put: tick</code> is a load error, as it is for <code>git</code>. A step that wants the current time has <code>date</code>; a version whose only meaning is "now" is not something to publish. <code>tags:</code> is refused too, as for every type that runs inside this process: there is nothing to place.</p><h2 id="writing-a-resource-type">Writing a resource type</h2><p>A resource type is three shell commands. (For a resource that is a JSON HTTP API and nothing else, there is a second way to write them — see <a href="expr.html">expression resource types</a>, which trades containers and binary artifacts for concurrent HTTP and no dependency on <code>curl</code>/<code>jq</code>.) Each is a <a href="templating.html">template</a> and each runs <code>sh -c</code>. This one is self-contained, so it runs anywhere:</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> greetings
+  <span class="c"># image: alpine:3   # optional — run these in a container instead of on the host</span>
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;word&#34;: &#34;hello&#34;}, {&#34;word&#34;: &#34;hola&#34;}]&#39;</span>
+    <span class="k">in</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      echo {{ .version.word | shellquote }} &gt; word.txt</span>
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> greeting
+  <span class="k">type</span><span class="p">:</span> greetings
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> speak
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> greeting
+  - <span class="k">task</span><span class="p">:</span> shout
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>greeting]
+    <span class="k">run</span><span class="p">:</span> tr a-z A-Z &lt; greeting/word.txt
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> HOLA           <span class="c"># check printed oldest-first, so the LATEST is &#34;hola&#34;</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>greeting, shout]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><h3 id="check--what-versions-exist"><code>check</code> — what versions exist?</h3><p>Runs when a plan is built, and on every <code>steps web</code> poll.</p><ul><li><p><strong>Sees</strong>: <code>{{ .source }}</code> and <code>{{ .version }}</code> — the last version this pipeline recorded for the resource. See <a href="#the-check-cursor">the cursor</a> below.</p></li><li><p><strong>Must print</strong>: a JSON <strong>array</strong> of version objects to stdout, <strong>oldest first</strong>. A version object is a flat map of strings — <code>{"ref": "abc123"}</code>, <code>{"number": "87"}</code>. The whole object identifies the version; steps never interprets the fields.</p></li><li><p><strong>Empty array</strong> means "no versions yet". Any version mode other than <code>every</code> fails the step with <code>no versions available</code>. Under <code>version: every</code> the job exits 0 having built nothing, and says which kind of nothing it was:</p><ul><li><code>get: &lt;name> cannot build; no versions exist for: &lt;names></code> — an input has never had a version at all, so no set can be assembled. The named resources are what to go look at.</li><li><code>get: &lt;name> has no new versions; all N already taken</code> — the steady state: everything this check reports has been built already. Under <code>--force</code> the line says the force did not re-open them, and the run page shows the get as skipped with the same words.</li><li><code>get: &lt;name> returned no versions; the N step(s) after it did not run</code> — the check came back empty and there is no history to fall back on, so that much plan was dropped.</li><li><code>get: &lt;name> returned no versions; nothing was fetched</code> — the same, for a get <em>inside</em> a build: the rest of the plan still runs, without that artifact.</li></ul><p>These say a check came back empty — they cannot say <em>why</em>, so a type should still <strong>fail loudly</strong> (exit non-zero) when it can't answer, rather than printing nothing.</p></li><li><p><strong>Exit non-zero</strong> to fail the step.</p></li><li><p><strong>Identical checks are run once.</strong> When <code>steps web</code> polls several pipelines whose checks render to the same command, run the same way (image, <code>env:</code> names, user, network, limits), it runs that command once and hands every pipeline the answer for half a poll interval. The cursor is part of the rendered command, so pipelines that have seen different versions never share. Each pipeline still keeps its own history and triggers its own jobs; only the run is shared. A check placed on a worker with <code>tags:</code> is never shared, and neither is the one a build runs for itself, so a build someone triggers right after a push sees what exists now. Unlike Concourse's opt-in global resources, pipelines never share a version history.</p></li></ul><pre class="hl"><code><span class="p">[{</span><span class="k">&#34;ref&#34;</span><span class="p">:</span> <span class="s">&#34;9fceb02&#34;</span><span class="p">},</span> <span class="p">{</span><span class="k">&#34;ref&#34;</span><span class="p">:</span> <span class="s">&#34;d7b22a6&#34;</span><span class="p">}]</span>
+</code></pre><h4 id="the-check-cursor">The check cursor</h4><p><code>{{ .version }}</code> is the newest version the last successful check reported — Concourse calls it the <em>current version</em>. It exists so a check can ask its API for what it has <strong>not seen</strong> instead of guessing a window:</p><pre class="hl"><code><span class="c"># a guess, and the only thing between you and both failure modes below</span>
+<span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">  curl -sS ... --data-urlencode &#39;limit=20&#39; https://api.example.com/messages</span>
+
+<span class="c"># ask for exactly what we haven&#39;t seen</span>
+<span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">  curl -sS ... --data-urlencode since={{ index .version &#34;ts&#34; | default &#34;0&#34; | shellquote }} \
+</span><span class="s">               --data-urlencode &#39;limit=200&#39; https://api.example.com/messages</span>
+</code></pre><p>Guess too small and items scroll past during a busy period — and while <a href="#version-history">history</a> means a version steps already recorded is not lost, one it never saw at all cannot be recovered by anything. Guess anything at all and a cold start sees a backlog it must not answer — it builds only the newest of what it finds.</p><p>Three things to know:</p><ul><li><strong>Spell it <code>{{ index .version "ts" | default "0" }}</code>, not <code>{{ .version.ts }}</code>.</strong> On the first-ever check there is no cursor and <code>.version</code> is an empty map; templates render with <code>missingkey=error</code>, so the bare form fails that first poll. This is the same shape an optional <code>source:</code> field or get <code>params:</code> already uses.</li><li><strong>The cursor belongs to <code>steps web</code> alone</strong>, which both advances it and is the only thing that reads it. A <code>steps run</code> or <code>steps plan</code> renders <code>{{ .version }}</code> as an empty map even when a watcher has been polling for weeks — a manual run asks what exists, not what is new.</li><li><strong>A check that ignores <code>.version</code> keeps working exactly as before.</strong> The cursor narrows what a check <em>asks for</em>; it is not a filter steps applies to the answer, and it is not what decides which versions a job builds — that is <a href="#version-history">history</a>.</li></ul><h3 id="version-history">Version history</h3><p>steps remembers every version it has seen of a resource, in the order it first
+saw them. That record is what a triggered job actually builds from — it does
+<strong>not</strong> re-run <code>check</code> for the versions it was triggered for.</p><p>The reason is that a cursor-driven check cannot be asked twice. The second
+answer is different, because the first answer moved the cursor: a job
+re-deriving its own versions would ask "what is new since the versions I was
+just handed" and correctly get nothing. A lookup is repeatable, so plan time
+and run time agree without anything being passed between them.</p><p>History is also what makes a version <em>recoverable</em>. Without it, whatever
+<code>check</code> returned right now would be the whole universe — a version that
+scrolled out of the window while nothing was watching would be gone, and no
+amount of cursor bookkeeping could bring it back.</p><p>Three things follow:</p><ul><li><strong>A resource nothing has polled has no history</strong>, so a get against it runs
+its own <code>check</code> — every <code>steps run</code>, and every <code>get:</code> beside a triggered one.</li><li><strong>A cold start does not become a backlog.</strong> The first check of a resource
+records everything it reports, marks everything BELOW the newest as already
+taken, and triggers once on the newest — so a watcher pointed at twenty
+existing items builds the twentieth and answers none of the nineteen. One
+build, not twenty (which is what the marking is for) and not zero (which
+would leave a slowly-changing resource unbuilt indefinitely, and make
+deleting the state database re-arm that silence). <code>version: every</code> does not change this:
+the fan-out is over UNCONSUMED versions, and a cold start leaves exactly one
+unconsumed. (A job <em>added</em> to the pipeline later has no such marking, and
+its first trigger will see whatever history holds.)</li><li><strong>Pruning is not free.</strong> A version dropped from history takes its green
+record with it, so a <code>passed:</code> gate can no longer clear for it. That is
+correct — a version out of history cannot be built — but it means a limit
+set below what a slow downstream job needs will hold that job back.</li></ul><h4 id="how-much-to-remember">How much to remember</h4><p><code>defaults.version_history:</code> caps it per resource, keeping the newest (<code>0</code> keeps everything, as <a href="attempts-timeout.html#zero-means-no-limit">every limit here does</a>):</p><pre class="hl"><code><span class="c"># The cap itself is not observable in one run — internal/store/sqlite&#39;s tests measure</span>
+<span class="c"># the pruning. This example pins only that the field loads and a capped</span>
+<span class="c"># resource still fetches normally.</span>
+<span class="k">defaults</span><span class="p">:</span>
+  <span class="c"># A git branch produces a version per push; a chat feed one per message.</span>
+  <span class="c"># The right number is a property of what you watch.</span>
+  <span class="k">version_history</span><span class="p">:</span> <span class="n">50</span>
+
+<span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> counter
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;n&#34;: &#34;1&#34;}, {&#34;n&#34;: &#34;2&#34;}]&#39;</span>
+    <span class="k">in</span><span class="p">:</span> echo {{ .version.n | shellquote }} &gt; n.txt
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> ticks
+  <span class="k">type</span><span class="p">:</span> counter
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> build
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> ticks
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>ticks]
+    <span class="k">run</span><span class="p">:</span> cat ticks/n.txt
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;2&#34;</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>ticks, show]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><p><code>--version-history</code> sets a default for a pipeline that does not; when neither
+says, steps keeps 1000. Whatever the limit, the newest versions are the ones
+kept.</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> since-cursor
+  <span class="k">config</span><span class="p">:</span>
+    <span class="c"># A real type would send this to an API. Here it just reports what it was</span>
+    <span class="c"># handed, which is the part worth seeing: on a fresh run there is no</span>
+    <span class="c"># cursor, so the default is what the check gets.</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;seen&#34;: &#34;%s&#34;}]&#39; {{ index .version &#34;ts&#34; | default &#34;0&#34; | shellquote }}</span>
+    <span class="k">in</span><span class="p">:</span> echo {{ .version.seen | shellquote }} &gt; seen.txt
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> feed
+  <span class="k">type</span><span class="p">:</span> since-cursor
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> poll
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> feed
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>feed]
+    <span class="k">run</span><span class="p">:</span> cat feed/seen.txt
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;0&#34;</span>          <span class="c"># nothing recorded yet, so the check saw the default</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>feed, show]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><h3 id="in--fetch-one-version"><code>in</code> — fetch one version</h3><p>Runs when a <code>get</code> step executes.</p><ul><li><strong>Sees</strong>: <code>{{ .source }}</code>, <code>{{ .version }}</code> (one object from <code>check</code>'s array), and <code>{{ .params }}</code> (the get step's <code>params:</code>).</li><li><strong>Working directory</strong> is the artifact directory itself, already created and empty. Write the contents there — <code>.</code>, not a subdirectory named after the resource.</li><li><strong>Exit non-zero</strong> to fail the step.</li></ul><p><code>params:</code> on a get is how a resource is told <em>how</em> to fetch, as opposed to <code>source:</code>, which says <em>what</em> to fetch. The distinction matters because <code>source:</code> belongs to the resource and <code>params:</code> belongs to the step, so one resource can be fetched differently by different jobs without being declared twice:</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> notes
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;ref&#34;: &#34;v1&#34;}]&#39;</span>
+    <span class="k">in</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      head -n {{ index .params &#34;lines&#34; | default &#34;100&#34; | shellquote }} &lt;&lt;&#39;EOF&#39; &gt; notes.txt
+</span><span class="s">      first line
+</span><span class="s">      second line
+</span><span class="s">      EOF</span>
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> log
+  <span class="k">type</span><span class="p">:</span> notes
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> quick
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> log
+    <span class="k">params</span><span class="p">:</span> { <span class="k">lines</span><span class="p">:</span> <span class="n">1</span> }     <span class="c"># this job fetches a truncated view</span>
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>log]
+    <span class="k">run</span><span class="p">:</span> wc -l &lt; log/notes.txt
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;1&#34;</span>            <span class="c"># the param reached in:</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>log, show]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+- <span class="k">name</span><span class="p">:</span> full
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> log                 <span class="c"># same resource, whole thing</span>
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>log]
+    <span class="k">run</span><span class="p">:</span> wc -l &lt; log/notes.txt
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;2&#34;</span>            <span class="c"># no param, so the default won — same resource, other view</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>log, show]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+
+<span class="k">assert</span><span class="p">:</span>
+  <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>quick, full]
+</code></pre><p><strong>Optional params take the same shape as an optional <code>source:</code> field</strong> (see <a href="#shell-safety">Shell safety</a> below). Templates render with <code>missingkey=error</code>, so a bare <code>{{ .params.lines }}</code> makes <code>lines</code> <em>mandatory</em> on every get of that type; <code>{{ index .params "lines" | default "100" }}</code> works on an absent key and on a get with no <code>params:</code> block at all.</p><p><strong>Params change the fetch, so they change the hash.</strong> Two gets of one version differing in <code>params:</code> are two different fetches: they get distinct cache entries and neither is reused for the other. A get with no <code>params:</code> hashes as if the field did not exist, so adding <code>params:</code> to one get invalidates nothing that does not use it.</p><p>The fetched directory is named after the <code>get:</code>, so <code>get: log</code> puts it in <code>log/</code>, and later steps read <code>log/...</code>. See <a href="workspace.html">workspace.md</a> for what a step can and can't see.</p><h3 id="out--publish-something"><code>out</code> — publish something</h3><p>Runs when a <code>put</code> step executes. Optional: a type with no <code>out:</code> is read-only, and a <code>put:</code> against it is rejected at load time rather than silently doing nothing.</p><ul><li><strong>Sees</strong>: <code>{{ .source }}</code> and <code>{{ .params }}</code> (the put step's <code>params:</code>).</li><li><strong>Working directory</strong> is the put step's read view, composed from its <code>inputs:</code>.</li><li><strong>May print</strong> a single JSON <strong>object</strong> — the version it produced. Printing nothing is fine and not an error. The object is stored as a version, shown on the job page, and rendered into downstream <code>in:</code> commands, so print identifiers, not credentials or whole API responses, and quote it with <code>shellquote</code>. Over 4 KiB it is not recorded.</li></ul><h3 id="a-put-publishes-it-does-not-fetch">A put publishes; it does not fetch</h3><p>A put step runs <code>out:</code> and nothing else — there is no implicit get afterward, so a put produces no artifact. (Concourse fetches the produced version automatically; steps deliberately does not: an artifact appearing in the build that no step declared is exactly the kind of ambient data flow this DSL rejects.) A plan that wants the resource's contents after a put writes the fetch it means:</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> release
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;ref&#34;: &#34;v1.4.1&#34;}]&#39;</span>
+    <span class="k">in</span><span class="p">:</span> echo {{ .version.ref | shellquote }} &gt; ref
+    <span class="k">out</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      cat notes/summary.txt        # &#34;publish&#34; the summary an earlier step wrote
+</span><span class="s">      printf &#39;{&#34;ref&#34;: &#34;v1.4.2&#34;}&#39;</span>
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> releases
+  <span class="k">type</span><span class="p">:</span> release
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> publish
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">task</span><span class="p">:</span> summarize
+    <span class="k">outputs</span><span class="p">:</span> <span class="p">[</span>notes]
+    <span class="k">run</span><span class="p">:</span> echo &#39;what changed&#39; &gt; notes/summary.txt
+  - <span class="k">put</span><span class="p">:</span> releases              <span class="c"># out: publishes and prints v1.4.2</span>
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>notes]
+  - <span class="k">get</span><span class="p">:</span> releases              <span class="c"># fetch the resource, explicitly</span>
+  - <span class="k">task</span><span class="p">:</span> verify
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>releases]
+    <span class="k">run</span><span class="p">:</span> cat releases/ref
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="c"># check&#39;s answer, NOT the v1.4.2 the put just printed — the get was</span>
+      <span class="c"># pinned when the plan was built, before out: ran. See below.</span>
+      <span class="k">stdout</span><span class="p">:</span> v1.4.1
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>summarize, releases, releases, verify]   <span class="c"># put, then get — two entries</span>
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><p>The explicit get fetches the version <code>check</code> reported <strong>when the plan was built</strong> — check runs once, before any step, so the version the put publishes mid-run is not what the same run's get fetches (the example above pins exactly that: <code>out:</code> prints <code>v1.4.2</code>, the get still fetches <code>v1.4.1</code>). The version a put prints is recorded with the run; it reaches a <code>passed:</code>-gated get in a later run whether or not a check ever reports it (see <a href="infra.html#a-version-a-job-put-counts-as-having-passed-it"><code>passed:</code></a>); an ungated get still needs the check to report it. A put whose output nothing reads simply has no get after it.</p><h2 id="shell-safety">Shell safety</h2><p>Anything interpolated into a command is text substitution, so quote it:</p><pre class="hl"><code><span class="k">check</span><span class="p">:</span> git ls-remote {{ .source.uri | shellquote }}     <span class="c"># good</span>
+<span class="k">check</span><span class="p">:</span> git ls-remote {{ .source.uri }}                  <span class="c"># a uri with a space or ; breaks or worse</span>
+</code></pre><p><code>shellquote</code> renders a value as one safely-quoted shell word. Use it for every <code>{{ }}</code> that reaches a command. See <a href="templating.html">templating.md</a>.</p><p>Templates render with <code>missingkey=error</code>, so reading an optional field that wasn't set fails the render. Ask for optional fields in a way that can answer "nothing":</p><pre class="hl"><code>{{ index .source &#34;branch&#34; | default &#34;HEAD&#34; }}     <span class="c"># optional</span>
+{{ .source.uri }}                                 <span class="c"># required — failing is correct</span>
+</code></pre><h2 id="version-on-a-get-step"><code>version:</code> on a get step</h2><p>By default a get fetches the <strong>latest</strong> version <code>check</code> reported. <code>version: every</code> runs the rest of the plan once per version, and a mapping pins one exact version:</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> builds
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;number&#34;: &#34;87&#34;}, {&#34;number&#34;: &#34;88&#34;}]&#39;</span>
+    <span class="k">in</span><span class="p">:</span> echo {{ .version.number | shellquote }} &gt; number.txt
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> build
+  <span class="k">type</span><span class="p">:</span> builds
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> latest-only
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> build                     <span class="c"># default: &#34;88&#34;, the newest</span>
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>build]
+    <span class="k">run</span><span class="p">:</span> cat build/number.txt
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;88&#34;</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>build, show]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+- <span class="k">name</span><span class="p">:</span> each-in-turn
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> build
+    <span class="k">version</span><span class="p">:</span> every                 <span class="c"># the rest of the plan runs per version</span>
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>build]
+    <span class="k">run</span><span class="p">:</span> cat build/number.txt      <span class="c"># no stdout assert: this runs once per version</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>build, show, build, show]   <span class="c"># one run per version, judged together</span>
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+- <span class="k">name</span><span class="p">:</span> pinned
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> build
+    <span class="k">version</span><span class="p">:</span> { <span class="k">number</span><span class="p">:</span> <span class="s">&#34;87&#34;</span> }      <span class="c"># exactly this one</span>
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>build]
+    <span class="k">run</span><span class="p">:</span> cat build/number.txt
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;87&#34;</span>                 <span class="c"># the pin won over the newer version</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>build, show]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+
+<span class="k">assert</span><span class="p">:</span>
+  <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>latest-only, each-in-turn, pinned]
+</code></pre><p>Under <code>every</code>, <strong>each version is a run of its own</strong>, as each is a build of its own in Concourse — so <code>max_in_flight:</code>, <code>serial:</code>, the job's history and <strong>Retry</strong> all count versions. <code>steps web</code> builds the oldest version the job has not taken and queues the job again while more wait, so a backlog drains one run per version and, under <code>max_in_flight: 2</code>, two at a time. <code>steps run</code> builds one version per invocation, as <code>fly trigger-job</code> does, and says how many still wait; <code>steps test</code> builds every version, each as its own run, and judges the job's <code>assert:</code> over all of them, which is why the example above asserts two passes. A failing version does not stop the ones behind it.</p><h3 id="every-takes-each-version-once"><code>every</code> takes each version once</h3><p>A check reports what <em>exists</em>, not what is new — the same twenty Slack messages, the same page of builds, on every poll. So <code>every</code> remembers: once a version's run has <strong>started</strong>, that version is not taken again, and a later run takes only what is left. Without that, a plan ending in a <code>put:</code> — which the step cache never skips, because its worth is an effect rather than an artifact — repeats every effect it has ever performed each time anything new shows up.</p><ul><li><p><strong>Recorded per (job, resource)</strong>, so another job reading the same resource keeps its own place.</p></li><li><p><strong>A version is taken when its build STARTS</strong>, not when it succeeds — so a version whose build failed is not retried on the next run. This is Concourse's rule (<code>NextEveryVersion</code> reads the versions a build was <em>created</em> with and never looks at build status), and it is what stops one bad input failing forever, on every trigger, with an agent's bill attached. Re-running it is a deliberate act: <code>--resume</code> (the run that took it) or <code>--pin</code> (the version), or a new version.</p></li><li><p><strong><code>--force</code> does not lift it</strong>: it skips the step cache only (#145). <code>steps test</code> is the exception — it re-opens taken versions so a fixture reruns deterministically against the same state file.</p></li><li><p><strong>It suppresses; <a href="#version-history">history</a> is what resurrects.</strong> The versions a job may take are the ones steps has recorded, not only the ones <code>check</code> returns right now — so a version that scrolled out of the window while nothing was watching is still built. What history does not hold, nothing can recover: a version pruned by <code>version_history:</code>, or one from before steps first checked the resource.</p></li><li><p><strong>Any top-level <code>get:</code> in a plan may say <code>every</code></strong> — each keeps its own cursor. Anywhere else (inside a hook, or a branch of <code>in_parallel:</code>/<code>do:</code>/<code>try:</code>) the get runs within a build whose versions are already decided, so <code>every</code> there is a load error rather than a field that is accepted and ignored. Two <code>every</code> gets on the same resource are a load error too — one cursor cannot serve both.</p></li><li><p><strong>A second get of the same resource keeps its own version.</strong> <code>get: code, version: every</code> beside <code>get: baseline, resource: code, version: {ref: "v1"}</code> fans over <code>code</code> while <code>baseline</code> stays pinned, which is how a plan diffs what just arrived against a fixed point.</p></li></ul><p><code>steps plan</code> reads the same record, so it lists only the versions a run would actually take.</p><h3 id="several-every-gets-input-sets">Several <code>every</code> gets: input sets</h3><p>When more than one get says <code>every</code>, a run resolves <strong>input sets</strong>, Concourse's model: each <code>every</code> get advances one step per set through its own unbuilt versions, in lockstep with its siblings, and each set is a run of its own. A get whose versions run out <strong>holds</strong> at the newest version it has already covered while the others keep moving. There is no cross product — 3 new versions on one input and 2 on another mean three builds, not six.</p><p>The hold rule is what makes the steady state right, not just the burst: updates rarely arrive in matched pairs. <code>config</code> moving alone builds <code>(code@held, config@new)</code>; <code>code</code> catching up later builds <code>(code@new, config@held)</code>.</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> builds
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;number&#34;: &#34;87&#34;}, {&#34;number&#34;: &#34;88&#34;}, {&#34;number&#34;: &#34;89&#34;}]&#39;</span>
+    <span class="k">in</span><span class="p">:</span> echo {{ .version.number | shellquote }} &gt; number.txt
+- <span class="k">name</span><span class="p">:</span> configs
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;rev&#34;: &#34;5&#34;}, {&#34;rev&#34;: &#34;6&#34;}]&#39;</span>
+    <span class="k">in</span><span class="p">:</span> echo {{ .version.rev | shellquote }} &gt; rev.txt
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> build
+  <span class="k">type</span><span class="p">:</span> builds
+  <span class="k">source</span><span class="p">:</span> {}
+- <span class="k">name</span><span class="p">:</span> conf
+  <span class="k">type</span><span class="p">:</span> configs
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> pairwise
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> build
+    <span class="k">version</span><span class="p">:</span> every
+  - <span class="k">get</span><span class="p">:</span> conf
+    <span class="k">version</span><span class="p">:</span> every
+  - <span class="k">task</span><span class="p">:</span> show
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>build, conf]
+    <span class="c"># The case pins the pairing, not just the count: a cross product would</span>
+    <span class="c"># build (87,6), (88,5) or (89,5) and fail here.</span>
+    <span class="k">run</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      pair=&#34;$(cat build/number.txt)-$(cat conf/rev.txt)&#34;
+</span><span class="s">      case &#34;$pair&#34; in
+</span><span class="s">        87-5|88-6|89-6) echo &#34;took $pair&#34; ;;
+</span><span class="s">        *) echo &#34;unexpected pair $pair&#34;; exit 1 ;;
+</span><span class="s">      esac</span>
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> took
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="c"># Three sets, not six: (87,5), (88,6), then conf is exhausted and</span>
+    <span class="c"># HOLDS at rev 6 while build keeps moving — (89,6).</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>build, conf, show, build, conf, show, build, conf, show]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+
+<span class="k">assert</span><span class="p">:</span>
+  <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>pairwise]
+</code></pre><h2 id="trigger-true"><code>trigger: true</code></h2><p>Marks a <code>get</code> as something <code>steps web</code> should poll. When its version changes, the jobs containing it run automatically. Valid only on <code>get</code> steps — setting it anywhere else is a load-time error.</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> ticker
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;tick&#34;: &#34;1&#34;}]&#39;</span>
+    <span class="k">in</span><span class="p">:</span> echo {{ .version.tick | shellquote }} &gt; tick.txt
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> clock
+  <span class="k">type</span><span class="p">:</span> ticker
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> <span class="w">on</span>-change
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> clock
+    <span class="k">trigger</span><span class="p">:</span> <span class="w">true</span>      <span class="c"># steps web polls this; a new version runs the job</span>
+  - <span class="k">task</span><span class="p">:</span> react
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>clock]
+    <span class="k">run</span><span class="p">:</span> cat clock/tick.txt
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="s">&#34;1&#34;</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>clock, react]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><p>See <a href="infra.html">infra.md</a> for the watch loop and cross-job triggering, and <a href="webhooks.html">webhooks.md</a> for a resource whose versions are webhook deliveries. Gating a get on upstream jobs — Concourse's <code>passed:</code> — is there too: <a href="infra.html#passed--only-run-against-versions-that-are-green-upstream">infra.md#passed</a>.</p><h2 id="mcp-backed-types">MCP-backed types</h2><p>A resource type can call an MCP server instead of running shell commands — the same check/in/out roles, as tool calls. See <a href="mcp.html">mcp.md</a>.</p><h2 id="checking-your-work">Checking your work</h2><p><code>steps validate pipeline.yml</code> answers "does it parse and hang together"; <code>steps plan pipeline.yml</code> runs <code>check</code> and shows what would be fetched vs cached — the fastest way to see whether a <code>check</code> you just wrote returns what you expect, since it resolves versions without running the rest of the job.</p></article></main><script>
+(function(){
+  window.addEventListener('message', function(e){
+    if(!e.data || e.data.type !== 'topbanana:settheme') return;
+    var t = e.data.theme;
+    if(typeof t !== 'string' || !/^[a-z]{2,20}$/.test(t)) return;
+    document.documentElement.setAttribute('data-theme', t);
+  });
+})();
+</script></body></html>

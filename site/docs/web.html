@@ -1,0 +1,609 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The daemon · steps docs</title><meta name="description" content="steps web: the daemon that serves the browser UI, holds the pipelines set into it, polls trigger: true resources and runs the jobs they affect."><link rel="stylesheet" href="steps.css"><style>.hl{color:#d8d5c9;background-color:#171a16}.c{color:#83887b;font-style:italic}.k{color:#7aa4d9}.p{color:#83887b}.s{color:#84c06d}.n{color:#d9a94a}.w{color:#b98fcc}.f{color:#6fbcb4}.d{color:#e0645a}.b{font-weight:bold}.i{font-style:italic}</style><link rel="stylesheet" href="/app.css"></head><body><div class="statusline"><a class="brand" href="/"><b>steps</b> docs</a><nav class="tabs" aria-label="Sections"><a class="tab" href="/">site</a>
+<a class="tab" aria-current="page" href="index.html">docs</a>
+<a class="tab" href="https://github.com/jtarchie/steps">github</a>
+<a class="tab" href="https://github.com/jtarchie/steps/releases">releases</a></nav></div><main><div class="docsnav"><a href="index.html">start here</a>
+<span class="docsgroup"><span class="docsgrouptitle">Writing pipelines</span>
+<a href="resources.html">resources</a><a href="webhooks.html">webhooks</a><a href="expr.html">expr</a><a href="control-flow.html">control-flow</a><a href="agents.html">agents</a><a href="attempts-timeout.html">attempts-timeout</a><a href="workspace.html">workspace</a><a href="infra.html">infra</a><a href="templating.html">templating</a><a href="mcp.html">mcp</a><a href="complete.html">complete</a>
+</span><span class="docsgroup"><span class="docsgrouptitle">Reference</span>
+<a aria-current="page" href="web.html">web</a><a href="observability.html">observability</a><a href="authentication.html">authentication</a><a href="agents-internals.html">agents-internals</a><a href="aws-workers.html">aws-workers</a><a href="gcp-workers.html">gcp-workers</a><a href="do-workers.html">do-workers</a><a href="conformance.html">conformance</a></span></div><nav class="docstoc" aria-label="On this page"><span class="docsgrouptitle">on this page</span>
+<a href="#setting-a-pipeline">Setting a pipeline</a><a href="#the-rest-of-the-family">The rest of the family</a><a href="#what-a-restart-does">What a restart does</a><a href="#what-it-shows">What it shows</a><a href="#the-transcript">The transcript</a><a href="#activity">Activity</a><a href="#live-runs">Live runs</a><a href="#following-a-run-you-started">Following a run you started</a><a href="#the-action-bar">The action bar</a><a href="#triggering-retrying-approving-releasing">Triggering, retrying, approving, releasing</a><a href="#aborting-a-run">Aborting a run</a><a href="#one-daemon">One daemon</a><a href="#applying-a-change">Applying a change</a><a href="#one-database-several-pipelines">One database, several pipelines</a><a href="#security">Security</a><a href="#flags">Flags</a></nav><article class="docs"><h1 id="the-daemon">The daemon</h1><pre class="hl"><code>steps web                                        <span class="c"># starts empty</span>
+steps pipeline set -c pipeline.yml               <span class="c"># upload one into it</span>
+</code></pre><p><code>steps web</code> is the long-running mode: it serves the browser UI at
+<code>http://127.0.0.1:8088</code>, holds whatever pipelines have been set into it, polls
+their <code>trigger: true</code> resources, and runs the jobs both of those enqueue.</p><p><strong>It takes no pipeline arguments.</strong> A pipeline arrives by <code>steps pipeline set</code>
+and by nothing else, so vars belong to the pipeline you set rather than to the
+process, a pipeline's identity is a name you chose rather than whatever its
+file was called, and a change happens when somebody asks for it rather than
+when a file moves. Nothing here watches a file.</p><p>Each served pipeline is routed under <code>/p/&lt;name>/</code>, where the name is the one
+<code>set</code> was given. All of them share one state database — <code>.steps/steps.db</code>
+unless <code>--db</code> says otherwise — and stay strangers inside it; see
+<a href="#one-database-several-pipelines">One database, several pipelines</a>.</p><p><strong>Its terminal is log lines, nothing else.</strong> A run is read on its page, so
+what a step prints, its notes and its prompts never reach the daemon's
+stdout. Stderr carries the log: where it serves, what polling enqueued, each
+job starting and finishing, workers and failures. <code>--log-level debug</code> adds
+each step starting, skipping and noting.</p><h2 id="setting-a-pipeline">Setting a pipeline</h2><pre class="hl"><code>steps pipeline set -p app -c app.yml -v repo_uri<span class="p">=</span>https://github.com/acme/app
+</code></pre><ul><li><strong><code>-p</code> is the name on the daemon</strong>, defaulting to the YAML's base name. It is
+the <code>/p/&lt;name>/</code> route, the identity every recorded row is scoped by, and
+what every other verb takes.</li><li><strong><code>-c</code> is the file on YOUR machine.</strong> It is read, <code>((var))</code>-substituted and
+parsed locally, then uploaded. The daemon never reads a path of yours.</li><li><strong><code>-v</code> / <code>--vars-file</code> are per-set.</strong> Substitution happens before the upload,
+so the daemon holds the substituted text and one file set twice under two var
+sets is two pipelines. Vars are still not a secret store — see
+<a href="templating.html">templating.md</a>.</li><li><strong>Includes travel with it.</strong> A <code>run_file:</code>, <code>system_file:</code> or
+<code>message_files:</code> entry is pipeline-relative, and the daemon has no sibling
+filesystem, so <code>set</code> sends <code>{source, includes}</code> and the daemon resolves those
+paths against the upload and nothing else. An include it was not sent is a
+refusal, never a read of the daemon's own disk.</li><li><strong>It diffs, then asks.</strong> <code>set</code> fetches what the daemon is serving, prints
+what would change, and asks. <code>-n</code> skips the prompt and is what scripts pass.</li><li><strong><code>--pause</code> sets it paused.</strong> The pause is written with the configuration,
+before the pipeline starts, so a new pipeline never gets its first poll. A
+<code>set</code> followed by a separate <code>pause</code> leaves a gap where that poll, and any
+build it starts, can slip in.</li><li><strong>It is compare-and-set.</strong> The sha you diffed against is sent with the
+upload; if the configuration moved in between, the daemon refuses and says
+so, rather than applying yours over whatever arrived.</li></ul><p><strong>The refusal lands where you asked.</strong> That is the whole reason this is HTTP
+rather than a row written into a database: <code>set</code> needs a synchronous answer
+from the machine that will run the pipeline — is <code>api_key_env:</code> (or a resource expression's <code>env("NAME")</code>) set <em>there</em>, is
+the stdio MCP binary on <em>its</em> <code>PATH</code>, does <code>workspace.root:</code> exist. A
+configuration that fails those is refused, the daemon goes on serving what it
+had, and the terminal that asked prints why:</p><pre><code>$ steps pipeline set -c app.yml
+http://127.0.0.1:8088 refused it: app cannot run here:
+  agent &quot;reviewer&quot;  $OPENROUTER_API_KEY is not set (source.api_key_env)
+</code></pre><p>What it does NOT check is the network. A set that passes can still meet a
+revoked key or a server that is down at run time; <code>steps validate --live</code> is
+the command that asks.</p><h2 id="the-rest-of-the-family">The rest of the family</h2><pre class="hl"><code>steps pipeline list                      <span class="c"># what this daemon holds</span>
+steps pipeline get -p app                <span class="c"># the configuration it is serving</span>
+steps pipeline pause -p app              <span class="c"># stop polling, admitting and triggering</span>
+steps pipeline unpause -p app
+steps pipeline rename -p app --to legacy <span class="c"># keeps the history and its mcp logins</span>
+steps pipeline destroy -p app            <span class="c"># forgets it, everything under it, and its mcp logins</span>
+</code></pre><p>Every verb takes <code>--target</code> (or <code>STEPS_TARGET</code>), defaulting to
+<code>http://127.0.0.1:8088</code>. There is no <code>login</code> and no saved targets: on a daemon
+with accounts, the credentials ride in the target URL's userinfo
+(<code>http://user:password@host</code>) — see <a href="authentication.html#from-the-cli">authentication.md</a>.</p><ul><li><strong><code>get</code> is the only full copy</strong> of a configuration once you have edited the
+file it came from. It prints the served source and every file it carried.</li><li><strong><code>pause</code> is the pipeline-level circuit breaker.</strong> Paused, nothing is
+polled, nothing is admitted from the queue, a webhook delivery is recorded
+and builds on unpause, and a manual trigger is refused with a message. Every
+page of that pipeline says so, and offers to release it. It is a bigger
+switch than the per-job breaker <code>steps jobs</code> reports, and unrelated to it.</li><li><strong><code>rename</code> keeps history</strong>, because every recorded row reaches its pipeline
+by row id rather than by name. It is <strong>refused while a build of the pipeline is running</strong>, naming the builds
+— the served pipeline is rebuilt under the new name, which would cancel
+them — so wait for them, or stop them with <code>steps runs abort</code>. Queued
+builds are not a reason to refuse: they are kept, and run under the new
+name.</li><li><strong><code>destroy</code> is not recoverable.</strong> The runs, the resource versions, the queue
+and the merkle cache go with the row. It asks unless given <code>-n</code>.</li></ul><h2 id="what-a-restart-does">What a restart does</h2><p>Nothing you have to redo. The daemon loads every pipeline's current
+configuration from its state database at startup and serves it, so a restart
+picks up where the last process left off — including on a machine where the
+YAML never existed. Queued runs are kept, and a build the restart interrupted
+is <a href="workspace.html#a-daemon-restart-resumes-the-build-it-interrupted">resumed</a>,
+skipping the steps it finished. A daemon that holds nothing serves an index
+saying how to set one.</p><p>A pipeline the restart <strong>cannot</strong> serve — its <code>workspace.root:</code> is gone or
+read-only, a variable it needs is unset in the daemon's environment — does not
+stop the others. Every pipeline that restores is served, and each one that did
+not is listed as <strong>broken</strong>, with the reason, on <code>/</code>, in <code>/api/pipelines</code> and
+in <code>steps pipeline list</code> (and printed as the daemon starts). Nothing about it
+is served: its pages and its API verbs answer 404 naming the reason, and a
+webhook delivery to it a bare 404, since a sender never passed the daemon's
+credentials. <code>steps pipeline set -p &lt;name></code> with the same configuration
+repairs it once the cause is fixed, and says <code>repaired:</code>; a missing variable is
+the daemon's own environment, so that one needs a restart with it set, or a
+configuration that does not need it. <code>steps pipeline destroy</code> removes a broken
+pipeline whose cause cannot be fixed, and a rename onto or from one is refused.
+Only a state file the daemon cannot read at all stops it from starting.</p><h2 id="what-it-shows">What it shows</h2><table><thead><tr><th>Route</th><th>Answers</th></tr></thead><tbody><tr><td><code>/</code></td><td>With several pipelines served, or any held <a href="#what-a-restart-does">broken</a>: what this process holds, one quiet row each — its mark, its jobs colored by their latest run (a red one is one click from its transcript), and its last run. A row says more only when something is not normal: what waits on you, what its queue still owes, paused, or how many jobs the breaker holds. Its pause button sits at the end of the row, shown when you hover or tab into it. Below is one run feed across every pipeline, newest first: the latest ten, or fifty with <code>?runs=50</code> (the <strong>show 50 runs</strong> link). A broken pipeline is a row with its reason and no links. With one served and none broken, it redirects straight through</td></tr><tr><td><code>/p/:pipeline</code></td><td><a href="#the-pipeline-graph">The pipeline graph</a>: which jobs exist, how each last run went and how long ago, and what feeds each one. Hover a job for how long its run took, why the breaker holds it, or what a queued run waits on</td></tr><tr><td><code>…/runs</code></td><td>One run history across every job of the pipeline, newest first — the cross-job view the per-job history can't give</td></tr><tr><td><code>…/jobs/:job</code></td><td>Where the job stands, without another click: it forwards to the job's <strong>latest run</strong>, running included; with no run but a trigger queued, to the <a href="#following-a-run-you-started">follow page</a> for that trigger; with neither, to the detail page. Every link that names a job goes here, so a job is one click from its transcript from anywhere. It is a temporary redirect on purpose — a bookmark to it re-resolves on every visit</td></tr><tr><td><code>…/jobs/:job/detail</code></td><td>This job's dependencies in both directions, its run history with a duration trend, the resource versions it has passed against, and the resolved limits each agent step runs under. The one job link that leads here rather than to a run is the breadcrumb on a run, a node or the follow page — from inside a run, "latest" is already on the page</td></tr><tr><td><code>…/jobs/:job/follow</code></td><td>The <a href="#following-a-run-you-started">waiting page</a> a trigger lands on, until the queued run starts</td></tr><tr><td><code>…/runs/:run</code></td><td><strong>The transcript</strong>: every step in plan order, what it did, and — for agent steps — what the model said and which tools it called. A run that died on an mcp server links the server it blames</td></tr><tr><td><code>…/nodes/:hash</code></td><td>What a merkle hash is made of, and every run that reused it: the cache's receipt</td></tr><tr><td><code>…/config/:sha</code></td><td>The pipeline as the runs pinned to that hash executed it — readable after the file on disk has moved on</td></tr><tr><td><code>…/approvals</code></td><td>Pending <code>approval:</code> steps, and the decisions already made</td></tr><tr><td><code>…/questions</code></td><td>Pending <code>ask_user</code> questions, and the answers already given</td></tr><tr><td><code>…/resources</code></td><td>Latest checked version per resource, and why any of them is failing its check</td></tr><tr><td><code>…/resources/:resource</code></td><td>Every recorded version, newest first, with a column per job that gets the resource: the latest run of that version and how many there were, or why there is none — <strong>queued</strong> (the job has a queue row and will build it), <strong>waiting</strong> (it would, but nothing has queued the job), <strong>superseded</strong> (a latest-mode job only builds the newest version), <strong>not pinned</strong> (the job only builds its <code>version:</code> pin), or <strong>reaped</strong> (a <code>version: every</code> job took it, and <a href="infra.html#how-much-history-to-keep-run_history"><code>run_history:</code></a> has since removed the run)</td></tr><tr><td><code>…/mcp</code></td><td>Every <code>mcp_servers:</code> entry, who depends on it, and whether it is wired up — with <strong>Connect</strong> to finish an oauth login in this browser and <strong>Test</strong> to probe one server. Present only for a pipeline that declares servers; see <a href="mcp.html#authorizing-from-the-browser-the-mcp-tab">mcp.md</a></td></tr><tr><td><code>…/mcp/exports/:export</code></td><td>One <code>mcp_exports:</code> entry: its address, its tools, its recent calls — see <a href="mcp.html#where-an-export-is-seen">mcp.md</a></td></tr><tr><td><code>/activity</code></td><td><a href="#activity">What people did</a>, across every pipeline. Admins only</td></tr><tr><td><code>/connections</code></td><td>The agents you have let connect to an export, with <strong>Revoke</strong>; on a daemon people sign in to — see <a href="mcp.html">mcp.md</a></td></tr><tr><td><code>/login</code></td><td>The sign-in form, on a daemon with accounts — see <a href="authentication.html#signing-in-from-a-browser">authentication.md</a></td></tr><tr><td><code>/healthz</code></td><td><code>ok</code> and nothing else, for a platform's health check; needs no credentials</td></tr><tr><td><code>/docs</code></td><td>These docs, rendered with syntax-highlighted examples — the same pages <code>steps docs</code> shows in a terminal</td></tr><tr><td><code>/mark</code>, <code>…/mark</code>, <code>…/runs/:run/mark</code></td><td>Not a page: the tab mark alone, for every pipeline, one pipeline, or one run. A tab in the background stops refreshing its page and asks this every 30 seconds instead, so a pinned tab's icon and title stay current — within about a minute, since browsers slow a background tab's timers</td></tr></tbody></table><h3 id="the-pipeline-graph">The pipeline graph</h3><p>The graph is drawn the way Concourse draws a pipeline. Resources are boxes: what a
+job gets sits on its left and what it puts sits on its right, including a put
+in a hook. A solid line means the get triggers the job. A dashed line means the
+job only reads it. A <code>passed:</code> constraint arrives from the upstream job's
+output, or through a box of its own when that job only gets the resource. A
+job is as tall as the resources landing on it, so each line meets it at its
+own point.</p><p>A put in one job and a get of the same resource in another are <strong>not</strong>
+joined, because nothing makes the second job wait for the first. A line on
+this graph promises that ordering, and only <code>passed:</code> makes it. So a resource
+read beside two jobs in one column is one box, while the same resource further
+right gets its own box. A line that would cross a column runs through a dashed
+copy of its resource instead.</p><h3 id="finding-your-way">Finding your way</h3><p>The header is a path: <strong>steps / <em>pipeline</em> / <em>section</em></strong>. The pipeline comes
+first because every tab after it — jobs, runs, resources, approvals,
+questions, and mcp when the pipeline declares servers — is about that one
+pipeline; click its name to switch to another the daemon holds. The root,
+the docs and an error page sit above any pipeline, so they offer only the
+switcher and no tabs. On a phone the tabs become one strip that scrolls
+sideways, with the current one brought into view. <strong>jump</strong> (or <code>/</code>) opens a
+palette that searches jobs, runs and pipelines across everything served.</p><p>The footer carries the docs, the source and the version this daemon was built
+from — the thing to quote in a bug report.</p><h3 id="what-needs-you">What needs you</h3><p>The header counts work that is <strong>stuck and waiting on a person</strong>, on the tab
+that fixes it, and spells each one out in a list under the header. It is
+absent when nothing is waiting — the presence of the list is the signal, so it
+has no resting state.</p><table><thead><tr><th>Shown as</th><th>Means</th><th>Fixed by</th></tr></thead><tbody><tr><td><code>jobs ●N</code></td><td>N jobs the circuit breaker is holding after repeated failures</td><td><strong>Release</strong> on the job's page</td></tr><tr><td><code>resources ●N</code></td><td>N resources whose <code>check</code> is erroring. A poll stops at the first one, so ONE broken check stops the pipeline triggering</td><td>the resources page, which shows what the check said</td></tr><tr><td><code>mcp ●N</code></td><td>N declared <code>mcp_servers:</code> that cannot be used — a login expired, a command missing, a variable unset</td><td><strong>Connect</strong>, or the thing the status names</td></tr><tr><td><code>approvals ●N</code></td><td>N <code>approval:</code> steps parked on a decision</td><td>approving or rejecting</td></tr><tr><td><code>questions ●N</code></td><td>N <code>ask_user</code> questions parked on an answer</td><td>answering</td></tr></tbody></table><p>The pipeline switcher carries the same count for every pipeline this daemon
+holds, and the root lists it per pipeline — otherwise a daemon holding
+several hides every one but the open tab. Each switcher row also leads with
+that pipeline's <a href="#the-tab-mark">mark</a> — <code>✗</code> for a failed job, <code>⏸</code> paused,
+<code>◐</code> while something runs — so a broken pipeline is found by scanning one
+column rather than opening each.</p><p>Activity is shown differently from attention, because a signal that is never
+quiet is one nobody reads. Runs in flight appear as a dim <code>◐N</code> beside a
+switcher row — quiet the moment nothing is running, and never in the yellow
+of what waits on you. Failures appear as a pipeline's mark and never as a
+count: a count that only clears when somebody fixes the world would be
+permanent. How many resources exist does not appear at all.</p><p>Press <code>/</code> anywhere for a jump palette over pipelines, jobs, and recent runs — across <strong>every</strong> pipeline this process serves, not only the one whose page you are on. The one you are on ranks first, and a hit from anywhere else says which pipeline it belongs to.</p><h3 id="agent-dials">Agent dials</h3><p>A job page lists the <strong>resolved</strong> limits of each agent step in its plan: turns, context ceiling, deadline, and spend budget, after the step, the agent and the built-in default have all had their say. It exists so "why did this step stop at 30 turns" is answerable without cross-referencing three files, and it shows <code>uncapped</code> rather than <code>0</code> for a dial an author explicitly removed — <code>0</code> in a limit column reads as the opposite of what it means. An <code>ensemble:</code> that decides with a judge (<code>decide: &lt;agent></code>) lists the judge as a row of its own, because it runs — and spends — as an agent step the plan never spells out.</p><p><code>Turns</code> is one word for two units and the header says so: a hosted agent's turn is one request/tool-execute round driven by steps, while a CLI agent's is whatever the child reports as <code>num_turns</code> — one per tool round, pooled across every <code>messages:</code> entry — which runs far higher for the same work. A cap that looks generous beside a hosted source can truncate a CLI one mid-task.</p><p>The budget column carries one unit or the other, never both, because the two spellings are exclusive by source kind: a hosted agent is metered in <code>budget.tokens</code> and a CLI agent in <code>budget.usd</code> (see <a href="attempts-timeout.html">attempts-timeout.md</a>). Read <code>uncapped</code> there together with the turn column: for a CLI agent <code>budget.usd</code> is the only ceiling anything enforces mid-conversation, so an uncapped budget beside uncapped turns means the step is held by its deadline and nothing else. The one exception is spelled out in the same cell: an <code>across:</code> block's own <code>budget:</code> caps what its cells spend <em>together</em> (see <a href="control-flow.html">control-flow.md</a>), so such a step reads <code>uncapped per cell · 50,000 tokens for the matrix</code> rather than <code>uncapped</code>.</p><p>It covers the agents a <em>step</em> names. A task's <code>fix:</code> agent and a step's sub-agent <code>tools:</code> grants run under limits of their own and are not listed.</p><h2 id="the-transcript">The transcript</h2><p>The run page is the point of the whole thing. It renders a run the way the
+terminal does — steps in order, prefixed by kind, colored by outcome — with
+the things a scrollback cannot give you. Its head is two lines: what happened
+and where (status, the step that broke, duration, when), then what it ran
+against and what it cost (configuration, workspace, neighbours, the run's
+total spend). The steps follow within the first screen, and each step carries
+what it spent and where it ran on its own row.</p><ul><li><p><strong>Spend is shown against the ceiling it was spent under</strong>, on the agent step's own row: its header names the model and totals the tokens, cache hits and cost, and its body breaks them down and ends <code>of &lt;ceiling></code>, so it reads <code>$0.42 of 2,000,000 tokens</code> — or <code>$3.00</code> for a CLI agent, which is metered in dollars — which answers a question <code>500,000</code> alone does not. The ceiling is the agent's per-invocation one (an <code>across:</code> block's shared <code>budget:</code> is on the job page instead). It comes from the configuration currently loaded, so it is shown only for a run whose recorded config sha still matches it — a run started before an edit says <code>config changed</code> instead. That is deliberate and not a limitation to route around: a recorded revision stores its source but not its include files, so a run older than the last edit cannot be reconstructed, and "what was this capped at when it failed" is exactly the question a stale number would answer wrongly.</p><p>The ceiling distinguishes <code>uncapped</code> from <code>unknown</code>, and the difference is load-bearing. A ceiling belongs to the <strong>agent</strong>, while spend is recorded against the <strong>step</strong> — the same string for an ordinary step, and not for an <code>across:</code> cell, which renames itself. <code>uncapped</code> means the loaded configuration says that agent has no ceiling; <code>unknown</code> means the step's name resolved to no agent here. Reading a miss as <code>uncapped</code> would state the opposite of the truth for a step that had a ceiling, on the run where the ceiling is why it died.</p></li><li><p><strong>A finish reason that outlived its step says so.</strong> <code>finish</code> on an agent step is the <em>provider's</em> word about the last request that completed — for a CLI agent, the last invocation's. A step whose first message finished cleanly and then ran out of a pooled <code>max_turns:</code> or <code>budget: usd</code> before the next message was asked records <code>success</code> on a step that failed, so it reads <code>success — step failed</code>. The provider's word is annotated, never overwritten: it is the only record of how the model itself stopped.</p></li><li><p><strong>A step that stopped early says so.</strong> An agent whose turn budget ran out is asked to answer from what it already gathered, and the answer is <em>degraded</em> — afterwards it is indistinguishable from a confident one unless the record says otherwise. It carries a <code>stopped early</code> badge, live and on reload alike. A <code>truncated</code> badge answers the other half: a response cut off mid-sentence by the model's own output limit.</p></li><li><p><strong>A plan is a tree, and it renders as one.</strong> A block step (<code>across:</code>,
+<code>in_parallel:</code>, <code>race:</code>, <code>ensemble:</code>, <code>do:</code>, <code>try:</code>) holds the steps that ran
+inside it, indented under a guide rail, and folding the block folds its whole
+subtree. A triggering <code>get:</code> holds the entire build its version set off,
+which is what it already is — the get does not finish until that build does.</p></li><li><p><strong>A folded block still says where it stands.</strong> Its row carries the count of
+what is inside it — <code>3 steps · 2 passed · 1 failed</code> — because the rows that
+would otherwise answer are folded away with it. A block wrapping a single
+step carries no count unless that step failed: one child says nothing its own
+row does not.</p></li><li><p><strong>Only the path to a failure or to live work opens by default.</strong> A reader
+opening a finished run came for what broke, so a failed, errored or
+aborted step opens, and so does every block holding one; while a run is
+live, so does a running block and the agent whose conversation is
+streaming in. A put opens
+on the version it produced, and a step the run never heard the end of opens
+too. Everything else — a passed agent's transcript, a passed block, a
+failure a <code>try:</code> tolerated, a sibling <code>fail_fast:</code> aborted — is one click
+or e away. A row you open, close or focus stays the way you left
+it, including across the reload when the run ends.</p></li><li><p><strong>The rail lights along the branch that is working.</strong> While a run is in
+flight, every block holding something still running is marked, so a reader
+who has folded half the page still knows where to look. A failed branch is
+not marked the same way — the counts above already carry the failure up every
+ancestor.</p></li><li><p><strong>The job's other runs are one click away, on the page.</strong> A strip under
+the header lists this job's recent runs, newest first, as status-colored
+chips — the one you are on is marked, a trigger that has not become a run
+yet leads with a <code>queued</code> chip to its follow page, and <code>all runs</code> opens the
+job's detail page. It refreshes on its own, so an older run of a job says
+when a newer one starts.</p></li><li><p><strong>Keyboard</strong>: j/k walk the tree, e/c
+expand and collapse everything, enter toggles, and f
+jumps to the innermost failure — the step that actually broke, rather than
+the outermost block that reports it.</p></li><li><p><strong>A cached step is folded and dimmed</strong>, labeled <code>unchanged — replayed from cache</code>. The steps a chain-skip swallowed are shown too, for the same reason:
+a transcript that stops at the cache hit reads as a truncated run rather
+than a cheap one.</p></li><li><p><strong>A failed run leads with where it broke</strong>: its header names the innermost
+failing step — the one that actually broke, which f also jumps
+to — as a link, and the error is read on that step, once. The head carries
+an error only when no step holds it: a run that died on an image pull, a
+placement or a resource check before any step failed. The page also says
+what changed since the last passed run of that job — computed by comparing
+content hashes, so each step whose inputs, command, or prompt actually moved
+carries a <code>changed</code> mark on its own row (<code>new</code> for a step that run did not
+have), and the line under the header counts them. A step that broke
+because its content moved carries <code>changed</code>; one that failed with the same
+content as before does not; hooks are never compared.</p></li><li><p><strong>Every run says who or what started it</strong>, after when it started: a
+person by name and where the name came from (<code>by ops (local)</code>), or what
+stood in for one (<code>by new version of repo</code>, <code>by webhook: push</code>,
+<code>by upstream jobs passed</code>, <code>by more versions to build</code>). A retry says what it repeated first
+(<code>rerun of #a1b2c3 by ops (local)</code>), and a restart keeps the run's original
+starter. A run started from a terminal with <code>steps run</code> names whoever ran
+the command, marked <code>(this machine, unverified)</code>: nothing checked that
+name, and the page says so in words. A run recorded before steps kept this
+names nobody rather than guessing.</p></li><li><p><strong>Every run names the configuration it executed</strong>, linking the pipeline as
+it was when that run started — which the file on disk no longer holds once
+anyone edits it. When a failed run's configuration differs from the last
+passed one's, the page says so above the step diff and links both, because
+"the steps moved because the pipeline did" and "the steps moved on their
+own" are different problems and the step diff alone cannot tell them apart.</p></li><li><p><strong>A put opens on the version it produced</strong>, <code>put: image (version: {...})</code>,
+as a get's row opens on the version it fetched — or says <code>(no version)</code>
+when its <code>out:</code> printed none. The note that the put made the rest of the
+chain uncacheable sits on the same row.</p></li><li><p><strong>A task step expands into what it printed.</strong> Output is captured as it
+prints and bounded at 32KB per step (see <a href="#live-runs">Live runs</a>). Recorded
+whichever way the step ended, and especially when it failed: the error a
+task returns names the exit status, and an assert mismatch names the
+expectation — neither carries the output that explains either. A step that
+printed nothing is not expandable at all, so a chevron never promises detail
+that is not there.</p></li><li><p><strong>An agent step expands into its conversation</strong>: the model's text each turn,
+every tool call, and any sub-agent delegation nested underneath, closing with
+the step's <code>answer</code>. Each model reply carries how long the request behind it
+took, measured from when that request was sent (hover it for both times, in
+UTC); a reply that took more than a tenth of the step's <code>timeout:</code> is flagged,
+so the slow ones stand out on a folded page. A step that failed while waiting
+on the model says how long that last request had been in flight — for a
+timed-out step, usually the answer to where the time went.</p></li><li><p><strong>Every payload is rendered as JSON, not printed.</strong> A call's arguments, a
+tool result, a node's content map, a resource version: parsed and
+highlighted, in the order they were recorded. A document that arrived escaped
+inside a string — <code>read_file</code> returns <code>{"content": "…"}</code>, and that content is
+often JSON itself — is shown as the document it is, unescaped, still inside
+its quotes so the nesting stays legible. Small payloads sit on the row; a
+bulky one folds behind a summary that names what is inside it (<code>content · 555 B</code>), so one 30KB tool result cannot bury the conversation around it. A
+string value that is not itself JSON is sniffed for a language — Go, YAML,
+a diff, a shebang script — and colored the same way, line by line.</p></li><li><p><strong>What was written for a reader is rendered; what was written to the model,
+and what a program produced, is shown literally and colored.</strong> A model's
+answer, and its running commentary mid-conversation, is markdown — headings,
+lists, tables, emphasis, because that is what a model writes for a person to
+read. A system prompt, a user message, a tool payload and a task's output are
+never re-rendered: they are text sent to a model or produced by a program,
+and showing them as anything other than what they are would show something
+that was never sent or printed. Each is still colored when the content can be
+told apart from prose with confidence — a diff's <code>@@</code> hunks, a YAML document,
+a Go file, an unfenced JSON blob — through the same highlighter <code>/docs</code> uses.
+Detection is best-effort over a fragment that may be truncated mid-token, and
+it declines rather than guesses: anything it cannot tell apart from prose
+renders as plain text. No detected language is ever named on the page — a
+guess is not a fact, unlike the byte counts and worker names beside it.</p><p>Rendered markdown's renderer is a deliberately narrowed one, because the text
+came from a model. Raw HTML is dropped rather than parsed. A <code>javascript:</code> or
+<code>data:</code> link renders with no destination, and every surviving link carries
+<code>rel="noopener noreferrer nofollow"</code>. <strong>Images are never fetched</strong> — an
+<code>![](http://…)</code> in a review is a request the browser makes on its own, so the
+page shows the alt text and the host it wanted instead. Headings mint no
+anchor ids, which are the page's own (<code>#step-…</code>) to hand out.</p></li><li><p><strong>A CLI-backed agent reads the same as a hosted one.</strong> An agent whose
+<code>source.model:</code> is a CLI (<code>@claude/sonnet</code>) runs its own tool loop in a
+subprocess, so steps reads that subprocess's transcript as it streams and
+publishes the same turns: the model's text, every tool call, and every
+result. They appear live while the step runs and are stored with it
+afterwards, so the node page's conversation works for a CLI step too.</p></li><li><p><strong>What a step cost</strong>, when anything reported it. A CLI meters itself and
+prints a figure when it exits; the HTTP paths report tokens and leave pricing
+to whoever knows the rate card. A run where nothing reported one says
+<code>unpriced</code> rather than <code>$0.00</code>, which would read as free, and a run where
+only some steps did says <code>$0.42+3?</code> — a bill for three of six steps
+presented as the whole one is the same lie in the other direction.</p></li><li><p><strong>Which machine a step ran on</strong>, on that step's own row, for a step that was
+placed: the tag, the platform the worker reported,
+how many bytes had to be pushed to it and how many came back, the identity
+it ran as, and the machine — plus the image if the step ran in a container
+on it. A worker that named no identity — every
+docker+ worker, whose step runs as its image's user — leaves it out rather
+than inventing <code>0:0</code>, which would read as root.</p><p>There is deliberately <strong>no cost column</strong>: what an instance-hour actually
+cost is not knowable from inside a run — list prices ignore Savings Plans
+and Reserved Instances, a spot instance's paid price is reported by no API,
+and real billing lands up to a day later. That is the opposite call from
+spend above, where the <em>provider</em> reports the dollars and steps only records
+what it was told. <code>steps runs where -p &lt;pipeline></code> reads the same rows in a
+terminal.</p></li><li><p><strong>Every hash is a link</strong> to the node page, and <strong>every step has one too</strong> —
+the <code>#</code> beside its name is a URL you can paste at someone, and it opens the
+step it names.</p></li></ul><h2 id="activity">Activity</h2><p><code>/activity</code> — an admin's page, reached from the menu under your name on a
+server you sign in to — is the log of what people did to the daemon's
+pipelines, newest first, across every pipeline: who set one, triggered or
+retried a job, approved or rejected, answered a question, aborted, paused,
+released, renamed, destroyed, or connected, tested or disconnected an MCP
+server. Each line says when, who,
+what, and to which pipeline, and the job, run, revision or page it touched
+is a link.</p><ul><li><strong>Every name narrows it.</strong> Click a person, an action or a pipeline and the
+log shows only those; what it is narrowed by is said above the table, each
+with an <code>×</code> to drop it, and the URL is the filter — send it to someone.</li><li><strong>People, not machinery.</strong> A run a new version started is not here: it says
+<code>by new version of repo</code> on the run itself. Keeping the log to what people
+did is what stops a busy poll pushing their actions out of a log bounded by
+count.</li><li><strong>Destroying a pipeline does not erase its history.</strong> Its lines stay, under
+the name it had, marked <code>gone</code>, and the destroy is one of them. A rename
+keeps its history too, and answers to the new name.</li><li><strong>Only what happened is recorded.</strong> A refused action — a read-only server,
+a pipeline that would not load — leaves no line.</li><li><strong>Bounded by count</strong>, <code>--activity-history</code> (default 10,000), the oldest
+dropped first, whichever pipeline they belong to. Names in it are personal
+data; that bound is how long they are kept.</li><li>On a server nobody signs in to, the who is <code>—</code>.</li></ul><h2 id="live-runs">Live runs</h2><p>A run still in flight streams to the page over server-sent events: steps
+appear as they start, tool calls arrive as the model makes them, and the page
+settles into its final state when the run ends.</p><p>The stream is built on the same rows the finished-run page reads, so a run
+watched live and the same run opened an hour later show the same thing, and a
+dropped connection costs nothing but a reconnect. It also means the UI shows
+runs it did not start — a <code>steps run</code> in another terminal against the same
+pipeline appears here as it happens.</p><p>Recording is the runner's job, not the UI's: <strong>every</strong> run persists its events
+(<code>run_events</code>), whether or not anything is watching. A job started from a
+terminal leaves the same record as one started from the browser.</p><p>A task's output arrives the same way — a task with <code>assert:</code> or <code>fix:</code> too —
+and so does what a get's <code>in:</code> or a put's <code>out:</code> prints to stderr; their
+stdout is not recorded, because <code>out:</code>'s is the version the resource protocol
+reads, not something to show. A <code>check</code> records nothing. While the command
+runs, what it prints is recorded a line at a time (a partial line is
+published anyway once it has waited a second and the command writes again) and
+appended to the step's row as it lands, so a six-hour build is readable while
+it builds. When the command exits, those pieces are replaced by one record of
+its output, bounded at 32KB: the first 8KB and the last 24KB, with a line
+between them saying how much was left out. The end is kept because the end is
+where a failing command explains itself; the pieces are dropped because a
+finished build should cost the same on disk however much it printed. A build
+that dies mid-step keeps them, as the only record of what that step said. A
+progress bar's carriage returns are collapsed to the value a terminal would
+show, one per piece, rather than kept as the thousands of lines they would
+otherwise be.</p><h2 id="following-a-run-you-started">Following a run you started</h2><p>Triggering does not drop you back on a list to refresh. A trigger lands on a
+short waiting page that reports what the queue is doing and forwards itself to
+the live transcript the moment a worker picks the job up — a queued job has no
+run id until then, which is why there is a waiting room rather than a
+redirect. While it waits it lists what the drain checks before claiming, each
+line <code>✓</code> clear or <code>⟳</code> blocking — the pipeline is not paused, its serial group
+is free, its <code>max_in_flight</code> has room, a worker has claimed it — so the first
+blocking line answers why it has not started, as Concourse's "preparing build"
+does. It lists only checks the drain makes: a held job is not one, because a
+person's trigger runs a held job.</p><p>Every status is one word, one glyph and one colour, on every page:</p><table><thead><tr><th>State</th><th>Of</th><th>Drawn</th><th>Meaning</th></tr></thead><tbody><tr><td>queued</td><td>run</td><td><code>○</code> faint</td><td>triggered, not yet claimed by a worker</td></tr><tr><td>running</td><td>run</td><td><code>◐</code> yellow</td><td>in progress</td></tr><tr><td>passed</td><td>run</td><td><code>✓</code> green</td><td>every step succeeded</td></tr><tr><td>failed</td><td>run</td><td><code>✗</code> red</td><td>a step said no</td></tr><tr><td>errored</td><td>run</td><td><code>!</code> red</td><td>the machinery broke: an image, a daemon, a provider</td></tr><tr><td>aborted</td><td>run</td><td><code>■</code> dim</td><td>a person stopped it; not a failure</td></tr><tr><td>paused</td><td>pipeline</td><td><code>⏸</code> blue</td><td>a person paused it; an unpaused pipeline reads <em>active</em></td></tr><tr><td>held</td><td>job</td><td><code>⊘</code> red</td><td>the <a href="infra.html#circuit-breaker-max_consecutive_failures">circuit breaker</a> stopped its automatic triggers</td></tr><tr><td>unreported</td><td>step</td><td><code>?</code> dim</td><td>the run ended before this step reported how it did</td></tr></tbody></table><h3 id="the-tab-mark">The tab mark</h3><p>The browser tab carries a <strong>mark</strong> for whatever the page is about: a run page
+marks that run, every other pipeline page marks the pipeline, and the root
+marks every pipeline at once. The favicon is a disc colored by status, with a
+yellow ring around it while something is running — so a red disc with a ring
+reads "broken, and a fix is building". The title leads with the same glyphs.
+A pipeline is colored by each job's latest <em>finished</em> run: red when any of
+them failed or errored, blue while paused, green otherwise. The mark follows
+the page as it refreshes, and a run page's mark changes the instant the run
+ends, so a tab left in the background reports the outcome without being
+reopened.</p><p>The jobs graph refreshes itself every couple of seconds, in place — it keeps
+your scroll position rather than reloading the page — and pauses while the
+tab is hidden.</p><h2 id="the-action-bar">The action bar</h2><p>Every action on a pipeline's pages lives in one bar under the nav, in the same
+place on every page: the pipeline's <strong>Pause</strong> at the left, what this page's job
+or run can have done to it at the right. Each button's tooltip says what it
+does. A paused pipeline turns the bar blue and its button reads <strong>Unpause</strong>;
+buttons that would start something are disabled, and say why when hovered.</p><table><thead><tr><th>Page</th><th>Right-hand buttons</th></tr></thead><tbody><tr><td>a job</td><td><strong>↻ Trigger</strong>, and <strong>Release</strong> when the breaker holds it</td></tr><tr><td>a run, finished</td><td><strong>↻ Trigger</strong> (a new run of its job) and <strong>⟲ Retry</strong> (this run again)</td></tr><tr><td>a run, live</td><td><strong>↻ Trigger</strong> and <strong>■ Abort</strong></td></tr><tr><td>the follow page</td><td><strong>■ Abort</strong> the queued run</td></tr></tbody></table><h2 id="triggering-retrying-approving-releasing">Triggering, retrying, approving, releasing</h2><p>Nine controls, each doing what a CLI verb does:</p><ul><li><strong>Trigger</strong> enqueues the job into the durable trigger
+queue <code>steps web</code> uses — the same queue this process's own polling fills.
+<code>steps web</code> drains it in-process by calling <code>pipeline.RunJob</code> — there is no
+second execution path, so a job run from a browser gets the same caching,
+hooks, serial groups, and recording as any other. A trigger builds the newest versions the job has not built, and honors the cache,
+which on an unchanged pipeline correctly does almost nothing; Retry, or <code>steps run --force</code> from a terminal, is how to run unchanged steps again. A job the breaker holds is still triggered, since the breaker stops only automatic triggers.</li><li><strong>Retry</strong> is <code>fly rerun-build</code>: a new run, the whole plan from the top, against exactly the versions the run was created with — what <code>steps run --rerun &lt;run></code> does. A <code>version: every</code> job builds each version as a run of its own, so Retry rebuilds that one version. Nothing that arrived since joins it, <code>passed:</code> is not asked again, and it takes no version, so it disturbs no other build. It skips the step cache, since a retry of a run that passed would otherwise do nothing. The new run links the run it retried, and a retry of an old run does not become its job's status — only a retry of the job's latest run does, as in Concourse. See <a href="conformance.html">conformance.md</a>.</li><li><strong>Approve / Reject</strong> on an <code>approval:</code> step, with the reason recorded — the
+same row <code>steps approvals approve</code> writes, under the name of whoever signed
+in (a decision on a server nobody signs in to reads <code>by web</code>).</li><li><strong>Answer</strong> an <code>ask_user</code> question a step is parked on — one click for an
+offered option, or your own words — the same row <code>steps questions answer</code> writes. See
+<a href="agents.html">agents.md</a>.</li><li><strong>Release</strong> a job the circuit breaker is holding — what <code>steps jobs release</code> does.</li><li><strong>Pause / Unpause</strong> the whole pipeline — what <code>steps pipeline pause</code> throws.
+The action bar carries it on every page of the pipeline, and the root lists
+it for every pipeline at once. Each puts you back on the page you pressed it
+from.</li><li><strong>Abort</strong> a running run from its page's bar, or a queued one from the page a
+trigger lands on — what <code>steps runs abort</code> asks for. See
+<a href="#aborting-a-run">Aborting a run</a>.</li><li><strong>Connect</strong> an oauth <code>mcp_servers:</code> entry from the
+<a href="mcp.html#authorizing-from-the-browser-the-mcp-tab">mcp tab</a>, finishing the
+login in the browser you are already in.</li><li><strong>Test</strong> any declared <code>mcp_servers:</code> entry from the same tab — the only
+thing on that page that connects to anything.</li></ul><p><code>--read-only</code> withholds all nine: the controls disappear from the pages and
+the routes refuse. The mcp tab keeps its status column — that a server needs a
+login is a diagnostic a build box should still show, and the row names the CLI
+command instead. The queue is still drained, polling still runs, and
+<code>steps pipeline set</code> still works — that flag is a statement about the
+browser's surface, not about what the process does on its own or about how it
+is deployed. It also serves no <a href="mcp.html#sharing-tools-with-other-agents-mcp_exports"><code>mcp_exports:</code></a>,
+since calling a tool is acting. <code>--listen 0.0.0.0:8088 --read-only</code> is a build box that still has
+to notice new versions; read <a href="#security">Security</a> before you expose one.</p><p><strong>The webhook route is the one exception, deliberately.</strong>
+<code>POST /p/&lt;slug>/hooks/&lt;resource></code> still works under <code>--read-only</code>, and the job
+it enqueues still runs. It is not a UI control: it carries the sender's own
+signature, which is a stronger check than any control above has, and withholding
+it would mean a read-only box could not be the thing GitHub notifies — which is
+most of why a build box is exposed at all. <code>--read-only</code> says a <em>browser</em>
+cannot start work here; it does not say nothing can. If that is what you
+want, do not give the pipeline a <code>type: webhook</code> resource — with none, the
+route is a 404. See <a href="webhooks.html#receiving-deliveries">webhooks.md</a>.</p><h2 id="aborting-a-run">Aborting a run</h2><p>Stopping one run leaves the daemon and every other run alone:</p><pre class="hl"><code>steps runs abort -p app 46UMHVPYRA6YHB7M   <span class="c"># stop a running run</span>
+steps runs abort -p app --queued build     <span class="c"># drop build&#39;s queued run before it starts</span>
+</code></pre><p>or <strong>■ Abort</strong> on the run's page. It means what it means in Concourse:</p><ul><li>The run reads <strong>aborted</strong>, not failed — the status a Ctrl-C gives a
+<code>steps run</code> too. Its <code>on_abort:</code> and <code>ensure:</code> hooks still run, with the
+60-second grace every abort gets, so the command returns before the run has
+finished stopping.</li><li>Nothing it did is cached as done: running the job again runs the aborted
+step again, and no version is marked as having passed it.</li><li>A placed step is interrupted on its worker rather than orphaned there, and a
+machine the run acquired is given back the way any finished run gives it
+back.</li><li>Its queue row is finalized <strong>aborted</strong>, so a restart does not run it again,
+the circuit breaker neither counts nor clears it, and its <code>serial:</code> /
+<code>max_in_flight</code> slot frees once the run has actually stopped.</li><li>An aborted queued run keeps its row, reads aborted, and never starts.
+<code>--queued</code> names a job rather than a run because a queued build has no run
+id yet, and a job has at most one queued at a time.</li></ul><p>It goes through the daemon rather than the database — what it stops is a
+context inside that process — so it needs a running <code>steps web</code>, takes
+<code>--target</code> like <code>steps pipeline</code> does, and is refused under <code>--read-only</code>. A
+run this daemon is not executing — one a <code>steps run</code> started against the same
+file, or one a crashed daemon left marked running — is refused with a message
+saying so.</p><h2 id="one-daemon">One daemon</h2><p><code>steps web</code> is the whole long-running mode: it serves the UI, holds the
+pipelines, polls every <code>trigger: true</code> resource, and drains the queue all of
+that fills. There is no separate watcher and no one-shot — a front end that
+drains a queue nothing fills is a runner that looks alive and notices nothing,
+and two processes against one state database claim each other's work.</p><pre class="hl"><code>steps web                      <span class="c"># serve, and poll every 30s</span>
+steps web --interval 5m        <span class="c"># slower</span>
+steps web --max-concurrent <span class="n">4</span>   <span class="c"># up to four queued jobs at a time, per pipeline</span>
+steps web --max-runs <span class="n">6</span>         <span class="c"># and at most six runs at once across all of them</span>
+</code></pre><p><code>--max-concurrent</code> is per pipeline; <code>--max-runs</code> is the whole daemon's. A
+triggered run that a limit holds back — either flag, a job's <code>serial:</code> or
+<code>max_in_flight:</code>, a paused pipeline — stays <strong>pending</strong>: a row in the queue,
+not a run yet, and the follow page names which limit is holding it. A pending
+run has not started, so a restart keeps it and runs it; a build that was
+going is resumed instead (see <a href="#what-a-restart-does">What a restart does</a>).</p><p><strong>There is no one-shot mode.</strong> A process that never binds has nothing to be
+set into, and a server is its own scheduler — run it under systemd as a
+service rather than a timer, and let <code>--interval</code> be the schedule. A job that should run at a
+time of day gets a <a href="resources.html#the-built-in-cron-type"><code>cron</code> resource</a>; the
+interval is only how often that clock is read.</p><ul><li><strong>One poller per pipeline.</strong> Within one pipeline the poller is handed the
+store handle its drain already uses rather than opening a second one.
+<code>trigger.Poll</code>'s doc comment has the why; the short version is that a store
+is a single pooled connection, so sharing it queues the poll's writes behind
+the drain's instead of adding a second connection to fight for the same
+write lock.</li><li><strong>One <code>steps</code> process per state database, and nothing enforces it.</strong> Two of
+them claim each other's work, and startup recovery — re-queueing rows a
+crashed process left claimed — reads every <code>running</code> row as abandoned, which
+is true only when nothing else is alive. A second <code>steps web</code> against one
+state file is a deployment mistake, not a supported pairing.</li><li><strong>A pipeline with no <code>trigger: true</code> get is not an error.</strong> It is noted in
+the log and served anyway, because plenty of pipelines are run by hand and
+the UI is where you would run them from.</li><li><strong>Preflight runs before the first poll</strong>, the same check <code>steps run</code> does,
+with one asymmetry: a problem <em>waiting cannot fix</em> — an <code>mcp:</code> tool the
+server does not expose — stops that pipeline's polling and says so, while a
+problem waiting might fix — a server that did not answer, a token a refresh
+would renew — is logged once as <code>trigger.preflight_transient</code> and left to
+the loop, which retries by its nature. <code>--no-preflight</code> skips the
+check entirely. It runs inside the poller, so it never delays serving.</li></ul><h2 id="applying-a-change">Applying a change</h2><p>Set it again. There is no watcher and no <code>--watch</code>:</p><pre class="hl"><code>steps pipeline set -c pipeline.yml       <span class="c"># edit, set, and it is serving</span>
+</code></pre><p><strong>A save-to-apply loop is a one-line wrapper</strong> around this — <code>watchexec -w pipeline.yml -- steps pipeline set -c pipeline.yml -n</code> — and that is where it
+belongs. A watcher inside the daemon would be a set that fires with nobody
+attached; a configuration the daemon will not accept is refused to the
+terminal that set it instead.</p><p><strong>A run in flight finishes against the configuration it started under.</strong> The
+swap is immediate for everything after it: the pages, the trigger poller, the
+webhook endpoints, and the next job the queue admits — including the <code>serial:</code>,
+<code>serial_groups:</code> and <code>max_in_flight:</code> a job is admitted under, which live in the
+database and are rewritten from the new configuration on every set. What the
+running job is executing does not change underneath it, and the run records
+which configuration that was — the <code>CONFIG</code> column <code>steps runs</code> prints and the
+revision named on the run page, where it links the configuration itself. A
+<code>--resume</code> is the exception, and deliberately: it continues a failed run under
+the configuration it is resumed <em>with</em>, which is usually the one that fixed it.</p><p><strong>Adding or removing a <code>trigger: true</code> get takes effect too.</strong> The poll loop
+re-decides what it can check each time the configuration changes, so a resource
+a set adds is preflighted and then polled, and one a set removes stops being
+checked. A pipeline with nothing to poll is a state the loop sits in, not a
+reason it was never started.</p><p><strong>A changed <code>workspace:</code> is adopted.</strong> The provider that materializes build
+directories is rebuilt when the block moves, and a run already in flight keeps
+the one it started with until it finishes — so a set never deletes the tree a
+build is working in. One this machine cannot provide is refused like any other
+part of the configuration.</p><h2 id="one-database-several-pipelines">One database, several pipelines</h2><p>A daemon holds every pipeline set into it in ONE state database — <code>.steps/steps.db</code>
+unless <code>--db</code> names another:</p><pre class="hl"><code>steps web --db /var/lib/steps/state.db
+steps pipeline set -p app -c app.yml
+steps pipeline set -p infra -c infra/pipeline.yml
+</code></pre><p>A bare path is a sqlite file, and so is <code>sqlite:///var/lib/steps/state.db</code>
+— the scheme chooses the driver, the way <code>--worker</code> takes <code>ssh://</code> and
+<code>aws://</code>, and <code>postgres://</code> is the other one (below). A scheme no driver
+answers to is refused before anything is opened.</p><p>One file to back up, and one file to delete. What it is <em>not</em> is a merge:
+inside the database every row carries the pipeline it belongs to, so histories,
+resource versions, queues, serial groups and the merkle cache stay separate.
+Two pipelines each with a job named <code>build</code> running an identical task do not
+share a cache entry, and one pipeline's <code>run_history:</code> cap never reaps
+another's runs.</p><p>Reading it back needs no pipeline argument. <code>steps runs</code> lists what the file
+holds and interleaves the newest runs of all of it, which is the terminal's
+version of the web root:</p><pre class="hl"><code>$ steps runs --db /var/lib/steps/state.db
+
+PIPELINE  PATH
+app       /src/app/app.yml
+infra     /src/infra/pipeline.yml
+
+WHEN                 PIPELINE  JOB      STATUS     RUN               CONFIG
+2026-08-30 09:14:02  infra     deploy   succeeded  UNVFHMCHVWY6GV6N  9b1e04c7d2aa
+2026-08-30 09:12:40  app       build    failed     46UMHVPYRA6YHB7M  3f6a91d0be52
+
+break one down with: steps runs cost -p &lt;pipeline&gt; &lt;run&gt; --db /var/lib/steps/state.db
+</code></pre><p><code>PATH</code> is where the configuration was last set FROM — a file on whoever's
+machine ran <code>set</code>, recorded so a reader can tell two checkouts apart, and never
+opened here.</p><p><strong>The read commands take <code>-p &lt;name></code>, not a path</strong>, because a served pipeline
+has no file on this machine:</p><pre class="hl"><code>steps runs -p app                      <span class="c"># what ran</span>
+steps runs steps -p app                <span class="c"># why a step did what it did</span>
+steps runs follow -p app               <span class="c"># watch the newest run to its end</span>
+steps runs cost -p app 46UMHVPYRA6YHB7M
+steps approvals -p app
+steps questions -p app
+steps jobs -p app
+</code></pre><p>They read the database directly rather than going through the daemon, so they
+work against a stopped one — and they take <code>--db</code> when it is not the default.
+<code>steps run</code>, <code>steps test</code>, <code>steps validate</code> and <code>steps plan</code> still take a file
+path and still default to <code>.steps/&lt;filename>.db</code> beside it: those are the local
+commands, and a local command has a file.</p><p>Run ids stay globally unique, but <code>--resume</code> and <code>--replay</code> still refuse an id
+belonging to a different pipeline in the same file: continuing another
+pipeline's run would reuse its workspace and step indexes against this
+pipeline's plan.</p><p><strong>A database an older steps wrote is upgraded when it is opened</strong>, by any
+command that writes to it (<code>steps web</code>, <code>steps run</code>, <code>steps test</code>). Before upgrading a file, steps copies it beside
+itself as <code>&lt;file>.v&lt;old schema>.bak</code>, keeping only the newest copy; if the
+upgrade fails, the file is left as it was and the error names the copy. A
+read command (<code>steps runs</code> and the like) does not upgrade, and says which
+command will. Two cases are still refused: a file older than v0.1.0,
+whose answer is deleting it (losing run history and cache, nothing else), and
+a file a NEWER steps wrote, whose answer is that steps.</p><h3 id="postgres">Postgres</h3><p>History can live in a Postgres server you already run instead of a file on the
+daemon's disk — same commands, same web UI, same pipelines:</p><pre class="hl"><code>export PGPASSWORD<span class="p">=</span>…
+steps web --db <span class="s">&#39;postgres://steps@db.internal:5432/ci?sslmode=verify-full&#39;</span>
+steps runs --db <span class="s">&#39;postgres://steps@db.internal:5432/ci?sslmode=verify-full&#39;</span>
+</code></pre><p><code>postgresql://</code> is the same thing, and a unix socket is
+<code>postgres:///ci?host=/var/run/postgresql</code>. Only the url form is accepted, not a
+<code>key=value</code> string. Quote the url: its <code>?</code> and <code>&</code> mean something to a shell.</p><ul><li><strong>The database must exist; steps never creates it.</strong> Create it with
+<code>createdb</code> first. Inside it, steps creates and uses one schema, <code>steps</code>, and
+touches nothing outside it — so it can share a database with an application
+that has its own <code>runs</code> table. <code>search_path=&lt;schema></code> in the url picks
+another schema (never <code>public</code>, which is refused); each schema is its own
+state database, so two daemons can share a server as long as each has its
+own.</li><li><strong>Credentials do not belong in the url.</strong> A password in <code>--db</code> is kept by
+every process listing and shell history that saw the command, and steps warns
+when it sees one. Set <code>PGPASSWORD</code>, or use <code>~/.pgpass</code> or <code>PGSERVICEFILE</code>.
+Nothing steps prints — a banner, an error, a pasteable hint — carries the
+password, and the hints drop it from the url they print.</li><li><strong>Off the machine, use <code>sslmode=verify-full</code>.</strong> The default is libpq's
+<code>prefer</code>, which quietly falls back to an unencrypted connection.</li><li><strong>Behind PgBouncer in transaction mode</strong>, add
+<code>default_query_exec_mode=simple_protocol</code>: prepared statements do not survive
+a pooler that hands each transaction a different server connection. List
+<code>search_path</code> in PgBouncer's <code>track_extra_parameters</code>, not
+<code>ignore_startup_parameters</code>: a session that lost it is refused on open,
+since steps' tables would otherwise land in <code>public</code>.</li><li><strong>Still one <code>steps web</code> per state database</strong> — per schema, here. Nothing
+arbitrates two daemons sharing one, exactly as with a file.</li><li><strong>The first open creates the schema; every later one only reads its
+version</strong>, so once it exists the role steps connects as needs no <code>CREATE</code>
+privilege — <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code> and <code>DELETE</code> on the schema's tables
+(and <code>USAGE</code> on its sequences) are enough, and a role with only <code>SELECT</code> can
+run the read commands.</li><li><strong>A schema an older steps wrote is upgraded on open, in one transaction</strong>,
+so a failed upgrade leaves it as it was (Postgres DDL is transactional; take
+your own backup if you want one). Upgrading needs the role to own the
+tables, which a role with only <code>SELECT</code>/<code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> does not —
+open it once as the owner. A schema older than v0.1.0, or one a newer steps
+wrote, is refused; for the first, <code>DROP SCHEMA steps CASCADE</code> and run again,
+which loses steps' run history and cache and nothing else in the database.</li></ul><h2 id="security">Security</h2><p>On the loopback address it binds by default there is nothing to authenticate
+against: this is the local runner's own front end, in the same trust domain as
+the shell that started it. A daemon reachable from anywhere else turns on
+accounts — local ones, or GitHub or Google sign-in — and roles that say who may
+do what, on every route but a few that carry their own credential (the webhook
+one among them). See <a href="authentication.html">authentication.md</a>.</p><p><strong>Two browser-reachable routes make the daemon act on the outside world</strong>, and they are the only ones that do: the mcp tab's <strong>Connect</strong> starts an oauth login and <strong>Test</strong> connects to a declared server. Both need the daemon's credentials, both are refused cross-origin, neither can name a server the pipeline does not already declare, and <code>--read-only</code> withholds both while keeping the page. The reasoning is in <a href="authentication.html#what-a-browser-may-start">authentication.md</a>.</p><p><strong><code>steps pipeline set</code> is a remote-shell endpoint. Say that plainly: a
+pipeline is arbitrary commands, so anyone who can reach this port can run
+anything they like as the user running the daemon.</strong> With no accounts
+configured there is no token, no password, no allow-list; with them, it takes
+the <code>admin</code> <a href="authentication.html#who-may-do-what-roles">role</a>. <code>--read-only</code> does
+not close it either — that flag has always been
+a statement about the <em>browser's</em> surface, and the set endpoint is the
+deployment path, not a button on a page.</p><p>That is the reason for the loopback default, and it is a stronger reason than
+the trigger controls ever were. <strong>Binding to a routable address hands the
+machine to whoever can reach the port.</strong> <code>--listen 0.0.0.0:8088</code> exists for
+someone who has decided that is what they want; put credentials on it
+(<a href="authentication.html">authentication.md</a>) and TLS in front of it, or put it
+behind something else that authenticates — an SSH tunnel, a reverse proxy, a
+network nobody else is on — and treat <code>--read-only</code> as being about the browser
+only.</p><p><strong>Loopback keeps other machines off the port, not other web pages.</strong> A page
+open in a browser on this machine can re-point its own hostname at <code>127.0.0.1</code>
+after it loads — DNS rebinding — and from then on its requests reach this port
+carrying that name as both <code>Host</code> and <code>Origin</code>, which is exactly what a
+same-origin request looks like. So everything under <code>/api/</code> — what
+<code>steps pipeline</code> and <code>steps runs abort</code> talk to — refuses a request carrying a
+header only a browser attaches: an <code>Origin</code> of any value, which every browser
+sends on the <code>PUT</code>, <code>POST</code> and <code>DELETE</code> those verbs use, or a <code>Sec-Fetch-Site</code>
+saying anything but <code>none</code>, which is a URL typed into the address bar. The CLI
+sends neither, and no page in the UI calls <code>/api/</code>. <code>Host</code> is not checked by
+default, because a reverse proxy in front of the daemon forwards the name the
+client used — only you know which names are this daemon's.</p><p>The browser's own controls — trigger, retry, approve, answer, release, pause,
+abort, connect, test — are <code>POST</code>s refused when their <code>Origin</code> names another host, which stops another
+site aiming a form at your port. A rebinding page is not another host: it can
+read every page, configurations included, and press those controls, unless
+<code>--allowed-host</code> refuses its name or <code>--read-only</code> has withheld them. It cannot set, destroy or rename a pipeline:
+those verbs live under <code>/api</code>, which refuses anything browser-shaped.</p><p><strong><code>--allowed-host</code> closes rebinding.</strong> Name every host this daemon is reached
+by — the one in <code>--external-url</code>, the one a reverse proxy forwards, the one a
+webhook provider was given — and any request whose <code>Host</code> is not one of them,
+or a loopback name (<code>localhost</code>, <code>127.0.0.1</code>, <code>::1</code>), is refused with a 403
+before it reaches a page, a button or <code>/api</code>. Repeat the flag, or put a
+comma-separated list in <code>STEPS_ALLOWED_HOSTS</code>. A port is ignored, and so is
+case. It applies to every route, webhooks included — a delivery that names
+another host is refused like anything else — except <code>/healthz</code>, which a
+platform's probe reaches by IP and which answers <code>ok</code> and nothing more.</p><pre><code>steps web --listen 0.0.0.0:8088 --allowed-host steps.example.com
+</code></pre><p><strong>Pause and unpause are on the browser's side of that line, deliberately.</strong>
+They are the one pair a page can reach that <code>/api</code> also serves, and the reason
+is that the envelope does not grow: a page that can press <strong>Trigger</strong> already
+runs arbitrary commands as this user, so unpausing grants it nothing it did not
+have, and pausing is a smaller stop than <strong>Abort</strong> next to it. What is <em>not</em>
+on this side is everything that changes what a pipeline IS.</p><h2 id="flags">Flags</h2><p><code>steps web</code> — facts about the box, all of them:</p><pre><code>--listen         address to serve on (default 127.0.0.1:8088)
+--external-url   the URL published to every step as STEPS_URL (default http://&lt;listen&gt;;
+                 unset for a wildcard listen address). http(s) only, no credentials,
+                 query or fragment: credentials would land in every step's environment
+--interval       how often to poll trigger: true resources (default 30s)
+--max-concurrent maximum queued jobs running at once, per pipeline (default 1)
+--max-runs       maximum runs at once across every pipeline (default 0, no limit)
+--pin / --force  pin a version field; ignore the step cache (not the every-cursor)
+--no-preflight   skip the pre-poll health check of models and MCP servers
+--read-only      serve without trigger, retry, approve/reject, answer, release,
+                 pause, abort, connect or test controls, and serve no mcp_exports
+                 (steps pipeline set is NOT withheld — see Security)
+--basic-auth-username / --basic-auth-password
+                 one account, as a plain pair; both or neither,
+                 env STEPS_BASIC_AUTH_USERNAME / _PASSWORD (see authentication.md)
+--local-user / --local-users-file
+                 local accounts as name:bcrypt-hash, or an htpasswd file of them
+                 (see authentication.md)
+--github-client-id / --google-client-id
+                 sign people in with GitHub or Google; the secret is read from
+                 $STEPS_GITHUB_CLIENT_SECRET / $STEPS_GOOGLE_CLIENT_SECRET (or the
+                 variable --github-client-secret-env / --google-client-secret-env
+                 names), and needs --external-url and --role
+--role           who may do what: viewer, operator or admin, each a rule about
+                 the signed-in person (repeatable; see authentication.md)
+--activity-history
+                 how many entries the activity log keeps across every pipeline
+                 (default 10000, 0 is no limit; see Activity)
+--allowed-host   refuse any request whose Host is not this name (repeatable;
+                 loopback names always pass; env STEPS_ALLOWED_HOSTS,
+                 comma-separated; see Security)
+--run-history / --version-history
+                 how many runs of each job / versions of each resource to keep;
+                 a pipeline's defaults: wins (see infra.md)
+--artifact-store mirror cached step outputs to a content-addressed store,
+                 e.g. s3://bucket/prefix
+--keep-workspace leave build workspaces on disk ($STEPS_KEEP_WORKSPACE)
+--answer         answer an ask_user question in advance (repeatable)
+--worker         map a step tag to a machine, e.g. --worker gpu=ssh://jt@box
+--db             state database: a sqlite path, sqlite:// or postgres:// url
+                 (default .steps/steps.db; see Postgres above)
+--log-level      debug, info, warn or error (default info, $STEPS_LOG_LEVEL)
+</code></pre><p><code>--deliver</code> is listed by <code>--help</code> but refused: a daemon receives deliveries at
+<code>POST /p/&lt;pipeline>/hooks/&lt;resource></code>, and the flag is for <code>steps run</code> and
+<code>steps test</code>.</p><p><code>steps pipeline &lt;verb></code> — facts about one pipeline:</p><pre><code>--target         the daemon to talk to (default http://127.0.0.1:8088, $STEPS_TARGET),
+                 optionally http://user:password@host
+-p / --pipeline  its name on the daemon (set defaults to the YAML's base name)
+-c / --config    the YAML to upload (set only)
+-v / --var, --vars-file   pipeline vars, substituted before the upload (set only)
+--pause          set it paused (set only)
+-n / --non-interactive    do not diff or ask; apply it (set, destroy)
+--to             the new name (rename only)
+</code></pre></article></main><script>
+(function(){
+  window.addEventListener('message', function(e){
+    if(!e.data || e.data.type !== 'topbanana:settheme') return;
+    var t = e.data.theme;
+    if(typeof t !== 'string' || !/^[a-z]{2,20}$/.test(t)) return;
+    document.documentElement.setAttribute('data-theme', t);
+  });
+})();
+</script></body></html>

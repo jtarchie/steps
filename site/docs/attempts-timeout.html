@@ -1,0 +1,224 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Attempts and Timeout · steps docs</title><meta name="description" content="attempts: and timeout: in steps: retries and deadlines for every step type, and what each one costs on an agent step."><link rel="stylesheet" href="steps.css"><style>.hl{color:#d8d5c9;background-color:#171a16}.c{color:#83887b;font-style:italic}.k{color:#7aa4d9}.p{color:#83887b}.s{color:#84c06d}.n{color:#d9a94a}.w{color:#b98fcc}.f{color:#6fbcb4}.d{color:#e0645a}.b{font-weight:bold}.i{font-style:italic}</style><link rel="stylesheet" href="/app.css"></head><body><div class="statusline"><a class="brand" href="/"><b>steps</b> docs</a><nav class="tabs" aria-label="Sections"><a class="tab" href="/">site</a>
+<a class="tab" aria-current="page" href="index.html">docs</a>
+<a class="tab" href="https://github.com/jtarchie/steps">github</a>
+<a class="tab" href="https://github.com/jtarchie/steps/releases">releases</a></nav></div><main><div class="docsnav"><a href="index.html">start here</a>
+<span class="docsgroup"><span class="docsgrouptitle">Writing pipelines</span>
+<a href="resources.html">resources</a><a href="webhooks.html">webhooks</a><a href="expr.html">expr</a><a href="control-flow.html">control-flow</a><a href="agents.html">agents</a><a aria-current="page" href="attempts-timeout.html">attempts-timeout</a><a href="workspace.html">workspace</a><a href="infra.html">infra</a><a href="templating.html">templating</a><a href="mcp.html">mcp</a><a href="complete.html">complete</a>
+</span><span class="docsgroup"><span class="docsgrouptitle">Reference</span>
+<a href="web.html">web</a><a href="observability.html">observability</a><a href="authentication.html">authentication</a><a href="agents-internals.html">agents-internals</a><a href="aws-workers.html">aws-workers</a><a href="gcp-workers.html">gcp-workers</a><a href="do-workers.html">do-workers</a><a href="conformance.html">conformance</a></span></div><nav class="docstoc" aria-label="On this page"><span class="docsgrouptitle">on this page</span>
+<a href="#when-to-use-attempts">When to use attempts</a><a href="#when-to-use-timeout">When to use timeout</a><a href="#interaction-with-fix">Interaction with fix:</a><a href="#interaction-with-assert">Interaction with assert:</a><a href="#hook-firing">Hook firing</a><a href="#logging">Logging</a><a href="#what-attempts-costs-on-an-agent">What attempts: costs on an agent</a><a href="#timeout-classification">Timeout classification</a><a href="#agent-steps-the-one-implicit-deadline">Agent steps: the one implicit deadline</a><a href="#put-the-deadline-on-the-agent-not-on-every-step">Put the deadline on the agent, not on every step</a><a href="#zero-means-no-limit">Zero means no limit</a><a href="#why-no-global-default">Why no global default?</a></nav><article class="docs"><h1 id="attempts-and-timeout">Attempts and Timeout</h1><p>Two operational limits available on all step types (get/task/put/agent):</p><ul><li><strong><code>attempts:</code></strong> — retry count for retrying unmodified operations</li><li><strong><code>timeout:</code></strong> — wall-clock deadline per attempt</li></ul><p>Neither is ever hashed: adding or changing them invalidates no cache.</p><h2 id="when-to-use-attempts">When to use attempts</h2><p><strong>Agent steps default to <code>attempts: 3</code></strong> (tasks and puts stay at 1). The asymmetry is the domain's: a task that failed will fail again — same command, same tree — so a retry hides a real failure. A model call that failed usually says nothing about the step and everything about the provider's minute, and under one attempt a single 503 destroyed a six-reviewer fan-out whose other five cells were healthy.</p><pre class="hl"><code><span class="k">agents</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> reviewer
+  <span class="k">source</span><span class="p">:</span> { <span class="k">model</span><span class="p">:</span> openrouter/qwen/qwen3.7-flash }
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> review
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">agent</span><span class="p">:</span> reviewer
+    <span class="k">attempts</span><span class="p">:</span> <span class="n">2</span>                    <span class="c"># pins that a retry absorbs the one provider 500 —</span>
+    <span class="k">messages</span><span class="p">:</span>
+      - <span class="s">&#34;Review the release.&#34;</span>  <span class="c"># any attempts &gt;= 2 would pass; the default is 3</span>
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> Release looks good   <span class="c"># the answer AFTER the absorbed 500</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>reviewer]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><p>Use <code>attempts:</code> for transient faults — flaky network calls, rate limits, temporary unavailability. Do <strong>not</strong> use it for internal bugs, permanent failures (wrong credentials, missing resources), or anything that needs investigation: if a step fails reliably, fix the underlying issue instead of adding retries.</p><p><code>attempts:</code> and <code>timeout:</code> sit on any step kind:</p><pre class="hl"><code><span class="k">resource_types</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> upstream
+  <span class="k">config</span><span class="p">:</span>
+    <span class="k">check</span><span class="p">:</span> <span class="p">|</span><span class="s">
+</span><span class="s">      printf &#39;[{&#34;ref&#34;: &#34;v1&#34;}]&#39;</span>
+    <span class="k">in</span><span class="p">:</span> echo {{ .version.ref | shellquote }} &gt; ref
+
+<span class="k">resources</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> release
+  <span class="k">type</span><span class="p">:</span> upstream
+  <span class="k">source</span><span class="p">:</span> {}
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> fetch
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">get</span><span class="p">:</span> release
+    <span class="k">attempts</span><span class="p">:</span> <span class="n">3</span>        <span class="c"># retries check and in</span>
+    <span class="k">timeout</span><span class="p">:</span> 2m        <span class="c"># per attempt</span>
+  - <span class="k">task</span><span class="p">:</span> verify
+    <span class="k">inputs</span><span class="p">:</span> <span class="p">[</span>release]
+    <span class="k">timeout</span><span class="p">:</span> 5m
+    <span class="k">run</span><span class="p">:</span> cat release/ref
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> v1
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>release, verify]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><h2 id="when-to-use-timeout">When to use timeout</h2><p>Use <code>timeout:</code> to prevent hung commands — and don't set it aggressively; a legitimate long-running operation should not be cut short:</p><pre class="hl"><code><span class="c"># DON&#39;T: this will fail a 25-minute test</span>
+- <span class="k">task</span><span class="p">:</span> integration-test
+  <span class="k">timeout</span><span class="p">:</span> 10m
+
+<span class="c"># DO: allow the test its reasonable time</span>
+- <span class="k">task</span><span class="p">:</span> integration-test
+  <span class="k">timeout</span><span class="p">:</span> 1h
+</code></pre><p><strong>Timeout is per-attempt</strong>, not per-step total. With <code>attempts: 3</code> and <code>timeout: 30s</code>, each attempt gets 30 seconds and the total possible time is ~90 seconds plus backoff.</p><h3 id="a-whole-job-can-have-one-too">A whole job can have one too</h3><p><code>timeout:</code> on a <strong>job</strong> is a wall-clock ceiling on the entire run — the same ceiling <code>budget:</code> gives in tokens, in the other unit. It exists because per-step timeouts do not add up to one: a job whose width is decided at run time (an <code>across:</code> block over what an earlier step recorded) can run twelve cells that each finish comfortably inside their own deadline and still take all afternoon.</p><pre class="hl"><code><span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> bounded
+  <span class="k">timeout</span><span class="p">:</span> 45m
+  <span class="k">budget</span><span class="p">:</span>
+    <span class="k">tokens</span><span class="p">:</span> <span class="n">2000000</span>
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">task</span><span class="p">:</span> work
+    <span class="k">run</span><span class="p">:</span> echo well inside the ceiling
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> well inside the ceiling
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>work]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><ul><li><strong>Checked between steps, never during one.</strong> The step that is running finishes and keeps its work; the deadline decides only whether the <em>next</em> one starts. The price is that a job may overrun by one step's duration — <strong>and that bound is only as tight as your steps are</strong>: a step with no <code>timeout:</code> of its own is unbounded, so give long steps their own if you want the job's to be a hard ceiling.</li><li><strong>A fan-out is checked per unit of work, not per block.</strong> An <code>across:</code> matrix or <code>in_parallel:</code> block stops admitting cells/branches when the deadline passes, and the job still fails. The bound is what is <em>admitted</em>, so a block that started everything at once (<code>max_in_flight:</code>/<code>limit:</code> at or above the unit count) has nothing left to stop.</li><li><strong>It fails the job</strong>, as a job-level <em>failure</em> (the same class as exceeding <code>max_visits:</code>), so the job's own <code>on_failure</code> and <code>ensure</code> fire. That is where a "this took too long" notification belongs.</li><li><strong>It does not degrade</strong>, unlike <a href="control-flow.html#a-ceiling-that-degrades-budget"><code>budget:</code> on an <code>across:</code> block</a>. A job-level limit is a backstop against a run that has gone wrong, and stopping loudly is the right answer.</li></ul><p>Those claims are pinned by a deliberately-expired deadline: the step that outlives it finishes and <em>succeeds</em>, the next step is never admitted, and the job's <code>on_failure</code> — not <code>on_error</code> — fires, because an expired deadline is a failure at either level (see <a href="#timeout-classification">Timeout classification</a>):</p><pre class="hl"><code><span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> bounded-expired
+  <span class="k">timeout</span><span class="p">:</span> 1s
+  <span class="k">on_failure</span><span class="p">:</span>
+    <span class="k">task</span><span class="p">:</span> overdue
+    <span class="k">run</span><span class="p">:</span> echo the job deadline expired
+  <span class="k">on_error</span><span class="p">:</span>
+    <span class="k">task</span><span class="p">:</span> wrong-class
+    <span class="k">run</span><span class="p">:</span> echo this must not fire
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">task</span><span class="p">:</span> slow
+    <span class="k">run</span><span class="p">:</span> sleep 2                 <span class="c"># outlives the job&#39;s deadline, and still succeeds</span>
+  - <span class="k">task</span><span class="p">:</span> never
+    <span class="k">run</span><span class="p">:</span> echo must not run
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>slow, overdue]   <span class="c"># slow kept its work; never was not admitted</span>
+    <span class="k">outcome</span><span class="p">:</span> failed
+</code></pre><h3 id="an-expired-timeout-is-not-retried">An expired timeout is not retried</h3><p>When an attempt exhausts its own <code>timeout:</code>, the step ends there — the remaining attempts are <strong>skipped</strong>. (A deliberate divergence from Concourse, which retries a timed-out attempt like any other failure — see <a href="conformance.html">conformance.md</a>.) The same work against the same budget expires again, so retrying only doubles the wall clock and the bill. This matters most for <code>agent</code> steps, where a retried conversation would be rebuilt from scratch and paid for a second time.</p><p><code>attempts:</code> buys retries of a transient fault; it cannot buy more time. If a step legitimately needs longer, raise <code>timeout:</code>:</p><pre class="hl"><code><span class="c"># DON&#39;T: 2 x 20m of a review that needs 25m, then a failed job</span>
+- <span class="k">agent</span><span class="p">:</span> reviewer
+  <span class="k">attempts</span><span class="p">:</span> <span class="n">2</span>
+  <span class="k">timeout</span><span class="p">:</span> 20m
+
+<span class="c"># DO: give it the time, keep the attempts for transport faults</span>
+- <span class="k">agent</span><span class="p">:</span> reviewer
+  <span class="k">attempts</span><span class="p">:</span> <span class="n">2</span>
+  <span class="k">timeout</span><span class="p">:</span> 40m
+</code></pre><p>A job-level abort (SIGINT/SIGTERM) is distinct and still stops everything immediately. A deadline from <em>inside</em> an attempt — an MCP or HTTP client's own timeout, say — is a normal transient failure and stays retryable; only the step's own <code>timeout:</code> ends the retry loop.</p><h2 id="interaction-with-fix">Interaction with <code>fix:</code></h2><p>A task step can name a <strong>fix agent</strong> — invoked when the task fails, running <em>inside the failing task's own working directory</em> (the exact state the task failed in), after which the task re-runs. This example is real end to end: the task fails because a file is missing, the fix agent writes it, the re-run passes:</p><pre class="hl"><code><span class="k">agents</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> fixer
+  <span class="k">source</span><span class="p">:</span> { <span class="k">model</span><span class="p">:</span> openrouter/qwen/qwen3.7-flash }
+  <span class="k">tools</span><span class="p">:</span> <span class="p">[</span>read_file, write_file, run_shell]
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> build
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">task</span><span class="p">:</span> check
+    <span class="k">run</span><span class="p">:</span> test -f patched.txt      <span class="c"># fails until the fixer creates it</span>
+    <span class="k">fix</span><span class="p">:</span> fixer
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">code</span><span class="p">:</span> <span class="n">0</span>                     <span class="c"># judged after the repair, on the re-run</span>
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>fixer, check]     <span class="c"># the fixer ran, then the task&#39;s re-run passed —</span>
+    <span class="k">outcome</span><span class="p">:</span> succeeded            <span class="c"># a green first try would record [check] alone</span>
+</code></pre><p>With both <code>attempts:</code> and <code>fix:</code>, the fix agent runs <strong>once per exhausted attempt</strong>: attempt fails → fix agent → re-run, repeated until an attempt passes or all are spent, and the job fails with the error from the last attempt. Each fix invocation retries its own failing model requests under an <code>attempts:</code> resolved as for any agent step — <code>fix: {attempts: ...}</code>, then the fix agent's <code>agents:</code> entry, then 3.</p><h2 id="interaction-with-assert">Interaction with <code>assert:</code></h2><p>Only the <strong>final attempt's output</strong> is evaluated by <code>assert:</code>. If attempt 1 prints the expected text but exits nonzero, the task retries — only the last attempt's stdout and code are checked. A <code>fix:</code> sits inside an attempt the same way: the assert decides whether the run needs repairing at all, and then judges the re-run that followed it, as in the fixture above. An assert is the oracle over the outcome a step reached, never a substitute for reaching one — which is why one that is already satisfied costs no repair, and why a run that exits 0 and still misses it gets one. (See <a href="control-flow.html">control-flow.md</a> for <code>assert:</code> itself.)</p><h2 id="hook-firing">Hook firing</h2><p>Hooks (<code>on_failure</code>, <code>on_error</code>, <code>ensure</code>) fire <strong>once per exhausted step</strong>, not per attempt. If a deploy fails on all 3 attempts, <code>on_failure</code> runs once with the error from attempt 3.</p><h2 id="logging">Logging</h2><p>The CLI logs "attempt N/M" markers for each retry, in both CLI output and structured logs (<code>job.task.attempt</code>):</p><pre><code>task: build
+task: build (attempt 2/3)
+task: build (attempt 3/3)
+</code></pre><h2 id="what-attempts-costs-on-an-agent">What <code>attempts:</code> costs on an agent</h2><p><code>attempts:</code> means the same thing on every step kind: <strong>retry the failing operation</strong>. On a task that operation is a command. On an agent it is one HTTP request to the model — not the conversation.</p><pre><code>provider requests per failing turn  =  attempts:
+</code></pre><p>A retry re-sends the failing request and the conversation carries on from exactly where it was. Nothing accumulated is lost, and a transient 500 costs one extra request rather than a whole re-billed history.</p><p>Every retry is logged, and a failed step reports what it really spent:</p><pre><code>WRN agent.request_retry       agent=coder model=deepseek-v4-pro attempt=1 attempts=3 status=500
+WRN agent.request_retry       agent=coder model=deepseek-v4-pro attempt=2 attempts=3 status=500
+WRN agent.conversation_failed agent=coder provider_requests=3 error=&quot;... 500 ...&quot;
+</code></pre><p>Retryable failures are connection errors and HTTP 408, 409, 429, and 5xx. A 400 or a 401 is taken at its word — retrying a request the server rejected on its merits just pays to be told the same thing again.</p><p><strong>There is no hidden multiplier</strong>: steps switches the provider SDK's own retries off, so <code>attempts: 6</code> means at most six requests for a failing turn. <strong>And a retry never restarts the conversation</strong> — a restart would keep the agent's workspace but drop its memory, handing it its own half-finished edits with no recollection of making them. The retry that works for a bad <em>answer</em> is routing back with <code>max_visits:</code> — a <code>verdicts:</code> entry like <code>revise: &lt;step></code>, or <code>to:</code> on a verdict-less agent (<a href="control-flow.html#step-transitions-tomax_visitsverdicts">control-flow.md</a>) — which re-enters the agent in a fresh conversation, with the critique carried in as an artifact or through <code>context: { from: }</code>.</p><h2 id="timeout-classification">Timeout classification</h2><p>A step's expired <code>timeout:</code> classifies as <strong>failed</strong> — <code>on_failure</code> fires, <code>on_error</code> does not, matching Concourse (which marks a timed-out step failed). The step was given a budget and did not finish inside it: that is the step saying no, not the infrastructure. Errored stays reserved for the machinery breaking (docker, transport, workspace). This fixture pins it — the <code>assert:</code> block is what keeps a deliberately-failing job green under <code>steps test</code> (see <a href="control-flow.html#assert-self-verification--steps-test">control-flow.md</a>):</p><pre class="hl"><code><span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> deadline
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">task</span><span class="p">:</span> slow
+    <span class="k">run</span><span class="p">:</span> sleep 5
+    <span class="k">timeout</span><span class="p">:</span> 1s
+    <span class="k">on_failure</span><span class="p">:</span>
+      <span class="k">task</span><span class="p">:</span> page
+      <span class="k">run</span><span class="p">:</span> echo the deadline expired
+    <span class="k">on_error</span><span class="p">:</span>
+      <span class="k">task</span><span class="p">:</span> wrong
+      <span class="k">run</span><span class="p">:</span> echo this must not fire
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>slow, page]    <span class="c"># on_failure fired, on_error did not</span>
+    <span class="k">outcome</span><span class="p">:</span> failed
+</code></pre><p>What still lands on <code>on_error</code> is the machinery genuinely breaking. A provider that answers nothing but 500s — with <code>attempts: 1</code>, so the single request is the whole budget — is that class:</p><pre class="hl"><code><span class="k">agents</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> reviewer
+  <span class="k">source</span><span class="p">:</span> { <span class="k">model</span><span class="p">:</span> openrouter/qwen/qwen3.7-flash }
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> outage
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">agent</span><span class="p">:</span> reviewer
+    <span class="k">messages</span><span class="p">:</span>
+      - <span class="s">&#34;Review the PR.&#34;</span>
+    <span class="k">attempts</span><span class="p">:</span> <span class="n">1</span>
+    <span class="k">on_error</span><span class="p">:</span>
+      <span class="k">task</span><span class="p">:</span> page
+      <span class="k">run</span><span class="p">:</span> echo the provider is down
+    <span class="k">on_failure</span><span class="p">:</span>
+      <span class="k">task</span><span class="p">:</span> wrong
+      <span class="k">run</span><span class="p">:</span> echo this must not fire
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>reviewer, page]   <span class="c"># on_error fired, on_failure did not</span>
+    <span class="k">outcome</span><span class="p">:</span> failed
+</code></pre><h2 id="agent-steps-the-one-implicit-deadline">Agent steps: the one implicit deadline</h2><p>An <code>agent:</code> step's <code>timeout:</code> bounds the entire conversation, tool calls included:</p><pre class="hl"><code><span class="k">agents</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> reviewer
+  <span class="k">source</span><span class="p">:</span> { <span class="k">model</span><span class="p">:</span> openrouter/qwen/qwen3.7-flash }
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> review
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">agent</span><span class="p">:</span> reviewer
+    <span class="k">messages</span><span class="p">:</span>
+      - <span class="s">&#34;Review the PR for safety issues.&#34;</span>
+    <span class="k">timeout</span><span class="p">:</span> 10m
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="w">No</span> safety issues found
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>reviewer]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><blockquote><p><strong>An <code>agent:</code> step that sets no <code>timeout:</code> still gets one: 30 minutes.</strong> This is the single exception to the explicit-only rule below, and it exists because the OpenAI client sets no request timeout of its own — without a fallback, one hung endpoint blocks the run forever.</p><p><strong>It bounds the step, not each source.</strong> When <code>fallback:</code> cascades mid-run (see <a href="agents.html">agents.md</a>), every source the cascade tries shares this one deadline — <code>timeout: 10m</code> across three sources is ten minutes total, not thirty. A source that hangs spends the budget the later ones would have used, which is the point: the ceiling is what the step is allowed to cost.</p><p><strong>Deleting a <code>timeout:</code> from an agent step therefore does not remove its deadline — it may shorten it.</strong> Removing <code>timeout: 45m</code> leaves 30m, not "no limit". A long-running agent (a coding agent over 100+ turns) needs an explicit generous value. The symptom when 30 minutes isn't enough is <code>agent: generate content: context deadline exceeded</code>, classified not-retryable, because a fresh conversation would hit the same wall.</p><p><code>task:</code>/<code>put:</code>/<code>get:</code> steps have no such default: unset means no deadline.</p><p><strong>The model is told about this deadline — it is not a silent cutoff.</strong> Whenever a resolved <code>timeout:</code> applies (the implicit 30m default counts), the agent's system message discloses it once, up front. Once less than a fifth of that budget remains — or less than two of the slowest model request this attempt has made, whichever is more, since a reasoning model can spend longer on one request than the whole fifth — the conversation gets one further nudge to wrap up — a plain message, tools left granted, costing no turn of its own. Neither disclosure ends the conversation; only the deadline actually expiring does that, the same <code>context deadline exceeded</code> cutoff described above. An explicit <code>timeout: "0"</code> (no deadline) discloses nothing, since there is nothing to disclose. The web UI's run page mirrors the same resolved deadline as a live countdown beside a running agent step's elapsed time.</p></blockquote><h2 id="put-the-deadline-on-the-agent-not-on-every-step">Put the deadline on the agent, not on every step</h2><p><code>timeout:</code> and <code>attempts:</code> are also fields of an <code>agents:</code> entry, and a step that sets neither inherits them:</p><pre class="hl"><code><span class="k">agents</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> deep-reviewer
+  <span class="k">timeout</span><span class="p">:</span> 20m
+  <span class="k">attempts</span><span class="p">:</span> <span class="n">5</span>
+  <span class="k">max_turns</span><span class="p">:</span> <span class="n">50</span>
+  <span class="k">source</span><span class="p">:</span> { <span class="k">model</span><span class="p">:</span> openrouter/qwen/qwen3.7-flash }
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> review
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">agent</span><span class="p">:</span> deep-reviewer
+    <span class="k">messages</span><span class="p">:</span>
+      - <span class="s">&#34;Review the diff for correctness.&#34;</span>
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> Looks correct
+  - <span class="k">agent</span><span class="p">:</span> deep-reviewer
+    <span class="k">messages</span><span class="p">:</span>
+      - <span class="s">&#34;Now review it for security.&#34;</span>
+    <span class="k">timeout</span><span class="p">:</span> 45m
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> <span class="w">No</span> injection paths
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>deep-reviewer, deep-reviewer]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><p>Both steps get 20 minutes, five attempts and 50 turns; the second one asks for 45 minutes and gets it. <strong>Precedence is step, then agent entry, then the package default</strong> (30 turns for a hosted agent, none for a CLI one — see <a href="agents.html">agents.md</a>) — the same order <code>max_turns:</code> has always had, and nothing about it is new here except that two more dials now participate.</p><p>The reason this belongs on the agent is that the right deadline is usually a property of the agent rather than of the step invoking it: a deep reviewer needs twenty minutes whoever calls it. Before an entry could carry one, a deadline shared by six steps was six copies of one number.</p><p>It is <strong>not</strong> available on <code>defaults:</code>. A pipeline-wide deadline changes failure behavior at a distance — a step written with no <code>timeout:</code> means <em>this one has no deadline</em>, and a global default silently converts that into a deadline somebody else picked. An <code>agents:</code> entry is a thing the author named and pointed at deliberately, which is the difference.</p><h2 id="zero-means-no-limit">Zero means no limit</h2><p>Every dial that bounds an agent step reads the same three ways:</p><table><thead><tr><th>written</th><th>means</th></tr></thead><tbody><tr><td>omitted</td><td>take the default</td></tr><tr><td><code>0</code></td><td><strong>no limit</strong></td></tr><tr><td>negative</td><td>load error</td></tr></tbody></table><pre class="hl"><code><span class="k">agents</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> marathon
+  <span class="k">max_turns</span><span class="p">:</span> <span class="n">0</span>            <span class="c"># no turn cap — bounded by budget:, timeout: and loop detection</span>
+  <span class="k">max_context_bytes</span><span class="p">:</span> <span class="n">0</span>    <span class="c"># hand over context_paths: files whole, however large</span>
+  <span class="k">timeout</span><span class="p">:</span> <span class="s">&#34;0&#34;</span>            <span class="c"># no deadline at all</span>
+  <span class="k">budget</span><span class="p">:</span> { <span class="k">tokens</span><span class="p">:</span> <span class="n">4000000</span> }
+  <span class="k">source</span><span class="p">:</span> { <span class="k">model</span><span class="p">:</span> openrouter/qwen/qwen3.7-flash }
+
+<span class="k">jobs</span><span class="p">:</span>
+- <span class="k">name</span><span class="p">:</span> migrate
+  <span class="k">plan</span><span class="p">:</span>
+  - <span class="k">agent</span><span class="p">:</span> marathon
+    <span class="k">messages</span><span class="p">:</span>
+      - <span class="s">&#34;Migrate every call site, however long it takes.&#34;</span>
+    <span class="k">assert</span><span class="p">:</span>
+      <span class="k">stdout</span><span class="p">:</span> migration complete
+  <span class="k">assert</span><span class="p">:</span>
+    <span class="k">execution</span><span class="p">:</span> <span class="p">[</span>marathon]
+    <span class="k">outcome</span><span class="p">:</span> succeeded
+</code></pre><p>Two things about that block are worth being explicit about.</p><p><strong><code>timeout: "0"</code> is quoted, and it only means this on an agent step.</strong> Quoted because YAML would otherwise hand the loader the integer 0 rather than a duration string. Agent-step-only because an agent step is the <em>only</em> kind that gets a deadline it never asked for — on a <code>task:</code>/<code>get:</code>/<code>put:</code> step, omitting <code>timeout:</code> already means no deadline, so a <code>0</code> there says nothing the empty field doesn't and is a load error. Same for a job's <code>timeout:</code>.</p><p><strong>Removing a cap is not the same as removing a bound.</strong> <code>max_turns: 0</code> does not mean "runs forever": the agent's <code>budget:</code> (tokens/USD), the step's deadline, the job's deadline, and loop detection all still bind, and each of them bounds a runaway conversation more precisely than a turn count does. What <code>max_turns:</code> is actually for is the case none of those catch — a model that keeps calling tools productively but never converges — so switching it off is a statement that one of the others is the real ceiling for this step, which is why the agent above names a token budget in the same breath.</p><p>Take the budget away too, along with <code>timeout: "0"</code>, and what is left holding the step is loop detection plus one narrower guard: a model that answers with text through five consecutive <strong>forced</strong> tool calls (see <a href="agents.html"><code>required:</code> tools</a>) ends the attempt, since a provider disregarding <code>tool_choice</code> produces no tool interaction for loop detection to hash. That pair is a floor, not a budget — an uncapped agent with no <code>budget:</code> and no deadline can still spend a lot before either fires. Removing all three is a choice, not an accident.</p><p><strong><code>attempts:</code> is deliberately outside the convention.</strong> <code>attempts: 0</code> is a load error rather than "retry forever", because retrying a provider that is down would never stop, and the backstop that would otherwise catch it — the step's deadline — is itself something a step can now switch off. Omit <code>attempts:</code> for the default.</p><p>Switching a cap off <strong>busts the cache</strong> for the affected steps. <code>max_turns:</code> is part of an agent step's identity (it is hashed, along with the model, persona and tool grant), so changing it re-runs the step — which is correct: a step that may now take 200 turns is not the step that was capped at 30. <code>timeout:</code>, <code>attempts:</code> and <code>max_context_bytes:</code> are never hashed, so changing those re-runs nothing.</p><h2 id="why-no-global-default">Why no global default?</h2><p>Timeouts are explicit-only (with the one agent-step exception above): a missing timeout doesn't fail silently, authors are forced to think about reasonable limits per step, and there are no surprise deadlines from a global setting somebody forgot about.</p></article></main><script>
+(function(){
+  window.addEventListener('message', function(e){
+    if(!e.data || e.data.type !== 'topbanana:settheme') return;
+    var t = e.data.theme;
+    if(typeof t !== 'string' || !/^[a-z]{2,20}$/.test(t)) return;
+    document.documentElement.setAttribute('data-theme', t);
+  });
+})();
+</script></body></html>

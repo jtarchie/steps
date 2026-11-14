@@ -1,0 +1,57 @@
+<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>You're on the list — steps</title><meta name="description" content="Your email is recorded. You'll get one message from steps per release: what changed and the download."><meta property="og:title" content="You're on the list — steps"><meta property="og:description" content="One message per steps release. Nothing else."><link rel="stylesheet" href="/app.css"><style>
+  :root {
+    --bg: #111310;
+    --panel: #171a16;
+    --line: #262b25;
+    --fg: #d8d5c9;
+    --dim: #83887b;
+    --faint: #565b50;
+    --green: #84c06d;
+    --blue: #7aa4d9;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html { color-scheme: dark; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 1px solid #d9a94a; outline-offset: 2px; }
+
+  .statusline {
+    display: flex;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    font-size: 12px;
+    flex-wrap: wrap;
+  }
+  .statusline .brand { padding: 8px 14px; color: var(--green); border-right: 1px solid var(--line); white-space: nowrap; }
+  .statusline .brand b { color: var(--fg); font-weight: 600; }
+
+  main { max-width: 640px; margin: 0 auto; padding: 60px 20px; }
+  .prompt { color: var(--dim); margin: 0 0 14px; font-size: 13px; }
+  .prompt::before { content: "$ "; color: var(--green); }
+  .prompt b { color: var(--fg); font-weight: 600; }
+
+  .pane { border: 1px solid var(--line); border-left: 3px solid var(--green); background: var(--panel); padding: 20px 22px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 10px; }
+  h1::before { content: "● "; color: var(--green); }
+  p { color: var(--dim); font-size: 13.5px; margin: 0 0 12px; }
+  p:last-child { margin-bottom: 0; }
+</style></head><body><div class="statusline"><span class="brand"><b>steps</b> — pipeline runner</span></div><main><p class="prompt"><b>steps</b> runs pipeline.yml</p><div class="pane"><h1>Recorded</h1><p>You'll get one message per release &mdash; what changed and the download. No newsletter, no drip.</p><p>v0.1.0 is already out: <a href="https://github.com/jtarchie/steps/releases/tag/v0.1.0">grab it</a>, or <a href="/">back to the front page</a>.</p></div></main><script>
+(function(){
+  window.addEventListener('message', function(e){
+    if(!e.data || e.data.type !== 'topbanana:settheme') return;
+    var t = e.data.theme;
+    if(typeof t !== 'string' || !/^[a-z]{2,20}$/.test(t)) return;
+    document.documentElement.setAttribute('data-theme', t);
+  });
+})();
+</script></body></html>
