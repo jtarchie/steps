@@ -921,6 +921,48 @@ jobs:
 	}
 }
 
+// A pinned trigger and a "no cache" trigger of one job are two requests: the pinned row, claimed first, must not spend the flag the other one set (#235).
+func TestAPinnedClaimLeavesAnotherRequestsForceAlone(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tally := filepath.Join(dir, "tally")
+
+	runner, target, _ := drainable(t, dir, `
+jobs:
+  - name: build
+    plan:
+      - task: append
+        inputs: []
+        run: echo ran >> `+tally+`
+`)
+	ctx := t.Context()
+
+	runner.DrainOne(ctx, target)
+
+	err := runner.EnqueuePinned(ctx, target, "build", "trigger, pinned (cli)", map[string]string{"n": "one"})
+	if err != nil {
+		t.Fatalf("EnqueuePinned: %v", err)
+	}
+
+	_, err = runner.Enqueue(ctx, target, "build", "trigger, no cache (cli)", true)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runner.DrainOne(ctx, target)
+
+	if lines := countLines(t, tally); lines != 1 {
+		t.Fatalf("tally = %d after the pinned run, want 1: it ran without the cache, on a flag somebody else set", lines)
+	}
+
+	runner.DrainOne(ctx, target)
+
+	if lines := countLines(t, tally); lines != 2 {
+		t.Errorf("tally = %d, want 2: the no-cache trigger lost its flag to the pinned run before it", lines)
+	}
+}
+
 // drainable is one pipeline with one queued build of "build", for a test that drives DrainOne itself.
 func drainable(t *testing.T, dir, yaml string) (*LocalRunner, *Pipeline, store.Store) {
 	t.Helper()

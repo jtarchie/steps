@@ -112,6 +112,26 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 	}
 }
 
+// TestImageRefShortensTheDigestAndNeverRepeatsIt: the row shows enough of the digest to tell two pulls of one tag apart, and an image already written by digest is left as written.
+func TestImageRefShortensTheDigestAndNeverRepeatsIt(t *testing.T) {
+	t.Parallel()
+
+	const digest = "sha256:0123456789abcdef0123456789abcdef"
+
+	for name, tc := range map[string]struct{ image, digest, want string }{
+		"a tag":              {"golang:1.27", digest, "golang:1.27@sha256:0123456789ab"},
+		"pinned by digest":   {"golang@" + digest, digest, "golang@" + digest},
+		"no digest known":    {"golang:1.27", "", "golang:1.27"},
+		"no container":       {"", digest, ""},
+		"a digest too short": {"golang:1.27", "sha256:abc", "golang:1.27"},
+	} {
+		got := PlacementView{Placement: store.Placement{Image: tc.image, ImageDigest: tc.digest}}.ImageRef()
+		if got != tc.want {
+			t.Errorf("%s: ImageRef = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
 // TestPlacementStatesWhatTheWorkerCouldNotSay: a worker that named no identity is shown none, never an invented one.
 func TestPlacementStatesWhatTheWorkerCouldNotSay(t *testing.T) {
 	t.Parallel()

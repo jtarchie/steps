@@ -452,7 +452,7 @@ func (r *LocalRunner) DrainOne(ctx context.Context, target *Pipeline) bool {
 
 	// Before anything can finalize the row without running it (a job the config dropped, one the breaker paused), since the claim is what spends a force. A rerun spends none: it skips the cache anyway, and the flag belongs to the job's ordinary row.
 	force := r.base.Force
-	if claim.RerunOf == "" {
+	if claim.RerunOf == "" && claim.Pin == "" {
 		force = r.takeForce(target.Slug, jobName) || force
 	}
 
