@@ -139,6 +139,7 @@ The run page is the transcript at the top of this file: every step in plan order
 |---|---|
 | [`examples/pr-review.yml`](examples/pr-review.yml) | Adaptive PR review: a planner decides which review dimensions a change needs, one reviewer per dimension runs concurrently, a falsifier challenges every finding, a gatekeeper decides what blocks, a synthesizer writes the review, and a human approves before it posts. `PR_REPO=owner/name steps run examples/pr-review.yml --job review` |
 | [`examples/self-build.yml`](examples/self-build.yml) | One draft PR per open issue labeled `self-build`: an opus planner (read-only), an opus implementer, an empty-diff gate, an opus reviewer whose verdict either approves or sends the diff back, then commit, push, `gh pr create --draft`. |
+| [`examples/factory.yml`](examples/factory.yml) | A software factory over one repository: an issue labeled `epic` becomes proposed issues, one a person relabels `self-build` becomes a draft pull request through a planner, an implementer and a reviewer, and a comment starting `/factory` on that pull request becomes a commit on its branch. Merging is the only approval. |
 | [`examples/release.yml`](examples/release.yml) | How steps releases itself: a new `v*` tag on GitHub → the full validation suite as the gate → `approval:` → goreleaser as a `put` → download the published archive and check it reports the tag. |
 
 Every YAML example in [`docs/`](docs/README.md) is also a complete pipeline the test suite extracts and executes, so it runs as shown.
