@@ -172,6 +172,12 @@ func (b *isolatingBuild) ResourceDir(ctx context.Context, name string) (string, 
 
 	dir := filepath.Join(b.artifacts, name)
 
+	// An in: always starts in an empty directory, as Concourse's does: a retried attempt or a resumed run (#256) otherwise fetches on top of the last attempt's leavings.
+	err = b.backend.remove(dir)
+	if err != nil {
+		return "", fmt.Errorf("could not empty resource dir %q: %w", dir, err)
+	}
+
 	err = b.backend.createEmpty(ctx, dir)
 	if err != nil {
 		return "", fmt.Errorf("could not create resource dir %q: %w", dir, err)

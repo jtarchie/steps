@@ -261,3 +261,70 @@ func TestResumeRefusesWhenTheKeptWorkspaceIsGone(t *testing.T) {
 		t.Errorf("the refusal came after the run was put back in flight:\n%s", out)
 	}
 }
+
+// TestResumeRerunsAGetIntoAnEmptyDirectory is #256: nothing after the get completed, so the resume fetches again — into the kept artifact directory, which still held the first attempt's fetch. An in: is handed an empty directory every time, as Concourse's is (a fresh volume per get), and git's own `remote add origin` is one of many scripts that rely on it.
+func TestResumeRerunsAGetIntoAnEmptyDirectory(t *testing.T) {
+	dir := t.TempDir()
+	fixed := filepath.Join(dir, "fixed")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+resource_types:
+- name: once
+  config:
+    check: echo '[{"n":"one"}]'
+    in: |
+      test -z "$(ls -A)" || { echo "in: ran in a directory that is not empty: $(ls -A)" >&2; exit 3; }
+      echo {{ .version.n | shellquote }} > n.txt
+
+resources:
+- name: repo
+  type: once
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+  - task: flaky
+    inputs: [repo]
+    run: test -f %s
+`, fixed))
+
+	runID, _ := failThenCapture(t, path)
+
+	writePipelineFile(t, fixed, "")
+
+	err := cli.Run([]string{"run", path, "--resume", runID})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+}
+
+// TestARetriedGetStartsInAnEmptyDirectory: the same contract inside one run — attempt two must not see what attempt one left behind.
+func TestARetriedGetStartsInAnEmptyDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+resource_types:
+- name: once
+  config:
+    check: echo '[{"n":"one"}]'
+    in: |
+      test -z "$(ls -A)" || { echo "in: ran in a directory that is not empty: $(ls -A)" >&2; exit 3; }
+      touch partial
+      test -f %[1]s || { touch %[1]s; exit 1; }
+
+resources:
+- name: repo
+  type: once
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+    attempts: 2
+`, filepath.Join(dir, "tried")))
+
+	mustRun(t, path, "--job", "build")
+}
