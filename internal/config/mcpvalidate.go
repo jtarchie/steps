@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -75,7 +76,42 @@ func validateMCPServerAuth(srv MCPServer) error {
 		return fmt.Errorf("mcp server %q: auth.type must be one of none, bearer, oauth (got %q)", srv.Name, srv.Auth.Type)
 	}
 
+	err := validateMCPAuthSecrets(srv)
+	if err != nil {
+		return err
+	}
+
 	return validateMCPServerClientCredentials(srv)
+}
+
+// validateMCPAuthSecrets holds a server's secrets: to the one key its HTTP client reads, since nothing else would read another.
+func validateMCPAuthSecrets(srv MCPServer) error {
+	if len(srv.Auth.Secrets) == 0 {
+		return nil
+	}
+
+	label := fmt.Sprintf("mcp server %q auth", srv.Name)
+
+	if srv.Auth.Type != MCPAuthBearer {
+		return fmt.Errorf("%s: secrets: applies to auth.type: bearer, whose token it holds", label)
+	}
+
+	err := checkSecretsMap(label, srv.Auth.Secrets, nil)
+	if err != nil {
+		return err
+	}
+
+	if _, held := srv.Auth.Secrets[srv.Auth.APIKeyEnv]; !held {
+		return fmt.Errorf("%s: api_key_env %s is not a key of its secrets: map", label, srv.Auth.APIKeyEnv)
+	}
+
+	for _, extra := range slices.Sorted(maps.Keys(srv.Auth.Secrets)) {
+		if extra != srv.Auth.APIKeyEnv {
+			return fmt.Errorf("%s: secrets: holds the server's token and no other; nothing would read %s", label, extra)
+		}
+	}
+
+	return nil
 }
 
 // validateMCPServerClientCredentials checks the pre-registered oauth client

@@ -246,7 +246,7 @@ func authorizedHTTPClient(ctx context.Context, pipeline string, srv config.MCPSe
 	case "", config.MCPAuthNone:
 		return tracedClient(), nil
 	case config.MCPAuthBearer:
-		token, err := lookupBearerToken(srv.Auth.APIKeyEnv)
+		token, err := bearerTokenFor(ctx, srv)
 		if err != nil {
 			return nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
 		}

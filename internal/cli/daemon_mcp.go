@@ -11,6 +11,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	runs "github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -198,7 +199,8 @@ func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
 		}()
 		defer cancel()
 
-		tools, probeErr := stepsmcp.ListServerTools(ctx, name, target)
+		// A page's probe is no run and no poll: one memo for the click, so a secret-backed token is asked for with the pipeline's own lookup paths.
+		tools, probeErr := stepsmcp.ListServerTools(runs.WithProbeSecrets(ctx, name), name, target)
 		result := web.MCPProbe{At: time.Now()}
 
 		if probeErr != nil {

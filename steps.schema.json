@@ -1342,7 +1342,16 @@
             },
             "api_key_env": {
               "type": "string",
-              "description": "bearer only."
+              "description": "bearer only. Environment variable holding the token, or the one key of this block's secrets:. Never the token itself."
+            },
+            "secrets": {
+              "type": "object",
+              "maxProperties": 1,
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^\\(\\([a-z0-9_-]+:[A-Za-z0-9_./-]+\\)\\)$"
+              },
+              "description": "bearer only. The server's token as NAME: ((source:name)), where NAME is what api_key_env names. Resolved from the daemon's secret sources and handed to the HTTP client only."
             },
             "client_id": {
               "type": "string",

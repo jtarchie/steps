@@ -279,6 +279,8 @@ func (v *ValidateCmd) secretProblems(ctx context.Context, cfg *config.Config) (*
 
 func describeSecretUse(use config.SecretUse) string {
 	switch {
+	case use.Polled && use.Resource == "":
+		return "an mcp server when polled"
 	case use.Polled:
 		return fmt.Sprintf("resource %q when polled", use.Resource)
 	case use.Resource != "":

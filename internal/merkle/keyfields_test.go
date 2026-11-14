@@ -354,6 +354,7 @@ func keyProbes() []keyProbe {
 		}),
 		probeOf("MCPServer", server, map[string]string{
 			"Auth.CallbackPort": "source: config.MCPServerAuth — read only by `steps mcp login`, so no step ever runs with it",
+			"Auth.Secrets":      secretNamed,
 		}, func(srv config.MCPServer) (any, error) {
 			return mcpServerContent(&config.Config{MCPServers: []config.MCPServer{srv}}, "github")
 		}),

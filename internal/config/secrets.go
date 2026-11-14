@@ -78,6 +78,10 @@ func (c *Config) SecretRefs() []SecretRef {
 		add(r.Secrets)
 	}
 
+	for _, server := range c.MCPServers {
+		add(server.Auth.Secrets)
+	}
+
 	for _, job := range c.Jobs {
 		_ = job.visitSteps(func(_ string, step *Step) error {
 			add(step.Secrets)
@@ -289,7 +293,48 @@ func (c *Config) refuseExportedSourceSecrets() error {
 		}
 	}
 
+	return c.refuseExportedMCPSecrets()
+}
+
+// refuseExportedMCPSecrets is refuseExportedSourceSecrets for a server's token: an export answers an MCP grant upstream, with no run to resolve the token in.
+func (c *Config) refuseExportedMCPSecrets() error {
+	for _, export := range c.MCPExports {
+		agents := []string{}
+
+		for _, spec := range export.Tools {
+			if spec.Agent != "" {
+				agents = append(agents, spec.Agent)
+			}
+		}
+
+		if server := c.secretBackedGrant(export.Tools); server != "" {
+			return fmt.Errorf("mcp_exports %q: mcp server %q has auth.secrets:; an export has no run to resolve them in", export.Name, server)
+		}
+
+		for _, name := range c.withSubAgents(agents) {
+			agent, err := c.FindAgent(name)
+			if err != nil || agent == nil {
+				continue
+			}
+
+			if server := c.secretBackedGrant(agent.Tools); server != "" {
+				return fmt.Errorf("mcp_exports %q: agent %q reaches mcp server %q, which has auth.secrets:; an export has no run to resolve them in", export.Name, name, server)
+			}
+		}
+	}
+
 	return nil
+}
+
+// secretBackedGrant names the first server these grants draw from whose token is a reference, or "".
+func (c *Config) secretBackedGrant(tools []ToolSpec) string {
+	for _, server := range c.MCPServers {
+		if len(server.Auth.Secrets) > 0 && grantsMCPServer(tools, server.Name) {
+			return server.Name
+		}
+	}
+
+	return ""
 }
 
 func agentHasSourceSecrets(agent Agent) bool {
@@ -485,6 +530,75 @@ func (c *Config) modelKeyUses(job Job, add func(map[string]string, SecretUse)) {
 	}
 }
 
+// mcpTokenUses adds the token of every secret-backed server a job reaches: through an agent's grant, a fix: block's, or a resource whose type is backed by the server. The resource's name is left out, as the lookup has only the job to scope on.
+func (c *Config) mcpTokenUses(job Job, add func(map[string]string, SecretUse)) {
+	for _, server := range c.MCPServers {
+		if len(server.Auth.Secrets) == 0 {
+			continue
+		}
+
+		reached, polled := c.jobReachesMCPServer(job, server.Name)
+		if reached {
+			add(server.Auth.Secrets, SecretUse{Job: job.Name})
+		}
+
+		if polled {
+			add(server.Auth.Secrets, SecretUse{Polled: true})
+		}
+	}
+}
+
+func (c *Config) jobReachesMCPServer(job Job, server string) (reached, polled bool) {
+	for _, name := range c.withSubAgents(job.AgentNames()) {
+		agent, err := c.FindAgent(name)
+		if err == nil && agent != nil && grantsMCPServer(agent.Tools, server) {
+			reached = true
+		}
+	}
+
+	_ = job.visitSteps(func(_ string, step *Step) error {
+		fix := c.effectiveFix(step)
+
+		switch {
+		case grantsMCPServer(step.Tools, server), fix != nil && grantsMCPServer(fix.Tools, server):
+			reached = true
+		case c.resourceBackedBy(cmp.Or(step.GetResourceName(), step.PutResourceName()), server):
+			reached = true
+			polled = polled || stepIsPolled(*step)
+		}
+
+		return nil
+	})
+
+	return reached, polled
+}
+
+// resourceBackedBy reports a resource whose type's mcp: backend calls the named server.
+func (c *Config) resourceBackedBy(resource, server string) bool {
+	r, err := c.FindResource(resource)
+	if err != nil || r == nil {
+		return false
+	}
+
+	resourceType, err := c.FindResourceType(r.Type)
+
+	return err == nil && resourceType != nil && resourceType.Config.MCP != nil && resourceType.Config.MCP.Server == server
+}
+
+// effectiveFix is the step's own fix:, or its task's.
+func (c *Config) effectiveFix(step *Step) *FixSpec {
+	if step.Fix != nil {
+		return step.Fix
+	}
+
+	task, err := c.FindTask(step.Task)
+	if err != nil || task == nil {
+		return nil
+	}
+
+	return task.Fix
+}
+
 // SecretUses is every (reference, where) pair the pipeline would resolve, deduplicated and in a stable order: what `steps validate --live` resolves in the daemon's stead.
 func (c *Config) SecretUses() []SecretUse {
 	seen := map[SecretUse]bool{}
@@ -501,6 +615,7 @@ func (c *Config) SecretUses() []SecretUse {
 
 	for _, job := range c.Jobs {
 		c.modelKeyUses(job, add)
+		c.mcpTokenUses(job, add)
 
 		_ = job.visitSteps(func(_ string, step *Step) error {
 			switch kind, _ := step.Kind(); kind {

@@ -477,6 +477,9 @@ func listServerToolsCached(ctx context.Context, cfg *config.Config, srv *config.
 		identity = append(identity, cfg.Name)
 	}
 
+	// A secret-backed token is the pipeline's too: the same definition resolves to another credential next door.
+	identity = append(identity, stepsmcp.TokenScope(ctx, *srv))
+
 	key := strings.Join(append(identity, srv.Args...), "|")
 	now := time.Now()
 

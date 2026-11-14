@@ -15,6 +15,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -48,6 +49,22 @@ type MCPListCmd struct {
 	Offline  bool              `help:"list what the file declares without connecting to anything"                                                                                  name:"offline"`
 	Name     map[string]string `help:"name the pipeline a file's mcp logins are filed under, e.g. --name infra=infra/pipeline.yml (repeatable)"                                    name:"name"`
 	DB       DB                `help:"state database the logins are sealed into: a sqlite file path, sqlite:// or postgres:// url (default: .steps/<pipeline>.db beside the YAML)" name:"db"                             placeholder:"URL"`
+
+	SecretFlags
+}
+
+// probeSecrets gives a probe the sources of --config, so a server whose token is a reference is asked with it; without the flag such a server's row says what is missing, since this command reports rather than refuses.
+func (s SecretFlags) probeSecrets(ctx context.Context, pipelineName string) (context.Context, error) {
+	if s.Config == "" {
+		return ctx, nil
+	}
+
+	resolver, err := secretsFromConfigFile(s.Config)
+	if err != nil {
+		return ctx, err
+	}
+
+	return pipeline.WithProbeSecrets(pipeline.WithSecrets(ctx, resolver), pipelineName), nil
 }
 
 // Run prints one row per configured server.
@@ -72,6 +89,11 @@ func (m *MCPListCmd) Run() error {
 
 	if !m.Offline {
 		_, err = useLogins(StatePath(m.Pipeline, m.DB), true)
+		if err != nil {
+			return err
+		}
+
+		ctx, err = m.probeSecrets(ctx, cfg.Name)
 		if err != nil {
 			return err
 		}
@@ -183,6 +205,8 @@ type MCPToolsCmd struct {
 	Server   string            `arg:""                                                                                                                                             help:"mcp_servers: entry name"`
 	Name     map[string]string `help:"name the pipeline a file's mcp logins are filed under, e.g. --name infra=infra/pipeline.yml (repeatable)"                                    name:"name"`
 	DB       DB                `help:"state database the logins are sealed into: a sqlite file path, sqlite:// or postgres:// url (default: .steps/<pipeline>.db beside the YAML)" name:"db"                             placeholder:"URL"`
+
+	SecretFlags
 }
 
 // Run loads the pipeline, resolves the named server, connects (per its
@@ -207,6 +231,11 @@ func (m *MCPToolsCmd) Run() error {
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
+
+	ctx, err = m.probeSecrets(ctx, cfg.Name)
+	if err != nil {
+		return err
+	}
 
 	tools, err := stepsmcp.ListServerTools(ctx, cfg.Name, *srv)
 	if err != nil {

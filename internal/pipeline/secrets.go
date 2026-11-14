@@ -13,6 +13,7 @@ import (
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/secret"
@@ -83,6 +84,15 @@ func withSecretMemo(ctx context.Context, memo *secret.Run, pipelineName string) 
 
 	// A model's key goes to its HTTP client alone: resolved and masked like a step's secret, never exported to a shell. Job is empty under a poll, which has no job to name.
 	ctx = agent.WithKeyLookup(ctx, pipelineName, func(ctx context.Context, name, ref string) (string, error) {
+		meta := shell.MetadataFrom(ctx)
+
+		env, err := lookupSecrets(ctx, secret.Ref{Pipeline: cmp.Or(meta.PipelineName, pipelineName), Job: meta.JobName}, map[string]string{name: ref})
+
+		return env[name], err
+	})
+
+	// A server's token goes to its HTTP client alone, as a model's key does.
+	ctx = stepsmcp.WithTokenLookup(ctx, pipelineName, func(ctx context.Context, name, ref string) (string, error) {
 		meta := shell.MetadataFrom(ctx)
 
 		env, err := lookupSecrets(ctx, secret.Ref{Pipeline: cmp.Or(meta.PipelineName, pipelineName), Job: meta.JobName}, map[string]string{name: ref})

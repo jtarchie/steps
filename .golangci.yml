@@ -875,6 +875,8 @@ linters:
           allow:
             # secret: a run memoizes the daemon's lookups and a step resolves its secrets: map through it.
             - "github.com/jtarchie/steps/internal/secret"
+            # mcp: only to install the run's lookup for a server's secret-backed token (mcp.WithTokenLookup), beside the model key's and a resource's; agent and resource, both already here, are what connect.
+            - "github.com/jtarchie/steps/internal/mcp"
             # testdocker is test-only: whether a daemon is reachable, and a tree in a volume.
             - "github.com/jtarchie/steps/internal/testdocker"
             # venue is the tier ABOVE shell: shell decides host vs container,

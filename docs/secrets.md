@@ -105,8 +105,8 @@ jobs:
 ## Where a reference may appear
 
 Only in a `secrets:` map, on a `tasks:` entry, an `agents:` entry, an agent's
-`source:` (and each `fallback:` source), a `resources:` entry, or a task or
-agent step. A get or put step has no
+`source:` (and each `fallback:` source), an `mcp_servers:` entry's `auth:`, a
+`resources:` entry, or a task or agent step. A get or put step has no
 `secrets:` of its own; its resource's apply. Each key is the
 environment variable the step's commands see; each value is exactly one
 `((source:name))`. A step's own `secrets:` replaces its task's, the way `env:`
@@ -118,6 +118,11 @@ it. `api_key_env:` may be left out where the provider has a default variable
 (`openrouter/` reads `OPENROUTER_API_KEY`) and the map's key is that name. A
 second key is a load error, since nothing would read it; a tool's credential
 goes in the agent's own `secrets:`.
+
+An `mcp_servers:` entry's `auth:` takes a map of the same shape, holding the
+one key its `api_key_env:` names: the server's bearer token, which only the
+HTTP client reads. See
+[mcp.md](mcp.md#a-token-from-a-secret-source).
 
 A reference anywhere else is a load error: written into `run:` it would be
 hashed, stored and put on a command line. That includes a resource's

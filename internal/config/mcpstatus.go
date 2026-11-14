@@ -95,6 +95,11 @@ func (s MCPServer) StaticStatus() MCPStatus {
 	case MCPAuthOAuth:
 		return MCPStatus{Readiness: MCPUnknown, Detail: "needs a login"}
 	case MCPAuthBearer:
+		// A token the daemon resolves from a secret source is never read from its environment.
+		if s.Auth.TokenSecret() != "" {
+			return MCPStatus{Readiness: MCPReady, Detail: "$" + s.Auth.APIKeyEnv + " comes from a secret source"}
+		}
+
 		if detail := unsetEnvDetail(s.Auth.APIKeyEnv); detail != "" {
 			return MCPStatus{Readiness: MCPMissing, Detail: detail}
 		}

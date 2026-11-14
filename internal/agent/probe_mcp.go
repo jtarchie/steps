@@ -82,6 +82,9 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 		identity = append(identity, cfg.Name)
 	}
 
+	// A secret-backed token is the pipeline's too: the same definition resolves to another credential next door.
+	identity = append(identity, stepsmcp.TokenScope(ctx, *srv))
+
 	// Ahead of the cache: a server can refuse a login mid-run, after this
 	// cache vouched for it, and the next run must hear about that now rather
 	// than when the entry expires. A vault read, as checkCredential's is.

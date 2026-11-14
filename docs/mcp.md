@@ -34,6 +34,7 @@ jobs:
 - `name` is how `agents:` tool grants and `resource_types:` `mcp:` blocks reference this server — declared once, shared by any number of consumers, the same "reusable top-level block" idiom as `agents:`/`resources:`.
 - `endpoint` must not embed userinfo (`https://user:token@host/`), since it's folded into cache-hashed content — use `auth.api_key_env` for a credential, never the endpoint itself. Checked at load.
 - `auth.type` is `"none"` (default, when `auth:` is omitted entirely), `"bearer"`, or `"oauth"`. `"bearer"` requires `api_key_env` — a static token read from that OS environment variable at run time, exactly like an LLM `agents:` entry's `api_key_env` (the value is never stored in YAML or hashed; only the env var *name* is).
+- A bearer token can come from one of the daemon's [secret sources](secrets.md) instead of its environment: see [A token from a secret source](#a-token-from-a-secret-source).
 - `api_key_env` (and `oauth`'s `client_secret_env`) may name **any** environment variable of the machine running the pipeline; there is no allowlist. That is consistent with `steps pipeline set` being a remote shell on that machine: whoever can upload a pipeline can already run commands there and read its environment, so restricting these names would add no boundary. Treat upload access to a daemon as access to every secret in its environment.
 
 ## Local (stdio) servers
@@ -373,6 +374,47 @@ The daemon asks every time, on a page that says plainly what is being agreed to:
 ### Disconnecting an agent
 
 **connections**, in the menu under your name, lists every agent you have let connect: the name it gave itself (unverified), where it sends people back, which export, when you agreed, when it last called and how many times. **Revoke** asks once more, then ends every token the agent holds for that export — its next call fails, and it cannot refresh its way back. An admin can switch the page to **everyone** and disconnect anybody's agent. Both are recorded in the activity log as `mcp disconnect`.
+
+## A token from a secret source
+
+`auth.api_key_env:` by itself names a variable in the environment of the
+`steps` process, which every pipeline on a daemon shares. With a `secrets:` map
+beside it, the token comes from one of the daemon's
+[secret sources](secrets.md) instead, and the daemon's environment never holds
+it:
+
+```yaml noexec=secrets
+mcp_servers:
+- name: github
+  endpoint: https://api.githubcopilot.com/mcp/
+  auth:
+    type: bearer
+    api_key_env: GITHUB_PAT
+    secrets:
+      GITHUB_PAT: ((ci:github_pat))
+
+agents:
+- name: triager
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools:
+  - mcp: github
+    tool: list_issues
+
+jobs:
+- name: triage
+  plan:
+  - agent: triager
+    messages:
+    - Which issues are open?
+```
+
+- **The HTTP client is the only reader.** The value is sent as the request's bearer token and is in no step's environment.
+- **One key, the one `api_key_env:` names.** Any other key is a load error, as is `secrets:` on an `oauth` or `none` server.
+- **Scoped to the pipeline.** The same reference resolves through the admin's lookup paths for each pipeline, so two pipelines declaring the same server can hold different tokens, and one's failed probe does not speak for the other.
+- **Masked once resolved**, in recorded output and in every tool result a model is sent. A token read from the environment is not.
+- **Never hashed.** The variable's name is, through `api_key_env:`; re-pointing or rotating the token re-runs nothing.
+- **`steps mcp list` and `steps mcp tools` take `--config`**, the daemon's config file, to probe such a server. Without it the row says the token needs a secret source.
+- **Refused on a server an `mcp_exports:` entry reaches**, since an export has no run to resolve a secret in.
 
 ## Backing a resource type with MCP
 

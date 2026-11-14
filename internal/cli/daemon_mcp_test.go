@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,7 +12,10 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	"github.com/jtarchie/steps/internal/pipeline"
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/sealbox"
+	"github.com/jtarchie/steps/internal/secret"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -622,5 +626,104 @@ func TestProbeFingerprintSeesARotatedArgCredential(t *testing.T) {
 
 	if probeFingerprint(&before) == probeFingerprint(&after) {
 		t.Error("rotating the credential in an arg kept the probe's fingerprint")
+	}
+}
+
+// vaultResolver is a daemon's secret sources over a directory with a folder per pipeline, holding one item.
+func vaultResolver(t *testing.T, item, value string) *secret.Resolver {
+	t.Helper()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "vault", filepath.FromSlash(item))
+
+	err := os.MkdirAll(filepath.Dir(file), 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(file, []byte(value), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	configFile := filepath.Join(dir, "steps.yml")
+
+	err = os.WriteFile(configFile, []byte(`
+web:
+  secret:
+    source:
+      ci:
+        command: cat {{ .path | shellquote }}
+        lookup:
+        - path: `+filepath.Join(dir, "vault")+`/{{ .pipeline }}/{{ .name }}
+`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolver, err := secretsFromConfigFile(configFile)
+	if err != nil {
+		t.Fatalf("secretsFromConfigFile: %v", err)
+	}
+
+	return resolver
+}
+
+// The page's Test button is no run and no poll, so nothing else gives it a memo: a server whose token is a reference must be dialled with the token this pipeline's lookup paths give.
+func TestAProbeDialsASecretBackedServerWithThePipelinesToken(t *testing.T) {
+	t.Parallel()
+
+	const bearer = "probe-value-from-the-vault-51c8"
+
+	inner := mcpCLIFixtureServer(t)
+
+	guarded := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+bearer {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+
+			return
+		}
+
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(guarded.Close)
+
+	ctx := pipeline.WithSecrets(t.Context(), vaultResolver(t, "app/vaulted_bearer", bearer))
+	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, 1)
+
+	server, err := web.New(nil, local)
+	if err != nil {
+		t.Fatalf("web.New: %v", err)
+	}
+
+	held := newDaemon(ctx, server, local, State(filepath.Join(t.TempDir(), "steps.db")), ExecFlags{}, HistoryFlags{}, time.Hour)
+	held.ready = func() error { return nil }
+	t.Cleanup(held.Close)
+
+	_, err = held.Set(ctx, "app", web.SetRequest{From: "/src/app.yml", Source: `
+mcp_servers:
+- name: vaulted
+  endpoint: ` + guarded.URL + `
+  auth: { type: bearer, api_key_env: VAULTED_ONLY_IN_VAULT, secrets: { VAULTED_ONLY_IN_VAULT: ((ci:vaulted_bearer)) } }
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "true"
+`})
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	target := held.server.Lookup("app")
+
+	err = held.StartProbe(target, "vaulted")
+	if err != nil {
+		t.Fatalf("StartProbe: %v", err)
+	}
+
+	probe := waitForProbe(t, held, target, "vaulted")
+	if !probe.OK || strings.Contains(probe.Detail, bearer) {
+		t.Errorf("probe of a secret-backed server = %+v, want it answered with the vault's value and never showing it", probe)
 	}
 }
