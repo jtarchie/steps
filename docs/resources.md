@@ -1392,6 +1392,46 @@ jobs:
 
 The explicit get fetches the version `check` reported **when the plan was built** — check runs once, before any step, so the version the put publishes mid-run is not what the same run's get fetches (the example above pins exactly that: `out:` prints `v1.4.2`, the get still fetches `v1.4.1`). The version a put prints is recorded with the run; it reaches a `passed:`-gated get in a later run whether or not a check ever reports it (see [`passed:`](infra.md#a-version-a-job-put-counts-as-having-passed-it)); an ungated get still needs the check to report it. A put whose output nothing reads simply has no get after it.
 
+## Running a stock Concourse resource image
+
+A resource type's `image:` can be one of Concourse's own resource images. Those images expect Concourse's wire contract: an executable at `/opt/resource/check`, `in` or `out`, handed `{source, version, params}` as JSON on its standard input and the directory as its first argument. steps renders a shell command instead, so the command has to build that JSON and pipe it in:
+
+```yaml noexec=docker
+resource_types:
+- name: concourse-git
+  image: concourse/git-resource
+  config:
+    check: printf '%s' {{ dict "source" .source "version" .version | toJson | shellquote }} | /opt/resource/check
+    in: printf '%s' {{ dict "source" .source "version" .version "params" .params | toJson | shellquote }} | /opt/resource/in "$PWD" >&2
+
+resources:
+- name: repo
+  type: concourse-git
+  source:
+    uri: https://github.com/concourse/time-resource.git
+    branch: master
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+    params: {depth: 1}
+  - task: look
+    inputs: [repo]
+    run: ls repo
+```
+
+Run against `concourse/git-resource` and `concourse/time-resource`: `check` finds versions and `get` fetches them, and a later task reads the files. What to know before relying on it:
+
+- **`in` answers with `{version, metadata}` on its standard output**, which steps does not read. The `>&2` sends it to the step's log instead of leaving it in the output.
+- **`put` is not covered.** `/opt/resource/out` prints the same `{version, metadata}` envelope, and steps records whatever an `out:` prints as the version, so the envelope itself would be stored. Unwrapping it needs `jq` in the image, which only some of the stock images ship.
+- **Anything in `source:` is part of the rendered command line**, which is how the wrapper passes it. Do not put a private key or a password in `source:` this way; the stock images take credentials there, and steps has no way yet to hand them over out of band.
+- **No `BUILD_*` variables are set.** steps' own are `STEPS_RUN_ID` and its siblings ([infra.md](infra.md#build-metadata-steps_run_id-)). A resource that reads `BUILD_ID` or `ATC_EXTERNAL_URL`, as notification resources do, sees them empty.
+- **Each check starts a fresh container**, so a resource that keeps a clone between checks (git does) clones again every poll.
+- **Pin a tag.** `image:` is pulled once and reused; a moving `latest` is not refreshed.
+
+First-class support, where `type: registry-image` works as written and none of the above applies, is tracked in [steps#237](https://github.com/jtarchie/steps/issues/237).
+
 ## Shell safety
 
 Anything interpolated into a command is text substitution, so quote it:
