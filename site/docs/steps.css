@@ -1351,3 +1351,24 @@ table.mcp-exports td { white-space: nowrap; }
   .conn-revoke form { flex-wrap: wrap; }
 }
 .rohint .sep { margin: 0 8px; color: var(--line); }
+
+/* stepsci.dev serves /app.css (Tailwind preflight + daisyUI) on every page; these restore the browser defaults the rules above assume. */
+.docs :is(p, ul, ol, pre, blockquote) { margin-block: 1em; }
+.docs li > :is(ul, ol) { margin-block: 0; }
+.docs :is(ul, ol) { padding-left: 40px; }
+.docs ul { list-style: disc; }
+.docs ol { list-style: decimal; }
+.docs :is(ul, ol) ul { list-style: circle; }
+.docs h1 { margin-block: .67em; }
+.docs h2 { margin-bottom: .83em; }
+.docs h3 { margin-bottom: 1em; }
+.docs h4 { margin-block: 1.33em; }
+.docs blockquote { margin-right: 40px; }
+.docs pre { font-family: var(--mono); }
+.tabs .tab { font-size: 12px; line-height: inherit; justify-content: normal; }
+.docs td { white-space: normal; }
+.docs td:first-child { white-space: nowrap; }
+.docs { overflow-wrap: break-word; }
+.docstoc { display: block; }
+.docstoc summary { cursor: pointer; width: max-content; }
+.docstoclinks { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 4px; }
