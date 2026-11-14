@@ -32,8 +32,14 @@ import (
 	"github.com/jtarchie/steps/internal/wire"
 )
 
-// plusWorkdir is where a step's tree is mounted in its container; a placed step never sees a local path, so one fixed path serves every worker.
-const plusWorkdir = "/steps/work"
+// workdir is where the step's tree is mounted in its container: the path the step asked for (shell.BuildDir, GetDir, PutDir), never a local one, so it reads the same on every worker.
+func (s *plusSession) workdir() string {
+	if s.spec.Workdir != "" {
+		return s.spec.Workdir
+	}
+
+	return shell.BuildDir("")
+}
 
 var (
 	errLocalDaemon     = errors.New("local: reaches this machine's docker daemon")
@@ -350,7 +356,7 @@ func (s *plusSession) connect(ctx context.Context) error {
 	spec.DockerDial = dial
 	spec.EnvValues = withWorkerTag(resolveEnv(spec.Env), s.spec.WorkerTag)
 	spec.Volumes = mounts
-	spec.MountPath = plusWorkdir
+	spec.MountPath = s.workdir()
 
 	s.inner, err = shell.NewRunner(spec)
 	if err != nil {
@@ -362,7 +368,7 @@ func (s *plusSession) connect(ctx context.Context) error {
 
 // compose lays the step's tree out as volumes: each input directory a copy-on-write view of a cached tree, each empty output a plain volume of its own, and the work volume under them for whatever else the tree holds.
 func (s *plusSession) compose(ctx context.Context) ([]dockerapi.Bind, []string, error) {
-	mounts := []dockerapi.Bind{volumeMount(s.work, plusWorkdir, false)}
+	mounts := []dockerapi.Bind{volumeMount(s.work, s.workdir(), false)}
 	s.outputs, s.layered = map[string]string{}, map[string]string{}
 
 	declared := map[string]bool{}
@@ -402,7 +408,7 @@ func (s *plusSession) compose(ctx context.Context) ([]dockerapi.Bind, []string, 
 			return nil, nil, err
 		}
 
-		mounts = append(mounts, volumeMount(volume, path.Join(plusWorkdir, name), false))
+		mounts = append(mounts, volumeMount(volume, path.Join(s.workdir(), name), false))
 	}
 
 	s.emptyTree = len(mounts) == 1 && len(files) == 0
@@ -420,7 +426,7 @@ func (s *plusSession) cacheMounts(ctx context.Context) ([]dockerapi.Bind, error)
 			return nil, fmt.Errorf("cache %q: %w", rel, err)
 		}
 
-		mounts = append(mounts, volumeMount(volume.Name, path.Join(plusWorkdir, rel), false))
+		mounts = append(mounts, volumeMount(volume.Name, path.Join(s.workdir(), rel), false))
 	}
 
 	return mounts, nil
@@ -435,7 +441,7 @@ func taskCacheVolume(namespace, key string) string {
 
 // mountFor places one top-level directory; an empty declared output gets a fresh volume, which is what lets it be held afterwards without a copy.
 func (s *plusSession) mountFor(ctx context.Context, name, local string, output bool) (dockerapi.Bind, error) {
-	target := path.Join(plusWorkdir, name)
+	target := path.Join(s.workdir(), name)
 
 	if output && isEmptyDir(local) {
 		volume, err := s.newVolume(ctx, "out")
@@ -477,7 +483,7 @@ func (s *plusSession) pourFiles(ctx context.Context, names []string) error {
 
 	go func() { writer.CloseWithError(wire.PackPaths(writer, s.spec.Cwd, names)) }()
 
-	err := s.docker.PutArchive(ctx, s.holder, plusWorkdir, &byteCounter{r: reader, n: &s.sent})
+	err := s.docker.PutArchive(ctx, s.holder, s.workdir(), &byteCounter{r: reader, n: &s.sent})
 
 	_ = reader.CloseWithError(io.ErrClosedPipe)
 
@@ -601,7 +607,7 @@ func (s *plusSession) newVolume(ctx context.Context, kind string) (dockerapi.Vol
 
 // openRoots makes the root of every volume the holder mounts writable by any user, before the step's container mounts them: the daemon creates volumes root-owned 0755, and a step with a non-root user: could not write its own outputs. Each is fresh (the work volume, an empty output) or an overlay whose root is its fresh upper, so an input dir opens up too.
 //
-// Through the holder's archive endpoint, not a container: unpacking a directory entry over a directory that exists applies the entry's mode to it, a mount point included, and only "." is skipped, so the entries are written from the parent of plusWorkdir.
+// Through the holder's archive endpoint, not a container: unpacking a directory entry over a directory that exists applies the entry's mode to it, a mount point included, and only "." is skipped, so the entries are written from the parent of the workdir.
 //
 // ponytail: an input's files arrive root-owned with the modes they had, so a non-root user: reads what is world-readable and adds to an input but cannot overwrite it; the cache is shared across users, so ownership cannot follow the step. Concourse has the same limit.
 func (s *plusSession) openRoots(ctx context.Context, mounts []dockerapi.Bind) error {
@@ -610,7 +616,7 @@ func (s *plusSession) openRoots(ctx context.Context, mounts []dockerapi.Bind) er
 	archive := tar.NewWriter(&roots)
 
 	for _, mount := range mounts {
-		err := archive.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: strings.TrimPrefix(mount.Target, path.Dir(plusWorkdir)+"/") + "/", Mode: 0o777})
+		err := archive.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: strings.TrimPrefix(mount.Target, path.Dir(s.workdir())+"/") + "/", Mode: 0o777})
 		if err != nil {
 			return fmt.Errorf("opening the step's volumes: %w", err)
 		}
@@ -621,7 +627,7 @@ func (s *plusSession) openRoots(ctx context.Context, mounts []dockerapi.Bind) er
 		return fmt.Errorf("opening the step's volumes: %w", err)
 	}
 
-	err = s.docker.PutArchive(ctx, s.holder, path.Dir(plusWorkdir), &roots)
+	err = s.docker.PutArchive(ctx, s.holder, path.Dir(s.workdir()), &roots)
 	if err != nil {
 		return fmt.Errorf("opening the step's volumes: %w", err)
 	}
@@ -646,7 +652,7 @@ func (s *plusSession) fetch(ctx context.Context) error {
 
 	if s.spec.FetchAll {
 		// A tree with inputs mounted into it is several volumes, not one to hold.
-		return s.fetchInto(ctx, plusWorkdir+"/.", s.spec.Cwd, "")
+		return s.fetchInto(ctx, s.workdir()+"/.", s.spec.Cwd, "")
 	}
 
 	return s.fetchDeclared(ctx, s.spec.Fetch...)
@@ -697,7 +703,7 @@ func (s *plusSession) fetchOne(ctx context.Context, name string) error {
 		return s.fetchChanges(ctx, name, overlay, s.uppers[overlay])
 	}
 
-	return s.fetchInto(ctx, path.Join(plusWorkdir, name), s.spec.Cwd, name)
+	return s.fetchInto(ctx, path.Join(s.workdir(), name), s.spec.Cwd, name)
 }
 
 func (r plusRunner) heldOutputs() (map[string]string, string, bool) {
@@ -823,7 +829,7 @@ func (s *plusSession) placement() (Placement, bool) {
 		Instance:      s.worker.Instance,
 		GOOS:          s.goos,
 		GOARCH:        s.goarch,
-		Workdir:       plusWorkdir,
+		Workdir:       s.workdir(),
 		Image:         s.spec.Image,
 		ImageDigest:   s.imageDigestText(),
 		BytesSent:     s.sent.Load(),

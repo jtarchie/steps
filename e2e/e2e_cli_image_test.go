@@ -159,7 +159,7 @@ jobs:
 
 	mustRun(t, path)
 
-	if got := readFileString(t, captured); !strings.Contains(got, "/steps/work") || !strings.Contains(got, "written") {
+	if got := readFileString(t, captured); !strings.Contains(got, buildDir("recorder")) || !strings.Contains(got, "written") {
 		t.Errorf("check answered %q, want the file write_file made, read in the volume workdir", got)
 	}
 

@@ -309,7 +309,7 @@ func (shellBackend) in(ctx context.Context, c Call) error {
 	// FetchAll: the directory IS the output, so a worker sends the whole of
 	// it home — there is no declared outputs: list to name a subset.
 	spec := runnerSpec(rt, c.Resource.Env)
-	spec.Cwd, spec.FetchAll = destDir, true
+	spec.Cwd, spec.Workdir, spec.FetchAll = destDir, shell.GetDir, true
 
 	runner, err := newRunner(ctx, spec)
 	if err != nil {
@@ -373,7 +373,7 @@ func (shellBackend) out(ctx context.Context, c Call) (map[string]any, error) {
 
 	// Nothing fetched back: an out publishes elsewhere and answers on stdout.
 	spec := runnerSpec(rt, c.Resource.Env)
-	spec.Cwd = srcDir
+	spec.Cwd, spec.Workdir = srcDir, shell.PutDir
 
 	runner, err := newRunner(ctx, spec)
 	if err != nil {

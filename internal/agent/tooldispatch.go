@@ -57,6 +57,10 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env too
 			response, _ = scrubValues(response, secrets.String).(map[string]any)
 		}
 
+		if env.spillShown != "" {
+			response, _ = scrubValues(response, env.showSpill).(map[string]any)
+		}
+
 		parts = append(parts, &genai.Part{
 			FunctionResponse: &genai.FunctionResponse{ID: call.ID, Name: call.Name, Response: response},
 		})

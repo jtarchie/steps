@@ -206,7 +206,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		// this it was told there was nobody to ask on a run that manifestly
 		// had somebody. The NAME is the child's, so a parked question says
 		// which agent wants to know rather than which one delegated.
-		env:   toolEnv{dir: env.dir, runner: runner, tree: childTree, lost: env.lost, spillDir: env.spillDir, ask: env.ask.forAgent(c.ri.AgentName), sight: sightFor(c.ri)},
+		env:   toolEnv{dir: env.dir, runner: runner, tree: childTree, lost: env.lost, spillDir: env.spillDir, spillShown: shownSpill(env.dir, childDir), ask: env.ask.forAgent(c.ri.AgentName), sight: sightFor(c.ri)},
 		tools: c.tools,
 		params: llmclient.GenParams{
 			Temperature: c.ri.Temperature,

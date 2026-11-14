@@ -73,6 +73,8 @@ type RunnerSpec struct {
 	Cwd string
 	// MountPath is where the tree's volume is mounted inside the container, and its working directory. Required beside Cwd for a container: without it the tree would have to be a bind mount, which steps never makes (steps#246).
 	MountPath string
+	// Workdir is where a venue should mount the tree, which it then hands on as MountPath: BuildDir of the step's name, GetDir or PutDir. Empty takes BuildDir(""), for a caller with no step to name. A request rather than MountPath itself, so a spec that reaches a container without passing a venue is still refused for having no tree.
+	Workdir string
 	// DockerHost is the daemon to run this step's containers on. Empty is
 	// this machine's; a venue sets it to a socket it forwards to a worker.
 	DockerHost string

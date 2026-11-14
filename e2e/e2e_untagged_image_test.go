@@ -183,8 +183,8 @@ jobs:
 
 	mustRun(t, path)
 
-	if got := readFileString(t, seen); got != "/steps/work\n" {
-		t.Errorf("the get ran in %q, want the volume workdir /steps/work", got)
+	if got := readFileString(t, seen); got != "/tmp/build/get\n" {
+		t.Errorf("the get ran in %q, want the volume workdir /tmp/build/get", got)
 	}
 }
 

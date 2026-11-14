@@ -226,6 +226,10 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 		}
 
 		result := impl(ctx, args, env)
+		if env.spillShown != "" {
+			result, _ = scrubValues(result, env.showSpill).(map[string]any)
+		}
+
 		span.end(ctx, result)
 
 		b.capture(name, args, result)

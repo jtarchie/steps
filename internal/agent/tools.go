@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -34,6 +35,8 @@ type toolEnv struct {
 	dir      string
 	runner   shell.Runner
 	spillDir string
+	// spillShown is the name the model is given for spillDir when its tools run in a container: a path under the container's working directory, since the real one names this machine (steps#247). Empty when the two are the same place.
+	spillShown string
 	// lost records the first "the container could not be reached" a tool hit, so the loop can end the attempt rather than let the model keep calling into a machine that is gone.
 	lost *tree.Lost
 	// tree is where the file tools read and write. Nil means this process's own filesystem, which is every agent with no image:; a containerized one carries a tree reaching into its container, so its file tools and its run_shell are on one copy of the step directory instead of two.
@@ -93,6 +96,38 @@ func (env toolEnv) readsSpill(rel string) bool {
 	clean := filepath.Clean(rel)
 
 	return clean == spill || strings.HasPrefix(clean, spill+string(filepath.Separator))
+}
+
+// shownSpill is the name a model whose working directory is modelDir is given for the spill directory under hostDir, or "" when it works in hostDir itself.
+func shownSpill(hostDir, modelDir string) string {
+	if modelDir == "" || modelDir == hostDir {
+		return ""
+	}
+
+	return path.Join(modelDir, tree.SpillDirName)
+}
+
+// showSpill rewrites this machine's spill path to the name the model knows it by, in anything about to be said to the model.
+func (env toolEnv) showSpill(text string) string {
+	if env.spillShown == "" || env.spillDir == "" {
+		return text
+	}
+
+	return strings.ReplaceAll(text, filepath.Clean(env.spillDir), env.spillShown)
+}
+
+// hostSpill is the reverse, for a path the model hands back: one under the shown name becomes the file on this machine, and anything else is returned as given.
+func (env toolEnv) hostSpill(rel string) string {
+	if env.spillShown == "" || env.spillDir == "" {
+		return rel
+	}
+
+	clean := path.Clean(rel)
+	if clean != env.spillShown && !strings.HasPrefix(clean, env.spillShown+"/") {
+		return rel
+	}
+
+	return filepath.Join(env.spillDir, filepath.FromSlash(strings.TrimPrefix(clean, env.spillShown)))
 }
 
 // readTree is the tree a read_file call should use: the container's, except for the spill directory above.

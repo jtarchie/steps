@@ -36,6 +36,7 @@ func execReadFile(ctx context.Context, args map[string]any, env toolEnv) map[str
 		return errorResult(`read_file: missing required argument "path"`)
 	}
 
+	rel = env.hostSpill(rel)
 	files := env.readTree(rel)
 
 	resolved, err := files.Resolve(ctx, rel)
