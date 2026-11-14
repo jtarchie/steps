@@ -11,7 +11,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
-	runs "github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -26,6 +25,8 @@ type probes struct {
 	running  map[*probeRun]struct{}
 	inflight sync.WaitGroup
 	creds    *credentials
+	// memos is each served pipeline's context for what it resolves outside a run, by slug: a probe resolves a secret-backed token through it, so repeated clicks share the poller's answer for an interval instead of running the source command once each.
+	memos sync.Map
 }
 
 type probeRun struct {
@@ -49,6 +50,8 @@ func (p *probes) dropProbes(slug string) {
 	prefix := slug + "\x00"
 
 	var gone []*probeRun
+
+	p.memos.Delete(slug)
 
 	p.mu.Lock()
 	for key := range p.results {
@@ -87,7 +90,7 @@ func probeKey(pipeline *web.Pipeline, server string) string {
 
 // probeFingerprint is the configuration an answer describes, and what invalidates it when a `steps pipeline set` moves the endpoint: the old answer describes a server this pipeline no longer has, and a stale "✓ 7 tools" against a moved endpoint is worse than no answer. It needs no hook on set, rename or destroy — a changed configuration simply misses. Built from the raw fields rather than Target(), which masks credentials: a rotated token in an arg is a different server to dial.
 func probeFingerprint(srv *config.MCPServer) string {
-	return strings.Join(append([]string{srv.Endpoint, srv.Command, srv.Cwd}, srv.Args...), "\x00") + "\x00" + srv.AuthLabel()
+	return strings.Join(append([]string{srv.Endpoint, srv.Command, srv.Cwd}, srv.Args...), "\x00") + "\x00" + srv.AuthLabel() + "\x00" + srv.Auth.TokenSecret()
 }
 
 // probeWorthMaking resolves the server a Test names and refuses the two kinds this daemon will not dial: one it cannot honestly reach from here, and one there is nothing to connect with.
@@ -173,7 +176,12 @@ func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(p.base, timeout)
+	base := p.base
+	if memo, served := p.memos.Load(pipeline.Slug); served {
+		base, _ = memo.(context.Context)
+	}
+
+	ctx, cancel := context.WithTimeout(base, timeout)
 
 	// A probe of the configuration this one replaces is answering a question nobody is asking any more.
 	if previous := p.cancels[key]; previous != nil {
@@ -199,8 +207,7 @@ func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
 		}()
 		defer cancel()
 
-		// A page's probe is no run and no poll: one memo for the click, so a secret-backed token is asked for with the pipeline's own lookup paths.
-		tools, probeErr := stepsmcp.ListServerTools(runs.WithProbeSecrets(ctx, name), name, target)
+		tools, probeErr := stepsmcp.ListServerTools(ctx, name, target)
 		result := web.MCPProbe{At: time.Now()}
 
 		if probeErr != nil {

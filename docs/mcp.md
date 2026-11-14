@@ -413,6 +413,7 @@ jobs:
 - **Scoped to the pipeline.** The same reference resolves through the admin's lookup paths for each pipeline, so two pipelines declaring the same server can hold different tokens, and one's failed probe does not speak for the other.
 - **Masked once resolved**, in recorded output and in every tool result a model is sent. A token read from the environment is not.
 - **Never hashed.** The variable's name is, through `api_key_env:`; re-pointing or rotating the token re-runs nothing.
+- **The web UI's Test button shares the poller's answer.** A token looked up for a poll or an earlier click is reused for one `--interval`, so clicking Test again does not run the source command again. Re-pointing the reference discards the row's last result.
 - **`steps mcp list` and `steps mcp tools` take `--config`**, the daemon's config file, to probe such a server. Without it the row says the token needs a secret source.
 - **A token that could not be fetched is not remembered.** A lapsed login in the secret store fails the run, and the next run asks again rather than waiting out the probe cache.
 - **Refused on a server an `mcp_exports:` entry reaches**, since an export has no run to resolve a secret in.

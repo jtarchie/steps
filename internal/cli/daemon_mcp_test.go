@@ -630,10 +630,11 @@ func TestProbeFingerprintSeesARotatedArgCredential(t *testing.T) {
 }
 
 // vaultResolver is a daemon's secret sources over a directory with a folder per pipeline, holding one item.
-func vaultResolver(t *testing.T, item, value string) *secret.Resolver {
+func vaultResolver(t *testing.T, item, value string) (*secret.Resolver, func() int) {
 	t.Helper()
 
 	dir := t.TempDir()
+	asked := filepath.Join(dir, "asked")
 	file := filepath.Join(dir, "vault", filepath.FromSlash(item))
 
 	err := os.MkdirAll(filepath.Dir(file), 0o700)
@@ -653,7 +654,7 @@ web:
   secret:
     source:
       ci:
-        command: cat {{ .path | shellquote }}
+        command: echo asked >> `+asked+` && cat {{ .path | shellquote }}
         lookup:
         - path: `+filepath.Join(dir, "vault")+`/{{ .pipeline }}/{{ .name }}
 `), 0o600)
@@ -666,7 +667,27 @@ web:
 		t.Fatalf("secretsFromConfigFile: %v", err)
 	}
 
-	return resolver
+	// How many times the source command ran, which is how many prompts an operator would have seen.
+	return resolver, func() int {
+		log, _ := os.ReadFile(asked) //nolint:gosec // a t.TempDir() file the fixture's own command writes
+
+		return strings.Count(string(log), "asked")
+	}
+}
+
+// A reference re-pointed at another secret is another credential to dial with: the old answer describes a connection this pipeline no longer makes.
+func TestProbeFingerprintSeesARepointedReference(t *testing.T) {
+	t.Parallel()
+
+	before := config.MCPServer{Name: "tracker", Endpoint: "https://tracker.example/mcp", Auth: config.MCPServerAuth{
+		Type: config.MCPAuthBearer, APIKeyEnv: "TRACKER", Secrets: map[string]string{"TRACKER": "((ci:old))"},
+	}}
+	after := before
+	after.Auth.Secrets = map[string]string{"TRACKER": "((ci:new))"}
+
+	if probeFingerprint(&before) == probeFingerprint(&after) {
+		t.Error("re-pointing the token's reference kept the probe's fingerprint")
+	}
 }
 
 // The page's Test button is no run and no poll, so nothing else gives it a memo: a server whose token is a reference must be dialled with the token this pipeline's lookup paths give.
@@ -688,7 +709,8 @@ func TestAProbeDialsASecretBackedServerWithThePipelinesToken(t *testing.T) {
 	}))
 	t.Cleanup(guarded.Close)
 
-	ctx := pipeline.WithSecrets(t.Context(), vaultResolver(t, "app/vaulted_bearer", bearer))
+	resolver, asked := vaultResolver(t, "app/vaulted_bearer", bearer)
+	ctx := pipeline.WithSecrets(t.Context(), resolver)
 	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, 1)
 
 	server, err := web.New(nil, local)
@@ -725,5 +747,19 @@ jobs:
 	probe := waitForProbe(t, held, target, "vaulted")
 	if !probe.OK || strings.Contains(probe.Detail, bearer) {
 		t.Errorf("probe of a secret-backed server = %+v, want it answered with the vault's value and never showing it", probe)
+	}
+
+	// Anyone signed in can click Test, and a source may prompt: a second click inside the interval is answered from the pipeline's memo.
+	err = held.StartProbe(target, "vaulted")
+	if err != nil {
+		t.Fatalf("second StartProbe: %v", err)
+	}
+
+	if probe = waitForProbe(t, held, target, "vaulted"); !probe.OK {
+		t.Errorf("the second probe = %+v, want it answered too", probe)
+	}
+
+	if got := asked(); got != 1 {
+		t.Errorf("the source command ran %d times for two clicks inside the interval, want once", got)
 	}
 }
