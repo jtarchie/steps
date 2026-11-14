@@ -1394,22 +1394,25 @@ The explicit get fetches the version `check` reported **when the plan was built*
 
 ## Running a stock Concourse resource image
 
-A resource type's `image:` can be one of Concourse's own resource images. Those images expect Concourse's wire contract: an executable at `/opt/resource/check`, `in` or `out`, handed `{source, version, params}` as JSON on its standard input and the directory as its first argument. steps renders a shell command instead, so the command has to build that JSON and pipe it in:
+A resource type can be one of Concourse's own resource images, spelled as Concourse spells it: `type: registry-image`, with the image in `source.repository`. steps runs the image's own `/opt/resource/check`, `in` and `out`, and hands each one Concourse's request — `{source, version, params}` — as JSON on its standard input, the way Concourse does.
 
 ```yaml noexec=docker
 resource_types:
-- name: concourse-git
-  image: concourse/git-resource
-  config:
-    check: printf '%s' {{ dict "source" .source "version" .version | toJson | shellquote }} | /opt/resource/check
-    in: printf '%s' {{ dict "source" .source "version" .version "params" .params | toJson | shellquote }} | /opt/resource/in "$PWD" >&2
+- name: git
+  type: registry-image
+  source:
+    repository: concourse/git-resource
+    tag: "1.18"                       # pin it: latest is pulled once and never refreshed
+  defaults:                           # source: keys every git resource gets; its own keys win
+    branch: main
 
 resources:
 - name: repo
-  type: concourse-git
+  type: git
   source:
-    uri: https://github.com/concourse/time-resource.git
-    branch: master
+    uri: git@github.com:acme/app.git
+  secrets:
+    private_key: ((ci:deploy_key))    # becomes source.private_key, on stdin only
 
 jobs:
 - name: build
@@ -1418,20 +1421,23 @@ jobs:
     params: {depth: 1}
   - task: look
     inputs: [repo]
-    run: ls repo
+    run: git -C repo log -1 --oneline
+  - put: repo
+    inputs: [repo]
+    params: {repository: repo}
 ```
 
-Run against `concourse/git-resource` and `concourse/time-resource`: `check` finds versions and `get` fetches them, and a later task reads the files. What to know before relying on it:
+What steps does, and where it differs from Concourse:
 
-- **`in` answers with `{version, metadata}` on its standard output**, which steps does not read. The `>&2` sends it to the step's log instead of leaving it in the output.
-- **`put` is not covered.** `/opt/resource/out` prints the same `{version, metadata}` envelope, and steps records whatever an `out:` prints as the version, so the envelope itself would be stored. Unwrapping it needs `jq` in the image, which only some of the stock images ship.
-- **Anything in `source:` is part of the rendered command line**, which is how the wrapper passes it. Do not put a private key or a password in `source:` this way; the stock images take credentials there, and steps has no way yet to hand them over out of band.
-- **No `BUILD_*` variables are set.** steps' own are `STEPS_RUN_ID` and its siblings ([infra.md](infra.md#build-metadata-steps_run_id-)). A resource that reads `BUILD_ID` or `ATC_EXTERNAL_URL`, as notification resources do, sees them empty.
+- **`check`** is sent no `version` the first time, and the version it last reported after that. Its answer is the usual array of versions, oldest first.
+- **`in`** runs in `/tmp/build/get` and is handed that directory as its first argument; **`out`** runs in `/tmp/build/put`, each input a directory beneath it. Both answer `{version, metadata}`: steps records the `version`, and shows each `metadata` entry as a note on the step. An answer with no version fails the step, as it does in Concourse.
+- **Credentials go in `secrets:`, not `source:`.** A resource's `secrets:` entries are laid over its `source:` in the request, under the same key, so `secrets: {private_key: ((ci:deploy_key))}` arrives as `source.private_key`. They are resolved from a [secret source](secrets.md) when the script runs, never hashed or stored, and masked in output. A credential written straight into `source:` is stored with every version, as any `source:` value is.
+- **`in` and `out` see Concourse's build variables**, spelled from steps' own: `BUILD_ID` and `BUILD_NAME` are the run id, `BUILD_JOB_NAME` and `BUILD_PIPELINE_NAME` the job and pipeline, `ATC_EXTERNAL_URL` is `STEPS_URL`, and `BUILD_TEAM_NAME` is always `main`, since steps has no teams. `check` sees none of them, as in Concourse.
+- **A `put` gets only the inputs it lists.** Concourse guesses them from `params:` when none are listed; steps does not guess, so list the ones `out` reads.
 - **Each check starts a fresh container**, so a resource that keeps a clone between checks (git does) clones again every poll.
-- **Pin a tag.** `image:` is pulled once and reused; a moving `latest` is not refreshed.
+- **No `type:` other than `registry-image`**, and the type takes no `image:` or `config:`: the image's scripts are the config. `source:` on a type takes `repository` and `tag` only.
 
-First-class support, where `type: registry-image` works as written and none of the above applies, is tracked in [steps#237](https://github.com/jtarchie/steps/issues/237).
-
+## Shell safety
 ## Shell safety
 
 Anything interpolated into a command is text substitution, so quote it:

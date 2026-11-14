@@ -289,7 +289,10 @@ func keyProbes() []keyProbe {
 		})
 	}
 
-	resourceType := map[string]string{"Name": "source: config.ResourceType — a step is keyed by what the type DOES, so a rename re-runs nothing and two types doing the same thing share an entry", "Config.Check": notThisVerb, "Config.Webhook": derivedFlag, "Config.Cron": derivedFlag}
+	// desugared is type: registry-image: rewritten at load into Image, the three scripts and each resource's source:, all of which the key reads (steps#237).
+	const desugared = "rewritten at load into Image, Config and the resources' source:, which are keyed"
+
+	resourceType := map[string]string{"Name": "source: config.ResourceType — a step is keyed by what the type DOES, so a rename re-runs nothing and two types doing the same thing share an entry", "Config.Check": notThisVerb, "Config.Webhook": derivedFlag, "Config.Cron": derivedFlag, "Config.Concourse": derivedFlag, "Type": desugared, "Source": desugared, "Defaults": desugared}
 
 	agentSilent := map[string]string{
 		"Attempts": operational, "Budget": operational, "DelegateBudgetPercent": operational, "Timeout": operational,

@@ -764,7 +764,10 @@ func (h HostRunner) Exec(ctx context.Context, cmd Command) (Result, error) {
 	proc.Dir = h.cwd
 	proc.Env = env
 
-	if cmd.Stdin {
+	switch {
+	case cmd.Input != "":
+		proc.Stdin = strings.NewReader(cmd.Input)
+	case cmd.Stdin:
 		proc.Stdin = os.Stdin
 	}
 
