@@ -8,6 +8,8 @@ package postgres
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was DROP SCHEMA.
 //
+// 23 added trigger_queue.pin, as sqlite's 37 did.
+//
 // 22 added run_step_outputs, as sqlite's 36 did.
 //
 // 21 added pause_all, as sqlite's 35 did.
@@ -30,7 +32,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 22
+const schemaVersion = 23
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -236,6 +238,7 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     rerun_of    TEXT REFERENCES runs(id) ON DELETE CASCADE,
     run_id      TEXT REFERENCES runs(id) ON DELETE SET NULL,
     requested_by TEXT NOT NULL DEFAULT '',
+    pin         TEXT,
     status      TEXT NOT NULL,
     enqueued_at TIMESTAMPTZ NOT NULL,
     started_at  TIMESTAMPTZ,
@@ -243,7 +246,10 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     error       TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
-    ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL;
+    ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL AND pin IS NULL;
+-- A pinned trigger builds what it names, so it is its own pending row; the same pin asked twice is still one.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_pin
+    ON trigger_queue(pipeline_id, job_name, pin) WHERE status = 'pending' AND pin IS NOT NULL AND run_id IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_rerun
     ON trigger_queue(pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL AND run_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_trigger_queue_rerun_of ON trigger_queue(rerun_of);

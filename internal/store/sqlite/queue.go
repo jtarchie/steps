@@ -32,7 +32,7 @@ func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, rea
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, status, enqueued_at)
 		VALUES (?, ?, ?, ?, 'pending', ?)
-		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL DO NOTHING
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL AND pin IS NULL DO NOTHING
 	`, pipelineID, jobName, reason, by, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
@@ -46,7 +46,7 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason, by string
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, status, enqueued_at)
 		VALUES (?, ?, ?, ?, 1, 'pending', ?)
-		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL AND pin IS NULL
 		DO UPDATE SET manual = 1, reason = excluded.reason, requested_by = excluded.requested_by
 	`, s.pipelineID, jobName, reason, by, nowNano())
 	if err != nil {
@@ -65,6 +65,20 @@ func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID, by 
 	`, s.pipelineID, jobName, reason, by, runID, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not queue a rerun of %q: %w", runID, err)
+	}
+
+	return nil
+}
+
+// EnqueuePinnedJob keeps the row beside the job's ordinary one, as a retry's is kept.
+func (s *Store) EnqueuePinnedJob(ctx context.Context, jobName, reason, pin, by string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, pin, status, enqueued_at)
+		VALUES (?, ?, ?, ?, 1, ?, 'pending', ?)
+		ON CONFLICT (pipeline_id, job_name, pin) WHERE status = 'pending' AND pin IS NOT NULL AND run_id IS NULL DO NOTHING
+	`, s.pipelineID, jobName, reason, by, pin, nowNano())
+	if err != nil {
+		return fmt.Errorf("could not queue a pinned run of %q: %w", jobName, err)
 	}
 
 	return nil
@@ -92,6 +106,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 		claim   store.ClaimedJob
 		rerun   sql.NullString
 		resume  sql.NullString
+		pin     sql.NullString
 		pending bool
 	)
 
@@ -136,8 +151,8 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 			  )
 			ORDER BY tq.id LIMIT 1
 		)
-		RETURNING id, job_name, manual, rerun_of, run_id
-	`, nowNano(), s.pipelineID).Scan(&claim.ID, &claim.JobName, &claim.Manual, &rerun, &resume)
+		RETURNING id, job_name, manual, rerun_of, run_id, pin
+	`, nowNano(), s.pipelineID).Scan(&claim.ID, &claim.JobName, &claim.Manual, &rerun, &resume, &pin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.ClaimedJob{}, false, nil
 	}
@@ -148,6 +163,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 
 	claim.RerunOf = rerun.String
 	claim.Resume = resume.String
+	claim.Pin = pin.String
 
 	return claim, true, nil
 }
@@ -253,7 +269,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 		      SELECT 1 FROM trigger_queue AS p
 		      WHERE p.pipeline_id = trigger_queue.pipeline_id
 		        AND p.job_name = trigger_queue.job_name AND p.status = 'pending'
-		        AND p.rerun_of IS trigger_queue.rerun_of AND p.run_id IS NULL
+		        AND p.rerun_of IS trigger_queue.rerun_of AND p.pin IS trigger_queue.pin AND p.run_id IS NULL
 		  )
 	`, s.pipelineID)
 	if err != nil {
@@ -268,7 +284,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 		DELETE FROM trigger_queue
 		WHERE pipeline_id = ? AND status = 'running' AND run_id IS NULL AND rowid NOT IN (
 			SELECT MIN(rowid) FROM trigger_queue
-			WHERE pipeline_id = ? AND status = 'running' AND run_id IS NULL GROUP BY job_name, rerun_of
+			WHERE pipeline_id = ? AND status = 'running' AND run_id IS NULL GROUP BY job_name, rerun_of, pin
 		)
 	`, s.pipelineID, s.pipelineID)
 	if err != nil {

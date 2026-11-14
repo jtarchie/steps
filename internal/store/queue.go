@@ -19,6 +19,8 @@ type Queue interface {
 	EnqueueManualJob(ctx context.Context, jobName, reason, by string) error
 	// EnqueueRerunJob queues a retry of a recorded run. It is a person's request, so it is manual; it is not merged into the job's ordinary pending row, since it builds different versions.
 	EnqueueRerunJob(ctx context.Context, jobName, reason, runID, by string) error
+	// EnqueuePinnedJob queues a person's trigger of a job against the versions pin names (ClaimedJob.Pin). Its own row for the reason a retry is: it builds different versions from the job's ordinary trigger. The same pin asked twice while pending is one row.
+	EnqueuePinnedJob(ctx context.Context, jobName, reason, pin, by string) error
 	// ClaimNextJob takes the oldest pending row admitted by serial: and
 	// max_in_flight, atomically, and reports false when nothing is ready. The
 	// row comes back from the statement that claimed it, so nothing can be
@@ -58,6 +60,8 @@ type ClaimedJob struct {
 	RerunOf string
 	// Resume is the run a restart interrupted, which this claim continues rather than starting a new one; empty for any other trigger.
 	Resume string
+	// Pin is the version fields a person pinned this trigger to, as the JSON object EnqueuePinnedJob was given; empty for any other trigger. A string so the row stays comparable.
+	Pin string
 }
 
 // QueueStatus is where a trigger-queue row is: pending until claimed, running until CompleteJob (or ResetStaleRunning, which copies the run's status) closes it.

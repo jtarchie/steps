@@ -105,6 +105,8 @@ var activityRoutes = map[string]activityRoute{
 	"POST /api/pipelines/:pipeline/pause":                  {role: RoleOperator, action: verb("pause"), target: nothing},
 	"POST /api/pipelines/:pipeline/unpause":                {role: RoleOperator, action: verb("unpause"), target: nothing},
 	"POST /api/pipelines/:pipeline/rename":                 {role: RoleAdmin, action: verb("rename"), target: param("pipeline")},
+	"POST /api/pipelines/:pipeline/jobs/:job/trigger":      {role: RoleOperator, action: verb("trigger"), target: param("job")},
+	"POST /api/pipelines/:pipeline/runs/:run/rerun":        {role: RoleOperator, action: verb("rerun"), target: param("run")},
 	"POST /api/pipelines/:pipeline/runs/:run/abort":        {role: RoleOperator, action: verb("abort"), target: param("run")},
 	"POST /api/pipelines/:pipeline/jobs/:job/queued/abort": {role: RoleOperator, action: verb("abort queued"), target: param("job")},
 	"POST /api/pipelines/:pipeline/mcp/:server/login":      {role: RoleAdmin, action: verb("mcp connect"), target: param("server")},

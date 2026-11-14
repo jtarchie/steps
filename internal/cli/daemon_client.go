@@ -205,7 +205,12 @@ func (c *daemonClient) login(ctx context.Context, method, name, server string, p
 
 // post is a bodiless verb whose only answer worth reading is a refusal.
 func (c *daemonClient) post(path string, want int) error {
-	status, body, err := c.do(http.MethodPost, path, nil)
+	return c.send(path, nil, want)
+}
+
+// send is post with a JSON body.
+func (c *daemonClient) send(path string, payload []byte, want int) error {
+	status, body, err := c.do(http.MethodPost, path, payload)
 	if err != nil {
 		return err
 	}

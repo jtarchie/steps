@@ -14,9 +14,11 @@ package scheduler
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"runtime/debug"
 	"slices"
@@ -161,8 +163,23 @@ func (r *LocalRunner) SetProvider(slug string, provider workspace.Provider) {
 }
 
 // EnqueueRerun puts a person's retry of a run on the pipeline's queue.
-func (r *LocalRunner) EnqueueRerun(ctx context.Context, target *Pipeline, jobName, runID string) error {
-	err := target.Store.EnqueueRerunJob(ctx, jobName, "retry (web)", runID, actor.From(ctx).String())
+func (r *LocalRunner) EnqueueRerun(ctx context.Context, target *Pipeline, jobName, reason, runID string) error {
+	err := target.Store.EnqueueRerunJob(ctx, jobName, reason, runID, actor.From(ctx).String())
+	if err != nil {
+		return fmt.Errorf("scheduler: %w", err)
+	}
+
+	return nil
+}
+
+// EnqueuePinned puts a person's trigger of a job, pinned to the version fields named, on the pipeline's queue. The pin rides the row rather than this process's memory, so a restart between the request and the claim still builds what was asked for and not whatever is newest.
+func (r *LocalRunner) EnqueuePinned(ctx context.Context, target *Pipeline, jobName, reason string, pin map[string]string) error {
+	encoded, err := json.Marshal(pin)
+	if err != nil {
+		return fmt.Errorf("scheduler: %w", err)
+	}
+
+	err = target.Store.EnqueuePinnedJob(ctx, jobName, reason, string(encoded), actor.From(ctx).String())
 	if err != nil {
 		return fmt.Errorf("scheduler: %w", err)
 	}
@@ -196,6 +213,25 @@ func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, re
 	r.mu.Unlock()
 
 	return 0, nil
+}
+
+// requestPin is the daemon's own --pin with one request's pin laid over it: the request is the narrower word.
+func requestPin(base map[string]string, encoded string) (map[string]string, error) {
+	var pin map[string]string
+
+	err := json.Unmarshal([]byte(encoded), &pin)
+	if err != nil {
+		return nil, fmt.Errorf("scheduler: a queued trigger's pin %q does not parse: %w", encoded, err)
+	}
+
+	pinned := maps.Clone(base)
+	if pinned == nil {
+		pinned = map[string]string{}
+	}
+
+	maps.Copy(pinned, pin)
+
+	return pinned, nil
 }
 
 // jobKey identifies a job within a pipeline. A plain string, not a hash: two
@@ -645,6 +681,15 @@ func (r *LocalRunner) runJob(
 	opts := r.base
 	opts.Provider, opts.Force, opts.ID, opts.QueueID = provider, force, runID, trigger.ID
 	opts.Interrupted = func() bool { return ctx.Err() != nil && !errors.Is(context.Cause(runCtx), errAborted) }
+
+	if trigger.Pin != "" {
+		pinned, err := requestPin(r.base.Pinned, trigger.Pin)
+		if err != nil {
+			return false, err
+		}
+
+		opts.Pinned = pinned
+	}
 
 	if trigger.RerunOf != "" {
 		var err error

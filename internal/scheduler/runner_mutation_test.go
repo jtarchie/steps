@@ -146,7 +146,7 @@ jobs:
 
 	_ = st.Close()
 
-	err := runner.EnqueueRerun(context.Background(), target, "build", "RUN1")
+	err := runner.EnqueueRerun(context.Background(), target, "build", "retry (web)", "RUN1")
 	if err == nil || !strings.HasPrefix(err.Error(), "scheduler: ") {
 		t.Errorf("EnqueueRerun on a closed store = %v, want a scheduler-prefixed error", err)
 	}

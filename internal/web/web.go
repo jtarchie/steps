@@ -226,7 +226,9 @@ type Runner interface {
 	// Enqueue queues a person's trigger of a job, returning the queue row id.
 	Enqueue(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason string, force bool) (int64, error)
 	// EnqueueRerun queues a retry of a recorded run.
-	EnqueueRerun(ctx context.Context, pipeline *scheduler.Pipeline, jobName, runID string) error
+	EnqueueRerun(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason, runID string) error
+	// EnqueuePinned queues a person's trigger of a job pinned to the version fields named.
+	EnqueuePinned(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason string, pin map[string]string) error
 	// Abort cancels a run this process is executing, and reports false when it is not running here.
 	Abort(pipeline *scheduler.Pipeline, runID string) bool
 	// AbortQueued drops a job's queued run before it starts, and reports false when nothing was queued.
@@ -417,6 +419,8 @@ func (s *Server) routes() error {
 	api.POST("/pipelines/:pipeline/pause", s.handleAPIPause)
 	api.POST("/pipelines/:pipeline/unpause", s.handleAPIUnpause)
 	api.POST("/pipelines/:pipeline/rename", s.handleAPIRename)
+	api.POST("/pipelines/:pipeline/jobs/:job/trigger", s.handleAPITrigger)
+	api.POST("/pipelines/:pipeline/runs/:run/rerun", s.handleAPIRerun)
 	api.POST("/pipelines/:pipeline/runs/:run/abort", s.handleAPIAbortRun)
 	api.POST("/pipelines/:pipeline/jobs/:job/queued/abort", s.handleAPIAbortQueued)
 	api.POST("/pipelines/:pipeline/mcp/:server/login", s.handleAPIStartLogin)

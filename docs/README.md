@@ -66,6 +66,10 @@ steps runs                  with no -p: every pipeline in the state file
 steps runs follow -p <name> [run]
                             watch a run to its end (live on a terminal;
                             Ctrl-C detaches, never aborts)
+steps runs trigger -p <name> <job>
+                            queue a run on a daemon (--pin field=value
+                            for one version; runs retry <run> re-queues
+                            a past run against the versions it built)
 steps runs abort -p <name> <run>
                             stop a run on a daemon (--queued <job> drops
                             a queued one instead)

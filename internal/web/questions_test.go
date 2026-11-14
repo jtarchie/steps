@@ -22,8 +22,12 @@ func (stubRunner) Enqueue(context.Context, *scheduler.Pipeline, string, string, 
 
 func (stubRunner) Abort(*scheduler.Pipeline, string) bool { return false }
 
-func (stubRunner) EnqueueRerun(ctx context.Context, pipeline *scheduler.Pipeline, jobName, runID string) error {
-	return pipeline.Store.EnqueueRerunJob(ctx, jobName, "retry (web)", runID, "") //nolint:wrapcheck // a double answering what the store answers
+func (stubRunner) EnqueueRerun(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason, runID string) error {
+	return pipeline.Store.EnqueueRerunJob(ctx, jobName, reason, runID, "") //nolint:wrapcheck // a double answering what the store answers
+}
+
+func (stubRunner) EnqueuePinned(context.Context, *scheduler.Pipeline, string, string, map[string]string) error {
+	return nil
 }
 
 func (stubRunner) AbortQueued(ctx context.Context, pipeline *scheduler.Pipeline, jobName string) (bool, error) {

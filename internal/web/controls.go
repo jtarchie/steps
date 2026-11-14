@@ -2,7 +2,10 @@ package web
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -29,14 +32,32 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	name := c.Param("job")
 
-	_, err = pipeline.Config().FindJob(name)
+	// Stamped BEFORE enqueueing: the run this click causes must start at or
+	// after this instant, and a stamp taken afterwards could miss a run the
+	// drainer started in between.
+	since := time.Now().UTC()
+
+	err = s.queueTrigger(c.Request().Context(), pipeline, name, "web", c.FormValue("force") == forceAll, nil)
+	if err != nil {
+		return err
+	}
+
+	// Follow, do not return to the list. The natural loop is trigger then
+	// watch; sending the browser back to a table it must poll by hand leaves
+	// the person to do the waiting the UI is for.
+	//nolint:wrapcheck // echo's redirect error is returned verbatim
+	return c.Redirect(http.StatusSeeOther, fmt.Sprintf("/p/%s/jobs/%s/follow?since=%d",
+		pipeline.Slug, name, since.UnixMilli()))
+}
+
+// queueTrigger is a person's trigger of a job, from the page or from `steps runs trigger`; from says which. A pin makes it a row of its own, built against the version it names.
+func (s *Server) queueTrigger(ctx context.Context, pipeline *Pipeline, name, from string, force bool, pin map[string]string) error {
+	_, err := pipeline.Config().FindJob(name)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
 	}
 
 	// Refused rather than queued: a pause that let the button enqueue would fill the queue with work nobody intends to run, and say nothing about why nothing happened.
-	ctx := c.Request().Context()
-
 	stopped, err := pipeline.Store.Paused(ctx)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
@@ -46,29 +67,27 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 		return pausedRefusal(ctx, pipeline)
 	}
 
-	force := c.FormValue("force") == forceAll
-
-	reason := "trigger (web)"
+	reason := "trigger (" + from + ")"
 	if force {
-		reason = "trigger, no cache (web)"
+		reason = "trigger, no cache (" + from + ")"
 	}
 
-	// Stamped BEFORE enqueueing: the run this click causes must start at or
-	// after this instant, and a stamp taken afterwards could miss a run the
-	// drainer started in between.
-	since := time.Now().UTC()
+	if len(pin) > 0 {
+		// ponytail: a pinned trigger cannot also skip the cache; the force flag is per job in memory and a pinned row would spend another request's. Carry force on the row if anyone asks.
+		if force {
+			return echo.NewHTTPError(http.StatusBadRequest, "a pinned trigger cannot also skip the cache")
+		}
 
-	_, err = s.runner.Enqueue(ctx, pipeline.Pipeline, name, reason, force)
+		err = s.runner.EnqueuePinned(ctx, pipeline.Pipeline, name, "trigger, pinned ("+from+")", pin)
+	} else {
+		_, err = s.runner.Enqueue(ctx, pipeline.Pipeline, name, reason, force)
+	}
+
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	// Follow, do not return to the list. The natural loop is trigger then
-	// watch; sending the browser back to a table it must poll by hand leaves
-	// the person to do the waiting the UI is for.
-	//nolint:wrapcheck // echo's redirect error is returned verbatim
-	return c.Redirect(http.StatusSeeOther, fmt.Sprintf("/p/%s/jobs/%s/follow?since=%d",
-		pipeline.Slug, name, since.UnixMilli()))
+	return nil
 }
 
 // handleRerun is Retry: fly rerun-build (#146), a recorded run against the
@@ -82,32 +101,94 @@ func (s *Server) handleRerun(c *echo.Context) error {
 	}
 
 	pipeline := pipelineOf(c)
-	ctx := c.Request().Context()
 
-	run, ok, err := pipeline.Store.FindRunRow(ctx, c.Param("run"))
-	if err != nil {
-		return fmt.Errorf("web: %w", err)
-	}
+	since := time.Now().UTC()
 
-	if !ok {
-		return echo.NewHTTPError(http.StatusNotFound, "no such run")
-	}
-
-	err = refuseRerun(ctx, pipeline, run)
+	job, err := s.queueRerun(c.Request().Context(), pipeline, c.Param("run"), "web")
 	if err != nil {
 		return err
 	}
 
-	since := time.Now().UTC()
-
-	err = s.runner.EnqueueRerun(ctx, pipeline.Pipeline, run.JobName, run.ID)
-	if err != nil {
-		return fmt.Errorf("web: %w", err)
-	}
-
 	//nolint:wrapcheck // echo's redirect error is returned verbatim
 	return c.Redirect(http.StatusSeeOther, fmt.Sprintf("/p/%s/jobs/%s/follow?since=%d",
-		pipeline.Slug, run.JobName, since.UnixMilli()))
+		pipeline.Slug, job, since.UnixMilli()))
+}
+
+// queueRerun queues a retry of a recorded run and names the job it belongs to.
+func (s *Server) queueRerun(ctx context.Context, pipeline *Pipeline, runID, from string) (string, error) {
+	run, ok, err := pipeline.Store.FindRunRow(ctx, runID)
+	if err != nil {
+		return "", fmt.Errorf("web: %w", err)
+	}
+
+	if !ok {
+		return "", echo.NewHTTPError(http.StatusNotFound, "no such run")
+	}
+
+	err = refuseRerun(ctx, pipeline, run)
+	if err != nil {
+		return "", err
+	}
+
+	err = s.runner.EnqueueRerun(ctx, pipeline.Pipeline, run.JobName, "retry ("+from+")", run.ID)
+	if err != nil {
+		return "", fmt.Errorf("web: %w", err)
+	}
+
+	return run.JobName, nil
+}
+
+// TriggerRequest is what `steps runs trigger` sends: nothing, for the job's ordinary trigger, or the version fields to pin it to.
+type TriggerRequest struct {
+	Pin   map[string]string `json:"pin,omitempty"`
+	Force bool              `json:"force,omitempty"`
+}
+
+// handleAPITrigger answers 202: the run is queued, not started.
+func (s *Server) handleAPITrigger(c *echo.Context) error {
+	err := s.requireControls()
+	if err != nil {
+		return err
+	}
+
+	target := s.Lookup(c.Param("pipeline"))
+	if target == nil {
+		return s.notServed(c.Param("pipeline"))
+	}
+
+	var req TriggerRequest
+
+	// An empty body is the ordinary trigger, so only a body that is there has to parse.
+	err = json.NewDecoder(c.Request().Body).Decode(&req)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return echo.NewHTTPError(http.StatusBadRequest, "the request body is not a trigger request: "+err.Error())
+	}
+
+	err = s.queueTrigger(c.Request().Context(), target, c.Param("job"), "cli", req.Force, req.Pin)
+	if err != nil {
+		return err
+	}
+
+	return c.NoContent(http.StatusAccepted) //nolint:wrapcheck // echo's own response error
+}
+
+func (s *Server) handleAPIRerun(c *echo.Context) error {
+	err := s.requireControls()
+	if err != nil {
+		return err
+	}
+
+	target := s.Lookup(c.Param("pipeline"))
+	if target == nil {
+		return s.notServed(c.Param("pipeline"))
+	}
+
+	_, err = s.queueRerun(c.Request().Context(), target, c.Param("run"), "cli")
+	if err != nil {
+		return err
+	}
+
+	return c.NoContent(http.StatusAccepted) //nolint:wrapcheck // echo's own response error
 }
 
 // refuseRerun is why a run cannot be retried right now, if it cannot.

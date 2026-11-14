@@ -609,6 +609,24 @@ cannot start work here; it does not say nothing can. If that is what you
 want, do not give the pipeline a `type: webhook` resource — with none, the
 route is a 404. See [webhooks.md](webhooks.md#receiving-deliveries).
 
+## Starting a run from the terminal
+
+`steps run` runs a job on the machine you type it on. To have the **daemon** run it instead, with the logins it holds, in its queue and its history, ask it:
+
+```bash
+steps runs trigger -p app build                      # queue build, as the Trigger button does
+steps runs trigger -p app review --pin number=87     # queue it against the version whose number is 87
+steps runs retry   -p app 46UMHVPYRA6YHB7M           # queue a retry of a recorded run, as its Retry button does
+```
+
+- A plain trigger merges into a run of that job already waiting, exactly as a second click of the button does.
+- **`--pin`** takes the same `field=value` pairs `steps run --pin` takes, and is repeatable. A pinned trigger is a queue row of its own, because it builds something the job's ordinary trigger does not; asking for the same pin twice while it waits is still one run. The pin is stored with the row, so a daemon restarted before the run starts still builds what you asked for.
+- **`--force`** skips the step cache for that run. It cannot be combined with `--pin`.
+- **`retry`** rebuilds a past run against the versions it was built with, which is Concourse's `fly rerun-build`.
+- Each is refused where the button is: on a `--read-only` daemon, on a paused pipeline, for a job the configuration no longer names.
+
+Follow what you queued with `steps runs follow -p app --job build`.
+
 ## Aborting a run
 
 Stopping one run leaves the daemon and every other run alone:

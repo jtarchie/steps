@@ -55,6 +55,12 @@ ALTER TABLE run_steps_v33 RENAME TO run_steps;`),
     chunk   BLOB NOT NULL,
     PRIMARY KEY (run_id, step_id, n, seq)
 );`),
+	execStep(`ALTER TABLE trigger_queue ADD COLUMN pin TEXT;
+DROP INDEX idx_trigger_queue_pending_job;
+CREATE UNIQUE INDEX idx_trigger_queue_pending_job
+    ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL AND pin IS NULL;
+CREATE UNIQUE INDEX idx_trigger_queue_pending_pin
+    ON trigger_queue(pipeline_id, job_name, pin) WHERE status = 'pending' AND pin IS NOT NULL AND run_id IS NULL;`),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {

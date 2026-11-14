@@ -40,6 +40,12 @@ var migrations = []string{
     chunk   BYTEA NOT NULL,
     PRIMARY KEY (run_id, step_id, n, seq)
 )`,
+	`ALTER TABLE trigger_queue ADD COLUMN pin TEXT;
+DROP INDEX idx_trigger_queue_pending_job;
+CREATE UNIQUE INDEX idx_trigger_queue_pending_job
+    ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL AND pin IS NULL;
+CREATE UNIQUE INDEX idx_trigger_queue_pending_pin
+    ON trigger_queue(pipeline_id, job_name, pin) WHERE status = 'pending' AND pin IS NOT NULL AND run_id IS NULL`,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

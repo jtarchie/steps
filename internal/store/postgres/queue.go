@@ -32,7 +32,7 @@ func enqueueJobs(ctx context.Context, db executor, pipelineID int64, jobNames []
 		SELECT $1, job_name, $3, $5, 'pending', $4
 		FROM unnest($2::text[]) WITH ORDINALITY AS j(job_name, position)
 		ORDER BY position
-		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL DO NOTHING
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL AND pin IS NULL DO NOTHING
 	`, pipelineID, jobNames, clean(reason), now(), clean(by))
 	if err != nil && len(jobNames) == 1 {
 		return fmt.Errorf("could not enqueue job %q: %w", jobNames[0], err)
@@ -50,11 +50,25 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason, by string
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, status, enqueued_at)
 		VALUES ($1, $2, $3, $5, TRUE, 'pending', $4)
-		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL AND pin IS NULL
 		DO UPDATE SET manual = TRUE, reason = excluded.reason, requested_by = excluded.requested_by
 	`, s.pipelineID, jobName, clean(reason), now(), clean(by))
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+	}
+
+	return nil
+}
+
+// EnqueuePinnedJob queues a person's trigger pinned to the versions pin names.
+func (s *Store) EnqueuePinnedJob(ctx context.Context, jobName, reason, pin, by string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, pin, status, enqueued_at)
+		VALUES ($1, $2, $3, $6, TRUE, $4, 'pending', $5)
+		ON CONFLICT (pipeline_id, job_name, pin) WHERE status = 'pending' AND pin IS NOT NULL AND run_id IS NULL DO NOTHING
+	`, s.pipelineID, jobName, clean(reason), clean(pin), now(), clean(by))
+	if err != nil {
+		return fmt.Errorf("could not queue a pinned run of %q: %w", jobName, err)
 	}
 
 	return nil
@@ -88,6 +102,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 		claim   store.ClaimedJob
 		rerun   sql.NullString
 		resume  sql.NullString
+		pin     sql.NullString
 		found   bool
 		pending bool
 	)
@@ -135,8 +150,8 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 				ORDER BY tq.id LIMIT 1
 				FOR UPDATE SKIP LOCKED
 			)
-			RETURNING id, job_name, manual, rerun_of, run_id
-		`, now(), s.pipelineID).Scan(&claim.ID, &claim.JobName, &claim.Manual, &rerun, &resume)
+			RETURNING id, job_name, manual, rerun_of, run_id, pin
+		`, now(), s.pipelineID).Scan(&claim.ID, &claim.JobName, &claim.Manual, &rerun, &resume, &pin)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -151,6 +166,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 
 	claim.RerunOf = rerun.String
 	claim.Resume = resume.String
+	claim.Pin = pin.String
 
 	return claim, found, nil
 }
@@ -211,7 +227,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 			      SELECT 1 FROM trigger_queue AS p
 			      WHERE p.pipeline_id = trigger_queue.pipeline_id
 			        AND p.job_name = trigger_queue.job_name AND p.status = 'pending'
-			        AND p.rerun_of IS NOT DISTINCT FROM trigger_queue.rerun_of AND p.run_id IS NULL
+			        AND p.rerun_of IS NOT DISTINCT FROM trigger_queue.rerun_of AND p.pin IS NOT DISTINCT FROM trigger_queue.pin AND p.run_id IS NULL
 			  )
 		`, s.pipelineID)
 		if err != nil {
@@ -222,7 +238,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 			DELETE FROM trigger_queue
 			WHERE pipeline_id = $1 AND status = 'running' AND run_id IS NULL AND id NOT IN (
 				SELECT MIN(id) FROM trigger_queue
-				WHERE pipeline_id = $1 AND status = 'running' AND run_id IS NULL GROUP BY job_name, rerun_of
+				WHERE pipeline_id = $1 AND status = 'running' AND run_id IS NULL GROUP BY job_name, rerun_of, pin
 			)
 		`, s.pipelineID)
 		if err != nil {

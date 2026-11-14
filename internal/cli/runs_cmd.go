@@ -3,6 +3,7 @@ package cli
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -32,14 +33,16 @@ import (
 // command that distinction was a runtime table of which combinations to
 // refuse; as subcommands it is the grammar, and kong enforces it.
 type RunsCmd struct {
-	List   RunsListCmd   `cmd:"" default:"withargs"                                                      help:"runs, newest first"`
-	Steps  RunsStepsCmd  `cmd:"" help:"individual steps, with what each one recorded"`
-	Queue  RunsQueueCmd  `cmd:"" help:"what the trigger loop has queued"`
-	Cost   RunsCostCmd   `cmd:"" help:"what a pipeline's agent steps spent"`
-	Where  RunsWhereCmd  `cmd:"" help:"the machines a run's placed steps ran on"`
-	Output RunsOutputCmd `cmd:"" help:"what a step printed, whole; with no step, the steps that printed"`
-	Abort  RunsAbortCmd  `cmd:"" help:"stop a run on a steps web daemon, or drop a queued one"`
-	Follow RunsFollowCmd `cmd:"" help:"watch a run to its end: live on a terminal, lines elsewhere"`
+	List    RunsListCmd    `cmd:"" default:"withargs"                                                                                   help:"runs, newest first"`
+	Steps   RunsStepsCmd   `cmd:"" help:"individual steps, with what each one recorded"`
+	Queue   RunsQueueCmd   `cmd:"" help:"what the trigger loop has queued"`
+	Cost    RunsCostCmd    `cmd:"" help:"what a pipeline's agent steps spent"`
+	Where   RunsWhereCmd   `cmd:"" help:"the machines a run's placed steps ran on"`
+	Output  RunsOutputCmd  `cmd:"" help:"what a step printed, whole; with no step, the steps that printed"`
+	Trigger RunsTriggerCmd `cmd:"" help:"queue a run of a job on a steps web daemon, optionally pinned to a version"`
+	Retry   RunsRetryCmd   `cmd:"" help:"queue a retry of a recorded run on a steps web daemon, against the versions it was built with"`
+	Abort   RunsAbortCmd   `cmd:"" help:"stop a run on a steps web daemon, or drop a queued one"`
+	Follow  RunsFollowCmd  `cmd:"" help:"watch a run to its end: live on a terminal, lines elsewhere"`
 }
 
 // RunsListCmd is the default view: runs, newest first — and the one
@@ -176,6 +179,63 @@ func (a *RunsAbortCmd) Run() error {
 	}
 
 	fmt.Printf("aborting: %s stops once its on_abort and ensure hooks have run\n", a.RunID)
+
+	return nil
+}
+
+// RunsTriggerCmd asks the daemon to queue a run rather than running one here: the daemon holds the logins, the history and the queue this run belongs in (#235). `steps run` is the run on this machine.
+type RunsTriggerCmd struct {
+	TargetFlags      `embed:""`
+	PipelineNameFlag `embed:""`
+	Job              string            `arg:""                                                    help:"the job to run"`
+	Pin              map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"   name:"pin"`
+	Force            bool              `help:"ignore the step cache for this run; not with --pin"`
+}
+
+// Run queues the job on the daemon.
+func (r *RunsTriggerCmd) Run() error {
+	name, err := namedPipeline(r.Pipeline, "runs trigger")
+	if err != nil {
+		return err
+	}
+
+	payload, err := json.Marshal(web.TriggerRequest{Pin: r.Pin, Force: r.Force})
+	if err != nil {
+		return fmt.Errorf("could not encode the trigger: %w", err)
+	}
+
+	client := newDaemonClient(r.Target)
+
+	err = client.send("/api/pipelines/"+name+"/jobs/"+url.PathEscape(r.Job)+"/trigger", payload, http.StatusAccepted)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("queued: %s on %s; watch it with steps runs follow -p %s --job %s\n", r.Job, name, name, r.Job)
+
+	return nil
+}
+
+// RunsRetryCmd is the web page's retry button from a terminal.
+type RunsRetryCmd struct {
+	TargetFlags      `embed:""`
+	PipelineNameFlag `embed:""`
+	RunID            string `arg:""   help:"the run to retry"`
+}
+
+// Run queues the retry on the daemon.
+func (r *RunsRetryCmd) Run() error {
+	name, err := namedPipeline(r.Pipeline, "runs retry")
+	if err != nil {
+		return err
+	}
+
+	err = newDaemonClient(r.Target).post("/api/pipelines/"+name+"/runs/"+url.PathEscape(r.RunID)+"/rerun", http.StatusAccepted)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("queued: a retry of %s on %s\n", r.RunID, name)
 
 	return nil
 }

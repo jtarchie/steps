@@ -4,6 +4,7 @@ package storetest
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -334,6 +335,76 @@ func (s suite) TestARerunIsQueuedBesideAnOrdinaryTrigger(t *testing.T) {
 
 	if len(reruns) != 1 || reruns[0] != (store.ClaimedJob{ID: reruns[0].ID, JobName: "build", Manual: true, RerunOf: "ORIGINAL"}) {
 		t.Errorf("claimed reruns = %+v, want one manual rerun of all of ORIGINAL", reruns)
+	}
+}
+
+// TestAPinnedTriggerIsQueuedBesideAnOrdinaryOne: a trigger pinned to a version builds something the job's ordinary trigger does not, so the two are two rows; the same pin asked twice is one, a different pin another, and the claim hands the pin back.
+func (s suite) TestAPinnedTriggerIsQueuedBesideAnOrdinaryOne(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+
+	mustEnqueueJob(t, st, "build", "a new version")
+
+	for _, pin := range []string{`{"n":"one"}`, `{"n":"one"}`, `{"n":"two"}`} {
+		err := st.EnqueuePinnedJob(ctxFor(t), "build", "trigger (cli)", pin, "local:ops")
+		if err != nil {
+			t.Fatalf("EnqueuePinnedJob: %v", err)
+		}
+	}
+
+	rows, err := st.ListTriggerQueue(ctxFor(t), 10)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("queue = %+v (%v), want the trigger and two pinned rows", rows, err)
+	}
+
+	pins := make([]string, 0, 3)
+
+	for range 3 {
+		claim := claimAndComplete(t, st)
+		if claim.Pin != "" && !claim.Manual {
+			t.Errorf("pinned claim %+v is not manual: the breaker would hold back a person's request", claim)
+		}
+
+		pins = append(pins, claim.Pin)
+	}
+
+	if got, want := strings.Join(pins, " "), ` {"n":"one"} {"n":"two"}`; got != want {
+		t.Errorf("claimed pins = %q, want %q, oldest first", got, want)
+	}
+}
+
+// TestARestartKeepsAPinnedRowApartFromTheOrdinaryOne: a claimed pinned row a dead daemon left goes back to pending still pinned, and is not dropped as superseded by the job's ordinary pending row.
+func (s suite) TestARestartKeepsAPinnedRowApartFromTheOrdinaryOne(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+
+	err := st.EnqueuePinnedJob(ctxFor(t), "build", "trigger (cli)", `{"n":"one"}`, "")
+	if err != nil {
+		t.Fatalf("EnqueuePinnedJob: %v", err)
+	}
+
+	claim, claimed, err := st.ClaimNextJob(ctxFor(t))
+	if err != nil || !claimed || claim.Pin == "" {
+		t.Fatalf("claim = %+v, %v, %v", claim, claimed, err)
+	}
+
+	mustEnqueueJob(t, st, "build", "a new version")
+
+	err = st.ResetStaleRunning(ctxFor(t))
+	if err != nil {
+		t.Fatalf("ResetStaleRunning: %v", err)
+	}
+
+	pins := make([]string, 0, 3)
+
+	for range 2 {
+		pins = append(pins, claimAndComplete(t, st).Pin)
+	}
+
+	if got, want := strings.Join(pins, "|"), `{"n":"one"}|`; got != want {
+		t.Errorf("claimed pins after a restart = %q, want %q", got, want)
 	}
 }
 
