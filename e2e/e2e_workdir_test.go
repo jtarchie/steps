@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -188,4 +189,56 @@ func assertNamesNoHostPath(t *testing.T, said, dir string) {
 			t.Errorf("the model was told the host path %s", hostPath)
 		}
 	}
+}
+
+// TestAContainerizedCLIAgentIsHandedNoHostPath is #247's line for a CLI agent: everything steps hands the CLI — its arguments, the system prompt it appends, the message on stdin, and a bridged tool's result — names the container's working directory and nothing on this machine. What the CLI says to its own model about the directory its process started in is the CLI's, and is documented in docs/infra.md.
+func TestAContainerizedCLIAgentIsHandedNoHostPath(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	captured := filepath.Join(t.TempDir(), "run_shell.json")
+
+	claude := writeFakeClaude(t, strings.Join([]string{
+		"echo '" + cliInitEvent("mcp__steps__run_shell") + "'",
+		captureBridgeScript(captured, "run_shell", `{"command":"pwd; seq 1 20000"}`),
+		"echo '" + cliResultEvent("ran it", 1) + "'",
+	}, "\n"))
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: shell
+  image: %s
+  source:
+    model: "@claude/sonnet"
+  tools: [run_shell]
+
+jobs:
+- name: build
+  plan:
+  - agent: shell
+    inputs: []
+    messages:
+      - Run it.
+`, dockerE2EImage))
+
+	mustRun(t, path)
+
+	argv, prompt, result := claude.argv(t, 1), claude.prompt(t, 1), readFileString(t, captured)
+
+	if !strings.Contains(argv, buildDir("shell")) {
+		t.Errorf("the CLI's appended system prompt does not name the container's working directory %s:\n%s", buildDir("shell"), argv)
+	}
+
+	if !strings.Contains(result, buildDir("shell")+"/.steps-agent-out/") {
+		t.Errorf("the bridged result's spill pointer is not under the container's working directory:\n%.400s", result)
+	}
+
+	// The --mcp-config file is where the CLI process finds the bridge, read by the process and never shown to its model.
+	shown := slices.DeleteFunc(strings.Split(argv, "|"), func(arg string) bool { return strings.Contains(arg, "steps-cli-mcp-") })
+
+	assertNamesNoHostPath(t, strings.Join(shown, "|")+prompt+result, dir)
 }
