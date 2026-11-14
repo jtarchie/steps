@@ -668,3 +668,22 @@ func oobEntries(body string) []string {
 		at = mark + shut
 	}
 }
+
+// #240: htmx 4 processes the page on a 0ms timer when it runs after parsing ended, which is when a deferred script runs — and an extension that had not arrived by then never sees the page, so a run page loaded that way never opened its event stream and showed no output until a reload re-rolled the race. As parser-blocking scripts, in this order, htmx waits for DOMContentLoaded and the extension has registered before it.
+func TestHtmxAndItsExtensionLoadBeforeThePageIsProcessed(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	_, page := get(t, server, "/p/demo/")
+
+	core, sse := strings.Index(page, `<script src="/static/htmx.min.js"></script>`), strings.Index(page, `<script src="/static/hx-sse.min.js"></script>`)
+	if core < 0 || sse < core {
+		t.Error("htmx and its sse extension must load in that order with no defer or async: deferred, the extension can miss htmx's first pass and a live run page never streams")
+	}
+
+	_, htmx := get(t, server, "/static/htmx.min.js")
+	if !strings.Contains(htmx, `"loading"===document.readyState`) {
+		t.Error("the vendored htmx no longer starts by document.readyState: re-read how it initializes before trusting the script order above")
+	}
+}

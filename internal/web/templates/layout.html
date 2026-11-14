@@ -32,9 +32,13 @@
 {{/* Vendored, not from a CDN: this server is expected to run on machines
      with no route to the internet, and a page whose refresh depends on one
      is a page that silently stops refreshing there. The extension carries the
-     run page's live transcript; it is not bundled in htmx itself. */}}
-<script src="/static/htmx.min.js" defer></script>
-<script src="/static/hx-sse.min.js" defer></script>
+     run page's live transcript; it is not bundled in htmx itself.
+     Neither is deferred (#240): htmx 4 run after parsing processes the page on
+     a 0ms timer, and an extension that arrives after that timer never sees the
+     page, so the run page opened no event stream until a reload. Blocking, in
+     this order, htmx waits for DOMContentLoaded and the extension is there. */}}
+<script src="/static/htmx.min.js"></script>
+<script src="/static/hx-sse.min.js"></script>
 <script src="/static/app.js" defer></script>
 </head>
 <body>
