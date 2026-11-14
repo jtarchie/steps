@@ -280,6 +280,7 @@
         {{if .Unreported}}<span class="r-sep">·</span><b class="r-skip">{{.Unreported}} unreported</b>{{end}}
       </span>{{end}}{{end}}
       {{if $step.Worker}}<span class="note worker">on {{$step.Worker}}</span>{{end}}
+      {{range $run.StepPlacements $step}}{{with .ImageRef}}<span class="note image">in {{.}}</span>{{end}}{{end}}
       <span class="dur">
         {{if and (not $step.Skipped) (not $step.Running)}}{{duration $step.Duration}}{{end}}
         {{if $step.Running}}<time class="live" data-elapsed-since="{{rfc3339 $step.Started}}">{{duration $step.Elapsed}}</time>{{end}}
