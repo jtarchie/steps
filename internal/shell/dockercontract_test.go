@@ -100,7 +100,7 @@ func TestContractInspectionFindsEachRunnersOwnContainer(t *testing.T) {
 	names := make([]string, 0, 2)
 
 	for range 2 {
-		runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+		runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
 		_, _, _, err := RunCaptureFull(t.Context(), runner, "true")
 		if err != nil {
@@ -125,14 +125,15 @@ func TestContractInspectionFindsEachRunnersOwnContainer(t *testing.T) {
 func TestContractSessionContainerConfiguration(t *testing.T) {
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
+	mount := testdocker.Tree(t, t.TempDir())
 
 	t.Setenv("STEPS_TEST_CONTRACT_SET", "visible")
 	_ = os.Unsetenv("STEPS_TEST_CONTRACT_UNSET")
 
 	runner, err := NewRunner(RunnerSpec{
 		Image:       testImage,
-		Cwd:         dir,
+		MountPath:   testdocker.TreePath,
+		Volumes:     mount.Volumes,
 		Env:         []string{"STEPS_TEST_CONTRACT_SET", "STEPS_TEST_CONTRACT_UNSET"},
 		EnvValues:   map[string]string{"STEPS_TEST_CONTRACT_SUPPLIED": "from-the-caller"},
 		User:        "1234:5678",
@@ -161,14 +162,9 @@ func TestContractSessionContainerConfiguration(t *testing.T) {
 
 	view := inspectContainerOf(t, runner)
 
-	resolved, err := ResolveMountPath(dir)
-	if err != nil {
-		t.Fatalf("ResolveMountPath: %v", err)
-	}
-
 	assertContainerLimits(t, view)
 	assertContainerLifecycle(t, view)
-	assertContainerPlacement(t, view, resolved)
+	assertContainerPlacement(t, view, mount)
 	assertContainerEnv(t, view)
 }
 
@@ -219,16 +215,15 @@ func assertContainerLifecycle(t *testing.T, view daemonView) {
 
 // assertContainerPlacement checks where the container's work happens and whose
 // it is.
-func assertContainerPlacement(t *testing.T, view daemonView, resolved string) {
+func assertContainerPlacement(t *testing.T, view daemonView, mount testdocker.TreeVolume) {
 	t.Helper()
 
-	wantBind := resolved + ":" + resolved
-	if len(view.HostConfig.Binds) != 1 || view.HostConfig.Binds[0] != wantBind {
-		t.Errorf("Binds = %v, want exactly [%s]", view.HostConfig.Binds, wantBind)
+	if len(view.HostConfig.Binds) != 1 || view.HostConfig.Binds[0] != mount.Volumes[0].String() {
+		t.Errorf("Binds = %v, want exactly the tree's volume %v", view.HostConfig.Binds, mount.Volumes)
 	}
 
-	if view.Config.WorkingDir != resolved {
-		t.Errorf("WorkingDir = %q, want %q", view.Config.WorkingDir, resolved)
+	if view.Config.WorkingDir != testdocker.TreePath {
+		t.Errorf("WorkingDir = %q, want %q", view.Config.WorkingDir, testdocker.TreePath)
 	}
 
 	if view.Config.Labels[dockerOwnerLabel] != "steps" {
@@ -306,7 +301,6 @@ func TestContractEnvValueIsReadableInsideTheContainer(t *testing.T) {
 
 	runner, err := NewRunner(RunnerSpec{
 		Image:     testImage,
-		Cwd:       testdocker.MountableDir(t),
 		Env:       []string{"STEPS_TEST_CONTRACT_READ", "STEPS_TEST_CONTRACT_ABSENT"},
 		EnvValues: map[string]string{"STEPS_TEST_CONTRACT_WORKER": "worker-1"},
 	})
@@ -355,7 +349,6 @@ func TestContractBadImageSurfacesAsData(t *testing.T) {
 
 	runner, err := NewRunner(RunnerSpec{
 		Image: "steps-test-no-such-image:definitely-not-here",
-		Cwd:   testdocker.MountableDir(t),
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -388,7 +381,6 @@ func TestContractBadImageIsAnExitError(t *testing.T) {
 
 	runner, err := NewRunner(RunnerSpec{
 		Image: "steps-test-no-such-image:definitely-not-here",
-		Cwd:   testdocker.MountableDir(t),
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -417,7 +409,6 @@ func TestContractStartFailureIsSticky(t *testing.T) {
 
 	runner, err := NewRunner(RunnerSpec{
 		Image: "steps-test-no-such-image:definitely-not-here",
-		Cwd:   testdocker.MountableDir(t),
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -613,7 +604,6 @@ func TestContractResolvesTheDaemonFromADockerContext(t *testing.T) {
 	testdocker.Require(t)
 
 	host := currentDockerHost(t)
-	dir := testdocker.MountableDir(t)
 
 	writeDockerContext(t, "steps-test-context", host)
 
@@ -625,7 +615,7 @@ func TestContractResolvesTheDaemonFromADockerContext(t *testing.T) {
 		t.Fatalf("unsetting DOCKER_HOST: %v", err)
 	}
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: dir})
+	runner, err := NewRunner(RunnerSpec{Image: testImage})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -723,7 +713,7 @@ func writeJSON(t *testing.T, path string, value any) {
 func TestContractCancelledCommandKeepsItsOutput(t *testing.T) {
 	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
 	// Started first, so the container exists and the cancel lands on the
 	// command rather than on the session start.
@@ -761,7 +751,7 @@ func TestContractSecretEnvNeverReachesTheContainerConfig(t *testing.T) {
 
 	const value = "contract-secret-value-71c2"
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 	ctx := WithSecretEnv(t.Context(), map[string]string{"STEPS_TEST_SECRET": value})
 
 	stdout, _, _, err := RunCaptureFull(ctx, runner, `printf %s "$STEPS_TEST_SECRET"`)
@@ -786,8 +776,7 @@ func TestContractSecretEnvNeverReachesTheContainerConfig(t *testing.T) {
 func TestContractCutOffCommandIsKilledBeforeTheNextOne(t *testing.T) {
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: dir})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
 	_, _, _, err := RunCaptureFull(t.Context(), runner, "true")
 	if err != nil {
@@ -797,11 +786,9 @@ func TestContractCutOffCommandIsKilledBeforeTheNextOne(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	pidFile := filepath.Join(dir, "victim.pid")
+	go cancelOncePidWritten(ctx, cancel, runner)
 
-	go cancelOncePidWritten(ctx, cancel, pidFile)
-
-	_, _, code, err := RunCaptureFull(ctx, runner, "echo $$ > victim.pid; exec sleep 300")
+	_, _, code, err := RunCaptureFull(ctx, runner, "echo $$ > /tmp/victim.pid; exec sleep 300")
 	if err != nil || code != SignalledExitCode {
 		t.Fatalf("cut-off command: exit %d, err %v; want %d as data", code, err, SignalledExitCode)
 	}
@@ -809,11 +796,11 @@ func TestContractCutOffCommandIsKilledBeforeTheNextOne(t *testing.T) {
 	awaitVictimDead(t, runner)
 }
 
-// cancelOncePidWritten spins on the pidfile rather than sleeping: the cancel must land after the command has written its pid and before it finishes, and only the file says which moment that is.
-func cancelOncePidWritten(ctx context.Context, cancel context.CancelFunc, pidFile string) {
+// cancelOncePidWritten polls the pidfile from a second exec rather than sleeping: the cancel must land after the command has written its pid and before it finishes, and only the file says which moment that is.
+func cancelOncePidWritten(ctx context.Context, cancel context.CancelFunc, runner Runner) {
 	for ctx.Err() == nil {
-		data, err := os.ReadFile(pidFile) //nolint:gosec // a path the test itself built inside its own temp dir
-		if err == nil && strings.HasSuffix(string(data), "\n") {
+		data, _, _, err := RunCaptureFull(context.WithoutCancel(ctx), runner, "cat /tmp/victim.pid 2>/dev/null")
+		if err == nil && strings.HasSuffix(data, "\n") {
 			cancel()
 
 			return
@@ -831,7 +818,7 @@ func awaitVictimDead(t *testing.T, runner Runner) {
 	defer stop()
 
 	for {
-		stdout, _, _, err := RunCaptureFull(bound, runner, `p=$(cat victim.pid); if [ -r /proc/$p/stat ] && ! grep -q ') Z' /proc/$p/stat; then echo alive; else echo dead; fi`)
+		stdout, _, _, err := RunCaptureFull(bound, runner, `p=$(cat /tmp/victim.pid); if [ -r /proc/$p/stat ] && ! grep -q ') Z' /proc/$p/stat; then echo alive; else echo dead; fi`)
 		if err != nil {
 			t.Fatalf("liveness probe: %v", err)
 		}

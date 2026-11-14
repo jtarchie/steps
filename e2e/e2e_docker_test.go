@@ -32,12 +32,11 @@ import (
 
 const dockerE2EImage = "alpine:3"
 
-// requireDockerE2E is testdocker.Require plus TMPDIR moved where the daemon can bind-mount: every docker-backed e2e here builds its workspace under TMPDIR, so the move belongs beside the daemon check rather than in each test.
+// requireDockerE2E is testdocker.Require; TMPDIR stays wherever the OS put it, because a step's tree reaches its container through volumes, never a path the daemon has to see.
 func requireDockerE2E(t *testing.T) {
 	t.Helper()
 
 	testdocker.Require(t)
-	t.Setenv("TMPDIR", testdocker.MountableDir(t))
 }
 
 // lastToolResult returns the most recent tool result in a captured request.

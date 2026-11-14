@@ -3,9 +3,7 @@ package shell
 import (
 	"bytes"
 	"context"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,16 +12,16 @@ import (
 
 const testImage = "alpine:3"
 
-// TestDockerRunnerIntegrationBindMountPersists and its siblings below are
+// TestDockerRunnerIntegrationTreeVolumePersists and its siblings below are
 // split into separate top-level functions (rather than t.Run subtests of
 // one function) to stay under the linter's per-function
 // cyclomatic-complexity budget.
-func TestDockerRunnerIntegrationBindMountPersists(t *testing.T) {
+func TestDockerRunnerIntegrationTreeVolumePersists(t *testing.T) {
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
+	mount := testdocker.Tree(t, t.TempDir())
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: dir})
+	runner, err := NewRunner(RunnerSpec{Image: testImage, MountPath: testdocker.TreePath, Volumes: mount.Volumes})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -35,7 +33,7 @@ func TestDockerRunnerIntegrationBindMountPersists(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	data, readErr := os.ReadFile(filepath.Join(dir, "written.txt")) //nolint:gosec // test fixture path
+	data, _, readErr := testdocker.ReadTree(t, mount, "written.txt")
 	if readErr != nil {
 		t.Fatalf("read file written inside the container: %v", readErr)
 	}
@@ -48,7 +46,7 @@ func TestDockerRunnerIntegrationBindMountPersists(t *testing.T) {
 func TestDockerRunnerIntegrationExitCodeRoundTrips(t *testing.T) {
 	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -70,7 +68,7 @@ func TestDockerRunnerIntegrationHostEnvNotVisible(t *testing.T) {
 
 	t.Setenv("STEPS_TEST_HOST_SECRET", "leak-me-not")
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -90,7 +88,7 @@ func TestDockerRunnerIntegrationHostEnvNotVisible(t *testing.T) {
 func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) {
 	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -133,7 +131,7 @@ func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) 
 func TestDockerRunnerIntegrationStatePersistsAcrossCommands(t *testing.T) {
 	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -172,7 +170,7 @@ func TestDockerRunnerIntegrationStatePersistsAcrossCommands(t *testing.T) {
 func TestDockerRunnerIntegrationCloseRemovesContainer(t *testing.T) {
 	testdocker.Require(t)
 
-	runnerIface, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runnerIface, err := NewRunner(RunnerSpec{Image: testImage})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

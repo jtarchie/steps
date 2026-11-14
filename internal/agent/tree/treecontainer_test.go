@@ -18,11 +18,18 @@ import (
 // probeImages are the two userlands worth disagreeing: busybox, where grep has no -P and accepts -I without honouring it, and GNU, where -E reads `\d` as a literal d. Anything that behaves the same in both behaves the same nearly everywhere.
 var probeImages = []string{"alpine:3", "debian:13-slim"}
 
-// newContainerTree starts a container over dir and returns the tree its file tools would use.
+// newContainerTree starts a container over a volume seeded from dir, as a step's container gets its tree, and returns the tree its file tools would use.
 func newContainerTree(t *testing.T, image, dir string) Container {
 	t.Helper()
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: image, Cwd: dir})
+	return newContainerTreeOver(t, image, testdocker.Tree(t, dir))
+}
+
+// newContainerTreeOver is newContainerTree on a volume the caller keeps, to read back what the container wrote.
+func newContainerTreeOver(t *testing.T, image string, mount testdocker.TreeVolume) Container {
+	t.Helper()
+
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: image, MountPath: testdocker.TreePath, Volumes: mount.Volumes})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -87,7 +94,7 @@ func TestContainerTreeMatchesHostTree(t *testing.T) {
 	t.Parallel()
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
+	dir := t.TempDir()
 	writeFixture(t, dir)
 
 	host := Host{Dir: dir}
@@ -242,7 +249,7 @@ func TestContainerTreeConfinesPaths(t *testing.T) {
 	t.Parallel()
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
+	dir := t.TempDir()
 	writeFixture(t, dir)
 
 	err := os.Symlink("/etc/passwd", filepath.Join(dir, "escape"))
@@ -278,7 +285,7 @@ func TestContainerTreeRoundTripsFiles(t *testing.T) {
 	t.Parallel()
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
+	dir := t.TempDir()
 	writeFixture(t, dir)
 
 	script := filepath.Join(dir, "run.sh")
@@ -288,25 +295,21 @@ func TestContainerTreeRoundTripsFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	contained := newContainerTree(t, "alpine:3", dir)
+	mount := testdocker.Tree(t, dir)
+	contained := newContainerTreeOver(t, "alpine:3", mount)
 
 	err = contained.WriteFile(t.Context(), contained.dir+"/run.sh", []byte("#!/bin/sh\necho two\n"), false)
 	if err != nil {
 		t.Fatalf("writeFile: %v", err)
 	}
 
-	info, err := os.Stat(script)
+	body, mode, err := testdocker.ReadTree(t, mount, "run.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if info.Mode().Perm() != 0o755 {
-		t.Errorf("mode = %v, want 0755 kept — the write replaced the file instead of writing through it", info.Mode().Perm())
-	}
-
-	body, err := os.ReadFile(script) //nolint:gosec // a path this test made
-	if err != nil {
-		t.Fatal(err)
+	if mode != 0o755 {
+		t.Errorf("mode = %v, want 0755 kept — the write replaced the file instead of writing through it", mode)
 	}
 
 	if !strings.Contains(string(body), "echo two") {
@@ -321,7 +324,7 @@ func TestContainerTreeRoundTripsFiles(t *testing.T) {
 		t.Fatalf("writeFile(awkward): %v", err)
 	}
 
-	got, err := os.ReadFile(filepath.Join(dir, "awkward.txt")) //nolint:gosec // a path this test made
+	got, _, err := testdocker.ReadTree(t, mount, "awkward.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,8 +339,8 @@ func TestContainerWriteRefusesNUL(t *testing.T) {
 	t.Parallel()
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
-	contained := newContainerTree(t, "alpine:3", dir)
+	mount := testdocker.Tree(t, t.TempDir())
+	contained := newContainerTreeOver(t, "alpine:3", mount)
 
 	for name, content := range map[string][]byte{
 		"leading":  []byte("\x00after the nul\n"),
@@ -349,7 +352,7 @@ func TestContainerWriteRefusesNUL(t *testing.T) {
 				t.Fatalf("writeFile with a %s NUL = %v, want it refused before the shell truncates it", name, err)
 			}
 
-			_, statErr := os.Stat(filepath.Join(dir, "nul-"+name+".txt"))
+			_, _, statErr := testdocker.ReadTree(t, mount, "nul-"+name+".txt")
 			if statErr == nil {
 				t.Error("the file was created anyway, so a truncated write reached the tree")
 			}
@@ -362,9 +365,9 @@ func TestProbeRefusesAnImageWithoutTheFileUtilities(t *testing.T) {
 	t.Parallel()
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
+	dir := t.TempDir()
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: "alpine:3", Cwd: dir})
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: "alpine:3", MountPath: testdocker.TreePath, Volumes: testdocker.Tree(t, dir).Volumes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +397,7 @@ func TestContainerTreeStatMatchesHostTree(t *testing.T) {
 	t.Parallel()
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
+	dir := t.TempDir()
 	writeFixture(t, dir)
 
 	contained := newContainerTree(t, "alpine:3", dir)
@@ -423,7 +426,7 @@ func TestContainerTreeResolveWriteRefusesLinkEscapes(t *testing.T) {
 	t.Parallel()
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
+	dir := t.TempDir()
 	writeFixture(t, dir)
 
 	for link, target := range map[string]string{"escape": "/etc/passwd", "outside": "/etc"} {

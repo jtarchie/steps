@@ -306,7 +306,6 @@ jobs:
 // An export that names an image runs its commands there, as the container's user and with no network if it says so, each call in a fresh container over a volume of its own.
 func TestAnExportedCommandRunsInTheContainerTheExportNames(t *testing.T) {
 	testdocker.Require(t)
-	t.Setenv("TMPDIR", testdocker.MountableDir(t))
 
 	served := serveOps(t, `
 mcp_exports:

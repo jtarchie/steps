@@ -220,7 +220,7 @@ func TestNewRunnerDoesNotStartAContainer(t *testing.T) {
 
 	before := ourContainerCount(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestNewRunnerDoesNotStartAContainer(t *testing.T) {
 func TestDockerRunnerCaptureFull(t *testing.T) {
 	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
 	stdout, stderr, exitCode, err := RunCaptureFull(context.Background(), runner,
 		"printf 'out text'; printf 'err text' >&2; exit 3")
@@ -280,7 +280,7 @@ func TestDockerRunnerReusesOneContainer(t *testing.T) {
 	testdocker.Require(t)
 
 	before := ourContainerCount(t)
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
 	for _, command := range []string{"echo one > /tmp/marker", "cat /tmp/marker"} {
 		_, _, code, err := RunCaptureFull(context.Background(), runner, command)
@@ -301,7 +301,7 @@ func TestDockerRunnerWithLabelSharesOneContainer(t *testing.T) {
 	testdocker.Require(t)
 
 	before := ourContainerCount(t)
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
 	_, _, _, err := RunCaptureFull(context.Background(), runner, "true")
 	if err != nil {
@@ -323,7 +323,7 @@ func TestDockerRunnerWithLabelSharesOneContainer(t *testing.T) {
 func TestDockerRunnerCloseWithoutCommandsRemovesNothing(t *testing.T) {
 	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestDockerRunnerCloseWithoutCommandsRemovesNothing(t *testing.T) {
 func TestDockerRunnerCloseIsIdempotent(t *testing.T) {
 	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestDockerRunnerCaptureFullPreservesAdversarialOutput(t *testing.T) {
 
 	const adversarial = `it's a "test" with \backslashes\ and 'quotes'`
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
 	stdout, _, _, err := RunCaptureFull(context.Background(), runner, "cat /tmp/adversarial 2>/dev/null || printf '%s' "+singleQuote(adversarial))
 	if err != nil {
@@ -389,7 +389,7 @@ func singleQuote(value string) string {
 func TestDockerRunnerRunErrorsOnNonzeroExit(t *testing.T) {
 	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
 	err := Run(context.Background(), runner, "false")
 	if err == nil {
@@ -405,7 +405,7 @@ func TestDockerRunnerRunErrorsOnNonzeroExit(t *testing.T) {
 func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
 	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
 	out, err := RunCapture(context.Background(), runner, "printf 'captured output'")
 	if err != nil {
@@ -424,7 +424,7 @@ func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
 func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
 	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
 	var logBuf bytes.Buffer
 
@@ -507,7 +507,7 @@ func TestDockerRunnerDiagnosesAContainerThatOutlivedTheSettleWindow(t *testing.T
 	t.Cleanup(func() { dockerSettleBound = previous })
 
 	image := entrypointImage(t)
-	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: image})
 
 	docker, ok := runner.(DockerRunner)
 	if !ok {
@@ -541,7 +541,7 @@ func TestDockerRunnerDiagnosesAContainerThatOutlivedTheSettleWindow(t *testing.T
 func TestDockerRunnerSaysAContainerKilledMidStepStoppedRatherThanNeverStarted(t *testing.T) {
 	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
 	_, _, _, err := RunCaptureFull(t.Context(), runner, "true")
 	if err != nil {
@@ -587,7 +587,7 @@ func TestDockerRunnerDetectsAContainerThatDiedAtBirth(t *testing.T) {
 	testdocker.Require(t)
 
 	image := entrypointImage(t)
-	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: image})
 
 	_, _, _, err := RunCaptureFull(t.Context(), runner, "anything")
 	if err == nil {
@@ -622,7 +622,7 @@ func TestDockerRunnerDetectsAContainerThatDiedAtBirth(t *testing.T) {
 func TestRunOnAContainerThatDiedAtBirthIsNotAnExitError(t *testing.T) {
 	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: entrypointImage(t), Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: entrypointImage(t)})
 
 	runErr := Run(t.Context(), runner, "true")
 	if runErr == nil {
@@ -659,7 +659,7 @@ func TestDockerRunnerRemovesAContainerThatDiedAtBirth(t *testing.T) {
 	image := entrypointImage(t)
 	// Of this image only: under a loaded daemon another test's container can still be on its way out, and a process-wide count reads it as this one.
 	before := ourContainerCountOf(t, image)
-	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: testdocker.MountableDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: image})
 
 	_, _, _, _ = RunCaptureFull(t.Context(), runner, "anything")
 
@@ -675,7 +675,7 @@ func TestDockerRunnerRemovesAContainerThatDiedAtBirth(t *testing.T) {
 func TestDockerRunnerRejectsCommandsAfterClose(t *testing.T) {
 	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

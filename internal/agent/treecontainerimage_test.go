@@ -26,11 +26,11 @@ func TestContainerTreeReadsAnImageWhole(t *testing.T) {
 		t.Run(image, func(t *testing.T) {
 			t.Parallel()
 
-			dir := testdocker.MountableDir(t)
+			dir := t.TempDir()
 			data := encodedImage(t, "png", 64, 48)
 			writeBytes(t, dir, "shot.png", data)
 
-			runner, err := shell.NewRunner(shell.RunnerSpec{Image: image, Cwd: dir})
+			runner, err := shell.NewRunner(shell.RunnerSpec{Image: image, MountPath: testdocker.TreePath, Volumes: testdocker.Tree(t, dir).Volumes})
 			if err != nil {
 				t.Fatalf("NewRunner: %v", err)
 			}

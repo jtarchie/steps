@@ -43,16 +43,19 @@ func currentDockerHost(t *testing.T) string {
 func TestRunnerTargetsANamedDaemon(t *testing.T) {
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
+	dir := t.TempDir()
 
 	err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed\n"), 0o600)
 	if err != nil {
 		t.Fatalf("writing the input: %v", err)
 	}
 
+	mount := testdocker.Tree(t, dir)
+
 	runner, err := NewRunner(RunnerSpec{
 		Image:      testImage,
-		Cwd:        dir,
+		MountPath:  testdocker.TreePath,
+		Volumes:    mount.Volumes,
 		DockerHost: currentDockerHost(t),
 	})
 	if err != nil {
@@ -78,7 +81,6 @@ func TestRunnerTargetsANamedDaemon(t *testing.T) {
 	// here instead of failing.
 	absent, err := NewRunner(RunnerSpec{
 		Image:      testImage,
-		Cwd:        dir,
 		DockerHost: "tcp://127.0.0.1:1",
 	})
 	if err != nil {
@@ -94,32 +96,26 @@ func TestRunnerTargetsANamedDaemon(t *testing.T) {
 }
 
 // TestRunnerMountsAPathItDidNotResolve pins the seam a placed containerized
-// step turns on: the bind mount names a path on the DAEMON's filesystem, and
-// this process must not try to resolve it.
+// step turns on: the tree is a volume on the DAEMON, mounted at MountPath, and
+// this process must not try to resolve Cwd.
 //
-// Proven by handing MountPath a directory that exists — so the container can
-// read it — while pointing Cwd at one that does not. ResolveMountPath would
-// fail on that Cwd, so a runner that still resolved locally cannot reach the
-// assertion at all.
+// Proven by pointing Cwd at a directory that does not exist: a runner that
+// still resolved it locally cannot reach the assertion at all.
 func TestRunnerMountsAPathItDidNotResolve(t *testing.T) {
 	testdocker.Require(t)
 
-	dir := testdocker.MountableDir(t)
+	dir := t.TempDir()
 
 	err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed\n"), 0o600)
 	if err != nil {
 		t.Fatalf("writing the input: %v", err)
 	}
 
-	resolved, err := ResolveMountPath(dir)
-	if err != nil {
-		t.Fatalf("ResolveMountPath: %v", err)
-	}
-
 	runner, err := NewRunner(RunnerSpec{
 		Image:     testImage,
 		Cwd:       filepath.Join(dir, "no", "such", "place"),
-		MountPath: resolved,
+		MountPath: testdocker.TreePath,
+		Volumes:   testdocker.Tree(t, dir).Volumes,
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -162,7 +158,6 @@ func TestStepEnvCannotRedirectTheSessionsDaemon(t *testing.T) {
 
 	runner, err := NewRunner(RunnerSpec{
 		Image:      testImage,
-		Cwd:        testdocker.MountableDir(t),
 		DockerHost: currentDockerHost(t),
 		Env:        []string{"DOCKER_HOST"},
 		EnvValues:  map[string]string{"DOCKER_HOST": decoy},

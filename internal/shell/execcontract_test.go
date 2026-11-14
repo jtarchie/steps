@@ -67,7 +67,7 @@ func TestContractExecMatrix(t *testing.T) {
 			t.Helper()
 			testdocker.Require(t)
 
-			return newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+			return newTestRunner(t, RunnerSpec{Image: testImage})
 		},
 	}
 
@@ -127,7 +127,7 @@ func TestContractExecNeverStarted(t *testing.T) {
 			t.Helper()
 			testdocker.Require(t)
 
-			runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
+			runner := newTestRunner(t, RunnerSpec{Image: testImage})
 			CloseRunner(runner, "test")
 
 			return runner
