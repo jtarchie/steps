@@ -262,6 +262,7 @@ func (s *plusSession) overlay(ctx context.Context, data dockerapi.Volume) (strin
 	}
 
 	s.volumes = append(s.volumes, child.Name)
+	s.uppers[child.Name] = upper.Name
 
 	return child.Name, nil
 }

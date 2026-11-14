@@ -77,6 +77,10 @@ type plusSession struct {
 	volumes   []string
 	// outputs are the declared outputs that got a plain volume of their own: only those can be held, since an overlay's data is visible only while something mounts it.
 	outputs map[string]string
+	// layered are declared outputs that are inputs from this machine, by their overlay: home already holds the lower, so only the upper has to travel.
+	layered map[string]string
+	// uppers names each overlay's upper volume.
+	uppers map[string]string
 	// kept are volumes now named by a digest, which outlive the session.
 	kept map[string]bool
 	// fetchMu serializes fetches: an agent's concurrent tool calls would otherwise swap the same local paths and write kept at once.
@@ -96,7 +100,7 @@ type plusSession struct {
 
 // newPlusSession picks how the worker's sshd is reached, and for a machine steps provisioned, how it hears of its own reclamation.
 func newPlusSession(worker Worker, spec shell.RunnerSpec) *plusSession {
-	s := &plusSession{worker: worker, spec: spec, kept: map[string]bool{}, socket: worker.Socket}
+	s := &plusSession{worker: worker, spec: spec, kept: map[string]bool{}, uppers: map[string]string{}, socket: worker.Socket}
 
 	switch worker.Scheme {
 	case SchemeAWS:
@@ -354,7 +358,7 @@ func (s *plusSession) connect(ctx context.Context) error {
 // compose lays the step's tree out as volumes: each input directory a copy-on-write view of a cached tree, each empty output a plain volume of its own, and the work volume under them for whatever else the tree holds.
 func (s *plusSession) compose(ctx context.Context) ([]dockerapi.Bind, []string, error) {
 	mounts := []dockerapi.Bind{volumeMount(s.work, plusWorkdir, false)}
-	s.outputs = map[string]string{}
+	s.outputs, s.layered = map[string]string{}, map[string]string{}
 
 	declared := map[string]bool{}
 	for _, name := range s.spec.Fetch {
@@ -442,6 +446,10 @@ func (s *plusSession) mountFor(ctx context.Context, name, local string, output b
 	volume, err := s.placeLocal(ctx, local)
 	if err != nil {
 		return dockerapi.Bind{}, fmt.Errorf("input %q: %w", name, err)
+	}
+
+	if output {
+		s.layered[name] = volume
 	}
 
 	return volumeMount(volume, target, false), nil
@@ -665,7 +673,7 @@ func (s *plusSession) fetchDeclared(ctx context.Context, names ...string) error 
 			continue
 		}
 
-		err := s.fetchInto(ctx, path.Join(plusWorkdir, name), s.spec.Cwd, name)
+		err := s.fetchOne(ctx, name)
 		if err != nil {
 			return err
 		}
@@ -676,6 +684,15 @@ func (s *plusSession) fetchDeclared(ctx context.Context, names ...string) error 
 	s.heldMu.Unlock()
 
 	return nil
+}
+
+// fetchOne brings one declared output home: an input from this machine as the step's changes to it, anything else whole.
+func (s *plusSession) fetchOne(ctx context.Context, name string) error {
+	if overlay, ok := s.layered[name]; ok {
+		return s.fetchChanges(ctx, name, overlay, s.uppers[overlay])
+	}
+
+	return s.fetchInto(ctx, path.Join(plusWorkdir, name), s.spec.Cwd, name)
 }
 
 func (r plusRunner) heldOutputs() (map[string]string, string, bool) {

@@ -114,3 +114,38 @@ jobs:
 		t.Errorf("requests = %d, want 2 (write, then finish): the nudge did not see the file the agent wrote", got)
 	}
 }
+
+// TestAnEditedInputComesHomeAsItsChanges: an input declared as an output came home whole after every command, so a one-line edit in a repository cost the repository (steps#246 S6). Only the overlay's upper layer travels now, and a deletion still reaches home.
+func TestAnEditedInputComesHomeAsItsChanges(t *testing.T) {
+	requireDockerE2E(t)
+
+	path := writePipeline(t, t.TempDir(), fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+jobs:
+- name: edit
+  plan:
+  - task: prepare
+    outputs: [data]
+    run: head -c %[2]d /dev/urandom > data/blob && mkdir -p data/sub && echo a > data/a.txt && echo b > data/sub/b.txt && echo c > data/sub/c.txt
+
+  - task: change
+    image: %[1]s
+    inputs: [data]
+    outputs: [data]
+    run: echo more >> data/a.txt && rm data/sub/b.txt && echo new > data/sub/new.txt
+
+  - task: check
+    inputs: [data]
+    run: test "$(cat data/a.txt)" = "$(printf 'a\nmore')" && test ! -e data/sub/b.txt && test -s data/sub/c.txt && test -s data/sub/new.txt && test -s data/blob
+`, dockerE2EImage, fetchBlobBytes))
+
+	mustRun(t, path)
+
+	row := placementNamed(t, runPlacements(t, path), "change")
+	if row.BytesReceived > fetchBlobBytes/4 {
+		t.Errorf("bytes_received = %d, want about the edited files, not the %d-byte tree", row.BytesReceived, fetchBlobBytes)
+	}
+}
