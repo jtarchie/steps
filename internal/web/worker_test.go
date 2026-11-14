@@ -105,8 +105,8 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 	for _, want := range []string{
 		"gpu", "linux/arm64", "64.0 MiB", "1.0 MiB",
 		">0:0<", "aws://" + instance + " in golang:1.25@sha256:0123456789ab",
-		// #239: on the row itself, so which image ran is read without opening the step.
-		`<span class="note image">in golang:1.25@sha256:0123456789ab</span>`,
+		// #239: on the row itself, so which image ran is read without opening the step; the digest rides its tooltip and the placed-on line, not the row.
+		`<span class="note worker" title="golang:1.25@sha256:0123456789ab">golang:1.25</span>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the run page does not show %q", want)
