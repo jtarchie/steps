@@ -178,3 +178,10 @@ func taskCacheKeys(ctx context.Context, name string, caches []config.TaskCache) 
 
 	return workspace.TaskCacheKeys(meta.PipelineName, meta.JobName, name, caches)
 }
+
+// inputDigests is the space's view of the build's digest memo; a space without one (a test double) walks every input.
+func inputDigests(space workspace.StepSpace) shell.InputDigests {
+	digests, _ := space.(shell.InputDigests)
+
+	return digests
+}

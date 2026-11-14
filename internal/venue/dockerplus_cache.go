@@ -268,10 +268,28 @@ func (s *plusSession) overlay(ctx context.Context, data dockerapi.Volume) (strin
 }
 
 // placeLocal is an input the orchestrator has on disk.
-func (s *plusSession) placeLocal(ctx context.Context, dir string) (string, error) {
+func (s *plusSession) placeLocal(ctx context.Context, name, dir string) (string, error) {
+	memo := s.inputDigests(name)
+
+	// Only a hit is trusted to the memo: a miss walks the copy, so a remembered digest can never name the volume a different tree fills.
+	if known, ok := memoDigest(memo, name); ok {
+		data, hit, err := s.cached(ctx, known)
+		if err != nil {
+			return "", err
+		}
+
+		if hit {
+			return s.overlay(ctx, data)
+		}
+	}
+
 	digest, err := treedigest.Tree(dir)
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
+	}
+
+	if memo != nil {
+		memo.LearnDigest(name, digest)
 	}
 
 	data, hit, err := s.cached(ctx, digest)
@@ -318,7 +336,30 @@ func (s *plusSession) placeRemote(ctx context.Context, name string, input shell.
 	// Counted as sent even when the worker turns out to hold it: the tree crossed to reach it, which is what a pipe costs.
 	s.sent.Add(pulled)
 
-	return s.placeLocal(ctx, staged)
+	return s.placeLocal(ctx, "", staged)
+}
+
+// inputDigests is the build's memo for input name, or nil where the copy may differ from the artifact: a cache at or under it puts a stand-in in the copy.
+func (s *plusSession) inputDigests(name string) shell.InputDigests {
+	if name == "" || s.spec.InputDigests == nil {
+		return nil
+	}
+
+	for rel := range s.spec.Caches {
+		if rel == name || strings.HasPrefix(rel, name+"/") {
+			return nil
+		}
+	}
+
+	return s.spec.InputDigests
+}
+
+func memoDigest(memo shell.InputDigests, name string) (string, bool) {
+	if memo == nil {
+		return "", false
+	}
+
+	return memo.KnownDigest(name)
 }
 
 // hold files an output volume under its digest and keeps it past close, so the next step here finds it and nothing comes home.

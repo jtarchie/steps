@@ -253,6 +253,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	// Cwd is the whole step directory and Subdir is where the model works, even though dir: is the only thing that makes them differ. The step's outputs: are named relative to the SPACE, so a placed agent that sent only its subdirectory would fetch them from a path that does not exist and come home with nothing.
 	spec := containerSpec(ri.Image, space.Dir(), ri.Env, ri.Isolation())
 	spec.Subdir, spec.Caches, spec.Fetch, spec.Keep = step.Dir, caches, step.Outputs, workspace.Kept(space)
+	spec.InputDigests, _ = space.(shell.InputDigests)
 
 	runner, err := newRunner.build(ctx, spec)
 	if err != nil {

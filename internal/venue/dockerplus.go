@@ -443,7 +443,7 @@ func (s *plusSession) mountFor(ctx context.Context, name, local string, output b
 		return volumeMount(volume.Name, target, false), nil
 	}
 
-	volume, err := s.placeLocal(ctx, local)
+	volume, err := s.placeLocal(ctx, name, local)
 	if err != nil {
 		return dockerapi.Bind{}, fmt.Errorf("input %q: %w", name, err)
 	}

@@ -123,7 +123,7 @@ func (b *isolatingBuild) newSpaceLeaving(ctx context.Context, label string, inpu
 		return nil, fmt.Errorf("could not create step workspace %q: %w", dir, err)
 	}
 
-	err = b.materializeSpace(ctx, dir, inputs, outputs, inputMapping, outputMapping, leaving)
+	copied, err := b.materializeSpace(ctx, dir, inputs, outputs, inputMapping, outputMapping, leaving)
 	if err != nil {
 		// Tear down whatever was already materialized under dir, so a
 		// mid-loop failure doesn't leak input copies until the
@@ -140,8 +140,14 @@ func (b *isolatingBuild) newSpaceLeaving(ctx context.Context, label string, inpu
 	return &isolatingSpace{
 		backend: b.backend, artifacts: b.artifacts, dir: dir,
 		outputs: outputs, outputMapping: outputMapping, keep: b.keep,
-		captured: b.superseded, left: leaving,
+		captured: b.superseded, left: leaving, build: b, copied: copied,
 	}, nil
+}
+
+// copiedInput is the artifact an input directory was copied from, and that artifact's generation when the copy began: a digest remembered at the same generation names these bytes.
+type copiedInput struct {
+	artifact   string
+	generation uint64
 }
 
 // materializeSpace populates an already-created step directory with a copy or
@@ -152,11 +158,13 @@ func (b *isolatingBuild) newSpaceLeaving(ctx context.Context, label string, inpu
 // declared name (what the task's run: expects), while the artifact copied in /
 // captured out uses the mapped name. On any error the caller (newSpace)
 // removes dir.
-func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, inputs, outputs []string, inputMapping, outputMapping map[string]string, leaving map[string]RemoteArtifact) error {
+func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, inputs, outputs []string, inputMapping, outputMapping map[string]string, leaving map[string]RemoteArtifact) (map[string]copiedInput, error) {
+	copied := make(map[string]copiedInput, len(inputs))
+
 	for _, in := range inputs {
 		err := config.ValidateArtifactName(in)
 		if err != nil {
-			return fmt.Errorf("input %q: %w", in, err)
+			return nil, fmt.Errorf("input %q: %w", in, err)
 		}
 
 		if _, left := leaving[in]; left {
@@ -167,23 +175,28 @@ func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, input
 
 		err = b.ensureLocal(ctx, artifact)
 		if err != nil {
-			return fmt.Errorf("input %q: %w", in, err)
+			return nil, fmt.Errorf("input %q: %w", in, err)
 		}
 
 		src := filepath.Join(b.artifacts, artifact)
 
 		err = rejectSymlinkSrc(src)
 		if err != nil {
-			return fmt.Errorf("input %q: %w", in, err)
+			return nil, fmt.Errorf("input %q: %w", in, err)
 		}
+
+		// Read before the copy, so a capture landing during it leaves a generation no remembered digest can match.
+		_, generation, _ := b.rememberedDigest(artifact)
 
 		err = b.backend.materialize(ctx, src, filepath.Join(dir, in))
 		if err != nil {
-			return fmt.Errorf("materializing input %q: %w", in, err)
+			return nil, fmt.Errorf("materializing input %q: %w", in, err)
 		}
+
+		copied[in] = copiedInput{artifact: artifact, generation: generation}
 	}
 
-	return b.materializeOutputs(ctx, dir, inputs, outputs, outputMapping)
+	return copied, b.materializeOutputs(ctx, dir, inputs, outputs, outputMapping)
 }
 
 // materializeOutputs is materializeSpace's output half, split out to stay
@@ -263,9 +276,34 @@ type isolatingSpace struct {
 	// that is also an output has no directory here when the worker kept the
 	// result: the record of the hold IS the capture.
 	left map[string]RemoteArtifact
+	// build and copied answer KnownDigest/LearnDigest: what this build has already digested of each input's bytes.
+	build  *isolatingBuild
+	copied map[string]copiedInput
 }
 
 func (s *isolatingSpace) Dir() string { return s.dir }
+
+// KnownDigest is the digest the build already holds for input name's bytes, so a venue placing it need not walk the copy again (steps#246).
+func (s *isolatingSpace) KnownDigest(name string) (string, bool) {
+	input, ok := s.copied[name]
+	if !ok {
+		return "", false
+	}
+
+	digest, generation, ok := s.build.rememberedDigest(input.artifact)
+
+	return digest, ok && generation == input.generation
+}
+
+// LearnDigest keeps a digest a venue walked of input name's copy, for the next step reading the same artifact; rememberDigest drops it if the artifact moved since the copy.
+func (s *isolatingSpace) LearnDigest(name, digest string) {
+	input, ok := s.copied[name]
+	if !ok {
+		return
+	}
+
+	s.build.rememberDigest(input.artifact, digest, input.generation)
+}
 
 // Kept implements the optional capability workspace.Kept reads.
 func (s *isolatingSpace) Kept() bool { return s.keep }

@@ -243,6 +243,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 		// Untagged steps bring outputs home as before, so capture, --replay and --artifact-store never see a tree held in a local volume.
 		DeferFetch:   placementTag(step) != "" && deferrable(step, rt),
 		RemoteInputs: remote,
+		InputDigests: inputDigests(space),
 		Caches:       taskCacheKeys(ctx, step.Task, rt.Caches),
 		// The same postmortem, on the machine that actually ran the step: a
 		// worker's scratch is the remote half of the step directory, and a

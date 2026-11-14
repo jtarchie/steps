@@ -157,6 +157,14 @@ type RunnerSpec struct {
 	// directory here and sent on, never into the step's own tree. Only meaningful with a Worker; the caller
 	// leaves this empty otherwise and materializes the input under Cwd.
 	RemoteInputs map[string]RemoteInput
+	// InputDigests is what the build already digested of the inputs under Cwd, so a venue places an unchanged one without walking it again; nil walks every one.
+	InputDigests InputDigests
+}
+
+// InputDigests is a step's view of its build's digest memo, keyed by the input's directory name under Cwd.
+type InputDigests interface {
+	KnownDigest(name string) (string, bool)
+	LearnDigest(name, digest string)
 }
 
 // errTreeOutsideVolume is a container asked to work in a directory of this machine's, which only a bind mount could give it.

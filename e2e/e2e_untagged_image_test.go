@@ -185,3 +185,42 @@ jobs:
 		t.Errorf("the get ran in %q, want the volume workdir /steps/work", got)
 	}
 }
+
+// TestAnEditBetweenContainerStepsReachesTheNext edits an input on the host between two image: steps, same size and within the same second: the build's digest memo must forget the first read, or the second mounts the tree the first one saw.
+func TestAnEditBetweenContainerStepsReachesTheNext(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	seen := filepath.Join(dir, "seen.txt")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: seed
+    outputs: [tree]
+    run: printf aaaa > tree/file
+  - task: first
+    image: %[1]s
+    inputs: [tree]
+    run: test "$(cat tree/file)" = aaaa
+  - task: edit
+    inputs: [tree]
+    outputs: [tree]
+    run: printf bbbb > tree/file
+  - task: second
+    image: %[1]s
+    inputs: [tree]
+    outputs: [out]
+    run: cat tree/file > out/seen
+  - task: publish
+    inputs: [out]
+    run: cp out/seen %[2]s
+`, dockerE2EImage, seen))
+
+	mustRun(t, path)
+
+	if got := readFileString(t, seen); got != "bbbb" {
+		t.Errorf("the step after the edit read %q, want bbbb", got)
+	}
+}
