@@ -71,7 +71,7 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 
 	appendEvents(t, pipeline.Store, "placed", []store.RunEventRow{
 		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
-		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: "succeeded", Hash: hash},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: "succeeded", Hash: hash, Worker: "gpu (aws://i-0abc123def4567890)"},
 	})
 
 	instance := "i-0abc123def4567890"
@@ -82,7 +82,7 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 		NodeHash: hash, Slot: hash, Tag: "gpu", Address: "aws://" + instance, InstanceID: &instance,
 		GOOS: "linux", GOARCH: "arm64",
 		Workdir: "/var/tmp/steps/work",
-		UID:     &root, GID: &root, Image: "golang:1.25", BytesSent: 67_108_864, BytesReceived: 1_048_576,
+		UID:     &root, GID: &root, Image: "golang:1.25", ImageDigest: "sha256:0123456789abcdef0123", BytesSent: 67_108_864, BytesReceived: 1_048_576,
 	})
 	if err != nil {
 		t.Fatalf("RecordPlacement: %v", err)
@@ -104,7 +104,11 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 	// uid-0-is-root-not-silence contract went unproven on those days.
 	for _, want := range []string{
 		"gpu", "linux/arm64", "64.0 MiB", "1.0 MiB",
-		">0:0<", "aws://" + instance + " in golang:1.25",
+		">0:0<", "aws://" + instance + " · golang:1.25@sha256:0123456789ab", "1.0 MiB back",
+		// #239: on the row itself, so which image ran is read without opening the step; the digest rides its tooltip and the placed-on line, not the row.
+		`<span class="note worker" title="golang:1.25@sha256:0123456789ab">on gpu (aws://i-0abc123def4567890) · golang:1.25</span>`,
+		// The row already names the worker, so the detail line starts at the machine rather than saying gpu twice.
+		`<div class="agentmeta">aws://` + instance + ` · golang:1.25@sha256:0123456789ab · linux/arm64`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the run page does not show %q", want)
