@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/containerd/errdefs"
 	"github.com/distribution/reference"
@@ -39,6 +40,27 @@ func (c *Client) ImagePresent(ctx context.Context, image string) bool {
 	}
 
 	return !errdefs.IsNotFound(err) && !errdefs.IsInvalidArgument(err)
+}
+
+// ImageDigest is what image names on this daemon: the registry's content digest when it was pulled, the daemon's own image id when it was built here and exists in no registry. Empty when the daemon cannot say — a record of what ran, never a reason to fail it.
+func (c *Client) ImageDigest(ctx context.Context, image string) string {
+	inspected, err := c.api.ImageInspect(ctx, image)
+	if err != nil {
+		return ""
+	}
+
+	return pickDigest(inspected.RepoDigests, inspected.ID)
+}
+
+// pickDigest prefers a registry digest: the image id differs between daemons holding the same pulled image, the registry digest does not.
+func pickDigest(repoDigests []string, id string) string {
+	for _, named := range repoDigests {
+		if _, digest, found := strings.Cut(named, "@"); found {
+			return digest
+		}
+	}
+
+	return id
 }
 
 // IsImageNotFound reports whether err is the daemon saying it does not have

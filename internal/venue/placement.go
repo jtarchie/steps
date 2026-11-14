@@ -25,6 +25,8 @@ type Placement struct {
 	Workdir  string
 	UID, GID *int
 	Image    string
+	// ImageDigest is what Image named on that daemon once the step's container ran; see store.Placement.
+	ImageDigest string
 	// BytesSent is what this session put on the wire for step trees. It is
 	// the number the artifact grain exists to reduce, and no vantage point
 	// outside the session can weigh it — the tunnel is a pipe to a process.

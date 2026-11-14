@@ -16,7 +16,7 @@ import (
 const placementColumns = `run_id, step_index, step_name, job_name, slot, node_hash,
 	tag, address, instance_id,
 	goos, goarch, workdir, uid, gid,
-	image, bytes_sent, bytes_received, volume_bytes`
+	image, image_digest, bytes_sent, bytes_received, volume_bytes`
 
 // RecordPlacement stores where one placed step ran.
 //
@@ -27,7 +27,7 @@ const placementColumns = `run_id, step_index, step_name, job_name, slot, node_ha
 func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) error {
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_placements (`+placementColumns+`, pipeline_id, created_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND pipeline_id = ?)
 		ON CONFLICT(pipeline_id, run_id, slot) DO UPDATE SET
 			step_index = excluded.step_index,
@@ -43,6 +43,7 @@ func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) 
 			uid = excluded.uid,
 			gid = excluded.gid,
 			image      = excluded.image,
+			image_digest = excluded.image_digest,
 			bytes_sent = excluded.bytes_sent,
 			bytes_received = excluded.bytes_received,
 			volume_bytes = excluded.volume_bytes,
@@ -52,7 +53,7 @@ func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) 
 		placement.Tag, placement.Address, placement.InstanceID,
 		placement.GOOS, placement.GOARCH, placement.Workdir,
 		placement.UID, placement.GID,
-		placement.Image, placement.BytesSent, placement.BytesReceived, placement.VolumeBytes,
+		placement.Image, placement.ImageDigest, placement.BytesSent, placement.BytesReceived, placement.VolumeBytes,
 		s.pipelineID, now(), placement.RunID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("recording a placement: %w", err)
@@ -79,7 +80,7 @@ func (s *Store) RunPlacements(ctx context.Context, runID string) ([]store.Placem
 			&placement.Tag, &placement.Address, &placement.InstanceID,
 			&placement.GOOS, &placement.GOARCH, &placement.Workdir,
 			&placement.UID, &placement.GID,
-			&placement.Image, &placement.BytesSent, &placement.BytesReceived, &placement.VolumeBytes)
+			&placement.Image, &placement.ImageDigest, &placement.BytesSent, &placement.BytesReceived, &placement.VolumeBytes)
 		placement.NodeHash = nodeHash.String
 
 		return placement, err //nolint:wrapcheck // collect wraps with the thing being read

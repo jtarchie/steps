@@ -151,6 +151,7 @@ func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink
 		UID:           placement.UID,
 		GID:           placement.GID,
 		Image:         placement.Image,
+		ImageDigest:   placement.ImageDigest,
 		BytesSent:     placement.BytesSent,
 		BytesReceived: placement.BytesReceived,
 		VolumeBytes:   placement.VolumeBytes,

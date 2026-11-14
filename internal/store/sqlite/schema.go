@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 38 added run_placements.image_digest, what a step's image: resolved to on the machine that ran it: a tag moves, and the row otherwise could not say which bytes ran.
+//
 // 37 added trigger_queue.pin, the version fields a person pinned a queued trigger to (steps runs trigger --pin); the ordinary pending index now leaves such a row out, so an older file would merge it into the job's ordinary row.
 //
 // 36 added run_step_outputs, the whole of a step output its run event elided, in chunks.
@@ -106,7 +108,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 37
+const schemaVersion = 38
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -950,6 +952,7 @@ CREATE TABLE IF NOT EXISTS run_placements (
     uid           INTEGER,
     gid           INTEGER,
     image         TEXT NOT NULL,
+    image_digest  TEXT NOT NULL DEFAULT '',
     bytes_sent    INTEGER NOT NULL,
     bytes_received INTEGER NOT NULL,
     -- NULL where the worker keeps no volumes or could not weigh them: zero is a measurement.

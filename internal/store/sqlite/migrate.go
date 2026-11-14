@@ -61,6 +61,7 @@ CREATE UNIQUE INDEX idx_trigger_queue_pending_job
     ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL AND pin IS NULL;
 CREATE UNIQUE INDEX idx_trigger_queue_pending_pin
     ON trigger_queue(pipeline_id, job_name, pin) WHERE status = 'pending' AND pin IS NOT NULL AND run_id IS NULL;`),
+	execStep(`ALTER TABLE run_placements ADD COLUMN image_digest TEXT NOT NULL DEFAULT '';`),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {

@@ -44,7 +44,9 @@ type Placement struct {
 	UID        *int
 	GID        *int
 	Image      string
-	BytesSent  int64
+	// ImageDigest is what Image resolved to on the machine that ran the step: the registry's content digest, or the daemon's own image id for one built there. Empty when no container ran, or the daemon could not say. A tag moves; this is what says which bytes actually ran.
+	ImageDigest string
+	BytesSent   int64
 	// BytesReceived is the tree that came back from that machine. Together
 	// with BytesSent it is the whole cost of the placement in bytes, and
 	// the pair is what says whether a produced tree ever had to leave the

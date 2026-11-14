@@ -359,8 +359,20 @@ func (p PlacementView) Machine() string {
 		return p.Address
 	}
 
-	return p.Address + " in " + p.Image
+	return p.Address + " in " + p.ImageRef()
 }
+
+// ImageRef is the image the step named and the digest it resolved to there, shortened the way a commit is: enough to tell two pulls of one tag apart, with the whole digest in the store for whoever needs it.
+func (p PlacementView) ImageRef() string {
+	algorithm, hex, found := strings.Cut(p.ImageDigest, ":")
+	if p.Image == "" || !found || len(hex) < shortDigest {
+		return p.Image
+	}
+
+	return p.Image + "@" + algorithm + ":" + hex[:shortDigest]
+}
+
+const shortDigest = 12
 
 // mcpBlame finds the mcp server an error names. Two spellings, because internal/mcp writes two: a credential refusal names the server directly, and a dial failure names what it was connecting TO. Anything else is not an mcp failure and must not be decorated as one — a page that offers the same suggestion under every red run is one nobody reads.
 var mcpBlame = regexp.MustCompile(`mcp(?:: connect to| server) "([^"]+)"`)

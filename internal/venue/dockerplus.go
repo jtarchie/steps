@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -58,6 +59,8 @@ type plusSession struct {
 	namespace string
 	// goos and goarch are the daemon's own, for the placement record.
 	goos, goarch string
+	// imageDigest is what the step's image resolved to on that daemon, asked once its container has run: before that, nothing has pulled it.
+	imageDigest atomic.Pointer[string]
 	// drainScript watches the machine's metadata for its own reclamation; empty for a machine nobody reclaims.
 	drainScript string
 	drain       atomic.Pointer[string]
@@ -210,6 +213,8 @@ func (r plusRunner) around(ctx context.Context, run func(shell.Runner) error) (e
 	}
 
 	runErr := run(inner)
+	r.s.noteImage(ctx)
+
 	if runErr != nil && !shell.IsExitError(runErr) {
 		r.s.conn.suspect.Store(true)
 
@@ -779,6 +784,31 @@ func replaceContents(from, to string) error {
 	return nil
 }
 
+// noteImage asks the daemon what the step's image is, once. Under its own bound: the likeliest moment this runs for the last time is a step that was just cancelled, and the record of what ran matters most then.
+func (s *plusSession) noteImage(ctx context.Context) {
+	if s.imageDigest.Load() != nil || s.docker == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), imageDigestBound)
+	defer cancel()
+
+	digest := s.docker.ImageDigest(ctx, s.spec.Image)
+	if digest != "" {
+		s.imageDigest.Store(&digest)
+	}
+}
+
+const imageDigestBound = 5 * time.Second
+
+func (s *plusSession) imageDigestText() string {
+	if digest := s.imageDigest.Load(); digest != nil {
+		return *digest
+	}
+
+	return ""
+}
+
 func (s *plusSession) placement() (Placement, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -795,6 +825,7 @@ func (s *plusSession) placement() (Placement, bool) {
 		GOARCH:        s.goarch,
 		Workdir:       plusWorkdir,
 		Image:         s.spec.Image,
+		ImageDigest:   s.imageDigestText(),
 		BytesSent:     s.sent.Load(),
 		BytesReceived: s.received.Load(),
 		VolumeBytes:   s.volumeBytes.Load(),

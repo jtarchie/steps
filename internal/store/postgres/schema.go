@@ -8,6 +8,8 @@ package postgres
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was DROP SCHEMA.
 //
+// 24 added run_placements.image_digest, as sqlite's 38 did.
+//
 // 23 added trigger_queue.pin, as sqlite's 37 did.
 //
 // 22 added run_step_outputs, as sqlite's 36 did.
@@ -32,7 +34,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 23
+const schemaVersion = 24
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -439,6 +441,7 @@ CREATE TABLE IF NOT EXISTS run_placements (
     uid           INTEGER,
     gid           INTEGER,
     image         TEXT NOT NULL,
+    image_digest  TEXT NOT NULL DEFAULT '',
     bytes_sent    BIGINT NOT NULL,
     bytes_received BIGINT NOT NULL,
     volume_bytes  BIGINT,

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/testdocker"
 )
 
@@ -222,5 +224,59 @@ jobs:
 
 	if got := readFileString(t, seen); got != "bbbb" {
 		t.Errorf("the step after the edit read %q, want bbbb", got)
+	}
+}
+
+// TestAnImageStepRecordsWhichImageRan is #239: the placement names the image the step asked for and the digest it resolved to on the daemon that ran it, tagged or not, and `steps runs where` prints both.
+func TestAnImageStepRecordsWhichImageRan(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+resource_types:
+- name: boxed
+  image: %[1]s
+  config:
+    check: echo '[{"n":"one"}]'
+    in: echo one > n.txt
+
+resources:
+- name: ticks
+  type: boxed
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: ticks
+  - task: look
+    image: %[1]s
+    inputs: []
+    run: "true"
+`, dockerE2EImage))
+
+	mustRun(t, path, "--job", "build")
+
+	placements := runPlacements(t, path)
+
+	var placed store.Placement
+
+	for _, step := range []string{"ticks", "look"} {
+		placed = placementNamed(t, placements, step)
+		if placed.Image != dockerE2EImage || !strings.HasPrefix(placed.ImageDigest, "sha256:") {
+			t.Fatalf("%s: placement image = %q digest = %q, want %s and the sha256 it resolved to", step, placed.Image, placed.ImageDigest, dockerE2EImage)
+		}
+	}
+
+	out := captureStdout(t, func() {
+		err := cli.Run(append([]string{"runs", "where"}, readArgs(path)...))
+		if err != nil {
+			t.Fatalf("steps runs where: %v", err)
+		}
+	})
+
+	if want := dockerE2EImage + "@" + placed.ImageDigest[:len("sha256:")+12]; !strings.Contains(out, want) {
+		t.Errorf("steps runs where does not name %s:\n%s", want, out)
 	}
 }

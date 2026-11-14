@@ -101,6 +101,30 @@ func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 	}
 }
 
+// TestPlacementNamesTheImageAndWhatItResolvedTo: a tag moves, so the row carries the digest beside it, and a step that ran in no container says neither.
+func (s suite) TestPlacementNamesTheImageAndWhatItResolvedTo(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	placeAt(ctx, t, st, store.Placement{
+		RunID: "digest-run", JobName: "build", StepName: "compile", NodeHash: "digest-node",
+		Tag: "docker", Address: "local:", Image: "golang:1.27", ImageDigest: "sha256:0123456789abcdef",
+	})
+
+	placed := onlyPlacement(ctx, t, st, "digest-run")
+	if placed.Image != "golang:1.27" || placed.ImageDigest != "sha256:0123456789abcdef" {
+		t.Errorf("image = %q digest = %q, want what was recorded", placed.Image, placed.ImageDigest)
+	}
+
+	placeAt(ctx, t, st, store.Placement{RunID: "bare-run", JobName: "build", StepName: "compile", NodeHash: "bare-node", Tag: "box", Address: "ssh://box"})
+
+	if bare := onlyPlacement(ctx, t, st, "bare-run"); bare.Image != "" || bare.ImageDigest != "" {
+		t.Errorf("a step in no container reports image %q digest %q", bare.Image, bare.ImageDigest)
+	}
+}
+
 func onlyPlacement(ctx context.Context, t *testing.T, st store.Store, runID string) store.Placement {
 	t.Helper()
 
