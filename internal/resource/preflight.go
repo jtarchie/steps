@@ -517,7 +517,7 @@ func listServerToolsCached(ctx context.Context, cfg *config.Config, srv *config.
 	// leaving a daemon that refuses work it is now perfectly able to do. It
 	// is decided by reading a file rather than by a round trip, so it is the
 	// one failure here worth re-deriving every time.
-	if errors.Is(err, stepsmcp.ErrNeedsLogin) {
+	if errors.Is(err, stepsmcp.ErrNeedsLogin) || errors.Is(err, stepsmcp.ErrTokenLookup) {
 		return tools, err
 	}
 

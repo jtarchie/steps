@@ -357,3 +357,37 @@ jobs:
 		t.Errorf("validate = %v, want the export refused\n%s", err, printed)
 	}
 }
+
+// A token that could not be FETCHED says nothing about the server: once the vault has it, the next run must not be refused on the remembered failure.
+func TestAFailedMCPTokenLookupIsNotRememberedAsADeadServer(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		pipeline func(llm, mcp string) string
+	}{
+		{"an agent's grant", mcpSecretPipeline},
+		{"a resource type's backend", func(_, mcp string) string { return mcpResourceSecretPipeline(mcp) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolatePreflightPins(t)
+			t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
+
+			_, path, config, vault := cliSecretsFixture(t, nil)
+
+			server := startGuardedMCP(t)
+			model := scopeLLM(t)
+			writePipelineFile(t, path, tc.pipeline(model.URL, server.URL))
+
+			printed, err := runAndCapture(t, "run", "--config", config, path)
+			if err == nil {
+				t.Fatalf("a run whose token is in no vault ran clean:\n%s", printed)
+			}
+
+			writeVault(t, vault, map[string]string{cli.PipelineName(path) + "/tracker_token": e2eTrackerValue})
+
+			printed, err = runAndCapture(t, "run", "--config", config, path)
+			if err != nil {
+				t.Fatalf("the run after the vault was filled was refused on the earlier lookup failure: %v\n%s", err, printed)
+			}
+		})
+	}
+}

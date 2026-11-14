@@ -138,7 +138,7 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 	// credential forever. Whether to RUN and whether to REMEMBER are
 	// different: the run should still be refused now, and the refusal should
 	// still be re-derived next time.
-	if errors.Is(err, stepsmcp.ErrNeedsLogin) {
+	if errors.Is(err, stepsmcp.ErrNeedsLogin) || errors.Is(err, stepsmcp.ErrTokenLookup) {
 		return err
 	}
 

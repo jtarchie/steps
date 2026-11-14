@@ -3,6 +3,7 @@ package mcp
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -24,6 +25,9 @@ func WithTokenLookup(ctx context.Context, pipeline string, lookup TokenLookup) c
 	return context.WithValue(ctx, tokenLookupKey{}, tokenSource{pipeline: pipeline, lookup: lookup})
 }
 
+// ErrTokenLookup marks a failure to FETCH a token, so a probe cache does not remember it as the server's: a declined prompt or a lapsed login is retried by the next run, as every other secret lookup is.
+var ErrTokenLookup = errors.New("mcp token")
+
 // bearerTokenFor is the one place a bearer token is read: through the context's lookup when the server names a secret, and from the environment exactly as before otherwise.
 func bearerTokenFor(ctx context.Context, srv config.MCPServer) (string, error) {
 	ref := srv.Auth.TokenSecret()
@@ -33,12 +37,12 @@ func bearerTokenFor(ctx context.Context, srv config.MCPServer) (string, error) {
 
 	source, _ := ctx.Value(tokenLookupKey{}).(tokenSource)
 	if source.lookup == nil {
-		return "", fmt.Errorf("$%s is a secret, and there is no secret source here: pass --config", srv.Auth.APIKeyEnv)
+		return "", fmt.Errorf("%w: $%s is a secret, and there is no secret source here: pass --config", ErrTokenLookup, srv.Auth.APIKeyEnv)
 	}
 
 	token, err := source.lookup(ctx, srv.Auth.APIKeyEnv, ref)
 	if err != nil {
-		return "", fmt.Errorf("auth.%w", err)
+		return "", fmt.Errorf("%w: auth.%w", ErrTokenLookup, err)
 	}
 
 	return token, nil
