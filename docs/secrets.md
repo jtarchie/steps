@@ -124,6 +124,10 @@ one key its `api_key_env:` names: the server's bearer token, which only the
 HTTP client reads. See
 [mcp.md](mcp.md#a-token-from-a-secret-source).
 
+A webhook resource's `secrets:` holds one key too, the one its
+`source.secret_env:` names: the secret its deliveries are verified against. See
+[webhooks.md](webhooks.md#a-secret-from-a-secret-source).
+
 A reference anywhere else is a load error: written into `run:` it would be
 hashed, stored and put on a command line. That includes a resource's
 `source:`: name the variable in `secrets:` and read it from the environment, as
@@ -209,7 +213,9 @@ Lazily, by the step that needs it, after the step's worker is acquired and
 before its first command. A branch that never runs fetches nothing. **A model's
 key (`source.secrets:`) is the exception**: preflight probes every agent a job
 names before the job's first step, so the key is fetched then, even for an
-agent on a branch that never runs. Each run
+agent on a branch that never runs. **So is an MCP server's token
+(`auth.secrets:`)**, for the same reason: preflight probes every server a job
+reaches. Each run
 asks the source once per reference, so a step re-placed after a spot reclaim
 reuses the value instead of prompting again. A failed lookup is not remembered,
 so a retried attempt asks again.
@@ -233,7 +239,7 @@ ok: pipeline.yml (1 job(s), 0 resource(s), 0 agent(s)) — every model and MCP s
 Since resolution is lazy, this is the one way to learn that an `op signin` has
 lapsed before a job is half paid for, and how an admin sees a name fall
 through to the shared folder. A reference no path has is reported with the
-paths tried. A model whose key is a reference is probed with the resolved key. `--job` narrows it to that job's references; a polled resource's
+paths tried. A model whose key is a reference is probed with the resolved key, and an MCP server with its resolved token. `--job` narrows it to that job's references; a polled resource's
 is no job's. Run it on the daemon's machine as the daemon's user, since the
 source commands run as whoever invokes it.
 

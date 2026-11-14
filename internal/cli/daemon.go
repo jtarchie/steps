@@ -496,7 +496,11 @@ func (d *daemon) start(
 
 	target := web.NewPipeline(name, from, cfg, st, bus)
 
-	target.Hooks = trigger.HookHandler(target.Config, st)
+	// One memo for everything this pipeline resolves outside a run, built once: a poll and a delivery asking for the same reference share an answer for an interval, where a memo made per call would cache nothing.
+	// A poll is no run: its secrets are cached for an interval rather than per run, or a trigger: true resource would prompt every poll.
+	outsideRuns := pipeline.WithPollSecrets(loopCtx, name, d.interval)
+
+	target.Hooks = trigger.HookHandler(outsideRuns, d.interval, target.Config, st)
 
 	err := d.server.Add(target)
 	// Only reachable if two sets of one name interleaved, which the lock above prevents, so this is the assertion rather than a path.
@@ -527,8 +531,7 @@ func (d *daemon) start(
 		defer loops.Done()
 
 		// The METHOD, not its result: a later set swaps the configuration under this loop, and a value would pin it to whatever was set first.
-		// A poll is no run: its secrets are cached for an interval rather than per run, or a trigger: true resource would prompt every poll.
-		pollCtx := pipeline.WithPollSecrets(d.checks.Context(loopCtx), name, d.interval)
+		pollCtx := d.checks.Context(outsideRuns)
 
 		pollErr := trigger.Poll(pollCtx, target.Config, st, d.interval)
 		if pollErr != nil {

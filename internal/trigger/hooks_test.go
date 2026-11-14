@@ -6,15 +6,18 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -84,7 +87,7 @@ func (f hookFixture) deliver(t *testing.T, resource string, header http.Header, 
 	req.Header = header
 	rec := httptest.NewRecorder()
 
-	HookHandler(staticConfig(f.cfg), f.st)(rec, req, resource)
+	HookHandler(t.Context(), time.Hour, staticConfig(f.cfg), f.st)(rec, req, resource)
 
 	return rec.Code
 }
@@ -95,7 +98,7 @@ func (f hookFixture) response(t *testing.T, resource string) *httptest.ResponseR
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/p/test/hooks/"+resource, bytes.NewReader(nil))
 	rec := httptest.NewRecorder()
 
-	HookHandler(staticConfig(f.cfg), f.st)(rec, req, resource)
+	HookHandler(t.Context(), time.Hour, staticConfig(f.cfg), f.st)(rec, req, resource)
 
 	return rec
 }
@@ -292,7 +295,7 @@ func TestASlackHandshakeIsAnsweredAndNotRecorded(t *testing.T) {
 	req.Header.Set("X-Slack-Signature", "v0="+hex.EncodeToString(mac.Sum(nil)))
 
 	rec := httptest.NewRecorder()
-	HookHandler(staticConfig(f.cfg), f.st)(rec, req, "push")
+	HookHandler(t.Context(), time.Hour, staticConfig(f.cfg), f.st)(rec, req, "push")
 
 	if rec.Code != http.StatusOK || rec.Body.String() != "c4allenge" {
 		t.Errorf("answered %d %q, want 200 with the challenge", rec.Code, rec.Body.String())
@@ -397,5 +400,146 @@ func TestAPollAfterUnpauseDoesNotRewindADeliveryItRaced(t *testing.T) {
 	enqueued, err = pollOnce(ctx, f.cfg, f.st)
 	if err != nil || len(enqueued) != 0 {
 		t.Errorf("the next poll enqueued %v (err %v), want nothing: d2 dispatched itself", enqueued, err)
+	}
+}
+
+// vaultedHook is a webhook resource whose secret_env names a key of its secrets: map, under a context whose lookup the test scripts and counts.
+type vaultedHook struct {
+	hookFixture
+
+	lookups atomic.Int32
+	handler func(w http.ResponseWriter, r *http.Request, resource string)
+}
+
+func newVaultedHook(t *testing.T, ttl time.Duration, lookup func() (string, error)) *vaultedHook {
+	t.Helper()
+
+	// Unset, so a handler that fell back to the environment verifies against nothing.
+	t.Setenv("STEPS_TEST_HOOK_SECRET", "")
+
+	cfg := hookConfig(nil)
+	cfg.Resources[0].Secrets = map[string]string{"STEPS_TEST_HOOK_SECRET": "((ci:hook_secret))"}
+
+	hook := &vaultedHook{hookFixture: hookFixture{cfg: cfg, st: mustOpenStore(t, t.TempDir())}}
+
+	base := rsrc.WithSecretLookup(t.Context(), func(_ context.Context, resource string, secrets map[string]string) (map[string]string, error) {
+		hook.lookups.Add(1)
+
+		if resource != "push" || secrets["STEPS_TEST_HOOK_SECRET"] != "((ci:hook_secret))" {
+			t.Errorf("lookup for %q of %v, want the push resource's one reference", resource, secrets)
+		}
+
+		value, err := lookup()
+
+		return map[string]string{"STEPS_TEST_HOOK_SECRET": value}, err
+	})
+
+	hook.handler = HookHandler(base, ttl, staticConfig(cfg), hook.st)
+
+	return hook
+}
+
+func (h *vaultedHook) post(ctx context.Context, header http.Header, body []byte) int {
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/p/test/hooks/push", bytes.NewReader(body))
+	req.Header = header
+	rec := httptest.NewRecorder()
+
+	h.handler(rec, req, "push")
+
+	return rec.Code
+}
+
+// The seam: the secret the delivery is verified against is the one the pipeline's lookup returned, fetched once however many deliveries arrive within the ttl.
+func TestAHookVerifiesAgainstASecretFromASource(t *testing.T) {
+	hook := newVaultedHook(t, time.Hour, func() (string, error) { return hookSecret, nil })
+	body := []byte(`{"ref":"main"}`)
+
+	if code := hook.post(t.Context(), signed(hookSecret, "d1", body), body); code != http.StatusOK {
+		t.Fatalf("a delivery signed with the source's secret answered %d, want 200", code)
+	}
+
+	if code := hook.post(t.Context(), signed("wrong", "d2", body), body); code != http.StatusUnauthorized {
+		t.Errorf("a delivery signed with another secret answered %d, want 401", code)
+	}
+
+	if got := hook.versions(t); len(got) != 1 {
+		t.Errorf("versions = %v, want the one verified delivery", got)
+	}
+
+	if got := hook.lookups.Load(); got != 1 {
+		t.Errorf("the source was asked %d times for two deliveries inside the ttl, want once", got)
+	}
+}
+
+// The lookup runs before the signature is checked, so anyone can cause one: a failing source must be asked once per ttl, not once per POST, and no delivery may be verified against nothing meanwhile.
+func TestAFailingSecretLookupIsAskedOncePerTTL(t *testing.T) {
+	hook := newVaultedHook(t, time.Hour, func() (string, error) { return "", errors.New("the vault is locked") })
+	body := []byte(`{}`)
+
+	for range 50 {
+		// Signed with the empty key: what an unset secret would have verified, were the failure read as one.
+		if code := hook.post(t.Context(), signed("", "d1", body), body); code != http.StatusServiceUnavailable {
+			t.Fatalf("a delivery while the secret cannot be fetched answered %d, want 503", code)
+		}
+	}
+
+	if got := hook.lookups.Load(); got != 1 {
+		t.Errorf("the failing source was asked %d times by 50 deliveries, want once", got)
+	}
+
+	if got := hook.versions(t); len(got) != 0 {
+		t.Errorf("versions = %v, want nothing recorded while the secret is unavailable", got)
+	}
+}
+
+// A sender that hangs up while the source is still answering gets a 503, and the lookup it started is the one the next delivery is verified with.
+func TestASenderThatHangsUpDoesNotCostASecondLookup(t *testing.T) {
+	release := make(chan struct{})
+	hook := newVaultedHook(t, time.Hour, func() (string, error) {
+		<-release
+
+		return hookSecret, nil
+	})
+	body := []byte(`{"ref":"main"}`)
+
+	impatient, hangUp := context.WithCancel(t.Context())
+	hangUp()
+
+	if code := hook.post(impatient, signed(hookSecret, "d1", body), body); code != http.StatusServiceUnavailable {
+		t.Fatalf("a delivery abandoned mid-lookup answered %d, want 503", code)
+	}
+
+	close(release)
+
+	if code := hook.post(t.Context(), signed(hookSecret, "d1", body), body); code != http.StatusOK {
+		t.Fatalf("the redelivery answered %d, want 200", code)
+	}
+
+	if got := hook.lookups.Load(); got != 1 {
+		t.Errorf("the source was asked %d times, want the one lookup the first delivery started", got)
+	}
+}
+
+// A rotated secret reaches the handler once the ttl has passed, and a failure is forgotten on the same clock.
+func TestALookedUpSecretIsAskedForAgainAfterTheTTL(t *testing.T) {
+	var answers atomic.Int32
+
+	hook := newVaultedHook(t, time.Millisecond, func() (string, error) {
+		if answers.Add(1) == 1 {
+			return "", errors.New("the vault is locked")
+		}
+
+		return hookSecret, nil
+	})
+	body := []byte(`{"ref":"main"}`)
+
+	if code := hook.post(t.Context(), signed(hookSecret, "d1", body), body); code != http.StatusServiceUnavailable {
+		t.Fatalf("the first delivery answered %d, want 503", code)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	if code := hook.post(t.Context(), signed(hookSecret, "d1", body), body); code != http.StatusOK {
+		t.Errorf("a delivery after the ttl answered %d, want the source asked again and 200", code)
 	}
 }

@@ -82,7 +82,7 @@ type Receiver struct {
 	Provider string
 	// Scheme is provider: custom's signature, and nil for every other provider.
 	Scheme *Scheme
-	// SecretEnv names the variable holding the secret; the caller reads it, per delivery, so a rotated secret needs no reload.
+	// SecretEnv names the variable holding the secret; the caller reads it from the environment per delivery, so a rotated secret needs no reload, or looks it up when the name is a key of the resource's secrets:, where a rotation arrives within the lookup's ttl.
 	SecretEnv string
 	MaxBody   int64
 	// Filter, when set, drops a delivery it answers false for.

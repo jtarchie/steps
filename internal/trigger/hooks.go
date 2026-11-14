@@ -28,12 +28,14 @@ type HookStore interface {
 }
 
 // HookHandler answers deliveries to one pipeline's webhook resources. The configuration is read per request, as Poll reads it per cycle, because a set swaps it while this stays mounted.
-func HookHandler(current ConfigSource, st HookStore) func(w http.ResponseWriter, r *http.Request, resource string) {
-	return hookHandler(current, st, rsrc.Receiver)
+//
+// base is the pipeline's own context, the one its poll resolves secrets under, and ttl how long a looked-up secret answers for: a secret_env naming a secrets: key is fetched under base, never under a request a sender can abandon.
+func HookHandler(base context.Context, ttl time.Duration, current ConfigSource, st HookStore) func(w http.ResponseWriter, r *http.Request, resource string) {
+	return hookHandler(base, ttl, current, st, rsrc.Receiver)
 }
 
-func hookHandler(current ConfigSource, st HookStore, compile func(config.Resource) (*webhook.Receiver, error)) func(w http.ResponseWriter, r *http.Request, resource string) {
-	compiled := &receivers{compile: compile}
+func hookHandler(base context.Context, ttl time.Duration, current ConfigSource, st HookStore, compile func(config.Resource) (*webhook.Receiver, error)) func(w http.ResponseWriter, r *http.Request, resource string) {
+	compiled := &receivers{compile: compile, base: base, ttl: ttl}
 
 	return func(w http.ResponseWriter, r *http.Request, resource string) {
 		cfg := current()
@@ -44,6 +46,8 @@ func hookHandler(current ConfigSource, st HookStore, compile func(config.Resourc
 // receivers compiles a configuration's webhook resources once rather than per request: a delivery's expressions are compiled before its signature can be checked, so per request an unsigned POST bought every compile. Keyed by the configuration's identity, as admission is — a set stores a new pointer, and nothing else does.
 type receivers struct {
 	compile func(config.Resource) (*webhook.Receiver, error)
+	base    context.Context //nolint:containedctx // a looked-up secret outlives the delivery that asked for it, and dies with the pipeline
+	ttl     time.Duration
 
 	mu     sync.Mutex
 	cfg    *config.Config
@@ -55,6 +59,85 @@ type compiledReceiver struct {
 	err      error
 	// unset gates the unset-secret warning to one per compiled configuration, since an unauthenticated caller controls how many requests there are.
 	unset *sync.Once
+	// vault is the looked-up secret of a secret_env that names a secrets: key; nil reads the daemon's environment.
+	vault *hookVault
+}
+
+// errSecretPending is a lookup still running when the sender gave up waiting for it.
+var errSecretPending = errors.New("the webhook secret is still being looked up")
+
+// hookVault holds one webhook resource's looked-up secret for ttl, a failure included: the lookup runs before the signature is checked, so without that an unsigned POST could run the source command, and raise its prompt, as often as it liked. Concourse resolves webhook_token per request and never caches an error; its sources do not prompt.
+type hookVault struct {
+	ttl   time.Duration
+	fetch func() (string, error)
+
+	mu      sync.Mutex
+	at      time.Time
+	value   string
+	err     error
+	pending chan struct{}
+}
+
+// get answers from the held value, or starts the one lookup and waits for it only as long as the sender does: the lookup itself carries on, so a sender that hung up does not cost the next delivery a second one.
+func (v *hookVault) get(waiting context.Context) (string, error) {
+	v.mu.Lock()
+
+	if !v.at.IsZero() && time.Since(v.at) < v.ttl {
+		defer v.mu.Unlock()
+
+		return v.value, v.err
+	}
+
+	if v.pending == nil {
+		done := make(chan struct{})
+		v.pending = done
+
+		go func() {
+			value, err := v.fetch()
+
+			v.mu.Lock()
+			v.value, v.err, v.at, v.pending = value, err, time.Now(), nil
+			v.mu.Unlock()
+
+			close(done)
+		}()
+	}
+
+	done := v.pending
+	v.mu.Unlock()
+
+	select {
+	case <-done:
+		v.mu.Lock()
+		defer v.mu.Unlock()
+
+		return v.value, v.err
+	case <-waiting.Done():
+		return "", errSecretPending
+	}
+}
+
+// vaultFor is the lookup of a webhook resource whose secret_env names a key of its secrets: map, under the pipeline's context so it is scoped, masked and bounded as its other lookups are.
+func (c *receivers) vaultFor(res config.Resource, receiver *webhook.Receiver) *hookVault {
+	if receiver == nil {
+		return nil
+	}
+
+	ref, held := res.Secrets[receiver.SecretEnv]
+	if !held {
+		return nil
+	}
+
+	name := receiver.SecretEnv
+
+	return &hookVault{ttl: c.ttl, fetch: func() (string, error) {
+		env, err := rsrc.LookupSecrets(c.base, res.Name, map[string]string{name: ref})
+		if err != nil {
+			slog.ErrorContext(c.base, "webhook.secret_lookup", "resource", res.Name, "error", err)
+		}
+
+		return env[name], err //nolint:wrapcheck // LookupSecrets names the resource, and the caller answers 503 whatever it says
+	}}
 }
 
 func (c *receivers) of(cfg *config.Config) map[string]compiledReceiver {
@@ -68,7 +151,7 @@ func (c *receivers) of(cfg *config.Config) map[string]compiledReceiver {
 		for _, res := range cfg.Resources {
 			if res.Type == config.WebhookType {
 				receiver, err := c.compile(res)
-				c.byName[res.Name] = compiledReceiver{receiver: receiver, err: err, unset: &sync.Once{}}
+				c.byName[res.Name] = compiledReceiver{receiver: receiver, err: err, unset: &sync.Once{}, vault: c.vaultFor(res, receiver)}
 			}
 		}
 	}
@@ -151,9 +234,12 @@ func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, entry
 		return nil, false
 	}
 
-	secret := os.Getenv(receiver.SecretEnv)
-	if secret == "" {
-		entry.unset.Do(func() { slog.WarnContext(ctx, "webhook.secret_unset", "resource", name, "env", receiver.SecretEnv) })
+	secret, err := deliverySecret(ctx, entry, name)
+	if err != nil {
+		// Not a 401: the sender did nothing wrong, and a 5xx is what it records as worth redelivering. Never on to Verify, where an empty secret would read as the pipeline's.
+		http.Error(w, "the webhook secret is unavailable", http.StatusServiceUnavailable)
+
+		return nil, false
 	}
 
 	err = receiver.Verify(requestFrom(r, body), secret, time.Now())
@@ -165,6 +251,22 @@ func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, entry
 	}
 
 	return body, true
+}
+
+// deliverySecret is what the delivery's signature is checked against: looked up for a secret_env naming a secrets: key, read from the daemon's environment otherwise.
+func deliverySecret(ctx context.Context, entry compiledReceiver, name string) (string, error) {
+	if entry.vault != nil {
+		return entry.vault.get(ctx)
+	}
+
+	secret := os.Getenv(entry.receiver.SecretEnv)
+	if secret == "" {
+		entry.unset.Do(func() {
+			slog.WarnContext(ctx, "webhook.secret_unset", "resource", name, "env", entry.receiver.SecretEnv)
+		})
+	}
+
+	return secret, nil
 }
 
 func requestFrom(r *http.Request, body []byte) webhook.Request {

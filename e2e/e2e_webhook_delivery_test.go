@@ -321,3 +321,82 @@ func TestWebhookDeliveryWhilePausedBuildsOnUnpause(t *testing.T) {
 	served.pipeline(t, "unpause", "-p", name)
 	waitForFile(t, filepath.Join(out, "version.json"))
 }
+
+const vaultedHookSecret = "hook-value-from-the-vault-2e7b"
+
+// The secret a delivery is verified against comes from the daemon's secret source: the variable is in no environment, a delivery signed with the vault's value builds, one signed with anything else is refused, and the value never reaches the database.
+func TestWebhookSecretComesFromASecretSource(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out")
+	path := pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	writePipelineFile(t, path, `
+resources:
+- name: push
+  type: webhook
+  source:
+    provider: github
+    secret_env: STEPS_TEST_HOOK_ONLY_IN_VAULT
+  secrets:
+    STEPS_TEST_HOOK_ONLY_IN_VAULT: ((ci:hook_value))
+jobs:
+- name: build
+  plan:
+  - get: push
+    trigger: true
+  - task: build
+    inputs: [push]
+    run: |
+      mkdir -p `+out+`.tmp
+      cp push/body `+out+`.tmp/
+      mv `+out+`.tmp `+out+`
+`)
+
+	served := secretDaemon(t, dir, map[string]string{name + "/hook_value": vaultedHookSecret + "\n"}, "--interval", "1h")
+	defer served.stopIfRunning(t)
+
+	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	if err != nil {
+		t.Fatalf("pipeline set: %v", err)
+	}
+
+	body := []byte(`{"ref":"refs/heads/main"}`)
+	url := fmt.Sprintf("http://%s/p/%s/hooks/push", served.addr, name)
+
+	if status := postDelivery(t, url, githubDelivery("not the vault's value", "push", "d-wrong", body), body); status != http.StatusUnauthorized {
+		t.Errorf("a delivery signed with another secret answered %d, want 401", status)
+	}
+
+	if status := postDelivery(t, url, githubDelivery(vaultedHookSecret, "push", "d-right", body), body); status != http.StatusOK {
+		t.Fatalf("a delivery signed with the vault's value answered %d, want 200", status)
+	}
+
+	waitForFile(t, filepath.Join(out, "body"))
+
+	served.stop(t)
+
+	assertNotInDatabase(t, served.state, vaultedHookSecret)
+}
+
+// A webhook's secrets: holds the key secret_env names and nothing else, since a delivery runs no command to read another.
+func TestAWebhookRefusesASecretNothingWouldRead(t *testing.T) {
+	path := pipelinePath(t, t.TempDir())
+	writePipelineFile(t, path, `
+resources:
+- name: push
+  type: webhook
+  source: { provider: github, secret_env: HOOK }
+  secrets: { OTHER: ((ci:x)) }
+jobs:
+- name: build
+  plan:
+  - get: push
+    trigger: true
+`)
+
+	printed, err := runAndCapture(t, "validate", "--syntax-only", path)
+	if err == nil || !strings.Contains(printed, "nothing would read OTHER") {
+		t.Errorf("validate = %v, want the stray key refused\n%s", err, printed)
+	}
+}

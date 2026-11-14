@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	rsrc "github.com/jtarchie/steps/internal/resource"
@@ -41,7 +42,7 @@ func TestAHookCompilesItsReceiverOncePerConfiguration(t *testing.T) {
 
 	var compiles atomic.Int64
 
-	handler := hookHandler(staticConfig(f.cfg), f.st, countingCompile(&compiles))
+	handler := hookHandler(t.Context(), time.Hour, staticConfig(f.cfg), f.st, countingCompile(&compiles))
 	body := []byte(`{"ref":"main"}`)
 
 	for range 5 {
@@ -70,7 +71,7 @@ func TestAHookRecompilesWhenTheConfigurationChanges(t *testing.T) {
 	)
 
 	current.Store(f.cfg)
-	handler := hookHandler(current.Load, f.st, countingCompile(&compiles))
+	handler := hookHandler(t.Context(), time.Hour, current.Load, f.st, countingCompile(&compiles))
 	body := []byte(`{"ref":"main"}`)
 
 	postHook(t, handler, signed(hookSecret, "d1", body), body)
@@ -92,7 +93,7 @@ func TestAnUnsetSecretIsWarnedOncePerConfiguration(t *testing.T) {
 	t.Setenv("STEPS_TEST_HOOK_SECRET", "")
 
 	out := captureLog(t)
-	handler := hookHandler(staticConfig(f.cfg), f.st, rsrc.Receiver)
+	handler := hookHandler(t.Context(), time.Hour, staticConfig(f.cfg), f.st, rsrc.Receiver)
 	body := []byte(`{}`)
 
 	for range 5 {
@@ -120,7 +121,7 @@ func TestConcurrentHooksShareTheCompiledReceiver(t *testing.T) {
 		wg    sync.WaitGroup
 	)
 
-	handler := hookHandler(func() *config.Config { return configs[calls.Add(1)%2] }, f.st, rsrc.Receiver)
+	handler := hookHandler(t.Context(), time.Hour, func() *config.Config { return configs[calls.Add(1)%2] }, f.st, rsrc.Receiver)
 	body := []byte(`{}`)
 
 	for range 8 {

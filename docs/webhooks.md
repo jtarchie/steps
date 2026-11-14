@@ -89,8 +89,42 @@ Every version is `{id, event, ...}`:
 Rules that hold for every provider:
 
 - **An empty secret refuses every delivery.** While `secret_env` is unset or empty, nothing gets in; "no secret, no check" would turn a deployment mistake into an open endpoint.
+- **The secret can come from a secret source** instead of the daemon's environment: see [A secret from a secret source](#a-secret-from-a-secret-source).
 - **Timestamped schemes have a five-minute tolerance**, both ways (Slack, Stripe, Standard Webhooks, and `custom` with a `timestamp:`). Without it a captured delivery replays forever.
 - **Comparison is constant-time**, and the body is read under a cap: 1 MiB unless `source.max_body` raises it. A bigger body is answered 413 — GitHub allows up to 25 MB, so a pipeline receiving large pushes raises the cap.
+
+### A secret from a secret source
+
+`secret_env:` by itself names a variable in the environment of `steps web`,
+which every pipeline on the daemon shares. When it names a key of the
+resource's `secrets:` map, the secret comes from one of the daemon's
+[secret sources](secrets.md) instead:
+
+```yaml noexec=secrets
+resources:
+- name: push
+  type: webhook
+  source:
+    provider: github
+    secret_env: GITHUB_WEBHOOK_SECRET
+  secrets:
+    GITHUB_WEBHOOK_SECRET: ((ci:github_webhook_secret))
+
+jobs:
+- name: build
+  plan:
+  - get: push
+    trigger: true
+  - task: build
+    inputs: [push]
+    run: cat push/body
+```
+
+- **Looked up when a delivery arrives, then held for one `--interval`.** A rotated secret reaches the route within one interval, where a variable in the environment is read on every delivery.
+- **A failed lookup is held for the interval too.** The lookup happens before the signature can be checked, so anyone who can reach the route can cause one; holding the failure keeps a source that prompts (`op read`) from prompting once per request. Until it is asked again, deliveries are answered 503, which a sender records as failed and can redeliver. Concourse asks its credential manager on every request and never holds an error.
+- **A delivery that arrives while the lookup is still running waits for it.** If the sender gives up first it gets a 503, and the lookup carries on for the next delivery.
+- **One key, the one `secret_env:` names.** Any other key is a load error: a delivery runs no command that could read it.
+- **A `get` of the resource fetches nothing.** The secret verifies deliveries; the job that builds one never sees it.
 
 Not supported, and why: Meta, Microsoft Graph and Dropbox verify with a GET, and this route is POST only; Twilio signs the full URL, which a tunnel rewrites; Amazon SNS signs with certificates rather than a shared secret.
 

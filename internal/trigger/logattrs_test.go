@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
@@ -227,7 +228,7 @@ func TestADeliveryDispatchesUnderItsIdentity(t *testing.T) {
 	req.Header = signed(hookSecret, "d1", body)
 	rec := httptest.NewRecorder()
 
-	HookHandler(staticConfig(f.cfg), probedStore{f.st})(rec, req, "push")
+	HookHandler(t.Context(), time.Hour, staticConfig(f.cfg), probedStore{f.st})(rec, req, "push")
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)

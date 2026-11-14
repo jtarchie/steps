@@ -282,7 +282,7 @@ func describeSecretUse(use config.SecretUse) string {
 	case use.Polled && use.Resource == "":
 		return "an mcp server when polled"
 	case use.Polled:
-		return fmt.Sprintf("resource %q when polled", use.Resource)
+		return fmt.Sprintf("resource %q when polled", use.Resource) // a webhook's delivery reads as a poll here: both are the resource resolving outside any run
 	case use.Resource != "":
 		return fmt.Sprintf("resource %q in job %q", use.Resource, use.Job)
 	default:

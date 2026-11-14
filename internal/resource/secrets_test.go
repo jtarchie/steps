@@ -37,3 +37,25 @@ func TestACheckWithSecretsIsNeverShared(t *testing.T) {
 		t.Errorf("checks answered %v then %v, want each pipeline's own", first, second)
 	}
 }
+
+// A webhook's secret verifies its deliveries; a get of one is long past that, so a run must not fetch a value nothing reads.
+func TestAWebhookResourcesSecretIsNotFetchedForAStage(t *testing.T) {
+	t.Parallel()
+
+	asked := false
+	ctx := WithSecretLookup(context.Background(), func(context.Context, string, map[string]string) (map[string]string, error) {
+		asked = true
+
+		return map[string]string{}, nil
+	})
+
+	_, err := withResourceSecrets(ctx, config.Resource{Name: "push", Type: config.WebhookType, Secrets: map[string]string{"HOOK": "((ci:hook))"}})
+	if err != nil || asked {
+		t.Errorf("a webhook resource's stage looked its secret up (asked=%v, err=%v), want it left alone", asked, err)
+	}
+
+	_, err = withResourceSecrets(ctx, config.Resource{Name: "feed", Type: "feed", Secrets: map[string]string{"PUBLISH_AS": "((ci:t))"}})
+	if err != nil || !asked {
+		t.Errorf("another resource's stage did not look its secret up (asked=%v, err=%v)", asked, err)
+	}
+}

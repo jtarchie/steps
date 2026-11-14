@@ -78,3 +78,31 @@ jobs:
 		t.Errorf("SecretUses = %+v, want %+v", got, want)
 	}
 }
+
+// A webhook's secret is resolved when a delivery arrives, under no job, and a get of it resolves nothing: validate --live must ask for exactly the lookup the daemon makes.
+func TestAWebhooksSecretIsUsedOutsideAnyRun(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+resources:
+- name: push
+  type: webhook
+  source: { provider: github, secret_env: HOOK }
+  secrets: { HOOK: ((ci:hook)) }
+jobs:
+- name: build
+  plan:
+  - get: push
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	want := []SecretUse{{Ref: SecretRef{Source: "ci", Name: "hook"}, Resource: "push", Polled: true}}
+
+	if got := cfg.SecretUses(); !reflect.DeepEqual(got, want) {
+		t.Errorf("SecretUses = %+v, want %+v", got, want)
+	}
+}

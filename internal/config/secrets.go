@@ -108,15 +108,7 @@ func (c *Config) validateSecrets() error {
 	}
 
 	for _, r := range c.Resources {
-		env := r.Env
-
-		// The type's env: names reach the same commands, so a collision there leaves merge order to pick a value too.
-		resourceType, findErr := c.FindResourceType(r.Type)
-		if findErr == nil && resourceType != nil {
-			env = UnionEnv(resourceType.Env, r.Env)
-		}
-
-		err := checkSecretsMap(fmt.Sprintf("resource %q", r.Name), r.Secrets, env)
+		err := c.checkResourceSecrets(r)
 		if err != nil {
 			return err
 		}
@@ -130,6 +122,40 @@ func (c *Config) validateSecrets() error {
 	}
 
 	return refuseMisplacedSecrets("", reflect.ValueOf(c).Elem())
+}
+
+func (c *Config) checkResourceSecrets(r Resource) error {
+	env := r.Env
+
+	// The type's env: names reach the same commands, so a collision there leaves merge order to pick a value too.
+	resourceType, findErr := c.FindResourceType(r.Type)
+	if findErr == nil && resourceType != nil {
+		env = UnionEnv(resourceType.Env, r.Env)
+	}
+
+	err := checkSecretsMap(fmt.Sprintf("resource %q", r.Name), r.Secrets, env)
+	if err != nil {
+		return err
+	}
+
+	return checkWebhookSecrets(r)
+}
+
+// checkWebhookSecrets holds a webhook resource's secrets: to the one key its secret_env names: nothing else reads one, since a delivery runs no command.
+func checkWebhookSecrets(r Resource) error {
+	if r.Type != WebhookType || len(r.Secrets) == 0 {
+		return nil
+	}
+
+	name, _ := r.Source["secret_env"].(string)
+
+	for _, key := range slices.Sorted(maps.Keys(r.Secrets)) {
+		if key != name {
+			return fmt.Errorf("resource %q: secrets: on a webhook holds the secret its source.secret_env names and no other; nothing would read %s", r.Name, key)
+		}
+	}
+
+	return nil
 }
 
 func (c *Config) checkStepSecrets(label string, step *Step) error {
@@ -599,6 +625,22 @@ func (c *Config) effectiveFix(step *Step) *FixSpec {
 	return task.Fix
 }
 
+// resourceUses adds where a get or put of r resolves its secrets: under the job, and outside any run when the poller checks it too.
+func resourceUses(job string, step Step, r Resource, add func(map[string]string, SecretUse)) {
+	// A webhook's secret verifies a delivery, outside any run and whether or not the get triggers; the get itself reads none.
+	if r.Type == WebhookType {
+		add(r.Secrets, SecretUse{Resource: r.Name, Polled: true})
+
+		return
+	}
+
+	add(r.Secrets, SecretUse{Job: job, Resource: r.Name})
+
+	if stepIsPolled(step) {
+		add(r.Secrets, SecretUse{Resource: r.Name, Polled: true})
+	}
+}
+
 // SecretUses is every (reference, where) pair the pipeline would resolve, deduplicated and in a stable order: what `steps validate --live` resolves in the daemon's stead.
 func (c *Config) SecretUses() []SecretUse {
 	seen := map[SecretUse]bool{}
@@ -626,11 +668,7 @@ func (c *Config) SecretUses() []SecretUse {
 				// The resolved name, since a get: or put: may alias its resource; stepIsPolled, since a passed: get is checked by the poller as a trigger: true one is.
 				r, err := c.FindResource(cmp.Or(step.GetResourceName(), step.PutResourceName()))
 				if err == nil && r != nil {
-					add(r.Secrets, SecretUse{Job: job.Name, Resource: r.Name})
-
-					if stepIsPolled(*step) {
-						add(r.Secrets, SecretUse{Resource: r.Name, Polled: true})
-					}
+					resourceUses(job.Name, *step, *r, add)
 				}
 			case StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
 				// A block's members are visited on their own; the rest carry no secrets: map.
