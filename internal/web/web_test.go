@@ -236,7 +236,7 @@ func TestTranscriptHighlightsDetectedContent(t *testing.T) {
 		t.Fatalf("GET run = %d: %s", code, body)
 	}
 
-	if !strings.Contains(body, "<span style=") {
+	if !strings.Contains(body, `<span class="hl-`) {
 		t.Error("transcript carries no highlighted spans at all")
 	}
 
@@ -368,7 +368,7 @@ func TestDelegateLineStaysAnAnnotation(t *testing.T) {
 		t.Fatalf("delegate turn not found: %s", delegate)
 	}
 
-	if strings.Contains(delegate, "<span style=") {
+	if strings.Contains(delegate, `<span class="hl-`) {
 		t.Errorf("delegate line was highlighted, but must stay a plain annotation: %s", delegate)
 	}
 }

@@ -38,7 +38,6 @@ import (
 	"strings"
 
 	"github.com/alecthomas/chroma/v3"
-	chromahtml "github.com/alecthomas/chroma/v3/formatters/html"
 	"github.com/alecthomas/chroma/v3/lexers"
 	"github.com/yuin/goldmark/v2/ast"
 	"github.com/yuin/goldmark/v2/extension"
@@ -50,16 +49,13 @@ import (
 )
 
 // codeFormatter is shared across every caller: the page renderer and the
-// live stream's flush goroutine. Safe to share — RegexLexer guards its own
-// lazy compilation with sync.Once, and the HTML formatter's style cache is
-// mutex-guarded — and cheaper than building one per call, which is what this
-// used to do on every fenced block and now would do on every turn.
+// live stream's flush goroutine. Safe to share — it holds no state, and
+// RegexLexer guards its own lazy compilation with sync.Once.
 //
-// WithClasses(false): the style is carried inline rather than by a
-// stylesheet this page does not serve. PreventSurroundingPre(true): the
-// caller owns its own <pre>, so the block matches every other code block on
-// the page.
-var codeFormatter = chromahtml.New(chromahtml.WithClasses(false), chromahtml.PreventSurroundingPre(true))
+// Classes, not inline styles, so code follows the page's theme; no <pre>,
+// because the caller owns its own, so the block matches every other code
+// block on the page.
+var codeFormatter = classFormatter{}
 
 // agentParser and agentRenderer render untrusted, model-authored prose.
 //
@@ -205,7 +201,7 @@ func highlightCodeUnguarded(body, lang string) template.HTML {
 		return template.HTML(template.HTMLEscapeString(body))
 	}
 
-	//nolint:gosec // G203: chroma escapes token text; the markup is its own <span style=…>
+	//nolint:gosec // G203: classFormatter escapes token text; the markup is its own <span class=…>
 	return template.HTML(out.String())
 }
 

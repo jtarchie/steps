@@ -12,6 +12,17 @@
 <title>{{.Nav.Mark.TitlePrefix}}{{with .Title}}{{.}} — {{end}}steps</title>
 <meta name="title-base" content="{{with .Title}}{{.}} — {{end}}steps">
 <link rel="icon" id="favicon" href="{{.Nav.Mark.Favicon}}">
+{{/* Ahead of the stylesheet so a pinned theme is on <html> before first paint; a deferred script would flash the OS's theme first. The one place the storage key is named: app.js's toggle goes through window.stepsTheme. Storage can throw (a private window, blocked site data), and then the toggle still works for the page's life. */}}
+<script>
+(function () {
+  var key = 'steps-theme', root = document.documentElement;
+  window.stepsTheme = function (theme) {
+    if (theme) root.dataset.theme = theme; else delete root.dataset.theme;
+    try { if (theme) localStorage.setItem(key, theme); else localStorage.removeItem(key); } catch (e) {}
+  };
+  try { var saved = localStorage.getItem(key); if (saved === 'light' || saved === 'dark') root.dataset.theme = saved; } catch (e) {}
+})();
+</script>
 <link rel="stylesheet" href="/static/app.css">
 {{/* A fold the reader opened is THEIRS: morph reconciles attributes, so an
      expanded <details> inside a step the stream re-renders would snap shut
@@ -67,6 +78,8 @@
          and the palette was unreachable there. The kbd is the hint for a
          reader with a keyboard and is hidden where there is none. */}}
     {{if .Nav.Current}}<button class="jumpbtn" id="jumpbtn" type="button" title="jump to a job, run or pipeline"><span aria-hidden="true">⌕</span> jump <kbd>/</kbd></button>{{end}}
+    {{/* No label in the markup: #statusline is morphed on every poll, so text or an aria-label set by script would snap back. app.css writes the icon and the state word from html[data-theme], which no swap touches, and generated content is part of the button's accessible name. */}}
+    <button class="jumpbtn themebtn" id="themebtn" type="button" title="theme: auto follows the system, or pin light or dark"><span class="visually-hidden">theme </span><span class="themeicon" aria-hidden="true"></span><span class="themelabel"></span></button>
     {{/* The signed-in person, last on the line, and the daemon-wide pages that are about people rather than pipelines. Not drawn where nobody signs in. */}}
     {{with .Nav.Who}}<div class="usermenu">
       <button class="pipebtn userbtn" id="userbtn" type="button" aria-haspopup="menu" aria-expanded="false" title="{{(actorOf .).Label}}"><span class="visually-hidden">signed in as </span><span class="who">{{(actorOf .).ID}}</span> <span class="caret" aria-hidden="true">▾</span></button>

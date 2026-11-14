@@ -294,7 +294,7 @@ func TestPlainViewHighlightsDetectedContent(t *testing.T) {
 
 	plain := plainView(raw)
 
-	if !strings.Contains(string(plain.HTML), "<span style=") {
+	if !strings.Contains(string(plain.HTML), `<span class="hl-`) {
 		t.Errorf("yaml payload was not highlighted: %s", plain.HTML)
 	}
 
@@ -325,7 +325,7 @@ func TestWriteStringBlockHighlightsNestedContent(t *testing.T) {
 
 	html := string(jsonValue(string(payload)).HTML)
 
-	if !strings.Contains(html, "<span style=") {
+	if !strings.Contains(html, `<span class="hl-`) {
 		t.Errorf("nested go source was not highlighted:\n%s", html)
 	}
 
@@ -543,7 +543,7 @@ func TestWriteStringBlockHighlightsAtTheLineLimit(t *testing.T) {
 
 	html := string(jsonValue(string(payload)).HTML)
 
-	if strings.Contains(html, `class="j-doc"`) || !strings.Contains(html, "<span style=") {
+	if strings.Contains(html, `class="j-doc"`) || !strings.Contains(html, `<span class="hl-`) {
 		t.Errorf("a document of exactly jsonDocLineLimit lines was not highlighted:\n%.300s", html)
 	}
 }

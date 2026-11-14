@@ -1,29 +1,34 @@
-<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>steps — pipelines where an agent is just another step</title><meta name="description" content="steps runs Concourse-style YAML pipelines from one Go binary and adds an agent step type. Every step content-addressed, cached in SQLite, checked by assert:, and shown in a run transcript with what it cost."><meta property="og:title" content="steps — pipelines where an agent is just another step"><meta property="og:description" content="Concourse-style get/task/put plus agent. One binary, no server. Every step cached, asserted, and priced."><meta property="og:image" content="https://stepsci.dev/assets/transcript.png"><link rel="stylesheet" href="/app.css"><style>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>steps — pipelines where an agent is just another step</title><meta name="description" content="steps runs Concourse-style YAML pipelines from one Go binary and adds an agent step type. Every step content-addressed, cached in SQLite, checked by assert:, and shown in a run transcript with what it cost."><meta property="og:title" content="steps — pipelines where an agent is just another step"><meta property="og:description" content="Concourse-style get/task/put plus agent. One binary, no server. Every step cached, asserted, and priced."><meta property="og:image" content="https://stepsci.dev/assets/transcript.png"><script>
+(function(){var k='steps-theme',r=document.documentElement;window.stepsTheme=function(t){if(t)r.dataset.theme=t;else delete r.dataset.theme;try{t?localStorage.setItem(k,t):localStorage.removeItem(k)}catch(e){}};var s=null;try{s=localStorage.getItem(k)}catch(e){}if(s==='light'||s==='dark')r.dataset.theme=s;else delete r.dataset.theme;document.addEventListener('DOMContentLoaded',function(){var l=document.querySelector('.statusline');if(!l)return;var b=document.createElement('button');b.type='button';b.className='themebtn';b.title='theme: auto follows the system, or pin light or dark';b.innerHTML='<span class="tv">theme </span><span class="themeicon" aria-hidden="true"></span><span class="themelabel"></span>';b.addEventListener('click',function(){window.stepsTheme({'':'light',light:'dark',dark:''}[r.dataset.theme||''])});l.appendChild(b)})})();
+</script><link rel="stylesheet" href="/app.css"><style>
   /* The steps web UI, carried onto the web: warm near-black ground, hairline
      pane rules, prompt-styled headings, ANSI-16 as the status palette. Mono
      for anything that is data, a sans for labels about that data. */
   :root {
-    --bg: #111310;
-    --panel: #171a16;
-    --panel2: #1c201b;
-    --line: #262b25;
-    --line-soft: #1e231d;
-    --fg: #d8d5c9;
-    --dim: #83887b;
-    --faint: #7a7f72;
-    --green: #84c06d;
-    --red: #e0645a;
-    --yellow: #d9a94a;
-    --blue: #7aa4d9;
-    --magenta: #b98fcc;
-    --cyan: #6fbcb4;
+    color-scheme: light dark;
+    --bg: light-dark(#f6f4ee, #111310);
+    --panel: light-dark(#efece4, #171a16);
+    --panel2: light-dark(#e7e4da, #1c201b);
+    --line: light-dark(#d3cfc2, #262b25);
+    --line-soft: light-dark(#e0ddd2, #1e231d);
+    --fg: light-dark(#23251f, #d8d5c9);
+    --dim: light-dark(#5c6054, #83887b);
+    --faint: var(--dim);
+    --green: light-dark(#346c24, #84c06d);
+    --red: light-dark(#b3362c, #e0645a);
+    --yellow: light-dark(#7a580e, #d9a94a);
+    --blue: light-dark(#2e62a6, #7aa4d9);
+    --magenta: light-dark(#8549a0, #b98fcc);
+    --cyan: light-dark(#1f6c64, #6fbcb4);
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
     --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
   }
 
   *, *::before, *::after { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
-  html { color-scheme: dark; }
+  :root[data-theme="light"] { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
+  html { background: var(--bg); }
 
   body {
     background: var(--bg);
@@ -117,7 +122,7 @@
     font-size: 13px;
     color: var(--green);
     background: var(--panel2);
-    border: 1px solid #33452d;
+    border: 1px solid color-mix(in srgb, var(--green) 30%, var(--bg));
     border-radius: 3px;
     padding: 7px 16px;
     cursor: pointer;
@@ -156,6 +161,7 @@
 
   /* screenshots: a dark frame the UI already lives in, so the seam disappears */
   figure { margin: 0; }
+  /* The screenshots are dark captures in both themes, so their frame stays dark too. */
   figure .shot { border: 1px solid var(--line); background: #0b0c0a; padding: 4px; }
   figure img { display: block; width: 100%; max-width: 100%; height: auto; }
   figcaption { color: var(--dim); font-size: 12.5px; margin: 10px 0 0; max-width: 78ch; }
@@ -272,6 +278,16 @@
   }
   .notify input[type="email"]::placeholder { color: var(--faint); }
   .notify input[type="email"]:focus-visible { border-color: var(--yellow); }
+  .themebtn { font: inherit; font-size: 12px; color: var(--dim); background: none; border: 0; border-left: 1px solid var(--line); padding: 8px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; order: 1; white-space: nowrap; }
+  .themebtn:hover { color: var(--fg); background: var(--panel2); }
+  .themebtn .themeicon { font-size: 14px; line-height: 1; }
+  .themebtn .tv { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  :root:not([data-theme]) .themebtn .themeicon::before { content: "◐"; }
+  :root:not([data-theme]) .themebtn .themelabel::after { content: "auto"; }
+  :root[data-theme="light"] .themebtn .themeicon::before { content: "○"; }
+  :root[data-theme="light"] .themebtn .themelabel::after { content: "light"; }
+  :root[data-theme="dark"] .themebtn .themeicon::before { content: "●"; }
+  :root[data-theme="dark"] .themebtn .themelabel::after { content: "dark"; }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
   footer {
@@ -292,6 +308,9 @@
     h1 { font-size: 32px; }
     main { padding-top: 32px; }
     .statusline .right { display: none; }
+    .themebtn .themelabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .themebtn { min-height: 36px; margin-left: auto; }
+    .statusline nav { order: 2; }
     .statusline .brand { border-right: 0; }
     .statusline nav { flex-basis: 100%; border-top: 1px solid var(--line); overflow-x: auto; }
   }
@@ -432,7 +451,7 @@
 
   - <span class="k">put:</span> pr-review          <span class="c"># gh pr review --comment --body-file review/summary.md</span>
     <span class="k">inputs:</span> [pr, review]</pre></div><p class="why">The whole ladder in one file: a planner sets the width, reviewers run concurrently, a falsifier tries to knock every finding down, a gatekeeper separates <i>bad</i> from <i>blocking</i>, and <b>a human approves before anything reaches GitHub</b>.</p><p class="run">Full file: <a href="https://github.com/jtarchie/steps/blob/main/examples/pr-review.yml">examples/pr-review.yml</a> &#183; <code>PR_REPO=owner/name steps run examples/pr-review.yml --job review</code></p></div></div></section><section id="see"><p class="prompt"><b>steps</b> web <span class="faint">&mdash; the daemon: serves the UI, polls every trigger, runs what changes</span></p><div class="install" role="group" aria-label="Start the daemon"><div><span class="p">$</span> steps web <span class="c"># http://127.0.0.1:8088</span></div><div><span class="p">$</span> steps pipeline set -c pipeline.yml <span class="c"># upload a pipeline into it</span></div></div><div class="shots"><figure><div class="shot"><img src="assets/jobs-graph.png" alt="Jobs page in graph view: unit and lint feed build, build feeds release, all four passed"></div><figcaption><b>The jobs graph</b>, laid out from <code>passed:</code> constraints. Every node carries its latest status; hover an edge for the resource it carries.</figcaption></figure><figure><div class="shot"><img src="assets/spend.png" alt="A run page's spend panel listing each agent step's tokens, cache rate, model, cost, and ceiling"></div><figcaption><b>Spend against ceiling.</b> Each agent step's tokens, cache rate, model and cost, beside the budget it ran under. A run where nothing reported a price says <code>unpriced</code> rather than $0.00.</figcaption></figure><figure><div class="shot"><img src="assets/agent-turn.png" alt="An agent step expanded in the transcript: the model's text, a tool call with its arguments, and the tool's result rendered as JSON"></div><figcaption><b>The conversation.</b> Every turn: the model's text, each tool call, its result rendered as the document it is. Live while it runs, the same an hour later.</figcaption></figure></div><p class="lede" style="margin-top:18px">Press <code>/</code> for a jump palette over pipelines, jobs and runs. <code>j</code>/<code>k</code> walk a transcript, <code>f</code> jumps to the innermost failure. A failed run leads with the error and names the steps whose inputs, command or prompt moved since the last green one. <a href="/docs/web.html">The daemon, in full.</a></p></section><section id="real"><p class="prompt"><b>ls</b> ../real-pipelines/ <span class="faint">&mdash; two more, doing actual jobs</span></p><div class="cards"><div class="card"><h3><a href="https://github.com/jtarchie/steps/blob/main/examples/self-build.yml">Build an issue into a draft PR</a></h3><p>Label an issue <code>self-build</code>. An opus planner (read-only) writes the plan, an opus implementer executes it, an empty-diff gate stops a no-op before review, an opus reviewer either approves or sends the diff back &mdash; then commit, push, <code>gh pr create --draft</code>.</p><div class="shape">examples/self-build.yml · 3 agents · verdicts route backward, max_visits bounds it</div></div><div class="card"><h3><a href="https://github.com/jtarchie/steps/blob/main/examples/release.yml">Release steps itself</a></h3><p>A new <code>v*</code> tag on GitHub → the whole validation suite as the gate → <code>approval:</code> → goreleaser as a <code>put</code>, because a publish must never be a cached skip → download the published archive and check it reports the tag.</p><div class="shape">examples/release.yml · no agents · the shape every deploy pipeline has</div></div></div></section><section id="more"><p class="prompt"><b>ls</b> docs/ <span class="faint">&mdash; the rest of what ships in v0.3.0</span></p><div class="cards"><div class="card"><h3><a href="/docs/webhooks.html">Webhooks as versions</a></h3><p><code>type: webhook</code> turns each delivery a service POSTs to <code>steps web</code> into a version of the resource. Start a job from a push, a Sentry issue or a Stripe payment, and build exactly the commit the sender named rather than whatever the next poll finds.</p><div class="shape">github · gitlab · gitea · forgejo · bitbucket · slack · stripe · sentry · token</div></div><div class="card"><h3><a href="/docs/infra.html#two-kinds-of-worker">Remote workers</a></h3><p><code>--worker gpu=docker+ssh://box</code> places a step's <code>tags:</code> on another machine: bare over <code>ssh://</code>, in containers over <code>docker+ssh://</code>, or on cloud machines with <code>aws://</code>, <code>gcp://</code> or <code>do://</code>. Nothing is installed on the worker.</p><div class="shape">docs/aws-workers · docs/gcp-workers · docs/do-workers</div></div><div class="card"><h3><a href="/docs/mcp.html">MCP, both directions</a></h3><p>An <code>mcp_servers:</code> entry is a named connection agents take tools from and resource types run against; <code>steps mcp login</code> authorizes an OAuth one. <code>mcp_exports:</code> turns it around: the daemon serves some of a pipeline's tools to a teammate's Claude or Cursor, with the pipeline's credentials, which the caller never sees.</p><div class="shape">stdio · HTTP · bearer · oauth</div></div><div class="card"><h3><a href="/docs/authentication.html">Accounts and roles</a></h3><p><code>steps web</code> asks for nothing on loopback. Reachable from anywhere else, <code>steps pipeline set</code> is a remote shell, so turn on local accounts or GitHub and Google sign-in, and let roles decide who may do what.</p><div class="shape">HTTP Basic for the CLI · a sign-in form for browsers · per-pipeline access:</div></div><div class="card"><h3><a href="/docs/web.html#one-database-several-pipelines">One state database</a></h3><p>Every pipeline a daemon holds shares one database, every query scoped to its pipeline, bounded by count rather than age. SQLite by default; <code>--db postgres://&mldr;</code> for <a href="/docs/web.html#postgres">Postgres</a>.</p><div class="shape">run_history: · version_history:</div></div><div class="card"><h3><a href="/docs/observability.html">OpenTelemetry</a></h3><p>Traces and metrics over OTLP, configured from the standard <code>OTEL_*</code> environment every collector and hosted backend documents. Off unless the environment names an exporter or an endpoint; nothing in a pipeline turns it on.</p><div class="shape">OTLP over HTTP · Honeycomb · any collector</div></div></div></section><div class="notify" id="notify"><h2>Release notes by email</h2><p>One message per release: what changed and the download. No newsletter, no drip.</p><form action="/api/submit" method="post"><label class="sr" for="email">Email address</label>
-<input id="email" type="email" name="email" placeholder="you@example.com" autocomplete="email" required><div class="cf-turnstile" data-sitekey="0x4AAAAAAFcGOugKbvVyUX4R" data-appearance="interaction-only"></div><button class="btn">Notify me</button></form></div><footer><span class="links"><a href="https://github.com/jtarchie/steps">GitHub</a>
+<input id="email" type="email" name="email" placeholder="you@example.com" autocomplete="email" required><div class="cf-turnstile" data-sitekey="0x4AAAAAAFcGOugKbvVyUX4R" data-appearance="interaction-only" data-theme="auto"></div><button class="btn">Notify me</button></form></div><footer><span class="links"><a href="https://github.com/jtarchie/steps">GitHub</a>
 <a href="https://github.com/jtarchie/steps/releases">Releases</a>
 <a href="/docs/index.html">Docs</a>
 <a href="https://github.com/jtarchie/steps/blob/main/steps.schema.json">JSON Schema</a>

@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/alecthomas/chroma/v3"
-	chromahtml "github.com/alecthomas/chroma/v3/formatters/html"
 	"github.com/alecthomas/chroma/v3/lexers"
 	"github.com/labstack/echo/v5"
 	"github.com/yuin/goldmark/v2/ast"
@@ -70,8 +69,8 @@ var docsRenderer = html.New(
 	html.WithNodeRendererDecorator(ast.KindCodeBlock, highlightDocsFence),
 )
 
-// docsFormatter is chroma's default HTML formatter: its own <pre> with the style inline, unlike prose.go's codeFormatter.
-var docsFormatter = chromahtml.New()
+// docsFormatter draws its own <pre>, unlike prose.go's codeFormatter.
+var docsFormatter = classFormatter{pre: true}
 
 // highlightDocsFence is the slice of goldmark-highlighting the docs used — a fence whose language chroma knows, in docsCodeStyle — and nothing else: that extension linked chroma's styles package, whose registry of stock themes was a fifth of every invocation's startup heap and which no page here draws in.
 func highlightDocsFence(next html.NodeRenderer) html.NodeRenderer {

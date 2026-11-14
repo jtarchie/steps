@@ -31,6 +31,12 @@
     paintSwitcher();
   });
 
+  // auto → light → dark → auto. The head script owns storage; this only asks it for the next state.
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('#themebtn')) return;
+    window.stepsTheme({ '': 'light', light: 'dark', dark: '' }[document.documentElement.dataset.theme || '']);
+  });
+
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape' || !openMenu) return;
     var btn = document.getElementById(openMenu);

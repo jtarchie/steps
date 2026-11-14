@@ -1,18 +1,25 @@
-<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>You're on the list — steps</title><meta name="description" content="Your email is recorded. You'll get one message from steps per release: what changed and the download."><meta property="og:title" content="You're on the list — steps"><meta property="og:description" content="One message per steps release. Nothing else."><link rel="stylesheet" href="/app.css"><style>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>You're on the list — steps</title><meta name="description" content="Your email is recorded. You'll get one message from steps per release: what changed and the download."><meta property="og:title" content="You're on the list — steps"><meta property="og:description" content="One message per steps release. Nothing else."><script>
+(function(){var k='steps-theme',r=document.documentElement;window.stepsTheme=function(t){if(t)r.dataset.theme=t;else delete r.dataset.theme;try{t?localStorage.setItem(k,t):localStorage.removeItem(k)}catch(e){}};var s=null;try{s=localStorage.getItem(k)}catch(e){}if(s==='light'||s==='dark')r.dataset.theme=s;else delete r.dataset.theme;document.addEventListener('DOMContentLoaded',function(){var l=document.querySelector('.statusline');if(!l)return;var b=document.createElement('button');b.type='button';b.className='themebtn';b.title='theme: auto follows the system, or pin light or dark';b.innerHTML='<span class="tv">theme </span><span class="themeicon" aria-hidden="true"></span><span class="themelabel"></span>';b.addEventListener('click',function(){window.stepsTheme({'':'light',light:'dark',dark:''}[r.dataset.theme||''])});l.appendChild(b)})})();
+</script><link rel="stylesheet" href="/app.css"><style>
   :root {
-    --bg: #111310;
-    --panel: #171a16;
-    --line: #262b25;
-    --fg: #d8d5c9;
-    --dim: #83887b;
-    --faint: #7a7f72;
-    --green: #84c06d;
-    --blue: #7aa4d9;
+    color-scheme: light dark;
+    --bg: light-dark(#f6f4ee, #111310);
+    --panel: light-dark(#efece4, #171a16);
+    --panel2: light-dark(#e7e4da, #1c201b);
+    --line: light-dark(#d3cfc2, #262b25);
+    --fg: light-dark(#23251f, #d8d5c9);
+    --dim: light-dark(#5c6054, #83887b);
+    --faint: var(--dim);
+    --green: light-dark(#346c24, #84c06d);
+    --yellow: light-dark(#7a580e, #d9a94a);
+    --blue: light-dark(#2e62a6, #7aa4d9);
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   }
+  :root[data-theme="light"] { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
   *, *::before, *::after { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
-  html { color-scheme: dark; }
+  html { background: var(--bg); }
   body {
     background: var(--bg);
     color: var(--fg);
@@ -23,7 +30,7 @@
   }
   a { color: var(--blue); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  :focus-visible { outline: 1px solid #d9a94a; outline-offset: 2px; }
+  :focus-visible { outline: 1px solid var(--yellow); outline-offset: 2px; }
 
   .statusline {
     display: flex;
@@ -45,6 +52,18 @@
   h1::before { content: "● "; color: var(--green); }
   p { color: var(--dim); font-size: 13.5px; margin: 0 0 12px; }
   p:last-child { margin-bottom: 0; }
+
+  .themebtn { font: inherit; font-size: 12px; color: var(--dim); background: none; border: 0; border-left: 1px solid var(--line); padding: 8px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; order: 1; white-space: nowrap; }
+  .themebtn:hover { color: var(--fg); background: var(--panel2); }
+  .themebtn .themeicon { font-size: 14px; line-height: 1; }
+  .themebtn .tv { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  :root:not([data-theme]) .themebtn .themeicon::before { content: "◐"; }
+  :root:not([data-theme]) .themebtn .themelabel::after { content: "auto"; }
+  :root[data-theme="light"] .themebtn .themeicon::before { content: "○"; }
+  :root[data-theme="light"] .themebtn .themelabel::after { content: "light"; }
+  :root[data-theme="dark"] .themebtn .themeicon::before { content: "●"; }
+  :root[data-theme="dark"] .themebtn .themelabel::after { content: "dark"; }
+  @media (max-width: 600px) { .themebtn .themelabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } .themebtn { min-height: 36px; margin-left: auto; } }
 </style></head><body><div class="statusline"><span class="brand"><b>steps</b> — pipeline runner</span></div><main><p class="prompt"><b>steps</b> runs pipeline.yml</p><div class="pane"><h1>Recorded</h1><p>You'll get one message per release &mdash; what changed and the download. No newsletter, no drip.</p><p>v0.3.0 is already out: <a href="https://github.com/jtarchie/steps/releases/tag/v0.3.0">grab it</a>, or <a href="/">back to the front page</a>.</p></div></main><script>
 (function(){
   window.addEventListener('message', function(e){

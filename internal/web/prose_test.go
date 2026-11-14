@@ -134,9 +134,8 @@ func TestRenderProseKeepsFencedCodeHighlighted(t *testing.T) {
 		t.Errorf("fenced code did not render as a block: %s", got)
 	}
 
-	// chroma emits inline styles from the site's own palette; without the
-	// highlighter this would be bare text in a <pre>.
-	if !strings.Contains(got, "<span style=") {
+	// Without the highlighter this would be bare text in a <pre>.
+	if !strings.Contains(got, `<span class="hl-`) {
 		t.Errorf("fenced code is not highlighted: %s", got)
 	}
 
@@ -171,11 +170,11 @@ func TestDiffRendersAddedAndRemovedDistinctly(t *testing.T) {
 
 	got := string(highlightCode(diff, "diff"))
 
-	if !strings.Contains(got, "#e0645a") {
+	if !strings.Contains(got, `class="hl-gd"`) {
 		t.Errorf("diff rendering missing the removed-line colour: %s", got)
 	}
 
-	if !strings.Contains(got, "#84c06d") {
+	if !strings.Contains(got, `class="hl-gi"`) {
 		t.Errorf("diff rendering missing the added-line colour: %s", got)
 	}
 }

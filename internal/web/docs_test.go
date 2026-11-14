@@ -98,7 +98,7 @@ func TestTheDocsMapIsTheSectionsOfALongPage(t *testing.T) {
 	}
 }
 
-// TestDocFencedCodeIsHighlightedInTheUIsOwnStyle: the highlighter is a decorator on the renderer (highlightDocsFence), and a page whose fences render as plain text is what an unwired one looks like — the inline color is the assertion, because docsCodeStyle exists precisely so the stock themes are not used.
+// TestDocFencedCodeIsHighlightedInTheUIsOwnStyle: the highlighter is a decorator on the renderer (highlightDocsFence), and a page whose fences render as plain text is what an unwired one looks like — the YAML key's class is the assertion, because docsCodeStyle exists precisely so the stock themes are not used, and TestCodeClassesFollowTheStyle holds that class to --blue.
 func TestDocFencedCodeIsHighlightedInTheUIsOwnStyle(t *testing.T) {
 	t.Parallel()
 
@@ -108,8 +108,7 @@ func TestDocFencedCodeIsHighlightedInTheUIsOwnStyle(t *testing.T) {
 		t.Errorf("the fenced block was not tokenised at all:\n%s", html)
 	}
 
-	// --blue, the color docsCodeStyle gives a YAML key; a stock chroma theme paints it red.
-	if !strings.Contains(strings.ToLower(html), "#7aa4d9") {
+	if !strings.Contains(html, `<span class="hl-nt">jobs</span>`) {
 		t.Errorf("the block was highlighted in something other than the UI's own palette:\n%s", html)
 	}
 }

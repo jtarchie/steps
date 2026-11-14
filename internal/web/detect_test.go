@@ -50,7 +50,7 @@ func TestEntryPointsSkipHighlightingAboveTheLimit(t *testing.T) {
 			t.Errorf("%s did not escape an oversized input: leaked <script>", name)
 		}
 
-		if strings.Contains(got, "<span style=") {
+		if strings.Contains(got, `<span class="hl-`) {
 			t.Errorf("%s highlighted an oversized input instead of skipping it", name)
 		}
 	}
@@ -72,7 +72,7 @@ func TestEntryPointsStillHighlightAtTheLimit(t *testing.T) {
 		"highlightPayload": string(highlightPayload(exact)),
 		"renderModelText":  string(renderModelText(exact)),
 	} {
-		if !strings.Contains(got, "<span style=") {
+		if !strings.Contains(got, `<span class="hl-`) {
 			t.Errorf("%s skipped highlighting an input exactly at the limit", name)
 		}
 	}
@@ -139,7 +139,7 @@ func TestHighlightedModelTextKeepsItsLineBreaks(t *testing.T) {
 		t.Errorf("highlighted model text carries no <pre>, so its line breaks collapse in prose:\n%s", got)
 	}
 
-	if !strings.Contains(got, "#e0645a") {
+	if !strings.Contains(got, `class="hl-gd"`) {
 		t.Errorf("model text that is a diff was not highlighted:\n%s", got)
 	}
 }

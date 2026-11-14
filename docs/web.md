@@ -182,6 +182,10 @@ the docs and an error page sit above any pipeline, so they offer only the
 switcher and no tabs. On a phone the tabs become one strip that scrolls
 sideways, with the current one brought into view. **jump** (or `/`) opens a
 palette that searches jobs, runs and pipelines across everything served.
+Beside it is the theme: **auto** follows the system's
+light or dark setting, and a press pins **light**, then **dark**, then back
+to auto. The choice is this browser's own, kept in its local storage; the
+daemon stores nothing.
 
 On the root, `j`/`k` (or the up and down arrows, once inside the table) move
 between pipelines, `h`/`l` (or left and right) move along a row's job cells,

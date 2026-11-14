@@ -12,34 +12,38 @@
  */
 
 :root {
-  /* Single-theme, but say so: without this the UA paints form controls and
-     scrollbars for whatever the OS prefers, light chrome on a dark page. */
-  color-scheme: dark;
-  --bg: #111310;
-  --panel: #171a16;
-  --panel2: #1c201b;
-  --line: #262b25;
+  /* Say so: without this the UA paints form controls and scrollbars for whatever the OS prefers, not for the page's theme. */
+  color-scheme: light dark;
+  --bg: light-dark(#f6f4ee, #111310);
+  --panel: light-dark(#efece4, #171a16);
+  --panel2: light-dark(#e7e4da, #1c201b);
+  --line: light-dark(#d3cfc2, #262b25);
   /* The ground every code, log, and data block sits on: a step down from
      --panel, so a payload reads as something the page is quoting rather than
      as more page. */
-  --code-bg: #0c0e0b;
-  --line-soft: #1e231d;
-  --fg: #d8d5c9;
-  --dim: #83887b;
+  --code-bg: light-dark(#eae7de, #0c0e0b);
+  --line-soft: light-dark(#e0ddd2, #1e231d);
+  --fg: light-dark(#23251f, #d8d5c9);
+  --dim: light-dark(#5c6054, #83887b);
   /* Below --dim no text tone reaches 4.5:1 on --panel, so faint text is dim; the darker tone is kept only for rules and edges. */
   --faint: var(--dim);
-  --faint-line: #565b50;
-  --green: #84c06d;
-  --red: #e0645a;
-  --yellow: #d9a94a;
-  --blue: #7aa4d9;
-  --magenta: #b98fcc;
-  --cyan: #6fbcb4;
+  --faint-line: light-dark(#a9a596, #565b50);
+  --green: light-dark(#346c24, #84c06d);
+  --red: light-dark(#b3362c, #e0645a);
+  --yellow: light-dark(#7a580e, #d9a94a);
+  --blue: light-dark(#2e62a6, #7aa4d9);
+  --magenta: light-dark(#8549a0, #b98fcc);
+  --cyan: light-dark(#1f6c64, #6fbcb4);
+  --backdrop: light-dark(rgb(35 37 31 / 0.35), rgb(8 9 8 / 0.72));
   /* How much of a status color fills a graph node. */
   --dag-tint: 12%;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+/* The injected daisyUI paints <html> in its own theme's base color whenever data-theme is set. */
+html { background: var(--bg); }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -117,7 +121,7 @@ code { font-family: var(--mono); color: var(--fg); }
   list-style: none;
   font-family: var(--sans);
   font-size: 12.5px;
-  border: 1px solid #4a3d20;
+  border: 1px solid color-mix(in srgb, var(--yellow) 30%, var(--bg));
   border-left: 3px solid var(--yellow);
   margin: 0 0 14px;
   padding: 0;
@@ -286,8 +290,8 @@ tr.checkfail pre { margin: 0 0 4px; }
     overflow-x: auto;
     scrollbar-width: none;
     border-top: 1px solid var(--line-soft);
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
-    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
   }
   .tabs::-webkit-scrollbar { display: none; }
   .tab:last-child { border-right: 0; padding-right: 28px; }
@@ -489,8 +493,8 @@ td.faint, .faint { color: var(--faint); }
   overflow-y: hidden;
   scroll-padding-inline: 2px 28px;
   scrollbar-width: thin;
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
 }
 .striplist li { flex: none; }
 .runstrip a { color: var(--dim); text-decoration: none; }
@@ -530,9 +534,9 @@ td.faint, .faint { color: var(--faint); }
   cursor: pointer;
 }
 .btn:hover { border-color: var(--dim); }
-.btn.primary { color: var(--green); border-color: #33452d; }
+.btn.primary { color: var(--green); border-color: color-mix(in srgb, var(--green) 30%, var(--bg)); }
 .btn.primary:hover { border-color: var(--green); }
-.btn.danger { color: var(--red); border-color: #4a2c29; }
+.btn.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, var(--bg)); }
 .btn.danger:hover { border-color: var(--red); }
 
 /* ---- dependency graph ----
@@ -967,8 +971,8 @@ pre.log { margin: 8px 0 0; font-family: var(--mono); }
 
 /* ---- failure triage ---- */
 .errblock {
-  border: 1px solid #4a2c29;
-  background: #191110;
+  border: 1px solid color-mix(in srgb, var(--red) 30%, var(--bg));
+  background: color-mix(in srgb, var(--red) 6%, var(--bg));
   color: var(--red);
   padding: 10px 14px;
   font-size: 12.5px;
@@ -1038,8 +1042,8 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
 
 /* ---- sparkline ---- */
 .spark { vertical-align: -2px; margin-left: 10px; }
-.spark rect { fill: #4d7040; }
-.spark rect.bad { fill: #8a4038; }
+.spark rect { fill: color-mix(in srgb, var(--green) 50%, var(--bg)); }
+.spark rect.bad { fill: color-mix(in srgb, var(--red) 55%, var(--bg)); }
 
 /* ---- approvals ---- */
 .approval { border: 1px solid var(--line); background: var(--panel); padding: 14px; margin-bottom: 10px; }
@@ -1064,7 +1068,7 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
 .decide input[type="text"]::placeholder { color: var(--faint); }
 
 /* ---- jump palette ---- */
-.palette-backdrop { position: fixed; inset: 0; background: rgba(8, 9, 8, 0.72); display: none; z-index: 50; }
+.palette-backdrop { position: fixed; inset: 0; background: var(--backdrop); display: none; z-index: 50; }
 .palette-backdrop.open { display: block; }
 .palette {
   position: fixed;
@@ -1372,3 +1376,25 @@ table.mcp-exports td { white-space: nowrap; }
 .docstoc { display: block; }
 .docstoc summary { cursor: pointer; width: max-content; }
 .docstoclinks { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 4px; }
+pre.hl { color: var(--fg); background-color: var(--panel); }
+.hl .c { color: var(--dim); font-style: italic; }
+.hl .k { color: var(--blue); }
+.hl .p { color: var(--dim); }
+.hl .s { color: var(--green); }
+.hl .n { color: var(--yellow); }
+.hl .w { color: var(--magenta); }
+.hl .f { color: var(--cyan); }
+.hl .d { color: var(--red); }
+.hl .b { font-weight: bold; }
+.hl .i { font-style: italic; }
+.themebtn { font: inherit; font-size: 12px; color: var(--dim); background: none; border: 0; border-left: 1px solid var(--line); padding: 8px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; white-space: nowrap; }
+.themebtn:hover { color: var(--fg); background: var(--panel2); }
+.themebtn .themeicon { font-size: 14px; line-height: 1; }
+.themebtn .tv { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+:root:not([data-theme]) .themebtn .themeicon::before { content: "◐"; }
+:root:not([data-theme]) .themebtn .themelabel::after { content: "auto"; }
+:root[data-theme="light"] .themebtn .themeicon::before { content: "○"; }
+:root[data-theme="light"] .themebtn .themelabel::after { content: "light"; }
+:root[data-theme="dark"] .themebtn .themeicon::before { content: "●"; }
+:root[data-theme="dark"] .themebtn .themelabel::after { content: "dark"; }
+@media (max-width: 600px) { .themebtn .themelabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } .themebtn { min-height: 36px; } }
