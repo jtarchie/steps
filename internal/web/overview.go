@@ -97,6 +97,24 @@ type nextView struct {
 	On []string
 }
 
+// Lead is the trigger named on the row; the rest are counted, since a list of names pushed the table sideways.
+func (n nextView) Lead() string {
+	if len(n.On) == 0 {
+		return ""
+	}
+
+	return n.On[0]
+}
+
+// Rest is the triggers after Lead.
+func (n nextView) Rest() []string {
+	if len(n.On) < 2 {
+		return nil
+	}
+
+	return n.On[1:]
+}
+
 // stripJobs is the widest pipeline whose every job gets a run strip; past it a strip per job wraps the row, so only red jobs keep theirs.
 const stripJobs = 4
 
@@ -179,6 +197,15 @@ type jobChip struct {
 	History []store.RunRow
 }
 
+// Empty is how many of the strip's laneRuns slots no run fills yet, drawn before the oldest so the newest always sits at the right edge.
+func (c jobChip) Empty() int {
+	if len(c.History) == 0 {
+		return 0
+	}
+
+	return max(laneRuns-len(c.History), 0)
+}
+
 // Red is a chip whose run Latest reports and whose strip survives the wide-pipeline cap.
 func (c jobChip) Red() bool {
 	return c.Held || c.Class == "st-failed" || c.Class == "st-errored"
@@ -244,10 +271,16 @@ func chipFor(view jobView) jobChip {
 		chip.Word = "never ran"
 	}
 
-	chip.Glyph = statusMark(chip.Word)
-
 	if chip.Held {
-		chip.Class, chip.Glyph, chip.Word = "st-held", "⊘", "held"
+		chip.Class, chip.Word = "st-held", "held"
+	}
+
+	// The row's mark is its one glyph; a cell adds one only when it is why the row is red.
+	if chip.Red() {
+		chip.Glyph = statusMark(chip.Word)
+		if chip.Held {
+			chip.Glyph = "⊘"
+		}
 	}
 
 	return chip
@@ -339,25 +372,14 @@ func cronAt(cfg *config.Config, name string, cronNext CronNext, now time.Time) (
 	return at, err == nil && !at.IsZero()
 }
 
-// nextLayout coarsens a fire time with distance: the clock later today, the weekday within a week, the date past that.
-func nextLayout(now, at time.Time) string {
-	now = now.In(at.Location())
-
-	switch {
-	case at.Sub(now) < 24*time.Hour && at.YearDay() == now.YearDay():
-		return "15:04"
-	// Same weekday as today but not today is next week's: "Wed 07:00" read on a Wednesday says this morning.
-	case at.Sub(now) < 7*24*time.Hour && at.Weekday() != now.Weekday():
-		return "Mon 15:04"
-	default:
-		return "Jan 2"
-	}
-}
-
+// nextTag is how long until a cron slot, with the clock time for a pointer and both for a screen reader. Relative because a clock time needed a day beside it to mean anything, and named the wrong day a week out.
 func nextTag(at time.Time) template.HTML {
+	short, spoken := untilCompact(time.Until(at))
+	clock := at.Format("Mon Jan 2 15:04 MST")
+
 	//nolint:gosec // G203: every interpolation is machine-formatted, not input
-	return template.HTML(fmt.Sprintf(`<time datetime=%q title=%q>%s</time>`,
-		at.UTC().Format(time.RFC3339), at.Format("Mon Jan 2 15:04 MST"), at.Format(nextLayout(time.Now(), at))))
+	return template.HTML(fmt.Sprintf(`<time datetime=%q title=%q><span aria-hidden="true">%s</span><span class="visually-hidden">%s, %s</span></time>`,
+		at.UTC().Format(time.RFC3339), clock, short, spoken, clock))
 }
 
 // handleIndex answers the bare root, and its answer depends on how many
@@ -399,6 +421,7 @@ func (s *Server) handleIndex(c *echo.Context) error {
 	// the switcher; handing those counts to the table is what stops the root
 	// asking the same six questions of the same databases twice per render.
 	nav := s.globalNav(c)
+	nav.Fleet = true
 
 	pipelines := s.overviewPipelines(c, nav)
 

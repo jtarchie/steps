@@ -224,6 +224,36 @@ func TestPauseAllLeavesEachPipelinesOwnPauseAndSaysWhichToLift(t *testing.T) {
 	}
 }
 
+// TestTheRootsPauseAllSitsInTheActionBar: on a pipeline's page Pause is in the bar under the nav; on the root Pause all was a lone button above the table, somewhere else on every page. It is the root's bar now, blue while everything is paused, as a pipeline's bar is while it is.
+func TestTheRootsPauseAllSitsInTheActionBar(t *testing.T) {
+	t.Parallel()
+
+	_, pipelines := testPipelines(t, "alpha", "beta")
+
+	server, err := New(pipelines, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, page := get(t, server, "/")
+	if bar := between(t, page, `<div class="actionbar" role="toolbar"`, "</div></div>"); !strings.Contains(bar, `action="/pause-all"`) {
+		t.Errorf("the root's action bar does not hold pause all:\n%s", bar)
+	}
+
+	if strings.Contains(page, `class="pauseall"`) {
+		t.Error("the root still draws pause all outside its action bar")
+	}
+
+	if code, _ := postForm(t, server, "/pause-all", nil); code != http.StatusSeeOther {
+		t.Fatalf("pause all answered %d, want 303", code)
+	}
+
+	_, page = get(t, server, "/")
+	if bar := between(t, page, `<div class="actionbar paused" role="toolbar"`, "</div></div>"); !strings.Contains(bar, `action="/unpause-all"`) || !strings.Contains(bar, "everything is paused") {
+		t.Errorf("an all-paused root's bar is not blue with resume all:\n%s", bar)
+	}
+}
+
 func activityActions(t *testing.T, pipeline *Pipeline) []string {
 	t.Helper()
 

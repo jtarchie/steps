@@ -536,6 +536,26 @@ func agoTag(t time.Time) template.HTML {
 // width is the constraint, plus the words a screen reader should say for it:
 // an abbreviation is read unpredictably ("5 d", "21 meters").
 func agoCompact(elapsed time.Duration) (short, spoken string) {
+	count, abbr, whole, ok := compactUnit(elapsed)
+	if !ok {
+		return "now", "just now"
+	}
+
+	return fmt.Sprintf("%d%s", count, abbr), fmt.Sprintf("%d %s ago", count, whole)
+}
+
+// untilCompact is agoCompact looking forward.
+func untilCompact(ahead time.Duration) (short, spoken string) {
+	count, abbr, whole, ok := compactUnit(ahead)
+	if !ok {
+		return "now", "now"
+	}
+
+	return fmt.Sprintf("in %d%s", count, abbr), fmt.Sprintf("in %d %s", count, whole)
+}
+
+// compactUnit floors a duration to its largest whole unit; whole is already pluralized.
+func compactUnit(d time.Duration) (count int, abbr, whole string, ok bool) {
 	units := []struct {
 		size        time.Duration
 		abbr, whole string
@@ -547,20 +567,20 @@ func agoCompact(elapsed time.Duration) (short, spoken string) {
 	}
 
 	for _, unit := range units {
-		count := int(elapsed / unit.size)
+		count = int(d / unit.size)
 		if count < 1 {
 			continue
 		}
 
-		plural := "s"
-		if count == 1 {
-			plural = ""
+		whole = unit.whole
+		if count != 1 {
+			whole += "s"
 		}
 
-		return fmt.Sprintf("%d%s", count, unit.abbr), fmt.Sprintf("%d %s%s ago", count, unit.whole, plural)
+		return count, unit.abbr, whole, true
 	}
 
-	return "now", "just now"
+	return 0, "", "", false
 }
 
 // agoCompactTag is agoTag for the run strip: the abbreviation for the eye,

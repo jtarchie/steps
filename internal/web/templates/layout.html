@@ -212,7 +212,7 @@
     {{end}}
     {{if .Retry}}<form method="post" action="/p/{{$.Nav.Current}}/runs/{{.RunID}}/rerun"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="run this build again, with the same inputs"{{end}}>⟲ Retry</button></form>{{end}}
     {{if .Abort}}<form method="post" action="{{.Abort}}"><button class="btn danger" type="submit" title="stop it">■ Abort</button></form>{{end}}
-  </div>{{end}}{{end}}</div>{{end}}{{end}}
+  </div>{{end}}{{end}}</div>{{else if and .Nav.Fleet (or .Nav.CanPauseAll .Nav.AllPaused)}}<div class="actionbar{{if .Nav.AllPaused}} paused{{end}}" role="toolbar" aria-label="Actions"><div class="group">{{if .Nav.AllPaused}}<span class="st st-paused">everything is paused</span>{{if .Nav.CanPauseAll}}<form method="post" action="/unpause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="resume every pipeline; each goes back to its own pause state">▶ Resume all</button></form>{{end}}{{else}}<form method="post" action="/pause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="stop polling and starting runs in every pipeline until resumed; each keeps its own pause state">⏸ Pause all</button></form>{{end}}</div></div>{{end}}{{end}}
 
 {{/* What <head> shows, kept where every visible poll's oob swap reaches it;
      app.js copies it into the favicon and the title (prefixed onto the
