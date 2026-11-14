@@ -167,3 +167,77 @@ jobs:
 		t.Errorf("the next step read %q, want what the agent wrote", got)
 	}
 }
+
+// TestE2ECLIAgentImageWithTagsPlacesItsToolsOnTheWorker is steps#241: a CLI agent that sets image: may take tags:, by the rule a hosted agent follows — the conversation stays here, the tools are placed. One run crosses every seam the issue lists: dir: is where the tools work on the worker, write_file and a custom tool share that tree, the declared file is checked after it comes home rather than against this machine's copy, and settings: project is still accepted.
+func TestE2ECLIAgentImageWithTagsPlacesItsToolsOnTheWorker(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	captured := filepath.Join(t.TempDir(), "check.json")
+	home := filepath.Join(dir, "home.txt")
+
+	claude := writeFakeClaude(t, strings.Join([]string{
+		"echo '" + cliInitEvent("mcp__steps__write_file", "mcp__steps__check") + "'",
+		captureBridgeScript(filepath.Join(t.TempDir(), "write.json"), "write_file", `{"path":"notes.txt","content":"written\n"}`),
+		captureBridgeScript(captured, "check", `{}`),
+		"echo '" + cliResultEvent("wrote and checked", 1) + "'",
+	}, "\n"))
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: recorder
+  image: %s
+  settings: project
+  source:
+    model: "@claude/sonnet"
+  tools:
+  - write_file
+  - name: check
+    description: Read the notes back.
+    run: echo "on=$STEPS_WORKER in=$(pwd)" && cat notes.txt seeded.txt
+
+jobs:
+- name: build
+  plan:
+  - task: seed
+    outputs: [report]
+    run: echo seeded > report/seeded.txt
+  - agent: recorder
+    tags: [box]
+    dir: report
+    inputs: [report]
+    outputs: [report]
+    assert:
+      files: [report/notes.txt]
+    messages:
+      - Write the notes.
+  - task: publish
+    inputs: [report]
+    run: cp report/notes.txt %s
+`, dockerE2EImage, home))
+
+	mustRun(t, path, "--worker", "box=local:")
+
+	if got := claude.invocations(t); got != 1 {
+		t.Fatalf("the fake claude ran %d times, want 1 — the CLI stays on this machine", got)
+	}
+
+	got := readFileString(t, captured)
+	for _, want := range []string{"on=box", "in=" + buildDir("recorder") + "/report", "written", "seeded"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("check answered %q, want %q: the tools did not run in dir: on the worker over one tree", got, want)
+		}
+	}
+
+	if got := readFileString(t, home); got != "written\n" {
+		t.Errorf("the file the agent wrote on the worker came home as %q", got)
+	}
+
+	if placed := placementNamed(t, runPlacements(t, path), "recorder"); placed.Tag != "box" {
+		t.Errorf("placement = %+v, want the step recorded on the worker tagged box", placed)
+	}
+}

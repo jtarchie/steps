@@ -148,6 +148,38 @@ That single fact is why a CLI agent's containerization has none of the machinery
 - **`network: none` is a coherent, useful sandbox**, exactly as it is for a hosted agent: cutting the container's egress narrows what the step's shell commands can reach, and never touches the bridge the verdict comes back on, since that bridge was never inside the container.
 - **The CLI is needed on the host, always** — `steps validate`'s PATH check applies to every CLI agent uniformly, whether or not any of its steps names an `image:`. A CI runner with docker and no `claude` on PATH gets a validate failure naming the orchestrator, which is the machine that actually needs the binary.
 
+**`tags:` places those tools on a worker**, by the rule a hosted agent follows: the conversation stays here, the tools move. It needs `image:`, since the container is the thing being placed; `tags:` on a CLI agent without one is refused, as it is for a hosted agent.
+
+```yaml noexec=cli
+agents:
+- name: implementer
+  image: golang:1.27
+  source:
+    model: "@claude/sonnet"
+  tools: [read_file, write_file, edit_file, run_shell]
+
+jobs:
+- name: build
+  plan:
+  - task: seed
+    outputs: [repo]
+    run: echo "package main" > repo/main.go
+  - agent: implementer
+    tags: [builder]            # --worker builder=docker+ssh://ci@build-box, or builder=local:
+    dir: repo
+    inputs: [repo]
+    outputs: [repo]
+    assert:
+      files: [repo/main.go]
+    messages:
+      - Make the package build, and run go vet.
+```
+
+- **`run_shell`, the file tools and custom `run:` tools all execute in the container on the worker**, in the step's [working directory](#the-working-directory-in-a-container) with `dir:` applied, and see `STEPS_WORKER`. The step's declared `outputs:` come home when it ends, and before an `assert: files:` check reads them, so the check is against what the tools wrote there.
+- **What the CLI process itself reads stays on this machine, as it was when the step began**: [`settings: project`](agents.md#cli-backed-agents-claudesonnet) loads the repository's `.claude/` from the orchestrator's copy of the step's inputs, and `context_paths:` are read from the same copy. An edit the agent makes to `.claude/` during the step is not seen by the running CLI. This is equally true of an untagged `image:` step, whose container is a volume and never this directory.
+- **Still refused beside `tags:`**, as for a hosted agent: a sub-agent grant, and a stdio `mcp_servers:` entry with a relative `cwd:`.
+- The usual reason to do it: a CLI agent that builds and tests a repository otherwise spends the orchestrator's CPU, disk and docker daemon, which is why such jobs are usually held to `max_in_flight: 1`.
+
 One thing containerizing a CLI agent's tools does **not** fence: `web_fetch` is an in-process HTTP implementation on both the hosted and the CLI path, not a shell tool, so `network: none` narrows `run_shell` and custom tools without touching it.
 
 ## Remote workers (`tags:`)
@@ -227,7 +259,7 @@ Nothing is installed on a worker and no `steps` binary goes anywhere. `?binary=`
   - **This is how a local `image:` agent works too.** A placed agent and a local one run the same code down to the same shell script, so there is no second path to get right, and no behaviour that appears only once a tag is added.
   - **One exception, and only one**: `read_file` may read the step's spill directory from the orchestrator. An oversized `run_shell` output is captured on this side even when the command ran elsewhere, written to a file there, and the model is handed a path for it under its own working directory (`.steps-agent-out/…`), which `read_file` maps back — that file is this process's record of the conversation and was never part of the step's tree, so it exists here and nowhere else, and `run_shell` will not find it. Every other tool, and every other path, goes to the container: anything the model can write has to land where `run_shell` can see it.
   - **A worker lost mid-conversation fails the step, and nothing starts it over.** A reclaimed spot instance is not re-placed either, as it is for a task: a fresh machine would start from the step's *inputs*, silently undoing every edit the model had made outside `outputs:`. `attempts:` on an agent is the retry of one *request to the model* (see [agents.md](agents.md)), never of the conversation, so it has nothing to say here.
-  - **Refused, each for the same reason — a second tree**: a grant of a **sub-agent** (the child builds its own container, which on a worker is a second copy of the tree), a **stdio `mcp_servers:` entry with a relative `cwd:`** (the server runs here, indexing files the placed agent's edits never reach), and a **CLI agent** (`@claude/...`, whose process is a subprocess of this one with its own working directory).
+  - **Refused, each for the same reason — a second tree**: a grant of a **sub-agent** (the child builds its own container, which on a worker is a second copy of the tree), a **stdio `mcp_servers:` entry with a relative `cwd:`** (the server runs here, indexing files the placed agent's edits never reach), each named at load. A **CLI agent** (`@claude/...`) with `image:` is placed by the same rule: see [CLI agents](#cli-agents).
 
 ### Reaching the machine
 
@@ -310,7 +342,7 @@ steps run --worker gpu=docker+ssh://jt@gpu-box --worker big-disk=docker+ssh://jt
 - **A resource's tag beats an inherited one.** A resource tag states a network fact — the source is only reachable from there — while a job or block tag is a default. Letting the default win would move a fetch onto a machine that cannot reach the source.
 - **Only `do:` and `in_parallel:` declare.** `race:`, `ensemble:` and `across:` pass an inherited tag through to what they hold but cannot declare one — wrap the block in a `do:` with `tags:` instead. The block itself runs nothing, so its row in the run record carries no worker; its steps do.
 - **A step's hooks go where the step went.** The job's `tags:` reach its job-level hooks, as above, and a step's own `on_failure:`/`ensure:`/… inherit what that step resolved to: a tagged step's untagged hook runs on the step's worker, a `get`'s or `put`'s on its resource's, a tagged `do:`'s on the `do:`'s. This is Concourse's rule. It includes `on_error:`/`on_abort:`, which fire most often *because* that worker died — so a hook that must run here instead cannot opt out (see below) and is restructured: move it onto an untagged `do:` around the tagged step, whose hooks take what the `do:` resolved to, or up to the job when the job carries no tag.
-- **A step that cannot be placed whole is refused, inherited tag or not** — an agent without `image:`, a CLI agent, a task with `fix:`, a get or put of an `mcp:`/`expr:`/`webhook` type. The error names where the tag came from (`inherited from job "train"`); give the step what it needs, or move the tag off the job onto a `do:` around only the steps that belong on the worker. Running it here instead would be a step silently somewhere the pipeline never said. Steps that run no command — `approval:`, `load_var:` — are not placed and ignore an inherited tag. The worker's own kind is checked too, at run start once the mapping is known: a step without an image on a docker+ worker, or with one on `ssh://`, is refused before anything runs — the same move-the-tag advice applies, or give it the image.
+- **A step that cannot be placed whole is refused, inherited tag or not** — an agent without `image:` (hosted or CLI), a task with `fix:`, a get or put of an `mcp:`/`expr:`/`webhook` type. The error names where the tag came from (`inherited from job "train"`); give the step what it needs, or move the tag off the job onto a `do:` around only the steps that belong on the worker. Running it here instead would be a step silently somewhere the pipeline never said. Steps that run no command — `approval:`, `load_var:` — are not placed and ignore an inherited tag. The worker's own kind is checked too, at run start once the mapping is known: a step without an image on a docker+ worker, or with one on `ssh://`, is refused before anything runs — the same move-the-tag advice applies, or give it the image.
 - **There is no opt-out yet.** `tags: []` is still refused rather than meaning "run here"; restructure with a `do:` instead. Concourse left it out on purpose too.
 - **A job tag moves what its steps carry.** Every untagged `put`'s rendered `source:` and `params:`, and every task's `env:` values, reach the worker without the step saying so. Tag the resource of a deploy `put` that must stay here with nothing — or better, scope the job's tag to a `do:` around the build steps only. An agent's model credentials never move: the conversation stays on this machine and only its tools are placed. `steps runs where` and each step's row in the run record say where it went.
 - **The poller is not placed by a job tag.** A resource's check runs where the **resource's** `tags:` say, whichever job reads it; state reachability on the resource.

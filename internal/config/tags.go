@@ -221,11 +221,7 @@ func (c *Config) checkPlacedAgent(label string, step Step) error {
 			label, step.Agent)
 	}
 
-	if ri.CLI != "" {
-		return fmt.Errorf("%s (agent %q): tags: is not valid on a CLI agent — the CLI runs as a subprocess of this one with its own working directory, and its tools arrive over the bridge, so placing the step would leave the CLI reading this machine",
-			label, step.Agent)
-	}
-
+	// A CLI agent passes the same checks (#241): with image: every tool it has arrives over the bridge and runs in the step's container, so placing the step moves that container and nothing else. The CLI process stays here and reads only what was here when the step began — settings: project, context_paths: — exactly as it does for an untagged image: step, whose container is a volume and never this machine's directory either.
 	for _, spec := range ri.ToolSpecs {
 		err := c.checkPlacedAgentTool(label, step.Agent, spec)
 		if err != nil {
