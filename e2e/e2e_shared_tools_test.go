@@ -303,7 +303,7 @@ jobs:
 	}
 }
 
-// An export that names an image runs its commands there, as the container's user and with no network if it says so, each call in a fresh container over a volume of its own.
+// An export that names an image runs its commands there, as the container's user and with no network if it says so, each call in a fresh container over a volume of its own. The probe dials an IP: a hostname waits ~5s on DNS offline, which under the suite's load ran a call past the client's 30s.
 func TestAnExportedCommandRunsInTheContainerTheExportNames(t *testing.T) {
 	testdocker.Require(t)
 
@@ -316,7 +316,7 @@ mcp_exports:
   tools:
   - name: whereami
     description: Say where this runs
-    run: 'pwd; cat /etc/alpine-release; echo kept > marker; ls; wget -q -T 2 -O- http://example.com >/dev/null 2>&1 && echo online || echo offline'
+    run: 'pwd; cat /etc/alpine-release; echo kept > marker; ls; wget -q -T 2 -O- http://1.1.1.1 >/dev/null 2>&1 && echo online || echo offline'
 `)
 
 	session := served.connect(t, "shell")
