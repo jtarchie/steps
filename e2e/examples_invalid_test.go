@@ -34,6 +34,8 @@ const expectMarker = "# expect:"
 // failed" would pass on a typo in the pipeline: the file would still fail to
 // load, just for a reason that has nothing to do with the rule under test.
 func TestExamplesInvalid(t *testing.T) {
+	t.Parallel()
+
 	matches, err := filepath.Glob(repoFile("examples", "invalid", "*.yml"))
 	if err != nil {
 		t.Fatal(err)

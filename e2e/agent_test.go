@@ -12,6 +12,8 @@ import (
 // test's shell-builtin counters. Not run with t.Parallel(): it uses
 // t.Setenv, which panics if called after a parallel test has started.
 func TestRunJobAgentNeverSkipped(t *testing.T) {
+	t.Parallel()
+
 	fake := newRepeatingFakeLLM(t, says("done"))
 
 	dir := t.TempDir()
@@ -65,6 +67,8 @@ jobs:
 // resolveDeferredPrompt) — matching how internal/workspace's
 // checkPromptFileArtifactAvailable requires it to be declared.
 func TestRunJobAgentPromptFileArtifactReadsRepoFile(t *testing.T) {
+	t.Parallel()
+
 	fake := newRepeatingFakeLLM(t, says("done"))
 
 	dir := t.TempDir()
@@ -158,6 +162,8 @@ func agentNodeContent(t *testing.T, path, job string) string {
 // — twelve turns of real investigation thrown away. Now the runner takes the
 // tools away and asks for an answer from what was gathered.
 func TestAgentAnswersWhenTurnsRunOut(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	// Never stops calling tools on its own — exactly the model this exists for.

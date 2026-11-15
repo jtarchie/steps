@@ -124,6 +124,8 @@ resources:
 // broke it: the alias fetched whatever the fan-out was on, so a comparison
 // against the baseline always found no difference.
 func TestRunAliasedGetKeepsItsOwnVersion(t *testing.T) {
+	t.Parallel()
+
 	fixture := newBindingFixture(t, cursorFeedType+`
 jobs:
 - name: build
@@ -171,6 +173,8 @@ jobs:
 // covered version, so a version superseded within one run was skipped
 // forever.
 func TestRunPassedSeesEveryGreenSet(t *testing.T) {
+	t.Parallel()
+
 	fixture := newBindingFixture(t, strings.Replace(passedAcrossSets, "run: RUN", `run: "true"`, 1))
 
 	fixture.items(t, 2)
@@ -187,6 +191,8 @@ func TestRunPassedSeesEveryGreenSet(t *testing.T) {
 // (and after the hooks) inverted the [step, its hooks...] order every other
 // step kind follows, and made a failed in-place get invisible.
 func TestRunGetRecordsExecutionBeforeItsHooks(t *testing.T) {
+	t.Parallel()
+
 	fixture := newBindingFixture(t, `
 defaults:
   preflight:
@@ -252,6 +258,8 @@ jobs:
 // build start), so losing their green record strands them: never green, never
 // retried, invisible to every downstream gate.
 func TestRunPassedKeepsGreenSetsFromAFailedRun(t *testing.T) {
+	t.Parallel()
+
 	fixture := newBindingFixture(t, strings.Replace(passedAcrossSets,
 		"run: RUN", `run: test "$(cat items/n.txt)" != 2`, 1))
 

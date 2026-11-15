@@ -160,7 +160,7 @@ jobs:
 	}
 
 	os.Stdout = devnull
-	err = cli.Run([]string{"run", "--config", config, "--progress", "plain", path})
+	err = stepsRun(t, []string{"run", "--config", config, "--progress", "plain", path})
 	os.Stdout = orig
 	_ = devnull.Close()
 
@@ -233,7 +233,7 @@ jobs:
 		t.Fatal("the first run kept nothing")
 	}
 
-	err = cli.Run([]string{"run", path, "--job", "build", "--force", "--progress", "plain"})
+	err = stepsRun(t, []string{"run", path, "--job", "build", "--force", "--progress", "plain"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func keptOutputDaemon(t *testing.T) (*webProcess, string, store.RunEventRow) {
 	name := cli.PipelineName(path)
 
 	for slug, file := range map[string]string{name: path, "other": other} {
-		err := cli.Run([]string{"pipeline", "set", "-p", slug, "-c", file, "-n", "--target", authTarget(served.addr, "alex", "a")})
+		err := stepsRun(t, []string{"pipeline", "set", "-p", slug, "-c", file, "-n", "--target", authTarget(served.addr, "alex", "a")})
 		if err != nil {
 			t.Fatalf("set %s: %v", slug, err)
 		}
@@ -352,8 +352,10 @@ func expectGet(t *testing.T, addr, user, path string, status int, want, wantNot 
 	return kind
 }
 
-// The run page links an elided output to the whole of it, served as text to whoever may see the run and to nobody else; an output nothing was stored for is a sentence, not an error page. Not t.Parallel(), for startWeb's reason.
+// The run page links an elided output to the whole of it, served as text to whoever may see the run and to nobody else; an output nothing was stored for is a sentence, not an error page.
 func TestTheRunPageServesAKeptOutput(t *testing.T) {
+	t.Parallel()
+
 	served, name, chatty := keptOutputDaemon(t)
 	defer served.stopIfRunning(t)
 
@@ -444,21 +446,21 @@ jobs:
 	run := stepOutput(t, recordedEvents(t, path), "chatty").RunID
 
 	got, err := stdoutOf(t, func() error {
-		return cli.Run(append([]string{"runs", "output", run, "chatty"}, readArgs(path)...))
+		return stepsRun(t, append([]string{"runs", "output", run, "chatty"}, readArgs(path)...))
 	})
 	if err != nil || got != chattyOutput() {
 		t.Errorf("runs output chatty = %d bytes, %v; want the %d the step printed", len(got), err, len(chattyOutput()))
 	}
 
 	got, err = stdoutOf(t, func() error {
-		return cli.Run(append([]string{"runs", "output", run, "quiet"}, readArgs(path)...))
+		return stepsRun(t, append([]string{"runs", "output", run, "quiet"}, readArgs(path)...))
 	})
 	if err != nil || got != "small\n" {
 		t.Errorf("runs output quiet = %q, %v; want the record of a step that stored nothing", got, err)
 	}
 
 	_, err = stdoutOf(t, func() error {
-		return cli.Run(append([]string{"runs", "output", run, "nobody"}, readArgs(path)...))
+		return stepsRun(t, append([]string{"runs", "output", run, "nobody"}, readArgs(path)...))
 	})
 	if err == nil || !strings.Contains(err.Error(), "chatty") || !strings.Contains(err.Error(), "quiet") {
 		t.Errorf("runs output nobody = %v, want the steps that did record output named", err)
@@ -485,7 +487,7 @@ jobs:
 	run := stepOutput(t, recordedEvents(t, path), "chatty").RunID
 
 	got, err := stdoutOf(t, func() error {
-		return cli.Run(append([]string{"runs", "output", run}, readArgs(path)...))
+		return stepsRun(t, append([]string{"runs", "output", run}, readArgs(path)...))
 	})
 	if err != nil || got != "chatty\nquiet\n" {
 		t.Errorf("runs output with no step = %q, %v; want the steps that recorded output, one per line", got, err)
@@ -509,7 +511,7 @@ jobs:
 
 	for _, args := range [][]string{{"runs", "output", "NOSUCHRUN"}, {"runs", "output", "NOSUCHRUN", "chatty"}} {
 		out, err := stdoutOf(t, func() error {
-			return cli.Run(append(args, readArgs(path)...))
+			return stepsRun(t, append(args, readArgs(path)...))
 		})
 		if err == nil {
 			t.Errorf("steps %s = nil, want an unknown run refused", strings.Join(args, " "))
@@ -554,7 +556,7 @@ jobs:
 
 	for _, args := range [][]string{{"runs", "output", run}, {"runs", "output", run, "silent"}} {
 		_, err := stdoutOf(t, func() error {
-			return cli.Run(append(args, readArgs(path)...))
+			return stepsRun(t, append(args, readArgs(path)...))
 		})
 		if err == nil || !strings.Contains(err.Error(), "recorded no step output") {
 			t.Errorf("steps %s = %v, want the run's recorded no step output", strings.Join(args, " "), err)

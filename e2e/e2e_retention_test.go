@@ -38,7 +38,7 @@ func runDistinctBuilds(t *testing.T, dir, template string, count int) string {
 	for build := range count {
 		path = writePipeline(t, dir, fmt.Sprintf(template, build))
 
-		err := cli.Run([]string{"run", path, "--job", "build", "--force"})
+		err := stepsRun(t, []string{"run", path, "--job", "build", "--force"})
 		if err != nil {
 			t.Fatalf("run %d: %v", build, err)
 		}
@@ -77,6 +77,8 @@ func countRunRows(t *testing.T, pipelinePath string) int {
 // is measured is retention rather than the merkle cache skipping work: --force
 // makes every invocation do the same work again and record it again.
 func TestRunHistoryBoundsWhatABuildLeavesBehind(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -93,7 +95,7 @@ jobs:
 	const invocations = 8
 
 	for range invocations {
-		err := cli.Run([]string{"run", path, "--job", "build", "--force"})
+		err := stepsRun(t, []string{"run", path, "--job", "build", "--force"})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -109,6 +111,8 @@ jobs:
 // gained, the run row would vanish and everything hanging off it would stay
 // forever as rows nothing can reach — which is the leak, not the run row.
 func TestRunHistoryReapsAWholeRun(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := runDistinctBuilds(t, dir, `
@@ -160,6 +164,8 @@ jobs:
 // entries means no eviction — which is also why this test needs no sleep, where
 // the age-based version did.
 func TestRunHistoryReapsCachedNodes(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	// run_history: 1 makes the node cap 1 * store.NodesPerRetainedRun, so this has to
@@ -204,6 +210,8 @@ jobs:
 // between a bounded database and an unbounded one, and a plain int field cannot
 // carry it.
 func TestRunHistoryZeroKeepsEverything(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -220,7 +228,7 @@ jobs:
 	const invocations = 4
 
 	for range invocations {
-		err := cli.Run([]string{"run", path, "--job", "build", "--force"})
+		err := stepsRun(t, []string{"run", path, "--job", "build", "--force"})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -235,6 +243,8 @@ jobs:
 // one --version-history follows: the pipeline wins, because it is the thing that
 // knows how much its jobs write.
 func TestRunHistoryFlagLosesToThePipeline(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -249,7 +259,7 @@ jobs:
 `)
 
 	for range 4 {
-		err := cli.Run([]string{"run", path, "--job", "build", "--force", "--run-history", "1"})
+		err := stepsRun(t, []string{"run", path, "--job", "build", "--force", "--run-history", "1"})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -265,6 +275,8 @@ jobs:
 // nothing. This is also the regression test for --version-history having been
 // declared on `steps run` and never applied at all.
 func TestRunHistoryFlagAppliesWhenThePipelineIsSilent(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -276,7 +288,7 @@ jobs:
 `)
 
 	for range 5 {
-		err := cli.Run([]string{"run", path, "--job", "build", "--force", "--run-history", "2"})
+		err := stepsRun(t, []string{"run", path, "--job", "build", "--force", "--run-history", "2"})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -296,6 +308,8 @@ jobs:
 // the failure mode that costs money and looks broken in public. So those tables
 // are deliberately outside everything Prune touches.
 func TestRetentionLeavesTriggerStateAlone(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	template := `
@@ -336,7 +350,7 @@ jobs:
 	for build := range 4 {
 		invocation := writePipeline(t, dir, fmt.Sprintf(template, build))
 
-		err := cli.Run([]string{"run", invocation, "--job", "build", "--force"})
+		err := stepsRun(t, []string{"run", invocation, "--job", "build", "--force"})
 		if err != nil {
 			t.Fatalf("run %d: %v", build, err)
 		}
@@ -380,6 +394,8 @@ jobs:
 // check after a retention pass, which is the broadest statement available that
 // the cascades and the explicit sweeps agree with each other.
 func TestRetentionKeepsTheDatabaseInternallyConsistent(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -397,7 +413,7 @@ jobs:
 `)
 
 	for range 6 {
-		err := cli.Run([]string{"run", path, "--job", "build", "--force"})
+		err := stepsRun(t, []string{"run", path, "--job", "build", "--force"})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -442,6 +458,8 @@ jobs:
 // assertion, at the only level a user experiences it: the size of the file on
 // disk after a pipeline has run many times.
 func TestStateDatabaseStaysSmallAcrossManyBuilds(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := runDistinctBuilds(t, dir, `
@@ -481,6 +499,8 @@ jobs:
 // its own — the run-history sibling above was doing the work — so mutation
 // testing walked straight through the line that applies it.
 func TestVersionHistoryFlagAppliesWhenThePipelineIsSilent(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	versions := dir + "/versions.json"
 
@@ -505,7 +525,7 @@ jobs:
     run: cat repo/ref.txt
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build", "--version-history", "2"})
+	err := stepsRun(t, []string{"run", path, "--job", "build", "--version-history", "2"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -523,7 +543,7 @@ jobs:
 	// four are finally prunable and the cap is what decides how many survive.
 	writePipelineFile(t, versions, `[{"ref":"v5"}]`)
 
-	err = cli.Run([]string{"run", path, "--job", "build", "--force", "--version-history", "2"})
+	err = stepsRun(t, []string{"run", path, "--job", "build", "--force", "--version-history", "2"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

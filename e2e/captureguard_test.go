@@ -32,6 +32,10 @@ import (
 // failing for — give the package a writer of its own rather than deleting the
 // t.Parallel() and paying for it in wall clock.
 //
+// ./e2e took that path: an invocation there writes to the streams it is handed
+// (cli.RunWith), captureStdout is a buffer per test, and what this still finds
+// in it are the few tests that swap os.Stderr to read slog lines.
+//
 // Keyed on what a function DOES, never on what it is called: three of the four
 // helpers happen to be named captureStdout and the fourth is inline in a test,
 // so a name-based rule would have covered the ones already documented and

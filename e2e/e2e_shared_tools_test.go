@@ -13,7 +13,6 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/testdocker"
 )
 
@@ -23,7 +22,7 @@ type servedPipeline struct {
 	dir  string
 }
 
-// serveOps sets pipeline (a whole YAML file, with a trivial job appended) on a fresh daemon and returns it. Not for t.Parallel(), for startWeb's reason.
+// serveOps sets pipeline (a whole YAML file, with a trivial job appended) on a fresh daemon and returns it.
 func serveOps(t *testing.T, pipeline string) servedPipeline {
 	t.Helper()
 
@@ -34,7 +33,7 @@ func serveOps(t *testing.T, pipeline string) servedPipeline {
 	served := startWeb(t, "--db", filepath.Join(dir, "daemon.db"), "--local-user", "alex:"+hashed(t, "a"))
 	t.Cleanup(func() { served.stopIfRunning(t) })
 
-	err := cli.Run([]string{"pipeline", "set", "-p", "ops", "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", "ops", "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
 	if err != nil {
 		t.Fatalf("steps pipeline set: %v", err)
 	}
@@ -130,6 +129,8 @@ func publishedSchema(t *testing.T, session *sdkmcp.ClientSession, tool string) m
 
 // The limits reach the caller in the schema and bind it whether or not it read them; a refusal never reaches the upstream.
 func TestParameterLimitsArePublishedAndEnforcedBeforeTheUpstream(t *testing.T) {
+	t.Parallel()
+
 	upstream := startDocMCPServer(t, docMCPTool{
 		name:       "search_issues",
 		required:   []string{"query"},
@@ -187,6 +188,8 @@ mcp_exports:
 
 // A caller supplies values and only values: whatever it sends reaches the command as one literal word, and every call works in a directory of its own that is gone afterwards.
 func TestAnExportedCommandReceivesWhatTheCallerSendsAsLiteralText(t *testing.T) {
+	t.Parallel()
+
 	served := serveOps(t, `
 mcp_exports:
 - name: shell
@@ -280,6 +283,8 @@ mcp_exports:
 
 // A caller's value that would reach the shell as syntax is refused where the pipeline is set, where somebody reads the reason — not discovered by a caller.
 func TestAnExportedCommandThatLeavesAValueUnquotedIsRefusedAtSet(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ops.yml")
 	writePipelineFile(t, path, `
@@ -297,7 +302,7 @@ jobs:
     run: echo hi
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil || !strings.Contains(err.Error(), "unquoted") || !strings.Contains(err.Error(), `mcp_exports "shell"`) {
 		t.Errorf("steps validate = %v, want the unquoted value named", err)
 	}
@@ -336,6 +341,8 @@ mcp_exports:
 
 // A when: rule refuses before anything goes upstream and says why; it reads the arguments as the tool will get them (pins applied) and who is asking.
 func TestAWhenRuleRefusesACallBeforeItReachesTheUpstreamAndIsRecordedByName(t *testing.T) {
+	t.Parallel()
+
 	upstream := startDocMCPServer(t, docMCPTool{
 		name:     "search_issues",
 		required: []string{"owner", "query"},
@@ -398,6 +405,8 @@ func refusalsAreRecordedByRuleName(t *testing.T, served servedPipeline) {
 
 // An accept: rule withholds a result the caller must not see, however it was produced, and the rule on the export covers every tool in it.
 func TestAnAcceptRuleWithholdsWhatCameBack(t *testing.T) {
+	t.Parallel()
+
 	upstream := startDocMCPServer(t, docMCPTool{
 		name:     "read_note",
 		required: []string{"name"},

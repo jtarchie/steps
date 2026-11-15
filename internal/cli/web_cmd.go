@@ -299,7 +299,7 @@ func (w *WebCmd) hostOptions() []web.Option {
 }
 
 // Run serves until canceled, holding whatever the state database says was set.
-func (w *WebCmd) Run() error {
+func (w *WebCmd) Run(streams Streams) error {
 	// Rejected rather than shrugged at: a server that quietly served forever
 	// without ever polling would be the exact confusion this command's
 	// polling default exists to remove.
@@ -331,7 +331,7 @@ func (w *WebCmd) Run() error {
 	// Kept beside opts rather than in it: opts says whether anybody signs in, which the address does not.
 	w.published = published
 
-	ctx, cancel := withSignalCancel(context.Background())
+	ctx, cancel := streams.cancellable()
 	defer cancel()
 
 	// A daemon's runs are read in the browser, from their record: its terminal is log lines, so a step's bytes, a note's fallback and a prompt reach nobody here.

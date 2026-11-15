@@ -45,7 +45,7 @@ func runAndCapture(t *testing.T, args ...string) (printed string, err error) {
 
 	stderr := captureStderr(t)
 
-	out := captureStdout(t, func() { err = cli.Run(args) })
+	out := captureStdout(t, func() { err = stepsRun(t, args) })
 
 	printed = out + stderr()
 	if err != nil {

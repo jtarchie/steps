@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestEndToEndTemplatesCannotReadDaemonEnv pins that a resource command's
@@ -45,7 +43,7 @@ jobs:
   - get: repo
 `, expr, leak)
 
-			err := cli.Run([]string{writePipeline(t, dir, pipeline)})
+			err := stepsRun(t, []string{writePipeline(t, dir, pipeline)})
 			if err == nil {
 				t.Fatal("run succeeded; a template calling a host-env function must fail")
 			}

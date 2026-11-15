@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 func TestBenchDefaultPath(t *testing.T) {
@@ -37,7 +35,7 @@ func TestBenchDefaultPath(t *testing.T) {
 			var err error
 
 			out := captureStdout(t, func() {
-				err = cli.Run([]string{path, "--job", job, "--force", "--var", "seed=" + seed, "--worker", "v=local:"})
+				err = stepsRun(t, []string{path, "--job", job, "--force", "--var", "seed=" + seed, "--worker", "v=local:"})
 			})
 			if err != nil {
 				t.Fatalf("job %s round %d: %v\n%s", job, round, err, out)

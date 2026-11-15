@@ -18,8 +18,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // assertFilesPipeline is an agent that must leave answer/reply.md behind, and
@@ -64,6 +62,8 @@ jobs:
 // Turn 1 is the production failure exactly — the answer delivered as chat
 // text, which reads like success and produces nothing.
 func TestEndToEndAssertFilesNudgesBeforeFailing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		says("Here is the answer: the catalog is seeded from widgets.json."),
@@ -106,11 +106,13 @@ func TestEndToEndAssertFilesNudgesBeforeFailing(t *testing.T) {
 // them and the step fails — which is what today's post-hoc assert already
 // does, reached the same way it always was.
 func TestEndToEndAssertFilesFailsAWillfulModel(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("The answer is in this message."))
 	path := assertFilesPipeline(t, dir, fake.URL, true)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("cli.Run succeeded, but the agent never wrote its declared artifact")
 	}
@@ -138,6 +140,8 @@ func TestEndToEndAssertFilesFailsAWillfulModel(t *testing.T) {
 // The failure also says how to opt in, so the change from always-nudging
 // reads as a one-line migration rather than a mystery regression.
 func TestEndToEndAssertFilesWithoutNudgeFailsAtOnce(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		says("Here is the answer: the catalog is seeded from widgets.json."),
@@ -149,7 +153,7 @@ func TestEndToEndAssertFilesWithoutNudgeFailsAtOnce(t *testing.T) {
 	)
 	path := assertFilesPipeline(t, dir, fake.URL, false)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("cli.Run succeeded, but the step never opted into a nudge and the model answered in prose")
 	}
@@ -207,6 +211,8 @@ jobs:
 // obligation: a model that answers without following the declared procedure
 // is told which calls it still owes, makes them, and the step succeeds.
 func TestEndToEndAssertToolCallsNudgesBeforeFailing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		says("Looks good to me."),
@@ -243,6 +249,8 @@ func TestEndToEndAssertToolCallsNudgesBeforeFailing(t *testing.T) {
 // TestEndToEndAssertToolCallsWithoutNudgeFailsAtOnce is the opt-in half for
 // tool_calls, over the same script.
 func TestEndToEndAssertToolCallsWithoutNudgeFailsAtOnce(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		says("Looks good to me."),
@@ -251,7 +259,7 @@ func TestEndToEndAssertToolCallsWithoutNudgeFailsAtOnce(t *testing.T) {
 	)
 	path := assertToolCallsPipeline(t, dir, fake.URL, false)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("cli.Run succeeded, but the model never ran the tests and the step never opted into a nudge")
 	}

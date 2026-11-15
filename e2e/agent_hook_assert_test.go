@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestAgentHookHonorsAssert pins the fix for the asymmetry between task and
@@ -23,6 +21,8 @@ import (
 // hook to the job's error on an otherwise-green outcome, so before the fix
 // this pipeline runs clean and after it fails, naming the assert.
 func TestAgentHookHonorsAssert(t *testing.T) {
+	t.Parallel()
+
 	t.Run("failing assert fails the hook", func(t *testing.T) {
 		dir := t.TempDir()
 		// The agent answers in prose and writes nothing, which is precisely
@@ -34,7 +34,7 @@ func TestAgentHookHonorsAssert(t *testing.T) {
 		fake := newRepeatingFakeLLM(t, says("All good, I have filed the incident note."))
 		path := agentHookAssertPipeline(t, dir, fake.URL, "files: [note/incident.md]")
 
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("cli.Run = nil, want a failure: the hook's assert.files names a file the agent never wrote")
 		}

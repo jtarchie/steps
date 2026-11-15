@@ -16,7 +16,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jtarchie/steps/docs"
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/testdocker"
 )
@@ -146,7 +145,7 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	varFlags := scenarioVarFlags(scenario)
 	runFlags := append(scenarioFlags(scenario), deliveryFlags(t, dir, block)...)
 
-	err = cli.Run(append([]string{"validate", "--syntax-only", path}, varFlags...))
+	err = stepsRun(t, append([]string{"validate", "--syntax-only", path}, varFlags...))
 	if err != nil {
 		t.Fatalf("steps validate: %v", err)
 	}
@@ -217,12 +216,12 @@ func executeDocBlock(t *testing.T, block docs.Block, scenario docScenario, dir, 
 		t.Fatal(err)
 	}
 
-	err = cli.Run(append([]string{"validate", original}, varFlags...))
+	err = stepsRun(t, append([]string{"validate", original}, varFlags...))
 	if err != nil {
 		t.Fatalf("steps validate (full, original text): %v", err)
 	}
 
-	err = cli.Run(append([]string{"test", path}, runFlags...))
+	err = stepsRun(t, append([]string{"test", path}, runFlags...))
 	if err != nil {
 		t.Fatalf("steps test: %v", err)
 	}
@@ -564,6 +563,8 @@ func injectFakeFallback(t *testing.T, agentEntry map[string]any, endpoint string
 // Step asserts are the richer check where they are legal, and examples carry
 // them too — they just cannot be the rule.
 func TestDocsExamplesAssert(t *testing.T) {
+	t.Parallel()
+
 	for _, block := range mustBlocks(t) {
 		if block.Mode() != "run" {
 			continue // fragments are prose; noexec blocks never execute
@@ -620,6 +621,8 @@ func checkBlockAsserts(t *testing.T, block docs.Block) {
 // stop failing. The reason must come from docs.NoexecReasons(), so "which
 // examples would run if this host had docker?" stays a grep.
 func TestDocsNoexecReasons(t *testing.T) {
+	t.Parallel()
+
 	allowed := map[string]bool{}
 	for _, reason := range docs.NoexecReasons() {
 		allowed[reason] = true
@@ -719,6 +722,8 @@ func docsCoverageTypes() map[string]reflect.Type {
 // (name, run, image, env, tools, assert, ...), and each collision is a place
 // where "documented" quietly meant "some other type documented it".
 func TestDocsCoverage(t *testing.T) {
+	t.Parallel()
+
 	used := map[string]map[string]bool{}
 
 	for _, block := range mustBlocks(t) {
@@ -940,6 +945,8 @@ var docLinkPattern = regexp.MustCompile(`\]\(([^)\s]+)\)`)
 // UI. (The YAML examples got this guarantee first; the anchors were the
 // untested half.)
 func TestDocsAnchors(t *testing.T) {
+	t.Parallel()
+
 	ids := map[string]map[string]bool{}
 
 	for _, page := range docs.Pages() {
@@ -992,6 +999,8 @@ func checkDocLink(t *testing.T, ids map[string]map[string]bool, page, target str
 // covering every page: a new page must be placed in a group, or the web
 // rail would silently omit it.
 func TestDocsGroupsComplete(t *testing.T) {
+	t.Parallel()
+
 	grouped := map[string]bool{}
 
 	for _, group := range docs.Groups() {
@@ -1025,6 +1034,8 @@ func TestDocsGroupsComplete(t *testing.T) {
 // TestDocsPagesListed keeps the index honest: every page docs.Pages reports
 // must be linked from README.md, so nothing ships unfindable.
 func TestDocsPagesListed(t *testing.T) {
+	t.Parallel()
+
 	index, err := docs.Page("README.md")
 	if err != nil {
 		t.Fatal(err)
@@ -1043,6 +1054,8 @@ func TestDocsPagesListed(t *testing.T) {
 
 // A ```yaml config block is a `steps web --config` file, not a pipeline: it is loaded by the daemon's own flag parser, so every key in it is a flag that exists. The listen flag on argv is unbindable, so the daemon never serves; any refusal that is not about the file is the proof it loaded.
 func TestDocsConfigFileExamples(t *testing.T) {
+	t.Parallel()
+
 	found := 0
 
 	for _, block := range mustBlocks(t) {
@@ -1059,7 +1072,7 @@ func TestDocsConfigFileExamples(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			err = cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--db", filepath.Join(t.TempDir(), "daemon.db"), "--config", path})
+			err = stepsRun(t, []string{"web", "--listen", "127.0.0.1:1", "--db", filepath.Join(t.TempDir(), "daemon.db"), "--config", path})
 			if err != nil && strings.Contains(err.Error(), "--config") {
 				t.Fatalf("the example does not load: %v", err)
 			}

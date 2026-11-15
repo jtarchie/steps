@@ -210,6 +210,8 @@ func (f *lockstepFixture) assertDid(t *testing.T, want ...string) {
 // paired with the sibling HELD at its last built version — and repeats
 // nothing.
 func TestWatchLockstepStreamingInterleave(t *testing.T) {
+	t.Parallel()
+
 	fixture := newLockstepFixture(t, lockstepPipeline)
 	fixture.coldStart(t) // baseline at (a1, b1): built once, then discarded
 
@@ -238,6 +240,8 @@ func TestWatchLockstepStreamingInterleave(t *testing.T) {
 // holding at its newest once exhausted. Concourse's diagonal, not a cross
 // product: 3x2 backlogs mean three builds, not six.
 func TestWatchLockstepDiagonal(t *testing.T) {
+	t.Parallel()
+
 	fixture := newLockstepFixture(t, lockstepPipeline)
 	fixture.coldStart(t) // baseline: built once, then discarded
 
@@ -255,6 +259,8 @@ func TestWatchLockstepDiagonal(t *testing.T) {
 // retried. Same rule as the single-every case, per set instead of per
 // version.
 func TestWatchLockstepFailureAdvances(t *testing.T) {
+	t.Parallel()
+
 	fixture := newLockstepFixture(t, mustReplace(t, lockstepPipeline,
 		`run: echo "$(cat a/n.txt)+$(cat b/n.txt)" >> PROCESSED`,
 		`run: |
@@ -280,6 +286,8 @@ func TestWatchLockstepFailureAdvances(t *testing.T) {
 // operator could: after the skip, the task changes; a consumed set stays
 // idle, an unconsumed one would rebuild under the new task.
 func TestWatchLockstepSkipStillConsumesTheSet(t *testing.T) {
+	t.Parallel()
+
 	fixture := newLockstepFixture(t, lockstepPipeline)
 	fixture.coldStart(t) // baseline: built once, then discarded
 
@@ -332,6 +340,8 @@ func TestWatchLockstepSkipStillConsumesTheSet(t *testing.T) {
 // — it binds its single resolved version into EVERY set, however many sets
 // its every siblings produce.
 func TestWatchLockstepNonEveryRidesAlong(t *testing.T) {
+	t.Parallel()
+
 	fixture := newLockstepFixture(t, mustReplace(t, lockstepPipeline, `
   - get: a
     trigger: true
@@ -355,6 +365,8 @@ func TestWatchLockstepNonEveryRidesAlong(t *testing.T) {
 // rule could most easily break, and the reason `version: every` needs its own
 // cold-start test rather than sharing the single-resource one.
 func TestWatchLockstepColdStartBuildsOneSet(t *testing.T) {
+	t.Parallel()
+
 	fixture := newLockstepFixture(t, lockstepPipeline)
 
 	fixture.feed(t, fixture.feedA, 4)

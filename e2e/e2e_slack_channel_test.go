@@ -4,8 +4,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // slackChannelPipeline writes a pipeline whose slack-reply resource is configured by sourceExtra (more source: lines) and returns its path.
@@ -149,7 +147,7 @@ func TestEndToEndSlackReplyTextRules(t *testing.T) {
     params: {text: ""}
 `)
 
-	err := cli.Run([]string{"validate", empty})
+	err := stepsRun(t, []string{"validate", empty})
 	if err == nil || !strings.Contains(err.Error(), "params.text") {
 		t.Fatalf("validate = %v, want the empty params.text refused", err)
 	}

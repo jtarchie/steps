@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 const gitTestToken = "tok-3f9a1c7e5b2d" //nolint:gosec // a fixture the test server checks, not a credential
@@ -107,7 +105,7 @@ jobs:
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v\n%s", err, logs())
 	}
@@ -168,7 +166,7 @@ jobs:
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("the put succeeded over a branch that moved past its lease")
 	}
@@ -209,7 +207,7 @@ jobs:
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("expected the check to fail: example.invalid does not resolve")
 	}
@@ -261,7 +259,7 @@ jobs:
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v\n%s", err, logs())
 	}
@@ -294,7 +292,7 @@ jobs:
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("expected the check to fail with the token unset")
 	}
@@ -367,7 +365,7 @@ jobs:
   - get: repo
 `)
 
-	err = cli.Run([]string{path})
+	err = stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("expected the check to fail: the ssh shim exits 1")
 	}

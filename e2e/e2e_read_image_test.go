@@ -17,8 +17,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // writeTestPNG writes a real 4x3 PNG and returns its path and bytes. Real,
@@ -180,6 +178,8 @@ func assertImageAnswer(t *testing.T, answer bridgeToolResult, encoded string) {
 // request must already hold it as an image part — on the wire, for the model
 // that takes images, and as a description for the one that does not.
 func TestE2EContextPathImageArrivesAsAnImage(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	source, want := writeTestPNG(t)
 	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(want)
@@ -307,6 +307,8 @@ jobs:
 // Each decides what read_file returns by ITS OWN model — a sighted child of a
 // blind parent is shown the image the parent could not be.
 func TestE2EFixAndSubAgentsSeeImagesByTheirOwnModel(t *testing.T) {
+	t.Parallel()
+
 	source, want := writeTestPNG(t)
 	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(want)
 	looksAtTheScreenshot := func(req capturedRequest) turn {
@@ -339,7 +341,7 @@ jobs:
     fix: fixer
 `, fixer.URL, source))
 
-		_ = cli.Run([]string{"run", path, "--job", "build"}) // the task stays broken; what the fixer saw is the point
+		_ = stepsRun(t, []string{"run", path, "--job", "build"}) // the task stays broken; what the fixer saw is the point
 
 		if !slices.ContainsFunc(fixer.allRequests(), func(req capturedRequest) bool { return slices.Contains(req.images(), dataURL) }) {
 			t.Error("a sighted fix agent was never shown the image it read")

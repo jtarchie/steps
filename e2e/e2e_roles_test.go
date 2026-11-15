@@ -9,8 +9,10 @@ import (
 	"github.com/jtarchie/steps/internal/cli"
 )
 
-// A viewer sees the daemon and cannot change it — not because a button is missing, but because the daemon refuses. Not t.Parallel(), for startWeb's reason.
+// A viewer sees the daemon and cannot change it — not because a button is missing, but because the daemon refuses.
 func TestAViewerCanReadButNotAct(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	writePipelineFile(t, path, "jobs:\n- name: manual\n  plan:\n  - task: say\n    run: echo hi\n")
@@ -22,12 +24,12 @@ func TestAViewerCanReadButNotAct(t *testing.T) {
 
 	name := cli.PipelineName(path)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "sam", "s")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "sam", "s")})
 	if err == nil {
 		t.Fatal("a viewer set a pipeline")
 	}
 
-	err = cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
+	err = stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
 	if err != nil {
 		t.Fatalf("the admin's set: %v", err)
 	}
@@ -54,7 +56,7 @@ func TestAViewerCanReadButNotAct(t *testing.T) {
 func TestRolesNeedAnAdmin(t *testing.T) {
 	t.Parallel()
 
-	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--local-user", "alex:" + hashed(t, "a"), "--role", "operator=true"})
+	err := stepsRun(t, []string{"web", "--listen", "127.0.0.1:1", "--local-user", "alex:" + hashed(t, "a"), "--role", "operator=true"})
 	if err == nil || !strings.Contains(err.Error(), "admin rule") {
 		t.Fatalf("steps web with no admin rule = %v, want refused", err)
 	}

@@ -5,12 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
-// A pipeline's access: narrows what the daemon allows and never widens it: the file is something a pull request can change, so it must not be able to grant itself more. Not t.Parallel(), for startWeb's reason.
+// A pipeline's access: narrows what the daemon allows and never widens it: the file is something a pull request can change, so it must not be able to grant itself more.
 func TestAPipelineCanOnlyNarrowAccess(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	public := filepath.Join(dir, "public.yml")
@@ -39,7 +39,7 @@ jobs:
 	defer served.stopIfRunning(t)
 
 	for name, path := range map[string]string{"public": public, "secret": secret} {
-		err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "alex")})
+		err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "alex")})
 		if err != nil {
 			t.Fatalf("set %s: %v", name, err)
 		}
@@ -66,8 +66,10 @@ jobs:
 	}
 }
 
-// A rule that cannot compile is refused at set, on the machine that would serve it, rather than quietly hiding the pipeline. Not t.Parallel(), for startWeb's reason.
+// A rule that cannot compile is refused at set, on the machine that would serve it, rather than quietly hiding the pipeline.
 func TestAnAccessRuleThatCannotWorkIsRefused(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "broken.yml")
 	writePipelineFile(t, path, "access:\n  viewer: 'UserID =='\njobs:\n- name: build\n  plan:\n  - task: say\n    run: echo hi\n")
@@ -75,7 +77,7 @@ func TestAnAccessRuleThatCannotWorkIsRefused(t *testing.T) {
 	served := startWeb(t, "--db", filepath.Join(dir, "daemon.db"), "--local-user", "alex:"+hashed(t, "a"))
 	defer served.stopIfRunning(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", "broken", "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", "broken", "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
 	if err == nil || !strings.Contains(err.Error(), "access.viewer") {
 		t.Fatalf("set with a broken access rule = %v, want refused naming access.viewer", err)
 	}

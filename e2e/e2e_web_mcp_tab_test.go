@@ -60,7 +60,7 @@ jobs:
 
 	name := cli.PipelineName(path)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, user, pass)})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, user, pass)})
 	if err != nil {
 		t.Fatalf("set a pipeline whose oauth server is not yet authorized: %v", err)
 	}

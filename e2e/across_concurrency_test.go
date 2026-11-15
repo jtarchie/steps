@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestAcrossMaxInFlightRunsCellsConcurrently proves the cells actually overlap,
@@ -22,6 +20,8 @@ import (
 // and records "alone" — so a regression to the serial walk FAILS this test with
 // a readable diagnosis rather than hanging it.
 func TestAcrossMaxInFlightRunsCellsConcurrently(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	marks := filepath.Join(dir, "marks")
 	log := filepath.Join(dir, "overlap.log")
@@ -72,6 +72,8 @@ jobs:
 // runner that recorded completions as they happened would produce c/b/a and
 // fail this assert every time.
 func TestAcrossMaxInFlightKeepsExecutionOrderDeterministic(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 workspace:
@@ -104,6 +106,8 @@ jobs:
 // fail_fast: here — cancelling the siblings of the first red cell would answer
 // that question for exactly one cell.
 func TestAcrossMaxInFlightReportsEveryFailure(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -125,7 +129,7 @@ jobs:
       test "{{ .vars.cell }}" = b
 `, log))
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("run succeeded with two failing cells")
 	}
@@ -146,6 +150,8 @@ jobs:
 // opposite of in_parallel:'s limit:/fail_fast:, which change which steps run at
 // all and are therefore hashed.
 func TestAcrossMaxInFlightIsNotHashed(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 

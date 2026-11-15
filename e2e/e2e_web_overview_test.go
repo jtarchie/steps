@@ -19,6 +19,8 @@ import (
 // one is a link, and the link lands on the transcript with the broken step
 // named.
 func TestColdTabReachesAFailingTranscriptInTwoClicks(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	green := filepath.Join(dir, "green.yml")
 	red := filepath.Join(dir, "red.yml")
@@ -45,7 +47,7 @@ jobs:
 	mustRun(t, "run", green, "--job", "ok")
 	mustRun(t, "run", red, "--job", "fine")
 
-	err := cli.Run([]string{"run", red, "--job", "broken"})
+	err := stepsRun(t, []string{"run", red, "--job", "broken"})
 	if err == nil {
 		t.Fatal("the broken job ran green")
 	}
@@ -118,6 +120,8 @@ func webServerForAll(t *testing.T, paths ...string) *web.Server {
 // the name it was set under, so its file is not drawn, and the mark is the
 // switcher's own, so the two cannot disagree.
 func TestRootRowsSayOnlyWhatIsNotNormal(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	running := filepath.Join(dir, "running.yml")
 	stopped := filepath.Join(dir, "stopped.yml")
@@ -192,6 +196,8 @@ func between(t *testing.T, text, start, end string) string {
 
 // TestTheDaemonsOverviewSaysWhenACronFiresNext: the cron reader lives in internal/resource, which web may not import, so only the daemon wiring it in makes the Next column a time rather than the resource's name.
 func TestTheDaemonsOverviewSaysWhenACronFiresNext(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	cron := filepath.Join(dir, "nightly.yml")
 	manual := filepath.Join(dir, "manual.yml")

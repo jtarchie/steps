@@ -59,6 +59,8 @@ jobs:
 // each resource on its own — and the failed one, never advanced while it was
 // failing, builds what it missed once it recovers.
 func TestWatchChecksEachResourceIndependently(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, independentFeeds)
 	fixture.resources = []string{"items", "down"}
 	broken := fixture.feed + ".broken"

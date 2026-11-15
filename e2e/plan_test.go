@@ -4,14 +4,14 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // steps plan answers "what would this run do?" without doing it. The planner
 // always computed this and acted on it immediately, so the only way to find
 // out what a run would skip was to start one.
 func TestPlanReportsRunVersusSkip(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	marker := dir + "/ran.txt"
 	path := writePipeline(t, dir, `
@@ -24,7 +24,7 @@ jobs:
 
 	// Nothing has run: the step is pending.
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"plan", path})
+		err := stepsRun(t, []string{"plan", path})
 		if err != nil {
 			t.Fatalf("plan: %v", err)
 		}
@@ -41,13 +41,13 @@ jobs:
 	}
 
 	// After a real run, the same plan reports it cached.
-	err = cli.Run([]string{path})
+	err = stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
 	out = captureStdout(t, func() {
-		planErr := cli.Run([]string{"plan", path})
+		planErr := stepsRun(t, []string{"plan", path})
 		if planErr != nil {
 			t.Fatalf("plan: %v", planErr)
 		}
@@ -61,6 +61,8 @@ jobs:
 // Planning records nothing: no node, no job_run. A preview that left history
 // behind would be lying about being a read.
 func TestPlanRecordsNothing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -70,27 +72,27 @@ jobs:
     run: "true"
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
 	before := captureStdout(t, func() {
-		runsErr := cli.Run(append([]string{"runs", "steps"}, readArgs(path)...))
+		runsErr := stepsRun(t, append([]string{"runs", "steps"}, readArgs(path)...))
 		if runsErr != nil {
 			t.Fatalf("runs: %v", runsErr)
 		}
 	})
 
 	captureStdout(t, func() {
-		planErr := cli.Run([]string{"plan", path})
+		planErr := stepsRun(t, []string{"plan", path})
 		if planErr != nil {
 			t.Fatalf("plan: %v", planErr)
 		}
 	})
 
 	after := captureStdout(t, func() {
-		runsErr := cli.Run(append([]string{"runs", "steps"}, readArgs(path)...))
+		runsErr := stepsRun(t, append([]string{"runs", "steps"}, readArgs(path)...))
 		if runsErr != nil {
 			t.Fatalf("runs: %v", runsErr)
 		}
@@ -104,6 +106,8 @@ jobs:
 // A step with a when: guard cannot be cached, and the plan says so in the
 // same words the run itself uses rather than leaving the reader to wonder.
 func TestPlanNamesWhyAStepCannotBeCached(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -115,7 +119,7 @@ jobs:
 `)
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"plan", path})
+		err := stepsRun(t, []string{"plan", path})
 		if err != nil {
 			t.Fatalf("plan: %v", err)
 		}

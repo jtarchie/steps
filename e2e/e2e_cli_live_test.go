@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/events"
 )
 
@@ -81,7 +80,7 @@ jobs:
     run: cp out.txt `+proof+`
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -144,7 +143,7 @@ jobs:
     run: echo done > `+report+`
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -191,7 +190,7 @@ jobs:
       - Say hello. Do not use any tool.
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v (an attestation mismatch would fail here, naming the surplus or missing tool)", err)
 	}
@@ -271,7 +270,7 @@ jobs:
     run: cp -f one.txt two.txt three.txt `+dir+`/ 2>/dev/null || true
 `)
 
-	err = cli.Run([]string{path})
+	err = stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

@@ -62,6 +62,8 @@ jobs:
 // forces the sender's note, the agent reader is handed it as a synthetic tool
 // result before its own prompt, and the task reader gets it as a file.
 func TestEndToEndContextFromDeliversDecisions(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		// triager decides, with the note its readers demanded
@@ -111,6 +113,8 @@ func TestEndToEndContextFromDeliversDecisions(t *testing.T) {
 // asked of the run ("has that step decided yet?") rather than of the route,
 // which is why it needs no relationship between the two steps at all.
 func TestEndToEndContextFromToleratesAnUnrunSender(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		says("Drafted."),

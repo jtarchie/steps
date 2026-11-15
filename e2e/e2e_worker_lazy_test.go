@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestEndToEndPlacedOutputsStayOnTheWorkerWithNoLocalReader: a placed
@@ -160,7 +158,7 @@ jobs:
     run: cat src/made.txt
 `)
 
-	err := cli.Run(append([]string{path}, workers...))
+	err := stepsRun(t, append([]string{path}, workers...))
 	if err == nil {
 		t.Fatal("the build passed with its input gone from the only machine that held it")
 	}

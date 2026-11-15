@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -261,7 +260,7 @@ jobs:
       - Delegate the summary.
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("run succeeded, want a preflight failure naming the unreachable sub-agent")
 	}

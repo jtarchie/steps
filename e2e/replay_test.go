@@ -7,8 +7,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // replayIDPattern pulls the forked run's id out of the line a replay prints.
@@ -23,6 +21,8 @@ var replayIDPattern = regexp.MustCompile(`replay: ([A-Za-z0-9]+) from`)
 // forked workspace carries what earlier steps produced, and their step record
 // says they ran.
 func TestReplayRerunsOnlyTheTargetStep(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	expensive := filepath.Join(dir, "expensive.log")
@@ -49,7 +49,7 @@ jobs:
 	path := writePipeline(t, dir, pipeline("first"))
 
 	// --keep-workspace, because a replay forks the tree the source run left.
-	err := cli.Run([]string{"run", path, "--job", "publish", "--keep-workspace"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish", "--keep-workspace"})
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
@@ -63,7 +63,7 @@ jobs:
 	writePipeline(t, dir, pipeline("second"))
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"run", path, "--job", "publish", "--replay", source, "--from", "tuned", "--keep-workspace"})
+		err = stepsRun(t, []string{"run", path, "--job", "publish", "--replay", source, "--from", "tuned", "--keep-workspace"})
 		if err != nil {
 			t.Fatalf("replay: %v", err)
 		}
@@ -86,6 +86,8 @@ jobs:
 
 // TestReplayRerunsAnUnchangedStep: a replay is asked for to run the step again, so the steps it skips must not chain it onto the source run's nodes, where an unchanged step would find its own success and replay nothing.
 func TestReplayRerunsAnUnchangedStep(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	again := filepath.Join(dir, "again.log")
 
@@ -99,13 +101,13 @@ jobs:
     run: echo ran >> %[1]s
 `, again))
 
-	err := cli.Run([]string{"run", path, "--job", "publish", "--keep-workspace"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish", "--keep-workspace"})
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 
 	captureStdout(t, func() {
-		err = cli.Run([]string{"run", path, "--job", "publish", "--replay", runIDFromStore(t, path), "--from", "again"})
+		err = stepsRun(t, []string{"run", path, "--job", "publish", "--replay", runIDFromStore(t, path), "--from", "again"})
 		if err != nil {
 			t.Fatalf("replay: %v", err)
 		}
@@ -118,6 +120,8 @@ jobs:
 // run: the run being compared against has to still be there afterwards, or
 // measuring a prompt change destroys its own baseline.
 func TestReplayForksRatherThanMutating(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran.log")
 
@@ -131,7 +135,7 @@ jobs:
     run: echo ran >> %[1]s
 `, marker))
 
-	err := cli.Run([]string{"run", path, "--job", "publish", "--keep-workspace"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish", "--keep-workspace"})
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
@@ -139,7 +143,7 @@ jobs:
 	source := runIDFromStore(t, path)
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"run", path, "--job", "publish", "--replay", source, "--from", "second", "--keep-workspace"})
+		err = stepsRun(t, []string{"run", path, "--job", "publish", "--replay", source, "--from", "second", "--keep-workspace"})
 		if err != nil {
 			t.Fatalf("replay: %v", err)
 		}
@@ -163,6 +167,8 @@ jobs:
 // TestReplayRefusesAnUnknownStep keeps a typo from silently replaying the
 // whole plan, which is exactly what the feature exists to avoid paying for.
 func TestReplayRefusesAnUnknownStep(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran.log")
 
@@ -174,14 +180,14 @@ jobs:
     run: echo ran >> %s
 `, marker))
 
-	err := cli.Run([]string{"run", path, "--job", "publish", "--keep-workspace"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish", "--keep-workspace"})
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 
 	source := runIDFromStore(t, path)
 
-	err = cli.Run([]string{"run", path, "--job", "publish", "--replay", source, "--from", "typo"})
+	err = stepsRun(t, []string{"run", path, "--job", "publish", "--replay", source, "--from", "typo"})
 	if err == nil {
 		t.Fatal("a replay from a step that does not exist was accepted")
 	}
@@ -194,6 +200,8 @@ jobs:
 // TestReplayNeedsAFromStep refuses the spelling that would quietly re-run
 // everything at full price.
 func TestReplayNeedsAFromStep(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran.log")
 
@@ -205,12 +213,12 @@ jobs:
     run: echo ran >> %s
 `, marker))
 
-	err := cli.Run([]string{"run", path, "--job", "publish", "--keep-workspace"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish", "--keep-workspace"})
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 
-	err = cli.Run([]string{"run", path, "--job", "publish", "--replay", runIDFromStore(t, path)})
+	err = stepsRun(t, []string{"run", path, "--job", "publish", "--replay", runIDFromStore(t, path)})
 	if err == nil {
 		t.Fatal("--replay without --from was accepted")
 	}
@@ -225,6 +233,8 @@ jobs:
 // done-set keyed by plan index would mark "fragile" done in every build and
 // skip exactly the step asked for. Refused, naming the get.
 func TestReplayRefusesAcrossAFanningGet(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran.log")
 
@@ -248,12 +258,12 @@ jobs:
     run: echo ran >> %s
 `, marker))
 
-	err := cli.Run([]string{"run", path, "--job", "publish", "--keep-workspace"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish", "--keep-workspace"})
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 
-	err = cli.Run([]string{"run", path, "--job", "publish", "--replay", runIDFromStore(t, path), "--from", "fragile"})
+	err = stepsRun(t, []string{"run", path, "--job", "publish", "--replay", runIDFromStore(t, path), "--from", "fragile"})
 	if err == nil {
 		t.Fatal("a replay across a get was accepted")
 	}

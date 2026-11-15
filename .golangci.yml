@@ -1049,7 +1049,7 @@ linters:
 
   exclusions:
     rules:
-      # The CLI owns the process's streams — it is what chooses a renderer — and events is where the default lives. Tests, build tools and the process boundary are not a run's output.
-      - path: (^|/)(internal/cli/|internal/events/events\.go$|main\.go$|tools/|e2e/|docs/|hack/)|_test\.go$
+      # The CLI names the process's streams in exactly two files: cli.go, where Run hands them to RunWith, and logging.go, whose slog handler is the process's one. Every command below writes to the Streams it was given (a print to os.Stdout there is invisible to a caller that passed its own, which is every test), and events is where the default lives. Tests, build tools and the process boundary are not a run's output.
+      - path: (^|/)(internal/cli/(cli|logging)\.go$|internal/events/events\.go$|main\.go$|tools/|e2e/|docs/|hack/)|_test\.go$
         linters:
           - forbidigo

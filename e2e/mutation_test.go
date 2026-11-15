@@ -39,7 +39,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jtarchie/steps/docs"
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/testdocker"
 )
 
@@ -97,7 +96,7 @@ func checkMutantIsCaught(t *testing.T, block docs.Block, mut mutant) {
 	dir := t.TempDir()
 	path, _ := writeDocBlock(t, dir, mutated, scenario)
 
-	err := cli.Run(append([]string{"validate", "--syntax-only", path}, scenarioVarFlags(scenario)...))
+	err := stepsRun(t, append([]string{"validate", "--syntax-only", path}, scenarioVarFlags(scenario)...))
 	if err != nil {
 		t.Fatalf("the mutant does not load, so a failing run would prove nothing about the assertion: %v", err)
 	}
@@ -111,7 +110,7 @@ func checkMutantIsCaught(t *testing.T, block docs.Block, mut mutant) {
 	// the doc harness invokes the original. Missing a flag here makes the run
 	// fail for the wrong reason — an unmapped worker rather than the broken
 	// assertion — and the mutant reads as uncaught.
-	err = cli.Run(append([]string{"test", path}, append(scenarioFlags(scenario), deliveryFlags(t, dir, mutated)...)...))
+	err = stepsRun(t, append([]string{"test", path}, append(scenarioFlags(scenario), deliveryFlags(t, dir, mutated)...)...))
 	if err == nil {
 		t.Fatalf("the mutated assertion still passed — as written it cannot fail, so it verifies nothing")
 	}

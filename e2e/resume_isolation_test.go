@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestResumeUnderIsolationContinuesWhereItStopped is the gap issue #59
@@ -15,6 +13,8 @@ import (
 // halfway and the most expensive to repeat, was the one shape locked out of
 // recovery.
 func TestResumeUnderIsolationContinuesWhereItStopped(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -61,7 +61,7 @@ jobs:
 	// First run dies on `second`; `first` and the get have completed.
 	path := writePipeline(t, dir, pipeline(true))
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("the run succeeded; the fixture needs it to fail at the second step")
 	}
@@ -77,7 +77,7 @@ jobs:
 	// (its output is already in the tree) and must find made/thing.txt there.
 	path = writePipeline(t, dir, pipeline(false))
 
-	err = cli.Run([]string{path, "--resume", runID})
+	err = stepsRun(t, []string{path, "--resume", runID})
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}

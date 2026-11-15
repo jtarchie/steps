@@ -10,6 +10,8 @@ import (
 )
 
 func TestRunsTriggerQueuesAPinnedRunOnTheDaemon(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	seen := filepath.Join(dir, "seen")
 
@@ -39,7 +41,7 @@ jobs:
 
 	name := cli.PipelineName(path)
 
-	err := cli.Run([]string{"runs", "trigger", "build", "-p", name, "--pin", "n=one", "--target", served.target()})
+	err := stepsRun(t, []string{"runs", "trigger", "build", "-p", name, "--pin", "n=one", "--target", served.target()})
 	if err != nil {
 		t.Fatalf("steps runs trigger --pin: %v", err)
 	}
@@ -52,7 +54,7 @@ jobs:
 
 	pinned := newestRun(t, served.state, name, "build").ID
 
-	err = cli.Run([]string{"runs", "trigger", "build", "-p", name, "--target", served.target()})
+	err = stepsRun(t, []string{"runs", "trigger", "build", "-p", name, "--target", served.target()})
 	if err != nil {
 		t.Fatalf("steps runs trigger: %v", err)
 	}
@@ -63,7 +65,7 @@ jobs:
 		t.Fatalf("after an unpinned trigger seen = %q, want the newest version built second", got)
 	}
 
-	err = cli.Run([]string{"runs", "retry", pinned, "-p", name, "--target", served.target()})
+	err = stepsRun(t, []string{"runs", "retry", pinned, "-p", name, "--target", served.target()})
 	if err != nil {
 		t.Fatalf("steps runs retry: %v", err)
 	}
@@ -78,6 +80,8 @@ jobs:
 }
 
 func TestRunsTriggerRefusesWhatTheDaemonCannotQueue(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -98,7 +102,7 @@ jobs:
 		"an unknown job": {"runs", "trigger", "nope", "-p", name, "--target", served.target()},
 		"an unknown run": {"runs", "retry", "NOSUCHRUN", "-p", name, "--target", served.target()},
 	} {
-		if cli.Run(args) == nil {
+		if stepsRun(t, args) == nil {
 			t.Errorf("%s was accepted", label)
 		}
 	}

@@ -3,12 +3,12 @@ package e2e
 import (
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // A rendered command routinely carries a source: credential in a URL; a failing one must not copy it into the error a terminal prints and the run's events keep.
 func TestAFailingCommandDoesNotLeakItsURLCredentials(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 jobs:
 - name: review
@@ -18,7 +18,7 @@ jobs:
     run: "true https://u:hunter2secret@example.com/repo.git; exit 3"
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "review"})
+	err := stepsRun(t, []string{"run", path, "--job", "review"})
 	if err == nil {
 		t.Fatal("the task was supposed to fail")
 	}

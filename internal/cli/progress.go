@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
@@ -21,7 +22,7 @@ type ProgressFlags struct {
 }
 
 // wantsLive is auto's answer too: a live region is only for a person at a terminal, and a CI log, a pipe or an agent calling steps gets lines it can read back.
-func (p ProgressFlags) wantsLive() bool {
+func (p ProgressFlags) wantsLive(out io.Writer) bool {
 	switch p.Progress {
 	case "tty":
 		return true
@@ -29,16 +30,16 @@ func (p ProgressFlags) wantsLive() bool {
 		return false
 	}
 
-	return stdoutIsTerminal() && os.Getenv("CI") == "" && os.Getenv("TERM") != "dumb"
+	return isTerminal(out) && os.Getenv("CI") == "" && os.Getenv("TERM") != "dumb"
 }
 
 // draw installs the live view when one is wanted and returns what takes it down; with none, RunJob prints plainly on its own.
-func (p ProgressFlags) draw(ctx context.Context, st store.Usage) (context.Context, func()) {
-	if !p.wantsLive() {
+func (p ProgressFlags) draw(ctx context.Context, out io.Writer, st store.Usage) (context.Context, func()) {
+	if !p.wantsLive(out) {
 		return ctx, func() {}
 	}
 
-	live, stop := newLive(ctx, st)
+	live, stop := newLive(ctx, out, st)
 
 	ctx = events.WithRenderer(ctx, live.Event)
 	ctx = events.WithOutput(ctx, events.Output{Step: live.Stream, Hold: live.Hold})
@@ -46,11 +47,11 @@ func (p ProgressFlags) draw(ctx context.Context, st store.Usage) (context.Contex
 	return ctx, stop
 }
 
-// newLive starts a live view on stdout, sized to its terminal, and returns what takes it down.
-func newLive(ctx context.Context, st store.Usage) (*runview.Live, func()) {
-	live := runview.NewLive(os.Stdout)
-	live.Width = func() int { return terminalSize(80, func(size *unix.Winsize) uint16 { return size.Col }) }
-	live.Height = func() int { return terminalSize(24, func(size *unix.Winsize) uint16 { return size.Row }) }
+// newLive starts a live view on out, sized to its terminal, and returns what takes it down.
+func newLive(ctx context.Context, out io.Writer, st store.Usage) (*runview.Live, func()) {
+	live := runview.NewLive(out)
+	live.Width = func() int { return terminalSize(out, 80, func(size *unix.Winsize) uint16 { return size.Col }) }
+	live.Height = func() int { return terminalSize(out, 24, func(size *unix.Winsize) uint16 { return size.Row }) }
 	live.Color = os.Getenv("NO_COLOR") == ""
 	live.Spend = func(runID string) string { return runSpend(ctx, st, runID) }
 
@@ -80,9 +81,14 @@ func levelOf(ctx context.Context, handler slog.Handler) slog.Level {
 	return slog.LevelError
 }
 
-// terminalSize is one dimension of stdout's window, or fallback when the terminal will not say.
-func terminalSize(fallback int, dimension func(*unix.Winsize) uint16) int {
-	size, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
+// terminalSize is one dimension of out's window, or fallback when it is no terminal or will not say.
+func terminalSize(out io.Writer, fallback int, dimension func(*unix.Winsize) uint16) int {
+	file, ok := out.(*os.File)
+	if !ok {
+		return fallback
+	}
+
+	size, err := unix.IoctlGetWinsize(int(file.Fd()), unix.TIOCGWINSZ)
 
 	return sizeOr(fallback, dimension, size, err)
 }

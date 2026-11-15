@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // artifactResumePipeline is a job that changes a get's artifact in one step
@@ -75,7 +73,7 @@ func failThenCapture(t *testing.T, path string) (string, string) {
 	t.Helper()
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("expected the fragile step to fail")
 		}
@@ -98,6 +96,8 @@ func failThenCapture(t *testing.T, path string) (string, string) {
 // had changed it were skipped as already succeeded — so the retried step ran
 // on a clean checkout, missing everything the run was resumed to keep.
 func TestResumeContinuesFromTheArtifactTheSkippedStepsChanged(t *testing.T) {
+	t.Parallel()
+
 	for name, gets := range map[string]struct {
 		plan    string
 		fetches int
@@ -120,7 +120,7 @@ func TestResumeContinuesFromTheArtifactTheSkippedStepsChanged(t *testing.T) {
 			writePipelineFile(t, filepath.Join(dir, "fixed"), "")
 
 			out := captureStdout(t, func() {
-				err := cli.Run([]string{"run", path, "--resume", runID})
+				err := stepsRun(t, []string{"run", path, "--resume", runID})
 				if err != nil {
 					t.Fatalf("resume failed: %v", err)
 				}
@@ -146,6 +146,8 @@ func TestResumeContinuesFromTheArtifactTheSkippedStepsChanged(t *testing.T) {
 // step, and runs the hook again — rather than refusing over a missing tree.
 // The resumed get says nothing of a skip: it did fetch.
 func TestResumeRerunsAJobHookAfterEveryBuildFinished(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -164,7 +166,7 @@ func TestResumeRerunsAJobHookAfterEveryBuildFinished(t *testing.T) {
 	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--resume", runID})
+		err := stepsRun(t, []string{"run", path, "--resume", runID})
 		if err != nil {
 			t.Fatalf("resume failed: %v", err)
 		}
@@ -197,6 +199,8 @@ func TestResumeRerunsAJobHookAfterEveryBuildFinished(t *testing.T) {
 // cannot be fetched fresh without losing their work, so an artifact missing
 // from the kept tree is named rather than quietly replaced.
 func TestResumeRefusesWhenTheKeptArtifactIsGone(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -214,7 +218,7 @@ func TestResumeRefusesWhenTheKeptArtifactIsGone(t *testing.T) {
 	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"run", path, "--resume", runID})
+		err = stepsRun(t, []string{"run", path, "--resume", runID})
 	})
 
 	if err == nil {
@@ -233,6 +237,8 @@ func TestResumeRefusesWhenTheKeptArtifactIsGone(t *testing.T) {
 // TestResumeRefusesWhenTheKeptWorkspaceIsGone: with the whole tree gone there
 // is nothing to continue from, and that is said before anything runs.
 func TestResumeRefusesWhenTheKeptWorkspaceIsGone(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -248,7 +254,7 @@ func TestResumeRefusesWhenTheKeptWorkspaceIsGone(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"run", path, "--resume", runID})
+		err = stepsRun(t, []string{"run", path, "--resume", runID})
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "workspace "+root+" is gone") {
@@ -264,6 +270,8 @@ func TestResumeRefusesWhenTheKeptWorkspaceIsGone(t *testing.T) {
 
 // TestResumeRerunsAGetIntoAnEmptyDirectory is #256: nothing after the get completed, so the resume fetches again — into the kept artifact directory, which still held the first attempt's fetch. An in: is handed an empty directory every time, as Concourse's is (a fresh volume per get), and git's own `remote add origin` is one of many scripts that rely on it.
 func TestResumeRerunsAGetIntoAnEmptyDirectory(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fixed := filepath.Join(dir, "fixed")
 	fetches := filepath.Join(dir, "fetches.log")
@@ -296,7 +304,7 @@ jobs:
 
 	writePipelineFile(t, fixed, "")
 
-	err := cli.Run([]string{"run", path, "--resume", runID})
+	err := stepsRun(t, []string{"run", path, "--resume", runID})
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}
@@ -306,6 +314,8 @@ jobs:
 
 // TestARetriedGetStartsInAnEmptyDirectory: the same contract inside one run — attempt two must not see what attempt one left behind.
 func TestARetriedGetStartsInAnEmptyDirectory(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, fmt.Sprintf(`

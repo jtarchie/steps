@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -69,7 +68,7 @@ func TestAgentBudgetStopsTheStep(t *testing.T) {
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	stderr := logs()
 
 	if err == nil {
@@ -112,7 +111,7 @@ func TestAgentBudgetKeepsAFinalAnswerThatCrossesIt(t *testing.T) {
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	stderr := logs()
 
 	if err != nil {
@@ -133,6 +132,8 @@ func TestAgentBudgetKeepsAFinalAnswerThatCrossesIt(t *testing.T) {
 // with the tools still granted. The third turn leaves 100, due again, and the
 // fourth request must still carry only the one warning.
 func TestAgentBudgetWarnsBeforeItRunsOut(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	fake := newFakeLLM(t,
@@ -144,7 +145,7 @@ func TestAgentBudgetWarnsBeforeItRunsOut(t *testing.T) {
 
 	path := budgetPipeline(t, dir, fake.URL, "  budget:\n    tokens: 1000")
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err != nil {
 		t.Fatalf("job failed: a warned model that answered in budget must pass: %v", err)
 	}
@@ -181,6 +182,8 @@ func TestAgentBudgetWarnsBeforeItRunsOut(t *testing.T) {
 // breach is cumulative, so naming only the step that crossed the line would be
 // misleading — the step that trips it is rarely the one that cost the most.
 func TestJobBudgetReportsTheRunningTotal(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	fake := newFakeLLM(t,
@@ -220,7 +223,7 @@ jobs:
       - Build it.
 `, fake.URL))
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err == nil {
 		t.Fatal("job succeeded despite blowing its job-level token budget")
 	}
@@ -248,6 +251,8 @@ jobs:
 // terminal scrollback, which is how every ceiling in examples/pr-review.yml
 // came to be derived by hand.
 func TestAgentUsageIsPersisted(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	fake := newFakeLLM(t,
@@ -257,7 +262,7 @@ func TestAgentUsageIsPersisted(t *testing.T) {
 
 	path := budgetPipeline(t, dir, fake.URL, "")
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -330,6 +335,8 @@ func assertRecordedStepUsage(t *testing.T, st store.Store, runID string) {
 // six-cell review matrix reported one reviewer and under-counted the run by
 // the whole fan-out: the exact pipeline this feature exists to make legible.
 func TestAgentUsageRecordsEveryCellOfAMatrix(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
@@ -354,7 +361,7 @@ jobs:
       - "\"review {{ .vars.shard }}\""
 `, fake.URL))
 
-	err := cli.Run([]string{"run", path, "--job", "fan"})
+	err := stepsRun(t, []string{"run", path, "--job", "fan"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

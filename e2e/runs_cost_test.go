@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -76,14 +75,14 @@ jobs:
 
 // TestRunsCostRollsUpByRun is the default view: one line per run, and a
 // pointer at the deeper one.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsCostRollsUpByRun(t *testing.T) {
+	t.Parallel()
+
 	path := costFixture(t)
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run(append([]string{"runs", "cost"}, readArgs(path)...)) })
+	out := captureStdout(t, func() { err = stepsRun(t, append([]string{"runs", "cost"}, readArgs(path)...)) })
 
 	if err != nil {
 		t.Fatalf("runs cost: %v", err)
@@ -103,14 +102,14 @@ func TestRunsCostRollsUpByRun(t *testing.T) {
 // TestRunsCostNamesARunForTheBreakdown: the positional is what chooses the
 // deeper view. As a flag (--run) this was the only way to reach it, and
 // nothing checked that it did.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsCostNamesARunForTheBreakdown(t *testing.T) {
+	t.Parallel()
+
 	path := costFixture(t)
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run(append([]string{"runs", "cost", "REVIEWRUN"}, readArgs(path)...)) })
+	out := captureStdout(t, func() { err = stepsRun(t, append([]string{"runs", "cost", "REVIEWRUN"}, readArgs(path)...)) })
 
 	if err != nil {
 		t.Fatalf("runs cost <run>: %v", err)
@@ -127,14 +126,14 @@ func TestRunsCostNamesARunForTheBreakdown(t *testing.T) {
 // pipeline-scoped, so a typo — or a run belonging to another pipeline in a
 // shared state file — reads back as zero rows. Saying so beats printing an
 // empty table that looks like a run which spent nothing.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsCostWillNotVouchForARunItDoesNotHave(t *testing.T) {
+	t.Parallel()
+
 	path := costFixture(t)
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run(append([]string{"runs", "cost", "NOSUCHRUN"}, readArgs(path)...)) })
+	out := captureStdout(t, func() { err = stepsRun(t, append([]string{"runs", "cost", "NOSUCHRUN"}, readArgs(path)...)) })
 
 	if err != nil {
 		t.Fatalf("runs cost <unknown run>: %v", err)
@@ -152,9 +151,9 @@ func TestRunsCostWillNotVouchForARunItDoesNotHave(t *testing.T) {
 // put, because such a chain is never skippable. So a pipeline of exactly the
 // kind steps exists to run recorded every failure and no success: after a run
 // that worked, `steps runs list` said "no job runs recorded".
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsListShowsASuccessfulAgentRun(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t, says("done"))
 
@@ -183,7 +182,7 @@ jobs:
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run(append([]string{"runs", "list"}, readArgs(path)...)) })
+	out := captureStdout(t, func() { err = stepsRun(t, append([]string{"runs", "list"}, readArgs(path)...)) })
 
 	if err != nil {
 		t.Fatalf("runs list: %v", err)

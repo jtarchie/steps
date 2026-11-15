@@ -10,15 +10,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestRunsCostIncludesAHookAgentsSpend: an on_success: agent's tokens show up
 // in both the rollup and the per-step breakdown, marked as a hook.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsCostIncludesAHookAgentsSpend(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("noted").spending(7000))
 
@@ -61,6 +59,8 @@ jobs:
 
 // TestRunPageDrawsAHookAgentsSpendOnItsRow: the spend the ledger records for a hook's agent is drawn on the hook's own row of the run page, not dropped for want of a node.
 func TestRunPageDrawsAHookAgentsSpendOnItsRow(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("noted").spending(7000))
 	path := hookAgentPipeline(t, dir, fake.URL)
@@ -80,6 +80,8 @@ func TestRunPageDrawsAHookAgentsSpendOnItsRow(t *testing.T) {
 
 // TestRunPageDrawsAFixAgentsSpendOnItsRow: a fix: agent's spend is drawn on the row of the task it repaired.
 func TestRunPageDrawsAFixAgentsSpendOnItsRow(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("done").spending(9000))
 	path := writeFixPipeline(t, dir, fake.URL, failThenPass(filepath.Join(dir, "counter.txt")))
@@ -95,9 +97,9 @@ func TestRunPageDrawsAFixAgentsSpendOnItsRow(t *testing.T) {
 
 // TestRunsCostIncludesAFixAgentsSpend: a fix: agent's tokens are the job's
 // spend too, and are reported as the fix rather than as a plan step.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsCostIncludesAFixAgentsSpend(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("done").spending(9000))
 
@@ -116,7 +118,7 @@ func assertRunCostShows(t *testing.T, path, step, tokens string, want int) {
 
 	var err error
 
-	rollup := captureStdout(t, func() { err = cli.Run(append([]string{"runs", "cost"}, readArgs(path)...)) })
+	rollup := captureStdout(t, func() { err = stepsRun(t, append([]string{"runs", "cost"}, readArgs(path)...)) })
 	if err != nil {
 		t.Fatalf("runs cost: %v", err)
 	}
@@ -143,7 +145,7 @@ func assertRunCostShows(t *testing.T, path, step, tokens string, want int) {
 	}
 
 	breakdown := captureStdout(t, func() {
-		err = cli.Run(append([]string{"runs", "cost", runs[0].ID}, readArgs(path)...))
+		err = stepsRun(t, append([]string{"runs", "cost", runs[0].ID}, readArgs(path)...))
 	})
 	if err != nil {
 		t.Fatalf("runs cost %s: %v", runs[0].ID, err)

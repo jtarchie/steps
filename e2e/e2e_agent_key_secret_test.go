@@ -233,7 +233,7 @@ func TestSourceSecretsAreRefusedAtLoad(t *testing.T) {
 			path := pipelinePath(t, t.TempDir())
 			writePipelineFile(t, path, tc.pipeline)
 
-			err := cli.Run([]string{"validate", "--syntax-only", path})
+			err := stepsRun(t, []string{"validate", "--syntax-only", path})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("validate = %v, want an error containing %q", err, tc.want)
 			}
@@ -278,7 +278,7 @@ jobs:
 
 	target := authTarget(served.addr, "ops", "pw")
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}
@@ -288,7 +288,7 @@ jobs:
 
 	writePipelineFile(t, path, pipeline("vault"))
 
-	err = cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
+	err = stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
 	if err == nil || !strings.Contains(err.Error(), `"vault"`) {
 		t.Errorf("pipeline set = %v, want a refusal naming the unknown source", err)
 	}
@@ -326,12 +326,12 @@ jobs:
 `)
 
 	// Without the sources, the reference is refused before anything is dialled.
-	err := cli.Run([]string{"validate", "--live", path})
+	err := stepsRun(t, []string{"validate", "--live", path})
 	if err == nil || !strings.Contains(err.Error(), "--config") || model.requestCount() != 0 {
 		t.Fatalf("validate --live without --config = %v after %d request(s), want a refusal naming --config and no probe", err, model.requestCount())
 	}
 
-	out := captureStdout(t, func() { err = cli.Run([]string{"validate", "--live", "--config", config, path}) })
+	out := captureStdout(t, func() { err = stepsRun(t, []string{"validate", "--live", "--config", config, path}) })
 	if err != nil {
 		t.Fatalf("validate --live: %v", err)
 	}
@@ -349,7 +349,7 @@ jobs:
 	assertEveryBearer(t, model, e2eModelKey)
 
 	// The file-and-machine depth never asks the environment for it.
-	err = cli.Run([]string{"validate", path})
+	err = stepsRun(t, []string{"validate", path})
 	if err != nil {
 		t.Errorf("validate = %v, want a key held as a secret not reported unset", err)
 	}

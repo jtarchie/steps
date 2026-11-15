@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -15,6 +14,8 @@ import (
 // step's step_finished carries the node it recorded, which is what lets the
 // run page mark the step that broke as changed.
 func TestFailedAgentStepsPublishTheNodeTheyFailedUnder(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		kind string
@@ -52,7 +53,7 @@ jobs:
 		t.Run(tc.name, func(t *testing.T) {
 			path := tc.path(t, t.TempDir())
 
-			err := cli.Run([]string{"run", path, "--job", "review"})
+			err := stepsRun(t, []string{"run", path, "--job", "review"})
 			if err == nil {
 				t.Fatalf("the %s step was supposed to fail", tc.kind)
 			}

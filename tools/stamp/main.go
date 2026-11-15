@@ -71,8 +71,8 @@ func seal(ctx context.Context) error {
 		return err
 	}
 
-	if skip := os.Getenv("STEPS_TESTSHARD_SKIP"); skip != "" {
-		return fmt.Errorf("STEPS_TESTSHARD_SKIP=%q left tests out of this run, so it vouches for less than a stamp says — unset it and rerun `task`", skip)
+	if flags := os.Getenv("GOFLAGS"); strings.Contains(flags, "-skip") || strings.Contains(flags, "-run") {
+		return fmt.Errorf("GOFLAGS=%q left tests out of this run, so it vouches for less than a stamp says — unset it and rerun `task`", flags)
 	}
 
 	if tree != began {

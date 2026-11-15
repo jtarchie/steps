@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
-
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
@@ -297,7 +295,7 @@ func TestOTelTracesACLIAgentsInvocationAndBridgedTools(t *testing.T) {
 			"echo '"+cliToolUseEvent("t1", "mcp__steps__verdict", `{"choice":"approve"}`)+"'\n"+
 			"echo '"+cliResultEvent("approved", 1)+"'")
 
-	err := cli.Run([]string{cliPipeline(t, t.TempDir())})
+	err := stepsRun(t, []string{cliPipeline(t, t.TempDir())})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -324,7 +322,7 @@ func TestOTelTracesAFixAgentAsAnInvocation(t *testing.T) {
 	collector := newOTLPCollector(t)
 
 	fake := fixAgentServer(t)
-	_ = cli.Run([]string{writeFixPipeline(t, t.TempDir(), fake.URL, "false")})
+	_ = stepsRun(t, []string{writeFixPipeline(t, t.TempDir(), fake.URL, "false")})
 
 	spans, _ := collector.snapshot()
 	invoked := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "invoke_agent fixer")

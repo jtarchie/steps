@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 
@@ -38,7 +37,9 @@ var (
 )
 
 // Run follows one run to its end and exits as that run did.
-func (r *RunsFollowCmd) Run() error {
+func (r *RunsFollowCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	if r.RunID != "" && r.Job != "" {
 		return errors.New("--job does not apply to a named run; a run belongs to one job already")
 	}
@@ -54,7 +55,7 @@ func (r *RunsFollowCmd) Run() error {
 	}
 	defer done()
 
-	ctx, cancel := withSignalCancel(context.Background())
+	ctx, cancel := streams.cancellable()
 	defer cancel()
 
 	run, err := r.target(ctx, st)
@@ -62,29 +63,29 @@ func (r *RunsFollowCmd) Run() error {
 		return err
 	}
 
-	fmt.Printf("following %s · %s · %s\n", run.ID, runview.Scrub(run.JobName), runview.Scrub(string(run.Status)))
+	sayf(out, "following %s · %s · %s\n", run.ID, runview.Scrub(run.JobName), runview.Scrub(string(run.Status)))
 
 	if run.Status != store.RunRunning {
-		fmt.Printf("run %s already %s, replaying\n", run.ID, runview.Scrub(string(run.Status)))
+		sayf(out, "run %s already %s, replaying\n", run.ID, runview.Scrub(string(run.Status)))
 	}
 
-	render, stop := r.renderer(ctx, st)
+	render, stop := r.renderer(ctx, out, st)
 	defer stop()
 
 	last, err := followRun(ctx, st, run, func(event events.Event) { render(runview.ScrubEvent(event)) })
 
 	stop()
 
-	return r.ended(last, err, st)
+	return r.ended(out, last, err, st)
 }
 
 // renderer is the live view on a terminal and lines elsewhere; the stop it returns may be called twice.
-func (r *RunsFollowCmd) renderer(ctx context.Context, st store.Usage) (func(events.Event), func()) {
-	if !r.wantsLive() {
-		return followPlain(os.Stdout), func() {}
+func (r *RunsFollowCmd) renderer(ctx context.Context, out io.Writer, st store.Usage) (func(events.Event), func()) {
+	if !r.wantsLive(out) {
+		return followPlain(out), func() {}
 	}
 
-	live, stop := newLive(ctx, st)
+	live, stop := newLive(ctx, out, st)
 
 	// A follower has no byte stream of its own: a chunk is the bytes a local run's Stream would have carried into the step's tail.
 	return func(event events.Event) {
@@ -99,10 +100,10 @@ func (r *RunsFollowCmd) renderer(ctx context.Context, st store.Usage) (func(even
 }
 
 // ended is the command's result: a detach says how to come back, anything else is how the run came out.
-func (r *RunsFollowCmd) ended(last store.RunRow, err error, st store.Meta) error {
+func (r *RunsFollowCmd) ended(out io.Writer, last store.RunRow, err error, st store.Meta) error {
 	if errors.Is(err, context.Canceled) {
 		if last.Status == store.RunRunning {
-			fmt.Printf("detached: %s is still running — steps runs follow -p %s %s%s\n", last.ID, r.Pipeline, last.ID, dbNote(r.DB, st))
+			sayf(out, "detached: %s is still running — steps runs follow -p %s %s%s\n", last.ID, r.Pipeline, last.ID, dbNote(r.DB, st))
 		}
 
 		return fmt.Errorf("detached from run %s: %w", last.ID, err)

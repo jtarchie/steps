@@ -15,6 +15,8 @@ import (
 
 // TestPipelineSetCarriesIncludeBytesExactly: an include is whatever bytes the file holds, and encoding/json turns each invalid UTF-8 byte of a string into U+FFFD — so a Latin-1 run_file: ran on the daemon as bytes nobody sent, under a sha no local load computes, and every later set saw a changed include and uploaded it again.
 func TestPipelineSetCarriesIncludeBytesExactly(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	log := filepath.Join(dir, "ran.log")

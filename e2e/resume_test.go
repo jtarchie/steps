@@ -6,8 +6,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // resumeIDPattern pulls the run id out of the line a failed run prints.
@@ -18,6 +16,8 @@ var resumeIDPattern = regexp.MustCompile(`--resume ([A-Za-z0-9]+)`)
 // options were re-running everything (and getting a different answer from the
 // agent) or running the failed command by hand outside the tool.
 func TestResumeSkipsWhatAlreadySucceeded(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	expensive := filepath.Join(dir, "expensive.log")
@@ -37,7 +37,7 @@ jobs:
 `, expensive, fragile, flag))
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "publish"})
+		err := stepsRun(t, []string{"run", path, "--job", "publish"})
 		if err == nil {
 			t.Fatal("expected the fragile step to fail")
 		}
@@ -52,7 +52,7 @@ jobs:
 	writePipelineFile(t, flag, "")
 
 	out = captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--resume", runID})
+		err := stepsRun(t, []string{"run", path, "--resume", runID})
 		if err != nil {
 			t.Fatalf("resume failed: %v", err)
 		}
@@ -69,6 +69,8 @@ jobs:
 
 // TestResumeKeepsAChainItSkippedThroughUncacheable: a resume that skips a when:-guarded step still owes the chain its uncacheability, or the resumed run files the chain in the skip index and the next run skips work it was told never to cache.
 func TestResumeKeepsAChainItSkippedThroughUncacheable(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	flag := filepath.Join(dir, "fixed")
 
@@ -84,7 +86,7 @@ jobs:
 `, flag))
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "publish"})
+		err := stepsRun(t, []string{"run", path, "--job", "publish"})
 		if err == nil {
 			t.Fatal("expected the fragile step to fail")
 		}
@@ -95,7 +97,7 @@ jobs:
 	writePipelineFile(t, flag, "")
 
 	captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--resume", resumeID(t, out)})
+		err := stepsRun(t, []string{"run", path, "--resume", resumeID(t, out)})
 		if err != nil {
 			t.Fatalf("resume failed: %v", err)
 		}
@@ -110,6 +112,8 @@ jobs:
 // survive into the resumed run. Without that, "resume" would mean running the
 // remaining steps against empty inputs and calling it a recovery.
 func TestResumeKeepsTheWorkspace(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	seen := filepath.Join(dir, "seen.log")
@@ -128,7 +132,7 @@ jobs:
 `, seen, flag))
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "publish"})
+		err := stepsRun(t, []string{"run", path, "--job", "publish"})
 		if err == nil {
 			t.Fatal("expected the consume step to fail")
 		}
@@ -138,7 +142,7 @@ jobs:
 
 	writePipelineFile(t, flag, "")
 
-	err := cli.Run([]string{"run", path, "--resume", runID})
+	err := stepsRun(t, []string{"run", path, "--resume", runID})
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}
@@ -151,6 +155,8 @@ jobs:
 // TestResumeRejectsAnUnknownRun keeps a typo from silently starting a fresh
 // run that looks like a recovery.
 func TestResumeRejectsAnUnknownRun(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -161,7 +167,7 @@ jobs:
     run: "true"
 `)
 
-	err := cli.Run([]string{"run", path, "--resume", "NOSUCHRUN"})
+	err := stepsRun(t, []string{"run", path, "--resume", "NOSUCHRUN"})
 	if err == nil {
 		t.Fatal("resuming a run that was never recorded succeeded")
 	}
@@ -181,6 +187,8 @@ jobs:
 // REQUIRES isolation. Continuing an isolated run is now supported (see
 // resume_isolation_test.go); an unknown id is still an error.
 func TestResumeUnknownRunUnderIsolation(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 workspace:
@@ -194,7 +202,7 @@ jobs:
     run: "true"
 `)
 
-	err := cli.Run([]string{"run", path, "--resume", "NOSUCHRUN"})
+	err := stepsRun(t, []string{"run", path, "--resume", "NOSUCHRUN"})
 	if err == nil {
 		t.Fatal("resume accepted a run id nothing recorded")
 	}
@@ -220,6 +228,8 @@ func resumeID(t *testing.T, out string) string {
 // marked the whole in_parallel: as done, and the resume skipped the block
 // including the branch that had failed. The job then exited 0.
 func TestResumeDoesNotSkipAFailedBranch(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	good := filepath.Join(dir, "good.log")
@@ -241,7 +251,7 @@ jobs:
 `, good, bad, flag))
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("expected the failing branch to fail the block")
 		}
@@ -251,7 +261,7 @@ jobs:
 
 	writePipelineFile(t, flag, "")
 
-	err := cli.Run([]string{"run", path, "--resume", runID})
+	err := stepsRun(t, []string{"run", path, "--resume", runID})
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}

@@ -6,12 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/testsshd"
 )
 
 // The issue's ssh:// test (#206): a bare placed step runs over plain ssh — tar in, sh -c, tar out — against an sshd with no daemon behind it.
 func TestSSHWorkerRunsABarePlacedStep(t *testing.T) {
+	t.Parallel()
+
 	server := testsshd.New(t)
 
 	dir := t.TempDir()
@@ -99,7 +100,7 @@ jobs:
     run: touch `+marker+`
 `+placed)
 
-	err := cli.Run([]string{path, "--worker", "box=" + worker})
+	err := stepsRun(t, []string{path, "--worker", "box=" + worker})
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("run: %v, want a refusal saying %q", err, want)
 	}
@@ -111,6 +112,8 @@ jobs:
 }
 
 func TestSSHWorkerRefusesAnImageBeforeAnyStep(t *testing.T) {
+	t.Parallel()
+
 	refusedBeforeAnyStep(t, testsshd.New(t).URL, `
   - task: remote
     tags: [box]
@@ -120,6 +123,8 @@ func TestSSHWorkerRefusesAnImageBeforeAnyStep(t *testing.T) {
 }
 
 func TestDockerSSHWorkerRefusesAStepWithNoImageBeforeAnyStep(t *testing.T) {
+	t.Parallel()
+
 	refusedBeforeAnyStep(t, "docker+ssh://box", `
   - task: remote
     tags: [box]

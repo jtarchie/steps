@@ -109,8 +109,6 @@ var spillPointer = regexp.MustCompile(`saved to (\S+)\.`)
 // TestAContainerizedAgentIsToldNoHostPath: the model's system message, every tool result and the spill pointer for an oversized output name the container's layout, and the pointer it is handed still reads back.
 func TestAContainerizedAgentIsToldNoHostPath(t *testing.T) {
 	requireDockerE2E(t)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 
 	fake := newRoutedFakeLLM(t, spillThenReadBack)

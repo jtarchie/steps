@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/jtarchie/steps/internal/actor"
@@ -28,8 +29,10 @@ type ApprovalsListCmd struct {
 }
 
 // Run prints every pending approval.
-func (a *ApprovalsListCmd) Run() error {
-	if nothingRecorded(a.ReadFlags, "no approvals are waiting") {
+func (a *ApprovalsListCmd) Run(streams Streams) error {
+	out := streams.Out
+
+	if nothingRecorded(out, a.ReadFlags, "no approvals are waiting") {
 		return nil
 	}
 
@@ -45,12 +48,12 @@ func (a *ApprovalsListCmd) Run() error {
 	}
 
 	if len(pending) == 0 {
-		fmt.Println("no approvals are waiting")
+		say(out, "no approvals are waiting")
 
 		return nil
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 
 	_, _ = fmt.Fprintln(writer, "ID\tJOB\tREQUESTED\tMESSAGE")
 
@@ -81,8 +84,10 @@ type ApproveCmd struct {
 }
 
 // Run approves the named approval.
-func (a *ApproveCmd) Run() error {
-	return decideApproval(a.ReadFlags, a.ID, store.ApprovalApproved, a.Reason)
+func (a *ApproveCmd) Run(streams Streams) error {
+	out := streams.Out
+
+	return decideApproval(out, a.ReadFlags, a.ID, store.ApprovalApproved, a.Reason)
 }
 
 // RejectCmd records a no.
@@ -93,12 +98,14 @@ type RejectCmd struct {
 }
 
 // Run rejects the named approval.
-func (r *RejectCmd) Run() error {
-	return decideApproval(r.ReadFlags, r.ID, store.ApprovalRejected, r.Reason)
+func (r *RejectCmd) Run(streams Streams) error {
+	out := streams.Out
+
+	return decideApproval(out, r.ReadFlags, r.ID, store.ApprovalRejected, r.Reason)
 }
 
 // decideApproval records a decision against a pipeline's store.
-func decideApproval(flags ReadFlags, id int64, status store.ApprovalStatus, reason string) error {
+func decideApproval(out io.Writer, flags ReadFlags, id int64, status store.ApprovalStatus, reason string) error {
 	err := checkFreeText("a reason", reason)
 	if err != nil {
 		return err
@@ -119,7 +126,7 @@ func decideApproval(flags ReadFlags, id int64, status store.ApprovalStatus, reas
 		return fmt.Errorf("could not record the decision: %w", err)
 	}
 
-	fmt.Printf("%s: approval %d\n", status, id)
+	sayf(out, "%s: approval %d\n", status, id)
 
 	return nil
 }

@@ -193,7 +193,7 @@ func TestOTelRefusesAProtocolItWouldIgnore(t *testing.T) {
 	path := pipelinePath(t, t.TempDir())
 	reloadPipeline(t, path, "build")
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil || !strings.Contains(err.Error(), "grpc") {
 		t.Fatalf("validate with OTLP over grpc = %v, want a refusal naming grpc", err)
 	}
@@ -221,7 +221,7 @@ func TestOTelTracesARunAsItsStepTree(t *testing.T) {
       run: "false"
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("steps run: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestOTelPutsADockerCallUnderItsStep(t *testing.T) {
     run: echo hi
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("steps run: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestOTelMeasuresARun(t *testing.T) {
     run: echo never
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("steps run: %v", err)
 	}
@@ -673,7 +673,7 @@ jobs:
       - Hello.
 `, fake.URL))
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil || !strings.Contains(err.Error(), "preflight") {
 		t.Fatalf("steps run = %v, want the preflight refusal", err)
 	}
@@ -712,7 +712,7 @@ func TestOTelPutsAStepsNotesOnItsSpan(t *testing.T) {
     run: test -f `+marker+` || { touch `+marker+`; exit 1; }
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("steps run: %v", err)
 	}

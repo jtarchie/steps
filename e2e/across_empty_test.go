@@ -7,6 +7,8 @@ import (
 
 // An empty from_file: list is a green run that did nothing, and the run says which file was empty — otherwise it reads exactly like a matrix whose cells all passed.
 func TestEndToEndAcrossOverAnEmptyListSaysWhichFileWasEmpty(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `

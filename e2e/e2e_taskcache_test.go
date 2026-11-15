@@ -12,7 +12,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/testsshd"
 )
@@ -45,6 +44,8 @@ jobs:
 
 // TestEndToEndTaskCacheSurvivesToTheNextRun: the cache survives, and a warm cache never moves the node hash.
 func TestEndToEndTaskCacheSurvivesToTheNextRun(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
 	path := taskCachePipeline(t, dir, filepath.Join(dir, "ws"), report)
@@ -73,6 +74,8 @@ func TestEndToEndTaskCacheSurvivesToTheNextRun(t *testing.T) {
 
 // TestEndToEndAgentCacheSurvivesToTheNextRun: an agent's run_shell is where self-build's compiles happen, so its caches: must persist the same way.
 func TestEndToEndAgentCacheSurvivesToTheNextRun(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
 	count := `n=$(cat .cache/runs 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > .cache/runs; echo "$n" >> ` + report
@@ -186,6 +189,8 @@ func removeTaskCacheVolumes(t *testing.T) {
 
 // TestEndToEndSSHWorkerTaskCacheStaysOnItsWorker: a bare ssh:// worker keeps its caches under its root, beside the builds it removes.
 func TestEndToEndSSHWorkerTaskCacheStaysOnItsWorker(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
 	worker := testsshd.New(t).URL
@@ -276,6 +281,8 @@ jobs:
 
 // TestEndToEndPlacedStepCacheNeverCrossesTheWire: a cache warmed here must not reach a worker, where it would be packed into the tree sent over and thrown away under the worker's own. The step cannot see the difference, so the proof is the bytes the placement sent.
 func TestEndToEndPlacedStepCacheNeverCrossesTheWire(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	worker := testsshd.New(t).URL
 
@@ -366,7 +373,7 @@ jobs:
 
 	mustRun(t, "run", path, "--force", "--worker", "box=local:")
 
-	// No lower bound: a tree the daemon already holds by digest is sent as 0 bytes, and an earlier test in the shard leaves this near-empty workspace's twin.
+	// No lower bound: a tree the daemon already holds by digest is sent as 0 bytes, and an earlier test in the process leaves this near-empty workspace's twin.
 	if sent := placementNamed(t, runPlacements(t, path), "builder").BytesSent; sent >= markerBytes {
 		t.Errorf("the placed agent sent %d bytes, want fewer than the %d-byte local cache: it crossed the wire", sent, markerBytes)
 	}
@@ -403,6 +410,8 @@ jobs:
 
 // TestEndToEndClearTaskCacheEmptiesTheLocalCache: fly clear-task-cache's job, against a cache this machine keeps.
 func TestEndToEndClearTaskCacheEmptiesTheLocalCache(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
 	path := taskCachePipeline(t, dir, filepath.Join(dir, "ws"), report)
@@ -423,6 +432,8 @@ func TestEndToEndClearTaskCacheEmptiesTheLocalCache(t *testing.T) {
 
 // TestEndToEndClearTaskCacheOnlyThePathNamed: -c is compared cleaned, which Concourse's own command does not do.
 func TestEndToEndClearTaskCacheOnlyThePathNamed(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
 	path := writePipeline(t, dir, fmt.Sprintf(`
@@ -455,7 +466,7 @@ jobs:
 		t.Errorf("runs reported %q, want only .a cleared", got)
 	}
 
-	err := cli.Run([]string{"clear-task-cache", path, "-j", "build", "-s", "compile", "-c", ".c"})
+	err := stepsRun(t, []string{"clear-task-cache", path, "-j", "build", "-s", "compile", "-c", ".c"})
 	if err == nil || !strings.Contains(err.Error(), ".a, .b") {
 		t.Errorf("clearing an undeclared path: %v, want a refusal naming the step's paths", err)
 	}
@@ -463,6 +474,8 @@ jobs:
 
 // TestEndToEndClearTaskCacheRefusesWhatItCannotName: each refusal names what the pipeline does have.
 func TestEndToEndClearTaskCacheRefusesWhatItCannotName(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -482,7 +495,7 @@ jobs:
 		{"no caches", "build", "lint", `"lint" declares no caches`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := cli.Run([]string{"clear-task-cache", path, "-j", tc.job, "-s", tc.step})
+			err := stepsRun(t, []string{"clear-task-cache", path, "-j", tc.job, "-s", tc.step})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("got %v, want an error containing %q", err, tc.want)
 			}
@@ -497,6 +510,8 @@ jobs:
 
 // TestEndToEndClearTaskCacheRefusesAnUnmappedWorker: the local cache must survive the refusal, or the command cleared half of what it was asked and said no.
 func TestEndToEndClearTaskCacheRefusesAnUnmappedWorker(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
 
@@ -505,7 +520,7 @@ func TestEndToEndClearTaskCacheRefusesAnUnmappedWorker(t *testing.T) {
 
 	placedCachePipeline(t, dir, "tags: [box]", report)
 
-	err := cli.Run([]string{"clear-task-cache", path, "-j", "build", "-s", "compile"})
+	err := stepsRun(t, []string{"clear-task-cache", path, "-j", "build", "-s", "compile"})
 	if err == nil || !strings.Contains(err.Error(), "--worker box=") {
 		t.Fatalf("clearing a placed step with no --worker: %v, want a refusal naming the tag", err)
 	}
@@ -520,6 +535,8 @@ func TestEndToEndClearTaskCacheRefusesAnUnmappedWorker(t *testing.T) {
 
 // TestEndToEndClearTaskCacheOnACloudWorker: a launched machine took its caches with it, so there is nothing to do; a parked one keeps them on a disk only a start reaches, which costs money and so is asked for.
 func TestEndToEndClearTaskCacheOnACloudWorker(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := placedCachePipeline(t, dir, "tags: [box]", filepath.Join(dir, "runs.txt"))
 
@@ -530,7 +547,7 @@ func TestEndToEndClearTaskCacheOnACloudWorker(t *testing.T) {
 		t.Errorf("a launch-rung worker printed %q, want it to say there is nothing to clear", out)
 	}
 
-	err := cli.Run([]string{"clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=aws://stopped/i-0123456789abcdef0?region=us-east-2"})
+	err := stepsRun(t, []string{"clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=aws://stopped/i-0123456789abcdef0?region=us-east-2"})
 	if err == nil || !strings.Contains(err.Error(), "--start") {
 		t.Errorf("a stopped worker without --start: %v, want a refusal naming --start", err)
 	}
@@ -549,7 +566,7 @@ func TestEndToEndClearTaskCacheOnADockerWorker(t *testing.T) {
 
 	release := holdTaskCacheVolumes(t)
 
-	err := cli.Run([]string{"clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=local:"})
+	err := stepsRun(t, []string{"clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=local:"})
 	if err == nil {
 		t.Error("clearing a volume a container mounts succeeded, want the daemon's refusal reported as a failure")
 	}
@@ -609,6 +626,8 @@ func holdTaskCacheVolumes(t *testing.T) func() {
 
 // TestEndToEndClearTaskCacheOnAnSSHWorker: a bare worker's cache is a directory under its root.
 func TestEndToEndClearTaskCacheOnAnSSHWorker(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
 	worker := testsshd.New(t).URL
@@ -697,6 +716,8 @@ func TestEndToEndPlacedTaskCacheOfARemovedStepIsReaped(t *testing.T) {
 }
 
 func TestEndToEndSSHWorkerTaskCacheOfARemovedStepIsReaped(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	assertReaped(t, "tags: [box]", func(path string) {
@@ -725,6 +746,8 @@ func TestEndToEndTaskCacheReapStaysInItsWorker(t *testing.T) {
 
 // TestEndToEndSSHWorkerCacheThatCannotBeRestoredIsEmpty: f/x is a file in the input, so the cache under it cannot be put back; that is an empty cache, as on this machine, never a failed step, and the other cache is still kept.
 func TestEndToEndSSHWorkerCacheThatCannotBeRestoredIsEmpty(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
 	worker := testsshd.New(t).URL
@@ -765,6 +788,8 @@ jobs:
 
 // TestEndToEndAgentContextSeesItsCache: the cache is in place before the agent reads its context_paths:, as a Concourse cache is mounted before the task starts, so a context file under the cache is the cache's, not the input copy it shadows. The first run has no context_paths: because an empty cache shadows the file it would read.
 func TestEndToEndAgentContextSeesItsCache(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	run := []turn{callsTool("run_shell", map[string]any{"command": "echo from-cache > src/cache/notes"}), says("done")}
 	fake := newFakeLLM(t, append(run, run...)...)
@@ -814,6 +839,8 @@ jobs:
 
 // TestEndToEndAgentCacheSurvivesAFailedPrepare: once attached, the cache is filed back on every way out, so an agent refused before its first turn (a context path its cache does not hold) keeps it.
 func TestEndToEndAgentCacheSurvivesAFailedPrepare(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	report := filepath.Join(dir, "seen.txt")
 	run := []turn{callsTool("run_shell", map[string]any{"command": "cat .cache/notes >> " + report + " 2>/dev/null; echo kept > .cache/notes"}), says("done")}
@@ -851,7 +878,7 @@ jobs:
 
 	mustRun(t, "run", pipeline(""), "--force")
 
-	err := cli.Run([]string{"run", pipeline("context_paths: [.cache/missing]"), "--force"})
+	err := stepsRun(t, []string{"run", pipeline("context_paths: [.cache/missing]"), "--force"})
 	if err == nil {
 		t.Fatal("a context path the cache does not hold was not refused")
 	}

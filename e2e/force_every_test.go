@@ -5,14 +5,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestForceDoesNotReplayTakenVersions pins #145: --force skips the step cache
 // and nothing more. The put is the point — the cache never skips an effect, so
 // a replayed version shows up as an extra line.
 func TestForceDoesNotReplayTakenVersions(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	versions := filepath.Join(dir, "versions.json")
 	published := filepath.Join(dir, "published.log")
@@ -48,7 +48,7 @@ jobs:
 
 	run := func(args ...string) string {
 		return captureStdout(t, func() {
-			err := cli.Run(append([]string{"run", path, "--job", "build"}, args...))
+			err := stepsRun(t, append([]string{"run", path, "--job", "build"}, args...))
 			if err != nil {
 				t.Fatalf("run %v: %v", args, err)
 			}
@@ -81,6 +81,8 @@ jobs:
 // taken versions so its execution assertions hold on every rerun against one
 // state file, which --force alone no longer guarantees.
 func TestStepsTestRerunsEveryVersionsDeterministically(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -107,7 +109,7 @@ jobs:
 `)
 
 	for i := range 2 {
-		err := cli.Run([]string{"test", path})
+		err := stepsRun(t, []string{"test", path})
 		if err != nil {
 			t.Fatalf("steps test, run %d: %v", i+1, err)
 		}

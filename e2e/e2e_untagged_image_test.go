@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/testdocker"
 )
@@ -270,7 +269,7 @@ jobs:
 	}
 
 	out := captureStdout(t, func() {
-		err := cli.Run(append([]string{"runs", "where"}, readArgs(path)...))
+		err := stepsRun(t, append([]string{"runs", "where"}, readArgs(path)...))
 		if err != nil {
 			t.Fatalf("steps runs where: %v", err)
 		}

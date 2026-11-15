@@ -11,6 +11,8 @@ import (
 
 // The seam from the minted run id and recorded revision to the environment a step sees. The second run being a cache hit is the "never hashed" claim: the merkle key did not move though the run id did.
 func TestBuildMetadataNamesTheRecordedRun(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	state := filepath.Join(dir, "meta.db")
 	log := filepath.Join(dir, "meta.log")
@@ -25,7 +27,7 @@ jobs:
 `)
 
 	for range 2 {
-		err := cli.Run([]string{"run", path, "--job", "build", "--db", state})
+		err := stepsRun(t, []string{"run", path, "--job", "build", "--db", state})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -46,6 +48,8 @@ jobs:
 }
 
 func TestBuildMetadataUnderTheDaemon(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct{ name, flag, want string }{
 		{name: "default", want: ""},
 		{name: "external-url", flag: "https://ci.example/steps/", want: "https://ci.example/steps"},
@@ -94,6 +98,8 @@ jobs:
 
 // Crosses the orchestrator-to-worker seam through the real transport: build metadata rides each exec, not the container.
 func TestBuildMetadataReachesAPlacedStep(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -113,7 +119,7 @@ jobs:
     run: cp seen/ids `+out+`
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "placed", "--db", filepath.Join(dir, "p.db"), "--worker", "gpu=" + worker})
+	err := stepsRun(t, []string{"run", path, "--job", "placed", "--db", filepath.Join(dir, "p.db"), "--worker", "gpu=" + worker})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -126,6 +132,8 @@ jobs:
 
 // A check is not part of a build: a run id in a version would mint one per run.
 func TestBuildMetadataNeverReachesACheck(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	state := filepath.Join(dir, "c.db")
 	out := filepath.Join(dir, "seen")
@@ -147,7 +155,7 @@ jobs:
 `)
 
 	for range 2 {
-		err := cli.Run([]string{"run", path, "--job", "build", "--db", state, "--force"})
+		err := stepsRun(t, []string{"run", path, "--job", "build", "--db", state, "--force"})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}

@@ -14,7 +14,7 @@ func TestProgressAutoIsPlainOffATerminal(t *testing.T) {
 	t.Parallel()
 
 	for mode, want := range map[string]bool{"auto": false, "plain": false, "tty": true} {
-		if got := (ProgressFlags{Progress: mode}).wantsLive(); got != want {
+		if got := (ProgressFlags{Progress: mode}).wantsLive(os.Stdout); got != want {
 			t.Errorf("--progress=%s live = %v, want %v", mode, got, want)
 		}
 	}
@@ -46,7 +46,7 @@ func TestProgressAutoIsLiveOnATerminal(t *testing.T) {
 		t.Setenv("CI", tc.ci)
 		t.Setenv("TERM", tc.term)
 
-		if got := (ProgressFlags{Progress: "auto"}).wantsLive(); got != tc.want {
+		if got := (ProgressFlags{Progress: "auto"}).wantsLive(os.Stdout); got != tc.want {
 			t.Errorf("CI=%q TERM=%q: live = %v, want %v", tc.ci, tc.term, got, tc.want)
 		}
 	}

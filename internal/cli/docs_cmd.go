@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -21,7 +22,9 @@ type DocsCmd struct {
 // (see pageOutput). Raw rather than styled: a terminal markdown renderer
 // linked a second chroma and goldmark beside the web UI's, and their lexer
 // and style registries were half of every invocation's startup heap.
-func (d *DocsCmd) Run() error {
+func (d *DocsCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	name := d.Page
 	if name == "" {
 		name = "README.md"
@@ -38,8 +41,8 @@ func (d *DocsCmd) Run() error {
 
 	page := string(body)
 
-	if stdoutIsTerminal() && !d.NoPager {
-		err = pageOutput(page)
+	if isTerminal(out) && !d.NoPager {
+		err = pageOutput(out, streams.Err, page)
 		if err == nil {
 			return nil
 		}
@@ -47,7 +50,7 @@ func (d *DocsCmd) Run() error {
 		// lost page.
 	}
 
-	fmt.Print(page)
+	_, _ = fmt.Fprint(out, page)
 
 	return nil
 }
@@ -56,7 +59,7 @@ func (d *DocsCmd) Run() error {
 // default is less with -F (quit immediately when it fits one screen, so
 // short pages behave exactly as if unpaged), -R (pass ANSI colors), and -X
 // (no screen clear on exit, so the page stays in scrollback).
-func pageOutput(text string) error {
+func pageOutput(out, errOut io.Writer, text string) error {
 	pager := os.Getenv("PAGER")
 	if pager == "" {
 		pager = "less"
@@ -66,8 +69,8 @@ func pageOutput(text string) error {
 	cmd := exec.Command("sh", "-c", pager) //nolint:gosec,noctx // PAGER is the operator's own environment, and an interactive pager outlives any request context
 	cmd.Env = append(os.Environ(), "LESS=FRX")
 	cmd.Stdin = strings.NewReader(text)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = out
+	cmd.Stderr = errOut
 
 	err := cmd.Run()
 	if err != nil {
@@ -88,10 +91,15 @@ func pageNames() []string {
 	return names
 }
 
-// stdoutIsTerminal mirrors wantNoColor's stderr check for stdout: a pager and
+// isTerminal mirrors wantNoColor's stderr check for the stream a command writes to (a buffer handed to RunWith is never one): a pager and
 // live progress belong on a live terminal, plain output everywhere else.
-func stdoutIsTerminal() bool {
-	info, err := os.Stdout.Stat()
+func isTerminal(out io.Writer) bool {
+	file, ok := out.(*os.File)
+	if !ok {
+		return false
+	}
+
+	info, err := file.Stat()
 	if err != nil {
 		return false
 	}

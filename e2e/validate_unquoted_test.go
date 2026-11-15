@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // unquotedPipeline renders a check: and a custom tool's run: from the two
@@ -47,7 +45,7 @@ func TestValidateWarnsOnUnquotedShellTemplateValues(t *testing.T) {
 		stderr := captureStderr(t)
 		path := writePipeline(t, t.TempDir(), fmt.Sprintf(unquotedPipeline, "{{ .version.ref }}", "{{ .args.body }}"))
 
-		err := cli.Run([]string{"validate", path, "--syntax-only"})
+		err := stepsRun(t, []string{"validate", path, "--syntax-only"})
 		if err != nil {
 			t.Fatalf("a warning failed validate: %v", err)
 		}
@@ -67,7 +65,7 @@ func TestValidateWarnsOnUnquotedShellTemplateValues(t *testing.T) {
 		stderr := captureStderr(t)
 		path := writePipeline(t, t.TempDir(), fmt.Sprintf(unquotedPipeline, "{{ .version.ref | shellquote }}", "{{ .args.body | shellquote }}"))
 
-		err := cli.Run([]string{"validate", path, "--syntax-only"})
+		err := stepsRun(t, []string{"validate", path, "--syntax-only"})
 		if err != nil {
 			t.Fatalf("validate: %v", err)
 		}
@@ -101,7 +99,7 @@ jobs:
   - get: repo
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err != nil {
 		t.Fatalf("a warning failed validate: %v", err)
 	}

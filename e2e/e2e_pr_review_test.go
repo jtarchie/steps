@@ -31,13 +31,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jtarchie/steps/internal/cli"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestEndToEndPRReviewExample runs examples/pr-review.yml end to end.
@@ -46,8 +45,6 @@ func TestEndToEndPRReviewExample(t *testing.T) {
 	fake := newRoutedFakeLLM(t, reviewScript())
 	github := newFakeGitHub(t)
 	github.addPR(docPR())
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-
 	path := writeExampleAgainstFake(t, dir, repoFile("examples", "pr-review.yml"), fake.URL, github.URL())
 
 	// Create and migrate the state db before anything races for it. Two
@@ -63,7 +60,7 @@ func TestEndToEndPRReviewExample(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- cli.Run([]string{"test", path, "--var", "pr_repo=" + fakeRepo})
+		done <- stepsRun(t, []string{"test", path, "--var", "pr_repo=" + fakeRepo})
 	}()
 
 	// Answer the gate, but never outlive the run: if the plan died before it
@@ -348,6 +345,8 @@ func reviewerFindings(dim string) string {
 // seen all three. Serially the first request waits out the barrier and the
 // test fails with a message saying so, rather than passing slowly.
 func TestEndToEndPRReviewFanOutIsConcurrent(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	barrier := newRendezvous(3)

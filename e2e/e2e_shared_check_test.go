@@ -14,6 +14,8 @@ import (
 // in the same environment, is run once and its answer handed to each. Each
 // pipeline still records its own history and triggers its own jobs.
 func TestIdenticalChecksRunOncePerWindow(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	checks := filepath.Join(dir, "checks.log")
 	ran := filepath.Join(dir, "ran.log")

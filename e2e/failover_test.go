@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/pipeline"
 )
 
@@ -74,7 +73,7 @@ func TestFailoverUsesTheBackupWhenThePrimaryIsDown(t *testing.T) {
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	stderr := logs()
 
 	if err != nil {
@@ -111,7 +110,7 @@ func TestFailoverFailsWhenEverySourceIsDown(t *testing.T) {
 
 	path := failoverPipeline(t, dir, dead.URL, alsoDead.URL)
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err == nil {
 		t.Fatal("run succeeded with every source down")
 	}
@@ -175,7 +174,7 @@ jobs:
       - Build it.
 `, dead.URL, live.URL))
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err == nil {
 		t.Fatal("preflight passed with an agent whose only model is down and has no fallback")
 	}

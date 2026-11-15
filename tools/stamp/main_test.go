@@ -17,7 +17,7 @@ func repo(t *testing.T) string {
 	t.Chdir(dir)
 
 	// A hook run inherits the GIT_ ones from git, and the release gate exports the skip; a test must inherit neither from whoever ran it.
-	for _, name := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "STEPS_TESTSHARD_SKIP"} {
+	for _, name := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GOFLAGS"} {
 		t.Setenv(name, "")
 
 		_ = os.Unsetenv(name)
@@ -211,7 +211,7 @@ func TestATreeEditedDuringTheRunIsNotSealed(t *testing.T) {
 	}
 }
 
-// A run with STEPS_TESTSHARD_SKIP set left tests out, so it vouches for less than the stamp says.
+// A run with -skip in GOFLAGS left tests out, so it vouches for less than the stamp says.
 func TestARunThatSkippedTestsIsNotSealed(t *testing.T) {
 	dir := repo(t)
 	ctx := context.Background()
@@ -221,11 +221,11 @@ func TestARunThatSkippedTestsIsNotSealed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("STEPS_TESTSHARD_SKIP", "TestSlow")
+	t.Setenv("GOFLAGS", "-skip=TestSlow")
 
 	err = seal(ctx)
-	if err == nil || !strings.Contains(err.Error(), "STEPS_TESTSHARD_SKIP") {
-		t.Fatalf("error = %v, want a refusal naming STEPS_TESTSHARD_SKIP", err)
+	if err == nil || !strings.Contains(err.Error(), "GOFLAGS") {
+		t.Fatalf("error = %v, want a refusal naming GOFLAGS", err)
 	}
 
 	_, statErr := os.Stat(filepath.Join(dir, ".git", stampFile))

@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // bareFixture is a bare clone of a one-commit fixture: a remote a put can push to by path.
@@ -30,6 +28,8 @@ func quietRemote(t *testing.T, repo string) {
 
 // Every fixture a put pushes into — bare, or a working repo pushed to on another branch (the factory's) — spawns no maintenance from receive-pack.
 func TestGitFixturesSpawnNoMaintenanceOnPush(t *testing.T) {
+	t.Parallel()
+
 	for name, remote := range map[string]func(*testing.T) string{
 		"bare": bareFixture,
 		"working": func(t *testing.T) string {
@@ -92,7 +92,7 @@ jobs:
 
 			logs := captureStderr(t)
 
-			err := cli.Run([]string{path})
+			err := stepsRun(t, []string{path})
 			if err != nil {
 				t.Fatalf("run: %v\n%s", err, logs())
 			}
@@ -163,7 +163,7 @@ func TestEndToEndBuiltinGitPutRefPushesThatCommit(t *testing.T) {
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	out := logs()
 
 	if err != nil {
@@ -188,7 +188,7 @@ func TestEndToEndBuiltinGitPutBadRefFailsNamingIt(t *testing.T) {
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("the put succeeded with a ref that is no commit")
 	}
@@ -213,7 +213,7 @@ func TestEndToEndBuiltinGitPutRefKeepsTheLease(t *testing.T) {
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("the put succeeded over a branch that moved past its lease")
 	}
@@ -238,7 +238,7 @@ func TestEndToEndBuiltinGitPutRefWithLeaseAdvances(t *testing.T) {
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v\n%s", err, logs())
 	}

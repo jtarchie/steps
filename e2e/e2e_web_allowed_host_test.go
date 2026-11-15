@@ -39,8 +39,9 @@ func hostCall(t *testing.T, served *webProcess, method, path, host string, origi
 	return resp.StatusCode
 }
 
-// Not t.Parallel(): startWeb backgrounds cli.Run in this process and stop signals the whole test binary.
 func TestAllowedHostRefusesEveryOtherName(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	writePipelineFile(t, path, `
@@ -78,8 +79,10 @@ jobs:
 	}
 }
 
-// A daemon bound to loopback has no name a browser can honestly reach it by other than a loopback one, so with no --allowed-host it answers only those — and the --external-url it was told it is published at, which is the name a proxy on this machine forwards. Anything else is a rebinding page. Not t.Parallel(), for startWeb's reason.
+// A daemon bound to loopback has no name a browser can honestly reach it by other than a loopback one, so with no --allowed-host it answers only those — and the --external-url it was told it is published at, which is the name a proxy on this machine forwards. Anything else is a rebinding page.
 func TestALoopbackListenRefusesOtherNamesByDefault(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	writePipelineFile(t, path, `

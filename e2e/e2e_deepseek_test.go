@@ -61,6 +61,8 @@ jobs:
 
 // TestDeepSeekAssistantTurnsCarryReasoningContent is a DeepSeek model in thinking mode refusing a tool history whose assistant turns lack reasoning_content: context_paths: arrives as a synthetic read_file turn no model reasoned about, so the implementer's first request 400'd (measured through OpenCode, intermittently by upstream: without the key 1 in 3 failed, with an empty one 0 in 6).
 func TestDeepSeekAssistantTurnsCarryReasoningContent(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeLLM(t, says("Cite line numbers."))
 
 	mustRun(t, contextPathsPipeline(t, fake.URL, "deepseek-v4-flash"))
@@ -79,6 +81,8 @@ func TestDeepSeekAssistantTurnsCarryReasoningContent(t *testing.T) {
 
 // TestOtherModelsSendNoReasoningContent is the control: OpenAI's own schema has no such field, so every other model's request is unchanged.
 func TestOtherModelsSendNoReasoningContent(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeLLM(t, says("Cite line numbers."))
 
 	mustRun(t, contextPathsPipeline(t, fake.URL, "test-model"))
@@ -92,6 +96,8 @@ func TestOtherModelsSendNoReasoningContent(t *testing.T) {
 
 // TestDeepSeekReasoningIsSentBackVerbatim: DeepSeek requires the model's own reasoning_content back on every later request that carries tools, not merely the key; the empty value is only for turns no model produced.
 func TestDeepSeekReasoningIsSentBackVerbatim(t *testing.T) {
+	t.Parallel()
+
 	const thought = "The listing will show what exists."
 
 	fake := newFakeLLM(t,

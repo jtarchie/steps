@@ -4,13 +4,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestANoteReachesTheTerminalAndTheTranscript crosses the whole seam a step_note travels: the engine says something about a step, the terminal prints it, and the run's own record keeps it — so the web transcript shows what used to reach only the shell that ran the job. Not parallel: captureStdout swaps os.Stdout.
 func TestANoteReachesTheTerminalAndTheTranscript(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 resource_types:
 - name: listing
@@ -72,6 +73,8 @@ jobs:
 
 // TestAFetchedVersionIsSaidOnItsGetsRow: the version a get fetched is about that get, so the transcript draws it on the get's row. Recorded against no step, it was drawn in a panel above the whole transcript, apart from the step it describes — for a version: every fan-out, one panel per build with nothing saying which build was which.
 func TestAFetchedVersionIsSaidOnItsGetsRow(t *testing.T) {
+	t.Parallel()
+
 	for _, mode := range []string{"", "\n    version: every"} {
 		path := writePipeline(t, t.TempDir(), `
 resource_types:
@@ -141,6 +144,8 @@ func latestRunEvents(t *testing.T, path string) []store.RunEventRow {
 
 // TestHowToResumeIsSaidToTheTerminalOnly: "resume with: steps run …" and "workspace kept at …" are directions for the shell that ran the job; the web page has Retry for the first and no filesystem for the second, and drew both as panels above the transcript.
 func TestHowToResumeIsSaidToTheTerminalOnly(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 jobs:
 - name: build
@@ -150,7 +155,7 @@ jobs:
 `)
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("expected the run to fail")
 		}
@@ -171,6 +176,8 @@ jobs:
 
 // TestAPutVersionIsSaidOnItsPutsRow: Concourse shows the version a put produced on the put step, and a put here has no implicit get to show it instead — so what out: answered is said on the put's own row, and so is its answering nothing.
 func TestAPutVersionIsSaidOnItsPutsRow(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 resource_types:
 - name: publishes

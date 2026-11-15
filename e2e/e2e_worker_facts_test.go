@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/testsshd"
 )
@@ -45,6 +44,8 @@ func runPlacements(t *testing.T, pipelinePath string) []store.Placement {
 // something this process can honestly know, and a wrong number in a cost
 // column is worse than no column.
 func TestEndToEndRecordsWhatRanTheStep(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -61,7 +62,7 @@ jobs:
     run: test -s seed/blob
 `)
 
-	err := cli.Run([]string{path, "--worker", "gpu=" + worker})
+	err := stepsRun(t, []string{path, "--worker", "gpu=" + worker})
 	if err != nil {
 		t.Fatalf("running: %v", err)
 	}
@@ -123,6 +124,8 @@ func assertBytesCrossed(t *testing.T, placement store.Placement) {
 // TestEndToEndReportsWhereStepsRan is the other half: a row nothing can read
 // is not a record. `steps runs --where` is the CLI that answers it.
 func TestEndToEndReportsWhereStepsRan(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -139,13 +142,13 @@ jobs:
     run: test -s seed/blob
 `)
 
-	err := cli.Run([]string{path, "--worker", "gpu=" + worker})
+	err := stepsRun(t, []string{path, "--worker", "gpu=" + worker})
 	if err != nil {
 		t.Fatalf("running: %v", err)
 	}
 
 	out := captureStdout(t, func() {
-		err = cli.Run(append([]string{"runs", "where"}, readArgs(path)...))
+		err = stepsRun(t, append([]string{"runs", "where"}, readArgs(path)...))
 	})
 	if err != nil {
 		t.Fatalf("steps runs --where: %v", err)
@@ -177,6 +180,8 @@ jobs:
 // worker is the ordinary case, and an empty table for it reads as "the
 // record is broken" rather than "nothing was placed".
 func TestEndToEndWhereNamesOneRunAndSaysWhenNoneWerePlaced(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -193,21 +198,21 @@ jobs:
     run: "true"
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "placed", "--worker", "gpu=" + worker})
+	err := stepsRun(t, []string{"run", path, "--job", "placed", "--worker", "gpu=" + worker})
 	if err != nil {
 		t.Fatalf("running the placed job: %v", err)
 	}
 
 	placedRun := latestRunID(t, path)
 
-	err = cli.Run([]string{"run", path, "--job", "unplaced"})
+	err = stepsRun(t, []string{"run", path, "--job", "unplaced"})
 	if err != nil {
 		t.Fatalf("running the unplaced job: %v", err)
 	}
 
 	// No --run: the newest, which is the one that never left this machine.
 	out := captureStdout(t, func() {
-		err = cli.Run(append([]string{"runs", "where"}, readArgs(path)...))
+		err = stepsRun(t, append([]string{"runs", "where"}, readArgs(path)...))
 	})
 	if err != nil {
 		t.Fatalf("steps runs --where: %v", err)
@@ -219,7 +224,7 @@ jobs:
 
 	// Named: the older run, which did.
 	out = captureStdout(t, func() {
-		err = cli.Run(append([]string{"runs", "where", placedRun}, readArgs(path)...))
+		err = stepsRun(t, append([]string{"runs", "where", placedRun}, readArgs(path)...))
 	})
 	if err != nil {
 		t.Fatalf("steps runs --where --run: %v", err)
@@ -256,6 +261,8 @@ func latestRunID(t *testing.T, pipelinePath string) string {
 // and bills an instance, and `steps runs --where` reported that the run never
 // left this machine.
 func TestEndToEndRecordsWhereAHookRan(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -272,7 +279,7 @@ jobs:
 `)
 
 	// The job fails: the point is the hook that ran because it did.
-	err := cli.Run([]string{path, "--worker", "gpu=" + worker})
+	err := stepsRun(t, []string{path, "--worker", "gpu=" + worker})
 	if err == nil {
 		t.Fatal("the pipeline was supposed to fail so its on_failure hook would run")
 	}
@@ -312,6 +319,8 @@ jobs:
 // first, and one of two billed machines vanishes from the record — silently,
 // because an upsert is a success.
 func TestEndToEndRecordsEveryTaggedHookSeparately(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -333,7 +342,7 @@ jobs:
 
 	// The job fails: the step runs `false`, which is what makes on_failure
 	// fire. Its error is the point, not a problem.
-	_ = cli.Run([]string{path, "--worker", "gpu=" + worker})
+	_ = stepsRun(t, []string{path, "--worker", "gpu=" + worker})
 
 	placements := runPlacements(t, path)
 

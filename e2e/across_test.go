@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestAcrossCachesPerCell is the headline advantage over Concourse, which
 // re-runs the entire matrix on any change: each cell is its own merkle node,
 // so editing one value re-runs only the cells that value appears in.
 func TestAcrossCachesPerCell(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -55,6 +55,8 @@ jobs:
 // at all — a matrix that silently runs zero steps is the worst possible
 // reading of a typo.
 func TestAcrossRejectsAnEmptyAxis(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -68,7 +70,7 @@ jobs:
     run: "true"
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("an axis with no values loaded")
 	}
@@ -81,6 +83,8 @@ jobs:
 // TestAcrossRejectsADuplicateVar covers the axis that would silently shadow
 // another.
 func TestAcrossRejectsADuplicateVar(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -96,7 +100,7 @@ jobs:
     run: "true"
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("a duplicated axis name loaded")
 	}
@@ -109,6 +113,8 @@ jobs:
 // TestAcrossRejectsAnUnknownVar verifies a typo in an interpolation is a load
 // error rather than an empty string substituted into a command.
 func TestAcrossRejectsAnUnknownVar(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -122,7 +128,7 @@ jobs:
     run: echo {{ .vars.suit }}
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("a misspelled variable loaded")
 	}
@@ -136,6 +142,8 @@ jobs:
 // for every cell and evaluated none of their asserts, so a regression in a
 // matrix task passed the suite green.
 func TestAcrossCellsRerunUnderForce(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -159,7 +167,7 @@ jobs:
 	assertLineCount(t, log, 2)
 
 	// Forced, both run again.
-	err := cli.Run([]string{"run", path, "--job", "build", "--force"})
+	err := stepsRun(t, []string{"run", path, "--job", "build", "--force"})
 	if err != nil {
 		t.Fatalf("forced run: %v", err)
 	}
@@ -193,7 +201,7 @@ jobs:
 	}
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"validate", path})
+		err = stepsRun(t, []string{"validate", path})
 	})
 	if err != nil {
 		t.Fatalf("validate: %v", err)

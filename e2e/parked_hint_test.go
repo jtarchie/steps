@@ -35,7 +35,7 @@ func TestParkedApprovalPrintsACommandThatDecidesIt(t *testing.T) {
 
 			done := make(chan error, 1)
 
-			go func() { done <- cli.Run(append([]string{verb[0], filepath.Base(path)}, verb[1:]...)) }()
+			go func() { done <- stepsRun(t, append([]string{verb[0], filepath.Base(path)}, verb[1:]...)) }()
 
 			approve, reject, found := strings.Cut(printedCommand(t, lines, "approval "), "  |  ")
 			if !found {
@@ -104,7 +104,7 @@ jobs:
 
 	done := make(chan error, 1)
 
-	go func() { done <- cli.Run([]string{"run", filepath.Base(path), "--job", "deploy"}) }()
+	go func() { done <- stepsRun(t, []string{"run", filepath.Base(path), "--job", "deploy"}) }()
 
 	err := runPrinted(printedCommand(t, lines, "question "), "staging")
 	if err != nil {

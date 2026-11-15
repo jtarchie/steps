@@ -109,7 +109,7 @@ func (r *RunCmd) applyReplay(
 
 // Run loads the pipeline, selects a job, and runs it once via
 // pipeline.RunJob.
-func (r *RunCmd) Run() error {
+func (r *RunCmd) Run(streams Streams) error {
 	cfg, err := r.Load(r.Path, resolvePipelineName(r.Path, r.Name))
 	if err != nil {
 		return err
@@ -126,7 +126,7 @@ func (r *RunCmd) Run() error {
 	}
 	defer cleanup()
 
-	ctx, cancel := withSignalCancel(context.Background())
+	ctx, cancel := streams.cancellable()
 	defer cancel()
 
 	ctx = pipeline.WithSecrets(ctx, resolver)
@@ -173,7 +173,7 @@ func (r *RunCmd) Run() error {
 		events.Note(ctx, events.NoteInfo, fmt.Sprintf("%d more version(s) of %s waiting; run it again to build the next", sets, job.Name))
 	}
 
-	ctx, undraw := r.draw(ctx, st)
+	ctx, undraw := r.draw(ctx, streams.Out, st)
 	runErr := pipeline.RunJob(ctx, cfg, job, st, opts)
 
 	undraw()
@@ -233,7 +233,9 @@ type TestCmd struct {
 // job plus the pipeline-level assert.execution. It returns a non-nil error if
 // any job failed or the pipeline assert mismatched, so the process exits
 // non-zero.
-func (t *TestCmd) Run() error {
+func (t *TestCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	cfg, err := t.Load(t.Pipeline, resolvePipelineName(t.Pipeline, t.Name))
 	if err != nil {
 		return err
@@ -250,7 +252,7 @@ func (t *TestCmd) Run() error {
 	}
 	defer cleanup()
 
-	ctx, cancel := withSignalCancel(context.Background())
+	ctx, cancel := streams.cancellable()
 	defer cancel()
 
 	ctx = pipeline.WithSecrets(ctx, resolver)
@@ -270,7 +272,7 @@ func (t *TestCmd) Run() error {
 
 	slog.Info("pipeline.test", "pipeline", t.Pipeline, "jobs", len(cfg.Jobs))
 
-	ctx, undraw := t.draw(ctx, st)
+	ctx, undraw := t.draw(ctx, streams.Out, st)
 	defer undraw()
 
 	for i := range cfg.Jobs {
@@ -304,7 +306,7 @@ func (t *TestCmd) Run() error {
 		return fmt.Errorf("test: %d job(s) failed:\n%s", len(failures), strings.Join(failures, "\n"))
 	}
 
-	fmt.Printf("%d/%d passed\n", len(executed), len(executed))
+	sayf(out, "%d/%d passed\n", len(executed), len(executed))
 
 	return nil
 }

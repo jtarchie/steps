@@ -44,7 +44,7 @@ func TestRunsAbortNamesExactlyOneThingToStop(t *testing.T) {
 	} {
 		cmd.Target = "http://127.0.0.1:1"
 
-		err := cmd.Run()
+		err := cmd.Run(std())
 		if err == nil || !strings.Contains(err.Error(), "not both") {
 			t.Errorf("run %q queued %q = %v, want refused before anything is sent", cmd.RunID, cmd.Queued, err)
 		}
@@ -187,7 +187,7 @@ func TestPipelineListShowsABrokenPipelineAndWhy(t *testing.T) {
 
 	var err error
 
-	out := captureStdout(t, func() { err = (&PipelineListCmd{TargetFlags{Target: daemon.URL}}).Run() })
+	out := captureStdout(t, func() { err = (&PipelineListCmd{TargetFlags{Target: daemon.URL}}).Run(std()) })
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestSetConfirmsARepairAsARepair(t *testing.T) {
 	})
 
 	out := captureStdout(t, func() {
-		_ = (&PipelineSetCmd{}).confirm("app", Held{Broken: "workspace: root is not writable"}, idlePipeline, nil)
+		_ = (&PipelineSetCmd{}).confirm(os.Stdout, "app", Held{Broken: "workspace: root is not writable"}, idlePipeline, nil)
 	})
 
 	if !strings.Contains(out, "app is not being served (workspace: root is not writable); this set will repair it") || strings.Contains(out, "new to this daemon") {
@@ -239,7 +239,7 @@ func TestAskTakesAYesAndNothingElse(t *testing.T) {
 		stdin := os.Stdin
 		os.Stdin = reader
 
-		_ = captureStdout(t, func() { err = ask("go?", "not done") })
+		_ = captureStdout(t, func() { err = ask(os.Stdout, "go?", "not done") })
 
 		os.Stdin = stdin
 		_ = reader.Close()
@@ -298,7 +298,7 @@ func TestAVerbTheDaemonRefusesFailsTheCommand(t *testing.T) {
 	target := TargetFlags{Target: daemon.URL}
 	ghost := PipelineNameFlag{Pipeline: "ghost"}
 
-	for verb, cmd := range map[string]interface{ Run() error }{
+	for verb, cmd := range map[string]interface{ Run(Streams) error }{
 		"destroy": &PipelineDestroyCmd{TargetFlags: target, PipelineNameFlag: ghost, NonInteractive: true},
 		"pause":   &PipelinePauseCmd{TargetFlags: target, PipelineNameFlag: ghost},
 		"unpause": &PipelineUnpauseCmd{TargetFlags: target, PipelineNameFlag: ghost},
@@ -306,7 +306,7 @@ func TestAVerbTheDaemonRefusesFailsTheCommand(t *testing.T) {
 	} {
 		var err error
 
-		out := captureStdout(t, func() { err = cmd.Run() })
+		out := captureStdout(t, func() { err = cmd.Run(std()) })
 		if err == nil {
 			t.Errorf("%s of something the daemon does not have succeeded, printing %q", verb, out)
 		}
@@ -315,7 +315,7 @@ func TestAVerbTheDaemonRefusesFailsTheCommand(t *testing.T) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = (&PipelineDestroyCmd{TargetFlags: target, PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}, NonInteractive: true}).Run()
+		err = (&PipelineDestroyCmd{TargetFlags: target, PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}, NonInteractive: true}).Run(std())
 	})
 	if err != nil || !strings.Contains(out, "destroyed: app") {
 		t.Errorf("destroy app = %v, printing %q; want it destroyed and said so", err, out)

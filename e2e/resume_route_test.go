@@ -5,12 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestResumeFollowsTheRouteTheFirstAttemptTook is steps#231: a resume walked the plan in written order, so a step the first attempt's to: jumped past was run (an escalation, a second deploy), and a to: failure route's step was re-run because its consumed failure was never recorded as done.
 func TestResumeFollowsTheRouteTheFirstAttemptTook(t *testing.T) {
+	t.Parallel()
+
 	for name, route := range map[string]struct {
 		cmd, key string
 	}{
@@ -45,7 +45,7 @@ jobs:
 			writePipelineFile(t, flag, "")
 
 			out := captureStdout(t, func() {
-				err := cli.Run([]string{"run", path, "--resume", runID})
+				err := stepsRun(t, []string{"run", path, "--resume", runID})
 				if err != nil {
 					t.Fatalf("resume failed: %v", err)
 				}
@@ -66,6 +66,8 @@ jobs:
 
 // TestResumeKeepsTheLoopsVisitCount: a resumed run started max_visits at zero, so a loop interrupted near its limit got a fresh budget.
 func TestResumeKeepsTheLoopsVisitCount(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	bumps := filepath.Join(dir, "bumps.log")
 	flag := filepath.Join(dir, "fixed")
@@ -93,7 +95,7 @@ jobs:
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"run", path, "--resume", runID})
+		err = stepsRun(t, []string{"run", path, "--resume", runID})
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "exceeded max_visits 3") {

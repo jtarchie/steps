@@ -156,3 +156,6 @@ jobs:
 
 	return path
 }
+
+// std is the process's streams as they are at the call, for a test that drives a command's Run directly under captureStdout.
+func std() Streams { return Streams{Out: os.Stdout, Err: os.Stderr} }

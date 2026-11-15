@@ -13,8 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // workerPipeline is a job whose second step runs somewhere else, consuming the
@@ -104,10 +102,12 @@ func TestEndToEndWorkerStepCachesLikeALocalOne(t *testing.T) {
 // a step that says it needs a particular machine does not quietly run on this
 // one. The refusal has to come before any step executes.
 func TestEndToEndUnmappedTagRefusesBeforeRunning(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := workerPipeline(t, dir)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("a job with an unmapped tag ran anyway")
 	}
@@ -145,7 +145,7 @@ jobs:
       run: "true"
 `)
 
-	err := cli.Run([]string{path, "--worker", "gpu=local:"})
+	err := stepsRun(t, []string{path, "--worker", "gpu=local:"})
 	if err == nil {
 		t.Fatal("a step whose command exited 3 reported success")
 	}

@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestASecondEveryGetWithNothingNewIsIdleNotBroken: when the get fanning out is not the build's first, a rerun with every version taken is still "nothing new" — not a warning that the first get's check came back empty, which it did not.
 func TestASecondEveryGetWithNothingNewIsIdleNotBroken(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	feedA := filepath.Join(dir, "a.json")
 	feedB := filepath.Join(dir, "b.json")
@@ -54,6 +54,8 @@ jobs:
 
 // TestANewVersionOfASecondGetRerunsWhatFollowsIt: the steps after a build's second get hang off that get's node, so a new version of it — the first get unchanged — is new work, not a cache hit on the last build's.
 func TestANewVersionOfASecondGetRerunsWhatFollowsIt(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	feedA := filepath.Join(dir, "a.json")
 	feedB := filepath.Join(dir, "b.json")
@@ -99,6 +101,8 @@ jobs:
 
 // TestResumeRefusesWhenAnInPlaceGetsKeptArtifactIsGone: the second get of a build keeps its artifact on resume by the same rule as the first, so it refuses by the same rule too, rather than carrying on without what the skipped steps changed.
 func TestResumeRefusesWhenAnInPlaceGetsKeptArtifactIsGone(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -116,7 +120,7 @@ func TestResumeRefusesWhenAnInPlaceGetsKeptArtifactIsGone(t *testing.T) {
 	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"run", path, "--resume", runID})
+		err = stepsRun(t, []string{"run", path, "--resume", runID})
 	})
 
 	if err == nil {
@@ -174,11 +178,13 @@ jobs:
 // The in-place path ran hooks only on a successful fetch, so a second get that
 // failed fired nothing.
 func TestAnInPlaceGetThatFailsFiresItsFailureHooks(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	p := newHookPaths(dir)
 	path := writePipeline(t, dir, inPlaceGetHooksPipeline(p, "exit 1"))
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("the build succeeded with a get whose in: exits 1")
 	}
@@ -192,6 +198,8 @@ func TestAnInPlaceGetThatFailsFiresItsFailureHooks(t *testing.T) {
 // TestAnInPlaceGetThatSucceedsFiresItsSuccessHooks is the green half of the
 // same rule.
 func TestAnInPlaceGetThatSucceedsFiresItsSuccessHooks(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	p := newHookPaths(dir)
 	path := writePipeline(t, dir, inPlaceGetHooksPipeline(p, "echo r1 > ref.txt"))

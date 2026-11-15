@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // hookPaths bundles the counter files a hook pipeline writes to, so each test
@@ -46,7 +44,7 @@ func writePipelineFile(t *testing.T, path, pipeline string) {
 func wantRunError(t *testing.T, path string) {
 	t.Helper()
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("cli.Run succeeded, want a failure")
 	}
@@ -55,6 +53,8 @@ func wantRunError(t *testing.T, path string) {
 // TestStepHooksGreenTask verifies a green task fires on_success and ensure but
 // not on_failure.
 func TestStepHooksGreenTask(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	p := newHookPaths(dir)
 	path := pipelinePath(t, dir)
@@ -88,6 +88,8 @@ jobs:
 // TestStepHooksRedTask verifies a failing task fires on_failure and ensure
 // (not on_success), and that the job still fails.
 func TestStepHooksRedTask(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	p := newHookPaths(dir)
 	path := pipelinePath(t, dir)
@@ -119,6 +121,8 @@ jobs:
 
 // A hook agent's dir: fails at load like a plan agent's, not as a missing directory once the hook fires.
 func TestStepHookAgentDirCheckedAtLoad(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -142,7 +146,7 @@ jobs:
         - "why did it fail?"
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil || !strings.Contains(err.Error(), `on_failure hook agent "reviewer"`) {
 		t.Fatalf("validate: %v, want the hook agent's dir: refused", err)
 	}
@@ -150,6 +154,8 @@ jobs:
 
 // TestStepHooksOnSuccessFailureFailsGreenStep verifies a failing on_success hook turns an otherwise-green step into a failure.
 func TestStepHooksOnSuccessFailureFailsGreenStep(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	p := newHookPaths(dir)
 	path := pipelinePath(t, dir)
@@ -178,6 +184,8 @@ jobs:
 // TestStepHooksNotFiredWhenSkipped verifies a cached (skipped) task fires no
 // step hooks on a second run, while the job-level on_success still fires.
 func TestStepHooksNotFiredWhenSkipped(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	p := newHookPaths(dir)
 	path := pipelinePath(t, dir)
@@ -213,6 +221,8 @@ jobs:
 // TestJobHooksOnFailure verifies a job-level on_failure fires when a plan step
 // fails, and the job still reports failure.
 func TestJobHooksOnFailure(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	p := newHookPaths(dir)
 	path := pipelinePath(t, dir)
@@ -241,6 +251,8 @@ jobs:
 // TestStepHookEditRerunsParent verifies that editing a hook busts the parent
 // step's merkle cache, re-running the parent (and its hooks) on the next run.
 func TestStepHookEditRerunsParent(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	p := newHookPaths(dir)
 	path := pipelinePath(t, dir)
@@ -275,9 +287,9 @@ jobs:
 // A hook announces itself as a row of its own on the terminal, named after
 // what it ran, before what it prints — and only once: the old "job ...:
 // on_failure hook" note said the same thing again.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestHookAnnouncesItsOwnRow(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -294,7 +306,7 @@ jobs:
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run([]string{path}) })
+	out := captureStdout(t, func() { err = stepsRun(t, []string{path}) })
 	if err == nil {
 		t.Fatal("cli.Run succeeded, want a failure")
 	}

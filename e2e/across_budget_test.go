@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestAcrossBudgetStopsAdmittingCells is the whole feature: four cells are
@@ -19,6 +17,8 @@ import (
 // A job budget would have failed the run here and published nothing. That
 // difference is the reason this ceiling exists separately from that one.
 func TestAcrossBudgetStopsAdmittingCells(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	// Every reply reports 400 tokens, so a 700-token allowance covers exactly
@@ -79,6 +79,8 @@ jobs:
 // never started recorded nothing, so a rerun with a larger allowance picks up
 // exactly where the first stopped instead of paying for the whole matrix again.
 func TestAcrossBudgetLetsARerunFinishTheWork(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
 
@@ -129,6 +131,8 @@ jobs:
 // TestAcrossBudgetRejectsWhatItCannotEnforce covers the two spellings that
 // would look like a ceiling and be none.
 func TestAcrossBudgetRejectsWhatItCannotEnforce(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name, step, extraAgent, wantErr string
 	}{
@@ -219,7 +223,7 @@ jobs:
   plan:
 `+tc.step+"\n")
 
-			err := cli.Run([]string{"validate", path})
+			err := stepsRun(t, []string{"validate", path})
 			if err == nil {
 				t.Fatal("the pipeline loaded")
 			}
@@ -240,6 +244,8 @@ jobs:
 //
 // Six cells at 800 tokens each against a 700-token allowance, two at a time: the first two start blind (no spend exists yet), and either alone exhausts the allowance, so the count is exactly two whatever the scheduler does — at 400 a third was rightly admitted whenever one finished before the other's usage landed, a flake on a loaded machine. Checked before the slot, a third is admitted blind.
 func TestAcrossBudgetBindsUnderConcurrency(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(800))
 
@@ -286,6 +292,8 @@ jobs:
 // the block's ceiling bounding precisely nothing. Reserving 400 per cell means
 // the 700 allowance is consumed after two, and the third is refused.
 func TestAcrossBudgetBindsAtFullWidth(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
 
@@ -333,6 +341,8 @@ jobs:
 // may cost supplies the number, so a block inherits a binding ceiling without
 // naming reserve_per_cell: at all.
 func TestAcrossBudgetReservesTheCellAgentsOwnBudget(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
 

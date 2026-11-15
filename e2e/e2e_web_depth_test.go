@@ -37,6 +37,8 @@ jobs:
 // TestWebUINestsAMatrixUnderItsBlock is the tree's defining assertion: a
 // cell's markup must live INSIDE its matrix's subtree, not beside it.
 func TestWebUINestsAMatrixUnderItsBlock(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writeNestedPipeline(t, dir)
 
@@ -67,6 +69,8 @@ func TestWebUINestsAMatrixUnderItsBlock(t *testing.T) {
 // index and the same name, and keying steps by that pair folded the two into
 // one row — losing the inner step's kind, hash and duration.
 func TestWebUIKeepsATryDistinctFromTheStepItWraps(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writeNestedPipeline(t, dir)
 
@@ -95,6 +99,8 @@ func TestWebUIKeepsATryDistinctFromTheStepItWraps(t *testing.T) {
 // collapses a matrix — or reaches the page with one already collapsed —
 // still has to be able to see where it stands without opening it.
 func TestWebUIRollsUpAContainersOutcome(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writeNestedPipeline(t, dir)
 
@@ -118,6 +124,8 @@ func TestWebUIRollsUpAContainersOutcome(t *testing.T) {
 // marks every container holding something still running, so a folded branch
 // still shows where the work is.
 func TestWebUIMarksTheActivePath(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writeNestedPipeline(t, dir)
 

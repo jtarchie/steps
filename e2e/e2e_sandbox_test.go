@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 func requireSandbox(t *testing.T) {
@@ -36,6 +34,8 @@ func outsideDir(t *testing.T) string {
 
 // The task's script states the policy as exit codes, so a run that passes is the sandbox holding on every point, and the Go side checks the two things the script cannot see from inside: nothing landed outside, and nothing reached the server.
 func TestSandboxedTaskWritesOnlyItsWorkspace(t *testing.T) {
+	t.Parallel()
+
 	requireSandbox(t)
 
 	dir := t.TempDir()
@@ -72,7 +72,7 @@ jobs:
     inputs: []
 `, outside, systemTmp, server.URL))
 
-	err = cli.Run([]string{"run", path, "--job", "build"})
+	err = stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("sandboxed task failed (exit 10: workspace not writable, 11: wrote outside, 12: no TMPDIR, 13: TMPDIR is the shared system one, 14: reached the network, 15: wrote the shared temp dir every workspace lives in): %v", err)
 	}
@@ -122,7 +122,7 @@ jobs:
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -136,6 +136,8 @@ jobs:
 
 // A resource type's commands are host commands too; check runs with no tree at all, so its only writable place is its private TMPDIR.
 func TestSandboxedResourceTypeCannotWriteOutside(t *testing.T) {
+	t.Parallel()
+
 	requireSandbox(t)
 
 	dir := t.TempDir()
@@ -168,7 +170,7 @@ jobs:
     run: cat ticks/n.txt
 `, outside))
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -179,6 +181,8 @@ jobs:
 }
 
 func TestSandboxRefusesWhatItCannotFence(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct{ name, entry, want string }{
 		{"image", "  image: alpine:3\n", "sandbox"},
 		{"bridge network", "  network: bridge\n", "network"},
@@ -198,7 +202,7 @@ jobs:
     inputs: []
 `)
 
-			err := cli.Run([]string{"validate", "--syntax-only", path})
+			err := stepsRun(t, []string{"validate", "--syntax-only", path})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("validate = %v, want a refusal naming %q", err, tc.want)
 			}
@@ -259,7 +263,7 @@ jobs:
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -312,7 +316,7 @@ jobs:
     inputs: []
 `, fixer.URL))
 
-		_ = cli.Run([]string{"run", path, "--job", "build"}) // the task stays broken; where the fixer could write is the point
+		_ = stepsRun(t, []string{"run", path, "--job", "build"}) // the task stays broken; where the fixer could write is the point
 
 		if fixer.requestCount() == 0 {
 			t.Fatal("the fix agent never ran")

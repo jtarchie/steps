@@ -19,6 +19,8 @@ import (
 // the two apart. The note is the same runtime answer, and it is the half a
 // user actually sees.
 func TestRunSaysAnInheritedFixMakesTheChainUncacheable(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -71,6 +73,8 @@ jobs:
 // pipeline whose last outcome says nothing more than "carry on". The route also
 // has to CONSUME the failure, or a job that said to keep going still exits red.
 func TestRouteNextOffTheEndOfThePlanDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 jobs:
 - name: j

@@ -6,8 +6,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestAPipelinesTabSaysWhetherItIsRed is the glance-status promise from the
@@ -16,6 +14,8 @@ import (
 // the pipeline's mark — red while any job's latest finished run failed, and
 // green again once that job passes, with nothing else touched.
 func TestAPipelinesTabSaysWhetherItIsRed(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "demo.yml")
 	gate := filepath.Join(dir, "fixed")
@@ -34,7 +34,7 @@ jobs:
 
 	mustRun(t, "run", path, "--job", "fine")
 
-	err := cli.Run([]string{"run", path, "--job", "flaky"})
+	err := stepsRun(t, []string{"run", path, "--job", "flaky"})
 	if err == nil {
 		t.Fatal("the gated job ran green before its gate existed")
 	}
@@ -99,6 +99,8 @@ func faviconOf(t *testing.T, page string) string {
 // each. Every row now leads with its pipeline's mark — read here from the
 // OTHER pipeline's page, which is where the reader who has not looked is.
 func TestTheSwitcherSaysWhichPipelineIsRed(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	green := filepath.Join(dir, "green.yml")
 	red := filepath.Join(dir, "red.yml")
@@ -120,7 +122,7 @@ jobs:
 
 	mustRun(t, "run", green, "--job", "ok")
 
-	err := cli.Run([]string{"run", red, "--job", "broken"})
+	err := stepsRun(t, []string{"run", red, "--job", "broken"})
 	if err == nil {
 		t.Fatal("the broken job ran green")
 	}

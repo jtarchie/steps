@@ -1006,6 +1006,8 @@ jobs:
 
 // TestSlackReactionWithNothingToDoIsRefusedAtLoad: a put with neither add nor remove published nothing and went green, where github-reaction refuses the same put when the pipeline loads.
 func TestSlackReactionWithNothingToDoIsRefusedAtLoad(t *testing.T) {
+	t.Parallel()
+
 	path := pipelinePath(t, t.TempDir())
 
 	err := os.WriteFile(path, []byte(`
@@ -1024,7 +1026,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = cli.Run([]string{"validate", path})
+	err = stepsRun(t, []string{"validate", path})
 	if err == nil || !strings.Contains(err.Error(), "params.add or params.remove is required") {
 		t.Fatalf("validate = %v, want the empty reaction refused", err)
 	}

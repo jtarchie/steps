@@ -22,8 +22,6 @@ import (
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // scopeFixture is an MCP server behind an authorization server whose scope
@@ -236,7 +234,7 @@ func loginTracker(t *testing.T, path string) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"mcp", "login", "tracker", "-c", path})
+		err = stepsRun(t, []string{"mcp", "login", "tracker", "-c", path})
 	})
 	if err != nil {
 		t.Fatalf("steps mcp login tracker: %v\n%s", err, out)
@@ -249,10 +247,10 @@ func runPipeline(t *testing.T, path string) error {
 	var err error
 
 	captureStdout(t, func() {
-		err = cli.Run([]string{"run", path, "--job", "read"})
+		err = stepsRun(t, []string{"run", path, "--job", "read"})
 	})
 
-	return err //nolint:wrapcheck // the test reads the error a user would see, unwrapped
+	return err
 }
 
 func hookFired(t *testing.T, dir, hook string) bool {

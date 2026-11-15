@@ -117,6 +117,8 @@ const stepCacheNotes = "The widget catalog is seeded from widgets.json on boot."
 // pipeline whose inputs did not change costs no model calls, and the artifact
 // the reused step produced is still delivered to the step that reads it.
 func TestStepCacheReusesAnAgentStep(t *testing.T) {
+	t.Parallel()
+
 	dir, root := t.TempDir(), t.TempDir()
 	publishLog := filepath.Join(dir, "publish.log")
 	fetchLog := filepath.Join(dir, "fetch.log")
@@ -178,6 +180,8 @@ func TestStepCacheReusesAnAgentStep(t *testing.T) {
 // key is the input BYTES, so a changed upstream artifact re-runs the step even
 // though the step's own declaration is untouched.
 func TestStepCacheRerunsWhenAnInputChanges(t *testing.T) {
+	t.Parallel()
+
 	dir, root := t.TempDir(), t.TempDir()
 	publishLog := filepath.Join(dir, "publish.log")
 	fetchLog := filepath.Join(dir, "fetch.log")
@@ -204,6 +208,8 @@ func TestStepCacheRerunsWhenAnInputChanges(t *testing.T) {
 // work. The unchanged rerun is proven cached first, so the request that
 // follows can only be the edited prompt.
 func TestStepCacheRerunsWhenThePromptChanges(t *testing.T) {
+	t.Parallel()
+
 	dir, root := t.TempDir(), t.TempDir()
 	fake := newFakeLLM(t, stepCacheScriptTimes(2)...)
 
@@ -228,6 +234,8 @@ func TestStepCacheRerunsWhenThePromptChanges(t *testing.T) {
 // TestStepCacheVolatileAgentAlwaysRuns pins volatile: on the kind of step it
 // exists for — one whose answer must never be replayed.
 func TestStepCacheVolatileAgentAlwaysRuns(t *testing.T) {
+	t.Parallel()
+
 	dir, root := t.TempDir(), t.TempDir()
 	publishLog := filepath.Join(dir, "publish.log")
 	fetchLog := filepath.Join(dir, "fetch.log")
@@ -270,6 +278,8 @@ func rewritePipeline(t *testing.T, path, from, to string) {
 
 // TestStepCacheRerunsWhenAGrantsTermsChange is the end-to-end half of internal/merkle's keyfields test, for the two grant fields that were found outside the key: a cached agent step was served as-is after its tool became required:, and after its web_fetch allow-list changed. Each run here is proven cached FIRST, so the re-run that follows can only be the changed term.
 func TestStepCacheRerunsWhenAGrantsTermsChange(t *testing.T) {
+	t.Parallel()
+
 	script := []turn{
 		callsTool("read_file", map[string]any{"path": "repo/NOTES.txt"}),
 		callsTool("write_file", map[string]any{"path": "report/summary.md", "content": "widgetd seeds its catalog from widgets.json."}),
@@ -316,6 +326,8 @@ func TestStepCacheRerunsWhenAGrantsTermsChange(t *testing.T) {
 
 // A nudge can turn a run that would have failed into a success, so a step cached under nudge: true must not stand in for the same step without it: removing the nudge to prove a prompt works unaided has to ask the model. Proven cached FIRST, so the re-run can only be the removed nudge.
 func TestStepCacheRerunsWhenTheNudgeIsRemoved(t *testing.T) {
+	t.Parallel()
+
 	dir, root := t.TempDir(), t.TempDir()
 	script := stepCacheScript()
 	fake := newFakeLLM(t, append(stepCacheScript(), script...)...)

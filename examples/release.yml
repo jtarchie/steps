@@ -102,11 +102,10 @@ tasks:
     export GOMEMLIMIT=6GiB   # golangci-lint took 9 GiB in 40s on a 12 GiB worker with no swap, which stopped answering ssh; a soft limit trades that for GC time
     # Skipped in this container only (the laptop's `task` runs them): the probe test rm's /usr/bin/find, which a
     # non-root container user cannot; the two ssh tests time TERM/KILL against a process tree dind changes; the
-    # keep-workspace test hangs to the 10m timeout here and takes a whole e2e shard with it.
+    # keep-workspace test hangs to the 10m timeout here and takes the e2e package with it.
     export GOFLAGS='-skip=^(TestProbeRefusesAnImageWithoutTheFileUtilities|TestSSHWorkerCancelKillsACommandIgnoringTERM|TestSSHWorkerCancelGivesTERMItsGrace|TestKeepWorkspaceKeepsSpilledToolOutput)$'
-    export STEPS_TESTSHARD_SKIP='^(TestProbeRefusesAnImageWithoutTheFileUtilities|TestSSHWorkerCancelKillsACommandIgnoringTERM|TestSSHWorkerCancelGivesTERMItsGrace|TestKeepWorkspaceKeepsSpilledToolOutput)$'   # the same names for the sharded packages, which go test -skip does not reach
     cd "$1/repo"
-    # `task fmt` minus its stamp: seal refuses a run under STEPS_TESTSHARD_SKIP by design, and nothing here commits. Keep in step with the Taskfile's fmt list.
+    # `task fmt` minus its stamp: seal refuses a run under a GOFLAGS -skip by design, and nothing here commits. Keep in step with the Taskfile's fmt list.
     task lint kindswitch vuln nilaway test build
     INNER
     su tester -c "sh /tmp/asuser.sh $PWD"

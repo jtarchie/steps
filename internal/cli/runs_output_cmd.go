@@ -3,7 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,13 +24,15 @@ type RunsOutputCmd struct {
 const outputBatch = 500
 
 // Run prints every output the named step recorded in the run, or the steps that recorded one.
-func (r *RunsOutputCmd) Run() error {
-	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
-		return r.print(ctx, st)
+func (r *RunsOutputCmd) Run(streams Streams) error {
+	out := streams.Out
+
+	return withRecorded(out, r.ReadFlags, func(ctx context.Context, st store.Store) error {
+		return r.print(ctx, out, st)
 	})
 }
 
-func (r *RunsOutputCmd) print(ctx context.Context, st interface {
+func (r *RunsOutputCmd) print(ctx context.Context, out io.Writer, st interface {
 	store.Meta
 	store.Runs
 	store.Events
@@ -52,7 +54,7 @@ func (r *RunsOutputCmd) print(ctx context.Context, st interface {
 	}
 
 	if r.Step == "" {
-		return printStepNames(names)
+		return printStepNames(out, names)
 	}
 
 	if len(outputs) == 0 {
@@ -65,7 +67,7 @@ func (r *RunsOutputCmd) print(ctx context.Context, st interface {
 	}
 
 	for _, output := range outputs {
-		err := printOutput(ctx, st, output)
+		err := printOutput(ctx, out, st, output)
 		if err != nil {
 			return err
 		}
@@ -129,9 +131,9 @@ func (r *RunsOutputCmd) recorded(ctx context.Context, st store.Events) ([]store.
 }
 
 // printStepNames lists the steps that recorded output, in the store's seq order — what the run recorded, first to last. Not elided, unlike a table cell: a line's whole point is being passable back as <step>.
-func printStepNames(names []string) error {
+func printStepNames(out io.Writer, names []string) error {
 	for _, name := range names {
-		_, err := fmt.Fprintln(os.Stdout, printableStepName(name))
+		_, err := fmt.Fprintln(out, printableStepName(name))
 		if err != nil {
 			return fmt.Errorf("could not write the step names: %w", err)
 		}
@@ -150,11 +152,11 @@ func printableStepName(name string) string {
 }
 
 // printOutput writes the stored whole when the record elided it, and the record otherwise: a reaped or refused store leaves only the record.
-func printOutput(ctx context.Context, st store.Events, output store.RunEventRow) error {
+func printOutput(ctx context.Context, out io.Writer, st store.Events, output store.RunEventRow) error {
 	n, err := strconv.Atoi(output.Detail)
 	if err == nil {
 		found, readErr := st.StepOutput(ctx, output.RunID, output.StepID, n, func(chunk []byte) error {
-			_, writeErr := os.Stdout.Write(chunk)
+			_, writeErr := out.Write(chunk)
 
 			return writeErr //nolint:wrapcheck // StepOutput names the output being read
 		})
@@ -167,7 +169,7 @@ func printOutput(ctx context.Context, st store.Events, output store.RunEventRow)
 		return nil
 	}
 
-	_, err = fmt.Fprintln(os.Stdout, output.Text)
+	_, err = fmt.Fprintln(out, output.Text)
 	if err != nil {
 		return fmt.Errorf("could not write the output of %q: %w", output.StepName, err)
 	}

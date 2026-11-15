@@ -133,7 +133,7 @@ func fakeBrowser(t *testing.T) {
 	t.Setenv("BROWSER", script)
 }
 
-// Not t.Parallel(): startWeb backgrounds cli.Run in this process, and the token directory and $BROWSER are process environment.
+// Not t.Parallel(): the token directory and $BROWSER are process environment.
 func TestMCPLoginAgainstADaemonAuthorizesItsPipelines(t *testing.T) {
 	const (
 		user = "ops"
@@ -186,7 +186,7 @@ jobs:
 	target := authTarget(served.addr, user, pass)
 
 	// An unauthorized server must not stop the pipeline being SET: the login resolves the server from the served configuration, so refusing the set would leave nothing to log in against.
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
 	if err != nil {
 		t.Fatalf("set a pipeline whose oauth server is not yet authorized: %v", err)
 	}
@@ -201,7 +201,7 @@ jobs:
 	abandoned := startLoginOverHTTP(t, served.addr, name, user, pass)
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"mcp", "login", "tracker", "-p", name, "--target", target})
+		err = stepsRun(t, []string{"mcp", "login", "tracker", "-p", name, "--target", target})
 	})
 	if err != nil {
 		t.Fatalf("steps mcp login against the daemon: %v\n%s", err, out)
@@ -411,7 +411,7 @@ func mcpLogins(t *testing.T) string {
 
 // Two pipelines on one daemon declare the same server. A login for one must leave the other's page, status route and runs exactly as they were, and the login must follow its pipeline through a rename and go with it on a destroy.
 //
-// Not t.Parallel(): startWeb backgrounds cli.Run in this process, and the token directory and $BROWSER are process environment.
+// Not t.Parallel(): the token directory and $BROWSER are process environment.
 func TestAnMCPLoginBelongsToOnePipeline(t *testing.T) {
 	const (
 		user = "ops"
@@ -437,14 +437,14 @@ func TestAnMCPLoginBelongsToOnePipeline(t *testing.T) {
 		path := filepath.Join(dir, name+".yml")
 		writePipelineFile(t, path, trackerPipeline(fixture.server.URL, ran))
 
-		err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
+		err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
 		if err != nil {
 			t.Fatalf("set %s: %v", name, err)
 		}
 	}
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"mcp", "login", "tracker", "-p", "app", "--target", target})
+		err := stepsRun(t, []string{"mcp", "login", "tracker", "-p", "app", "--target", target})
 		if err != nil {
 			t.Errorf("mcp login for app: %v", err)
 		}
@@ -480,7 +480,7 @@ func aDestroyTakesTheLoginWithIt(t *testing.T, browser *browserClient, target, d
 	path := filepath.Join(filepath.Dir(db), "app2-again.yml")
 	writePipelineFile(t, path, trackerPipeline(endpoint, ran))
 
-	err := cli.Run([]string{"pipeline", "set", "-p", "app2", "-c", path, "-n", "--target", target})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", "app2", "-c", path, "-n", "--target", target})
 	if err != nil {
 		t.Fatalf("set app2 again: %v", err)
 	}
@@ -492,7 +492,7 @@ func aDestroyTakesTheLoginWithIt(t *testing.T, browser *browserClient, target, d
 func theLoginFollowsARename(t *testing.T, fixture *oauthFixture, browser *browserClient, target string) {
 	t.Helper()
 
-	err := cli.Run([]string{"pipeline", "rename", "-p", "app", "--to", "app2", "--target", target})
+	err := stepsRun(t, []string{"pipeline", "rename", "-p", "app", "--to", "app2", "--target", target})
 	if err != nil {
 		t.Fatalf("rename: %v", err)
 	}
@@ -522,7 +522,7 @@ func aRenameOntoLoginsIsRefusedAndADestroyRemovesOnlyItsOwn(t *testing.T, addr, 
 
 	writePipelineFile(t, seeded, "{}")
 
-	err = cli.Run([]string{"pipeline", "rename", "-p", "app2", "--to", "taken", "--target", target})
+	err = stepsRun(t, []string{"pipeline", "rename", "-p", "app2", "--to", "taken", "--target", target})
 	if err == nil || !strings.Contains(err.Error(), "mcp logins") {
 		t.Errorf("rename onto existing logins = %v, want refused naming them", err)
 	}
@@ -531,7 +531,7 @@ func aRenameOntoLoginsIsRefusedAndADestroyRemovesOnlyItsOwn(t *testing.T, addr, 
 		t.Errorf("/p/app2 = %d after a refused rename, want it still served", code)
 	}
 
-	err = cli.Run([]string{"pipeline", "destroy", "-p", "app2", "-n", "--target", target})
+	err = stepsRun(t, []string{"pipeline", "destroy", "-p", "app2", "-n", "--target", target})
 	if err != nil {
 		t.Fatalf("destroy: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestALocalLoginFollowsDashName(t *testing.T) {
 		"defaults:\n  preflight:\n    disabled: true\n", "", 1))
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"mcp", "login", "tracker", "-c", path, "--name", "infra=" + path})
+		err := stepsRun(t, []string{"mcp", "login", "tracker", "-c", path, "--name", "infra=" + path})
 		if err != nil {
 			t.Errorf("local mcp login: %v", err)
 		}
@@ -592,14 +592,14 @@ func TestALocalLoginFollowsDashName(t *testing.T) {
 	noFileHoldsTheToken(t, dir)
 
 	captureStdout(t, func() {
-		err := cli.Run([]string{"validate", "--live", path, "--name", "infra=" + path})
+		err := stepsRun(t, []string{"validate", "--live", path, "--name", "infra=" + path})
 		if err != nil {
 			t.Errorf("validate --live under the logged-in name: %v", err)
 		}
 	})
 
 	captureStdout(t, func() {
-		err := cli.Run([]string{"test", path})
+		err := stepsRun(t, []string{"test", path})
 		if err == nil || !strings.Contains(err.Error(), `not authorized for pipeline "p"`) {
 			t.Errorf("a run under the file's own name = %v, want it not authorized for pipeline p", err)
 		}
@@ -620,7 +620,7 @@ func TestALoginWithNoKeyIsRefusedBeforeTheBrowserOpens(t *testing.T) {
 	path := filepath.Join(dir, "p.yml")
 	writePipelineFile(t, path, trackerPipeline(fixture.server.URL, filepath.Join(dir, "ran.log")))
 
-	err := cli.Run([]string{"mcp", "login", "tracker", "-c", path})
+	err := stepsRun(t, []string{"mcp", "login", "tracker", "-c", path})
 	if err == nil || !strings.Contains(err.Error(), "STEPS_ENCRYPTION_KEY") {
 		t.Fatalf("a login with no key = %v, want it refused naming STEPS_ENCRYPTION_KEY", err)
 	}
@@ -654,7 +654,7 @@ func TestALegacyLoginIsSealedOnFirstUse(t *testing.T) {
 	writePipelineFile(t, legacy, `{"endpoint":"`+fixture.server.URL+`/mcp","client_id":"fixture-client","token_url":"`+fixture.server.URL+`/token","access_token":"`+oauthFixtureToken+`","refresh_token":"fixture-refresh","expiry":"`+time.Now().Add(time.Hour).UTC().Format(time.RFC3339)+`"}`)
 
 	captureStdout(t, func() {
-		err = cli.Run([]string{"test", path})
+		err = stepsRun(t, []string{"test", path})
 	})
 	if err != nil {
 		t.Fatalf("a run over a legacy login: %v", err)
@@ -738,7 +738,7 @@ func TestALocalLoginTakesItsClientSecretFromASecretSource(t *testing.T) {
 
 // The daemon's half: a login started with -p runs on the daemon, which resolves the client secret through the pipeline's own lookup paths.
 //
-// Not t.Parallel(): startWeb backgrounds cli.Run in this process, and the token directory and $BROWSER are process environment.
+// Not t.Parallel(): the token directory and $BROWSER are process environment.
 func TestADaemonLoginTakesItsClientSecretFromASecretSource(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
@@ -757,13 +757,13 @@ func TestADaemonLoginTakesItsClientSecretFromASecretSource(t *testing.T) {
 
 	target := authTarget(served.addr, "ops", "pw")
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"mcp", "login", "tracker", "-p", name, "--target", target})
+		err = stepsRun(t, []string{"mcp", "login", "tracker", "-p", name, "--target", target})
 	})
 	if err != nil {
 		t.Fatalf("steps mcp login against the daemon: %v\n%s", err, out)

@@ -43,6 +43,8 @@ web:
 }
 
 func TestTaskSecretsReachTheStepAndNeverTheDatabase(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	name := cli.PipelineName(path)
@@ -68,7 +70,7 @@ jobs:
 	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue + "\n"})
 	defer served.stopIfRunning(t)
 
-	err = cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	err = stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}
@@ -106,19 +108,21 @@ func TestLocalRunRefusesASecretReference(t *testing.T) {
 	writePipelineFile(t, path, "jobs:\n- name: build\n  plan:\n  - task: check\n    secrets: {TOKEN: ((ci:gh_token))}\n    run: echo hi\n")
 
 	for _, command := range []string{"run", "test"} {
-		err := cli.Run([]string{command, "--db", filepath.Join(dir, command+".db"), path})
+		err := stepsRun(t, []string{command, "--db", filepath.Join(dir, command+".db"), path})
 		if err == nil || !strings.Contains(err.Error(), "--config") {
 			t.Errorf("steps %s = %v, want a refusal naming --config", command, err)
 		}
 	}
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err != nil {
 		t.Errorf("steps validate = %v, want the reference accepted", err)
 	}
 }
 
 func TestPipelineSetRefusesAnUnknownSecretSource(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	name := cli.PipelineName(path)
@@ -128,7 +132,7 @@ func TestPipelineSetRefusesAnUnknownSecretSource(t *testing.T) {
 	served := secretDaemon(t, dir, nil)
 	defer served.stopIfRunning(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
 	if err == nil || !strings.Contains(err.Error(), `"vault"`) {
 		t.Fatalf("pipeline set = %v, want a refusal naming the unknown source", err)
 	}
@@ -142,7 +146,7 @@ func TestASecretReferenceOutsideSecretsIsRefused(t *testing.T) {
 	path := pipelinePath(t, dir)
 	writePipelineFile(t, path, "jobs:\n- name: build\n  plan:\n  - task: check\n    run: echo ((ci:gh_token))\n")
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil || !strings.Contains(err.Error(), "((ci:gh_token))") || !strings.Contains(err.Error(), "secrets map") {
 		t.Fatalf("validate = %v, want a refusal naming the reference and where it belongs", err)
 	}
@@ -150,6 +154,8 @@ func TestASecretReferenceOutsideSecretsIsRefused(t *testing.T) {
 
 // The placed case is the seam the issue named first: the daemon resolves, the worker only ever receives the value, over the session's stdin rather than argv or a request the sshd could log.
 func TestPlacedTaskSecretsResolveOnTheDaemon(t *testing.T) {
+	t.Parallel()
+
 	server := testsshd.New(t)
 
 	dir := t.TempDir()
@@ -177,7 +183,7 @@ jobs:
 	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue}, "--worker", "box="+server.URL)
 	defer served.stopIfRunning(t)
 
-	err = cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	err = stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}
@@ -200,6 +206,8 @@ jobs:
 
 // A step that prints its secret, split across two writes so no one chunk holds it whole, has the value scrubbed before anything is recorded or streamed.
 func TestPrintedSecretIsScrubbedFromRecordedOutput(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	name := cli.PipelineName(path)
@@ -221,7 +229,7 @@ jobs:
 	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue})
 	defer served.stopIfRunning(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}
@@ -291,7 +299,7 @@ jobs:
 	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue})
 	defer served.stopIfRunning(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}
@@ -363,7 +371,7 @@ jobs:
 	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue})
 	defer served.stopIfRunning(t)
 
-	err = cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	err = stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}
@@ -414,7 +422,7 @@ func TestSecretsAreRefusedWhereNothingWouldResolveThem(t *testing.T) {
 			path := pipelinePath(t, dir)
 			writePipelineFile(t, path, tc.pipeline)
 
-			err := cli.Run([]string{"validate", path})
+			err := stepsRun(t, []string{"validate", path})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("validate = %v, want an error containing %q", err, tc.want)
 			}
@@ -424,6 +432,8 @@ func TestSecretsAreRefusedWhereNothingWouldResolveThem(t *testing.T) {
 
 // A resource's secrets reach both its poll, which runs outside any run, and its in: inside one; the poll is the case with no run to cache the lookup in.
 func TestResourceSecretsReachItsCheckAndIn(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	expected := filepath.Join(dir, "expected")
 
@@ -459,7 +469,7 @@ jobs:
 	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue}, "--interval", "200ms")
 	defer served.stopIfRunning(t)
 
-	err = cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	err = stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}
@@ -503,7 +513,7 @@ jobs:
 	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue}, "--interval", "200ms")
 	defer served.stopIfRunning(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}
@@ -568,7 +578,7 @@ jobs:
 	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue})
 	defer served.stopIfRunning(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}
@@ -620,7 +630,7 @@ jobs:
 	served := secretDaemon(t, dir, map[string]string{name + "/gh_token": e2eSecretValue})
 	defer served.stopIfRunning(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}
@@ -721,12 +731,14 @@ jobs:
 //
 // Not t.Parallel(): captureStdout swaps os.Stdout.
 func TestValidateLiveResolvesEverySecretAndNamesItsPath(t *testing.T) {
+	t.Parallel()
+
 	path, config, vault := validateSecretsFixture(t)
 	name := cli.PipelineName(path)
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run([]string{"validate", "--live", "--config", config, path}) })
+	out := captureStdout(t, func() { err = stepsRun(t, []string{"validate", "--live", "--config", config, path}) })
 	if err != nil {
 		t.Fatalf("validate --live: %v", err)
 	}
@@ -749,7 +761,7 @@ func TestValidateLiveResolvesEverySecretAndNamesItsPath(t *testing.T) {
 	}
 
 	// --job narrows the probe to that job's references, as it does its models and servers.
-	out = captureStdout(t, func() { err = cli.Run([]string{"validate", "--live", "--job", "build", "--config", config, path}) })
+	out = captureStdout(t, func() { err = stepsRun(t, []string{"validate", "--live", "--job", "build", "--config", config, path}) })
 	if err != nil {
 		t.Fatalf("validate --live --job build: %v", err)
 	}
@@ -765,12 +777,12 @@ func TestValidateLiveRefusesWhatItCannotVouchFor(t *testing.T) {
 
 	path, config, vault := validateSecretsFixture(t)
 
-	err := cli.Run([]string{"validate", "--config", config, path})
+	err := stepsRun(t, []string{"validate", "--config", config, path})
 	if err == nil || !strings.Contains(err.Error(), "--live") {
 		t.Fatalf("validate --config without --live = %v, want a refusal naming --live", err)
 	}
 
-	err = cli.Run([]string{"validate", "--live", path})
+	err = stepsRun(t, []string{"validate", "--live", path})
 	if err == nil || !strings.Contains(err.Error(), "--config") {
 		t.Fatalf("validate --live with references and no --config = %v, want a refusal naming --config", err)
 	}
@@ -785,7 +797,7 @@ jobs:
     run: "true"
 `)
 
-	err = cli.Run([]string{"validate", "--live", "--config", config, path})
+	err = stepsRun(t, []string{"validate", "--live", "--config", config, path})
 	if err == nil || !strings.Contains(err.Error(), "((ci:absent))") || !strings.Contains(err.Error(), vault+"/shared/absent") {
 		t.Fatalf("validate --live with a missing secret = %v, want a problem naming the reference and the paths tried", err)
 	}
@@ -799,7 +811,7 @@ jobs:
     run: "true"
 `)
 
-	err = cli.Run([]string{"validate", "--live", "--config", filepath.Join(t.TempDir(), "absent.yml"), path})
+	err = stepsRun(t, []string{"validate", "--live", "--config", filepath.Join(t.TempDir(), "absent.yml"), path})
 	if err == nil || !strings.Contains(err.Error(), "absent.yml") {
 		t.Fatalf("validate --live --config <missing file> on a pipeline without references = %v, want a refusal naming the file", err)
 	}

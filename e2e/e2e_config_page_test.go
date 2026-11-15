@@ -16,13 +16,13 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestRunPageNamesTheConfigItRan is the headline: every run page says which
 // configuration the run executed, and links the configuration itself.
 func TestRunPageNamesTheConfigItRan(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	log := filepath.Join(dir, "build.log")
@@ -76,6 +76,8 @@ func TestRunPageNamesTheConfigItRan(t *testing.T) {
 // readable after the file on disk has moved on, which is exactly when anyone
 // asks.
 func TestConfigPageServesTheOldRevisionAfterAnEdit(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	log := filepath.Join(dir, "build.log")
@@ -122,6 +124,8 @@ func TestConfigPageServesTheOldRevisionAfterAnEdit(t *testing.T) {
 // failures only, where "what is different this time" is the first question,
 // and on a green run it is trivia that costs a query.
 func TestRunPageSaysTheConfigChanged(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -130,7 +134,7 @@ func TestRunPageSaysTheConfigChanged(t *testing.T) {
 
 	revisionPipeline(t, path, "exit 1")
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("the edited pipeline was supposed to fail")
 	}
@@ -166,6 +170,8 @@ func TestRunPageSaysTheConfigChanged(t *testing.T) {
 // configuration passes and then fails — a flake, a full disk, the world
 // moving — which is exactly the case a config-change claim would misdiagnose.
 func TestRunPageIsQuietWhenTheConfigDidNotChange(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	marker := filepath.Join(dir, "marker")
@@ -177,7 +183,7 @@ func TestRunPageIsQuietWhenTheConfigDidNotChange(t *testing.T) {
 
 	mustRun(t, "run", path, "--job", "build")
 
-	err := cli.Run([]string{"run", path, "--job", "build", "--force"})
+	err := stepsRun(t, []string{"run", path, "--job", "build", "--force"})
 	if err == nil {
 		t.Fatal("the second run was supposed to fail")
 	}
@@ -220,6 +226,8 @@ func TestRunPageIsQuietWhenTheConfigDidNotChange(t *testing.T) {
 // passed run here is a replay, as it is for any job run twice unchanged: a
 // replay's steps past the skip point used to publish no hash either.
 func TestRunPageMarksTheStepThatBrokeAsChanged(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -229,7 +237,7 @@ func TestRunPageMarksTheStepThatBrokeAsChanged(t *testing.T) {
 
 	prepAndCompile(t, path, "echo one && exit 1")
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("the edited pipeline was supposed to fail")
 	}
@@ -250,6 +258,8 @@ func TestRunPageMarksTheStepThatBrokeAsChanged(t *testing.T) {
 // fails with its content untouched. Comparing against a replay must still
 // find compile's hash equal, not new or changed.
 func TestRunPageDoesNotMarkAFlakeAfterAReplay(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	marker := filepath.Join(dir, "marker")
@@ -263,7 +273,7 @@ func TestRunPageDoesNotMarkAFlakeAfterAReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = cli.Run([]string{"run", path, "--job", "build", "--force"})
+	err = stepsRun(t, []string{"run", path, "--job", "build", "--force"})
 	if err == nil {
 		t.Fatal("the flaking run was supposed to fail")
 	}
@@ -349,6 +359,8 @@ func failedRunPages(t *testing.T, path string) (string, string) {
 // TestConfigPageRefusesAnUnknownRevision: a sha this pipeline never ran is a
 // 404, not an empty page that reads as a configuration with nothing in it.
 func TestConfigPageRefusesAnUnknownRevision(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 

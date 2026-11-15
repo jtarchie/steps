@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // imageArtifactCanary sits in the resource's source as a password. A
@@ -213,7 +211,7 @@ func TestImageArtifactRefusesAMalformedDigest(t *testing.T) {
 	path := pipelinePath(t, t.TempDir())
 	imageArtifactPipeline(t, path, "alpine", "latest", "", imageArtifactTask)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("a digest of \"latest\" ran; want the step refused")
 	}
@@ -230,6 +228,8 @@ func TestImageArtifactRefusesAMalformedDigest(t *testing.T) {
 }
 
 func TestImageArtifactValidateRefusesAnUnfetchedImage(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		plan string
 		want string
@@ -298,7 +298,7 @@ resources:
 jobs:
 `+tc.plan)
 
-			err := cli.Run([]string{"validate", path})
+			err := stepsRun(t, []string{"validate", path})
 			if err == nil {
 				t.Fatal("validate passed; want the artifact image refused")
 			}
@@ -366,7 +366,7 @@ func TestImageArtifactResolvesAfterAResumeKeptTheGet(t *testing.T) {
 %s`, marker, imageArtifactTask))
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("expected the fragile step to fail")
 		}
@@ -375,7 +375,7 @@ func TestImageArtifactResolvesAfterAResumeKeptTheGet(t *testing.T) {
 	writePipelineFile(t, marker, "")
 
 	out = captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--resume", resumeID(t, out)})
+		err := stepsRun(t, []string{"run", path, "--resume", resumeID(t, out)})
 		if err != nil {
 			t.Fatalf("resume failed: %v", err)
 		}

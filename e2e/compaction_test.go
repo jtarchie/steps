@@ -32,6 +32,8 @@ jobs:
 
 // The provider reports 5,000 tokens (system prompt, tool schemas, a real tokenizer), which crosses the budget the len/4 estimate never would.
 func TestCompactionCountsTheProviderReportedSize(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeLLM(t,
 		says(strings.Repeat("progress ", 180)).spending(5000),
 		says("Summary of the work so far."),
@@ -51,6 +53,8 @@ func TestCompactionCountsTheProviderReportedSize(t *testing.T) {
 
 // With no usage reported the estimate is all there is, and it is under budget.
 func TestCompactionFallsBackToTheEstimateWithoutUsage(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeLLM(t,
 		says(strings.Repeat("progress ", 180)),
 		says("Done."),

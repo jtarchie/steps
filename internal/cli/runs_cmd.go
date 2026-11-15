@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -54,14 +55,16 @@ type RunsListCmd struct {
 }
 
 // Run prints one pipeline's job runs, or every pipeline's in a shared file.
-func (r *RunsListCmd) Run() error {
+func (r *RunsListCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	// No pipeline named is the cross-pipeline question: one database holds however many a daemon was given, which is what the web root answers too.
 	if r.Pipeline == "" {
-		return r.runAcross()
+		return r.runAcross(out)
 	}
 
-	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
-		return r.printJobRuns(ctx, st)
+	return withRecorded(out, r.ReadFlags, func(ctx context.Context, st store.Store) error {
+		return r.printJobRuns(ctx, out, st)
 	})
 }
 
@@ -77,18 +80,20 @@ type RunsStepsCmd struct {
 }
 
 // Run prints recorded steps, newest first, or what one run completed.
-func (r *RunsStepsCmd) Run() error {
+func (r *RunsStepsCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	// Refused rather than ignored: a run already names its job.
 	if r.RunID != "" && r.Job != "" {
 		return errors.New("--job does not apply to a named run; a run belongs to one job already")
 	}
 
-	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
+	return withRecorded(out, r.ReadFlags, func(ctx context.Context, st store.Store) error {
 		if r.RunID != "" {
-			return r.printRunSteps(ctx, st)
+			return r.printRunSteps(ctx, out, st)
 		}
 
-		return r.printSteps(ctx, st)
+		return r.printSteps(ctx, out, st)
 	})
 }
 
@@ -99,9 +104,11 @@ type RunsQueueCmd struct {
 }
 
 // Run prints the trigger queue.
-func (r *RunsQueueCmd) Run() error {
-	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
-		return r.printQueue(ctx, st)
+func (r *RunsQueueCmd) Run(streams Streams) error {
+	out := streams.Out
+
+	return withRecorded(out, r.ReadFlags, func(ctx context.Context, st store.Store) error {
+		return r.printQueue(ctx, out, st)
 	})
 }
 
@@ -117,13 +124,15 @@ type RunsCostCmd struct {
 }
 
 // Run prints per-run totals, or one run's steps.
-func (r *RunsCostCmd) Run() error {
-	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
+func (r *RunsCostCmd) Run(streams Streams) error {
+	out := streams.Out
+
+	return withRecorded(out, r.ReadFlags, func(ctx context.Context, st store.Store) error {
 		if r.RunID != "" {
-			return r.printRunCost(ctx, st)
+			return r.printRunCost(ctx, out, st)
 		}
 
-		return r.printCostTotals(ctx, st)
+		return r.printCostTotals(ctx, out, st)
 	})
 }
 
@@ -135,9 +144,11 @@ type RunsWhereCmd struct {
 }
 
 // Run prints one run's placements.
-func (r *RunsWhereCmd) Run() error {
-	return withRecorded(r.ReadFlags, func(ctx context.Context, st store.Store) error {
-		return r.printPlacements(ctx, st)
+func (r *RunsWhereCmd) Run(streams Streams) error {
+	out := streams.Out
+
+	return withRecorded(out, r.ReadFlags, func(ctx context.Context, st store.Store) error {
+		return r.printPlacements(ctx, out, st)
 	})
 }
 
@@ -150,7 +161,9 @@ type RunsAbortCmd struct {
 }
 
 // Run stops the named run, or drops the job's queued one.
-func (a *RunsAbortCmd) Run() error {
+func (a *RunsAbortCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	name, err := namedPipeline(a.Pipeline, "runs abort")
 	if err != nil {
 		return err
@@ -168,7 +181,7 @@ func (a *RunsAbortCmd) Run() error {
 			return err
 		}
 
-		fmt.Printf("aborted: the queued run of %s will not start\n", a.Queued)
+		sayf(out, "aborted: the queued run of %s will not start\n", a.Queued)
 
 		return nil
 	}
@@ -178,7 +191,7 @@ func (a *RunsAbortCmd) Run() error {
 		return err
 	}
 
-	fmt.Printf("aborting: %s stops once its on_abort and ensure hooks have run\n", a.RunID)
+	sayf(out, "aborting: %s stops once its on_abort and ensure hooks have run\n", a.RunID)
 
 	return nil
 }
@@ -193,7 +206,9 @@ type RunsTriggerCmd struct {
 }
 
 // Run queues the job on the daemon.
-func (r *RunsTriggerCmd) Run() error {
+func (r *RunsTriggerCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	name, err := namedPipeline(r.Pipeline, "runs trigger")
 	if err != nil {
 		return err
@@ -211,7 +226,7 @@ func (r *RunsTriggerCmd) Run() error {
 		return err
 	}
 
-	fmt.Printf("queued: %s on %s; watch it with steps runs follow -p %s --job %s\n", r.Job, name, name, r.Job)
+	sayf(out, "queued: %s on %s; watch it with steps runs follow -p %s --job %s\n", r.Job, name, name, r.Job)
 
 	return nil
 }
@@ -224,7 +239,9 @@ type RunsRetryCmd struct {
 }
 
 // Run queues the retry on the daemon.
-func (r *RunsRetryCmd) Run() error {
+func (r *RunsRetryCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	name, err := namedPipeline(r.Pipeline, "runs retry")
 	if err != nil {
 		return err
@@ -235,7 +252,7 @@ func (r *RunsRetryCmd) Run() error {
 		return err
 	}
 
-	fmt.Printf("queued: a retry of %s on %s\n", r.RunID, name)
+	sayf(out, "queued: a retry of %s on %s\n", r.RunID, name)
 
 	return nil
 }
@@ -250,9 +267,9 @@ func (r *RunsRetryCmd) Run() error {
 // signature hands every caller a nil it must remember to check — which is
 // exactly what a sixth `runs` subcommand written by copying the other five
 // would forget.
-func nothingRecorded(flags ReadFlags, answer string) bool {
+func nothingRecorded(out io.Writer, flags ReadFlags, answer string) bool {
 	if stateIsEmpty(flags.state()) {
-		fmt.Println(answer)
+		say(out, answer)
 
 		return true
 	}
@@ -289,8 +306,8 @@ func openRecorded(flags ReadFlags) (store.Store, func(), error) {
 }
 
 // withRecorded is the whole read-a-pipeline's-history preamble the `steps runs` views share — the empty-state sentence, the open, the deferred close — so a new view cannot forget a step of it.
-func withRecorded(flags ReadFlags, fn func(ctx context.Context, st store.Store) error) error {
-	if nothingRecorded(flags, noRunsYet(flags.Pipeline)) {
+func withRecorded(out io.Writer, flags ReadFlags, fn func(ctx context.Context, st store.Store) error) error {
+	if nothingRecorded(out, flags, noRunsYet(flags.Pipeline)) {
 		return nil
 	}
 
@@ -316,7 +333,7 @@ func withRecorded(flags ReadFlags, fn func(ctx context.Context, st store.Store) 
 // file turns out to hold: a one-pipeline file still prints the pipeline
 // column here, so a script that reads this output gets the same columns
 // whatever the file grows into.
-func (r *RunsListCmd) runAcross() error {
+func (r *RunsListCmd) runAcross(out io.Writer) error {
 	path := r.state()
 
 	// The only flag left that a whole file cannot answer: RecentRuns spans
@@ -331,7 +348,7 @@ func (r *RunsListCmd) runAcross() error {
 	if !path.postgres() {
 		_, err := os.Stat(string(path))
 		if err != nil {
-			fmt.Printf("no state database at %s\n", path)
+			sayf(out, "no state database at %s\n", path)
 
 			return nil
 		}
@@ -341,7 +358,7 @@ func (r *RunsListCmd) runAcross() error {
 	if errors.Is(err, store.ErrNoState) {
 		// Created but not yet filled in — a writer is mid-first-open. Nothing
 		// is recorded, which is an answer, not a file to delete.
-		fmt.Printf("no pipelines recorded in %s\n", path)
+		sayf(out, "no pipelines recorded in %s\n", path)
 
 		return nil
 	}
@@ -359,24 +376,24 @@ func (r *RunsListCmd) runAcross() error {
 	}
 
 	if len(pipelines) == 0 {
-		fmt.Printf("no pipelines recorded in %s\n", path)
+		sayf(out, "no pipelines recorded in %s\n", path)
 
 		return nil
 	}
 
-	err = printPipelines(pipelines)
+	err = printPipelines(out, pipelines)
 	if err != nil {
 		return err
 	}
 
-	return r.printRunsAcross(ctx, reader, pipelines, path)
+	return r.printRunsAcross(ctx, out, reader, pipelines, path)
 }
 
 // printPipelines lists what the file holds. A name alone does not say which
 // YAML is behind it — the name is the identity and the path is only what a
 // human reads back — so both are printed.
-func printPipelines(pipelines []store.PipelineRow) error {
-	writer := newTabWriter()
+func printPipelines(out io.Writer, pipelines []store.PipelineRow) error {
+	writer := newTabWriter(out)
 	_, _ = fmt.Fprintln(writer, "PIPELINE\tPATH")
 
 	for _, pipeline := range pipelines {
@@ -397,7 +414,7 @@ func printPipelines(pipelines []store.PipelineRow) error {
 		return err
 	}
 
-	fmt.Println()
+	say(out)
 
 	return nil
 }
@@ -415,7 +432,7 @@ func printPipelines(pipelines []store.PipelineRow) error {
 // timestamp means "last time this content ran" rather than "a build
 // happened". Across pipelines the useful row is a real run with an id, which
 // is the handle for going and asking that pipeline about it.
-func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, pipelines []store.PipelineRow, path State) error {
+func (r *RunsListCmd) printRunsAcross(ctx context.Context, out io.Writer, reader store.Reader, pipelines []store.PipelineRow, path State) error {
 	names := make([]string, 0, len(pipelines))
 	for _, pipeline := range pipelines {
 		names = append(names, pipeline.Name)
@@ -427,12 +444,12 @@ func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, 
 	}
 
 	if len(rows) == 0 {
-		fmt.Println("no runs recorded")
+		say(out, "no runs recorded")
 
 		return nil
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 	_, _ = fmt.Fprintln(writer, "WHEN\tPIPELINE\tJOB\tSTATUS\tRUN\tCONFIG")
 
 	for _, row := range rows {
@@ -447,7 +464,7 @@ func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, 
 
 	// The flag rather than a Description, which a Reader has no handle to
 	// give: as printable, so a url's password stays out of the hint.
-	fmt.Printf("\nbreak one down with: steps runs cost -p <pipeline> <run> --db %s\n", shellArg(path.String()))
+	sayf(out, "\nbreak one down with: steps runs cost -p <pipeline> <run> --db %s\n", shellArg(path.String()))
 
 	return nil
 }
@@ -467,7 +484,7 @@ func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, 
 // depending on whether a pipeline was named is a command nobody can reason
 // about. The error text moves one command along, to `steps runs steps`, which
 // reports it per step — where the answer to "why did it fail" actually is.
-func (r *RunsListCmd) printJobRuns(ctx context.Context, st interface {
+func (r *RunsListCmd) printJobRuns(ctx context.Context, out io.Writer, st interface {
 	store.Runs
 	store.Meta
 },
@@ -478,12 +495,12 @@ func (r *RunsListCmd) printJobRuns(ctx context.Context, st interface {
 	}
 
 	if len(rows) == 0 {
-		fmt.Println("no runs recorded")
+		say(out, "no runs recorded")
 
 		return nil
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 	_, _ = fmt.Fprintln(writer, "WHEN\tJOB\tSTATUS\tRUN\tCONFIG")
 
 	for _, row := range rows {
@@ -496,24 +513,24 @@ func (r *RunsListCmd) printJobRuns(ctx context.Context, st interface {
 		return err
 	}
 
-	fmt.Printf("\nwhy a step did what it did: steps runs steps -p %s%s\n", r.Pipeline, dbNote(r.DB, st))
+	sayf(out, "\nwhy a step did what it did: steps runs steps -p %s%s\n", r.Pipeline, dbNote(r.DB, st))
 
 	return nil
 }
 
-func (r *RunsStepsCmd) printSteps(ctx context.Context, st store.Cache) error {
+func (r *RunsStepsCmd) printSteps(ctx context.Context, out io.Writer, st store.Cache) error {
 	rows, err := st.ListNodes(ctx, r.Job, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read steps: %w", err)
 	}
 
 	if len(rows) == 0 {
-		fmt.Println("no steps recorded")
+		say(out, "no steps recorded")
 
 		return nil
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 	_, _ = fmt.Fprintln(writer, "WHEN\tJOB\tSTEP\tSTATUS\tERROR")
 
 	for _, row := range rows {
@@ -530,7 +547,7 @@ func (r *RunsStepsCmd) printSteps(ctx context.Context, st store.Cache) error {
 // would read as a plan position it is not. Checked with FindRunRow first, which is
 // scoped, so another pipeline's run — or a typo — is an error rather than an
 // empty table that reads as "completed nothing".
-func (r *RunsStepsCmd) printRunSteps(ctx context.Context, st interface {
+func (r *RunsStepsCmd) printRunSteps(ctx context.Context, out io.Writer, st interface {
 	store.Meta
 	store.Runs
 }) error {
@@ -545,7 +562,7 @@ func (r *RunsStepsCmd) printRunSteps(ctx context.Context, st interface {
 	}
 
 	if len(steps) == 0 {
-		fmt.Printf("run %s completed no steps\n", run.ID)
+		sayf(out, "run %s completed no steps\n", run.ID)
 
 		return nil
 	}
@@ -554,9 +571,9 @@ func (r *RunsStepsCmd) printRunSteps(ctx context.Context, st interface {
 		steps = steps[:r.Limit]
 	}
 
-	fmt.Printf("run %s  %s  %s: steps a --resume skips\n", run.ID, run.JobName, run.Status)
+	sayf(out, "run %s  %s  %s: steps a --resume skips\n", run.ID, run.JobName, run.Status)
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 	_, _ = fmt.Fprintln(writer, "STEP")
 
 	for _, step := range steps {
@@ -566,19 +583,19 @@ func (r *RunsStepsCmd) printRunSteps(ctx context.Context, st interface {
 	return flush(writer)
 }
 
-func (r *RunsQueueCmd) printQueue(ctx context.Context, st store.Queue) error {
+func (r *RunsQueueCmd) printQueue(ctx context.Context, out io.Writer, st store.Queue) error {
 	rows, err := st.ListTriggerQueue(ctx, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read the trigger queue: %w", err)
 	}
 
 	if len(rows) == 0 {
-		fmt.Println("trigger queue is empty")
+		say(out, "trigger queue is empty")
 
 		return nil
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 	_, _ = fmt.Fprintln(writer, "ENQUEUED\tJOB\tSTATUS\tREASON\tERROR")
 
 	for _, row := range rows {
@@ -594,7 +611,7 @@ func (r *RunsQueueCmd) printQueue(ctx context.Context, st store.Queue) error {
 // The cache column is the one worth having: it is the only place prompt
 // caching reports whether it did anything, and a run that suddenly drops from
 // 60% to 0% is the visible half of a bill that doubled.
-func (r *RunsCostCmd) printCostTotals(ctx context.Context, st interface {
+func (r *RunsCostCmd) printCostTotals(ctx context.Context, out io.Writer, st interface {
 	store.Usage
 	store.Meta
 },
@@ -605,20 +622,20 @@ func (r *RunsCostCmd) printCostTotals(ctx context.Context, st interface {
 	}
 
 	if len(totals) == 0 {
-		fmt.Println("no agent usage recorded yet")
+		say(out, "no agent usage recorded yet")
 
 		return nil
 	}
 
-	fmt.Printf("%-12s  %12s  %7s  %10s  %6s\n", "RUN", "TOKENS", "CACHED", "COST", "STEPS")
+	sayf(out, "%-12s  %12s  %7s  %10s  %6s\n", "RUN", "TOKENS", "CACHED", "COST", "STEPS")
 
 	for _, total := range totals {
-		fmt.Printf("%-12s  %12s  %6s%%  %10s  %6d\n",
+		sayf(out, "%-12s  %12s  %6s%%  %10s  %6d\n",
 			total.RunID, humanTokens(total.Tokens), cachePercent(total.Tokens, total.Cached),
 			renderCost(total.CostUSD, total.Unpriced), total.Steps)
 	}
 
-	fmt.Printf("\nbreak one down with: steps runs cost -p %s <run>%s\n", r.Pipeline, dbNote(r.DB, st))
+	sayf(out, "\nbreak one down with: steps runs cost -p %s <run>%s\n", r.Pipeline, dbNote(r.DB, st))
 
 	return nil
 }
@@ -647,22 +664,22 @@ func dbNote(typed DB, st store.Meta) string {
 }
 
 // printRunCost breaks one run down per agent step.
-func (r *RunsCostCmd) printRunCost(ctx context.Context, st store.Usage) error {
+func (r *RunsCostCmd) printRunCost(ctx context.Context, out io.Writer, st store.Usage) error {
 	usage, err := st.RunUsage(ctx, r.RunID)
 	if err != nil {
 		return fmt.Errorf("could not read usage: %w", err)
 	}
 
 	if len(usage) == 0 {
-		fmt.Printf("no agent usage recorded for run %s\n", r.RunID)
+		sayf(out, "no agent usage recorded for run %s\n", r.RunID)
 
 		return nil
 	}
 
-	fmt.Printf("%-28s  %12s  %7s  %9s  %s\n", "STEP", "TOKENS", "CACHED", "DURATION", "FINISH")
+	sayf(out, "%-28s  %12s  %7s  %9s  %s\n", "STEP", "TOKENS", "CACHED", "DURATION", "FINISH")
 
 	for _, step := range usage {
-		fmt.Printf("%-28s  %12s  %6s%%  %9s  %s\n",
+		sayf(out, "%-28s  %12s  %6s%%  %9s  %s\n",
 			truncateName(usageLabel(step), 28), humanTokens(step.Total),
 			cachePercent(step.Total, step.Cached),
 			(time.Duration(step.DurationMS) * time.Millisecond).Round(time.Second),
@@ -694,8 +711,8 @@ type placementReader interface {
 // spelling of what a machine was, so the browser and the terminal cannot
 // disagree about it. They did — the terminal's copy never learned which
 // filesystems are memory.
-func (r *RunsWhereCmd) printPlacements(ctx context.Context, st placementReader) error {
-	run, ok, err := r.placementRun(ctx, st)
+func (r *RunsWhereCmd) printPlacements(ctx context.Context, out io.Writer, st placementReader) error {
+	run, ok, err := r.placementRun(ctx, out, st)
 	if err != nil || !ok {
 		return err
 	}
@@ -711,21 +728,21 @@ func (r *RunsWhereCmd) printPlacements(ctx context.Context, st placementReader) 
 		// about a run that is over: a placement is recorded when the step
 		// finishes, so a run still in flight has nothing recorded YET.
 		if run.Status == store.RunRunning {
-			fmt.Printf("no placed steps recorded for run %s yet\n", run.ID)
+			sayf(out, "no placed steps recorded for run %s yet\n", run.ID)
 		} else {
-			fmt.Printf("run %s ran every step on this machine\n", run.ID)
+			sayf(out, "run %s ran every step on this machine\n", run.ID)
 		}
 
 		return nil
 	}
 
-	fmt.Printf("%-24s  %-12s  %-13s  %9s  %9s  %9s  %-11s  %s\n",
+	sayf(out, "%-24s  %-12s  %-13s  %9s  %9s  %9s  %-11s  %s\n",
 		"STEP", "TAG", "PLATFORM", "SENT", "RECEIVED", "DISK", "IDENTITY", "MACHINE")
 
 	for _, placed := range placements {
 		view := web.PlacementView{Placement: placed}
 
-		fmt.Printf("%-24s  %-12s  %-13s  %9s  %9s  %9s  %-11s  %s\n",
+		sayf(out, "%-24s  %-12s  %-13s  %9s  %9s  %9s  %-11s  %s\n",
 			truncateName(placed.StepName, 24), cmp.Or(truncateName(placed.Tag, 12), "-"),
 			view.Platform(), view.Sent(), view.Received(), view.Disk(), cmp.Or(view.Identity(), "-"), view.Machine())
 	}
@@ -740,7 +757,7 @@ func (r *RunsWhereCmd) printPlacements(ctx context.Context, st placementReader) 
 // this state file — reads back as zero rows, and the caller would print that
 // as a run that ran every step here: a positive claim about a run this
 // pipeline has never seen.
-func (r *RunsWhereCmd) placementRun(ctx context.Context, st placementReader) (store.RunRow, bool, error) {
+func (r *RunsWhereCmd) placementRun(ctx context.Context, out io.Writer, st placementReader) (store.RunRow, bool, error) {
 	if r.RunID != "" {
 		run, ok, err := st.FindRunRow(ctx, r.RunID)
 		if err != nil {
@@ -748,7 +765,7 @@ func (r *RunsWhereCmd) placementRun(ctx context.Context, st placementReader) (st
 		}
 
 		if !ok {
-			fmt.Printf("no run %s in this pipeline\n", r.RunID)
+			sayf(out, "no run %s in this pipeline\n", r.RunID)
 		}
 
 		return run, ok, nil
@@ -760,7 +777,7 @@ func (r *RunsWhereCmd) placementRun(ctx context.Context, st placementReader) (st
 	}
 
 	if len(runs) == 0 {
-		fmt.Println("no runs recorded")
+		say(out, "no runs recorded")
 
 		return store.RunRow{}, false, nil
 	}

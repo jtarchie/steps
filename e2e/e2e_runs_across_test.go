@@ -60,7 +60,7 @@ func sharedRunsFixture(t *testing.T) (state, first, second string) {
 	second = sharedStatePipeline(t, filepath.Join(dir, "second.yml"), filepath.Join(dir, "second.log"))
 
 	for _, pipeline := range []string{first, second} {
-		err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", state})
+		err := stepsRun(t, []string{"run", pipeline, "--job", "build", "--db", state})
 		if err != nil {
 			t.Fatalf("run %s: %v", filepath.Base(pipeline), err)
 		}
@@ -71,15 +71,15 @@ func sharedRunsFixture(t *testing.T) (state, first, second string) {
 
 // TestRunsAcrossPipelines is the headline: no pipeline argument, one --db,
 // and every pipeline in the file reports.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsAcrossPipelines(t *testing.T) {
+	t.Parallel()
+
 	state, first, second := sharedRunsFixture(t)
 
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", "--db", state})
+		runErr = stepsRun(t, []string{"runs", "--db", state})
 	})
 
 	if runErr != nil {
@@ -112,15 +112,15 @@ func TestRunsAcrossPipelines(t *testing.T) {
 //
 // The two views read different tables, and this is the guard that adding the
 // unscoped one did not quietly route the scoped one through the reader.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsScopedStaysScoped(t *testing.T) {
+	t.Parallel()
+
 	state, first, _ := sharedRunsFixture(t)
 
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", "-p", cli.PipelineName(first), "--db", state})
+		runErr = stepsRun(t, []string{"runs", "-p", cli.PipelineName(first), "--db", state})
 	})
 
 	if runErr != nil {
@@ -158,7 +158,7 @@ func TestScopedViewsRequireAPipeline(t *testing.T) {
 
 	for _, view := range []string{"steps", "queue", "cost", "where"} {
 		t.Run(view, func(t *testing.T) {
-			err := cli.Run([]string{"runs", view, "--db", state})
+			err := stepsRun(t, []string{"runs", view, "--db", state})
 			if err == nil {
 				t.Fatalf("runs %s answered without a pipeline to answer for", view)
 			}
@@ -175,15 +175,15 @@ func TestScopedViewsRequireAPipeline(t *testing.T) {
 // spans a file, because the cross-pipeline query does not filter by job and
 // two pipelines calling a job `build` are not one job. Silently ignoring it
 // would answer a different question than the one typed.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestJobFilterIsRefusedAcrossPipelines(t *testing.T) {
+	t.Parallel()
+
 	state, _, _ := sharedRunsFixture(t)
 
 	var err error
 
 	_ = captureStdout(t, func() {
-		err = cli.Run([]string{"runs", "--db", state, "--job", "build"})
+		err = stepsRun(t, []string{"runs", "--db", state, "--job", "build"})
 	})
 
 	if err == nil {
@@ -202,15 +202,15 @@ func TestJobFilterIsRefusedAcrossPipelines(t *testing.T) {
 // It used to be a refusal, because without a pipeline there was no YAML to
 // derive a path from. There is one now, and answering "nothing there" for a
 // file that does not exist is the honest answer rather than a usage error.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsWithNoPipelineReadsTheDaemonsOwnState(t *testing.T) {
+	t.Parallel()
+
 	absent := filepath.Join(t.TempDir(), "nothing-here.db")
 
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"runs", "--db", absent})
+		err = stepsRun(t, []string{"runs", "--db", absent})
 	})
 
 	if err != nil {
@@ -228,15 +228,15 @@ func TestRunsWithNoPipelineReadsTheDaemonsOwnState(t *testing.T) {
 
 // TestRunsAcrossMissingStateCreatesNothing: asking about history must never
 // leave a database behind, the same promise the scoped path already keeps.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsAcrossMissingStateCreatesNothing(t *testing.T) {
+	t.Parallel()
+
 	state := filepath.Join(t.TempDir(), "absent.db")
 
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"runs", "--db", state})
+		err = stepsRun(t, []string{"runs", "--db", state})
 	})
 
 	if err != nil {
@@ -260,9 +260,9 @@ func TestRunsAcrossMissingStateCreatesNothing(t *testing.T) {
 // read as unanswered rather than as an answer — a blank path column reads as
 // a pipeline living at "", and a feed that printed nothing at all reads as a
 // broken command.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsAcrossPipelineWithNothingRecorded(t *testing.T) {
+	t.Parallel()
+
 	state := filepath.Join(t.TempDir(), "shared.db")
 
 	st, err := sqlite.OpenStore(state, "never-run")
@@ -278,7 +278,7 @@ func TestRunsAcrossPipelineWithNothingRecorded(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", "--db", state})
+		runErr = stepsRun(t, []string{"runs", "--db", state})
 	})
 
 	if runErr != nil {
@@ -304,15 +304,15 @@ func TestRunsAcrossPipelineWithNothingRecorded(t *testing.T) {
 // typo left a pipeline in the file forever, and the answer it gave back ("no
 // job runs recorded") was indistinguishable from a pipeline that simply had
 // not run yet.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestRunsDoesNotMintThePipelineItWasAskedAbout(t *testing.T) {
+	t.Parallel()
+
 	state, _, _ := sharedRunsFixture(t)
 
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", "-p", "typo", "--db", state})
+		runErr = stepsRun(t, []string{"runs", "-p", "typo", "--db", state})
 	})
 
 	if runErr == nil {
@@ -328,7 +328,7 @@ func TestRunsDoesNotMintThePipelineItWasAskedAbout(t *testing.T) {
 	}
 
 	listing := captureStdout(t, func() {
-		err := cli.Run([]string{"runs", "--db", state})
+		err := stepsRun(t, []string{"runs", "--db", state})
 		if err != nil {
 			t.Errorf("runs --db: %v", err)
 		}

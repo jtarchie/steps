@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/pipeline"
 )
 
@@ -56,7 +55,7 @@ func TestPreflightStopsBeforeAnyStepRuns(t *testing.T) {
 	fake := newFakeLLM(t, outage...)
 	path := preflightPipeline(t, dir, fake.URL, "")
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err == nil {
 		t.Fatal("run succeeded against a model that never answers")
 	}
@@ -119,7 +118,7 @@ func TestNoPreflightFlagSkipsTheCheck(t *testing.T) {
 	fake := newFakeLLM(t, says("done"))
 	path := preflightPipeline(t, dir, fake.URL, "")
 
-	err := cli.Run([]string{"run", path, "--job", "publish", "--no-preflight"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish", "--no-preflight"})
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -141,7 +140,7 @@ func TestPerAgentPreflightOptOut(t *testing.T) {
 	fake := newFakeLLM(t, says("done"))
 	path := preflightPipeline(t, dir, fake.URL, "  preflight: false")
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -195,7 +194,7 @@ jobs:
       - Build it.
 `, fake.URL))
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err == nil {
 		t.Fatal("run succeeded with one of its models down")
 	}
@@ -220,7 +219,7 @@ func TestValidateLiveRunsNothing(t *testing.T) {
 	fake := newFakeLLM(t, says("probe ok"))
 	path := preflightPipeline(t, dir, fake.URL, "")
 
-	err := cli.Run([]string{"validate", path, "--live", "--job", "publish"})
+	err := stepsRun(t, []string{"validate", path, "--live", "--job", "publish"})
 	if err != nil {
 		t.Fatalf("validate --live failed against a live model: %v", err)
 	}
@@ -246,12 +245,12 @@ func TestValidateLiveReportsAnUnreachableModel(t *testing.T) {
 
 	// Plain validate passes: nothing about a dead endpoint is knowable from
 	// the file or from this machine.
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err != nil {
 		t.Fatalf("validate without --live should not reach the model: %v", err)
 	}
 
-	err = cli.Run([]string{"validate", path, "--live"})
+	err = stepsRun(t, []string{"validate", path, "--live"})
 	if err == nil {
 		t.Fatal("--live passed against a model that answers 500 to everything")
 	}
@@ -284,7 +283,7 @@ jobs:
 		"job without live":      {"validate", path, "--job", "build"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := cli.Run(args)
+			err := stepsRun(t, args)
 			if err == nil {
 				t.Fatalf("%v was accepted", args)
 			}
@@ -307,7 +306,7 @@ func TestValidateLiveRefusesWhenPreflightIsDisabled(t *testing.T) {
 	// Port 1 is nothing: if a probe were made, it would fail.
 	path := preflightPipeline(t, dir, "http://127.0.0.1:1", "\ndefaults:\n  preflight:\n    disabled: true")
 
-	err := cli.Run([]string{"validate", path, "--live"})
+	err := stepsRun(t, []string{"validate", path, "--live"})
 	if err == nil {
 		t.Fatal("--live vouched for a pipeline that had turned the probe off")
 	}
@@ -318,7 +317,7 @@ func TestValidateLiveRefusesWhenPreflightIsDisabled(t *testing.T) {
 
 	// The shallower depths still answer: nothing about the file or this
 	// machine depends on the probe.
-	err = cli.Run([]string{"validate", path})
+	err = stepsRun(t, []string{"validate", path})
 	if err != nil {
 		t.Errorf("plain validate should still pass: %v", err)
 	}

@@ -6,14 +6,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // steps validate reports everything wrong with a pipeline in one pass, and —
 // the point of the command — touches nothing while doing it: no state store,
 // no workspace, no containers, no step executed.
 func TestValidateReportsAllErrorsAndWritesNothing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -27,7 +27,7 @@ jobs:
       - x
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("expected validate to fail on a broken pipeline")
 	}
@@ -54,6 +54,8 @@ jobs:
 }
 
 func TestValidateAcceptsAValidPipeline(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -63,7 +65,7 @@ jobs:
     run: echo hello
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -72,6 +74,8 @@ jobs:
 // Artifact flow is checked for every job, not just the one a run would have
 // selected — the whole file is the unit being validated.
 func TestValidateChecksArtifactFlowInEveryJob(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 workspace:
@@ -92,7 +96,7 @@ jobs:
     inputs: [never-produced]
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("expected validate to reject an input nothing produces")
 	}
@@ -120,8 +124,6 @@ func TestValidatePRReviewExample(t *testing.T) {
 		t.Setenv(key, "test-key-not-used-for-any-call")
 	}
 
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-
 	path := repoFile("examples", "pr-review.yml")
 
 	err := loadSchema(t).Validate(yamlAsJSONValue(t, path))
@@ -129,7 +131,7 @@ func TestValidatePRReviewExample(t *testing.T) {
 		t.Errorf("%s does not match steps.schema.json:\n%v", path, err)
 	}
 
-	err = cli.Run([]string{"validate", path, "--var", "pr_repo=" + fakeRepo})
+	err = stepsRun(t, []string{"validate", path, "--var", "pr_repo=" + fakeRepo})
 	if err != nil {
 		t.Errorf("validate %s: %v", path, err)
 	}
@@ -148,8 +150,6 @@ func TestValidateSecurityAuditExample(t *testing.T) {
 		t.Setenv(key, "test-key-not-used-for-any-call")
 	}
 
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-
 	path := repoFile("examples", "security-audit.yml")
 
 	err := loadSchema(t).Validate(yamlAsJSONValue(t, path))
@@ -157,7 +157,7 @@ func TestValidateSecurityAuditExample(t *testing.T) {
 		t.Errorf("%s does not match steps.schema.json:\n%v", path, err)
 	}
 
-	err = cli.Run([]string{"validate", path, "--var", "pr_repo=" + fakeRepo})
+	err = stepsRun(t, []string{"validate", path, "--var", "pr_repo=" + fakeRepo})
 	if err != nil {
 		t.Errorf("validate %s: %v", path, err)
 	}
@@ -165,8 +165,6 @@ func TestValidateSecurityAuditExample(t *testing.T) {
 
 // TestValidateFactoryExample holds examples/factory.yml as written: the e2e harness runs it with settings: and token_env: stripped, so only this sees the file a reader copies.
 func TestValidateFactoryExample(t *testing.T) {
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-
 	path := repoFile("examples", "factory.yml")
 
 	err := loadSchema(t).Validate(yamlAsJSONValue(t, path))
@@ -174,7 +172,7 @@ func TestValidateFactoryExample(t *testing.T) {
 		t.Errorf("%s does not match steps.schema.json:\n%v", path, err)
 	}
 
-	err = cli.Run([]string{"validate", path, "--var", "repo=" + fakeRepo})
+	err = stepsRun(t, []string{"validate", path, "--var", "repo=" + fakeRepo})
 	if err != nil {
 		t.Errorf("validate %s: %v", path, err)
 	}
@@ -185,6 +183,8 @@ func TestValidateFactoryExample(t *testing.T) {
 // @builtin merge: the pipeline supplies the one thing it must (which model),
 // and gets the prompt and tools it referenced the profile for.
 func TestEndToEndBuiltinAgentSuppliesOnlyTheModel(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t, says("Looks fine."))
 
@@ -207,7 +207,7 @@ jobs:
       - review the notes
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -238,6 +238,8 @@ jobs:
 // being written and had no reader: the only route to "why did my last run
 // fail" was opening .steps/state.db by hand and knowing the schema.
 func TestRunsReportsHistory(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -248,13 +250,13 @@ jobs:
 `)
 
 	// The run fails; that outcome is what we want to read back.
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("expected the pipeline to fail")
 	}
 
 	out := captureStdout(t, func() {
-		runsErr := cli.Run(append([]string{"runs"}, readArgs(path)...))
+		runsErr := stepsRun(t, append([]string{"runs"}, readArgs(path)...))
 		if runsErr != nil {
 			t.Fatalf("runs: %v", runsErr)
 		}
@@ -267,7 +269,7 @@ jobs:
 	}
 
 	steps := captureStdout(t, func() {
-		runsErr := cli.Run(append([]string{"runs", "steps"}, readArgs(path)...))
+		runsErr := stepsRun(t, append([]string{"runs", "steps"}, readArgs(path)...))
 		if runsErr != nil {
 			t.Fatalf("runs --steps: %v", runsErr)
 		}
@@ -281,6 +283,8 @@ jobs:
 // Asking about history on a pipeline that has never run says so, and — since
 // this is a read — does not create a state store as a side effect.
 func TestRunsOnAFreshPipelineWritesNothing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -289,7 +293,7 @@ jobs:
 `)
 
 	out := captureStdout(t, func() {
-		err := cli.Run(append([]string{"runs"}, readArgs(path)...))
+		err := stepsRun(t, append([]string{"runs"}, readArgs(path)...))
 		if err != nil {
 			t.Fatalf("runs: %v", err)
 		}
@@ -311,6 +315,8 @@ jobs:
 // answerable in microseconds, and both used to surface at run time — for an
 // agent step, after it had already started billing.
 func TestValidateRejectsAPipelineThatCannotRunHere(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 mcp_servers:
@@ -332,7 +338,7 @@ jobs:
       - Write something.
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("validate reported ok for a pipeline that cannot run")
 	}
@@ -378,7 +384,7 @@ jobs:
 
 	t.Setenv("STEPS_TEST_PRESENT_KEY", "set-to-something")
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err != nil {
 		t.Fatalf("validate rejected a runnable pipeline: %v", err)
 	}
@@ -388,6 +394,8 @@ jobs:
 // time, not just in validate: a typo in a model name (`opencoder/` for
 // `opencode/`) should cost a load, not a run billed per token.
 func TestValidateRejectsAnUnknownProviderPrefix(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 defaults:
@@ -408,7 +416,7 @@ jobs:
       - Write something.
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("validate reported ok for a model with no known provider prefix")
 	}
@@ -422,6 +430,8 @@ jobs:
 // pre-commit hook or a build that checks a pipeline it has no intention of
 // running should not need that pipeline's production credentials on hand.
 func TestValidateSyntaxOnlySkipsMachineChecks(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 mcp_servers:
@@ -443,14 +453,14 @@ jobs:
       - Write something.
 `)
 
-	err := cli.Run([]string{"validate", path, "--syntax-only"})
+	err := stepsRun(t, []string{"validate", path, "--syntax-only"})
 	if err != nil {
 		t.Fatalf("--syntax-only still checked this machine: %v", err)
 	}
 
 	// The same file without the flag must still be rejected, or the flag is
 	// not skipping anything.
-	err = cli.Run([]string{"validate", path})
+	err = stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("validate without --syntax-only reported ok for a pipeline that cannot run")
 	}
@@ -469,6 +479,8 @@ jobs:
 // struct-driven test can only check what is registered, which is precisely the
 // half that was fine. The docs are where a command is promised.
 func TestEveryDocumentedCommandIsReachable(t *testing.T) {
+	t.Parallel()
+
 	body, err := os.ReadFile(repoFile("docs", "README.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -488,7 +500,7 @@ func TestEveryDocumentedCommandIsReachable(t *testing.T) {
 			// and fails trying to open it — so that error is the signature of
 			// a command that does not exist. (--help would be the obvious
 			// probe, but kong exits the process for it.)
-			runErr := cli.Run(append([]string{name}, probeArgs[name]...))
+			runErr := stepsRun(t, append([]string{name}, probeArgs[name]...))
 			if runErr != nil && strings.Contains(runErr.Error(), "could not load pipeline") {
 				t.Errorf("docs/README.md advertises `steps %s`, but it parsed as the default command with %q as its pipeline: %v",
 					name, name, runErr)

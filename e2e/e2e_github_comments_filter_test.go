@@ -34,6 +34,8 @@ jobs:
 
 // TestWatchGitHubCommentsLabelsNarrowToLabeledParents: a command builds only on an issue or pull request carrying every filter label, an issue's own labels counting for its comments; one refused for its parent's labels is not built when the label goes on after the cursor has passed it, because a command is an instruction given at a moment.
 func TestWatchGitHubCommentsLabelsNarrowToLabeledParents(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 
 	labeled := reviewablePR()
@@ -83,6 +85,8 @@ func TestWatchGitHubCommentsLabelsNarrowToLabeledParents(t *testing.T) {
 
 // TestWatchGitHubCommentsAuthorListTakesAnyOfThem: author: as a list builds a command from any login on it, in any case, and from nobody else.
 func TestWatchGitHubCommentsAuthorListTakesAnyOfThem(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 

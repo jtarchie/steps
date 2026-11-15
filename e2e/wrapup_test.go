@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 const wrapUpNudge = "then your tools are taken away"
@@ -47,6 +45,8 @@ jobs:
 
 // The nudge has to arrive while the tools are still granted, or the file it asks for cannot be written.
 func TestTurnCapNudgesTheModelToWriteItsDeliverable(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		callsTool("run_shell", map[string]any{"command": "true"}),
@@ -78,6 +78,8 @@ func TestTurnCapNudgesTheModelToWriteItsDeliverable(t *testing.T) {
 
 // A wrap-up answer is not the declared deliverable, so a capped step without it is red rather than green and empty.
 func TestTurnCapWithoutTheDeliverableIsRed(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		callsTool("run_shell", map[string]any{"command": "true"}),
@@ -85,7 +87,7 @@ func TestTurnCapWithoutTheDeliverableIsRed(t *testing.T) {
 		says("Here is everything I found, as prose."),
 	)
 
-	err := cli.Run([]string{"run", wrapUpPipeline(t, dir, fake.URL, 2), "--job", "build"})
+	err := stepsRun(t, []string{"run", wrapUpPipeline(t, dir, fake.URL, 2), "--job", "build"})
 	if err == nil {
 		t.Fatal("a capped step that never wrote its declared file went green")
 	}

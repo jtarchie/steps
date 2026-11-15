@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // compactedReviewPipeline renders one agent whose first tool result (a ~2KB file)
@@ -51,6 +49,8 @@ jobs:
 // the summary request's tokens are in the step's spend, and the step's
 // result counts it.
 func TestCompactionIsVisibleAndCounted(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	fake := newFakeLLM(t,
@@ -61,7 +61,7 @@ func TestCompactionIsVisibleAndCounted(t *testing.T) {
 
 	path := compactedReviewPipeline(t, dir, fake.URL, "")
 
-	err := cli.Run([]string{"run", path, "--job", "review"})
+	err := stepsRun(t, []string{"run", path, "--job", "review"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -93,6 +93,8 @@ func TestCompactionIsVisibleAndCounted(t *testing.T) {
 // request behind it, so crossing the agent's budget stops the step before
 // anything more is spent — and the summary it never used is not marked.
 func TestCompactionSummaryCrossingTheBudgetStopsTheStep(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	fake := newFakeLLM(t,
@@ -103,7 +105,7 @@ func TestCompactionSummaryCrossingTheBudgetStopsTheStep(t *testing.T) {
 
 	path := compactedReviewPipeline(t, dir, fake.URL, "  budget:\n    tokens: 500")
 
-	err := cli.Run([]string{"run", path, "--job", "review"})
+	err := stepsRun(t, []string{"run", path, "--job", "review"})
 	if err == nil || !strings.Contains(err.Error(), "budget exceeded") {
 		t.Fatalf("err = %v, want a budget breach", err)
 	}

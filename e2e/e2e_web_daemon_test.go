@@ -25,6 +25,8 @@ import (
 // file the second cannot write until it returns, and the step timeout ends it
 // as a failure.
 func TestWebMaxConcurrentReachesTheDrainer(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first.flag")
 	second := filepath.Join(dir, "second.flag")
@@ -112,6 +114,8 @@ func waitForQueueSuccess(t *testing.T, state, name string, want int) {
 // flag parse and do nothing. Cold start builds the NEWEST version, so a
 // pinned run building anything else is only explicable by the pin.
 func TestWebPinReachesTheRun(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 3)
 

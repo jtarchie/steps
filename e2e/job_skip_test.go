@@ -8,8 +8,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // countLines returns the number of newline-terminated lines in path's
@@ -43,13 +41,15 @@ func assertLineCount(t *testing.T, path string, want int) {
 func mustRun(t *testing.T, args ...string) {
 	t.Helper()
 
-	err := cli.Run(args)
+	err := stepsRun(t, args)
 	if err != nil {
 		t.Fatalf("run(%v): %v", args, err)
 	}
 }
 
 func TestRunJobSkipsUnchangedAndReexecutesOnChange(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	getCounter := filepath.Join(dir, "get-counter.txt")
 	taskCounter := filepath.Join(dir, "task-counter.txt")
@@ -110,6 +110,8 @@ jobs:
 }
 
 func TestRunJobPutNeverSkipped(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	getCounter := filepath.Join(dir, "get-counter.txt")
 	putCounter := filepath.Join(dir, "put-counter.txt")
@@ -160,6 +162,8 @@ jobs:
 // path separator and a traversal to pin that a put name, now free text,
 // still lands inside the build's steps directory.
 func TestRunJobPutResourceAlias(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "reaction.log")
 	dirs := filepath.Join(dir, "dirs.log")
@@ -239,6 +243,8 @@ jobs:
 // records each cell under its own coordinates, not the resource's name N
 // times — the same names the execution log uses.
 func TestRunJobAcrossPutCellsRecordTheirLabels(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -292,6 +298,8 @@ jobs:
 // runGetStep (to actually fetch it) — this counts every invocation of check:
 // itself, independent of whether the step ends up skipped.
 func TestRunJobCheckCommandRunsOnceNotTwice(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	checkCounter := filepath.Join(dir, "check-counter.txt")
 	path := pipelinePath(t, dir)
@@ -341,6 +349,8 @@ jobs:
 // The step's own execution still requires its inputs. Only the guard tolerates
 // an absent one, and only by reading it as absent.
 func TestRunJobGuardDecidesWhenAnInputWasNeverProduced(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	published := filepath.Join(dir, "published.txt")
 	path := pipelinePath(t, dir)
@@ -378,6 +388,8 @@ jobs:
 // nothing, answers false, and skips the step forever, with nothing in the log
 // to say why.
 func TestRunJobGuardSeesTheSameInputsTheStepDoes(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	published := filepath.Join(dir, "published.txt")
 	path := pipelinePath(t, dir)

@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestVarsInterpolateFromTheCommandLine is the shape the story describes: one
 // pipeline file serving staging and production instead of being copy-pasted
 // per environment and drifting.
 func TestVarsInterpolateFromTheCommandLine(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "target.log")
 
@@ -26,7 +26,7 @@ jobs:
     run: echo ((target)) >> %s
 `, log))
 
-	err := cli.Run([]string{"run", path, "--job", "build", "--var", "target=staging"})
+	err := stepsRun(t, []string{"run", path, "--job", "build", "--var", "target=staging"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -39,6 +39,8 @@ jobs:
 // TestVarsFileAndFlagCompose verifies the flag overrides the file — the only
 // ordering that makes a one-off override possible at all.
 func TestVarsFileAndFlagCompose(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "target.log")
 
@@ -54,7 +56,7 @@ jobs:
     run: echo ((target)) ((other)) >> %s
 `, log))
 
-	err := cli.Run([]string{"run", path, "--job", "build", "--vars-file", varsFile, "--var", "target=from-flag"})
+	err := stepsRun(t, []string{"run", path, "--job", "build", "--vars-file", varsFile, "--var", "target=from-flag"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -69,6 +71,8 @@ jobs:
 // a shell as the literal text ((repo_uri)) and fail somewhere far from the
 // mistake.
 func TestUnresolvedVarIsALoadError(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -79,7 +83,7 @@ jobs:
     run: echo ((nobody_supplies_this))
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("a pipeline with an unsupplied var validated")
 	}
@@ -92,6 +96,8 @@ jobs:
 // TestLoadVarCapturesAValueMidRun covers the second mechanism: a value that
 // does not exist until the run produces it.
 func TestLoadVarCapturesAValueMidRun(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "tag.log")
 
@@ -111,7 +117,7 @@ jobs:
     run: echo "shipping ((tag))" >> %s
 `, log))
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -124,6 +130,8 @@ jobs:
 
 // TestGuardedLoadVarFeedsItsOnSuccess crosses #262's seam: the guard must see the input the capture reads, and on_success must be allowed the capture.
 func TestGuardedLoadVarFeedsItsOnSuccess(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "tag.log")
 
@@ -145,7 +153,7 @@ jobs:
       run: echo "shipping ((tag))" >> %s
 `, log))
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -157,6 +165,8 @@ jobs:
 
 // TestGuardedDoCarriesItsCapture: #262's shape; without inputs: on the do:, its guard read an empty dir and was always false.
 func TestGuardedDoCarriesItsCapture(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		write string
 		want  string
@@ -185,7 +195,7 @@ jobs:
     when: test -s meta/v
 `, tc.write, log))
 
-			err := cli.Run([]string{"run", path, "--job", "build"})
+			err := stepsRun(t, []string{"run", path, "--job", "build"})
 			if err != nil {
 				t.Fatalf("run: %v", err)
 			}
@@ -200,6 +210,8 @@ jobs:
 
 // TestLoadVarNeedsAFile covers the malformed step.
 func TestLoadVarNeedsAFile(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -208,7 +220,7 @@ jobs:
   - load_var: tag
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("a load_var with no file validated")
 	}
@@ -222,6 +234,8 @@ jobs:
 // only the top-level plan, so a typo inside a hook or a block loaded fine and
 // reached the shell as the literal text.
 func TestUnresolvedVarNestedInThePlanIsALoadError(t *testing.T) {
+	t.Parallel()
+
 	for name, plan := range map[string]string{
 		"step hook": `
   - task: build
@@ -254,7 +268,7 @@ func TestUnresolvedVarNestedInThePlanIsALoadError(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			path := writePipeline(t, t.TempDir(), "jobs:\n- name: build\n  plan:"+plan+"\n")
 
-			err := cli.Run([]string{"validate", path})
+			err := stepsRun(t, []string{"validate", path})
 			if err == nil {
 				t.Fatal("a pipeline with an unsupplied nested var validated")
 			}
@@ -270,6 +284,8 @@ func TestUnresolvedVarNestedInThePlanIsALoadError(t *testing.T) {
 // concurrent branch has run by the time the plan moves past the block, so
 // the steps after it may use the value.
 func TestNestedLoadVarFeedsLaterSteps(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "tag.log")
 
@@ -297,7 +313,7 @@ jobs:
     run: echo "after ((tag)) ((color))" >> %[1]s
 `, log))
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -312,6 +328,8 @@ jobs:
 // once, so whether one sees another's capture is a race. Refused at load
 // rather than left to timing.
 func TestParallelSiblingCannotUseABranchesLoadVar(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 jobs:
 - name: build
@@ -328,7 +346,7 @@ jobs:
         run: echo ((tag))
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("a branch using a sibling branch's load_var validated")
 	}
@@ -344,6 +362,8 @@ jobs:
 // very pipelines vars were added for — an unresolved ((name)) is a load error,
 // and four of the five commands had no way to resolve one.
 func TestVarsWorkOnEveryCommandThatLoadsAPipeline(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -363,7 +383,7 @@ jobs:
 		{"preflight", path, "--job", "build", "--var", "target=staging"},
 	} {
 		t.Run(args[0], func(t *testing.T) {
-			err := cli.Run(args)
+			err := stepsRun(t, args)
 			if err != nil && strings.Contains(err.Error(), "((target))") {
 				t.Errorf("`steps %s` cannot resolve vars: %v", args[0], err)
 			}
@@ -375,6 +395,8 @@ jobs:
 // climbs out of the step's directory: the read happens on this machine, so it
 // would otherwise capture whatever sits beside the workspace.
 func TestLoadVarFileOutsideTheWorkspaceIsALoadError(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -389,7 +411,7 @@ jobs:
     inputs: [meta]
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("a load_var whose file: leaves the workspace ran")
 	}
@@ -403,6 +425,8 @@ jobs:
 // a file: rendered from a value an earlier step captured. The target exists
 // and the read would succeed, so only the confinement can fail it.
 func TestLoadVarFileSteeredOutByAVarFailsTheStep(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	secret := filepath.Join(dir, "secret.txt")
 	writePipelineFile(t, secret, "TOPSECRET\n")
@@ -429,7 +453,7 @@ jobs:
     run: echo "((stolen))" >> %s
 `, climb, log))
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("a load_var steered out of its workspace by a var ran")
 	}
@@ -446,6 +470,8 @@ jobs:
 // TestLoadVarRefusesAnOversizeFile covers the unbounded read: a var is a value
 // substituted into later steps, not a data transfer.
 func TestLoadVarRefusesAnOversizeFile(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -460,7 +486,7 @@ jobs:
     inputs: [meta]
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("a load_var read a file above the limit")
 	}
@@ -473,6 +499,8 @@ jobs:
 // TestLoadVarRefusesASymlinkOutOfTheWorkspace covers what a lexical check
 // cannot see: a file: inside the workspace that is a link to one outside it.
 func TestLoadVarRefusesASymlinkOutOfTheWorkspace(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	secret := filepath.Join(dir, "secret.txt")
 	writePipelineFile(t, secret, "TOPSECRET\n")
@@ -495,7 +523,7 @@ jobs:
     run: echo "((stolen))" >> %s
 `, secret, log))
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("a load_var followed a symlink out of its workspace")
 	}

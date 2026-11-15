@@ -20,7 +20,6 @@ import (
 // hookEnvName is the variable the auth fixture's webhook resource reads its signing key from.
 const hookEnvName = "STEPS_TEST_AUTH_HOOK_SECRET"
 
-// Not t.Parallel(): startWeb backgrounds cli.Run in this process and stop signals the whole test binary.
 func TestBasicAuthGuardsTheDaemonExceptItsWebhooks(t *testing.T) {
 	const (
 		user = "ops"
@@ -78,7 +77,7 @@ func theHealthCheckIsNot(t *testing.T, served *webProcess) {
 func setIsRefusedWithoutCredentials(t *testing.T, served *webProcess, name, path, user, pass string) {
 	t.Helper()
 
-	none := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", served.target()})
+	none := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", served.target()})
 	if none == nil {
 		t.Fatal("a set with no credentials was accepted by a daemon that requires them")
 	}
@@ -87,7 +86,7 @@ func setIsRefusedWithoutCredentials(t *testing.T, served *webProcess, name, path
 		t.Errorf("the refusal does not name the fix: %v", none)
 	}
 
-	wrong := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, user, "not-the-password")})
+	wrong := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, user, "not-the-password")})
 	if wrong == nil {
 		t.Fatal("a set with the wrong password was accepted")
 	}
@@ -106,7 +105,7 @@ func setGoesThroughWithThem(t *testing.T, served *webProcess, name, path, user, 
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, user, pass)})
+		err = stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, user, pass)})
 	})
 
 	if err != nil {
@@ -170,7 +169,7 @@ func TestBasicAuthIsBothOrNeither(t *testing.T) {
 		{"--basic-auth-username", "ops"},
 		{"--basic-auth-password", "secret"},
 	} {
-		err := cli.Run(append([]string{"web", "--listen", "127.0.0.1:1"}, args...))
+		err := stepsRun(t, append([]string{"web", "--listen", "127.0.0.1:1"}, args...))
 		if err == nil {
 			t.Fatalf("steps web started with only %s", args[0])
 		}

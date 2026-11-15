@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // messagesPipeline is an agent step with two user turns.
@@ -48,6 +46,8 @@ jobs:
 // second while still deciding the first — which is exactly what writing them as
 // one prompt already does, and not what this is for.
 func TestEndToEndSecondMessageIsSentAfterTheFirstIsAnswered(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		says("The diff looks fine."),
@@ -85,6 +85,8 @@ func TestEndToEndSecondMessageIsSentAfterTheFirstIsAnswered(t *testing.T) {
 // TestEndToEndOneMessageIsUnchanged pins that the common case did not move: a
 // single message is one request, exactly as a single prompt: always was.
 func TestEndToEndOneMessageIsUnchanged(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t, says("Looks fine."))
 
@@ -121,6 +123,8 @@ jobs:
 // first, so declaring both is refused at load rather than resolved by a
 // precedence nobody would guess.
 func TestEndToEndMessagesAndMessageFilesAreRefused(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	err := os.WriteFile(filepath.Join(dir, "review.md"), []byte("Review the diff.\n"), 0o600)
@@ -145,7 +149,7 @@ jobs:
     message_files: [review.md]
 `)
 
-	runErr := cli.Run([]string{"validate", "--syntax-only", path})
+	runErr := stepsRun(t, []string{"validate", "--syntax-only", path})
 	if runErr == nil {
 		t.Fatal("a step declaring both messages: and message_files: loaded")
 	}

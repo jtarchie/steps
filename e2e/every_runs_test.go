@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -84,6 +83,8 @@ func runVersions(t *testing.T, st store.Store, job, resource string) [][]string 
 // by one poll are three runs on the job's page, each built from one version,
 // not one run holding three builds.
 func TestWatchEveryVersionIsItsOwnRun(t *testing.T) {
+	t.Parallel()
+
 	fixture := newLockstepFixture(t, everyRunsPipeline)
 	fixture.coldStart(t)
 
@@ -108,6 +109,8 @@ func TestWatchEveryVersionIsItsOwnRun(t *testing.T) {
 // them one after another fails the first one's barrier. The cold start's
 // build of version 1 has no sibling and skips it.
 func TestWatchEveryVersionRunsOverlapUnderMaxInFlight(t *testing.T) {
+	t.Parallel()
+
 	started := filepath.Join(t.TempDir(), "started")
 
 	err := os.MkdirAll(started, 0o750)
@@ -152,6 +155,8 @@ func TestWatchEveryVersionRunsOverlapUnderMaxInFlight(t *testing.T) {
 // `fly trigger-job` is — the oldest version the job has not taken — and the
 // next invocation takes the next.
 func TestRunBuildsTheOldestVersionOnly(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	processed := filepath.Join(dir, "processed.txt")
 
@@ -180,7 +185,7 @@ jobs:
 
 		var err error
 
-		out := captureStdout(t, func() { err = cli.Run([]string{"run", path, "--job", "build"}) })
+		out := captureStdout(t, func() { err = stepsRun(t, []string{"run", path, "--job", "build"}) })
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -220,6 +225,8 @@ jobs:
 // versions, so it cannot walk a backlog one claim at a time — it builds every
 // version, each as its own run, and a job's assert: holds over all of them.
 func TestStepsTestBuildsEveryVersionAsItsOwnRun(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -243,7 +250,7 @@ jobs:
     execution: [ticks, work, ticks, work]
 `)
 
-	err := cli.Run([]string{"test", path})
+	err := stepsRun(t, []string{"test", path})
 	if err != nil {
 		t.Fatalf("steps test: %v", err)
 	}
@@ -281,7 +288,7 @@ func runBacklog(t *testing.T, args ...string) error {
 	for range 50 {
 		var err error
 
-		out := captureStdout(t, func() { err = cli.Run(args) })
+		out := captureStdout(t, func() { err = stepsRun(t, args) })
 		if err != nil {
 			errs = append(errs, err)
 		}

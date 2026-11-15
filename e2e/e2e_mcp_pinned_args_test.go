@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/events"
 )
 
@@ -52,6 +51,8 @@ func startPinFixture(t *testing.T) *docMCPServer {
 // TestMCPPinnedArgs carries a pin across every seam it crosses — YAML, the
 // schema the model is offered, the merge, and the wire to the MCP server.
 func TestMCPPinnedArgs(t *testing.T) {
+	t.Parallel()
+
 	srv := startPinFixture(t)
 	fake := newFakeLLM(t,
 		callsTool("hb__list_faults", map[string]any{"a": "other", "A": "sneaky", "q": "x"}),
@@ -150,6 +151,8 @@ func pinOverrideNote(t *testing.T, path string) string {
 // step at preparation — before a single model turn — and never echoes the
 // pinned value.
 func TestMCPPinnedArgsRefusedBeforeTheModel(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		pins string
@@ -166,7 +169,7 @@ func TestMCPPinnedArgsRefusedBeforeTheModel(t *testing.T) {
 
 			path := writePipeline(t, t.TempDir(), pinnedArgsPipeline(fake.URL, srv.URL, tc.pins))
 
-			err := cli.Run([]string{"run", path})
+			err := stepsRun(t, []string{"run", path})
 			if err == nil {
 				t.Fatal("the run succeeded with a pin that cannot bind")
 			}

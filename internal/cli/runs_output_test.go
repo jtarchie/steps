@@ -200,8 +200,8 @@ func TestRunCommandsReportAStoreFailureLookingUpTheRun(t *testing.T) {
 	faulty := faultyRunsStore{st}
 
 	for name, lookup := range map[string]func() error{
-		"runs output": func() error { return (&RunsOutputCmd{RunID: "RUN"}).print(t.Context(), faulty) },
-		"runs steps":  func() error { return (&RunsStepsCmd{RunID: "RUN"}).printRunSteps(t.Context(), faulty) },
+		"runs output": func() error { return (&RunsOutputCmd{RunID: "RUN"}).print(t.Context(), os.Stdout, faulty) },
+		"runs steps":  func() error { return (&RunsStepsCmd{RunID: "RUN"}).printRunSteps(t.Context(), os.Stdout, faulty) },
 		"runs follow": func() error {
 			_, err := (&RunsFollowCmd{RunID: "RUN"}).target(t.Context(), faulty)
 

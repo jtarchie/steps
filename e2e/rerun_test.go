@@ -5,12 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestRerunRebuildsABuildAgainstTheVersionsItWasCreatedWith is fly rerun-build (#146): a new run, the whole plan from the top, against exactly the versions the run's builds began with — not whatever the check reports now — recording which build it re-ran. Concourse has no cache, so every step of a rerun executes; here the rerun skips the cache to mean the same thing.
 func TestRerunRebuildsABuildAgainstTheVersionsItWasCreatedWith(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -78,6 +78,8 @@ jobs:
 
 // TestARerunTakesNothing: a rerun consumes no version, as Concourse's never runs the input algorithm. It matters for a rerun of a PINNED build: the cursor is a high-water mark, so taking the pinned version would leap it over every unbuilt version below, and the next ordinary run would silently skip them.
 func TestARerunTakesNothing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -119,6 +121,8 @@ jobs:
 
 // TestARerunIsRefusedWhenItsVersionIsGone: Concourse aborts the rerun with "chosen version of input X not available" rather than choose another; so does this, before anything runs.
 func TestARerunIsRefusedWhenItsVersionIsGone(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -154,7 +158,7 @@ jobs:
 	writePipelineFile(t, versions, `[{"n":"2"}]`)
 	mustRun(t, "run", path, "--job", "build")
 
-	err := cli.Run([]string{"run", path, "--rerun", first})
+	err := stepsRun(t, []string{"run", path, "--rerun", first})
 	if err == nil || !strings.Contains(err.Error(), "chosen version of input ticks not available") {
 		t.Fatalf("rerun of a build whose version was pruned = %v, want it refused naming the input", err)
 	}
@@ -162,6 +166,8 @@ jobs:
 
 // TestARerunOfAJobWithNoGetRunsItAgain: there is nothing to bind, so a rerun is the plan again from the top.
 func TestARerunOfAJobWithNoGetRunsItAgain(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	ran := filepath.Join(dir, "ran.log")
 
@@ -181,6 +187,8 @@ jobs:
 
 // TestARerunOfAnOldBuildDoesNotJumpTheQueueDownstream: Concourse ranks a rerun's outputs at its original's position, so it never overtakes a newer build for passed:. Here passed: selects by version order, not by which build finished last, so a green rerun of an old build hands downstream nothing older than it already had.
 func TestARerunOfAnOldBuildDoesNotJumpTheQueueDownstream(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -234,6 +242,8 @@ jobs:
 
 // TestRerunOfAnEveryRunRebuildsItsOneVersion: a version: every run is one build of one version, so Retry is that version again — not its siblings, which are runs of their own, and nothing that arrived since.
 func TestRerunOfAnEveryRunRebuildsItsOneVersion(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")

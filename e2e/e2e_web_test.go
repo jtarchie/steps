@@ -29,6 +29,8 @@ import (
 // plan order, the agent's turns and tool calls beneath its step, and the
 // verdict it reached.
 func TestWebUIRendersARealAgentRun(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t, happyPathScript()...)
 	path := e2ePipeline(t, dir, fake.URL, "")
@@ -100,6 +102,8 @@ func assertAgentTranscript(t *testing.T, body string) {
 // "stopped early" badge, the worker, the node link) was found by a reader who
 // had to reload.
 func TestWebUILiveStreamDrawsTheSameRunThePageDoes(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t, happyPathScript()...)
 	path := e2ePipeline(t, dir, fake.URL, "")
@@ -164,6 +168,8 @@ func TestWebUILiveStreamDrawsTheSameRunThePageDoes(t *testing.T) {
 // through the UI: rerun the same pipeline and the second run's transcript
 // must distinguish what it replayed from what it paid for.
 func TestWebUIShowsCachedStepsAsSkipped(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	pipelinePath := filepath.Join(dir, "cached.yml")
 
@@ -215,6 +221,8 @@ jobs:
 // with what broke, and mark the failing step rather than leaving a reader to
 // expand every step looking for it.
 func TestWebUIFailedRunOpensWithTheError(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	pipelinePath := filepath.Join(dir, "failing.yml")
 
@@ -228,7 +236,7 @@ jobs:
     run: exit 3
 `)
 
-	err := cli.Run([]string{"run", pipelinePath, "--job", "build"})
+	err := stepsRun(t, []string{"run", pipelinePath, "--job", "build"})
 	if err == nil {
 		t.Fatal("expected the failing pipeline to fail")
 	}

@@ -15,6 +15,8 @@ import (
 // back as tool-result data enforced by steps — not by prompt language the
 // model could talk itself out of.
 func TestEndToEndAgentWebFetch(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	content := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

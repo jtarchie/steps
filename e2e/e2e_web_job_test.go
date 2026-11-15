@@ -15,6 +15,8 @@ import (
 // job's detail page; with a trigger queued it waits on the follow page for
 // exactly that trigger's run; once a run exists it is the transcript.
 func TestJobLinkLandsOnItsLatestRun(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t, happyPathScript()...)
 	path := e2ePipeline(t, dir, fake.URL, "")

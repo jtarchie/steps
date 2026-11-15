@@ -16,8 +16,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // cliAssertFilesPipeline is a CLI agent owing one file, and a task that
@@ -117,7 +115,7 @@ func TestE2ECLIAgentStillFailsWithoutItsFile(t *testing.T) {
 	claude := writeFakeClaude(t, "echo '"+cliInitEvent("mcp__steps__write_file")+"'\necho '"+cliResultEvent("The answer is in this message.", 1)+"'")
 	path := cliAssertFilesPipeline(t, dir)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("cli.Run succeeded, but the agent never wrote its declared artifact")
 	}
@@ -183,7 +181,7 @@ echo '%[2]s'
 		readFileString(t, cliAssertFilesPipeline(t, dir)),
 		"    assert:", "    attempts: 2\n    assert:", 1))
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("cli.Run succeeded, but the agent never wrote its declared artifact")
 	}

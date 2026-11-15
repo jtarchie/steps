@@ -6,39 +6,59 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
 )
 
-// captureStdout runs fn with os.Stdout redirected to a pipe, returning
-// everything fn wrote via fmt.Printf and friends. Not safe alongside other
-// tests running in parallel that also touch os.Stdout — callers must not use
-// t.Parallel(). Duplicated per-package (see internal/agent/step_test.go,
-// internal/trigger/trigger_test.go) rather than exported cross-package.
+// captures is each test's own stdout while it is inside captureStdout, by test name. A map rather than a swapped os.Stdout so that a test capturing its output can run beside another: the process's stream is one, and stepsRun hands each invocation the buffer of the test that made it.
+var captures sync.Map //nolint:gochecknoglobals // the registry stepsRun reads; keyed per test, so it is shared by nobody
+
+// captureStdout returns what the invocations fn makes through stepsRun print to stdout.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
+	buffer := &lockedBuffer{}
 
-	orig := os.Stdout
-	os.Stdout = w
-
+	previous, nested := captures.Swap(t.Name(), buffer)
 	fn()
 
-	_ = w.Close()
-
-	os.Stdout = orig
-
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read captured stdout: %v", err)
+	if nested {
+		captures.Store(t.Name(), previous)
+	} else {
+		captures.Delete(t.Name())
 	}
 
-	return string(data)
+	return buffer.String()
+}
+
+// stepsRun is one steps invocation, in process: cli.Run writing to the calling test's capture when it is inside captureStdout (its own, or the test it is a subtest of), and to the process's streams otherwise.
+func stepsRun(t *testing.T, args []string) error {
+	t.Helper()
+
+	return cli.RunWith(streamsFor(t), args) //nolint:wrapcheck // the test asserts on the command's own error
+}
+
+// streamsFor is where an invocation t makes writes: t's capture while one is open, the process's streams otherwise.
+func streamsFor(t *testing.T) cli.Streams {
+	t.Helper()
+
+	streams := cli.Streams{Out: os.Stdout, Err: os.Stderr}
+
+	for name := t.Name(); ; name = name[:strings.LastIndex(name, "/")] {
+		if buffer, ok := captures.Load(name); ok {
+			streams.Out, _ = buffer.(io.Writer)
+
+			break
+		}
+
+		if !strings.Contains(name, "/") {
+			break
+		}
+	}
+
+	return streams
 }
 
 // fixAgentServer returns a fake provider that answers every request with a
@@ -125,6 +145,8 @@ func failThenPass(counter string) string {
 // agent is invoked exactly once and the job succeeds. Not parallel: uses
 // t.Setenv.
 func TestRunJobTaskFixRecovers(t *testing.T) {
+	t.Parallel()
+
 	fake := fixAgentServer(t)
 
 	dir := t.TempDir()
@@ -144,9 +166,10 @@ func TestRunJobTaskFixRecovers(t *testing.T) {
 
 // TestRunJobTaskFixPrintsResponse: the fix agent's final response ("done",
 // per fixAgentServer) must reach the terminal, not just the retry/error log —
-// previously RunFix discarded runAgentConversation's result entirely. Not
-// t.Parallel(): captureStdout swaps the package-global os.Stdout.
+// previously RunFix discarded runAgentConversation's result entirely.
 func TestRunJobTaskFixPrintsResponse(t *testing.T) {
+	t.Parallel()
+
 	fake := fixAgentServer(t)
 
 	dir := t.TempDir()
@@ -159,7 +182,7 @@ func TestRunJobTaskFixPrintsResponse(t *testing.T) {
 	// internal/trigger/trigger_test.go's captureStdout usage).
 	var runErr error
 
-	output := captureStdout(t, func() { runErr = cli.Run([]string{path}) })
+	output := captureStdout(t, func() { runErr = stepsRun(t, []string{path}) })
 
 	if runErr != nil {
 		t.Fatalf("run(%v): %v", []string{path}, runErr)
@@ -173,6 +196,8 @@ func TestRunJobTaskFixPrintsResponse(t *testing.T) {
 // TestRunJobTaskFixGreenPathSkipsAgent: a task that passes on its first run
 // never constructs the fix agent — the $0 happy path.
 func TestRunJobTaskFixGreenPathSkipsAgent(t *testing.T) {
+	t.Parallel()
+
 	fake := fixAgentServer(t)
 
 	dir := t.TempDir()
@@ -188,12 +213,14 @@ func TestRunJobTaskFixGreenPathSkipsAgent(t *testing.T) {
 // TestRunJobTaskFixStillFailing: a task that always fails invokes the agent
 // once, but the verdict re-run still fails, so the job errors.
 func TestRunJobTaskFixStillFailing(t *testing.T) {
+	t.Parallel()
+
 	fake := fixAgentServer(t)
 
 	dir := t.TempDir()
 	path := writeFixPipeline(t, dir, fake.URL, "false")
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("expected the job to fail when the task still fails after the fix agent")
 	}
@@ -211,6 +238,8 @@ func TestRunJobTaskFixStillFailing(t *testing.T) {
 // It also pins WHICH run the oracle sees: the final one, the same rule
 // attempts: already follows.
 func TestRunJobTaskFixRunsBeforeAssertJudges(t *testing.T) {
+	t.Parallel()
+
 	fake := fixAgentServer(t)
 
 	dir := t.TempDir()
@@ -235,6 +264,8 @@ func TestRunJobTaskFixRunsBeforeAssertJudges(t *testing.T) {
 // and the reason is the assert's own mismatch — which is what the author
 // declared the step's success to mean.
 func TestRunJobTaskFixAssertStillJudges(t *testing.T) {
+	t.Parallel()
+
 	fake := fixAgentServer(t)
 
 	dir := t.TempDir()
@@ -242,7 +273,7 @@ func TestRunJobTaskFixAssertStillJudges(t *testing.T) {
 	path := writeFixAssertPipeline(t, dir, fake.URL, failThenPass(counter),
 		"stdout: run 3", "")
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("expected the job to fail: the repaired command still does not satisfy the assert")
 	}
@@ -269,6 +300,8 @@ func TestRunJobTaskFixAssertStillJudges(t *testing.T) {
 // detector: it holds under either dispatch order, which the two tests below
 // it do not.
 func TestRunJobTaskFixGreenPathSkipsAgentWithAssert(t *testing.T) {
+	t.Parallel()
+
 	fake := fixAgentServer(t)
 
 	dir := t.TempDir()
@@ -290,6 +323,8 @@ func TestRunJobTaskFixGreenPathSkipsAgentWithAssert(t *testing.T) {
 // nothing: the one failure mode the author wrote down is the one the fixer
 // never hears about.
 func TestRunJobTaskFixRepairsAnAssertMissAtExitZero(t *testing.T) {
+	t.Parallel()
+
 	fake := fixAgentServer(t)
 
 	dir := t.TempDir()
@@ -319,6 +354,8 @@ func TestRunJobTaskFixRepairsAnAssertMissAtExitZero(t *testing.T) {
 // the command to exit 0 would fail `code: 1`, turning the repair itself into
 // the reason a passing pipeline went red.
 func TestRunJobTaskFixSkipsAnAssertedNonZeroExit(t *testing.T) {
+	t.Parallel()
+
 	fake := fixAgentServer(t)
 
 	dir := t.TempDir()

@@ -3,11 +3,11 @@ package e2e
 import (
 	"os"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 func TestRunFlagParsing(t *testing.T) {
+	t.Parallel()
+
 	const pipeline = `
 jobs:
 - name: build
@@ -41,7 +41,7 @@ jobs:
 	t.Run("job flag before positional path", func(t *testing.T) {
 		t.Parallel()
 
-		err := cli.Run([]string{"--job", "build", writePipeline(t)})
+		err := stepsRun(t, []string{"--job", "build", writePipeline(t)})
 		if err != nil {
 			t.Errorf("run: %v", err)
 		}
@@ -50,7 +50,7 @@ jobs:
 	t.Run("job flag after positional path", func(t *testing.T) {
 		t.Parallel()
 
-		err := cli.Run([]string{writePipeline(t), "--job", "test"})
+		err := stepsRun(t, []string{writePipeline(t), "--job", "test"})
 		if err != nil {
 			t.Errorf("run: %v", err)
 		}
@@ -59,7 +59,7 @@ jobs:
 	t.Run("job flag attached value", func(t *testing.T) {
 		t.Parallel()
 
-		err := cli.Run([]string{"--job=build", writePipeline(t)})
+		err := stepsRun(t, []string{"--job=build", writePipeline(t)})
 		if err != nil {
 			t.Errorf("run: %v", err)
 		}
@@ -68,7 +68,7 @@ jobs:
 	t.Run("missing job on ambiguous pipeline", func(t *testing.T) {
 		t.Parallel()
 
-		err := cli.Run([]string{writePipeline(t)})
+		err := stepsRun(t, []string{writePipeline(t)})
 		if err == nil {
 			t.Error("expected error when --job is omitted and multiple jobs exist")
 		}
@@ -77,7 +77,7 @@ jobs:
 	t.Run("missing pipeline path", func(t *testing.T) {
 		t.Parallel()
 
-		err := cli.Run(nil)
+		err := stepsRun(t, nil)
 		if err == nil {
 			t.Error("expected error for missing positional pipeline path")
 		}
@@ -96,7 +96,7 @@ jobs:
 	t.Run("log-level flag is accepted", func(t *testing.T) {
 		t.Parallel()
 
-		err := cli.Run([]string{"--log-level", "debug", "--job", "build", writePipeline(t)})
+		err := stepsRun(t, []string{"--log-level", "debug", "--job", "build", writePipeline(t)})
 		if err != nil {
 			t.Errorf("run: %v", err)
 		}
@@ -105,7 +105,7 @@ jobs:
 	t.Run("invalid log-level is rejected", func(t *testing.T) {
 		t.Parallel()
 
-		err := cli.Run([]string{"--log-level", "verbose", "--job", "build", writePipeline(t)})
+		err := stepsRun(t, []string{"--log-level", "verbose", "--job", "build", writePipeline(t)})
 		if err == nil {
 			t.Error("expected an error for an unrecognized --log-level value")
 		}

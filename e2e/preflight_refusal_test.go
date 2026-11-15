@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -45,7 +44,7 @@ jobs:
     run: echo failed >> %s
 `, errorLog, failureLog))
 
-	err := cli.Run([]string{"run", path, "--job", "outage"})
+	err := stepsRun(t, []string{"run", path, "--job", "outage"})
 	if err == nil {
 		t.Fatal("run should have been refused: the provider is unreachable")
 	}
@@ -160,7 +159,7 @@ jobs:
 
 	path := writePipeline(t, dir, pipeline("http://127.0.0.1:1"))
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil || !strings.Contains(err.Error(), "preflight failed") {
 		t.Fatalf("the first run should have been refused by preflight, got %v", err)
 	}

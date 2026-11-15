@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -23,8 +24,10 @@ type MemoryListCmd struct {
 }
 
 // Run prints the listing.
-func (m *MemoryListCmd) Run() error {
-	if nothingRecorded(m.ReadFlags, "no memories are kept") {
+func (m *MemoryListCmd) Run(streams Streams) error {
+	out := streams.Out
+
+	if nothingRecorded(out, m.ReadFlags, "no memories are kept") {
 		return nil
 	}
 
@@ -35,25 +38,25 @@ func (m *MemoryListCmd) Run() error {
 	defer cleanup()
 
 	if m.Scope == "" {
-		return printMemoryScopes(st)
+		return printMemoryScopes(out, st)
 	}
 
-	return printMemories(st, m.Scope)
+	return printMemories(out, st, m.Scope)
 }
 
-func printMemoryScopes(st store.Memories) error {
+func printMemoryScopes(out io.Writer, st store.Memories) error {
 	scopes, err := st.MemoryScopes(context.Background())
 	if err != nil {
 		return fmt.Errorf("could not list memory scopes: %w", err)
 	}
 
 	if len(scopes) == 0 {
-		fmt.Println("no memories are kept")
+		say(out, "no memories are kept")
 
 		return nil
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 
 	_, _ = fmt.Fprintln(writer, "SCOPE\tENTRIES\tLAST REMEMBERED")
 
@@ -64,19 +67,19 @@ func printMemoryScopes(st store.Memories) error {
 	return flushTable(writer, "memory scopes")
 }
 
-func printMemories(st store.Memories, scope string) error {
+func printMemories(out io.Writer, st store.Memories, scope string) error {
 	memories, err := st.ListMemories(context.Background(), scope, 0)
 	if err != nil {
 		return fmt.Errorf("could not list memories: %w", err)
 	}
 
 	if len(memories) == 0 {
-		fmt.Printf("nothing is remembered in scope %s\n", scope)
+		sayf(out, "nothing is remembered in scope %s\n", scope)
 
 		return nil
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 
 	_, _ = fmt.Fprintln(writer, "ID\tREMEMBERED\tRUN\tTEXT")
 
@@ -110,7 +113,9 @@ type MemoryRmCmd struct {
 }
 
 // Run deletes what was named.
-func (m *MemoryRmCmd) Run() error {
+func (m *MemoryRmCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	if m.All == (len(m.IDs) > 0) {
 		return errors.New("name entry ids, or pass --all for the whole scope: steps memory rm --scope <scope> <id>... -p <pipeline>")
 	}
@@ -121,10 +126,10 @@ func (m *MemoryRmCmd) Run() error {
 	}
 	defer cleanup()
 
-	return forgetMemories(st, m.Scope, m.All, m.IDs)
+	return forgetMemories(out, st, m.Scope, m.All, m.IDs)
 }
 
-func forgetMemories(st store.Memories, scope string, all bool, ids []int64) error {
+func forgetMemories(out io.Writer, st store.Memories, scope string, all bool, ids []int64) error {
 	ctx := context.Background()
 
 	if all {
@@ -133,7 +138,7 @@ func forgetMemories(st store.Memories, scope string, all bool, ids []int64) erro
 			return fmt.Errorf("could not forget scope %s: %w", scope, err)
 		}
 
-		fmt.Printf("forgot %d entries of scope %s\n", gone, scope)
+		sayf(out, "forgot %d entries of scope %s\n", gone, scope)
 
 		return nil
 	}
@@ -148,7 +153,7 @@ func forgetMemories(st store.Memories, scope string, all bool, ids []int64) erro
 			return fmt.Errorf("memory %d is not in scope %s — steps memory --scope %s lists what is", id, scope, scope)
 		}
 
-		fmt.Printf("forgot memory %d\n", id)
+		sayf(out, "forgot memory %d\n", id)
 	}
 
 	return nil

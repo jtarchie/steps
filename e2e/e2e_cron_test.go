@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // cronNeverDue is a slot no test will run inside of: midnight on the 29th of
@@ -61,6 +59,8 @@ jobs:
 // the slot; a resource with no slot in the last hour mints nothing at all,
 // however many polls go by.
 func TestWatchCronFiresOnceWhenToldToAndNotWhenNothingIsDue(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cronPipeline)
 	fixture.resources = []string{"now"}
 
@@ -115,6 +115,8 @@ jobs:
 // a version is minted at most once per poll, and each one is later than the
 // last — the shape a schedule has to have for a job to run on it.
 func TestWatchCronMintsAVersionEachTimeASlotPasses(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cronEverySecondPipeline)
 	fixture.resources = []string{"tick"}
 
@@ -155,6 +157,8 @@ func TestWatchCronMintsAVersionEachTimeASlotPasses(t *testing.T) {
 // pipeline is checked, so a slot nobody can compute is refused before a
 // daemon ever polls it — the same door a webhook's expressions go through.
 func TestValidateRefusesABadCronExpression(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 resources:
 - name: tick
@@ -168,7 +172,7 @@ jobs:
     trigger: true
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil || !strings.Contains(err.Error(), `resource "tick"`) || !strings.Contains(err.Error(), `source.expression "0 25 * * *"`) {
 		t.Errorf("validate: err = %v, want the resource and its expression named", err)
 	}

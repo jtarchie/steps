@@ -13,8 +13,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // factoryAgainstFakes writes examples/factory.yml into dir aimed at the fakes. The CLI-only settings: line goes, because the scripted provider is a hosted one and the field means nothing there.
@@ -86,9 +84,6 @@ func cutScript(index string, ids ...string) func(capturedRequest) turn {
 var decomposerScript = cutScript(`["01-schema","02-api"]`, "01-schema", "02-api")
 
 func TestFactoryDecomposesAnEpicIntoProposedIssues(t *testing.T) {
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	github := newFakeGitHub(t)
 	github.addIssue(fakeIssue{Number: 7, Title: "Cache everything", Body: "Cache the widgets, then serve them.", Author: "jt", Labels: []string{"epic"}})
 
@@ -122,9 +117,6 @@ func TestFactoryDecomposesAnEpicIntoProposedIssues(t *testing.T) {
 
 // An epic the factory already marked is refused before the model is asked anything, so a relabel or a retry cannot open a second set of children.
 func TestFactoryDecomposesAnEpicOnce(t *testing.T) {
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	github := newFakeGitHub(t)
 	github.addIssue(fakeIssue{Number: 7, Title: "Cache everything", Body: "Cache the widgets.", Author: "jt", Labels: []string{"epic"}})
 	github.addComment(fakeComment{ID: 901, Number: 7, Kind: "issue", Author: "steps-bot", Body: "factory: decomposing this epic into proposed issues (run `X`).", Updated: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)})
@@ -145,7 +137,7 @@ func TestFactoryDecomposesAnEpicOnce(t *testing.T) {
 		t.Errorf("opened %d issues for an epic already decomposed", len(created))
 	}
 
-	err = cli.Run([]string{"validate", path, "--var", "repo=" + fakeRepo})
+	err = stepsRun(t, []string{"validate", path, "--var", "repo=" + fakeRepo})
 	if err != nil {
 		t.Errorf("the pointed example no longer validates: %v", err)
 	}
@@ -153,9 +145,6 @@ func TestFactoryDecomposesAnEpicOnce(t *testing.T) {
 
 // A cut the gate refuses fails before GitHub hears of it: the marker is already on the epic, so a green run that opened nothing could never be retried, and an id is a file name on both sides of the gate.
 func TestFactoryRefusesACutBeforeOpeningIssues(t *testing.T) {
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	for name, tc := range map[string]struct {
 		script  func(capturedRequest) turn
 		refusal string
@@ -222,9 +211,6 @@ func requestedChange(req capturedRequest) string {
 
 // TestFactoryBuildsAPromotedIssueAndNothingProposed: a proposed issue is older and would be built first if self-build/proposed matched the filter, so the pull request naming the promoted one is the proof it did not; it ends one branch and one pull request, marked ready, carrying the plan comment on the issue.
 func TestFactoryBuildsAPromotedIssueAndNothingProposed(t *testing.T) {
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	github := newFakeGitHub(t)
 	github.addIssue(fakeIssue{Number: 9, Title: "Proposed, not promoted", Body: "Part of #7", Author: "steps-bot", Labels: []string{"self-build/proposed"}})
 	github.addIssue(fakeIssue{Number: 12, Title: "Add the cache", Body: "Cache the widgets.\n\nPart of #7", Author: "jt", Labels: []string{"self-build"}})
@@ -277,9 +263,6 @@ func assertPlanPostedOnlyOn(t *testing.T, github *fakeGitHub, built, proposed in
 
 // TestFactoryAnswersAReviewOnTheSameBranch: a /factory command on a factory pull request becomes a commit on that pull request's own branch, answered where it was asked and marked done — and the answer is not itself a command, or the next check would build it.
 func TestFactoryAnswersAReviewOnTheSameBranch(t *testing.T) {
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	repo, before := repoWithBranch(t)
 
 	github := newFakeGitHub(t)
@@ -319,9 +302,6 @@ func TestFactoryFencesTheShell(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("sandbox: is implemented only on darwin")
 	}
-
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	repo, before := repoWithBranch(t)
 
@@ -434,9 +414,6 @@ func assertOneReplyNaming(t *testing.T, github *fakeGitHub, number int, sha stri
 
 // respond pushes only to the open pull request's own issue-<n> branch: the ref grep alone matches a base as readily as a head, and a closed pull request's branch is pushed to for nothing.
 func TestFactoryRespondRefusesWhatIsNotItsBranch(t *testing.T) {
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	for name, tc := range map[string]struct {
 		pr      func(issueSHA, featureSHA string) fakePR
 		refusal string
@@ -481,9 +458,6 @@ func TestFactoryRespondRefusesWhatIsNotItsBranch(t *testing.T) {
 
 // A commit pushed to the branch while the agents work survives respond's push: the rebase makes it a forced one, and the lease is what keeps it from being a blind one.
 func TestFactoryRespondLeavesACommitPushedMeanwhile(t *testing.T) {
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	repo, before := repoWithBranch(t)
 
 	github := newFakeGitHub(t)
@@ -536,9 +510,6 @@ func TestFactoryRespondLeavesACommitPushedMeanwhile(t *testing.T) {
 
 // A branch behind main is rebased before it is changed, so its push rewrites history and must still land: the lease names the sha checkout fetched, not the one the rebase made.
 func TestFactoryRespondPushesARebasedBranch(t *testing.T) {
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	repo, before := repoWithBranch(t)
 
 	main, err := commitOn(t.Context(), repo, "main")
@@ -595,9 +566,6 @@ func commitOn(ctx context.Context, repo, branch string) (string, error) {
 
 // steer answers only its own token's user: a /factory command is a prompt to an agent with a host shell and then a push with GH_TOKEN, so a stranger's comment on a public repository must start nothing.
 func TestFactoryIgnoresAStrangersCommand(t *testing.T) {
-	t.Setenv("GH_TOKEN", fakeGitHubToken)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	repo, before := repoWithBranch(t)
 
 	github := newFakeGitHub(t)

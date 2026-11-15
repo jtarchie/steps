@@ -21,6 +21,8 @@ import (
 
 // The re-run is the cache and still-serving assertion at once: a cached abort replays and leaves one tally line, a dead drain or a held slot never finishes it.
 func TestAbortStopsOneRunAndTheDaemonKeepsServing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	started := filepath.Join(dir, "started")
 	release := filepath.Join(dir, "release")
@@ -57,7 +59,7 @@ jobs:
 
 	runID := newestRun(t, served.state, name, "slow").ID
 
-	err := cli.Run([]string{"runs", "abort", runID, "-p", name, "--target", served.target()})
+	err := stepsRun(t, []string{"runs", "abort", runID, "-p", name, "--target", served.target()})
 	if err != nil {
 		t.Fatalf("steps runs abort: %v", err)
 	}
@@ -90,6 +92,8 @@ jobs:
 
 // Claims go oldest first, so quick succeeding proves the drain walked past the dropped row rather than building slow a second time.
 func TestAbortDropsAQueuedRunBeforeItStarts(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	started := filepath.Join(dir, "started")
 
@@ -120,14 +124,14 @@ jobs:
 	// The job's one max_in_flight slot is taken, so this waits in the queue.
 	served.trigger(t, name, "slow")
 
-	err := cli.Run([]string{"runs", "abort", "--queued", "slow", "-p", name, "--target", served.target()})
+	err := stepsRun(t, []string{"runs", "abort", "--queued", "slow", "-p", name, "--target", served.target()})
 	if err != nil {
 		t.Fatalf("steps runs abort --queued: %v", err)
 	}
 
 	running := newestRun(t, served.state, name, "slow")
 
-	err = cli.Run([]string{"runs", "abort", running.ID, "-p", name, "--target", served.target()})
+	err = stepsRun(t, []string{"runs", "abort", running.ID, "-p", name, "--target", served.target()})
 	if err != nil {
 		t.Fatalf("steps runs abort: %v", err)
 	}
@@ -141,7 +145,7 @@ jobs:
 		t.Errorf("slow ran %d times, want 1: the queued build was aborted and must never start", got)
 	}
 
-	err = cli.Run([]string{"runs", "abort", "--queued", "slow", "-p", name, "--target", served.target()})
+	err = stepsRun(t, []string{"runs", "abort", "--queued", "slow", "-p", name, "--target", served.target()})
 	if err == nil || !strings.Contains(err.Error(), "nothing") {
 		t.Errorf("aborting a queue with nothing in it = %v, want a refusal saying so", err)
 	}

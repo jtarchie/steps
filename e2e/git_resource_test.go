@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // fixtureRepo builds a real one-commit git repository in a temp dir and
@@ -68,6 +66,8 @@ func fixtureRepo(t *testing.T, content string) string {
 // A pipeline that wants a checkout declares a resource and nothing else: no
 // resource_types: block, no hand-written check/in shell.
 func TestEndToEndBuiltinGitResourceType(t *testing.T) {
+	t.Parallel()
+
 	origin := fixtureRepo(t, "hello from the fixture\n")
 	dir := t.TempDir()
 
@@ -87,7 +87,7 @@ jobs:
     run: cp repo/README.md `+filepath.Join(dir, "fetched.txt")+`
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -104,6 +104,8 @@ jobs:
 
 // branch: is optional — omitted, the type follows the remote's HEAD.
 func TestEndToEndBuiltinGitFollowsHeadWithoutBranch(t *testing.T) {
+	t.Parallel()
+
 	origin := fixtureRepo(t, "head content\n")
 	dir := t.TempDir()
 
@@ -122,7 +124,7 @@ jobs:
     run: cp repo/README.md `+filepath.Join(dir, "fetched.txt")+`
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -141,6 +143,8 @@ jobs:
 // it prints nothing, which reads as an empty version list — "no versions yet"
 // — and the job would quietly do nothing at all.
 func TestEndToEndBuiltinGitUnknownBranchFails(t *testing.T) {
+	t.Parallel()
+
 	origin := fixtureRepo(t, "content\n")
 	dir := t.TempDir()
 
@@ -157,7 +161,7 @@ jobs:
   - get: repo
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("expected a failure for a branch that does not exist")
 	}
@@ -209,6 +213,8 @@ func clonedFixtureRepo(t *testing.T, originContent, aheadContent string) string 
 // fetch), so taking the wrong line silently plans against a stale commit,
 // which is the quieter half of the bug.
 func TestEndToEndBuiltinGitAgainstAClone(t *testing.T) {
+	t.Parallel()
+
 	clone := clonedFixtureRepo(t, "origin content\n", "local content\n")
 	dir := t.TempDir()
 
@@ -228,7 +234,7 @@ jobs:
     run: cp repo/README.md `+filepath.Join(dir, "fetched.txt")+`
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -246,6 +252,8 @@ jobs:
 // The same repo with no branch:, where the pattern HEAD also matches
 // refs/remotes/origin/HEAD.
 func TestEndToEndBuiltinGitAgainstACloneFollowingHead(t *testing.T) {
+	t.Parallel()
+
 	clone := clonedFixtureRepo(t, "origin content\n", "local head content\n")
 	dir := t.TempDir()
 
@@ -264,7 +272,7 @@ jobs:
     run: cp repo/README.md `+filepath.Join(dir, "fetched.txt")+`
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -345,7 +353,7 @@ jobs:
     run: cp repo/README.md `+filepath.Join(dir, "fetched.txt")+`
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run (fetch: %s): %v", fetch, err)
 	}
@@ -362,6 +370,8 @@ jobs:
 // staleness #135 was about — and moves nothing in the clone but the one
 // remote-tracking ref it read.
 func TestEndToEndBuiltinGitFetchRefreshesALocalClone(t *testing.T) {
+	t.Parallel()
+
 	clone := clonedFixtureRepo(t, "origin v1\n", "local ahead\n")
 	origin := gitOut(t, clone, "config", "--get", "remote.origin.url")
 
@@ -397,6 +407,8 @@ func TestEndToEndBuiltinGitFetchRefreshesALocalClone(t *testing.T) {
 // ref the clone already had — that ref is the stale answer fetch: exists to
 // refuse.
 func TestEndToEndBuiltinGitFetchFailureFailsTheCheck(t *testing.T) {
+	t.Parallel()
+
 	for name, breakRemote := range map[string]func(t *testing.T, clone, origin string){
 		"unreachable remote": func(t *testing.T, clone, _ string) {
 			t.Helper()
@@ -435,7 +447,7 @@ jobs:
   - get: repo
 `)
 
-			err := cli.Run([]string{path})
+			err := stepsRun(t, []string{path})
 			if err == nil {
 				t.Fatal("expected the check to fail, not to report the clone's stale refs/remotes/origin/feature")
 			}
@@ -479,7 +491,7 @@ jobs:
 	logs := captureStderr(t)
 	done := make(chan error, 1)
 
-	go func() { done <- cli.Run([]string{path}) }()
+	go func() { done <- stepsRun(t, []string{path}) }()
 
 	select {
 	case err := <-done:
@@ -523,7 +535,7 @@ jobs:
 	logs := captureStderr(t)
 	done := make(chan error, 1)
 
-	go func() { done <- cli.Run([]string{path}) }()
+	go func() { done <- stepsRun(t, []string{path}) }()
 
 	select {
 	case err := <-done:
@@ -572,7 +584,7 @@ jobs:
   - get: repo
 `)
 
-	err = cli.Run([]string{path})
+	err = stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("expected the check to fail: the operator's ssh command exits 1")
 	}

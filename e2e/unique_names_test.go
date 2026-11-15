@@ -3,8 +3,6 @@ package e2e
 import (
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // Two top-level entries of one kind under one name is refused at load, as
@@ -129,7 +127,7 @@ jobs:
 		t.Run(tc.name, func(t *testing.T) {
 			path := writePipeline(t, t.TempDir(), tc.pipeline)
 
-			err := cli.Run([]string{"validate", path})
+			err := stepsRun(t, []string{"validate", path})
 			if err == nil {
 				t.Fatal("expected validate to refuse a duplicated name")
 			}
@@ -168,7 +166,7 @@ jobs:
     messages: [hi]
 `)
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err != nil {
 		t.Fatalf("validate: %v", err)
 	}

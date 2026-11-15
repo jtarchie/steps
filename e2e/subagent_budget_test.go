@@ -19,6 +19,8 @@ import (
 // scripted for it and the step still succeeded. So this asserts the child
 // actually ran, by its own request landing on the wire.
 func TestSubAgentRunsWithoutAnyBudget(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	// Routed rather than positional: the parent and the child each get the

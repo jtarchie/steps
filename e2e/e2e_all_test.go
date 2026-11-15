@@ -2,8 +2,6 @@ package e2e
 
 import (
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestEndToEndEverything is the kitchen-sink ordering fixture, ported from
@@ -22,6 +20,8 @@ import (
 //     exit), so the errored class comes from the one hermetic infrastructure
 //     error available: an unreachable provider endpoint.
 func TestEndToEndEverything(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	pipeline := `
@@ -197,7 +197,7 @@ jobs:
 
 	path := writePipeline(t, dir, pipeline)
 
-	err := cli.Run([]string{"test", path})
+	err := stepsRun(t, []string{"test", path})
 	if err != nil {
 		t.Fatalf("steps test failed: %v", err)
 	}

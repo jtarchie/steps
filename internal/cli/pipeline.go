@@ -59,7 +59,9 @@ type PipelineSetCmd struct {
 }
 
 // Run substitutes, bundles, diffs, asks, and uploads.
-func (p *PipelineSetCmd) Run() error {
+func (p *PipelineSetCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	name := p.Pipeline
 	if name == "" {
 		name = config.Slugify(p.Config)
@@ -78,7 +80,7 @@ func (p *PipelineSetCmd) Run() error {
 
 	// The parsed config's own source, not a second read: two reads of one path have no ordering between them, so an editor saving in the window uploads bytes nobody validated.
 
-	return p.upload(name, cfg.Revision.Source, cfg.Revision.Includes)
+	return p.upload(out, name, cfg.Revision.Source, cfg.Revision.Includes)
 }
 
 // namedPipeline refuses a name before it is concatenated into a URL: "#" truncates the path into a fragment nobody sends and "?" into a query, so `-p prod#old` asked the daemon about `prod` — which for destroy is the wrong pipeline, irrecoverably.
@@ -97,7 +99,7 @@ func namedPipeline(name, verb string) (string, error) {
 
 // upload is the half that talks to the daemon: read what it serves, diff,
 // ask, and send the sha that diff was against.
-func (p *PipelineSetCmd) upload(name, source string, includes map[string]string) error {
+func (p *PipelineSetCmd) upload(out io.Writer, name, source string, includes map[string]string) error {
 	client := newDaemonClient(p.Target)
 
 	current, err := client.get(name)
@@ -106,7 +108,7 @@ func (p *PipelineSetCmd) upload(name, source string, includes map[string]string)
 	}
 
 	if current.Present && current.Config.Source == source && maps.Equal(convertIncludes[string](current.Config.Includes), includes) {
-		fmt.Printf("unchanged: %s is already serving this configuration (%s)\n", name, shortConfig(current.Config.SHA))
+		sayf(out, "unchanged: %s is already serving this configuration (%s)\n", name, shortConfig(current.Config.SHA))
 
 		// Separately and after, because the pipeline already exists: the window --pause closes is a new pipeline's first poll.
 		if p.Pause {
@@ -116,7 +118,7 @@ func (p *PipelineSetCmd) upload(name, source string, includes map[string]string)
 		return nil
 	}
 
-	err = p.confirm(name, current, source, includes)
+	err = p.confirm(out, name, current, source, includes)
 	if err != nil {
 		return err
 	}
@@ -137,7 +139,7 @@ func (p *PipelineSetCmd) upload(name, source string, includes map[string]string)
 		return err
 	}
 
-	fmt.Printf("%s: %s is now serving %s\n", setVerb(result), name, shortConfig(result.SHA))
+	sayf(out, "%s: %s is now serving %s\n", setVerb(result), name, shortConfig(result.SHA))
 
 	return nil
 }
@@ -154,7 +156,7 @@ func setVerb(result web.SetResult) string {
 }
 
 // confirm shows what would change and asks, unless told not to.
-func (p *PipelineSetCmd) confirm(
+func (p *PipelineSetCmd) confirm(out io.Writer,
 	name string, current Held, source string, includes map[string]string,
 ) error {
 	if p.NonInteractive {
@@ -163,17 +165,17 @@ func (p *PipelineSetCmd) confirm(
 
 	switch {
 	case current.Broken != "":
-		fmt.Printf("%s is not being served (%s); this set will repair it.\n", name, current.Broken)
+		sayf(out, "%s is not being served (%s); this set will repair it.\n", name, current.Broken)
 	case !current.Present && p.Pause:
-		fmt.Printf("%s is new to this daemon; it will be created paused.\n", name)
+		sayf(out, "%s is new to this daemon; it will be created paused.\n", name)
 	case !current.Present:
-		fmt.Printf("%s is new to this daemon; it will be created and start running.\n", name)
+		sayf(out, "%s is new to this daemon; it will be created and start running.\n", name)
 	default:
-		fmt.Print(diffSource(current.Config.Source, source))
-		fmt.Print(diffIncludes(convertIncludes[string](current.Config.Includes), includes))
+		_, _ = fmt.Fprint(out, diffSource(current.Config.Source, source))
+		_, _ = fmt.Fprint(out, diffIncludes(convertIncludes[string](current.Config.Includes), includes))
 	}
 
-	return ask("apply configuration?", "not applied")
+	return ask(out, "apply configuration?", "not applied")
 }
 
 // The includes are as much of a deploy as the YAML is — a run_file: decides what a step executes — so an edit that only moved one of them was shown a pipeline reported as unchanged, and confirmed on that.
@@ -210,8 +212,8 @@ func convertIncludes[To, From ~string | ~[]byte](includes map[string]From) map[s
 }
 
 // ask is the one confirmation both destructive verbs read, so a closed stdin is a no rather than a crash in one of them and a crash in the other.
-func ask(question, refusal string) error {
-	fmt.Print(question + " [y/N] ")
+func ask(out io.Writer, question, refusal string) error {
+	_, _ = fmt.Fprint(out, question+" [y/N] ")
 
 	var answer string
 
@@ -264,7 +266,9 @@ type PipelineListCmd struct {
 }
 
 // Run prints one row per served pipeline.
-func (p *PipelineListCmd) Run() error {
+func (p *PipelineListCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	client := newDaemonClient(p.Target)
 
 	rows, err := client.list()
@@ -273,12 +277,12 @@ func (p *PipelineListCmd) Run() error {
 	}
 
 	if len(rows) == 0 {
-		fmt.Printf("no pipelines set on %s — upload one with: steps pipeline set -c pipeline.yml\n", client.target)
+		sayf(out, "no pipelines set on %s — upload one with: steps pipeline set -c pipeline.yml\n", client.target)
 
 		return nil
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 	_, _ = fmt.Fprintln(writer, "PIPELINE\tJOBS\tCONFIG\tSTATE\tSET FROM")
 
 	for _, row := range rows {
@@ -307,7 +311,7 @@ func (p *PipelineListCmd) Run() error {
 	// A report, not a failure: the list succeeded, and /api/pipelines is the form a script reads.
 	for _, row := range rows {
 		if row.Broken != "" {
-			fmt.Printf("%s is not being served: %s\n", row.Name, row.Broken)
+			sayf(out, "%s is not being served: %s\n", row.Name, row.Broken)
 		}
 	}
 
@@ -321,7 +325,9 @@ type PipelineGetCmd struct {
 }
 
 // Run prints the served source and names the files it carried.
-func (p *PipelineGetCmd) Run() error {
+func (p *PipelineGetCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	name, err := namedPipeline(p.Pipeline, "pipeline get")
 	if err != nil {
 		return err
@@ -342,10 +348,10 @@ func (p *PipelineGetCmd) Run() error {
 		return fmt.Errorf("%s is not serving a pipeline called %q", client.target, name)
 	}
 
-	fmt.Print(current.Config.Source)
+	_, _ = fmt.Fprint(out, current.Config.Source)
 
 	for path, content := range current.Config.Includes {
-		fmt.Printf("\n# --- %s (%d bytes) ---\n%s", path, len(content), content)
+		sayf(out, "\n# --- %s (%d bytes) ---\n%s", path, len(content), content)
 	}
 
 	return nil
@@ -359,7 +365,9 @@ type PipelineDestroyCmd struct {
 }
 
 // Run destroys the named pipeline.
-func (p *PipelineDestroyCmd) Run() error {
+func (p *PipelineDestroyCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	name, err := namedPipeline(p.Pipeline, "pipeline destroy")
 	if err != nil {
 		return err
@@ -367,7 +375,7 @@ func (p *PipelineDestroyCmd) Run() error {
 
 	// Asked because it is not recoverable: history, versions and the merkle cache go with the row, and nothing here is a soft delete.
 	if !p.NonInteractive {
-		err = ask("destroy "+name+", everything recorded under it, and its mcp logins?", "not destroyed")
+		err = ask(out, "destroy "+name+", everything recorded under it, and its mcp logins?", "not destroyed")
 		if err != nil {
 			return err
 		}
@@ -378,7 +386,7 @@ func (p *PipelineDestroyCmd) Run() error {
 		return err
 	}
 
-	fmt.Printf("destroyed: %s\n", name)
+	sayf(out, "destroyed: %s\n", name)
 
 	return nil
 }
@@ -390,7 +398,9 @@ type PipelinePauseCmd struct {
 }
 
 // Run pauses the named pipeline.
-func (p *PipelinePauseCmd) Run() error { return pauseVerb(p.Target, p.Pipeline, "pause") }
+func (p *PipelinePauseCmd) Run(streams Streams) error {
+	return pauseVerb(streams.Out, p.Target, p.Pipeline, "pause")
+}
 
 // PipelineUnpauseCmd releases it.
 type PipelineUnpauseCmd struct {
@@ -399,9 +409,11 @@ type PipelineUnpauseCmd struct {
 }
 
 // Run unpauses the named pipeline.
-func (p *PipelineUnpauseCmd) Run() error { return pauseVerb(p.Target, p.Pipeline, "unpause") }
+func (p *PipelineUnpauseCmd) Run(streams Streams) error {
+	return pauseVerb(streams.Out, p.Target, p.Pipeline, "unpause")
+}
 
-func pauseVerb(target, pipeline, verb string) error {
+func pauseVerb(out io.Writer, target, pipeline, verb string) error {
 	name, err := namedPipeline(pipeline, "pipeline "+verb)
 	if err != nil {
 		return err
@@ -412,7 +424,7 @@ func pauseVerb(target, pipeline, verb string) error {
 		return err
 	}
 
-	fmt.Printf("%sd: %s\n", verb, name)
+	sayf(out, "%sd: %s\n", verb, name)
 
 	return nil
 }
@@ -425,7 +437,9 @@ type PipelineRenameCmd struct {
 }
 
 // Run renames the named pipeline.
-func (p *PipelineRenameCmd) Run() error {
+func (p *PipelineRenameCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	name, err := namedPipeline(p.Pipeline, "pipeline rename")
 	if err != nil {
 		return err
@@ -441,7 +455,7 @@ func (p *PipelineRenameCmd) Run() error {
 		return err
 	}
 
-	fmt.Printf("renamed: %s is now %s\n", name, p.To)
+	sayf(out, "renamed: %s is now %s\n", name, p.To)
 
 	return nil
 }

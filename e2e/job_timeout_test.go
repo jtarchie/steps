@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestJobTimeoutStopsBeforeTheNextStep is the contract: the step that was
@@ -20,6 +18,8 @@ import (
 // mid-sleep and never write its marker — which is exactly what this asserts
 // did not happen.
 func TestJobTimeoutStopsBeforeTheNextStep(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -38,7 +38,7 @@ jobs:
     run: echo never-starts >> %[1]s
 `, log))
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("the job succeeded; a passed deadline must fail it")
 	}
@@ -63,6 +63,8 @@ jobs:
 // TestJobTimeoutLeavesAFastJobAlone pins that the deadline is a ceiling and not
 // a schedule: a job that finishes inside it is untouched.
 func TestJobTimeoutLeavesAFastJobAlone(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -90,6 +92,8 @@ jobs:
 // "this took too long" notification belongs, and it only works if the breach
 // is failed rather than errored or aborted.
 func TestJobTimeoutReachesJobHooks(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "hook.log")
 
@@ -112,7 +116,7 @@ jobs:
     run: echo ensure >> %[1]s
 `, log))
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("the job succeeded; a passed deadline must fail it")
 	}
@@ -128,6 +132,8 @@ jobs:
 // TestJobTimeoutRejectsWhatCannotBeMeant covers the two spellings a load must
 // refuse rather than guess at.
 func TestJobTimeoutRejectsWhatCannotBeMeant(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct{ name, timeout, wantErr string }{
 		{name: "not a duration", timeout: "soon", wantErr: "timeout"},
 		{name: "zero", timeout: "0s", wantErr: "positive duration"},
@@ -146,7 +152,7 @@ jobs:
     run: "true"
 `, tc.timeout))
 
-			err := cli.Run([]string{"validate", path})
+			err := stepsRun(t, []string{"validate", path})
 			if err == nil {
 				t.Fatalf("timeout: %q loaded", tc.timeout)
 			}
@@ -170,6 +176,8 @@ jobs:
 //
 // Now the matrix stops admitting cells, and the plan walk still fails the job.
 func TestJobTimeoutBoundsAFanOut(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "cells.log")
 
@@ -188,7 +196,7 @@ jobs:
       echo {{ .vars.cell }} >> %[1]s
 `, log))
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("the job succeeded; a passed deadline must fail it")
 	}
@@ -212,6 +220,8 @@ jobs:
 // deadline to stop — with every branch started at once there is nothing left
 // to decide, which is the honest bound of an admission-time check.
 func TestJobTimeoutBoundsAParallelBlock(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "branches.log")
 
@@ -240,7 +250,7 @@ jobs:
           echo c >> %[1]s
 `, log))
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("the job succeeded; a passed deadline must fail it")
 	}

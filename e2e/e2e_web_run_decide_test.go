@@ -13,8 +13,10 @@ import (
 	"github.com/jtarchie/steps/internal/cli"
 )
 
-// A person watching a run approves the step it waits on from the run page, and lands back on that run rather than on the approvals tab (steps#228). Not t.Parallel(), for startWeb's reason.
+// A person watching a run approves the step it waits on from the run page, and lands back on that run rather than on the approvals tab (steps#228).
 func TestARunPageDecidesTheApprovalItWaitsOn(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := approvalPipeline(t, dir, "1m")
 

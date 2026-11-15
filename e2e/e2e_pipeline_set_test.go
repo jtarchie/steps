@@ -21,6 +21,8 @@ import (
 
 // TestPipelineSetServesAndPollsWhatWasSet: an empty daemon, one set, and the poll that set causes.
 func TestPipelineSetServesAndPollsWhatWasSet(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 1)
 
@@ -55,7 +57,7 @@ func TestPipelineSetServesAndPollsWhatWasSet(t *testing.T) {
 	// And -p is an override, not a requirement: without one the name is the
 	// YAML's base name, which is what the empty daemon's own instructions and
 	// every doc example rely on.
-	err := cli.Run([]string{"pipeline", "set", "-c", fixture.pipeline, "-n", "--target", served.target()})
+	err := stepsRun(t, []string{"pipeline", "set", "-c", fixture.pipeline, "-n", "--target", served.target()})
 	if err != nil {
 		t.Fatalf("steps pipeline set with no -p: %v", err)
 	}
@@ -67,6 +69,8 @@ func TestPipelineSetServesAndPollsWhatWasSet(t *testing.T) {
 
 // TestPipelineSetAppliesAnEdit: setting is the ONLY way a served pipeline changes, and a trigger the edit adds is polled after the set.
 func TestPipelineSetAppliesAnEdit(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	versions := filepath.Join(dir, "versions.json")
@@ -125,6 +129,8 @@ jobs:
 
 // TestPipelineSetCarriesIncludes: a run_file: is pipeline-relative and the daemon has no sibling filesystem, so the script must travel with the set.
 func TestPipelineSetCarriesIncludes(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	log := filepath.Join(dir, "ran.log")
@@ -169,6 +175,8 @@ jobs:
 
 // TestPipelineSetRefusesWhatCannotRunHere: the refusal must land in the terminal that asked, which is why the transport is HTTP.
 func TestPipelineSetRefusesWhatCannotRunHere(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -188,7 +196,7 @@ jobs:
 	served := startWebFor(t, path, "--interval", "1h", "--skip-set")
 	defer served.stop(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", "review", "-c", path, "-n", "--target", served.target()})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", "review", "-c", path, "-n", "--target", served.target()})
 	if err == nil {
 		t.Fatal("set accepted a pipeline whose api_key_env is not set on the daemon's machine")
 	}
@@ -212,6 +220,8 @@ jobs:
 //
 // The lever is a file at `workspace.root:` — ENOTDIR for every user, root included — which refuses at NewProvider, before Probe/Validate (TestTheDaemonsWorkspaceCheckRefusesARootItCannotWrite covers those).
 func TestARefusedSetLeavesNothingForTheNextRestartToChokeOn(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	root := filepath.Join(dir, "unwritable")
@@ -231,7 +241,7 @@ jobs:
 
 	served := startWebFor(t, path, "--interval", "1h", "--skip-set")
 
-	err := cli.Run([]string{"pipeline", "set", "-p", "app", "-c", path, "-n", "--target", served.target()})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", "app", "-c", path, "-n", "--target", served.target()})
 	if err == nil {
 		t.Fatal("a set whose workspace root is a file, not a directory, was accepted")
 	}
@@ -255,6 +265,8 @@ jobs:
 
 // TestARestartServesTheRestAndShowsTheBrokenOne: a pipeline a restart cannot serve used to stop the daemon from starting at all, taking every healthy pipeline down with it. It is served-or-shown now: never dropped, never the reason the rest are not served, and repaired by setting it again.
 func TestARestartServesTheRestAndShowsTheBrokenOne(t *testing.T) {
+	t.Parallel()
+
 	restarted, root, path := restartWithABrokenPipeline(t)
 	defer restarted.stopIfRunning(t)
 
@@ -271,7 +283,7 @@ func TestARestartServesTheRestAndShowsTheBrokenOne(t *testing.T) {
 		t.Errorf("/ = %d, want the overview naming the broken pipeline rather than redirecting past it:\n%s", code, page)
 	}
 
-	err := cli.Run([]string{"pipeline", "get", "-p", "onroot", "--target", restarted.target()})
+	err := stepsRun(t, []string{"pipeline", "get", "-p", "onroot", "--target", restarted.target()})
 	if err == nil || !strings.Contains(err.Error(), "workspace") {
 		t.Errorf("steps pipeline get on the broken pipeline = %v, want the reason", err)
 	}
@@ -404,6 +416,8 @@ func (w *webProcess) onrootBrokenReason(t *testing.T) string {
 
 // TestPipelineSetIsCompareAndSet: a set that diffed against a revision that has since moved must be refused, not applied over the newer one.
 func TestPipelineSetIsCompareAndSet(t *testing.T) {
+	t.Parallel()
+
 	path := flagFixture(t)
 
 	served := startWebFor(t, path, "--interval", "1h")
@@ -442,6 +456,8 @@ func TestPipelineSetIsCompareAndSet(t *testing.T) {
 // what a sabotage pass showed to be load-bearing: a shorter one passes with
 // the admission gate removed, because the drain was merely between naps.
 func TestPipelinePauseIsTheCircuitBreaker(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 1)
 
@@ -500,6 +516,8 @@ const drainIdleWindow = 2 * time.Second
 // purpose (docs/web.md, Security), so the UI could report a state it had no
 // way to change and told the reader to go find a terminal.
 func TestTheOverviewSaysWhatStateAPipelineIsInAndReleasesIt(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 1)
 
@@ -565,6 +583,8 @@ func TestTheOverviewSaysWhatStateAPipelineIsInAndReleasesIt(t *testing.T) {
 // it is not "unpause everything" — a pipeline somebody paused on purpose
 // before stays paused, because the daemon-wide pause never touched it.
 func TestPauseAllStopsEveryPipelineAndHandsEachItsOwnStateBack(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 1)
 
@@ -737,7 +757,7 @@ func TestPipelineRenameKeepsHistory(t *testing.T) {
 
 	// The read commands must follow the name, or history is reachable from the browser and not the terminal.
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"runs", "-p", "renamed", "--db", served.state})
+		err := stepsRun(t, []string{"runs", "-p", "renamed", "--db", served.state})
 		if err != nil {
 			t.Fatalf("steps runs under the new name: %v", err)
 		}
@@ -781,7 +801,7 @@ jobs:
 
 	runID := newestRun(t, served.state, name, "slow").ID
 
-	err := cli.Run([]string{"pipeline", "rename", "-p", name, "--to", "renamed", "--target", served.target()})
+	err := stepsRun(t, []string{"pipeline", "rename", "-p", name, "--to", "renamed", "--target", served.target()})
 	if err == nil {
 		t.Fatal("a rename went ahead with a build running")
 	}
@@ -816,6 +836,8 @@ jobs:
 
 // TestPipelineSetSurvivesARestart: a restart serves what was set from the database, with nobody setting it again.
 func TestPipelineSetSurvivesARestart(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 1)
 
@@ -844,6 +866,8 @@ func TestPipelineSetSurvivesARestart(t *testing.T) {
 
 // TestPipelineSetVarsArePerPipeline: one file set twice under two vars is two pipelines, each running under its own.
 func TestPipelineSetVarsArePerPipeline(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	log := filepath.Join(dir, "greetings.log")
@@ -886,7 +910,7 @@ jobs:
 func TestWebTakesNoPipelineArguments(t *testing.T) {
 	t.Parallel()
 
-	err := cli.Run([]string{"web", flagFixture(t), "--listen", "127.0.0.1:1"})
+	err := stepsRun(t, []string{"web", flagFixture(t), "--listen", "127.0.0.1:1"})
 	if err == nil {
 		t.Fatal("steps web accepted a pipeline file argument")
 	}
@@ -896,7 +920,7 @@ func TestWebTakesNoPipelineArguments(t *testing.T) {
 	}
 
 	for _, flag := range []string{"--once", "--var", "--vars-file", "--name"} {
-		err = cli.Run([]string{"web", flag, "x", "--listen", "127.0.0.1:1"})
+		err = stepsRun(t, []string{"web", flag, "x", "--listen", "127.0.0.1:1"})
 		if err == nil || !strings.Contains(err.Error(), "could not parse flags") {
 			t.Errorf("steps web still accepts %s: %v", flag, err)
 		}
@@ -908,7 +932,7 @@ func (w *webProcess) set(t *testing.T, name, path string, extra ...string) {
 
 	args := append([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", w.target()}, extra...)
 
-	err := cli.Run(args)
+	err := stepsRun(t, args)
 	if err != nil {
 		t.Fatalf("steps pipeline set %s: %v", name, err)
 	}
@@ -917,7 +941,7 @@ func (w *webProcess) set(t *testing.T, name, path string, extra ...string) {
 func (w *webProcess) pipeline(t *testing.T, args ...string) {
 	t.Helper()
 
-	err := cli.Run(append(append([]string{"pipeline"}, args...), "--target", w.target()))
+	err := stepsRun(t, append(append([]string{"pipeline"}, args...), "--target", w.target()))
 	if err != nil {
 		t.Fatalf("steps pipeline %v: %v", args, err)
 	}

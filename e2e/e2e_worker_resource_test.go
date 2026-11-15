@@ -97,6 +97,8 @@ func checkedVersionsIn(t *testing.T, state, name string) []map[string]any {
 // worker, and the fetched bytes still come home for the local step that
 // reads them.
 func TestEndToEndResourceTagPlacesCheckInAndOut(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -159,6 +161,8 @@ func assertRecordedOnWorker(t *testing.T, path string) {
 // TestEndToEndStepTagOverridesResourceTag: the step's own tags: wins over the
 // resource's, so one pipeline can fetch a resource from two places.
 func TestEndToEndStepTagOverridesResourceTag(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -194,6 +198,8 @@ jobs:
 // out of the hash holds for a get too — a second run skips the placed fetch
 // and everything under it.
 func TestEndToEndPlacedGetCachesLikeALocalOne(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -237,10 +243,12 @@ jobs:
 // TestEndToEndUnmappedResourceTagRefusesBeforeRunning: a resource that says
 // it needs a machine does not quietly get checked from this one.
 func TestEndToEndUnmappedResourceTagRefusesBeforeRunning(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := resourceWorkerPipeline(t, dir)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("a job whose resource carries an unmapped tag ran anyway")
 	}
@@ -257,6 +265,8 @@ func TestEndToEndUnmappedResourceTagRefusesBeforeRunning(t *testing.T) {
 // only reachable from a worker has to be polled from there. One poll, through
 // the CLI, with a lease of its own.
 func TestEndToEndPollerChecksOnTheResourceWorker(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -288,6 +298,8 @@ jobs:
 // TestEndToEndPollerRefusesAnUnmappedResourceTag: before anything is polled,
 // on the same terms as a job.
 func TestEndToEndPollerRefusesAnUnmappedResourceTag(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
 resources:
@@ -309,7 +321,7 @@ jobs:
 	served := startWebFor(t, path, "--interval", "1h", "--skip-set")
 	defer served.stop(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", "probe", "-c", path, "-n", "--target", served.target()})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", "probe", "-c", path, "-n", "--target", served.target()})
 	if err == nil {
 		t.Fatal("a pipeline whose polled resource has an unmapped tag was accepted")
 	}
@@ -327,6 +339,8 @@ jobs:
 // get's OWN check rather than by recorded history, so this is the one run
 // where the check inside version resolution has to be placed too.
 func TestEndToEndPinnedGetChecksOnTheResourceWorker(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -359,6 +373,8 @@ jobs:
 // resource's tag like a plan put, and is recorded under the hook's own scope
 // — a hook has no node — so the machine it billed is not lost.
 func TestEndToEndPutHookIsRecordedOnTheResourceWorker(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -395,6 +411,8 @@ jobs:
 // resource's tag still has its check run on the resource's, so both have to
 // be mapped — refused before the run, not discovered at resolution.
 func TestEndToEndOverriddenResourceTagIsStillValidated(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
 resources:
@@ -414,7 +432,7 @@ jobs:
     run: cp src/where.txt `+filepath.Join(dir, "fetched.txt")+`
 `)
 
-	err := cli.Run([]string{path, "--worker", "edge=" + testsshd.New(t).URL})
+	err := stepsRun(t, []string{path, "--worker", "edge=" + testsshd.New(t).URL})
 	if err == nil {
 		t.Fatal("a get whose resource carries an unmapped tag ran anyway")
 	}
@@ -456,7 +474,7 @@ jobs:
 	// A check's output streams to stderr, prefixed with its name.
 	stderr := captureStderr(t)
 
-	err := cli.Run([]string{"plan", path})
+	err := stepsRun(t, []string{"plan", path})
 	if err == nil {
 		t.Fatal("plan checked a resource whose tag maps to nothing")
 	}
@@ -471,7 +489,7 @@ jobs:
 		t.Errorf("the refused plan ran the check anyway:\n%s", stderr())
 	}
 
-	_ = captureStdout(t, func() { err = cli.Run([]string{"plan", path, "--worker", "vpc=" + worker}) })
+	_ = captureStdout(t, func() { err = stepsRun(t, []string{"plan", path, "--worker", "vpc=" + worker}) })
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}

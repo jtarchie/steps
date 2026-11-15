@@ -18,6 +18,8 @@ import (
 // page, and survive the daemon going down — it never started, so a restart
 // owes it a run rather than an abort.
 func TestWebMaxRunsHoldsOtherPipelinesPending(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	started := filepath.Join(dir, "hold.started")
 	gate := filepath.Join(dir, "hold.gate")

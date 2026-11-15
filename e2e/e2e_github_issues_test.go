@@ -43,6 +43,8 @@ jobs:
 
 // TestWatchGitHubIssuesTriggerOnTheFilterLabel: a labeled open issue builds with its discussion in issue.md, and so does one labeled later; a pull request carrying the label never does; a comment, or the pipeline's own state label, is no new version; taking the label off and putting it back is, which is how a person asks for the work again.
 func TestWatchGitHubIssuesTriggerOnTheFilterLabel(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	planIssue(fake)
 	fake.addLabeledIssue(5, "bug")
@@ -77,6 +79,8 @@ func TestWatchGitHubIssuesTriggerOnTheFilterLabel(t *testing.T) {
 
 // TestEndToEndGitHubIssueCommentLandsOnTheIssue is the seam between the finder and a publisher: a github-pr-comment put handed a github-issues get, and nothing else, posts on that issue. The comment it posts is issue.md, so the file is checked byte for byte on the way.
 func TestEndToEndGitHubIssueCommentLandsOnTheIssue(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	planIssue(fake)
 
@@ -125,6 +129,8 @@ jobs:
 
 // TestEndToEndGitHubIssueOpenedIsFound: an issue a github-issue put opens with the filter label is one github-issues finds.
 func TestEndToEndGitHubIssueOpenedIsFound(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 
 	path := writePipeline(t, t.TempDir(), `

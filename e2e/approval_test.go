@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // approvalPipeline gates a publishing step behind a human decision.
@@ -34,12 +32,14 @@ jobs:
 // TestApprovalBlocksUntilApproved is the safeguard: the step after the
 // approval must not run until a person says yes.
 func TestApprovalBlocksUntilApproved(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := approvalPipeline(t, dir, "30s")
 
 	done := make(chan error, 1)
 
-	go func() { done <- cli.Run([]string{"run", path, "--job", "publish"}) }()
+	go func() { done <- stepsRun(t, []string{"run", path, "--job", "publish"}) }()
 
 	// The draft step runs; the publish step does not, because the plan is
 	// parked. Poll rather than sleep-and-hope so the test says what it means.
@@ -59,12 +59,14 @@ func TestApprovalBlocksUntilApproved(t *testing.T) {
 // TestApprovalRejectionFailsTheJob verifies a person saying no is a FAILURE —
 // a decision about the work — and that the gated step never runs.
 func TestApprovalRejectionFailsTheJob(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := approvalPipeline(t, dir, "30s")
 
 	done := make(chan error, 1)
 
-	go func() { done <- cli.Run([]string{"run", path, "--job", "publish"}) }()
+	go func() { done <- stepsRun(t, []string{"run", path, "--job", "publish"}) }()
 
 	waitForFile(t, filepath.Join(dir, "draft.log"))
 	approveFirstPending(t, path, "reject")
@@ -85,10 +87,12 @@ func TestApprovalRejectionFailsTheJob(t *testing.T) {
 // deliberately not a rejection: "nobody looked at this" and "somebody said no"
 // are different things to read in a log.
 func TestApprovalExpiresUnanswered(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := approvalPipeline(t, dir, "1s")
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err == nil {
 		t.Fatal("the job succeeded with nobody answering the approval")
 	}
@@ -103,19 +107,21 @@ func TestApprovalExpiresUnanswered(t *testing.T) {
 // TestApprovalCannotBeDecidedTwice keeps the audit trail honest: a decision is
 // a record, not a setting.
 func TestApprovalCannotBeDecidedTwice(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := approvalPipeline(t, dir, "30s")
 
 	done := make(chan error, 1)
 
-	go func() { done <- cli.Run([]string{"run", path, "--job", "publish"}) }()
+	go func() { done <- stepsRun(t, []string{"run", path, "--job", "publish"}) }()
 
 	waitForFile(t, filepath.Join(dir, "draft.log"))
 	approveFirstPending(t, path, "approve")
 
 	<-done
 
-	err := cli.Run(append([]string{"approvals", "approve", "1"}, readArgs(path)...))
+	err := stepsRun(t, append([]string{"approvals", "approve", "1"}, readArgs(path)...))
 	if err == nil {
 		t.Fatal("an already-decided approval was decided again")
 	}
@@ -152,7 +158,7 @@ func approveFirstPending(t *testing.T, pipelinePath, verb string) {
 	var last error
 
 	for time.Now().Before(deadline) {
-		last = cli.Run(append([]string{"approvals", verb, "1"}, readArgs(pipelinePath)...))
+		last = stepsRun(t, append([]string{"approvals", verb, "1"}, readArgs(pipelinePath)...))
 		if last == nil {
 			return
 		}

@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // memoryPipeline is a bot answering one message from one user: a task writes
@@ -62,6 +60,8 @@ var memoryIDPattern = regexp.MustCompile(`\[(\d+)\] prefers code samples`)
 // blind to memory would replay the second run's answer — the one written
 // while it still knew the fact.
 func TestEndToEndAgentMemory(t *testing.T) {
+	t.Parallel()
+
 	fake := newRoutedFakeLLM(t, memoryBot)
 	path := writePipeline(t, t.TempDir(), memoryPipeline(fake.URL, t.TempDir()))
 	run := memoryRunner(t, fake, path)
@@ -152,9 +152,9 @@ func assertNoMemories(t *testing.T, path, scope string) {
 
 // TestEndToEndMemoryCommand: what a bot knows about somebody is readable, and
 // deletable, from the command line — one entry, or a whole person.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestEndToEndMemoryCommand(t *testing.T) {
+	t.Parallel()
+
 	fake := newRoutedFakeLLM(t, memoryBot)
 	path := writePipeline(t, t.TempDir(), memoryPipeline(fake.URL, t.TempDir()))
 	run := memoryRunner(t, fake, path)
@@ -167,7 +167,7 @@ func TestEndToEndMemoryCommand(t *testing.T) {
 
 		var err error
 
-		out := captureStdout(t, func() { err = cli.Run(append(append([]string{"memory"}, args...), readArgs(path)...)) })
+		out := captureStdout(t, func() { err = stepsRun(t, append(append([]string{"memory"}, args...), readArgs(path)...)) })
 		if err != nil {
 			t.Fatalf("steps memory %v: %v", args, err)
 		}
@@ -186,7 +186,7 @@ func TestEndToEndMemoryCommand(t *testing.T) {
 		t.Fatalf("steps memory --scope U1 = %q, want the entry with its id", entries)
 	}
 
-	err := cli.Run(append([]string{"memory", "rm", "--scope", "U2", found[1]}, readArgs(path)...))
+	err := stepsRun(t, append([]string{"memory", "rm", "--scope", "U2", found[1]}, readArgs(path)...))
 	if err == nil || !strings.Contains(err.Error(), "not in scope U2") {
 		t.Errorf("removing U1's entry under U2: err = %v, want it refused", err)
 	}

@@ -78,7 +78,7 @@ func untar(t *testing.T, r io.Reader) map[string]entry {
 	}
 }
 
-// The pid keeps two processes running the same test (shards, a second worktree) off each other's names and label counts: the daemon is shared.
+// The pid keeps two processes running the same test (a second worktree) off each other's names and label counts: the daemon is shared.
 func uniqueName(t *testing.T, suffix string) string {
 	return "steps-test-" + strconv.Itoa(os.Getpid()) + "-" + strings.NewReplacer("/", "-", "#", "-").Replace(t.Name()) + "-" + suffix
 }

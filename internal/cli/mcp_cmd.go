@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -68,19 +69,21 @@ func (s SecretFlags) probeSecrets(ctx context.Context, pipelineName string) (con
 }
 
 // Run prints one row per configured server.
-func (m *MCPListCmd) Run() error {
+func (m *MCPListCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	cfg, err := config.Load(m.Pipeline, resolvePipelineName(m.Pipeline, m.Name), nil)
 	if err != nil {
 		return fmt.Errorf("could not load pipeline: %w", err)
 	}
 
 	if len(cfg.MCPServers) == 0 {
-		fmt.Printf("no mcp_servers: entries in %s\n", m.Pipeline)
+		sayf(out, "no mcp_servers: entries in %s\n", m.Pipeline)
 
 		return nil
 	}
 
-	ctx, cancel := withSignalCancel(context.Background())
+	ctx, cancel := streams.cancellable()
 	defer cancel()
 
 	statuses := staticMCPStatuses(cfg)
@@ -101,7 +104,7 @@ func (m *MCPListCmd) Run() error {
 		probeErr = probeMCPServers(ctx, cfg, statuses)
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 
 	_, _ = fmt.Fprintln(writer, "NAME\tTRANSPORT\tTARGET\tAUTH\tUSED BY\tSTATUS")
 
@@ -213,7 +216,9 @@ type MCPToolsCmd struct {
 // configured auth), and prints each of its tools' name, description, and
 // argument schema. An unauthorized oauth server surfaces
 // oauthTokenSource's own actionable "run steps mcp login" error, unchanged.
-func (m *MCPToolsCmd) Run() error {
+func (m *MCPToolsCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	cfg, err := config.Load(m.Pipeline, resolvePipelineName(m.Pipeline, m.Name), nil)
 	if err != nil {
 		return fmt.Errorf("could not load pipeline: %w", err)
@@ -229,7 +234,7 @@ func (m *MCPToolsCmd) Run() error {
 		return err
 	}
 
-	ctx, cancel := withSignalCancel(context.Background())
+	ctx, cancel := streams.cancellable()
 	defer cancel()
 
 	ctx, err = m.probeSecrets(ctx, cfg.Name)
@@ -242,33 +247,33 @@ func (m *MCPToolsCmd) Run() error {
 		return fmt.Errorf("could not list tools: %w", err)
 	}
 
-	printMCPTools(tools)
+	printMCPTools(out, tools)
 
 	return nil
 }
 
 // printMCPTools writes each tool's name, description, and argument schema
 // to stdout in a simple, human-readable form.
-func printMCPTools(tools []*sdkmcp.Tool) {
+func printMCPTools(out io.Writer, tools []*sdkmcp.Tool) {
 	if len(tools) == 0 {
-		fmt.Println("(no tools)")
+		say(out, "(no tools)")
 
 		return
 	}
 
 	for _, tool := range tools {
-		fmt.Printf("%s\n", tool.Name)
+		sayf(out, "%s\n", tool.Name)
 
 		if tool.Description != "" {
-			fmt.Printf("  %s\n", tool.Description)
+			sayf(out, "  %s\n", tool.Description)
 		}
 
 		schema, err := json.MarshalIndent(tool.InputSchema, "  ", "  ")
 		if err == nil && len(schema) > 0 {
-			fmt.Printf("  arguments: %s\n", schema)
+			sayf(out, "  arguments: %s\n", schema)
 		}
 
-		fmt.Println()
+		say(out)
 	}
 }
 
@@ -315,12 +320,14 @@ func (m *MCPLoginCmd) remoteFlags() error {
 }
 
 // Run is one of two logins, chosen by which pipeline was named. -c is a file here, so the login runs here: a loopback listener catches the redirect and the token lands in this user's config dir. -p is a pipeline a DAEMON serves, so the daemon runs it (daemon_login.go) — it is the machine that will spend the token, and one with no browser cannot be the loopback a redirect comes back to.
-func (m *MCPLoginCmd) Run() error {
+func (m *MCPLoginCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	if (m.Config == "") == (m.Pipeline == "") {
 		return errors.New("steps mcp login needs -c <pipeline.yml> to authorize this machine, or -p <name> (with --target) to authorize a daemon — and not both")
 	}
 
-	ctx, cancel := withSignalCancel(context.Background())
+	ctx, cancel := streams.cancellable()
 	defer cancel()
 
 	if m.Pipeline != "" {
@@ -329,7 +336,7 @@ func (m *MCPLoginCmd) Run() error {
 			return err
 		}
 
-		return m.remote(ctx)
+		return m.remote(ctx, out)
 	}
 
 	cfg, err := config.Load(m.Config, resolvePipelineName(m.Config, m.Name), nil)
@@ -360,14 +367,14 @@ func (m *MCPLoginCmd) Run() error {
 		return fmt.Errorf("mcp login: %w", err)
 	}
 
-	fmt.Printf("→ opening browser to authorize %q…\n", m.Server)
+	sayf(out, "→ opening browser to authorize %q…\n", m.Server)
 
 	err = stepsmcp.Login(ctx, cfg.Name, *srv, openBrowser)
 	if err != nil {
 		return fmt.Errorf("mcp login: %w", err)
 	}
 
-	fmt.Printf("✓ authorized %q for pipeline %q (sealed into %s)\n", m.Server, cfg.Name, state)
+	sayf(out, "✓ authorized %q for pipeline %q (sealed into %s)\n", m.Server, cfg.Name, state)
 
 	return nil
 }
@@ -376,7 +383,7 @@ func (m *MCPLoginCmd) Run() error {
 const loginPoll = 500 * time.Millisecond
 
 // remote starts the login on the daemon and plays its browser half here. The daemon is sent the address it was reached on with the credentials ALREADY OFF it (daemonClient.target), because that address becomes the redirect URI the authorization server is given and keeps.
-func (m *MCPLoginCmd) remote(ctx context.Context) error {
+func (m *MCPLoginCmd) remote(ctx context.Context, out io.Writer) error {
 	name, err := namedPipeline(m.Pipeline, "mcp login")
 	if err != nil {
 		return err
@@ -389,7 +396,7 @@ func (m *MCPLoginCmd) remote(ctx context.Context) error {
 		return err
 	}
 
-	fmt.Printf("→ %s is authorizing %q…\n", client.target, m.Server)
+	sayf(out, "→ %s is authorizing %q…\n", client.target, m.Server)
 
 	announced := false
 
@@ -397,7 +404,7 @@ func (m *MCPLoginCmd) remote(ctx context.Context) error {
 		if status.AuthorizeURL != "" && !announced {
 			announced = true
 
-			stepsmcp.PrintAndOpen(os.Stdout, openBrowser, status.AuthorizeURL)
+			stepsmcp.PrintAndOpen(out, openBrowser, status.AuthorizeURL)
 		}
 
 		select {
@@ -416,7 +423,7 @@ func (m *MCPLoginCmd) remote(ctx context.Context) error {
 		return fmt.Errorf("mcp login: %s", status.Message)
 	}
 
-	fmt.Printf("✓ authorized %q on %s (saved there, sealed in its state database)\n", m.Server, client.target)
+	sayf(out, "✓ authorized %q on %s (saved there, sealed in its state database)\n", m.Server, client.target)
 
 	return nil
 }

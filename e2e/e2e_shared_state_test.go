@@ -42,6 +42,8 @@ jobs:
 // TestSharedStateKeepsPipelinesApart is the headline: two pipeline files, one
 // --db database, and neither one's cache answers for the other.
 func TestSharedStateKeepsPipelinesApart(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	state := filepath.Join(dir, "shared.db")
 
@@ -49,7 +51,7 @@ func TestSharedStateKeepsPipelinesApart(t *testing.T) {
 	second := sharedStatePipeline(t, filepath.Join(dir, "second.yml"), filepath.Join(dir, "second.log"))
 
 	for _, pipeline := range []string{first, second} {
-		err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", state})
+		err := stepsRun(t, []string{"run", pipeline, "--job", "build", "--db", state})
 		if err != nil {
 			t.Fatalf("run %s: %v", filepath.Base(pipeline), err)
 		}
@@ -76,6 +78,8 @@ func TestSharedStateKeepsPipelinesApart(t *testing.T) {
 // TestSharedStateWritesOneFile: --db means one database, and no .steps/
 // beside either YAML. The layout is half of what the flag promises.
 func TestSharedStateWritesOneFile(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	state := filepath.Join(dir, "shared.db")
 
@@ -83,7 +87,7 @@ func TestSharedStateWritesOneFile(t *testing.T) {
 	second := sharedStatePipeline(t, filepath.Join(dir, "second.yml"), filepath.Join(dir, "second.log"))
 
 	for _, pipeline := range []string{first, second} {
-		err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", state})
+		err := stepsRun(t, []string{"run", pipeline, "--job", "build", "--db", state})
 		if err != nil {
 			t.Fatalf("run %s: %v", filepath.Base(pipeline), err)
 		}
@@ -126,6 +130,8 @@ func assertRunCount(t *testing.T, state, name string, want int) {
 // the cache must not DEFEAT it. Running one pipeline twice against a shared
 // database skips the second time, exactly as it does with its own file.
 func TestSharedStateRerunStillSkips(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	state := filepath.Join(dir, "shared.db")
 	log := filepath.Join(dir, "build.log")
@@ -133,7 +139,7 @@ func TestSharedStateRerunStillSkips(t *testing.T) {
 	pipeline := sharedStatePipeline(t, filepath.Join(dir, "only.yml"), log)
 
 	for range 2 {
-		err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", state})
+		err := stepsRun(t, []string{"run", pipeline, "--job", "build", "--db", state})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -148,6 +154,8 @@ func TestSharedStateRerunStillSkips(t *testing.T) {
 // exists for: two repos each with a pipeline.yml, one shared database.
 // Without the flag they are the same name; with it they are two pipelines.
 func TestSharedStateNameFlagOverridesTheFilename(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	state := filepath.Join(dir, "shared.db")
 
@@ -163,7 +171,7 @@ func TestSharedStateNameFlagOverridesTheFilename(t *testing.T) {
 			filepath.Join(repo, "pipeline.yml"),
 			filepath.Join(dir, sub+".log"))
 
-		err = cli.Run([]string{"run", path, "--job", "build", "--db", state, "--name", name + "=" + path})
+		err = stepsRun(t, []string{"run", path, "--job", "build", "--db", state, "--name", name + "=" + path})
 		if err != nil {
 			t.Fatalf("run %s: %v", name, err)
 		}
@@ -188,13 +196,15 @@ func TestSharedStateNameFlagOverridesTheFilename(t *testing.T) {
 // cheerfully continue b's run — reusing b's workspace and step indexes against
 // a's plan.
 func TestSharedStateRefusesAForeignRunID(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	state := filepath.Join(dir, "shared.db")
 
 	first := sharedStatePipeline(t, filepath.Join(dir, "first.yml"), filepath.Join(dir, "first.log"))
 	second := sharedStatePipeline(t, filepath.Join(dir, "second.yml"), filepath.Join(dir, "second.log"))
 
-	err := cli.Run([]string{"run", first, "--job", "build", "--db", state})
+	err := stepsRun(t, []string{"run", first, "--job", "build", "--db", state})
 	if err != nil {
 		t.Fatalf("run first: %v", err)
 	}
@@ -216,7 +226,7 @@ func TestSharedStateRefusesAForeignRunID(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	err = cli.Run([]string{"run", second, "--job", "build", "--db", state, "--resume", foreign})
+	err = stepsRun(t, []string{"run", second, "--job", "build", "--db", state, "--resume", foreign})
 	if err == nil {
 		t.Fatal("second.yml resumed a run belonging to first.yml")
 	}
@@ -230,12 +240,14 @@ func TestSharedStateRefusesAForeignRunID(t *testing.T) {
 // as `--db /path`. The scheme exists so a second driver can be chosen the way
 // `--worker ssh://` chooses a transport; a bare path stays what it always was.
 func TestDBSchemeNamesTheSqliteFile(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	state := filepath.Join(dir, "shared.db")
 
 	pipeline := sharedStatePipeline(t, filepath.Join(dir, "only.yml"), filepath.Join(dir, "build.log"))
 
-	err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", "sqlite://" + state})
+	err := stepsRun(t, []string{"run", pipeline, "--job", "build", "--db", "sqlite://" + state})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -260,13 +272,15 @@ func TestDBSchemeNamesTheSqliteFile(t *testing.T) {
 // query string rides into the driver's DSN, which splits at the first '?'
 // and drops the pragmas steps sets after the file name.
 func TestDBRefusesAMalformedSqliteURL(t *testing.T) {
+	t.Parallel()
+
 	for _, db := range []string{"sqlite://", "sqlite:state.db", "sqlite://state.db?_pragma=foreign_keys(OFF)"} {
 		t.Run(db, func(t *testing.T) {
 			dir := t.TempDir()
 			log := filepath.Join(dir, "build.log")
 			pipeline := sharedStatePipeline(t, filepath.Join(dir, "only.yml"), log)
 
-			err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", db})
+			err := stepsRun(t, []string{"run", pipeline, "--job", "build", "--db", db})
 			if err == nil {
 				t.Fatalf("--db %s was accepted", db)
 			}
@@ -290,11 +304,13 @@ func TestDBRefusesAMalformedSqliteURL(t *testing.T) {
 // error, refused at the flag — before a .steps/ is created, a file is
 // stat'd, or a job runs against a database the operator did not name.
 func TestDBRefusesAnUnknownScheme(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "build.log")
 	pipeline := sharedStatePipeline(t, filepath.Join(dir, "only.yml"), log)
 
-	err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", "mysql://steps:hunter2@db.internal/steps"})
+	err := stepsRun(t, []string{"run", pipeline, "--job", "build", "--db", "mysql://steps:hunter2@db.internal/steps"})
 	if err == nil {
 		t.Fatal("a mysql:// database was accepted with no driver to open it")
 	}
@@ -311,11 +327,13 @@ func TestDBRefusesAnUnknownScheme(t *testing.T) {
 // server answers fails at open — before the job runs, without a sqlite file
 // standing in for it, and without the password in what it prints.
 func TestDBThatCannotBeReachedRunsNothing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "build.log")
 	pipeline := sharedStatePipeline(t, filepath.Join(dir, "only.yml"), log)
 
-	err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", "postgres://steps:hunter2@db.invalid/steps?connect_timeout=2"})
+	err := stepsRun(t, []string{"run", pipeline, "--job", "build", "--db", "postgres://steps:hunter2@db.invalid/steps?connect_timeout=2"})
 	if err == nil {
 		t.Fatal("a job ran against a postgres server that is not there")
 	}

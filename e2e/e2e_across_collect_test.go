@@ -10,14 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestEndToEndAcrossCollectsCellOutputs is the feature: two task cells write
 // the SAME file name into the SAME declared output, and both survive — each
 // under its own coordinate directory, consumed downstream as one artifact.
 func TestEndToEndAcrossCollectsCellOutputs(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "seen.log")
 
@@ -57,6 +57,8 @@ jobs:
 // collection, the leaf capture was remove-then-copy on ONE destination, so
 // whichever cell finished last silently erased the other's files.
 func TestEndToEndAcrossCollectDoesNotClobberConcurrently(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "seen.log")
 
@@ -96,6 +98,8 @@ jobs:
 // the same mapping tasks do: two agent cells, each told by its prompt to
 // write the same file name, both land under their own coordinates.
 func TestEndToEndAcrossCollectsAgentCells(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "seen.log")
 
@@ -159,6 +163,8 @@ jobs:
 // what survived — the same absence-tolerance the rest of the fan-out story
 // has. The failed cell must not leave a half-written directory behind.
 func TestEndToEndAcrossCollectFailedCellContributesNothing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "seen.log")
 
@@ -201,6 +207,8 @@ jobs:
 // captures nothing and the consumer would read a hole where its contribution
 // was. Both runs must see both cells execute AND both files present.
 func TestEndToEndAcrossCollectCellsRerun(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	ran := filepath.Join(dir, "ran.log")
 
@@ -238,6 +246,8 @@ jobs:
 // whatever was already stored, and a consumer that walks findings/ would read
 // the stale entries as cell contributions.
 func TestEndToEndAcrossCollectReplacesStaleArtifact(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "seen.log")
 
@@ -283,6 +293,8 @@ jobs:
 // consumer an EMPTY artifact to walk — not a missing input that kills the
 // consuming step's workspace materialization with a path error.
 func TestEndToEndAcrossCollectAllCellsFailedLeavesEmptyArtifact(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "seen.log")
 
@@ -318,6 +330,8 @@ jobs:
 // one step decides the width, the matrix fans out over it, and everything the
 // cells produced comes back as one artifact.
 func TestEndToEndAcrossCollectFromFile(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "seen.log")
 
@@ -361,6 +375,8 @@ jobs:
 // model-authored — so a value that cannot name a directory fails the block
 // naming the value, before any cell runs.
 func TestEndToEndAcrossCollectRejectsAPathHostileItem(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -383,7 +399,7 @@ jobs:
     run: "true"
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("the run succeeded with a traversal value naming a collected directory")
 	}

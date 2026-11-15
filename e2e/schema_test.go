@@ -84,6 +84,8 @@ func yamlAsJSONValue(t *testing.T, path string) any {
 // The schema rejects what the loader rejects. A schema that accepts everything
 // would validate cleanly and be worth nothing.
 func TestSchemaRejectsInvalidPipelines(t *testing.T) {
+	t.Parallel()
+
 	schema := loadSchema(t)
 
 	tests := []struct {
@@ -146,6 +148,8 @@ func TestSchemaRejectsInvalidPipelines(t *testing.T) {
 
 // A pipeline that declares a type under a built-in's name replaces the built-in, so its source: is the type's own business, in the schema as in the loader.
 func TestSchemaLeavesAReplacedBuiltinOpen(t *testing.T) {
+	t.Parallel()
+
 	schema := loadSchema(t)
 
 	path := writePipeline(t, t.TempDir(), `
@@ -223,6 +227,8 @@ func schemaDefsByType() map[string]reflect.Type {
 // errors — a silent, annoying kind of wrong — and a property here with no
 // field offers completion for a key the loader will reject.
 func TestSchemaKeysMatchStructs(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(repoFile("steps.schema.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -309,6 +315,8 @@ func yamlTagNames(structType reflect.Type) map[string]struct{} {
 
 // TestWebhookProviderEnumMatchesTheTable: the schema's provider enum is what an editor offers, and a provider missing from it is flagged as an error in a pipeline that loads fine.
 func TestWebhookProviderEnumMatchesTheTable(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(repoFile("steps.schema.json"))
 	if err != nil {
 		t.Fatal(err)

@@ -37,7 +37,7 @@ func TestMain(m *testing.M) {
 	// different value still calls t.Setenv and stays serial, which is the
 	// same bargain it made before.
 	for key, value := range map[string]string{
-		// One docker+ cache namespace per shard process, which share a daemon.
+		// One docker+ cache namespace per test process: other packages and other checkouts share the daemon.
 		"STEPS_TEST_CACHE_NAMESPACE": strconv.Itoa(os.Getpid()) + "-",
 		"STEPS_TEST_AGENT_API_KEY":   "test-key",
 		"OPENROUTER_API_KEY":         "test-key-not-used-for-any-call",
@@ -69,7 +69,7 @@ func TestMain(m *testing.M) {
 			goleak.IgnoreAnyFunction("internal/poll.runtime_pollWait"))
 	}
 
-	// The shard's test postgres, if a test started one. goleak.Cleanup
+	// The test postgres, if a test started one. goleak.Cleanup
 	// replaces the exit, so it exits.
 	options = append(options, goleak.Cleanup(func(code int) {
 		stopPostgresE2E()

@@ -127,6 +127,8 @@ func (p *capacityProbe) peak(t *testing.T, jobs int) int {
 
 // TestWebMaxRunsIsTheDaemonCeilingAcrossPipelines proves the cap is reached and never exceeded: five pipelines, each with room to run its job, and only --max-runs holds any of them back.
 func TestWebMaxRunsIsTheDaemonCeilingAcrossPipelines(t *testing.T) {
+	t.Parallel()
+
 	const pipelines, limit = 5, 3
 
 	probe := newCapacityProbe(t)
@@ -169,6 +171,8 @@ func TestWebMaxRunsIsTheDaemonCeilingAcrossPipelines(t *testing.T) {
 
 // TestWebMaxConcurrentIsThePipelineCeiling is the same proof for one pipeline holding many ready jobs, where no daemon-wide cap is set.
 func TestWebMaxConcurrentIsThePipelineCeiling(t *testing.T) {
+	t.Parallel()
+
 	const jobs, limit = 5, 3
 
 	probe := newCapacityProbe(t)

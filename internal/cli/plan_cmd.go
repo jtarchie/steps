@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/jtarchie/steps/internal/pipeline"
@@ -30,7 +29,9 @@ type PlanCmd struct {
 // Run loads the pipeline, plans the selected job, and prints one line per
 // step. Resource check commands run (planning has always resolved get
 // versions), but no step executes and nothing is recorded.
-func (p *PlanCmd) Run() error {
+func (p *PlanCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	cfg, err := p.Load(p.Pipeline, resolvePipelineName(p.Pipeline, p.Name))
 	if err != nil {
 		return err
@@ -47,7 +48,7 @@ func (p *PlanCmd) Run() error {
 	}
 	defer func() { _ = st.Close() }()
 
-	ctx, cancel := withSignalCancel(context.Background())
+	ctx, cancel := streams.cancellable()
 	defer cancel()
 
 	ctx, err = pipeline.WithWorkers(ctx, p.Worker)
@@ -61,12 +62,12 @@ func (p *PlanCmd) Run() error {
 	}
 
 	if len(rows) == 0 {
-		fmt.Printf("job %q plans no steps\n", job.Name)
+		sayf(out, "job %q plans no steps\n", job.Name)
 
 		return nil
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 	_, _ = fmt.Fprintln(writer, "ACTION\tSTEP\tHASH\tWHY")
 
 	skips := 0
@@ -86,7 +87,7 @@ func (p *PlanCmd) Run() error {
 		return err
 	}
 
-	fmt.Printf("\n%d step(s): %d would run, %d cached\n", len(rows), len(rows)-skips, skips)
+	sayf(out, "\n%d step(s): %d would run, %d cached\n", len(rows), len(rows)-skips, skips)
 
 	return nil
 }

@@ -2,7 +2,7 @@ package cli
 
 import (
 	"fmt"
-	"os"
+	"io"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -22,8 +22,8 @@ func (t table) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func newTabWriter() table {
-	return table{tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)}
+func newTabWriter(out io.Writer) table {
+	return table{tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)}
 }
 
 func flush(writer table) error {
@@ -110,3 +110,8 @@ func truncateName(name string, width int) string {
 
 	return name[:width-1] + "…"
 }
+
+// sayf and say write what a person reads to the stream the invocation was given. The error is dropped on purpose, as fmt.Printf's always was: a terminal that stopped taking output has nobody left to tell.
+func sayf(out io.Writer, format string, args ...any) { _, _ = fmt.Fprintf(out, format, args...) }
+
+func say(out io.Writer, args ...any) { _, _ = fmt.Fprintln(out, args...) }

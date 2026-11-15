@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestResumeContinuesTheJobBudget pins that a job budget is a ceiling on the
@@ -22,6 +20,8 @@ import (
 // that 400 already gone and refuse to spend another 400 on top — 800 would be
 // over the ceiling — so the second agent step never runs.
 func TestResumeContinuesTheJobBudget(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
 
@@ -62,7 +62,7 @@ jobs:
 	// Attempt 1: the first agent spends 400, then the gate fails.
 	path := writePipeline(t, dir, pipeline(true))
 
-	err := cli.Run([]string{"run", path, "--job", "fan"})
+	err := stepsRun(t, []string{"run", path, "--job", "fan"})
 	if err == nil {
 		t.Fatal("the run succeeded; the fixture needs it to fail at the gate")
 	}
@@ -80,7 +80,7 @@ jobs:
 	// be refused — 400 is already spent against a 700 ceiling.
 	path = writePipeline(t, dir, pipeline(false))
 
-	err = cli.Run([]string{"run", path, "--job", "fan", "--resume", runID})
+	err = stepsRun(t, []string{"run", path, "--job", "fan", "--resume", runID})
 	if err == nil {
 		t.Fatal("the resumed run succeeded; the job budget must stop the second agent step")
 	}

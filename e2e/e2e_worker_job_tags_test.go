@@ -5,7 +5,6 @@ package e2e
 import (
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/testsshd"
 )
 
@@ -13,6 +12,8 @@ import (
 // the job's own hook, a do: block's tags: override it for the steps inside,
 // and the block itself — which runs nothing — records no placement.
 func TestEndToEndJobTagsPlaceEveryStep(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -32,7 +33,7 @@ jobs:
     run: "true"
 `)
 
-	err := cli.Run([]string{path, "--worker", "gpu=" + worker, "--worker", "disk=" + worker})
+	err := stepsRun(t, []string{path, "--worker", "gpu=" + worker, "--worker", "disk=" + worker})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -58,6 +59,8 @@ jobs:
 // what the step resolved to, as in Concourse — the tagged step's on_failure:
 // is placed on the step's worker, not run here.
 func TestEndToEndAStepsHookGoesWhereTheStepWent(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -73,7 +76,7 @@ jobs:
       run: "true"
 `)
 
-	err := cli.Run([]string{path, "--worker", "gpu=" + worker})
+	err := stepsRun(t, []string{path, "--worker", "gpu=" + worker})
 	if err == nil {
 		t.Fatal("the pipeline was supposed to fail so its on_failure hook would run")
 	}

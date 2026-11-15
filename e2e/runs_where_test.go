@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -54,6 +53,8 @@ jobs:
 // is a positive claim about a run this pipeline has never seen, made with
 // exit 0.
 func TestWhereWillNotVouchForARunItDoesNotHave(t *testing.T) {
+	t.Parallel()
+
 	path := whereFixture(t, func(ctx context.Context, st store.Store) {
 		err := st.StartRun(ctx, store.NewRun{ID: "mid-flight", JobName: "build"})
 		if err != nil {
@@ -64,7 +65,7 @@ func TestWhereWillNotVouchForARunItDoesNotHave(t *testing.T) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run(append([]string{"runs", "where", "never-happened"}, readArgs(path)...))
+		err = stepsRun(t, append([]string{"runs", "where", "never-happened"}, readArgs(path)...))
 	})
 	if err != nil {
 		t.Fatalf("steps runs --where --run: %v", err)
@@ -81,7 +82,7 @@ func TestWhereWillNotVouchForARunItDoesNotHave(t *testing.T) {
 	// A run still in flight records its placements as its steps finish, so
 	// the same past-tense claim is just as wrong about one that exists.
 	out = captureStdout(t, func() {
-		err = cli.Run(append([]string{"runs", "where", "mid-flight"}, readArgs(path)...))
+		err = stepsRun(t, append([]string{"runs", "where", "mid-flight"}, readArgs(path)...))
 	})
 	if err != nil {
 		t.Fatalf("steps runs --where --run: %v", err)
@@ -94,6 +95,8 @@ func TestWhereWillNotVouchForARunItDoesNotHave(t *testing.T) {
 
 // TestWhereNamesWhoTheStepRanAs: the run page showed the uid:gid a step ran as and the terminal did not. A worker that named none prints "-", never an invented 0:0, which would read as root.
 func TestWhereNamesWhoTheStepRanAs(t *testing.T) {
+	t.Parallel()
+
 	root := 0
 	hash := strings.Repeat("e", 64)
 	other := strings.Repeat("f", 64)
@@ -108,7 +111,7 @@ func TestWhereNamesWhoTheStepRanAs(t *testing.T) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run(append([]string{"runs", "where", "as-who"}, readArgs(path)...))
+		err = stepsRun(t, append([]string{"runs", "where", "as-who"}, readArgs(path)...))
 	})
 	if err != nil {
 		t.Fatalf("steps runs where: %v", err)

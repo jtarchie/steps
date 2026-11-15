@@ -53,6 +53,8 @@ jobs:
 // only reads. Before this the graph drew jobs alone, so a pipeline with no
 // passed: was a column of unconnected boxes.
 func TestJobsGraphDrawsResourcesTheWayConcourseDoes(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "graph.yml")
 	writePipelineFile(t, path, graphPipeline)
@@ -122,6 +124,8 @@ func graphEdges(svg string) map[string]bool {
 // is what polls — a run landing while the page is open shows on its node at
 // the next refresh, with no reload and no view to pick first.
 func TestJobsPageIsTheGraphAndItRefreshes(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "graph.yml")
 	writePipelineFile(t, path, graphPipeline)

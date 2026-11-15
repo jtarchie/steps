@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // The file carries a scalar (basic-auth-username), a list (allowed-host) and a key the command line overrides (listen: an unbindable port — were the file to win, the daemon would never answer and startWeb would fail).
@@ -58,13 +56,13 @@ func TestConfigFileEnvIsWebsAlone(t *testing.T) {
 	writePipelineFile(t, path, "jobs:\n- name: hi\n  plan:\n  - task: say\n    run: echo hi\n")
 
 	for _, command := range []string{"validate", "run", "test"} {
-		err := cli.Run([]string{command, "--db", filepath.Join(dir, command+".db"), path})
+		err := stepsRun(t, []string{command, "--db", filepath.Join(dir, command+".db"), path})
 		if err != nil {
 			t.Fatalf("steps %s with STEPS_CONFIG set to an absent file: %v", command, err)
 		}
 	}
 
-	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1"})
+	err := stepsRun(t, []string{"web", "--listen", "127.0.0.1:1"})
 	if err == nil || !strings.Contains(err.Error(), "absent.yml") {
 		t.Fatalf("steps web with STEPS_CONFIG set to an absent file = %v, want a refusal naming it", err)
 	}
@@ -118,12 +116,12 @@ web:
 
 	state := filepath.Join(t.TempDir(), "daemon.db")
 
-	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--db", state, "--config", config})
+	err := stepsRun(t, []string{"web", "--listen", "127.0.0.1:1", "--db", state, "--config", config})
 	if err == nil || !strings.Contains(err.Error(), "secret source") || !strings.Contains(err.Error(), "sign in") {
 		t.Fatalf("steps web with a secret source and no login = %v, want a refusal naming both", err)
 	}
 
-	err = cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--db", state, "--config", config, "--basic-auth-username", "ops", "--basic-auth-password", "pw"})
+	err = stepsRun(t, []string{"web", "--listen", "127.0.0.1:1", "--db", state, "--config", config, "--basic-auth-username", "ops", "--basic-auth-password", "pw"})
 	if err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("steps web with a secret source and a login = %v, want only the bind to fail", err)
 	}

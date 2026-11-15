@@ -5,14 +5,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestRaceKeepsTheFirstSuccess is the feature in one assertion: the fast
 // branch's result is the step's result, and the slow one is cancelled rather
 // than waited on.
 func TestRaceKeepsTheFirstSuccess(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	slow := filepath.Join(dir, "slow.log")
 
@@ -44,6 +44,8 @@ jobs:
 // TestRaceIgnoresAFailingBranch verifies "first SUCCESS wins", not "first to
 // finish wins" — a branch that fails fast must not decide the block.
 func TestRaceIgnoresAFailingBranch(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -69,6 +71,8 @@ jobs:
 // TestRaceFailsWhenEveryBranchFails verifies the block reports every failure
 // when nothing won — a race is a hedge, not a guarantee.
 func TestRaceFailsWhenEveryBranchFails(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -88,7 +92,7 @@ jobs:
         run: exit 1
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("the race succeeded with every branch failing")
 	}
@@ -104,6 +108,8 @@ jobs:
 // depend on: the winner's outputs are the step's outputs, and a later step
 // consumes them without knowing which branch produced them.
 func TestRaceWinnersOutputsReachTheNextStep(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "seen.log")
 

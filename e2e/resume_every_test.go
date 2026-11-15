@@ -6,8 +6,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestResumeReachesAVersionTheCursorAlreadyTook is the recovery path
@@ -26,6 +24,8 @@ import (
 // and exited GREEN — a resume of a failed run reporting success having
 // continued nothing at all.
 func TestResumeReachesAVersionTheCursorAlreadyTook(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	ran := filepath.Join(dir, "ran.log")
@@ -55,7 +55,7 @@ jobs:
 `, ran, flag))
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("expected the fragile step to fail")
 		}
@@ -69,7 +69,7 @@ jobs:
 	writePipelineFile(t, flag, "")
 
 	out = captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--resume", runID})
+		err := stepsRun(t, []string{"run", path, "--resume", runID})
 		if err != nil {
 			t.Fatalf("resume failed: %v", err)
 		}
@@ -98,6 +98,8 @@ jobs:
 // created with; it does not reschedule the job), and so does this: --resume
 // re-opens the versions of the run named on the command line, and no others.
 func TestResumeDoesNotReopenAnotherRunsVersions(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -147,7 +149,7 @@ jobs:
 
 	// Run one takes "one" and publishes it. This is the green history a
 	// resume must not disturb.
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("the first version should have built: %v", err)
 	}
@@ -158,7 +160,7 @@ jobs:
 	writePipelineFile(t, versions, `[{"n":"one"},{"n":"two"}]`)
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("expected the second version to fail")
 		}
@@ -170,7 +172,7 @@ jobs:
 	// Fix what broke, then resume.
 	writePipelineFile(t, flag, "")
 
-	err = cli.Run([]string{"run", path, "--resume", runID})
+	err = stepsRun(t, []string{"run", path, "--resume", runID})
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}
@@ -228,6 +230,8 @@ jobs:
 // build whether a step was done and heard its sibling's yes, has no shared run
 // left to happen in.
 func TestResumeRerunsTheFailedRunNotItsSibling(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -242,7 +246,7 @@ func TestResumeRerunsTheFailedRunNotItsSibling(t *testing.T) {
 	mustRun(t, "run", path, "--job", "build")
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("expected the run of two to fail")
 		}
@@ -255,7 +259,7 @@ func TestResumeRerunsTheFailedRunNotItsSibling(t *testing.T) {
 
 	writePipelineFile(t, flag, "")
 
-	err := cli.Run([]string{"run", path, "--resume", runID})
+	err := stepsRun(t, []string{"run", path, "--resume", runID})
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}
@@ -278,7 +282,7 @@ func assertRunStepsPerBuild(t *testing.T, path, runID string) {
 	t.Helper()
 
 	listing := captureStdout(t, func() {
-		err := cli.Run(append([]string{"runs", "steps", runID}, readArgs(path)...))
+		err := stepsRun(t, append([]string{"runs", "steps", runID}, readArgs(path)...))
 		if err != nil {
 			t.Fatalf("runs steps %s: %v", runID, err)
 		}
@@ -291,7 +295,7 @@ func assertRunStepsPerBuild(t *testing.T, path, runID string) {
 	}
 
 	limited := captureStdout(t, func() {
-		err := cli.Run(append([]string{"runs", "steps", runID, "--limit", "1"}, readArgs(path)...))
+		err := stepsRun(t, append([]string{"runs", "steps", runID, "--limit", "1"}, readArgs(path)...))
 		if err != nil {
 			t.Fatalf("runs steps %s --limit 1: %v", runID, err)
 		}
@@ -301,7 +305,7 @@ func assertRunStepsPerBuild(t *testing.T, path, runID string) {
 		t.Errorf("runs steps --limit 1 did not stop after the first row:\n%s", limited)
 	}
 
-	err := cli.Run(append([]string{"runs", "steps", "NOSUCHRUN"}, readArgs(path)...))
+	err := stepsRun(t, append([]string{"runs", "steps", "NOSUCHRUN"}, readArgs(path)...))
 	if err == nil || !strings.Contains(err.Error(), "no run") {
 		t.Errorf("runs steps with an unknown run id: want a \"no run\" error, got %v", err)
 	}
@@ -312,6 +316,8 @@ func assertRunStepsPerBuild(t *testing.T, path, runID string) {
 // remainder after the get numbers fragile 0 too. One version, one build, and
 // still a resume that skipped the step it was meant to retry.
 func TestResumeDoesNotMistakeAStepBeforeTheGetForOneAfterIt(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	prep := filepath.Join(dir, "prep.log")
@@ -343,7 +349,7 @@ jobs:
 `, prep, fragile, flag))
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("expected the fragile step to fail")
 		}
@@ -353,7 +359,7 @@ jobs:
 
 	writePipelineFile(t, flag, "")
 
-	err := cli.Run([]string{"run", path, "--resume", runID})
+	err := stepsRun(t, []string{"run", path, "--resume", runID})
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}
@@ -368,6 +374,8 @@ jobs:
 // rerun ("chosen version of input X not available") rather than choose
 // another; so does this, naming the version, and it runs nothing.
 func TestResumeRefusesABuildWhoseVersionIsGone(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -382,7 +390,7 @@ func TestResumeRefusesABuildWhoseVersionIsGone(t *testing.T) {
 	mustRun(t, "run", path, "--job", "build")
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("expected the run of two to fail")
 		}
@@ -401,7 +409,7 @@ func TestResumeRefusesABuildWhoseVersionIsGone(t *testing.T) {
 	var err error
 
 	out = captureStdout(t, func() {
-		err = cli.Run([]string{"run", path, "--resume", runID})
+		err = stepsRun(t, []string{"run", path, "--resume", runID})
 	})
 
 	if err == nil {

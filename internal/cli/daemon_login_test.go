@@ -465,7 +465,7 @@ func TestMCPLoginRefusesNameWithDashP(t *testing.T) {
 	cmd := &MCPLoginCmd{PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}, Server: "tracker", Name: map[string]string{"x": "x.yml"}}
 	cmd.Target = "http://127.0.0.1:1"
 
-	err := cmd.Run()
+	err := cmd.Run(std())
 	if err == nil || !strings.Contains(err.Error(), "--name") {
 		t.Fatalf("mcp login -p with --name = %v, want refused naming --name", err)
 	}
@@ -478,7 +478,7 @@ func TestMCPLoginRefusesSecretsWithDashP(t *testing.T) {
 	cmd := &MCPLoginCmd{PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}, Server: "tracker", Secrets: "web.yml"}
 	cmd.Target = "http://127.0.0.1:1"
 
-	err := cmd.Run()
+	err := cmd.Run(std())
 	if err == nil || !strings.Contains(err.Error(), "--secrets") {
 		t.Fatalf("mcp login -p with --secrets = %v, want refused naming --secrets", err)
 	}
@@ -519,7 +519,7 @@ func TestARemoteLoginAnnouncesItsURLOnce(t *testing.T) {
 
 	var err error
 
-	out := captureStdout(t, func() { err = cmd.Run() })
+	out := captureStdout(t, func() { err = cmd.Run(std()) })
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}

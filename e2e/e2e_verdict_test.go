@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // classifierPipeline is one agent whose verdicts: are ALL bare — it records
@@ -50,6 +48,8 @@ jobs:
 // jumping — which is what makes a classifier expressible without inventing a
 // target for every outcome.
 func TestEndToEndBareVerdictsClassifyAndCarryOn(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		says("Looks like a defect."),
@@ -86,6 +86,8 @@ func TestEndToEndBareVerdictsClassifyAndCarryOn(t *testing.T) {
 // before this the only assertable trace of it was that the verdict tool had
 // been called — so a fixture passed whatever the model chose.
 func TestEndToEndAssertVerdictPinsTheDecision(t *testing.T) {
+	t.Parallel()
+
 	const assertBug = "    assert:\n      verdict: bug\n"
 
 	t.Run("matching verdict passes", func(t *testing.T) {
@@ -108,7 +110,7 @@ func TestEndToEndAssertVerdictPinsTheDecision(t *testing.T) {
 			says("Filed."),
 		)
 
-		err := cli.Run([]string{classifierPipeline(t, dir, fake.URL, assertBug)})
+		err := stepsRun(t, []string{classifierPipeline(t, dir, fake.URL, assertBug)})
 		if err == nil {
 			t.Fatal("a classifier that emitted the wrong verdict reported success")
 		}

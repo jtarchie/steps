@@ -35,7 +35,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jtarchie/steps/docs"
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/config"
 )
 
@@ -214,6 +213,8 @@ func reportDetectionModes(t *testing.T, modes map[string]string) {
 // TestDSLMutationCoversStep is the ratchet: operator or reasoned skip, for
 // every field.
 func TestDSLMutationCoversStep(t *testing.T) {
+	t.Parallel()
+
 	covered := map[string]bool{}
 	for _, operator := range stepOperators {
 		if covered[operator.tag] {
@@ -380,11 +381,11 @@ func detectMutant(t *testing.T, block docs.Block, body string) string {
 	varFlags := scenarioVarFlags(scenario)
 	runFlags := append(scenarioFlags(scenario), deliveryFlags(t, dir, mutated)...)
 
-	if cli.Run(append([]string{"validate", "--syntax-only", path}, varFlags...)) != nil {
+	if stepsRun(t, append([]string{"validate", "--syntax-only", path}, varFlags...)) != nil {
 		return "load"
 	}
 
-	err := cli.Run(append([]string{"test", path}, runFlags...))
+	err := stepsRun(t, append([]string{"test", path}, runFlags...))
 
 	switch {
 	case err == nil:

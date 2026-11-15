@@ -16,6 +16,8 @@ var ansi = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
 
 // TestRunDrawsALiveViewWhenAskedFor is #124 end to end: --progress=tty replaces the plain lines with a live region, leaves one line per finished step in scrollback, ends on a summary, and — because the job failed — prints the failed step's output after it, the way buildx does. Not parallel: captureStdout swaps os.Stdout.
 func TestRunDrawsALiveViewWhenAskedFor(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 jobs:
 - name: build
@@ -31,7 +33,7 @@ jobs:
 
 	var runErr error
 
-	out := captureStdout(t, func() { runErr = cli.Run([]string{"run", path, "--job", "build", "--progress", "tty"}) })
+	out := captureStdout(t, func() { runErr = stepsRun(t, []string{"run", path, "--job", "build", "--progress", "tty"}) })
 	if runErr == nil {
 		t.Fatal("the job should have failed on lint")
 	}
@@ -94,15 +96,17 @@ func lastRunID(t *testing.T, path string) string {
 
 // TestRunsFollowReplaysARunInTheLiveView is the rest of #124: the same view, attached to a run by reading what it recorded, exiting as the run did.
 func TestRunsFollowReplaysARunInTheLiveView(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), followPipeline)
 
-	_ = captureStdout(t, func() { _ = cli.Run([]string{"run", path, "--job", "build", "--progress", "plain"}) })
+	_ = captureStdout(t, func() { _ = stepsRun(t, []string{"run", path, "--job", "build", "--progress", "plain"}) })
 	id := lastRunID(t, path)
 
 	var followErr error
 
 	out := captureStdout(t, func() {
-		followErr = cli.Run(append([]string{"runs", "follow", id, "--progress", "tty"}, readArgs(path)...))
+		followErr = stepsRun(t, append([]string{"runs", "follow", id, "--progress", "tty"}, readArgs(path)...))
 	})
 
 	if code := outcome.ExitCode(followErr); code != outcome.ExitFailed {
@@ -131,15 +135,17 @@ func TestRunsFollowReplaysARunInTheLiveView(t *testing.T) {
 
 // TestRunsFollowPlainPrintsWhatAStreamingRunWould: plain never prints step_output locally because the bytes streamed; a follower has nothing else.
 func TestRunsFollowPlainPrintsWhatAStreamingRunWould(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), followPipeline)
 
-	_ = captureStdout(t, func() { _ = cli.Run([]string{"run", path, "--job", "build", "--progress", "plain"}) })
+	_ = captureStdout(t, func() { _ = stepsRun(t, []string{"run", path, "--job", "build", "--progress", "plain"}) })
 	id := lastRunID(t, path)
 
 	var followErr error
 
 	out := captureStdout(t, func() {
-		followErr = cli.Run(append([]string{"runs", "follow", "--progress", "plain"}, readArgs(path)...))
+		followErr = stepsRun(t, append([]string{"runs", "follow", "--progress", "plain"}, readArgs(path)...))
 	})
 	if outcome.ExitCode(followErr) != outcome.ExitFailed {
 		t.Errorf("err = %v, want the run's failure", followErr)
@@ -157,12 +163,14 @@ func TestRunsFollowPlainPrintsWhatAStreamingRunWould(t *testing.T) {
 }
 
 func TestRunsFollowRefusals(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, followPipeline)
 
 	var err error
 
-	_ = captureStdout(t, func() { err = cli.Run(append([]string{"runs", "follow"}, readArgs(path)...)) })
+	_ = captureStdout(t, func() { err = stepsRun(t, append([]string{"runs", "follow"}, readArgs(path)...)) })
 	if outcome.ExitCode(err) != outcome.ExitErrored || !strings.Contains(err.Error(), "no runs recorded yet") {
 		t.Errorf("before any run: err = %v, want nothing to follow refused", err)
 	}
@@ -172,19 +180,19 @@ func TestRunsFollowRefusals(t *testing.T) {
 		t.Errorf("following created state: %v", statErr)
 	}
 
-	_ = captureStdout(t, func() { _ = cli.Run([]string{"run", path, "--job", "build", "--progress", "plain"}) })
+	_ = captureStdout(t, func() { _ = stepsRun(t, []string{"run", path, "--job", "build", "--progress", "plain"}) })
 
-	_ = captureStdout(t, func() { err = cli.Run(append([]string{"runs", "follow", "nope"}, readArgs(path)...)) })
+	_ = captureStdout(t, func() { err = stepsRun(t, append([]string{"runs", "follow", "nope"}, readArgs(path)...)) })
 	if err == nil || !strings.Contains(err.Error(), cli.PipelineName(path)) {
 		t.Errorf("unknown run: err = %v, want the pipeline named", err)
 	}
 
-	_ = captureStdout(t, func() { err = cli.Run(append([]string{"runs", "follow", "--job", "deploi"}, readArgs(path)...)) })
+	_ = captureStdout(t, func() { err = stepsRun(t, append([]string{"runs", "follow", "--job", "deploi"}, readArgs(path)...)) })
 	if outcome.ExitCode(err) != outcome.ExitErrored || !strings.Contains(err.Error(), `"deploi"`) {
 		t.Errorf("a job with no runs: err = %v, want refused naming the job", err)
 	}
 
-	err = cli.Run(append([]string{"runs", "follow", "nope", "--job", "build"}, readArgs(path)...))
+	err = stepsRun(t, append([]string{"runs", "follow", "nope", "--job", "build"}, readArgs(path)...))
 	if err == nil || !strings.Contains(err.Error(), "--job") {
 		t.Errorf("run with --job: err = %v, want refused", err)
 	}

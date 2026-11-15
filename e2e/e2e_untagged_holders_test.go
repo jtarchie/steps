@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // untaggedPayload is big enough that a transfer of it cannot hide under the metadata a placement always moves.
@@ -117,6 +115,8 @@ resources:
 
 // TestAResumeReadsWhatAnUntaggedImageStepHeld: the run that held the output is gone, so the resumed one learns where the bytes are from the kept tree; with a get first the steps live in the get's build rather than the job's.
 func TestAResumeReadsWhatAnUntaggedImageStepHeld(t *testing.T) {
+	t.Parallel()
+
 	for name, get := range resumeBuilds {
 		t.Run(name, func(t *testing.T) {
 			assertResumeReadsHeld(t, get)
@@ -148,7 +148,7 @@ jobs:
 `, fixed, dir))
 
 	out := captureStdout(t, func() {
-		if cli.Run([]string{"run", path}) == nil {
+		if stepsRun(t, []string{"run", path}) == nil {
 			t.Fatal("expected the fragile step to fail")
 		}
 	})
@@ -156,7 +156,7 @@ jobs:
 	writePipelineFile(t, fixed, "")
 
 	out = captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--resume", resumeID(t, out)})
+		err := stepsRun(t, []string{"run", path, "--resume", resumeID(t, out)})
 		if err != nil {
 			t.Fatalf("resume failed: %v", err)
 		}
@@ -261,7 +261,7 @@ jobs:
 
 	path := writePipeline(t, dir, pipeline("    run: \"true\"\n"))
 
-	err := cli.Run([]string{"run", path, "--keep-workspace"})
+	err := stepsRun(t, []string{"run", path, "--keep-workspace"})
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
@@ -269,7 +269,7 @@ jobs:
 	writePipeline(t, dir, pipeline(fmt.Sprintf("    inputs: [src]\n    run: cp src/blob.bin src/sum %s/\n", dir)))
 
 	captureStdout(t, func() {
-		err = cli.Run([]string{"run", path, "--replay", runIDFromStore(t, path), "--from", "read"})
+		err = stepsRun(t, []string{"run", path, "--replay", runIDFromStore(t, path), "--from", "read"})
 		if err != nil {
 			t.Fatalf("replay: %v", err)
 		}
@@ -416,7 +416,7 @@ jobs:
 `, fixed, dir))
 
 	out := captureStdout(t, func() {
-		if cli.Run([]string{"run", path}) == nil {
+		if stepsRun(t, []string{"run", path}) == nil {
 			t.Fatal("expected the fragile step to fail")
 		}
 	})
@@ -430,7 +430,7 @@ jobs:
 	writePipelineFile(t, fixed, "")
 
 	_ = captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--resume", run})
+		err := stepsRun(t, []string{"run", path, "--resume", run})
 		if err != nil {
 			t.Fatalf("resume failed: %v", err)
 		}

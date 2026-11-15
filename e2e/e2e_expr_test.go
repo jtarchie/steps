@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestEndToEndExprResourceType drives an expr-backed resource type through
@@ -24,6 +22,8 @@ import (
 // detail endpoint per item, and a publish endpoint that echoes back the
 // version it created.
 func TestEndToEndExprResourceType(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	var posted atomic.Value
@@ -183,7 +183,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = cli.Run([]string{"validate", path})
+	err = stepsRun(t, []string{"validate", path})
 	if err == nil {
 		t.Fatal("validate: want an error for an unparsable expression")
 	}
@@ -194,7 +194,7 @@ jobs:
 
 	// And --syntax-only must still catch it: nothing about parsing an
 	// expression depends on this machine.
-	err = cli.Run([]string{"validate", path, "--syntax-only"})
+	err = stepsRun(t, []string{"validate", path, "--syntax-only"})
 	if err == nil {
 		t.Fatal("validate --syntax-only: want the same error")
 	}
@@ -247,6 +247,8 @@ jobs:
 // gets fetched, by the get's name — the aliased first get (fetched as its own
 // build) and an in-place second one alike.
 func TestEndToEndExprOutReadsFetchedVersion(t *testing.T) {
+	t.Parallel()
+
 	var posted atomic.Value
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -291,6 +293,8 @@ func TestEndToEndExprOutReadsFetchedVersion(t *testing.T) {
 // TestEndToEndExprOutVersionErrors: version() answers only for the put's
 // inputs, and each way of asking for something else says what was wrong.
 func TestEndToEndExprOutVersionErrors(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name, out, inputs, want string
 	}{
@@ -307,7 +311,7 @@ func TestEndToEndExprOutVersionErrors(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			err = cli.Run([]string{"run", path, "--job", "build"})
+			err = stepsRun(t, []string{"run", path, "--job", "build"})
 			if err == nil {
 				t.Fatal("run succeeded, want version() to refuse")
 			}

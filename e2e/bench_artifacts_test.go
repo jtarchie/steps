@@ -300,7 +300,7 @@ func benchInvoke(t *testing.T, path string, env benchEnv, jobs []string, extra .
 	var err error
 
 	for _, job := range jobs {
-		out := captureStdout(t, func() { err = cli.Run(append(append(args, "--job", job), extra...)) })
+		out := captureStdout(t, func() { err = stepsRun(t, append(append(args, "--job", job), extra...)) })
 		if err != nil {
 			err = fmt.Errorf("job %s: %w", job, err)
 			t.Logf("%v\n%s", err, out)
@@ -920,7 +920,7 @@ jobs:
 	done := make(chan error, 1)
 	started := time.Now()
 
-	go func() { done <- cli.Run(append(args, "--var", "hold=420")) }()
+	go func() { done <- stepsRun(t, append(args, "--var", "hold=420")) }()
 
 	instance, err := benchAwaitInstance(t, path, "drain-seed", done)
 	if err != nil {
@@ -957,7 +957,7 @@ jobs:
 		}
 	}
 
-	second := cli.Run(append(args, "--var", "hold=0"))
+	second := stepsRun(t, append(args, "--var", "hold=0"))
 	if second != nil {
 		row.problems = append(row.problems, "the run after the reclaim did not recover: "+second.Error())
 	}
@@ -1066,6 +1066,8 @@ func benchPassing(payload int64) (benchRun, benchRun) {
 }
 
 func TestBenchJudgmentPassesWhatMeetsEveryBudget(t *testing.T) {
+	t.Parallel()
+
 	first, second := benchPassing(64 << 20)
 
 	for _, row := range judgeBench(64<<20, first, second) {
@@ -1077,6 +1079,8 @@ func TestBenchJudgmentPassesWhatMeetsEveryBudget(t *testing.T) {
 
 // TestBenchJudgmentCatchesEachBudgetBroken is the bench's sabotage, done on the judgment: each regression the issue names, as the rows it would leave, must fail its hop.
 func TestBenchJudgmentCatchesEachBudgetBroken(t *testing.T) {
+	t.Parallel()
+
 	const payload = 64 << 20
 
 	for name, c := range map[string]struct {
@@ -1142,7 +1146,7 @@ jobs:
 			var err error
 
 			logs := captureStderr(t)
-			out := captureStdout(t, func() { err = cli.Run([]string{path}) }) + logs()
+			out := captureStdout(t, func() { err = stepsRun(t, []string{path}) }) + logs()
 			if err == nil || !strings.Contains(out, c.want) {
 				t.Errorf("verify passed or said something else (%v):\n%s", err, out)
 			}

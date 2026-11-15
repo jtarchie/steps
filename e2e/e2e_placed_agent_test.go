@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -299,7 +298,7 @@ func TestPlacedAgentRecordsWhereItFailed(t *testing.T) {
 	dir := t.TempDir()
 	path := placedAgentPipeline(t, dir, seesTheBlob(t, "Not what the assert wants").URL, "    assert:\n      stdout: Done\n")
 
-	err := cli.Run([]string{path, "--worker", "box=local:"})
+	err := stepsRun(t, []string{path, "--worker", "box=local:"})
 	if err == nil {
 		t.Fatal("run succeeded, want the assert to fail the agent step")
 	}

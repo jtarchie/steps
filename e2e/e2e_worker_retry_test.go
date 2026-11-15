@@ -5,7 +5,6 @@ package e2e
 import (
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/testsshd"
 )
 
@@ -23,6 +22,8 @@ import (
 // The marker is deliberately NOT in outputs:. A declared output is fetched
 // back and re-sent; the whole point is the undeclared scratch beside it.
 func TestEndToEndWorkerRetryKeepsScratch(t *testing.T) {
+	t.Parallel()
+
 	for _, placed := range []bool{false, true} {
 		name, tags, args := "local", "", []string(nil)
 		if placed {
@@ -54,7 +55,7 @@ jobs:
 			// Succeeding at all is the assertion: the second attempt takes
 			// the marker branch only if the first attempt's file is still
 			// there. A reset scratch touches MARKER again and exits 1.
-			err := cli.Run(append([]string{path}, args...))
+			err := stepsRun(t, append([]string{path}, args...))
 			if err != nil {
 				t.Fatalf("the retried task failed: %v\n\nthe second attempt could not see the marker the first wrote, so its scratch did not survive the retry", err)
 			}

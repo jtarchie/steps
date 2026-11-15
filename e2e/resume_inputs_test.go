@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // recordedInputsPipeline fans out over ticks and binds config beside it. The
@@ -62,6 +60,8 @@ jobs:
 // binding config@c2. Concourse records every input of a build and reruns
 // against exactly those.
 func TestResumeBindsAFixedGetToTheVersionItsBuildWasCreatedWith(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	ticks := filepath.Join(dir, "ticks.json")
@@ -77,7 +77,7 @@ func TestResumeBindsAFixedGetToTheVersionItsBuildWasCreatedWith(t *testing.T) {
 	mustRun(t, "run", path, "--job", "build")
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("expected the build of two to fail")
 		}
@@ -90,7 +90,7 @@ func TestResumeBindsAFixedGetToTheVersionItsBuildWasCreatedWith(t *testing.T) {
 	writePipelineFile(t, config, `[{"n":"c1"},{"n":"c2"}]`)
 	writePipelineFile(t, flag, "")
 
-	err := cli.Run([]string{"run", path, "--resume", runID})
+	err := stepsRun(t, []string{"run", path, "--resume", runID})
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}
@@ -107,6 +107,8 @@ func TestResumeBindsAFixedGetToTheVersionItsBuildWasCreatedWith(t *testing.T) {
 // with, not the new one — that is what makes "continue THIS run" mean
 // anything.
 func TestResumeRebuildsTheVersionAFixedGetWasCreatedWith(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -139,7 +141,7 @@ jobs:
 `, versions, ran, flag))
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build"})
+		err := stepsRun(t, []string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("expected the fragile step to fail")
 		}
@@ -150,7 +152,7 @@ jobs:
 	writePipelineFile(t, versions, `[{"n":"one"},{"n":"two"}]`)
 	writePipelineFile(t, flag, "")
 
-	err := cli.Run([]string{"run", path, "--resume", runID})
+	err := stepsRun(t, []string{"run", path, "--resume", runID})
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}
@@ -166,6 +168,8 @@ jobs:
 // and, the pinned run having taken nothing, the cursor still owes every
 // other version to the next ordinary run.
 func TestResumeOfAPinnedRunKeepsItsPin(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -178,7 +182,7 @@ func TestResumeOfAPinnedRunKeepsItsPin(t *testing.T) {
 	path := writePipeline(t, dir, fanOutPipeline(versions, ran, published, flag, ""))
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build", "--pin", "n=two"})
+		err := stepsRun(t, []string{"run", path, "--job", "build", "--pin", "n=two"})
 		if err == nil {
 			t.Fatal("expected the pinned build to fail")
 		}
@@ -189,7 +193,7 @@ func TestResumeOfAPinnedRunKeepsItsPin(t *testing.T) {
 
 	writePipelineFile(t, flag, "")
 
-	err := cli.Run([]string{"run", path, "--resume", runID})
+	err := stepsRun(t, []string{"run", path, "--resume", runID})
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}

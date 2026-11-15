@@ -1,10 +1,9 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"os"
+	"io"
 
 	"github.com/jtarchie/steps/internal/pipeline"
 )
@@ -25,13 +24,15 @@ type ClearTaskCacheCmd struct {
 var errCachesNotCleared = errors.New("some caches were not cleared")
 
 // Run clears what it can and fails if anything it found could not be removed.
-func (c *ClearTaskCacheCmd) Run() error {
+func (c *ClearTaskCacheCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	cfg, err := c.Load(c.Pipeline, resolvePipelineName(c.Pipeline, c.Name))
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := withSignalCancel(context.Background())
+	ctx, cancel := streams.cancellable()
 	defer cancel()
 
 	ctx, err = pipeline.WithWorkers(ctx, c.Worker)
@@ -44,7 +45,7 @@ func (c *ClearTaskCacheCmd) Run() error {
 		return fmt.Errorf("%w", err)
 	}
 
-	if !printCleared(cleared) {
+	if !printCleared(out, streams.Err, cleared) {
 		return errCachesNotCleared
 	}
 
@@ -52,7 +53,7 @@ func (c *ClearTaskCacheCmd) Run() error {
 }
 
 // printCleared reports each cache, failures on stderr, and whether every one was cleared.
-func printCleared(cleared []pipeline.ClearedCache) bool {
+func printCleared(out, errOut io.Writer, cleared []pipeline.ClearedCache) bool {
 	ok := true
 
 	for _, one := range cleared {
@@ -60,17 +61,17 @@ func printCleared(cleared []pipeline.ClearedCache) bool {
 		case one.Err != nil && one.Path == "":
 			ok = false
 
-			fmt.Fprintf(os.Stderr, "%s: %v\n", one.Where, one.Err)
+			sayf(errOut, "%s: %v\n", one.Where, one.Err)
 		case one.Err != nil:
 			ok = false
 
-			fmt.Fprintf(os.Stderr, "could not clear %s on %s: %v\n", one.Path, one.Where, one.Err)
+			sayf(errOut, "could not clear %s on %s: %v\n", one.Path, one.Where, one.Err)
 		case one.Note != "":
-			fmt.Printf("%s: %s\n", one.Where, one.Note)
+			sayf(out, "%s: %s\n", one.Where, one.Note)
 		case one.Found:
-			fmt.Printf("cleared %s on %s\n", one.Path, one.Where)
+			sayf(out, "cleared %s on %s\n", one.Path, one.Where)
 		default:
-			fmt.Printf("%s on %s: nothing kept\n", one.Path, one.Where)
+			sayf(out, "%s on %s: nothing kept\n", one.Path, one.Where)
 		}
 	}
 

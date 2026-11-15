@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // A block whose every branch is cacheable is cacheable. Every container used
 // to make its whole job re-run on every build, the steps before it included,
 // so a job with one in_parallel: never cached at all.
 func TestContainersOfCacheableStepsCache(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -36,7 +36,7 @@ func TestContainersOfCacheableStepsCache(t *testing.T) {
     run: echo last >> `+log)
 
 	for range 2 {
-		err := cli.Run([]string{"run", pipeline, "--progress", "plain"})
+		err := stepsRun(t, []string{"run", pipeline, "--progress", "plain"})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -52,6 +52,8 @@ func TestContainersOfCacheableStepsCache(t *testing.T) {
 // A plan that opens with a block has no task in front of it to notice the
 // chain already succeeded: the block itself asks the skip index.
 func TestAPlanOpeningWithABlockCaches(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -63,7 +65,7 @@ func TestAPlanOpeningWithABlockCaches(t *testing.T) {
       run: echo vet >> `+log)
 
 	for range 2 {
-		err := cli.Run([]string{"run", pipeline, "--progress", "plain"})
+		err := stepsRun(t, []string{"run", pipeline, "--progress", "plain"})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -79,6 +81,8 @@ func TestAPlanOpeningWithABlockCaches(t *testing.T) {
 // A block holding anything uncacheable still re-runs its chain: a put in a
 // branch is a side effect the planner must not stand in for.
 func TestAContainerWithAPutBranchStillReruns(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -91,7 +95,7 @@ func TestAContainerWithAPutBranchStillReruns(t *testing.T) {
     - put: sink`)
 
 	for range 2 {
-		err := cli.Run([]string{"run", pipeline, "--progress", "plain"})
+		err := stepsRun(t, []string{"run", pipeline, "--progress", "plain"})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}

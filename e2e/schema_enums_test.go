@@ -68,6 +68,8 @@ func enumPipelines(t *testing.T) []string {
 
 // Every value the schema admits for a field the loader also validates must load, so the hand-written enums cannot drift from the Go validators (reasoning_effort casing did).
 func TestSchemaEnumsAgreeWithLoaderValidators(t *testing.T) {
+	t.Parallel()
+
 	schema := loadSchema(t)
 
 	pipelines := enumPipelines(t)

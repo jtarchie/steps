@@ -11,6 +11,7 @@ package e2e
 // which is also the only thing that exercises its shutdown path.
 
 import (
+	"context"
 	"log/slog"
 	"net"
 	"net/http"
@@ -37,9 +38,9 @@ type webProcess struct {
 	// read back what it recorded without deriving a path from a file.
 	state string
 	done  chan error
-	// stopped guards the second stop. A stop SIGNALS THIS PROCESS, so calling
-	// it once nothing is trapping the signal kills the test binary outright —
-	// which is what a deferred cleanup after an explicit stop would do.
+	// cancel is the daemon's own ^C: it ends this invocation's context and no other's, so daemons under test can run side by side.
+	cancel context.CancelFunc
+	// stopped guards the second stop, which a deferred cleanup after an explicit stop would be.
 	stopped bool
 }
 
@@ -49,10 +50,14 @@ type webProcess struct {
 func startWeb(t *testing.T, args ...string) *webProcess {
 	t.Helper()
 
-	served := &webProcess{addr: freeAddr(t), done: make(chan error, 1)}
-	argv := append([]string{"web", "--listen", served.addr}, args...)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 
-	go func() { served.done <- cli.Run(argv) }()
+	served := &webProcess{addr: freeAddr(t), done: make(chan error, 1), cancel: cancel}
+	argv := append([]string{"web", "--listen", served.addr}, args...)
+	streams := streamsFor(t)
+
+	go func() { served.done <- cli.RunContext(ctx, streams, argv) }()
 
 	// 30s, not 10: a --db postgres:// server opens a container's database first, and under the full suite's docker load that alone passed 10s three runs in six.
 	deadline := time.Now().Add(30 * time.Second)
@@ -105,14 +110,9 @@ func probe(t *testing.T, addr string) (*http.Response, error) {
 	return client.Do(req) //nolint:wrapcheck // the caller only asks whether it answered
 }
 
-// stop signals the whole test binary, since the served command is this
-// process — which is only safe while every test that backgrounds cli.Run is
-// serial. If one of them ever takes t.Parallel(), this cancels its context
-// too, and the failure surfaces over there as a flake.
+// stop ends the daemon the way its first ^C does, through its own context.
 //
-// The already-exited check is not politeness: signal delivery is untrapped
-// once a command finishes (main.go's withSignalCancel stops it on the way
-// out), so signalling a dead command kills the test binary outright.
+// interrupt is the same with the real signal, for the test whose subject is the signal: it reaches every invocation in the process, so that test is serial.
 // stopIfRunning is stop for a deferred cleanup that may run after an explicit stop.
 func (w *webProcess) stopIfRunning(t *testing.T) {
 	t.Helper()
@@ -134,11 +134,32 @@ func (w *webProcess) stop(t *testing.T) {
 	}
 
 	w.stopped = true
+	w.cancel()
+	w.awaitExit(t)
+}
+
+func (w *webProcess) interrupt(t *testing.T) {
+	t.Helper()
+
+	// Signal delivery is untrapped once a command finishes (withSignalCancel stops it on the way out), so signalling a dead command kills the test binary outright.
+	select {
+	case exited := <-w.done:
+		t.Fatalf("web exited on its own before it was stopped: %v", exited)
+	default:
+	}
+
+	w.stopped = true
 
 	err := syscall.Kill(syscall.Getpid(), syscall.SIGINT)
 	if err != nil {
 		t.Fatalf("could not signal the web process: %v", err)
 	}
+
+	w.awaitExit(t)
+}
+
+func (w *webProcess) awaitExit(t *testing.T) {
+	t.Helper()
 
 	select {
 	case exited := <-w.done:
@@ -146,7 +167,7 @@ func (w *webProcess) stop(t *testing.T) {
 			t.Errorf("web exited with %v, want a clean shutdown", exited)
 		}
 	case <-time.After(30 * time.Second):
-		t.Fatal("web did not shut down after SIGINT")
+		t.Fatal("web did not shut down after it was stopped")
 	}
 }
 
@@ -421,6 +442,8 @@ func waitForDid(t *testing.T, fixture *watchFixture, want ...string) {
 // default: one command both notices a new version and builds it, because
 // "serving the UI" and "nothing is watching" was the surprise worth removing.
 func TestWebPollsTriggerResourcesByDefault(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 1)
 
@@ -462,7 +485,7 @@ jobs:
 	served.trigger(t, name, "deploy")
 	waitForFile(t, started)
 
-	served.stop(t)
+	served.interrupt(t)
 
 	if !fileExists(finished) {
 		t.Error("the deploy was cut off by the shutdown: a job that did not opt into interruptible: must be allowed to finish")
@@ -503,6 +526,8 @@ func newWatchFixtureIn(t *testing.T, dir, name string) *watchFixture {
 // rest on. Keyed by directory, two pipelines in one folder would share a
 // database by accident of layout rather than because anyone asked.
 func TestStatePathIsPerPipelineFile(t *testing.T) {
+	t.Parallel()
+
 	first := string(cli.StatePath("/srv/pipelines/app.yml", ""))
 	second := string(cli.StatePath("/srv/pipelines/infra.yml", ""))
 
@@ -524,6 +549,8 @@ func TestStatePathIsPerPipelineFile(t *testing.T) {
 // name, so its database cannot be named after a YAML — and the read commands
 // have to look in the same place or they answer about nothing.
 func TestDaemonStatePathHasNoFileToDeriveFrom(t *testing.T) {
+	t.Parallel()
+
 	if got := string(cli.DaemonStatePath("")); got != cli.DefaultDaemonState {
 		t.Errorf("the daemon's default state is %q, want %q", got, cli.DefaultDaemonState)
 	}
@@ -539,6 +566,8 @@ func TestDaemonStatePathHasNoFileToDeriveFrom(t *testing.T) {
 // and its own store handle — so one pipeline's version change builds that
 // pipeline's job, and not the other's.
 func TestWebPollsEveryPipelineItServes(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	first := newWatchFixtureIn(t, dir, "app")
 	second := newWatchFixtureIn(t, dir, "infra")
@@ -567,12 +596,14 @@ func TestWebPollsEveryPipelineItServes(t *testing.T) {
 // and notices nothing — the exact confusion this command polls by default to
 // remove.
 func TestWebRejectsANonPositiveInterval(t *testing.T) {
+	t.Parallel()
+
 	// Port 1 is unbindable as an ordinary user, so a regression fails in a
 	// second instead of serving forever. Mutation testing is what made this
 	// non-optional: with the guard weakened, --interval 0 was ACCEPTED and
 	// this test blocked until the run's own timeout — one mutant stalled a
 	// seven-hour run for an hour and forty minutes.
-	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--interval", "0"})
+	err := stepsRun(t, []string{"web", "--listen", "127.0.0.1:1", "--interval", "0"})
 	if err == nil {
 		t.Fatal("--interval 0 was accepted; it silently disables polling")
 	}
@@ -584,7 +615,9 @@ func TestWebRejectsANonPositiveInterval(t *testing.T) {
 
 // TestWebRejectsDeliver: a daemon receives deliveries over HTTP, and a --deliver it parsed and never recorded would read as a delivery made.
 func TestWebRejectsDeliver(t *testing.T) {
-	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--deliver", "push=push.http"})
+	t.Parallel()
+
+	err := stepsRun(t, []string{"web", "--listen", "127.0.0.1:1", "--deliver", "push=push.http"})
 	if err == nil || !strings.Contains(err.Error(), "--deliver") {
 		t.Fatalf("err = %v, want --deliver refused", err)
 	}
@@ -712,7 +745,7 @@ func TestDaemonPasswordWarningIsSlog(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 
-	err := cli.Run([]string{"web", "--interval", "0", "--db", "postgres://ops:s3cret@127.0.0.1:1/steps"})
+	err := stepsRun(t, []string{"web", "--interval", "0", "--db", "postgres://ops:s3cret@127.0.0.1:1/steps"})
 	if err == nil || !strings.Contains(err.Error(), "--interval") {
 		t.Fatalf("web = %v, want the --interval refusal", err)
 	}
@@ -816,6 +849,8 @@ func waitForLogLine(t *testing.T, logs func() string, msg, key, value string) {
 
 // A daemon launched as a background group on a terminal froze whole (state T) the first time anything in its group read that tty; both halves of the guard are checked through a real task.
 func TestDaemonChildrenCannotStopIt(t *testing.T) {
+	t.Parallel()
+
 	signal.Reset(syscall.SIGTTIN, syscall.SIGTTOU)
 
 	dir := t.TempDir()

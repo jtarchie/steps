@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // tagFixture is a repository with v1 (lightweight), v2 (annotated), v10 and a tag that does not match v*, on three commits.
@@ -55,7 +53,7 @@ func TestEndToEndBuiltinGitTagPatternTracksTags(t *testing.T) {
 
 	// One run builds one version, oldest first; `run it again to build the next`.
 	for range 3 {
-		err := cli.Run([]string{path})
+		err := stepsRun(t, []string{path})
 		if err != nil {
 			t.Fatalf("run: %v\n%s", err, logs())
 		}
@@ -85,7 +83,7 @@ func TestEndToEndBuiltinGitTagPatternWithNoTagsIsEmpty(t *testing.T) {
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	out := logs()
 
 	if strings.Contains(out, "git:") || strings.Contains(out, "exit status") {
@@ -130,7 +128,7 @@ jobs:
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v\n%s", err, logs())
 	}
@@ -167,7 +165,7 @@ jobs:
 
 	// Builds v1, v2, then v10; the last run is the one whose previous tag is v2.
 	for range 3 {
-		err := cli.Run([]string{path})
+		err := stepsRun(t, []string{path})
 		if err != nil {
 			t.Fatalf("run: %v\n%s", err, logs())
 		}

@@ -92,6 +92,8 @@ jobs:
 // command must refuse before it does any work, and a command that never
 // applied the flag would sail past it.
 func TestWorkerFlagAppliesWhereverItIsDeclared(t *testing.T) {
+	t.Parallel()
+
 	path := flagFixture(t)
 
 	for _, args := range [][]string{
@@ -105,7 +107,7 @@ func TestWorkerFlagAppliesWhereverItIsDeclared(t *testing.T) {
 		{"web", "--listen", "127.0.0.1:1"},
 	} {
 		t.Run(args[0], func(t *testing.T) {
-			err := cli.Run(append(args, "--worker", "gpu=nope://x"))
+			err := stepsRun(t, append(args, "--worker", "gpu=nope://x"))
 			if err == nil {
 				t.Fatalf("%s accepted an unparseable --worker, so it never applied the flag", args[0])
 			}
@@ -138,7 +140,7 @@ func TestVarsFileAppliesWhereverItIsDeclared(t *testing.T) {
 		{"pipeline", "set", "-c", path, "-n"},
 	} {
 		t.Run(args[0], func(t *testing.T) {
-			err := cli.Run(append(args, "--vars-file", missing))
+			err := stepsRun(t, append(args, "--vars-file", missing))
 			if err == nil {
 				t.Fatalf("%s accepted a --vars-file that does not exist, so it never read one", args[0])
 			}
@@ -158,9 +160,9 @@ func TestVarsFileAppliesWhereverItIsDeclared(t *testing.T) {
 // prompt only if the bare listing still works — which is what `list` being
 // the default subcommand buys, and what would silently regress if a later
 // change moved the default.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestGroupedVerbsKeepTheirBareForm(t *testing.T) {
+	t.Parallel()
+
 	path := flagFixture(t)
 
 	for _, group := range []struct {
@@ -177,7 +179,7 @@ func TestGroupedVerbsKeepTheirBareForm(t *testing.T) {
 			for _, args := range [][]string{group.bare, group.full} {
 				var err error
 
-				out := captureStdout(t, func() { err = cli.Run(args) })
+				out := captureStdout(t, func() { err = stepsRun(t, args) })
 				if err != nil {
 					t.Fatalf("%v: %v", args, err)
 				}
@@ -205,7 +207,7 @@ func TestRetiredVerbsAreGone(t *testing.T) {
 		{"jobs", "--resume", "build", "-p", "x"},
 	} {
 		t.Run(strings.Join(args[:1], " "), func(t *testing.T) {
-			err := cli.Run(args)
+			err := stepsRun(t, args)
 			if err == nil {
 				t.Fatalf("%v still parses; the old spelling was meant to be gone", args)
 			}
@@ -226,9 +228,9 @@ func TestRetiredVerbsAreGone(t *testing.T) {
 // a flag. The subcommand does the same work; this is the proof it does it —
 // which the flag form never had, so the mutation was covered by nothing at
 // the CLI level at all.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestJobsReleaseClearsTheBreaker(t *testing.T) {
+	t.Parallel()
+
 	path := flagFixture(t)
 
 	pauseJob(t, path, "build")
@@ -236,7 +238,7 @@ func TestJobsReleaseClearsTheBreaker(t *testing.T) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run(append([]string{"jobs", "release", "build"}, readArgs(path)...))
+		err = stepsRun(t, append([]string{"jobs", "release", "build"}, readArgs(path)...))
 	})
 
 	if err != nil {
@@ -301,7 +303,7 @@ func jobPaused(t *testing.T, path, job string) bool {
 func TestJobsReleaseRefusesAJobThePipelineDoesNotHave(t *testing.T) {
 	t.Parallel()
 
-	err := cli.Run(append([]string{"jobs", "release", "buidl"}, readArgs(flagFixture(t))...))
+	err := stepsRun(t, append([]string{"jobs", "release", "buidl"}, readArgs(flagFixture(t))...))
 	if err == nil {
 		t.Fatal("resuming a job the pipeline does not declare was reported as done")
 	}
@@ -318,7 +320,7 @@ func TestRunsCostTakesTheRunAsAnArgument(t *testing.T) {
 
 	path := flagFixture(t)
 
-	err := cli.Run(append([]string{"runs", "cost", "--run", "SOMERUN"}, readArgs(path)...))
+	err := stepsRun(t, append([]string{"runs", "cost", "--run", "SOMERUN"}, readArgs(path)...))
 	if err == nil {
 		t.Fatal("--run still parses; the run id is a positional now")
 	}
@@ -336,9 +338,9 @@ func TestRunsCostTakesTheRunAsAnArgument(t *testing.T) {
 // it mirrored — one listing against a shared state file minted the phantom
 // row that made `steps runs` STOP refusing the same typo, so the fix undid
 // itself the moment an operator asked a second question.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestListingsDoNotMintThePipelineTheyWereAskedAbout(t *testing.T) {
+	t.Parallel()
+
 	state, first, _ := sharedRunsFixture(t)
 	stranger := filepath.Join(filepath.Dir(first), "stranger.yml")
 
@@ -359,7 +361,7 @@ jobs:
 		t.Run(args[0], func(t *testing.T) {
 			var err error
 
-			_ = captureStdout(t, func() { err = cli.Run(args) })
+			_ = captureStdout(t, func() { err = stepsRun(t, args) })
 			if err == nil {
 				t.Fatalf("%v answered for a pipeline the file has never heard of", args)
 			}
@@ -369,7 +371,7 @@ jobs:
 	// And the file still holds only what actually ran, which is the property
 	// a phantom row destroys for every later command.
 	listing := captureStdout(t, func() {
-		err := cli.Run([]string{"runs", "--db", state})
+		err := stepsRun(t, []string{"runs", "--db", state})
 		if err != nil {
 			t.Errorf("runs --db: %v", err)
 		}
@@ -383,9 +385,9 @@ jobs:
 // TestListingsAnswerBeforeAStateFileExists: on a fresh checkout there is no
 // database, and "nothing is waiting" is the answer — not an error, and not a
 // .steps/ directory created by asking.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestListingsAnswerBeforeAStateFileExists(t *testing.T) {
+	t.Parallel()
+
 	path := flagFixture(t)
 
 	for _, probe := range []struct {
@@ -399,7 +401,7 @@ func TestListingsAnswerBeforeAStateFileExists(t *testing.T) {
 		t.Run(probe.verb, func(t *testing.T) {
 			var err error
 
-			out := captureStdout(t, func() { err = cli.Run(append([]string{probe.verb}, readArgs(path)...)) })
+			out := captureStdout(t, func() { err = stepsRun(t, append([]string{probe.verb}, readArgs(path)...)) })
 			if err != nil {
 				t.Fatalf("%s on a fresh checkout: %v", probe.verb, err)
 			}
@@ -423,9 +425,9 @@ func TestListingsAnswerBeforeAStateFileExists(t *testing.T) {
 // by a different version of steps … delete the file", which is wrong and is
 // the worst possible advice: it is the operator's brand new database, being
 // written by the run they just started.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestReadingADatabaseBeingCreated(t *testing.T) {
+	t.Parallel()
+
 	path := flagFixture(t)
 	state := string(cli.StatePath(path, ""))
 
@@ -453,7 +455,7 @@ func TestReadingADatabaseBeingCreated(t *testing.T) {
 		t.Run(strings.Join(probe.args[:2], " "), func(t *testing.T) {
 			var runErr error
 
-			out := captureStdout(t, func() { runErr = cli.Run(probe.args) })
+			out := captureStdout(t, func() { runErr = stepsRun(t, probe.args) })
 			if runErr != nil {
 				t.Fatalf("%v: %v", probe.args, runErr)
 			}
@@ -473,14 +475,14 @@ func TestReadingADatabaseBeingCreated(t *testing.T) {
 // no test at all: mutation testing could delete the clearing and every suite
 // stayed green, which makes this the THIRD place this one feature was found
 // unproven (inert in the daemon, unwired in the one-shot, unasserted here).
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestSuccessfulRunClearsTheBreaker(t *testing.T) {
+	t.Parallel()
+
 	path := flagFixture(t)
 
 	pauseJob(t, path, "build")
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -494,9 +496,9 @@ func TestSuccessfulRunClearsTheBreaker(t *testing.T) {
 // it. A mutant that cleared on every outcome would make the breaker
 // unreachable through the one command most likely to be run against a broken
 // job.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestFailedRunLeavesTheBreakerAlone(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -509,7 +511,7 @@ jobs:
 
 	pauseJob(t, path, "build")
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("the failing job reported success")
 	}
@@ -526,9 +528,9 @@ jobs:
 // nothing is there. The other direction matters too, and is what a mutant
 // walked through: appending an empty flag emits a bare `--db` that does not
 // parse.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestStateNoteNamesTheDatabaseTheReaderIsUsing(t *testing.T) {
+	t.Parallel()
+
 	path := costFixture(t)
 	state := string(cli.StatePath(path, ""))
 	name := cli.PipelineName(path)
@@ -536,7 +538,7 @@ func TestStateNoteNamesTheDatabaseTheReaderIsUsing(t *testing.T) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"runs", "cost", "-p", name, "--db", state})
+		err = stepsRun(t, []string{"runs", "cost", "-p", name, "--db", state})
 	})
 
 	if err != nil {
@@ -558,7 +560,7 @@ func TestStateNoteNamesTheDatabaseTheReaderIsUsing(t *testing.T) {
 	// the credentials. For sqlite it is the bare path, whichever spelling
 	// opened it.
 	out = captureStdout(t, func() {
-		err = cli.Run([]string{"runs", "cost", "-p", name, "--db", "sqlite://" + state})
+		err = stepsRun(t, []string{"runs", "cost", "-p", name, "--db", "sqlite://" + state})
 	})
 
 	if err != nil {

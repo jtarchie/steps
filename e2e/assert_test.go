@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestTaskAssertCodeClearsFailure verifies a task whose non-zero exit matches
 // assert.code is a success, and fires on_success (not on_failure).
 func TestTaskAssertCodeClearsFailure(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	onSuccess := filepath.Join(dir, "on_success.txt")
 	onFailure := filepath.Join(dir, "on_failure.txt")
@@ -44,6 +44,8 @@ jobs:
 // TestTaskAssertStdoutMismatchFails verifies a task whose output doesn't match
 // assert.stdout fails, even on a zero exit, and fires on_failure.
 func TestTaskAssertStdoutMismatchFails(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	onFailure := filepath.Join(dir, "on_failure.txt")
 	path := pipelinePath(t, dir)
@@ -69,6 +71,8 @@ jobs:
 // TestJobAssertClearsFailure verifies that a matching job assert.execution
 // makes a job containing a failing task exit green.
 func TestJobAssertClearsFailure(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -92,6 +96,8 @@ jobs:
 // TestJobAssertMismatchFailsGreenJob verifies a job whose recorded execution
 // doesn't match its assert fails, even when the plan itself succeeded.
 func TestJobAssertMismatchFailsGreenJob(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -114,6 +120,8 @@ jobs:
 // concluded failure — which is precisely what assert.execution cannot see, and
 // then erases by clearing the error on a match.
 func TestJobAssertOutcomeFailedRequiresAFailure(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		run     string
@@ -139,7 +147,7 @@ jobs:
     outcome: failed
 `, test.run))
 
-			err := cli.Run([]string{"run", path, "--job", "build"})
+			err := stepsRun(t, []string{"run", path, "--job", "build"})
 			if test.wantErr && err == nil {
 				t.Fatal("job succeeded, want a failure: assert.outcome said failed but the plan passed")
 			}
@@ -155,6 +163,8 @@ jobs:
 // not a no-op: a matching execution: normally clears a plan failure, and this
 // is how a fixture says "no, that failure is real."
 func TestJobAssertOutcomeSucceededOptsOutOfClearing(t *testing.T) {
+	t.Parallel()
+
 	path := pipelinePath(t, t.TempDir())
 
 	writePipelineFile(t, path, `
@@ -169,7 +179,7 @@ jobs:
     outcome: succeeded
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("job succeeded; a matching execution: must not clear the failure when outcome: succeeded is set")
 	}
@@ -183,6 +193,8 @@ jobs:
 // absent outcome:, a matching execution: clears the plan's failure exactly as
 // it did before the field existed.
 func TestJobAssertExecutionStillClearsWithoutOutcome(t *testing.T) {
+	t.Parallel()
+
 	path := pipelinePath(t, t.TempDir())
 
 	writePipelineFile(t, path, `
@@ -202,6 +214,8 @@ jobs:
 // TestJobAssertOutcomeAndExecutionCompose verifies a mismatch in EITHER
 // directive fails the job, including when the other one holds.
 func TestJobAssertOutcomeAndExecutionCompose(t *testing.T) {
+	t.Parallel()
+
 	path := pipelinePath(t, t.TempDir())
 
 	// outcome: failed holds — the plan does fail — but execution: names a step
@@ -218,7 +232,7 @@ jobs:
     outcome: failed
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("job succeeded; a satisfied outcome: must not excuse a mismatched execution:")
 	}
@@ -237,6 +251,8 @@ jobs:
 // TestStepsTestDetectsWrongAssert verifies `steps test` fails when a fixture's
 // assert.execution names something that didn't run.
 func TestStepsTestDetectsWrongAssert(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -254,7 +270,7 @@ jobs:
     execution: [work, wrong-name]
 `)
 
-	err := cli.Run([]string{"test", path})
+	err := stepsRun(t, []string{"test", path})
 	if err == nil {
 		t.Fatal("steps test succeeded, want a failure for the wrong assert.execution")
 	}
@@ -263,6 +279,8 @@ jobs:
 // TestStepsTestPipelineAssertMismatch verifies the top-level assert.execution
 // (job names) is enforced by `steps test`.
 func TestStepsTestPipelineAssertMismatch(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -278,7 +296,7 @@ jobs:
     run: "true"
 `)
 
-	err := cli.Run([]string{"test", path})
+	err := stepsRun(t, []string{"test", path})
 	if err == nil {
 		t.Fatal("steps test succeeded, want a pipeline assert.execution mismatch")
 	}
@@ -296,6 +314,8 @@ jobs:
 // other reading and every suite stayed green while `steps test` began failing
 // any pipeline carrying a bare assert block.
 func TestPipelineAssertWithNoExecutionListAssertsNothing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -310,7 +330,7 @@ jobs:
 assert: {}
 `)
 
-	err := cli.Run([]string{"test", path})
+	err := stepsRun(t, []string{"test", path})
 	if err != nil {
 		t.Fatalf("an assert block with no execution list failed the run: %v", err)
 	}
@@ -320,6 +340,8 @@ assert: {}
 // that IS given is enforced, so the guard above cannot be satisfied by
 // skipping the comparison entirely.
 func TestPipelineAssertExecutionStillChecksWhatItLists(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -335,7 +357,7 @@ assert:
   execution: [nosuchjob]
 `)
 
-	err := cli.Run([]string{"test", path})
+	err := stepsRun(t, []string{"test", path})
 	if err == nil {
 		t.Fatal("a pipeline assert naming a job that never ran was reported as passing")
 	}

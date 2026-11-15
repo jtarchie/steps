@@ -5,8 +5,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // hooksPipeline runs a CLI agent with the given settings line under image:, under image: plus an inherited tag, and on the host.
@@ -42,7 +40,7 @@ func TestValidateWarnsProjectHooksRunOnThisMachine(t *testing.T) {
 		stderr := captureStderr(t)
 		path := writePipeline(t, t.TempDir(), fmt.Sprintf(hooksPipeline, "settings: project"))
 
-		err := cli.Run([]string{"validate", path, "--syntax-only"})
+		err := stepsRun(t, []string{"validate", path, "--syntax-only"})
 		if err != nil {
 			t.Fatalf("a warning failed validate: %v", err)
 		}
@@ -64,7 +62,7 @@ func TestValidateWarnsProjectHooksRunOnThisMachine(t *testing.T) {
 		stderr := captureStderr(t)
 		path := writePipeline(t, t.TempDir(), fmt.Sprintf(hooksPipeline, ""))
 
-		err := cli.Run([]string{"validate", path, "--syntax-only"})
+		err := stepsRun(t, []string{"validate", path, "--syntax-only"})
 		if err != nil {
 			t.Fatalf("validate: %v", err)
 		}

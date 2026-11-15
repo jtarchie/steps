@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/config"
 )
 
@@ -16,6 +15,8 @@ import (
 // fed by a model: an item is data, and `| shellquote` is what keeps it data
 // once it is spliced into a run: line that sh -c reads.
 func TestEndToEndAcrossShellquoteKeepsAWrittenItemInert(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 	pwned := filepath.Join(dir, "pwned")
@@ -64,6 +65,8 @@ jobs:
 // TestEndToEndAcrossRefusesAProductOverTheCellCap: each axis is under its own
 // cap, but two model-written lists multiply, and the product is what costs.
 func TestEndToEndAcrossRefusesAProductOverTheCellCap(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -107,7 +110,7 @@ jobs:
     run: echo ran >> %[2]s
 `, source, log))
 
-	err = cli.Run([]string{path})
+	err = stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("a matrix over the cell cap ran")
 	}

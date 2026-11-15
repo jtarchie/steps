@@ -14,8 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // runKept runs a pipeline with --keep-workspace and answers what it printed,
@@ -27,7 +25,7 @@ func runKept(t *testing.T, path string, args []string) (string, string, error) {
 
 	logs := captureStderr(t)
 	out := captureStdout(t, func() {
-		err = cli.Run(append([]string{path, "--keep-workspace"}, args...))
+		err = stepsRun(t, append([]string{path, "--keep-workspace"}, args...))
 	})
 
 	return out, keptWorkspaceDir(t, out+logs()), err
@@ -182,12 +180,12 @@ jobs:
     tags: [b]
     image: `+dockerE2EImage+`
     inputs: [src]
-    # A pipe that never ends must fail here rather than wedge the shard.
+    # A pipe that never ends must fail here rather than wedge the suite.
     timeout: 60s
     run: wc -c < src/blob.bin
 `)
 
-	err := cli.Run(append([]string{path}, workers...))
+	err := stepsRun(t, append([]string{path}, workers...))
 	if err == nil {
 		t.Fatal("the build passed with its input gone from the only machine that held it")
 	}
@@ -242,7 +240,7 @@ func TestEndToEndAWorkerCannotPlantAnEscapingLinkOnAnother(t *testing.T) {
 	_, _, workers := twoWorkers(t)
 	path, leaked := escapingLinkPipeline(t, dir)
 
-	assertLinkRefused(t, cli.Run(append([]string{path}, workers...)), leaked)
+	assertLinkRefused(t, stepsRun(t, append([]string{path}, workers...)), leaked)
 }
 
 func assertLinkRefused(t *testing.T, err error, leaked string) {

@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestRunJobIsolatedTaskSeesOnlyDeclaredInputsAndOutputs runs a real
@@ -195,7 +193,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = cli.Run([]string{"--force", path})
+	err = stepsRun(t, []string{"--force", path})
 	if err == nil {
 		t.Fatal("expected an error for a task input naming nothing fetched or produced earlier")
 	}

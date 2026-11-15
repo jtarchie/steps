@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -25,8 +26,10 @@ type JobsListCmd struct {
 }
 
 // Run prints every held job.
-func (j *JobsListCmd) Run() error {
-	if nothingRecorded(j.ReadFlags, "no jobs are held") {
+func (j *JobsListCmd) Run(streams Streams) error {
+	out := streams.Out
+
+	if nothingRecorded(out, j.ReadFlags, "no jobs are held") {
 		return nil
 	}
 
@@ -42,12 +45,12 @@ func (j *JobsListCmd) Run() error {
 	}
 
 	if len(paused) == 0 {
-		fmt.Println("no jobs are held")
+		say(out, "no jobs are held")
 
 		return nil
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 
 	_, _ = fmt.Fprintln(writer, "JOB\tCONSECUTIVE FAILURES\tHELD SINCE")
 
@@ -69,14 +72,16 @@ type JobsReleaseCmd struct {
 }
 
 // Run releases the named job.
-func (j *JobsReleaseCmd) Run() error {
+func (j *JobsReleaseCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	st, cleanup, err := openRecorded(j.ReadFlags)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	return releaseJob(context.Background(), st, j.Job)
+	return releaseJob(context.Background(), out, st, j.Job)
 }
 
 // releaseJob takes a job out of the breaker's hold, refusing a name that is
@@ -88,7 +93,7 @@ func (j *JobsReleaseCmd) Run() error {
 // against. The paused list is the better check anyway: it catches the typo
 // this exists to catch, and it also catches releasing something that was never
 // held, which used to report success having done nothing.
-func releaseJob(ctx context.Context, st store.Queue, name string) error {
+func releaseJob(ctx context.Context, out io.Writer, st store.Queue, name string) error {
 	paused, err := st.HeldJobs(ctx)
 	if err != nil {
 		return fmt.Errorf("could not read held jobs: %w", err)
@@ -119,7 +124,7 @@ func releaseJob(ctx context.Context, st store.Queue, name string) error {
 		return fmt.Errorf("could not release job %q: %w", name, err)
 	}
 
-	fmt.Printf("released: %s\n", name)
+	sayf(out, "released: %s\n", name)
 
 	return nil
 }

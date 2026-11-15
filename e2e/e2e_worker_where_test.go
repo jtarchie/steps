@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/testsshd"
 )
@@ -40,6 +39,8 @@ func stepEvents(t *testing.T, pipelinePath string) []store.RunEventRow {
 // "It passes on my laptop and fails in CI" is the whole class of bug this
 // feature introduces, and the record had no column to answer it with.
 func TestEndToEndRecordsWhereAStepRan(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
@@ -54,7 +55,7 @@ jobs:
     run: "true"
 `)
 
-	err := cli.Run([]string{path, "--worker", "gpu=" + worker})
+	err := stepsRun(t, []string{path, "--worker", "gpu=" + worker})
 	if err != nil {
 		t.Fatalf("running: %v", err)
 	}

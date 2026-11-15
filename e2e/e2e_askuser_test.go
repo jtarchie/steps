@@ -30,6 +30,8 @@ import (
 // answer it was GIVEN into write_file, which a positional script could not do
 // — it would be asserting on a constant the test itself wrote.
 func TestEndToEndAgentAskUser(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	tagged := filepath.Join(dir, "tagged.txt")
 
@@ -232,6 +234,8 @@ func scanQuestions(t *testing.T, rows *sql.Rows) []questionRow {
 // the id: the number `steps questions` printed has to be the number `steps
 // answer` accepts and the number the parked call is watching.
 func TestEndToEndAgentAskUserAnsweredFromTheCLI(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	fake := newRoutedFakeLLM(t, func(req capturedRequest) turn {
@@ -271,7 +275,7 @@ jobs:
 	path := writePipeline(t, dir, yaml)
 
 	done := make(chan error, 1)
-	go func() { done <- cli.Run([]string{"run", path, "--job", "deploy"}) }()
+	go func() { done <- stepsRun(t, []string{"run", path, "--job", "deploy"}) }()
 
 	// What a person does: look at what is waiting, then answer it by the id
 	// they were shown.
@@ -311,7 +315,7 @@ func awaitPendingQuestion(t *testing.T, pipelinePath string) string {
 		// Read through the same command a person would run, so a listing that
 		// stopped showing pending questions fails this test rather than only
 		// the ones that read the table directly.
-		err := cli.Run(append([]string{"questions"}, readArgs(pipelinePath)...))
+		err := stepsRun(t, append([]string{"questions"}, readArgs(pipelinePath)...))
 		if err != nil {
 			t.Fatalf("steps questions: %v", err)
 		}
@@ -345,6 +349,8 @@ func awaitPendingQuestion(t *testing.T, pipelinePath string) string {
 // find out whether anything is waiting on them, and an empty answer accepted
 // silently would leave a step parked on a question the row says is resolved.
 func TestQuestionsAndAnswerCommandRefusals(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -359,7 +365,7 @@ jobs:
 	mustRun(t, "run", path, "--job", "build")
 	mustRun(t, append([]string{"questions"}, readArgs(path)...)...)
 
-	err := cli.Run(append([]string{"questions", "answer", "1", "   "}, readArgs(path)...))
+	err := stepsRun(t, append([]string{"questions", "answer", "1", "   "}, readArgs(path)...))
 	if err == nil {
 		t.Fatal("an empty answer was accepted")
 	}
@@ -368,7 +374,7 @@ jobs:
 		t.Errorf("empty answer error = %q, want it to say what is missing", err)
 	}
 
-	err = cli.Run(append([]string{"questions", "answer", "7", "minor"}, readArgs(path)...))
+	err = stepsRun(t, append([]string{"questions", "answer", "7", "minor"}, readArgs(path)...))
 	if err == nil {
 		t.Fatal("an answer to a question that does not exist was accepted")
 	}
@@ -385,6 +391,8 @@ jobs:
 // supplied the way an unattended run supplies one, and the task green on the
 // re-run.
 func TestEndToEndFixAgentAsks(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
 
@@ -456,6 +464,8 @@ jobs:
 // A hook is a real conversation inside a real run — it is only outside the
 // merkle chain, which says nothing about whether it can ask a person something.
 func TestEndToEndHookAgentAsks(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	fake := newRoutedFakeLLM(t, func(req capturedRequest) turn {
@@ -515,9 +525,9 @@ jobs:
 // are waiting" with a question waiting and every test stayed green. The
 // options line matters as much as the row: it is what makes a question one
 // keystroke to answer instead of a guess.
-//
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestQuestionsListsWhatIsWaiting(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -556,7 +566,7 @@ jobs:
 
 	var runErr error
 
-	out := captureStdout(t, func() { runErr = cli.Run(append([]string{"questions"}, readArgs(path)...)) })
+	out := captureStdout(t, func() { runErr = stepsRun(t, append([]string{"questions"}, readArgs(path)...)) })
 
 	if runErr != nil {
 		t.Fatalf("steps questions: %v", runErr)

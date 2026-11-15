@@ -13,14 +13,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestEndToEndAcrossFromFileFansOutOverAWrittenList is the feature: two cells
 // exist because a step said so mid-run, each named for its value and recorded
 // as its own node.
 func TestEndToEndAcrossFromFileFansOutOverAWrittenList(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -56,6 +56,8 @@ jobs:
 
 // TestEndToEndAcrossPutCellsReadTheirOwnParams: one put per item, each told by its params which file is its own; the label sits in a list so a top-level-only render fails it.
 func TestEndToEndAcrossPutCellsReadTheirOwnParams(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "published.log")
 
@@ -108,6 +110,8 @@ jobs:
 // expand over whatever the first left behind (or nothing at all, under
 // isolation), and this test would see one line instead of two.
 func TestEndToEndAcrossFromFileProducerAlwaysReruns(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	produced := filepath.Join(dir, "produced.log")
 
@@ -143,6 +147,8 @@ jobs:
 // found nothing" is a legitimate success, and an author who wants it to fail
 // asserts that where the file is written.
 func TestEndToEndAcrossFromFileEmptyListRunsNothing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -178,6 +184,8 @@ jobs:
 // TestEndToEndAcrossFromFileProductWithAStaticAxis proves full symmetry: a
 // file axis is an ordinary axis, so it multiplies with a static one.
 func TestEndToEndAcrossFromFileProductWithAStaticAxis(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	log := filepath.Join(dir, "ran.log")
 
@@ -215,6 +223,8 @@ jobs:
 // block naming the file, rather than expanding into something surprising. The
 // array is written during the run, so this is the likeliest failure there is.
 func TestEndToEndAcrossFromFileRejectsBadContent(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct{ name, content, wantErr, script string }{
 		{name: "objects", content: `[{"id":"a"}]`, wantErr: "must hold a JSON array of strings"},
 		{name: "not json", content: `alpha`, wantErr: "must hold a JSON array of strings"},
@@ -249,7 +259,7 @@ jobs:
     run: "true"
 `, write))
 
-			err := cli.Run([]string{path})
+			err := stepsRun(t, []string{path})
 			if err == nil {
 				t.Fatal("the run succeeded with an unusable axis file")
 			}

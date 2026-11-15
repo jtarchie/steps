@@ -237,6 +237,8 @@ jobs:
 
 // TestRunDeliversACapturedRequest: a local command has no daemon to POST to, so --deliver hands it a captured request — through the pipeline's own filter:, id: and version:, with only the signature skipped, which is where a pipeline's mistakes live.
 func TestRunDeliversACapturedRequest(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out")
 	path := writePipeline(t, dir, `
@@ -263,7 +265,7 @@ jobs:
 	captured := filepath.Join(dir, "push.http")
 	writeCaptured(t, captured, "POST /p/app/hooks/push HTTP/1.1\nX-GitHub-Event: push\nX-GitHub-Delivery: d1\nContent-Type: application/json\n\n{\"after\":\"aaa\"}\n")
 
-	err := cli.Run([]string{"run", path, "--deliver", "push=" + captured})
+	err := stepsRun(t, []string{"run", path, "--deliver", "push=" + captured})
 	if err != nil {
 		t.Fatalf("steps run --deliver: %v", err)
 	}
@@ -279,7 +281,7 @@ jobs:
 	ping := filepath.Join(dir, "ping.http")
 	writeCaptured(t, ping, "POST / HTTP/1.1\nX-GitHub-Event: ping\nX-GitHub-Delivery: d2\n\n{}")
 
-	err = cli.Run([]string{"run", path, "--deliver", "push=" + ping})
+	err = stepsRun(t, []string{"run", path, "--deliver", "push=" + ping})
 	if err == nil || !strings.Contains(err.Error(), "filter") {
 		t.Errorf("err = %v, want the filtered delivery named rather than the last version silently rebuilt", err)
 	}
@@ -326,6 +328,8 @@ const vaultedHookSecret = "hook-value-from-the-vault-2e7b"
 
 // The secret a delivery is verified against comes from the daemon's secret source: the variable is in no environment, a delivery signed with the vault's value builds, one signed with anything else is refused, and the value never reaches the database.
 func TestWebhookSecretComesFromASecretSource(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out")
 	path := pipelinePath(t, dir)
@@ -356,7 +360,7 @@ jobs:
 	served := secretDaemon(t, dir, map[string]string{name + "/hook_value": vaultedHookSecret + "\n"}, "--interval", "1h")
 	defer served.stopIfRunning(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
 	if err != nil {
 		t.Fatalf("pipeline set: %v", err)
 	}

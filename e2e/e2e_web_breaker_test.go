@@ -14,6 +14,8 @@ import (
 
 // TestAHeldJobRunsWhenAPersonTriggersIt: the breaker stops a job that keeps failing from being triggered AUTOMATICALLY — the page has always said "will not auto-trigger" — so a person pressing Trigger on a held job, most likely to try a fix, gets a run. It used to be accepted, queued, and then dropped at claim as "skipped" with nothing on screen saying why.
 func TestAHeldJobRunsWhenAPersonTriggersIt(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	tally := filepath.Join(dir, "ran.txt")
 	path := filepath.Join(dir, "held.yml")
@@ -62,6 +64,8 @@ jobs:
 
 // TestRetryOnARunPageRebuildsThatBuild: the browser's Retry is the CLI's --rerun, carried across the queue — the claim has to hand the recorded run and build to RunJob, which a test of either half alone never shows.
 func TestRetryOnARunPageRebuildsThatBuild(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	versions := filepath.Join(dir, "versions.json")
 	tally := filepath.Join(dir, "ran.txt")

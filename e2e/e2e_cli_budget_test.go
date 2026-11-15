@@ -6,8 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // End-to-end coverage of a CLI agent's dollar budget across RETRIES.
@@ -104,7 +102,7 @@ fi
 
 	path := cliBudgetPipeline(t, dir, 0.50)
 
-	_ = cli.Run([]string{path})
+	_ = stepsRun(t, []string{path})
 
 	if got := claude.invocations(t); got != 2 {
 		t.Fatalf("the fake claude ran %d times, want 2 (a crash and its retry)", got)
@@ -144,7 +142,7 @@ func TestE2ECLIAgentBudgetExhaustionFailsTheStep(t *testing.T) {
 
 	path := cliBudgetPipeline(t, dir, 0.10)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("the job passed, want a failure naming the exhausted budget")
 	}

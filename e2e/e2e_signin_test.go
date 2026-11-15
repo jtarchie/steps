@@ -14,8 +14,9 @@ import (
 	"github.com/jtarchie/steps/internal/cli"
 )
 
-// Not t.Parallel(): startWeb backgrounds cli.Run in this process and stop signals the whole test binary.
 func TestABrowserSignsInAndOut(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 	writePipelineFile(t, path, "jobs:\n- name: manual\n  plan:\n  - task: say\n    run: echo hi\n")
@@ -25,7 +26,7 @@ func TestABrowserSignsInAndOut(t *testing.T) {
 
 	name := cli.PipelineName(path)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
 	if err != nil {
 		t.Fatalf("steps pipeline set: %v", err)
 	}
@@ -161,7 +162,7 @@ func browserRequest(t *testing.T, addr, method, path, form string, cookies []*ht
 func TestASignInProviderNeedsItsSecret(t *testing.T) {
 	t.Setenv("STEPS_TEST_UNSET_SECRET", "")
 
-	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--github-client-id", "abc", "--github-client-secret-env", "STEPS_TEST_UNSET_SECRET"})
+	err := stepsRun(t, []string{"web", "--listen", "127.0.0.1:1", "--github-client-id", "abc", "--github-client-secret-env", "STEPS_TEST_UNSET_SECRET"})
 	if err == nil || !strings.Contains(err.Error(), "$STEPS_TEST_UNSET_SECRET") {
 		t.Fatalf("steps web with a GitHub client and no secret = %v, want a refusal naming the variable", err)
 	}
@@ -180,7 +181,7 @@ func TestASignInProviderNeedsRulesAboutWhoItLetsIn(t *testing.T) {
 		{nil, "--role"},
 		{[]string{"--role", `admin=UserID == "alex"`}, "viewer"},
 	} {
-		err := cli.Run(append(append([]string{}, base...), tc.roles...))
+		err := stepsRun(t, append(append([]string{}, base...), tc.roles...))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("steps web with a provider and roles %v = %v, want refused naming %q", tc.roles, err, tc.want)
 		}

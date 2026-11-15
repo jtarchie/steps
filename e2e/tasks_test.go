@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestRunJobTaskReferenceRunsNamedTask: a task step with no run: resolves
 // against a top-level tasks: entry of the same name and runs its command.
 func TestRunJobTaskReferenceRunsNamedTask(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
 	path := pipelinePath(t, dir)
@@ -46,6 +46,8 @@ jobs:
 // own run: is always inline, even when a tasks: entry of the same name
 // exists — the top-level entry must never be consulted.
 func TestRunJobTaskInlineIgnoresSameNamedTopLevelTask(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	topLevelCounter := filepath.Join(dir, "top-level-counter.txt")
 	inlineCounter := filepath.Join(dir, "inline-counter.txt")
@@ -82,6 +84,8 @@ jobs:
 // exercise PlanChains at all (skipCache=true), so this has to go through the
 // real cli.Run path, not a fixture.
 func TestRunJobTaskRunFileEditBustsCache(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
 	scriptPath := filepath.Join(dir, "unit.sh")
@@ -135,6 +139,8 @@ jobs:
 // run_file: to match, must NOT invalidate the cache, since nothing about
 // rt.Run's resolved text changed.
 func TestRunJobTaskRunFileRenameDoesNotBustCache(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
 	path := pipelinePath(t, dir)
@@ -184,6 +190,8 @@ jobs:
 // TestRunJobTaskReferenceUndefinedErrors: a task step naming an undefined
 // tasks: entry (and no run: of its own) fails clearly at plan time.
 func TestRunJobTaskReferenceUndefinedErrors(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -200,7 +208,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = cli.Run([]string{path})
+	err = stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("expected an error for a task step referencing an undefined tasks: entry")
 	}
@@ -261,6 +269,8 @@ jobs:
 // TestRunJobTaskReferenceUsesTaskFix: a referenced task's own fix: is used
 // when the step sets none of its own.
 func TestRunJobTaskReferenceUsesTaskFix(t *testing.T) {
+	t.Parallel()
+
 	fakeA := fixAgentServer(t)
 	fakeB := fixAgentServer(t)
 
@@ -283,6 +293,8 @@ func TestRunJobTaskReferenceUsesTaskFix(t *testing.T) {
 // TestRunJobTaskReferenceStepFixOverridesTaskFix: a step's own fix: overrides
 // the referenced task's fix: for that step only.
 func TestRunJobTaskReferenceStepFixOverridesTaskFix(t *testing.T) {
+	t.Parallel()
+
 	fakeA := fixAgentServer(t)
 	fakeB := fixAgentServer(t)
 

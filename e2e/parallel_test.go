@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // interleavePipeline builds a job whose branches each announce when they start
@@ -45,6 +43,8 @@ func orderLines(t *testing.T, dir string) []string {
 // sequential execution the first branch's end would come before the second's
 // start, whatever the machine's speed.
 func TestInParallelActuallyOverlaps(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	mustRun(t, interleavePipeline(t, dir, ""))
@@ -63,6 +63,8 @@ func TestInParallelActuallyOverlaps(t *testing.T) {
 // branch in flight at a time the interleaving must disappear entirely, which
 // is a deterministic assertion rather than a timing one.
 func TestInParallelLimitOneIsSequential(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	mustRun(t, interleavePipeline(t, dir, "      limit: 1\n"))
@@ -81,6 +83,8 @@ func TestInParallelLimitOneIsSequential(t *testing.T) {
 // TestInParallelFailFastCancelsSiblings verifies fail_fast: true stops work
 // that has not finished, rather than merely reporting sooner.
 func TestInParallelFailFastCancelsSiblings(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "slow.log")
 
@@ -100,7 +104,7 @@ jobs:
         run: echo ran >> %s
 `, marker))
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("job succeeded with a failing branch")
 	}
@@ -114,6 +118,8 @@ jobs:
 // block is told whether one branch broke or all of them did. A report
 // truncated at the first failure hides exactly that.
 func TestInParallelReportsEveryFailure(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -130,7 +136,7 @@ jobs:
         run: exit 1
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("job succeeded with two failing branches")
 	}
@@ -147,6 +153,8 @@ jobs:
 // sibling's output is a race — and the plan-time answer has to be "not
 // available" rather than "sometimes".
 func TestInParallelBranchesCannotSeeSiblingOutputs(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
@@ -167,7 +175,7 @@ jobs:
         run: cat report/x
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("a branch was allowed to consume a sibling branch's output")
 	}
@@ -181,6 +189,8 @@ jobs:
 // branches produced IS available to the steps that follow, which is where
 // consuming it is well-defined.
 func TestInParallelOutputsAreAvailableAfterTheBlock(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "seen.log")
 

@@ -16,8 +16,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 const fakeRepo = "acme/app"
@@ -88,6 +86,8 @@ func assertReviewed(t *testing.T, fake *fakeGitHub, where string) {
 // the tree at the version's commit beside the PR's metadata, and the put
 // comments on the PR that get fetched.
 func TestEndToEndGitHubPRFetchesTheTreeAndComments(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 	fake.addPR(fakePR{Number: 8, SHA: "ffff000011112222333344445555666677778888", Author: "bob", Base: "main"})
@@ -134,6 +134,8 @@ func TestEndToEndGitHubPRTreeReachesAContainer(t *testing.T) {
 // TestEndToEndGitHubPRCheckoutFalseFetchesNoTree: metadata only, for a
 // pipeline that takes its source from a git resource instead.
 func TestEndToEndGitHubPRCheckoutFalseFetchesNoTree(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 
@@ -168,6 +170,8 @@ jobs:
 // push replaces the pipeline's own draft — and never touches anybody
 // else's.
 func TestEndToEndGitHubPendingReviewReplacesOnlyYourOwn(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 	fake.addReview(7, fakeReview{ID: 1, User: fake.login, State: "PENDING", Body: "stale draft"})
@@ -260,6 +264,8 @@ jobs:
 // comment on its line, in the same review as the body, so the author reads
 // the problem beside the code rather than looking a path:line up.
 func TestEndToEndGitHubReviewCarriesInlineComments(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 
@@ -287,6 +293,8 @@ func TestEndToEndGitHubReviewCarriesInlineComments(t *testing.T) {
 // file that cannot be posted must fail before that, or the next review is
 // lost and the last one with it.
 func TestEndToEndGitHubReviewRefusesABadCommentBeforeDeletingTheDraft(t *testing.T) {
+	t.Parallel()
+
 	for name, comments := range map[string]string{
 		"misnamed field": `[{"file": "app/a.rb", "line": 12, "body": "x"}]`,
 		"no line":        `[{"path": "app/a.rb", "body": "x"}]`,
@@ -304,7 +312,7 @@ func TestEndToEndGitHubReviewRefusesABadCommentBeforeDeletingTheDraft(t *testing
 
 			path := writePipeline(t, t.TempDir(), reviewWithComments(fake, comments))
 
-			err := cli.Run([]string{"run", path, "--job", "draft"})
+			err := stepsRun(t, []string{"run", path, "--job", "draft"})
 			if err == nil {
 				t.Fatal("run succeeded, want the put refused")
 			}
@@ -347,6 +355,8 @@ jobs:
 // under a running daemon: a comment builds when its author AND its body
 // match, an edit that still matches is new work, and nothing else is.
 func TestWatchGitHubCommentsTriggerOnAuthorAndContent(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 
@@ -382,6 +392,8 @@ func TestWatchGitHubCommentsTriggerOnAuthorAndContent(t *testing.T) {
 
 // TestWatchGitHubCommentsBuildsACommentListedLate: a comment GitHub lists only after a newer one became the cursor is still built, once, and what the look-back lists again builds nothing a second time.
 func TestWatchGitHubCommentsBuildsACommentListedLate(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 
@@ -406,6 +418,8 @@ func TestWatchGitHubCommentsBuildsACommentListedLate(t *testing.T) {
 // TestWatchGitHubPRsTriggerWhenAssigned: an assignment brings a pull request
 // into the filtered set, which is what makes it a new version.
 func TestWatchGitHubPRsTriggerWhenAssigned(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 	// The baseline a cold start needs: a poll that finds nothing records nothing.
@@ -452,7 +466,7 @@ func TestValidateGitHubRefusesAnUnsetToken(t *testing.T) {
 	fake := newFakeGitHub(t)
 	path := writePipeline(t, t.TempDir(), githubPipeline(fake, ""))
 
-	err := cli.Run([]string{"validate", path})
+	err := stepsRun(t, []string{"validate", path})
 	if err == nil || !strings.Contains(err.Error(), "$GH_TOKEN is not set") {
 		t.Fatalf("validate = %v, want it to name the unset $GH_TOKEN", err)
 	}
@@ -492,6 +506,8 @@ jobs:
 // under, takes off only the token user's own reaction, and a second run —
 // a replay — finds the world already as asked and stays green.
 func TestEndToEndGitHubReactionSwapsOnlyItsOwn(t *testing.T) {
+	t.Parallel()
+
 	for _, kind := range []string{"conversation", "review", "issue"} {
 		t.Run(kind, func(t *testing.T) {
 			fake := newFakeGitHub(t)
@@ -523,6 +539,8 @@ func TestEndToEndGitHubReactionSwapsOnlyItsOwn(t *testing.T) {
 // already-gone is a failure naming GitHub's answer and the route — here a
 // token that may read the repository but not react in it.
 func TestEndToEndGitHubReactionFailsOnARefusal(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 	fake.addComment(fakeComment{ID: 501, Number: 7, Kind: "conversation", Author: "alice", Body: "/steps go", Updated: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)})
@@ -530,7 +548,7 @@ func TestEndToEndGitHubReactionFailsOnARefusal(t *testing.T) {
 	fake.refuseReactions = true
 	fake.mu.Unlock()
 
-	err := cli.Run([]string{"run", writePipeline(t, t.TempDir(), reactionPipeline(fake)), "--job", "act"})
+	err := stepsRun(t, []string{"run", writePipeline(t, t.TempDir(), reactionPipeline(fake)), "--job", "act"})
 	if err == nil || !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "/issues/comments/501/reactions") {
 		t.Fatalf("run = %v, want the put failed naming the 403 and the route", err)
 	}
@@ -542,6 +560,8 @@ func TestEndToEndGitHubReactionFailsOnARefusal(t *testing.T) {
 // does not re-run a command already answered. Only the token user's own
 // reaction counts — anybody can react with anything.
 func TestWatchGitHubCommentsSkipReactedSurvivesAWipe(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 
@@ -683,6 +703,8 @@ jobs:
 // threads, is answered in the conversation. Without the flag an inline
 // command is answered in the conversation, as before the flag existed.
 func TestEndToEndGitHubCommentInThreadAnswersWhereAsked(t *testing.T) {
+	t.Parallel()
+
 	at := time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)
 	question := fakeComment{ID: 500, Number: 7, Kind: "review", Author: "bob", Body: "why this guard?", Updated: at}
 	command := func(kind string, inReplyTo int64) fakeComment {
@@ -721,6 +743,8 @@ func TestEndToEndGitHubCommentInThreadAnswersWhereAsked(t *testing.T) {
 // it come first. A conversation has no threads, so a command there writes no
 // thread.json.
 func TestEndToEndGitHubCommentBringsItsThread(t *testing.T) {
+	t.Parallel()
+
 	at := time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)
 	elsewhere := fakeComment{ID: 499, Number: 7, Kind: "review", Author: "carol", Body: "another thread", Updated: at}
 	question := fakeComment{ID: 500, Number: 7, Kind: "review", Author: "bob", Body: "why this guard?", Updated: at}
@@ -790,6 +814,8 @@ jobs:
 // each read whole however many pages come first. Nothing is fetched unasked,
 // and an issue, which has no reviews, writes its conversation alone.
 func TestEndToEndGitHubCommentIncludesWhatItAsksFor(t *testing.T) {
+	t.Parallel()
+
 	at := time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)
 	everything := "\n    include: [conversation, review_comments, reviews]"
 
@@ -868,6 +894,8 @@ jobs:
 // thread is cut from the same listing review_comments writes, so an inline
 // command that includes them costs one read of it, not two.
 func TestEndToEndGitHubInlineCommandIncludingReviewCommentsReadsThemOnce(t *testing.T) {
+	t.Parallel()
+
 	at := time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
@@ -938,6 +966,8 @@ func answers(fake *fakeGitHub) []string {
 // TestEndToEndGitHubCommentInThreadFailsOnARefusal: a refused reply fails the
 // put with GitHub's status and words and the route, like every other post.
 func TestEndToEndGitHubCommentInThreadFailsOnARefusal(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 	fake.addComment(fakeComment{ID: 501, Number: 7, Kind: "review", Author: "alice", Body: "/steps explain", Updated: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)})
@@ -945,7 +975,7 @@ func TestEndToEndGitHubCommentInThreadFailsOnARefusal(t *testing.T) {
 	fake.refuseReplies = true
 	fake.mu.Unlock()
 
-	err := cli.Run([]string{"run", writePipeline(t, t.TempDir(), threadPipeline(fake, "\n      in_thread: true")), "--job", "act"})
+	err := stepsRun(t, []string{"run", writePipeline(t, t.TempDir(), threadPipeline(fake, "\n      in_thread: true")), "--job", "act"})
 	if err == nil || !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "Resource not accessible") || !strings.Contains(err.Error(), "POST /repos/acme/app/pulls/7/comments/501/replies") {
 		t.Fatalf("run = %v, want the put failed naming the 403, GitHub's message and the route", err)
 	}

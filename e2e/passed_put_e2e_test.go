@@ -7,8 +7,6 @@ package e2e
 import (
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 const putThenConsumePipeline = `
@@ -41,6 +39,8 @@ jobs:
 `
 
 func TestRunPassedCountsAVersionTheUpstreamPut(t *testing.T) {
+	t.Parallel()
+
 	fixture := newBindingFixture(t, putThenConsumePipeline)
 
 	fixture.write(t, `{"digest":"sha-1"}`)
@@ -51,6 +51,8 @@ func TestRunPassedCountsAVersionTheUpstreamPut(t *testing.T) {
 }
 
 func TestRunPassedIgnoresAVersionFromABuildThatFailedAfterPutting(t *testing.T) {
+	t.Parallel()
+
 	fixture := newBindingFixture(t, putThenConsumePipeline)
 
 	fixture.write(t, `{"digest":"sha-1"}`)
@@ -64,9 +66,11 @@ func TestRunPassedIgnoresAVersionFromABuildThatFailedAfterPutting(t *testing.T) 
 }
 
 func TestRunPassedNamesTheGateWhenNothingHasPassed(t *testing.T) {
+	t.Parallel()
+
 	fixture := newBindingFixture(t, putThenConsumePipeline)
 
-	err := cli.Run([]string{"run", fixture.pipeline, "--job", "implement"})
+	err := stepsRun(t, []string{"run", fixture.pipeline, "--job", "implement"})
 	if err == nil {
 		t.Fatal("implement ran with nothing passed upstream")
 	}

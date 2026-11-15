@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"slices"
 	"strings"
 
@@ -47,7 +47,9 @@ type ValidateCmd struct {
 // Run loads the pipeline (which runs every config-level validator) and then
 // checks artifact flow for each job, joining the failures so one invocation
 // reports everything wrong with the file.
-func (v *ValidateCmd) Run() error {
+func (v *ValidateCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	err := v.checkDepth()
 	if err != nil {
 		return err
@@ -64,7 +66,7 @@ func (v *ValidateCmd) Run() error {
 	}
 
 	for _, warning := range append(pipeline.UnquotedShellValues(cfg), cfg.ProjectHooksOnHost()...) {
-		fmt.Fprintln(os.Stderr, "warning: "+warning)
+		say(streams.Err, "warning: "+warning)
 	}
 
 	err = fileProblems(cfg)
@@ -72,7 +74,7 @@ func (v *ValidateCmd) Run() error {
 		return err
 	}
 
-	problems, secrets, err := v.machineProblems(cfg)
+	problems, secrets, err := v.machineProblems(out, cfg)
 	if err != nil {
 		return err
 	}
@@ -90,7 +92,7 @@ func (v *ValidateCmd) Run() error {
 		}
 	}
 
-	fmt.Printf("ok: %s (%d job(s), %d resource(s), %d agent(s))%s\n",
+	sayf(out, "ok: %s (%d job(s), %d resource(s), %d agent(s))%s\n",
 		v.Pipeline, len(cfg.Jobs), len(cfg.Resources), declared, liveNote(v.Live, secrets))
 
 	return nil
@@ -138,7 +140,7 @@ func fileProblems(cfg *config.Config) error {
 // Live only when the local checks passed: a missing API key makes every probe
 // that would use it fail too, and reporting both would be reporting one
 // problem twice.
-func (v *ValidateCmd) machineProblems(cfg *config.Config) ([]config.Problem, int, error) {
+func (v *ValidateCmd) machineProblems(out io.Writer, cfg *config.Config) ([]config.Problem, int, error) {
 	if v.SyntaxOnly {
 		return nil, 0, nil
 	}
@@ -148,7 +150,7 @@ func (v *ValidateCmd) machineProblems(cfg *config.Config) ([]config.Problem, int
 		return problems, 0, nil
 	}
 
-	return v.liveProblems(cfg)
+	return v.liveProblems(out, cfg)
 }
 
 // checkDepth refuses the two flag combinations that contradict each other.
@@ -181,7 +183,7 @@ func (v *ValidateCmd) checkDepth() error {
 // now" is a question about the file, and a validate that quietly checked one
 // job would answer a narrower question than it was asked. The probes are
 // cached for the process, so the jobs that share a model pay for it once.
-func (v *ValidateCmd) liveProblems(cfg *config.Config) ([]config.Problem, int, error) {
+func (v *ValidateCmd) liveProblems(out io.Writer, cfg *config.Config) ([]config.Problem, int, error) {
 	// Refused rather than answered emptily: the probes below return no
 	// problems when the pipeline has turned the check off, and the ok line
 	// would then vouch that every model and MCP server responded having
@@ -191,11 +193,11 @@ func (v *ValidateCmd) liveProblems(cfg *config.Config) ([]config.Problem, int, e
 		return nil, 0, errors.New("--live cannot probe: this pipeline sets defaults.preflight.disabled: true, so there is nothing to ask; drop --live, or turn the check back on")
 	}
 
-	ctx, cancel := withSignalCancel(context.Background())
+	ctx, cancel := Streams{Out: out}.cancellable()
 	defer cancel()
 
 	// Before the probes: a model whose key is a reference is asked with that key, so the sources have to be open, and a pipeline they cannot vouch for is refused before anything is dialled.
-	resolver, secretProblems, found, err := v.secretProblems(ctx, cfg)
+	resolver, secretProblems, found, err := v.secretProblems(ctx, out, cfg)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -226,7 +228,7 @@ func (v *ValidateCmd) liveProblems(cfg *config.Config) ([]config.Problem, int, e
 // secretProblems resolves every reference the way the daemon would and says which lookup path answered, discarding the values. Resolution is lazy at run time, so this is the only way to learn that a login has lapsed, or that a name falls through to the shared folder, before a job is half paid for.
 //
 // Under --job, the job's own references: a trigger: true resource's poll is no job's, so it is left out the way the job's probe leaves out the other jobs' models.
-func (v *ValidateCmd) secretProblems(ctx context.Context, cfg *config.Config) (*secret.Resolver, []config.Problem, int, error) {
+func (v *ValidateCmd) secretProblems(ctx context.Context, out io.Writer, cfg *config.Config) (*secret.Resolver, []config.Problem, int, error) {
 	uses := cfg.SecretUses()
 	if v.Job != "" {
 		uses = slices.DeleteFunc(uses, func(use config.SecretUse) bool { return use.Job != v.Job })
@@ -271,7 +273,7 @@ func (v *ValidateCmd) secretProblems(ctx context.Context, cfg *config.Config) (*
 
 		found[use.Ref] = true
 
-		fmt.Printf("%s is at %s\n", target, location)
+		sayf(out, "%s is at %s\n", target, location)
 	}
 
 	return resolver, problems, len(found), nil

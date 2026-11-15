@@ -41,7 +41,7 @@ func TestCLIExecDrainsAChildThatOutranTheParser(t *testing.T) {
 
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	// Generous on purpose: pumping ~2MB through tr took 18s under task's -race shards, and the assertion only has to tell "ended with the child" from "waited out the timeout".
+	// Generous on purpose: pumping ~2MB through tr took 18s on a loaded machine under -race, and the assertion only has to tell "ended with the child" from "waited out the timeout".
 	const timeout = 3 * time.Minute
 
 	start := time.Now()

@@ -17,14 +17,13 @@ import (
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 var consentInput = regexp.MustCompile(`name="consent" value="([^"]+)"`)
 
-// Not t.Parallel(): startWeb backgrounds cli.Run in this process and stop signals the whole test binary.
 func TestAnAgentCallsAnExportAsThePersonWhoAgreed(t *testing.T) {
+	t.Parallel()
+
 	upstream := startDocMCPServer(t, docMCPTool{
 		name:     "search_issues",
 		required: []string{"owner", "query"},
@@ -65,7 +64,7 @@ jobs:
 	served := startWeb(t, "--db", filepath.Join(dir, "daemon.db"), "--local-user", "alex:"+hashed(t, "a"))
 	defer served.stopIfRunning(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", "ops", "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", "ops", "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
 	if err != nil {
 		t.Fatalf("steps pipeline set: %v", err)
 	}
@@ -274,8 +273,10 @@ func pkceChallenge(verifier string) string {
 
 var clientInput = regexp.MustCompile(`name="client" value="([^"]+)"`)
 
-// Disconnecting an agent ends it at its next call, not at its token's expiry. Not t.Parallel(), for startWeb's reason.
+// Disconnecting an agent ends it at its next call, not at its token's expiry.
 func TestRevokingAConnectionEndsItAtOnce(t *testing.T) {
+	t.Parallel()
+
 	upstream := startDocMCPServer(t, docMCPTool{name: "search_issues", required: []string{"query"}, reply: func(map[string]any) string { return "ok" }})
 
 	dir := t.TempDir()
@@ -285,7 +286,7 @@ func TestRevokingAConnectionEndsItAtOnce(t *testing.T) {
 	served := startWeb(t, "--db", filepath.Join(dir, "daemon.db"), "--local-user", "alex:"+hashed(t, "a"))
 	defer served.stopIfRunning(t)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", "ops", "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", "ops", "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
 	if err != nil {
 		t.Fatalf("steps pipeline set: %v", err)
 	}

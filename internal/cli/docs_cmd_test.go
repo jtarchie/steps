@@ -14,7 +14,7 @@ func TestDocsPrintsThePageItWasAskedFor(t *testing.T) {
 			t.Fatalf("docs.Page(%s): %v", file, err)
 		}
 
-		out := captureStdout(t, func() { err = (&DocsCmd{Page: page}).Run() })
+		out := captureStdout(t, func() { err = (&DocsCmd{Page: page}).Run(std()) })
 		if err != nil {
 			t.Errorf("steps docs %q: %v", page, err)
 		}

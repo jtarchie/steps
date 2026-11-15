@@ -16,6 +16,8 @@ import (
 
 // A durable workspace.root: is the case the restart's stale-build sweep reaches, and volatile: keeps the step cache from passing for a resume.
 func TestARestartResumesTheBuildItInterrupted(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	root := filepath.Join(dir, "ws")
 	first := filepath.Join(dir, "first")
@@ -159,11 +161,15 @@ func assertStepIDsUnique(t *testing.T, state, name, runID string) {
 
 // A restart while a run waits on an approval resumes the run onto the approval it already made. It used to ask again, leaving one more pending approval per restart that nothing waited on, so deciding the old one did nothing and the run stayed parked.
 func TestARestartKeepsTheApprovalARunWaitsOn(t *testing.T) {
+	t.Parallel()
+
 	restartKeepsTheApproval(t, "", "")
 }
 
 // The same, behind a step the resume skips: skipping it left the next step's parent hash unset, so the approval hashed differently and asked again (steps#230).
 func TestARestartKeepsTheApprovalBehindAFinishedStep(t *testing.T) {
+	t.Parallel()
+
 	restartKeepsTheApproval(t, "", `
   - task: draft
     run: echo drafted`)
@@ -171,6 +177,8 @@ func TestARestartKeepsTheApprovalBehindAFinishedStep(t *testing.T) {
 
 // The same, behind a step a verdict sent round a loop: a step visited twice kept its first visit's hash, so the approval after its second hashed differently on resume.
 func TestARestartKeepsTheApprovalBehindALoop(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeLLM(t,
 		callsTool("verdict", map[string]any{"choice": "revise"}),
 		says("Sent back."),
@@ -231,7 +239,7 @@ jobs:
 	defer restarted.stopIfRunning(t)
 
 	// Decided over the CLI, as a person would, against the approval they were shown before the restart.
-	err := cli.Run([]string{"approvals", "approve", strconv.FormatInt(original, 10), "-p", name, "--db", served.state})
+	err := stepsRun(t, []string{"approvals", "approve", strconv.FormatInt(original, 10), "-p", name, "--db", served.state})
 	if err != nil {
 		t.Fatalf("approving approval %d: %v", original, err)
 	}

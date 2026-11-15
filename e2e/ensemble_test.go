@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // ensemblePipeline builds a three-member ensemble against one scripted
@@ -95,6 +93,8 @@ func votes(choice string) []turn {
 // opinions, majority rules, and the pipeline routes on the DECISION rather
 // than on any one model's answer.
 func TestEnsembleMajorityRoutesOnTheDecision(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	// Members run concurrently, so the fake serves whichever asks first —
@@ -111,9 +111,11 @@ func TestEnsembleMajorityRoutesOnTheDecision(t *testing.T) {
 // TestEnsembleUnanimousFailsOnDisagreement verifies a rule that cannot be
 // satisfied says so rather than picking something.
 func TestEnsembleUnanimousFailsOnDisagreement(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
-	err := cli.Run([]string{"run", ensemblePipeline(t, dir, members(t, "approve", "approve", "reject"), "unanimous", ""), "--job", "review"})
+	err := stepsRun(t, []string{"run", ensemblePipeline(t, dir, members(t, "approve", "approve", "reject"), "unanimous", ""), "--job", "review"})
 	if err == nil {
 		t.Fatal("decide: unanimous succeeded with a split vote")
 	}
@@ -127,6 +129,8 @@ func TestEnsembleUnanimousFailsOnDisagreement(t *testing.T) {
 // verdicts: is a precedence list, so `any` is the "one objection is enough"
 // shape when the list runs most to least severe.
 func TestEnsembleAnyTakesTheFirstDeclaredVerdict(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	mustRun(t, ensemblePipeline(t, dir, members(t, "approve", "approve", "reject"), "any", ""))
@@ -143,6 +147,8 @@ func TestEnsembleAnyTakesTheFirstDeclaredVerdict(t *testing.T) {
 // TestEnsembleTieIsAnError covers the decision the issue insists must never be
 // silent: with no majority, picking the first vote would be an invisible bug.
 func TestEnsembleTieIsAnError(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	// Two members, one each way: no majority, and picking one silently would
@@ -175,7 +181,7 @@ jobs:
           - Review it.
 `, newFakeLLM(t, votes("approve")...).URL, newFakeLLM(t, votes("reject")...).URL))
 
-	err := cli.Run([]string{"run", path, "--job", "review"})
+	err := stepsRun(t, []string{"run", path, "--job", "review"})
 	if err == nil {
 		t.Fatal("a tied majority vote silently decided something")
 	}
@@ -189,10 +195,12 @@ jobs:
 // ERRORS is not a member that voted. Counting a model failure as a vote is how
 // a three-agent ensemble silently becomes a two-agent one.
 func TestEnsembleMemberErrorFailsByDefault(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	// Two good votes and one member whose model is down.
-	err := cli.Run([]string{"run", ensemblePipeline(t, dir, members(t, "approve", "approve", ""), "majority", ""), "--job", "review"})
+	err := stepsRun(t, []string{"run", ensemblePipeline(t, dir, members(t, "approve", "approve", ""), "majority", ""), "--job", "review"})
 	if err == nil {
 		t.Fatal("the ensemble succeeded with a member that never voted")
 	}
@@ -204,6 +212,8 @@ func TestEnsembleMemberErrorFailsByDefault(t *testing.T) {
 
 // TestEnsembleMemberErrorsExcludeDecidesAmongTheRest covers the opt-in policy.
 func TestEnsembleMemberErrorsExcludeDecidesAmongTheRest(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	mustRun(t, ensemblePipeline(t, dir, members(t, "approve", "approve", ""), "majority", "      member_errors: exclude\n"))

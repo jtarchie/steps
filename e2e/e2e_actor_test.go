@@ -20,8 +20,9 @@ import (
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
-// Not t.Parallel(): startWeb backgrounds cli.Run in this process and stop signals the whole test binary.
 func TestARunSaysWhoStartedIt(t *testing.T) {
+	t.Parallel()
+
 	const (
 		user = "ops"
 		pass = "correct-horse-battery"
@@ -56,7 +57,7 @@ jobs:
 
 	name := cli.PipelineName(path)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, user, pass)})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, user, pass)})
 	if err != nil {
 		t.Fatalf("steps pipeline set: %v", err)
 	}
@@ -143,8 +144,10 @@ func waitForAuthedPage(t *testing.T, addr, user, pass, path, want string) {
 	t.Fatalf("GET %s never said %q; last text:\n%s", path, want, last)
 }
 
-// Several people, one daemon: each local user is told apart, so each run says its own name. Not t.Parallel(), for startWeb's reason.
+// Several people, one daemon: each local user is told apart, so each run says its own name.
 func TestEachLocalUserIsToldApart(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	state := filepath.Join(dir, "daemon.db")
 	path := pipelinePath(t, dir)
@@ -164,7 +167,7 @@ jobs:
 
 	name := cli.PipelineName(path)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "alexs-password")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "alexs-password")})
 	if err != nil {
 		t.Fatalf("steps pipeline set as alex: %v", err)
 	}
@@ -189,7 +192,7 @@ jobs:
 func TestALocalUserMustBeAHash(t *testing.T) {
 	t.Parallel()
 
-	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--local-user", "alex:hunter2"})
+	err := stepsRun(t, []string{"web", "--listen", "127.0.0.1:1", "--local-user", "alex:hunter2"})
 	if err == nil {
 		t.Fatal("steps web started with a plain-text password")
 	}
@@ -233,15 +236,17 @@ func waitForNthRun(t *testing.T, state, name, job string, n int) store.RunRow {
 func TestALocalUserNamedTwiceIsRefused(t *testing.T) {
 	t.Parallel()
 
-	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1",
+	err := stepsRun(t, []string{"web", "--listen", "127.0.0.1:1",
 		"--local-user", "alex:" + hashed(t, "one"), "--local-user", "alex:" + hashed(t, "two")})
 	if err == nil || !strings.Contains(err.Error(), `"alex" is given twice`) {
 		t.Fatalf("steps web with alex twice = %v, want a refusal naming alex", err)
 	}
 }
 
-// An approval decided in the browser is recorded under the person who decided it, and the approvals page says so. Not t.Parallel(), for startWeb's reason.
+// An approval decided in the browser is recorded under the person who decided it, and the approvals page says so.
 func TestAnApprovalSaysWhoDecidedIt(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	state := filepath.Join(dir, "daemon.db")
 	path := pipelinePath(t, dir)
@@ -259,7 +264,7 @@ jobs:
 
 	name := cli.PipelineName(path)
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
 	if err != nil {
 		t.Fatalf("steps pipeline set: %v", err)
 	}
@@ -332,8 +337,10 @@ func authPostForm(t *testing.T, addr, user, pass, path, form string) int {
 	return resp.StatusCode
 }
 
-// The activity log names who did each thing, narrows to one person, and keeps the record of a pipeline after it is destroyed. Not t.Parallel(), for startWeb's reason.
+// The activity log names who did each thing, narrows to one person, and keeps the record of a pipeline after it is destroyed.
 func TestTheActivityLogSaysWhoDidWhat(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	state := filepath.Join(dir, "daemon.db")
 	path := pipelinePath(t, dir)
@@ -351,7 +358,7 @@ jobs:
 	name := cli.PipelineName(path)
 	asAlex, asSam := authTarget(served.addr, "alex", "a"), authTarget(served.addr, "sam", "s")
 
-	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", asAlex})
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", asAlex})
 	if err != nil {
 		t.Fatalf("steps pipeline set: %v", err)
 	}
@@ -360,7 +367,7 @@ jobs:
 		t.Fatalf("trigger answered %d, want 303", code)
 	}
 
-	err = cli.Run([]string{"pipeline", "pause", "-p", name, "--target", asSam})
+	err = stepsRun(t, []string{"pipeline", "pause", "-p", name, "--target", asSam})
 	if err != nil {
 		t.Fatalf("steps pipeline pause: %v", err)
 	}
@@ -369,7 +376,7 @@ jobs:
 	waitForAuthedPage(t, served.addr, "alex", "a", "/activity", "alex (local) trigger manual")
 	waitForAuthedPage(t, served.addr, "alex", "a", "/activity", "alex (local) set")
 
-	err = cli.Run([]string{"pipeline", "destroy", "-p", name, "-n", "--target", asSam})
+	err = stepsRun(t, []string{"pipeline", "destroy", "-p", name, "-n", "--target", asSam})
 	if err != nil {
 		t.Fatalf("steps pipeline destroy: %v", err)
 	}

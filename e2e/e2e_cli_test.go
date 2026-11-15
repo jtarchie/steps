@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // End-to-end coverage of CLI-backed agent steps (`source.model: "@claude/…"`).
@@ -87,7 +85,7 @@ func TestE2ECLIAgentInvocation(t *testing.T) {
 	// obligation — which is itself the assertion in TestE2ECLIAgentVerdict.
 	// Here the run's outcome is beside the point: what this pins is what the
 	// child was ASKED to do.
-	_ = cli.Run([]string{path})
+	_ = stepsRun(t, []string{path})
 
 	argv := claude.argv(t, 1)
 
@@ -153,7 +151,7 @@ func TestE2ECLIAgentVerdictRoutesTheJob(t *testing.T) {
 
 	path := cliPipeline(t, dir)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -180,7 +178,7 @@ func TestE2ECLIAgentWithoutVerdictFails(t *testing.T) {
 	writeFakeClaude(t, "echo '"+cliInitEvent(cliPipelineGrantedTools()...)+"'\necho '"+cliResultEvent("I have decided nothing.", 1)+"'")
 	path := cliPipeline(t, dir)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("a step that never emitted its declared verdict reported success")
 	}
@@ -242,7 +240,7 @@ jobs:
       - Review the diff.
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("a cli reporting a tool beyond its grant was trusted")
 	}
@@ -288,7 +286,7 @@ fi
 		1)
 	path := writePipeline(t, dir, yaml)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -364,7 +362,7 @@ func TestE2ECLIAgentDoesNotRetryTaskFailure(t *testing.T) {
 		1)
 	path := writePipeline(t, dir, yaml)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("a claude that reported the task as failed produced a successful run")
 	}
@@ -412,7 +410,7 @@ func TestE2ECLIAgentRetriesProviderError(t *testing.T) {
 		1)
 	path := writePipeline(t, dir, yaml)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("a claude that reported a usage limit produced a successful run")
 	}
@@ -489,7 +487,7 @@ if [ ! -f "$0.attempted" ]; then
 		1)
 	path := writePipeline(t, dir, yaml)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -565,7 +563,7 @@ jobs:
 
 	path := writePipeline(t, dir, yaml)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

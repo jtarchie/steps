@@ -28,8 +28,10 @@ type QuestionsListCmd struct {
 }
 
 // Run prints every question waiting for an answer.
-func (q *QuestionsListCmd) Run() error {
-	if nothingRecorded(q.ReadFlags, "no questions are waiting") {
+func (q *QuestionsListCmd) Run(streams Streams) error {
+	out := streams.Out
+
+	if nothingRecorded(out, q.ReadFlags, "no questions are waiting") {
 		return nil
 	}
 
@@ -45,12 +47,12 @@ func (q *QuestionsListCmd) Run() error {
 	}
 
 	if len(pending) == 0 {
-		fmt.Println("no questions are waiting")
+		say(out, "no questions are waiting")
 
 		return nil
 	}
 
-	writer := newTabWriter()
+	writer := newTabWriter(out)
 
 	_, _ = fmt.Fprintln(writer, "ID\tJOB\tSTEP\tASKED\tQUESTION")
 
@@ -88,7 +90,9 @@ type AnswerCmd struct {
 }
 
 // Run answers the named question.
-func (a *AnswerCmd) Run() error {
+func (a *AnswerCmd) Run(streams Streams) error {
+	out := streams.Out
+
 	answer := strings.TrimSpace(strings.Join(a.Answer, " "))
 	if answer == "" {
 		return errors.New("an answer is required: steps questions answer -p <pipeline> <id> <answer>")
@@ -110,7 +114,7 @@ func (a *AnswerCmd) Run() error {
 		return fmt.Errorf("could not record the answer: %w", err)
 	}
 
-	fmt.Printf("answered: question %d\n", a.ID)
+	sayf(out, "answered: question %d\n", a.ID)
 
 	return nil
 }

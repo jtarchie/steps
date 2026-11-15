@@ -9,8 +9,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // agentNodeResult returns the decoded nodes.result for the single agent step
@@ -77,6 +75,8 @@ func trajectoryNames(t *testing.T, result map[string]any) []string {
 // in memory, so the most useful question about an agent step had no answer
 // once the run ended.
 func TestAgentTrajectoryIsPersisted(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		callsTool("write_file", map[string]any{"path": "notes.md", "content": "some findings"}),
@@ -104,7 +104,7 @@ jobs:
       - write some notes
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -123,6 +123,8 @@ jobs:
 // matters: the step you need to reconstruct is the one that went wrong, and
 // its work used to be discarded entirely.
 func TestFailedAgentStepRecordsWhatItDid(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		callsTool("write_file", map[string]any{"path": "partial.md", "content": "half an answer"}),
@@ -151,7 +153,7 @@ jobs:
       stdout: "a phrase the model never says"
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("expected the assert to fail the step")
 	}
@@ -172,6 +174,8 @@ jobs:
 // An enormous tool argument is elided: the trajectory records what the agent
 // did, not a second copy of everything it wrote.
 func TestTrajectoryArgsAreTruncated(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	huge := strings.Repeat("x", 50_000)
 	fake := newFakeLLM(t,
@@ -199,7 +203,7 @@ jobs:
       - write a big file
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -235,6 +239,8 @@ jobs:
 // files a step had just edited when it broke — the first thing anyone would
 // want to look at — were always gone before the error reached the terminal.
 func TestKeepWorkspaceSurvivesAFailedStep(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -247,7 +253,7 @@ jobs:
 `)
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{path, "--keep-workspace"})
+		err := stepsRun(t, []string{path, "--keep-workspace"})
 		if err == nil {
 			t.Fatal("expected the pipeline to fail")
 		}
@@ -303,7 +309,7 @@ jobs:
 
 	logs := captureStderr(t)
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{path})
+		err := stepsRun(t, []string{path})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -347,6 +353,8 @@ func keptWorkspaceDir(t *testing.T, out string) string {
 // deleting those files would keep the transcript's pointers and throw away
 // everything they point at.
 func TestKeepWorkspaceKeepsSpilledToolOutput(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	// Overflow the inline cap, so the result spills instead of being returned.
@@ -379,7 +387,7 @@ jobs:
 `)
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{path, "--keep-workspace"})
+		err := stepsRun(t, []string{path, "--keep-workspace"})
 		if err == nil {
 			t.Fatal("expected the hook to fail the job, so the workspace is kept on a failure path")
 		}
@@ -422,6 +430,8 @@ jobs:
 // steps read, so that one case is removed before Capture regardless of
 // --keep-workspace.
 func TestSpilledOutputDoesNotRideIntoAnArtifact(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	fake := newFakeLLM(t,
@@ -460,7 +470,7 @@ jobs:
       test ! -e built/.steps-agent-out
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v — the captured artifact carries the agent's spill directory", err)
 	}
@@ -468,6 +478,8 @@ jobs:
 
 // As in Concourse's run.dir, a step's own output exists, empty, before the step runs, so an agent may work in one nothing earlier produced.
 func TestAgentDirMayNameItsOwnFreshOutput(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	fake := newFakeLLM(t,
@@ -500,7 +512,7 @@ jobs:
     run: grep -qx 'written in place' report/summary.txt
 `)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

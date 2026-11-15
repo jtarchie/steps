@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestEndToEndASecondGetOfOneResourceFetchesItsOwnVersion: two gets under one name with different version: pins are two resolutions, and the later one's artifact is what the task reads, as in Concourse. The resolver cache was keyed by the get's name alone, so the second get was handed the first's version.
 func TestEndToEndASecondGetOfOneResourceFetchesItsOwnVersion(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	out := filepath.Join(dir, "seen.txt")
 
@@ -38,7 +38,7 @@ jobs:
     run: cat r/n.txt > %s
 `, out))
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

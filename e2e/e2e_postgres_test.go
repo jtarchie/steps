@@ -19,7 +19,7 @@ import (
 	"github.com/jtarchie/steps/internal/testpostgres"
 )
 
-// postgresServer is this shard process's one test server, started by the first test that asks and removed by TestMain.
+// postgresServer is this test process's one server, started by the first test that asks and removed by TestMain.
 var postgresServer struct {
 	once    sync.Once
 	server  *testpostgres.Server
@@ -70,7 +70,7 @@ func startPostgresE2E() {
 	}
 }
 
-// stopPostgresE2E removes this shard's server, if it started one.
+// stopPostgresE2E removes the server, if a test started one.
 func stopPostgresE2E() { postgresServer.server.Stop() }
 
 func postgresPipeline(t *testing.T) (string, string) {
@@ -89,7 +89,7 @@ jobs:
 `, log)), log
 }
 
-// TestPostgres is one top-level test so that one shard, and one server, runs it all: as four, the shard balancer dealt them apart and every shard started a postgres of its own.
+// TestPostgres is one top-level test: its subtests share one server and one state database, in order.
 func TestPostgres(t *testing.T) {
 	t.Run("RunsAndCaches", postgresRunsAndCaches)
 	t.Run("WithNothingRecorded", postgresWithNothingRecorded)
@@ -107,7 +107,7 @@ func postgresRunsAndCaches(t *testing.T) {
 	for range 2 {
 		var err error
 
-		out := captureStdout(t, func() { err = cli.Run([]string{"run", path, "--job", "build", "--db", db}) })
+		out := captureStdout(t, func() { err = stepsRun(t, []string{"run", path, "--job", "build", "--db", db}) })
 		if err != nil {
 			t.Fatalf("run: %v\n%s", err, out)
 		}
@@ -118,7 +118,7 @@ func postgresRunsAndCaches(t *testing.T) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"runs", "list", "-p", cli.PipelineName(path), "--db", db})
+		err = stepsRun(t, []string{"runs", "list", "-p", cli.PipelineName(path), "--db", db})
 	})
 	if err != nil {
 		t.Fatalf("runs list: %v", err)
@@ -142,7 +142,7 @@ func postgresWithNothingRecorded(t *testing.T) {
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run([]string{"runs", "list", "-p", "app", "--db", db}) })
+	out := captureStdout(t, func() { err = stepsRun(t, []string{"runs", "list", "-p", "app", "--db", db}) })
 	if err != nil {
 		t.Fatalf("runs list: %v", err)
 	}
@@ -177,7 +177,7 @@ func postgresPasswordIsNeverPrinted(t *testing.T) {
 	path := approvalPipeline(t, dir, "1s")
 
 	out := captureStdout(t, func() {
-		_ = cli.Run([]string{"run", path, "--job", "publish", "--db", withPassword})
+		_ = stepsRun(t, []string{"run", path, "--job", "publish", "--db", withPassword})
 	})
 
 	if strings.Contains(out, postgresServer.server.Password) || strings.Contains(stderr(), postgresServer.server.Password) {

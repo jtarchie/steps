@@ -229,6 +229,8 @@ jobs:
 // database to "start fresh" re-armed the same silence. Concourse builds the
 // version its first check reports; so does this now.
 func TestWatchColdStartAnswersTheNewestNotTheBacklog(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 20)
 
@@ -242,6 +244,8 @@ func TestWatchColdStartAnswersTheNewestNotTheBacklog(t *testing.T) {
 // that left the whole window unconsumed would build twenty times. One build,
 // then the backlog stays taken.
 func TestWatchColdStartWithVersionEveryBuildsOnce(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 20)
 
@@ -256,6 +260,8 @@ func TestWatchColdStartWithVersionEveryBuildsOnce(t *testing.T) {
 // unit of work, not the whole window. For the pipeline this was built for,
 // getting it wrong is 21 replies to threads nobody is waiting on.
 func TestWatchProcessesOnlyWhatIsNew(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 20)
 	fixture.coldStart(t)
@@ -269,6 +275,8 @@ func TestWatchProcessesOnlyWhatIsNew(t *testing.T) {
 // TestWatchLosesNothingAcrossPolls: two arrivals between drains are two units
 // of work. Nothing may be dropped on the way through the queue.
 func TestWatchLosesNothingAcrossPolls(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 20)
 	fixture.coldStart(t)
@@ -285,6 +293,8 @@ func TestWatchLosesNothingAcrossPolls(t *testing.T) {
 // no work at all. The obvious property, and the one a cursor bug breaks in
 // the loudest possible way.
 func TestWatchIsIdleWhenNothingChanges(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 20)
 	fixture.coldStart(t)
@@ -303,6 +313,8 @@ func TestWatchIsIdleWhenNothingChanges(t *testing.T) {
 // versions runs each once, and a later poll repeats none of them — including
 // after a failure, since a version is taken when its build starts.
 func TestWatchVersionEveryTakesEachVersionOnce(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, strings.Replace(cursorFeed,
 		"run: cat items/n.txt >> PROCESSED",
 		"run: |\n      cat items/n.txt >> PROCESSED\n      test \"$(cat items/n.txt)\" != 22", 1))
@@ -326,6 +338,8 @@ func TestWatchVersionEveryTakesEachVersionOnce(t *testing.T) {
 // from outside — if the planner and the executor resolved versions
 // differently their hashes would not match and nothing would ever skip.
 func TestWatchSkipsUnchangedWork(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, strings.Replace(cursorFeed, `
   - get: items
     trigger: true
@@ -349,6 +363,8 @@ func TestWatchSkipsUnchangedWork(t *testing.T) {
 // one is an instruction. It must resolve even though the poll only ever
 // observed newer versions.
 func TestWatchPinReachesPastWhatThePollSaw(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, strings.Replace(cursorFeed, `
     check: |
       cursor='{{ index .version "n" | default "0" }}'
@@ -375,6 +391,8 @@ func TestWatchPinReachesPastWhatThePollSaw(t *testing.T) {
 // 1699887654.001200 as 1.6998876540012e+09 sends an API a value it has never
 // seen.
 func TestWatchNumericVersionFieldsKeepTheirDigits(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, `
 defaults:
   preflight:
@@ -410,6 +428,8 @@ jobs:
 // TestWatchResolvesAnUntriggeredGet: a job may read resources nobody polls.
 // Those still resolve, by running their own check.
 func TestWatchResolvesAnUntriggeredGet(t *testing.T) {
+	t.Parallel()
+
 	fixture := newWatchFixture(t, `
 defaults:
   preflight:

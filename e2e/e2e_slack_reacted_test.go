@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // TestEndToEndBuiltinSlackReactionWatch is the get side of slack-reaction:
@@ -292,7 +290,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = cli.Run([]string{"run", path, "--job", "look"})
+	err = stepsRun(t, []string{"run", path, "--job", "look"})
 	if err == nil || !strings.Contains(err.Error(), "slack reactions.list: missing_scope") {
 		t.Fatalf("run = %v, want the refusal named", err)
 	}
@@ -303,6 +301,8 @@ jobs:
 // resource that watches would record its own version on that resource, which
 // the watching get then fetches as new: the mark answers the message again.
 func TestSlackReactionWatchRefusedAtLoad(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct{ yaml, want string }{
 		"get without emoji": {`
 resources:
@@ -336,7 +336,7 @@ jobs:
 				t.Fatal(err)
 			}
 
-			err = cli.Run([]string{"validate", path})
+			err = stepsRun(t, []string{"validate", path})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("validate = %v, want %q", err, tc.want)
 			}

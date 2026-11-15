@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // End-to-end tests: one pipeline, one scripted provider, assertions at every
@@ -150,6 +148,8 @@ func happyPathScript() []turn {
 // one, so the default a pipeline gets and the strategy it can name are held
 // to the same artifact flow.
 func TestEndToEndAgentHappyPath(t *testing.T) {
+	t.Parallel()
+
 	for _, mode := range []struct{ name, workspace string }{
 		{"default workspace", ""},
 		{"explicit copy workspace", "workspace:\n  strategy: copy\n"},
@@ -359,7 +359,7 @@ func testSadPathModelRejects(t *testing.T) {
 	)
 	path := e2ePipeline(t, dir, fake.URL, "")
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("run succeeded; the reject branch's escalate step exits 1, so the job must fail")
 	}
@@ -432,7 +432,7 @@ func testSadPathProviderUnreachable(t *testing.T) {
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("run succeeded despite the provider being unreachable")
 	}
@@ -499,6 +499,8 @@ func testSadPathProviderUnreachable(t *testing.T) {
 // next step, and the store records the try node as succeeded while the inner
 // step's node records its real outcome.
 func TestEndToEndTryToleratesFailure(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "try-after.log")
 
@@ -515,7 +517,7 @@ jobs:
 
 	path := writePipeline(t, dir, pipeline)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run should have succeeded (try swallowed the failure): %v", err)
 	}
@@ -548,6 +550,8 @@ jobs:
 // made every failure branch dead code and silently fell through to the next
 // step instead), and the wrapped step's own hooks must fire on its real result.
 func TestEndToEndTryRoutesOnRealOutcome(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	hookLog := filepath.Join(dir, "hook.log")
 	recoverLog := filepath.Join(dir, "recover.log")
@@ -574,7 +578,7 @@ jobs:
 
 	path := writePipeline(t, dir, pipeline)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run should have succeeded (the failure routed): %v", err)
 	}
@@ -595,6 +599,8 @@ jobs:
 // try-wrapped agent that can't be reached is shrugged off and the plan
 // carries on.
 func TestEndToEndTryToleratesInfraError(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	afterLog := filepath.Join(dir, "after.log")
 
@@ -624,7 +630,7 @@ jobs:
 
 	path := writePipeline(t, dir, pipeline)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err != nil {
 		t.Fatalf("run failed: %v — try: tolerates an infrastructure error", err)
 	}
@@ -639,6 +645,8 @@ jobs:
 // that an expired timeout: no longer produces the class (a timeout is a
 // failure, per Concourse — see docs/conformance.md).
 func TestEndToEndAgentInfraErrorFiresOnError(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	errorLog := filepath.Join(dir, "error.log")
 	failureLog := filepath.Join(dir, "failure.log")
@@ -672,7 +680,7 @@ jobs:
 
 	path := writePipeline(t, dir, pipeline)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("run should have failed: the provider is unreachable")
 	}
@@ -686,6 +694,8 @@ jobs:
 // not. The doc-tested deadline fixture in docs/attempts-timeout.md pins the
 // same thing through steps test; this one holds it through a plain run.
 func TestEndToEndTimeoutFiresOnFailure(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	failureLog := filepath.Join(dir, "failure.log")
 	errorLog := filepath.Join(dir, "error.log")
@@ -707,7 +717,7 @@ jobs:
 
 	path := writePipeline(t, dir, pipeline)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("run should have failed: the step outlived its timeout")
 	}
@@ -755,7 +765,7 @@ jobs:
 
 	logs := captureStderr(t)
 
-	err := cli.Run([]string{"run", path, "--job", "build"})
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err == nil {
 		t.Fatal("run succeeded despite the provider being unreachable")
 	}
@@ -849,6 +859,8 @@ jobs:
 // primary that answers preflight (disabled here, so it never even runs) and
 // then dies mid-conversation, after already completing one real tool turn.
 func TestEndToEndAgentMidRunFailover(t *testing.T) {
+	t.Parallel()
+
 	t.Run("resumes on the fallback source", testMidRunFailoverResumes)
 	t.Run("a non-transient failure does not fail over", testMidRunFailoverSkipsNonTransient)
 	t.Run("does not re-invoke a required tool the primary already satisfied", testMidRunFailoverDoesNotReinvokeRequiredTool)
@@ -1003,7 +1015,7 @@ func testMidRunFailoverSkipsNonTransient(t *testing.T) {
 
 	path := midRunFailoverPipeline(t, dir, "rejector", primary.URL, fallback.URL)
 
-	err := cli.Run([]string{path})
+	err := stepsRun(t, []string{path})
 	if err == nil {
 		t.Fatal("run succeeded despite the primary's second turn returning 400")
 	}
@@ -1199,6 +1211,8 @@ func logField(line, key string) string {
 // implicit deadline is 30 minutes, so without a per-tool bound this fixture
 // still passes, 30 seconds later.
 func TestEndToEndToolTimeoutIsData(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t,
 		callsTool("watch", map[string]any{"service": "widgetd"}),
@@ -1265,7 +1279,7 @@ jobs:
 	logs := captureStderr(t)
 
 	_ = captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build", "--progress", "plain"})
+		err := stepsRun(t, []string{"run", path, "--job", "build", "--progress", "plain"})
 		if err != nil {
 			t.Errorf("run: %v", err)
 		}
@@ -1280,6 +1294,8 @@ jobs:
 
 // Running a job by hand is how somebody confirms a fix, so a green manual run lets the breaker go rather than leaving the job held until a separate resume.
 func TestAGreenManualRunReleasesTheBreaker(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 jobs:
 - name: build
@@ -1290,7 +1306,7 @@ jobs:
 `)
 	build := func() {
 		_ = captureStdout(t, func() {
-			err := cli.Run([]string{"run", path, "--job", "build", "--progress", "plain"})
+			err := stepsRun(t, []string{"run", path, "--job", "build", "--progress", "plain"})
 			if err != nil {
 				t.Fatalf("run: %v", err)
 			}

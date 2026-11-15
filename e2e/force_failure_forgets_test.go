@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // A --force rerun that fails must not leave the older success standing for
@@ -14,6 +12,8 @@ import (
 // failure condition is a file the step reads, outside every hash, so all
 // three runs plan the same chain.
 func TestForcedFailureForgetsTheOlderSuccess(t *testing.T) {
+	t.Parallel()
+
 	const tail = `
   - task: c
     inputs: []
@@ -106,12 +106,12 @@ jobs:
 				t.Fatal(err)
 			}
 
-			err = cli.Run([]string{"--force", path})
+			err = stepsRun(t, []string{"--force", path})
 			if err == nil {
 				t.Fatal("forced run: want failure, got success")
 			}
 
-			err = cli.Run([]string{path})
+			err = stepsRun(t, []string{path})
 			if err == nil {
 				t.Fatal("rerun after a forced failure: want it to re-run and fail, got success (skipped on the older success)")
 			}

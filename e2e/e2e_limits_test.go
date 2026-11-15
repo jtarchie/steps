@@ -5,8 +5,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // This file covers the limit-dial convention: an omitted dial takes the
@@ -30,6 +28,8 @@ import (
 // turns plus the tool-less wrap-up); uncapped it is called 36 (35 tool turns
 // plus the model's own final answer).
 func TestAgentMaxTurnsZeroIsUnlimited(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	const toolTurns = 35
@@ -89,6 +89,8 @@ jobs:
 // 1ns is not a realistic deadline — it is a deterministic one. Any real
 // value would make this test a race against an httptest round trip.
 func TestAgentEntryTimeoutIsInheritedByItsSteps(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRoutedFakeLLM(t, func(_ capturedRequest) turn { return says("fine") })
 
@@ -111,7 +113,7 @@ jobs:
       - Say something.
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "expires"})
+	err := stepsRun(t, []string{"run", path, "--job", "expires"})
 	if err == nil {
 		t.Fatal("run succeeded, but the agent entry's timeout: 1ns should have expired the step")
 	}
@@ -124,6 +126,8 @@ jobs:
 // TestStepTimeoutBeatsAgentEntryTimeout is the other half of the precedence:
 // the narrower statement wins, exactly as max_turns: already behaves.
 func TestStepTimeoutBeatsAgentEntryTimeout(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newRoutedFakeLLM(t, func(_ capturedRequest) turn { return says("fine") })
 
@@ -160,6 +164,8 @@ jobs:
 // whether or not the entry's value was read at all. One attempt means the
 // first 503 is terminal, which only the inherited value produces.
 func TestAgentEntryAttemptsIsInheritedByItsSteps(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fake := newFakeLLM(t, failsWith(503), says("recovered"))
 
@@ -182,7 +188,7 @@ jobs:
       - Say something.
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "flaky"})
+	err := stepsRun(t, []string{"run", path, "--job", "flaky"})
 	if err == nil {
 		t.Fatal("run succeeded, but attempts: 1 on the agent entry should have made the first 503 terminal")
 	}

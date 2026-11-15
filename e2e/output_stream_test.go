@@ -138,8 +138,6 @@ jobs:
 
 	for name, write := range pipelines {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 			path := write(t.TempDir())
 			done := make(chan error, 1)
 

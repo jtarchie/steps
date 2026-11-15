@@ -49,6 +49,8 @@ jobs:
 
 // TestEndToEndGitHubIssueOpensOnePerCell: a step decides the children, and each across cell opens its own issue, numbered after everything the repository already holds.
 func TestEndToEndGitHubIssueOpensOnePerCell(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 	fake.addComment(fakeComment{ID: 501, Number: 12, Kind: "issue", Author: "alice", Body: "an old issue", Updated: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)})
@@ -92,11 +94,13 @@ func TestEndToEndGitHubIssueOpensOnePerCell(t *testing.T) {
 
 // TestEndToEndGitHubIssueRefusesAMultiLineTitle: a title GitHub would take whole is cut by no one, so the put fails before anything is opened.
 func TestEndToEndGitHubIssueRefusesAMultiLineTitle(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 
 	path := writePipeline(t, t.TempDir(), issueFanOut(fake, `printf 'Fix %s\nand more\n' "$c" > children/$c.title`))
 
-	err := cli.Run([]string{"run", path, "--job", "split"})
+	err := stepsRun(t, []string{"run", path, "--job", "split"})
 	if err == nil || !strings.Contains(err.Error(), "params.title_file") || !strings.Contains(err.Error(), "one line") {
 		t.Fatalf("run = %v, want the put refused naming params.title_file and its lines", err)
 	}

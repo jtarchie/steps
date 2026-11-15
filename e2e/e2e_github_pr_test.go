@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 const prHeadSHA = "feedfeedfeedfeedfeedfeedfeedfeedfeedfeed"
@@ -51,6 +49,8 @@ const prTitleBody = "      title_file: files/title\n      body_file: files/body.
 
 // TestEndToEndGitHubPROpensOne: a pushed branch with no open pull request gets one, from the files, onto the repository's default branch, and the put records its number and head commit.
 func TestEndToEndGitHubPROpensOne(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.defaultBranch = "trunk"
 	fake.pushBranch("feature/widgets", prHeadSHA)
@@ -95,6 +95,8 @@ func recordedPRVersions(t *testing.T, path string) []string {
 
 // TestEndToEndGitHubPRUpdatesTheOpenOne: a second put for the same branch edits the pull request the first opened rather than opening another; its draft state, labels and assignees are not touched.
 func TestEndToEndGitHubPRUpdatesTheOpenOne(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.pushBranch("feature/widgets", prHeadSHA)
 
@@ -127,6 +129,8 @@ func TestEndToEndGitHubPRUpdatesTheOpenOne(t *testing.T) {
 
 // TestEndToEndGitHubPRWithNothingToSayChangesNothing: an existing pull request and no title_file or body_file is left alone, not sent an empty PATCH.
 func TestEndToEndGitHubPRWithNothingToSayChangesNothing(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(fakePR{Number: 5, SHA: prHeadSHA, Title: "Hand written", Body: "mine", Author: "alice", Base: "main", Head: "feature/widgets"})
 
@@ -144,6 +148,8 @@ func TestEndToEndGitHubPRWithNothingToSayChangesNothing(t *testing.T) {
 
 // TestEndToEndGitHubPRReadyFlipsADraft: ready: true takes a draft out of draft. The pull request is opened as a draft by one put and flipped by the next, which is how a pipeline that reviews before it publishes uses it.
 func TestEndToEndGitHubPRReadyFlipsADraft(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.pushBranch("feature/widgets", prHeadSHA)
 
@@ -172,6 +178,8 @@ func TestEndToEndGitHubPRReadyFlipsADraft(t *testing.T) {
 
 // TestEndToEndGitHubPRRefusesToOpenWithoutAField: opening needs both files, and the failure names the one missing, before anything is sent.
 func TestEndToEndGitHubPRRefusesToOpenWithoutAField(t *testing.T) {
+	t.Parallel()
+
 	for field, params := range map[string]string{
 		"params.title_file": "      body_file: files/body.md\n",
 		"params.body_file":  "      title_file: files/title\n",
@@ -181,7 +189,7 @@ func TestEndToEndGitHubPRRefusesToOpenWithoutAField(t *testing.T) {
 
 		path := writePipeline(t, t.TempDir(), prPublishPipeline(fake, "Add widgets", "Body.", params))
 
-		err := cli.Run([]string{"run", path, "--job", "publish"})
+		err := stepsRun(t, []string{"run", path, "--job", "publish"})
 		if err == nil || !strings.Contains(err.Error(), field) || !strings.Contains(err.Error(), "feature/widgets") {
 			t.Errorf("%s: run = %v, want the put refused naming the field and the branch with no pull request", field, err)
 		}
@@ -194,12 +202,14 @@ func TestEndToEndGitHubPRRefusesToOpenWithoutAField(t *testing.T) {
 
 // TestEndToEndGitHubPRRefusesToRetarget: a base that is not the open pull request's fails the put and changes nothing, including a title it was also given.
 func TestEndToEndGitHubPRRefusesToRetarget(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.addPR(fakePR{Number: 5, SHA: prHeadSHA, Title: "old", Author: "alice", Base: "develop", Head: "feature/widgets"})
 
 	path := writePipeline(t, t.TempDir(), prPublishPipeline(fake, "New title", "Body.", prTitleBody+"      base: main\n"))
 
-	err := cli.Run([]string{"run", path, "--job", "publish"})
+	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err == nil || !strings.Contains(err.Error(), "params.base") || !strings.Contains(err.Error(), "develop") {
 		t.Fatalf("run = %v, want the put refused naming params.base and the pull request's own base", err)
 	}
@@ -211,6 +221,8 @@ func TestEndToEndGitHubPRRefusesToRetarget(t *testing.T) {
 
 // TestEndToEndGitHubPRIgnoresAClosedOne: only an open pull request is the branch's; a closed one does not stop a new one opening.
 func TestEndToEndGitHubPRIgnoresAClosedOne(t *testing.T) {
+	t.Parallel()
+
 	fake := newFakeGitHub(t)
 	fake.pushBranch("feature/widgets", prHeadSHA)
 	fake.addPR(fakePR{Number: 5, SHA: prHeadSHA, Title: "old", Author: "alice", Base: "main", Head: "feature/widgets", Closed: true})

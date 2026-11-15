@@ -256,7 +256,7 @@ func TestEndToEndAgentContainerLeavesNothingRunning(t *testing.T) {
 // compares before/after rather than asserting emptiness, so a developer with
 // unrelated containers around doesn't get a spurious failure.
 //
-// Scoped to this process's steps.pid label: the suite runs as several processes against one daemon, and another shard's container coming or going mid-run is not a leak of this one.
+// Scoped to this process's steps.pid label: the daemon is shared with every other test process on the machine (another package, another checkout), and their containers coming or going mid-run are not a leak of this one.
 func runningStepsContainers(t *testing.T) []string {
 	t.Helper()
 
