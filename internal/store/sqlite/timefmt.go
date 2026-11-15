@@ -4,7 +4,7 @@ import "time"
 
 // now is whole-second RFC3339, for columns nothing orders or subtracts finer
 // than a second (nodes, versions, approvals, usage, placements, the breaker).
-// A column that is ordered or subtracted takes nowNano instead.
+// A column that is ordered or subtracted takes nowNano instead, and so does resource_checks.checked_at: a daemon polls faster than a second and a watcher tells two polls apart by it.
 func now() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }

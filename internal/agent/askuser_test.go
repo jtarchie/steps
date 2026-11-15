@@ -326,6 +326,55 @@ func TestAskUserAnswerFromAnotherProcessEndsTheWait(t *testing.T) {
 	}
 }
 
+// questionsFacet names the embedded interface something other than Questions, which is also one of its methods.
+type questionsFacet = store.Questions
+
+// answeredAfterTheFirstPoll answers the moment the wait has read "pending" once, and keeps the time of every read from then on: the scripted case, `steps questions answer` straight after the question.
+type answeredAfterTheFirstPoll struct {
+	questionsFacet
+
+	reads *[]time.Time
+}
+
+func (s answeredAfterTheFirstPoll) QuestionStatus(ctx context.Context, id int64) (store.Question, error) {
+	question, err := s.questionsFacet.QuestionStatus(ctx, id)
+	if err != nil || (len(*s.reads) == 0 && question.Status != store.QuestionPending) {
+		return question, err //nolint:wrapcheck // a double answering what the store answers
+	}
+
+	*s.reads = append(*s.reads, time.Now())
+
+	if len(*s.reads) == 1 {
+		err = s.AnswerQuestion(ctx, id, "minor", "jtarchie")
+	}
+
+	return question, err //nolint:wrapcheck // a double answering what the store answers
+}
+
+// TestAskUserAnswerJustAfterTheParkIsSeenPromptly: at a fixed two-second poll an answer given just after the question sat recorded for two seconds. Asserted on the gap between the first two reads rather than on the whole wait, so a loaded machine has half the ceiling to schedule one short sleep in, and a fixed interval cannot meet it.
+func TestAskUserAnswerJustAfterTheParkIsSeenPromptly(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+
+	var reads []time.Time
+
+	fixture.env.ask.st = answeredAfterTheFirstPoll{questionsFacet: fixture.store, reads: &reads}
+
+	result := fixture.ask(askGrant{wait: 10 * time.Second}, "Which bump?")
+	if result["answer"] != "minor" {
+		t.Fatalf("parked ask = %v, want the out-of-band answer", result)
+	}
+
+	if len(reads) != 2 {
+		t.Fatalf("the wait read the question %d times, want the pending read and the one that saw the answer", len(reads))
+	}
+
+	if gap := reads[1].Sub(reads[0]); gap > askUserPollInterval/2 {
+		t.Errorf("the second read came %s after the first, want well inside the %s poll ceiling", gap, askUserPollInterval)
+	}
+}
+
 // TestAskUserAnswerInsideTheRecordWindowIsNotAMemo: the store records a
 // question and reads it back, and a person can answer between the two. That
 // row is this call's own — nothing earlier in the run asked it — so the answer

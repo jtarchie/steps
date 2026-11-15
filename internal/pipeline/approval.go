@@ -23,10 +23,12 @@ const (
 	// enough to survive a weekend evening and short enough that a forgotten
 	// approval does not hold a worker forever.
 	defaultApprovalTimeout = 24 * time.Hour
-	// approvalPollInterval is how often a waiting run re-reads the decision.
-	// A person is answering, so seconds are free and a busier loop would only
-	// spin the CPU.
+	// approvalPollInterval is the ceiling on how often a waiting run re-reads
+	// the decision. A person is answering, so seconds are free and a busier
+	// loop would only spin the CPU.
 	approvalPollInterval = 2 * time.Second
+	// approvalFirstPoll is where the wait starts before doubling up to the ceiling: a decision scripted straight after the park is seen at once, and the handful of extra reads stop within two seconds.
+	approvalFirstPoll = 50 * time.Millisecond
 )
 
 // runApprovalStep blocks until someone approves or rejects, or the wait
@@ -90,6 +92,8 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 func awaitApproval(ctx context.Context, st store.Approvals, id int64, timeout time.Duration) (store.Approval, error) {
 	var deadline time.Time
 
+	wait := approvalFirstPoll
+
 	for {
 		approval, err := st.ApprovalStatus(ctx, id)
 		if err != nil {
@@ -125,8 +129,10 @@ func awaitApproval(ctx context.Context, st store.Approvals, id int64, timeout ti
 		select {
 		case <-ctx.Done():
 			return approval, ctx.Err() //nolint:wrapcheck // ctx.Err() is a well-known sentinel
-		case <-time.After(approvalPollInterval):
+		case <-time.After(wait):
 		}
+
+		wait = min(wait*2, approvalPollInterval)
 	}
 }
 

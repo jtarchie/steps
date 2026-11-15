@@ -29,7 +29,7 @@ func recordCheckedVersion(ctx context.Context, db executor, pipelineID int64, re
 		ON CONFLICT(pipeline_id, resource_name) DO UPDATE SET
 			version_json = excluded.version_json,
 			checked_at   = excluded.checked_at
-	`, pipelineID, resourceName, versionJSON, now())
+	`, pipelineID, resourceName, versionJSON, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not record checked version for %q: %w", resourceName, err)
 	}
@@ -43,12 +43,12 @@ func (s *Store) CompareAndSetCheckedVersion(ctx context.Context, swap store.Chec
 
 	query := `UPDATE resource_checks SET version_json = ?, checked_at = ?
 		WHERE pipeline_id = ? AND resource_name = ? AND version_json = ?`
-	args := []any{next, now(), s.pipelineID, resourceName, expected}
+	args := []any{next, nowNano(), s.pipelineID, resourceName, expected}
 
 	if !expectedFound {
 		query = `INSERT INTO resource_checks (pipeline_id, resource_name, version_json, checked_at)
 			VALUES (?, ?, ?, ?) ON CONFLICT (pipeline_id, resource_name) DO NOTHING`
-		args = []any{s.pipelineID, resourceName, next, now()}
+		args = []any{s.pipelineID, resourceName, next, nowNano()}
 	}
 
 	result, err := s.db.ExecContext(ctx, query, args...)

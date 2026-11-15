@@ -123,3 +123,53 @@ func TestApprovalRecordKeepsOnlyWhatWasDecided(t *testing.T) {
 		}
 	}
 }
+
+// decidedAfterTheFirstRead approves the moment the wait has read "pending" once, and keeps the time of every read: the scripted case, `steps approvals approve` straight after a run starts.
+type decidedAfterTheFirstRead struct {
+	store.Store
+
+	reads *[]time.Time
+}
+
+func (s decidedAfterTheFirstRead) ApprovalStatus(ctx context.Context, id int64) (store.Approval, error) {
+	approval, err := s.Store.ApprovalStatus(ctx, id)
+	*s.reads = append(*s.reads, time.Now())
+
+	if err == nil && len(*s.reads) == 1 {
+		err = s.DecideApproval(ctx, id, store.ApprovalApproved, "jt", "")
+	}
+
+	return approval, err //nolint:wrapcheck // a double answering what the store answers
+}
+
+// At a fixed two-second poll a decision made just after the park sat decided for two seconds. Asserted on the gap between the first two reads rather than on the whole wait, so a loaded machine has half the ceiling to schedule one short sleep in, and a fixed interval cannot meet it.
+func TestADecisionMadeJustAfterTheParkIsSeenPromptly(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	id, err := st.RequestApproval(t.Context(), "publish", "ship it?")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var reads []time.Time
+
+	approval, err := awaitApproval(t.Context(), decidedAfterTheFirstRead{Store: st, reads: &reads}, id, time.Minute)
+	if err != nil || approval.Status != store.ApprovalApproved {
+		t.Fatalf("awaitApproval = %+v, %v; want it approved", approval, err)
+	}
+
+	if len(reads) != 2 {
+		t.Fatalf("the wait read the decision %d times, want the pending read and the one that saw it", len(reads))
+	}
+
+	if gap := reads[1].Sub(reads[0]); gap > approvalPollInterval/2 {
+		t.Errorf("the second read came %s after the first, want well inside the %s poll ceiling", gap, approvalPollInterval)
+	}
+}

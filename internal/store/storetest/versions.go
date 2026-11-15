@@ -263,6 +263,49 @@ func (s suite) TestTheCheckedVersionMovesOnlyFromWhatWasRead(t *testing.T) {
 	}
 }
 
+// TestARecheckWithinTheSecondIsToldApart: a daemon polling faster than once a second records each check, and a reader comparing CheckedAt has to see the later one as later — at whole seconds two checks tie and a watcher waits out the second to see the poll it is watching for.
+func (s suite) TestARecheckWithinTheSecondIsToldApart(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	checkedAt := func() time.Time {
+		checked, found, err := st.LastChecked(ctx, "push")
+		if err != nil || !found {
+			t.Fatalf("LastChecked: found=%v err=%v", found, err)
+		}
+
+		return checked.CheckedAt
+	}
+
+	err := st.RecordCheckedVersion(ctx, "push", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := checkedAt()
+
+	err = st.RecordCheckedVersion(ctx, "push", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := checkedAt()
+	if !second.After(first) {
+		t.Errorf("a recheck recorded %s, not after the check before it at %s", second, first)
+	}
+
+	moved, err := st.CompareAndSetCheckedVersion(ctx, store.CheckedSwap{Resource: "push", Expected: "a", ExpectedFound: true, Next: "b"})
+	if err != nil || !moved {
+		t.Fatalf("swap: moved=%v err=%v", moved, err)
+	}
+
+	if third := checkedAt(); !third.After(second) {
+		t.Errorf("a swap recorded %s, not after the check before it at %s", third, second)
+	}
+}
+
 // TestPassedVersionsAreNewestFirstWithinASecond: a green build records its
 // versions in one burst, so most of a job's rows share a timestamp. A limit
 // over a timestamp order alone would hand back an arbitrary subset of the

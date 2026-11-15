@@ -33,9 +33,11 @@ const (
 	// gates a step that is holding a workspace, a container and possibly a
 	// billed worker open while it waits.
 	defaultAskUserWait = 30 * time.Minute
-	// askUserPollInterval is how often a parked question re-reads its row. A
-	// person is answering, so seconds are free.
+	// askUserPollInterval is the ceiling on how often a parked question
+	// re-reads its row. A person is answering, so seconds are free.
 	askUserPollInterval = 2 * time.Second
+	// askUserFirstPoll is where the wait starts before doubling up to the ceiling: an answer scripted straight after the question is seen at once, and the handful of extra reads stop within two seconds.
+	askUserFirstPoll = 50 * time.Millisecond
 	// askUserQuestionArg / askUserOptionsArg are the tool's two arguments.
 	askUserQuestionArg = "question"
 	askUserOptionsArg  = "options"
@@ -453,6 +455,7 @@ func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Ques
 	defer endPrompt()
 
 	terminal := g.promptTerminal(promptCtx, env, row)
+	wait := askUserFirstPoll
 
 	for {
 		if done := g.poll(ctx, env, row, deadline, terminal); done != nil {
@@ -478,7 +481,8 @@ func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Ques
 			}
 
 			terminal = g.promptTerminal(promptCtx, env, row)
-		case <-time.After(askUserPollInterval):
+		case <-time.After(wait):
+			wait = min(wait*2, askUserPollInterval)
 		}
 	}
 }
