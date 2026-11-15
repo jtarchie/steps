@@ -60,12 +60,12 @@
        error) the switcher reads as a picker and no tabs are drawn: tabs
        borrowed from the first pipeline looked like the root's own. */}}
   {{if .Nav.Pipelines}}<div class="pipeswitch">
-    <button class="pipebtn" id="pipebtn" type="button" aria-haspopup="listbox" aria-expanded="false">{{template "markglyph" .Nav.SwitchMark}}{{if .Nav.Anchored}}<span class="visually-hidden">pipeline </span><b>{{.Nav.Current}}</b>{{else}}pipelines{{end}} <span class="caret" aria-hidden="true">▾</span></button>
-    <div class="pipemenu" id="pipemenu" role="listbox" aria-label="Pipelines">
+    <button class="pipebtn" id="pipebtn" type="button" aria-expanded="false" aria-controls="pipemenu">{{template "markglyph" .Nav.SwitchMark}}{{if .Nav.Anchored}}<span class="visually-hidden">pipeline </span><b>{{.Nav.Current}}</b>{{else}}pipelines{{end}} <span class="caret" aria-hidden="true">▾</span></button>
+    <div class="pipemenu" id="pipemenu" role="group" aria-label="Pipelines">
       {{range .Nav.Pipelines}}
       {{/* Not a link: a broken pipeline has no page to go to. Its reason is on the root and not here, because this shell also draws the error page a webhook sender gets, and that sender never passed this server's credentials. */}}
-      {{if .Broken}}<span class="broken" role="option" aria-disabled="true">{{template "markglyph" .Mark}}<span class="slug">{{.Slug}}</span> <span class="hint">not serving</span></span>{{else}}
-      <a role="option" {{if and $.Nav.Anchored (eq .Slug $.Nav.Current)}}aria-selected="true"{{end}} href="/p/{{.Slug}}">{{template "markglyph" .Mark}}<span class="slug">{{.Slug}}</span>{{template "counts" .}}</a>{{end}}
+      {{if .Broken}}<span class="broken">{{template "markglyph" .Mark}}<span class="slug">{{.Slug}}</span> <span class="hint">not serving</span></span>{{else}}
+      <a class="pipeitem" {{if and $.Nav.Anchored (eq .Slug $.Nav.Current)}}aria-current="page" {{end}}href="/p/{{.Slug}}">{{template "markglyph" .Mark}}<span class="slug">{{.Slug}}</span>{{template "counts" .}}</a>{{end}}
       {{end}}
     </div>
   </div>
@@ -88,12 +88,12 @@
     <button class="jumpbtn themebtn" id="themebtn" type="button" title="theme: auto follows the system, or pin light or dark"><span class="visually-hidden">theme </span><span class="themeicon" aria-hidden="true"></span><span class="themelabel"></span></button>
     {{/* The signed-in person, last on the line, and the daemon-wide pages that are about people rather than pipelines. Not drawn where nobody signs in. */}}
     {{with .Nav.Who}}<div class="usermenu">
-      <button class="pipebtn userbtn" id="userbtn" type="button" aria-haspopup="menu" aria-expanded="false" title="{{(actorOf .).Label}}"><span class="visually-hidden">signed in as </span><span class="who">{{(actorOf .).ID}}</span> <span class="caret" aria-hidden="true">▾</span></button>
-      <div class="pipemenu" id="usermenu" role="menu" aria-label="Account">
+      <button class="pipebtn userbtn" id="userbtn" type="button" aria-expanded="false" aria-controls="usermenu" title="{{(actorOf .).Label}}"><span class="visually-hidden">signed in as </span><span class="who">{{(actorOf .).ID}}</span> <span class="caret" aria-hidden="true">▾</span></button>
+      <div class="pipemenu" id="usermenu" role="group" aria-label="Account">
         <span class="menuhead">{{template "actor" .}}</span>
-        {{if ge $.Nav.Role 3}}<a role="menuitem" href="/activity">activity</a>{{end}}
-        {{if $.Nav.CanSignOut}}<a role="menuitem" href="/connections">connections</a>{{end}}
-        {{if $.Nav.CanSignOut}}<form method="post" action="/logout"><button class="menubtn" role="menuitem" type="submit">sign out</button></form>{{end}}
+        {{if ge $.Nav.Role 3}}<a href="/activity">activity</a>{{end}}
+        {{if $.Nav.CanSignOut}}<a href="/connections">connections</a>{{end}}
+        {{if $.Nav.CanSignOut}}<form method="post" action="/logout"><button class="menubtn" type="submit">sign out</button></form>{{end}}
       </div>
     </div>{{end}}
   </div>
@@ -139,8 +139,8 @@
 
 <div class="palette-backdrop" id="palette-backdrop"></div>
 <div class="palette" id="palette" role="dialog" aria-label="Jump to" data-search="/p/{{.Nav.Current}}/search">
-  <input id="palette-input" type="text" placeholder="jump to job, run, pipeline…" autocomplete="off">
-  <ul id="palette-list"></ul>
+  <input id="palette-input" type="text" role="combobox" aria-label="Jump to" aria-expanded="false" aria-controls="palette-list" aria-autocomplete="list" placeholder="jump to job, run, pipeline…" autocomplete="off">
+  <ul id="palette-list" role="listbox" aria-label="Results"></ul>
 </div>
 
 {{block "scripts" .}}{{end}}

@@ -198,7 +198,7 @@ func TestPagesAboveAPipelineDrawNoTabs(t *testing.T) {
 		}
 
 		menu := between(t, body, `id="pipemenu"`, "</div>")
-		if strings.Contains(menu, `aria-selected="true"`) {
+		if strings.Contains(menu, `aria-current="page"`) {
 			t.Errorf("%s switcher marks a pipeline as current on a page above all of them", page)
 		}
 	}

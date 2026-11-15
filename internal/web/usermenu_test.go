@@ -30,7 +30,7 @@ func TestTheUserMenuNamesWhoIsSignedIn(t *testing.T) {
 		t.Fatalf("the user menu is missing or comes before jump (jump %d, menu %d)", jump, menu)
 	}
 
-	for _, want := range []string{`<span class="who">ops</span>`, `aria-haspopup="menu"`, `<a role="menuitem" href="/activity">activity</a>`} {
+	for _, want := range []string{`<span class="who">ops</span>`, `aria-controls="usermenu"`, `<a href="/activity">activity</a>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the user menu does not carry %s", want)
 		}

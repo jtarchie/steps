@@ -141,7 +141,7 @@ jobs:
 func switcherRow(t *testing.T, page, slug string) string {
 	t.Helper()
 
-	start := strings.Index(page, `role="option"`)
+	start := strings.Index(page, `class="pipeitem"`)
 	for start >= 0 {
 		end := strings.Index(page[start:], "</a>")
 		if end < 0 {
@@ -153,7 +153,7 @@ func switcherRow(t *testing.T, page, slug string) string {
 			return row
 		}
 
-		next := strings.Index(page[start+end:], `role="option"`)
+		next := strings.Index(page[start+end:], `class="pipeitem"`)
 		if next < 0 {
 			break
 		}

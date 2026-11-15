@@ -395,7 +395,7 @@ func TestABrokenPipelineIsMarkedErrored(t *testing.T) {
 		t.Errorf("the root over a broken pipeline is titled %q, want !", titleText(root))
 	}
 
-	row := between(t, root, `class="broken" role="option"`, "not serving")
+	row := between(t, root, `class="broken"`, "not serving")
 
 	if !strings.Contains(row, `class="st-errored"`) {
 		t.Errorf("the broken pipeline's switcher row reads:\n%s", row)

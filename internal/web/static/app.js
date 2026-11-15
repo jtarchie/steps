@@ -1,4 +1,19 @@
 (function () {
+  // Single-key shortcuts can be switched off (WCAG 2.1.4): a speech-input
+  // user saying a word with a j in it would otherwise be walking the page.
+  // Kept on <html>, which no swap touches, and remembered per browser.
+  try { if (window.localStorage.getItem('steps.keys') === 'off') document.documentElement.dataset.keys = 'off'; } catch (err) {}
+
+  function keysOn() { return document.documentElement.dataset.keys !== 'off'; }
+
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('.keystoggle')) return;
+    var off = keysOn();
+    if (off) document.documentElement.dataset.keys = 'off';
+    else delete document.documentElement.dataset.keys;
+    try { window.localStorage.setItem('steps.keys', off ? 'off' : 'on'); } catch (err) {}
+  });
+
   // The switcher is inside #statusline, which every polling page now morphs
   // out of band so the attention marks on the OTHER pipelines stay live. That
   // makes an open menu reader state the server does not know about — like a
@@ -131,6 +146,17 @@
       var step = document.querySelector('[data-step="' + CSS.escape(key) + '"]');
       if (step) step.classList.toggle('open', open);
     });
+    syncExpanded();
+  }
+
+  // A row's toggle says whether it is open. The server draws the default;
+  // every fold here, and every morph that redraws the server's, can make it
+  // a lie, so it is re-read from the class rather than tracked.
+  function syncExpanded() {
+    document.querySelectorAll('.step[data-toggle]').forEach(function (step) {
+      var toggle = step.querySelector(':scope > .stephead > .steptoggle');
+      if (toggle) toggle.setAttribute('aria-expanded', String(step.classList.contains('open')));
+    });
   }
 
   // A shared link names a step; open it so the reader lands on the content
@@ -175,6 +201,7 @@
   function fold(step) {
     step.classList.toggle('open');
     if (step.dataset.step) remember(step.dataset.step, step.classList.contains('open'));
+    syncExpanded();
   }
 
   // <head> is never swapped, so the tab's title and icon follow the #mark
@@ -262,14 +289,6 @@
     if (head && head.parentElement && head.parentElement.parentElement) reveal(head.parentElement.parentElement);
   });
 
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    var step = toggleFrom(e.target);
-    if (!step) return;
-    e.preventDefault();
-    fold(step);
-  });
-
   // Keyboard navigation over the step tree.
   //
   // A run of any size is read by scanning, and on a tree the scan is the
@@ -290,10 +309,9 @@
     steps().forEach(function (other) { other.classList.remove('sel'); });
     step.classList.add('sel');
     chosen = step.dataset.step || null;
-    // Focused as well as marked, so Enter and Space reach the toggle handler
-    // above rather than needing a second copy of it here.
-    var head = step.querySelector(':scope > .stephead');
-    if (head && head.hasAttribute('tabindex')) head.focus({preventScroll: true});
+    // Focused as well as marked, so Enter and Space reach the row's toggle.
+    var toggle = step.querySelector(':scope > .stephead > button.steptoggle');
+    if (toggle) toggle.focus({preventScroll: true});
     step.scrollIntoView({block: 'center', behavior: 'smooth'});
   }
 
@@ -321,6 +339,7 @@
     // Once, not per row: each write serializes every fold, so per row was
     // quadratic on a large transcript.
     persist();
+    syncExpanded();
   }
 
   // The INNERMOST failure: a failed step inside a failed container is the one
@@ -338,10 +357,11 @@
       if (at.dataset.step) folds.set(at.dataset.step, true);
     }
     persist();
+    syncExpanded();
   }
 
   document.addEventListener('keydown', function (e) {
-    if (!transcript || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (!transcript || !keysOn() || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
     switch (e.key) {
@@ -409,11 +429,11 @@
   document.addEventListener('keydown', function (e) {
     var rows = pipelineRows();
     if (!rows.length || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (!e.target.closest || e.target.closest('input, textarea, select, button, [role="option"]')) return;
+    if (!e.target.closest || e.target.closest('input, textarea, select, button, .pipemenu')) return;
 
     // The arrows only once inside the table: elsewhere they scroll the page.
     var inside = spotOf(e.target);
-    var by = { j: [1, 0], k: [-1, 0], h: [0, -1], l: [0, 1] }[e.key];
+    var by = keysOn() ? { j: [1, 0], k: [-1, 0], h: [0, -1], l: [0, 1] }[e.key] : null;
     if (!by && inside) by = { ArrowDown: [1, 0], ArrowUp: [-1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
     if (!by) return;
 
@@ -447,10 +467,15 @@
   // served pipelines, a name written in one pipeline renders on every other
   // pipeline's page, so an innerHTML template would let a repo you merely
   // serve alongside your own run script on a page you never left.
+  // A combobox: focus stays in the input, and aria-activedescendant names the
+  // result the arrows are on, which is what a screen reader reads out.
   function draw() {
     list.textContent = '';
     hits.forEach(function (h, i) {
       var li = document.createElement('li');
+      li.id = 'palette-opt-' + i;
+      li.setAttribute('role', 'option');
+      li.setAttribute('aria-selected', String(i === sel));
       if (i === sel) { li.className = 'sel'; }
       li.dataset.url = h.url;
       li.appendChild(el('span', 'kind', h.kind));
@@ -459,6 +484,9 @@
       li.addEventListener('click', function () { window.location = li.dataset.url; });
       list.appendChild(li);
     });
+    input.setAttribute('aria-expanded', String(hits.length > 0));
+    if (hits[sel]) input.setAttribute('aria-activedescendant', 'palette-opt-' + sel);
+    else input.removeAttribute('aria-activedescendant');
   }
 
   function el(tag, cls, text) {
@@ -502,6 +530,7 @@
   }
   function close() {
     backdrop.classList.remove('open'); palette.classList.remove('open');
+    input.setAttribute('aria-expanded', 'false');
   }
 
   backdrop.addEventListener('click', close);
@@ -513,7 +542,7 @@
     else if (e.key === 'Escape') { close(); }
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key === '/' && !palette.classList.contains('open') && !e.target.closest('input, textarea')) {
+    if (e.key === '/' && keysOn() && !palette.classList.contains('open') && !e.target.closest('input, textarea')) {
       e.preventDefault(); open();
     }
   });
@@ -582,16 +611,21 @@
   // A wide table or code block scrolls inside itself, and a region that
   // scrolls but cannot take focus is one a keyboard can never scroll (WCAG
   // 2.1.1). Only the ones that overflow get a tab stop: a docs page has dozens
-  // of blocks, and a stop on each that fits would be noise.
-  function focusableScrollers() {
-    document.querySelectorAll('main pre, main table').forEach(function (el) {
+  // of blocks, and a stop on each that fits would be noise. Watched for size
+  // rather than checked once, because a box inside a folded row measures zero
+  // until the row is opened.
+  var scrollers = new ResizeObserver(function (entries) {
+    entries.forEach(function (entry) {
+      var el = entry.target;
       if (el.scrollWidth > el.clientWidth) el.setAttribute('tabindex', '0');
       else if (el.getAttribute('tabindex') === '0') el.removeAttribute('tabindex');
     });
+  });
+  function watchScrollers() {
+    document.querySelectorAll('main pre, main table').forEach(function (el) { scrollers.observe(el); });
   }
-  focusableScrollers();
-  window.addEventListener('resize', focusableScrollers);
-  document.addEventListener('htmx:after:swap', focusableScrollers);
+  watchScrollers();
+  document.addEventListener('htmx:after:swap', watchScrollers);
 
   // A second only when something is actively counting; otherwise half a
   // minute is plenty for text measured in minutes and hours.

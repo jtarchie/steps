@@ -1911,8 +1911,8 @@ func TestTheRootShowsABrokenPipeline(t *testing.T) {
 		t.Error("the broken pipeline's reason is not on the root, or is not escaped")
 	}
 
-	if !strings.Contains(body, `role="option" aria-disabled="true"`) || strings.Contains(body, `href="/p/gone"`) {
-		t.Error("the broken pipeline's switcher entry is a link, or is not marked disabled")
+	if !strings.Contains(body, `<span class="broken">`) || strings.Contains(body, `href="/p/gone"`) {
+		t.Error("the broken pipeline's switcher entry is a link rather than plain text")
 	}
 
 	code, body = get(t, server, "/p/gone")

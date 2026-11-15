@@ -80,11 +80,14 @@
 {{/* On the transcript's top edge, at the right: the keys drive the rows
      below, and a row of their own cost the first step a line. */}}
 <div class="transcripthead">
-  <div class="keyhint" aria-hidden="true">
-    <span><kbd>j</kbd>/<kbd>k</kbd> move</span>
-    <span><kbd>e</kbd>/<kbd>c</kbd> expand / collapse all</span>
-    <span><kbd>f</kbd> first failure</span>
-    <span><kbd>enter</kbd> toggle</span>
+  <div class="keyhint">
+    <span class="keys" aria-hidden="true">
+      <span><kbd>j</kbd>/<kbd>k</kbd> move</span>
+      <span><kbd>e</kbd>/<kbd>c</kbd> expand / collapse all</span>
+      <span><kbd>f</kbd> first failure</span>
+      <span><kbd>enter</kbd> toggle</span>
+    </span>
+    <button type="button" class="keystoggle"><span class="when-on">turn keys off</span><span class="when-off">keys are off · turn on</span></button>
   </div>
 </div>
 
@@ -255,11 +258,14 @@
 {{define "stepshell"}}<div id="{{.Step.Anchor}}" hx-swap-oob="outerMorph" hx-morph-skip-children{{template "stepattrs" .}}></div>
 {{template "stephead" .}}{{end}}
 
-{{define "stephead"}}{{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}{{$detail := $run.StepHasDetail $step}}<div class="stephead" id="{{$step.Anchor}}_head"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{if $detail}} role="button" tabindex="0"{{end}}>
+{{define "stephead"}}{{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}{{$detail := $run.StepHasDetail $step}}{{$body := $run.StepHasBody $step}}<div class="stephead" id="{{$step.Anchor}}_head"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}>
+    {{/* The toggle is a real button BESIDE the head's links, not the head itself: as role="button" around the permalink and node link it was a control inside a control (WCAG 4.1.2). app.js keeps aria-expanded in step with the reader's folds. */}}
+    {{if $detail}}<button type="button" class="steptoggle" aria-expanded="{{if $step.OpenByDefault}}true{{else}}false{{end}}" aria-controls="{{if $body}}{{$step.Anchor}}_body{{if $step.Container}} {{end}}{{end}}{{if $step.Container}}{{$step.Anchor}}_substeps{{end}}">{{else}}<span class="steptoggle">{{end}}
     <span class="chev{{if $detail}} chev-icon{{end}}"></span>
     {{if $step.Skipped}}<span class="stmark" role="img" aria-label="skipped">–</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="failed">✗</span>{{else if $step.Unreported}}<span class="stmark" role="img" aria-label="unreported">?</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="running">◐</span>{{else}}<span class="stmark" role="img" aria-label="passed">✓</span>{{end}}
     <span class="kind">{{$step.Kind}}</span>
     <span class="name">{{$step.Name}}</span>
+    {{if $detail}}</button>{{else}}</span>{{end}}
     <a class="anchor" href="#{{$step.Anchor}}" title="Link to this step" aria-label="Link to this step">#</a>
     {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
     {{if $step.Unreported}}<span class="note">did not report an end</span>{{end}}

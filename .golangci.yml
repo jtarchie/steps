@@ -979,6 +979,9 @@ linters:
             # goleak is test-only: goleak_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
+            # chromedp is test-only: browser_a11y_test.go drives a local Chrome to run the vendored axe-core over every page and walk it by keyboard.
+            - "github.com/chromedp/chromedp"
+            - "github.com/chromedp/cdproto"
             - "github.com/labstack/echo/v5"
             # bcrypt verifies a local user's password against the hash an operator gave, so the daemon never holds the password itself.
             - "golang.org/x/crypto/bcrypt"

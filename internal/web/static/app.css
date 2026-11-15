@@ -67,7 +67,7 @@ body {
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
 /* A link inside running text is underlined, because its color alone does not set it apart from the words around it. */
-.crumbs a, .metaline a:not(.hash), .deps a, .md a, .docs a { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 3px; }
+.crumbs a, .metaline a:not(.hash), .meta a, .deps a, .md a, .docs a { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 3px; }
 :focus-visible { outline: 2px solid var(--yellow); outline-offset: 1px; }
 /* Off-screen until focused, then over the bar's brand: the first Tab lands here, so a keyboard reader skips the bar's dozen controls in one Enter. */
 .skiplink { position: absolute; left: 8px; top: -100px; z-index: 30; padding: 6px 10px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
@@ -279,7 +279,7 @@ tr.checkfail pre { margin: 0 0 4px; }
 /* Every row reserves the marker's width, or the selected row's glyph sits a
    column right of every other and the glyph column stops being one. */
 .pipemenu a::before, .pipemenu .broken::before { content: ""; display: inline-block; width: 1.5ch; flex: none; }
-.pipemenu a[aria-selected="true"]::before { content: "›"; color: var(--green); }
+.pipemenu a[aria-current="page"]::before { content: "›"; color: var(--green); }
 .pipemenu .hint { margin-left: auto; color: var(--faint); font-size: 11px; }
 
 /* A finger needs more than 30px of row. Every control in the bar grows to the
@@ -726,11 +726,11 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 /* The rail tick's readable twin: same outcome as a glyph, so a row's status
    survives colorblindness and screen readers. */
 .stmark { flex: none; width: 14px; text-align: center; }
-.step.passed  > .stephead > .stmark { color: var(--green); }
-.step.failed  > .stephead > .stmark { color: var(--red); }
-.step.running > .stephead > .stmark { color: var(--yellow); }
-.step.skipped > .stephead > .stmark { color: var(--faint); }
-.step.unreported > .stephead > .stmark { color: var(--dim); }
+.step.passed  > .stephead .stmark { color: var(--green); }
+.step.failed  > .stephead .stmark { color: var(--red); }
+.step.running > .stephead .stmark { color: var(--yellow); }
+.step.skipped > .stephead .stmark { color: var(--faint); }
+.step.unreported > .stephead .stmark { color: var(--dim); }
 
 /* ---- depth ----
  *
@@ -796,6 +796,11 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
   border-bottom: 0;
   background: var(--panel);
 }
+.keyhint .keys { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+/* The switch's words follow html[data-keys], which no swap touches, so a poll cannot flip them back. Hidden text is not part of the button's name. */
+.keystoggle { margin-left: auto; padding: 0; border: 0; background: none; font: inherit; color: var(--blue); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.keystoggle .when-off, html[data-keys="off"] .keystoggle .when-on, html[data-keys="off"] .keyhint .keys { display: none; }
+html[data-keys="off"] .keystoggle .when-off { display: inline; }
 .keyhint kbd {
   font-family: var(--mono);
   color: var(--dim);
@@ -818,6 +823,8 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 }
 .step.skipped .stephead .kind { color: var(--faint); }
 .stephead .name { font-weight: 600; }
+/* The toggle carries the head's leading cells, laid out as the head lays them out, so becoming a real <button> moved nothing. */
+.steptoggle { display: flex; align-items: baseline; gap: 12px; min-width: 0; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .step.skipped .stephead .name { color: var(--dim); font-weight: 400; }
 .stephead .note { color: var(--faint); }
 /* One line, cut rather than wrapped: wrapped, a worker and an image stacked into word-columns that tripled the row. The step's "placed on" line holds the whole of it, digest included. */
@@ -1227,6 +1234,7 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
      to break at, so it needs permission to break anywhere — otherwise it sets
      the row's minimum width and pushes the whole page sideways. */
   .stephead .name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .stephead .steptoggle { flex: 1 1 auto; gap: 6px 9px; }
   .stephead .note { flex-basis: 100%; margin-left: 18px; }
 
   .headmeta {
@@ -1247,6 +1255,8 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
  * hovered or focused, so "look at this step" is a pastable URL rather than
  * a description of where to click. */
 .stephead .anchor {
+  padding: 2px 8px;
+  margin: -2px -8px;
   color: var(--faint);
   opacity: 0;
   text-decoration: none;
