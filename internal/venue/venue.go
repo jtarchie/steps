@@ -15,15 +15,15 @@ import (
 // The zero case hands back to shell.NewRunner, except a container step with a tree: that runs on the implicit local: worker, through volumes, so this machine's docker is reached the way any other is and never bind-mounts a host path (steps#246).
 func NewRunner(worker Worker, spec shell.RunnerSpec) (shell.Runner, error) {
 	if worker.Here() {
+		// A tree-less command (a check, an export call) has no path to mount, and a holder container per poll would buy nothing.
+		if spec.Image != "" && spec.Cwd != "" {
+			return newPlusRunner(implicitLocal, spec)
+		}
+
 		// Refused rather than dropped: a local runner cannot fetch them, so
 		// the step would run against a tree missing those inputs.
 		if len(spec.RemoteInputs) > 0 {
 			return nil, errRemoteInputsHere
-		}
-
-		// A tree-less command (a check, an export call) has no path to mount, and a holder container per poll would buy nothing.
-		if spec.Image != "" && spec.Cwd != "" {
-			return newPlusRunner(implicitLocal, spec)
 		}
 
 		return shell.NewRunner(spec) //nolint:wrapcheck // the local path is shell's answer, returned as shell phrased it

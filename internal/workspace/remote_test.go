@@ -627,3 +627,71 @@ func TestAWaitingReaderPullsItselfWhenTheFirstPullIsAbandoned(t *testing.T) {
 		t.Errorf("second reader inherited the first's failure: %v", secondErr)
 	}
 }
+
+// TestAHoldOutlivesTheProcessThatMadeIt: a build continuing in the same tree, as a resume does, learns what a worker held from the tree and pulls it, while a hold a later capture superseded stays superseded.
+func TestAHoldOutlivesTheProcessThatMadeIt(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	heldTree(t, bw)
+	supersededHold(t, bw, "old")
+
+	provider := newTestCopyProvider(t)
+	provider.Reuse(bw.Root())
+
+	resumed, err := provider.NewBuild(t.Context(), "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var asked []string
+
+	err = resumed.RestoreHeld(func(holder, digest string) func(context.Context, string) error {
+		asked = append(asked, holder+" "+digest)
+
+		return func(_ context.Context, dst string) error {
+			return os.WriteFile(filepath.Join(dst, "f.txt"), []byte("held\n"), 0o600)
+		}
+	})
+	if err != nil {
+		t.Fatalf("RestoreHeld: %v", err)
+	}
+
+	reader, err := resumed.TaskSpace(t.Context(), "reader", []string{"src"}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("the continuing build could not read what the worker held: %v", err)
+	}
+
+	defer func() { _ = reader.Close() }()
+
+	content, err := os.ReadFile(filepath.Join(reader.Dir(), "src", "f.txt"))
+	if err != nil || string(content) != "held\n" {
+		t.Errorf("the reader saw %q, %v; want the pulled tree", content, err)
+	}
+
+	if want := "local:/somewhere " + strings.Repeat("ab", 32); len(asked) != 1 || asked[0] != want {
+		t.Errorf("restored pulls for %q, want only %q: the superseded hold must stay superseded", asked, want)
+	}
+}
+
+// supersededHold records name as held and then captures it here, which is what a later step producing it locally does.
+func supersededHold(t *testing.T, bw BuildWorkspace, name string) {
+	t.Helper()
+
+	err := bw.HoldRemote(name, RemoteArtifact{Digest: strings.Repeat("ef", 32), Holder: "local:", Pull: func(context.Context, string) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	space, err := bw.TaskSpace(t.Context(), "producer", nil, []string{name}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = space.Capture(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = space.Close()
+}

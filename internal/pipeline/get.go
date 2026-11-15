@@ -172,6 +172,11 @@ func (w *planWalk) runTriggeredBuild(
 		return fmt.Errorf("could not create workspace for %q: %w", resource.Name, err)
 	}
 
+	err = bw.RestoreHeld(pullHeld)
+	if err != nil {
+		return fmt.Errorf("could not create workspace for %q: %w", resource.Name, err)
+	}
+
 	// Torn down only when the build SUCCEEDS. A failed build's tree is what a
 	// resume continues in — the same reason RunJob keeps the workspace on
 	// failure — and destroying it here is what made an isolated run

@@ -43,16 +43,7 @@ func holdRemoteOutputs(bw workspace.BuildWorkspace, outputs []string, mapping ma
 			name = mapped
 		}
 
-		err := bw.HoldRemote(name, workspace.RemoteArtifact{
-			Name:   out,
-			Digest: digest,
-			Holder: holder,
-			Pull: func(ctx context.Context, dst string) error {
-				_, err := venue.Pull(ctx, holder, digest, dst)
-
-				return err //nolint:wrapcheck // the workspace names the artifact and the holder around it
-			},
-		})
+		err := bw.HoldRemote(name, workspace.RemoteArtifact{Name: out, Digest: digest, Holder: holder, Pull: pullHeld(holder, digest)})
 		if err != nil {
 			return err //nolint:wrapcheck // the workspace names the artifact
 		}
@@ -61,12 +52,26 @@ func holdRemoteOutputs(bw workspace.BuildWorkspace, outputs []string, mapping ma
 	return nil
 }
 
+// pullHeld brings a tree home from the worker that holds it.
+func pullHeld(holder, digest string) func(context.Context, string) error {
+	return func(ctx context.Context, dst string) error {
+		_, err := venue.Pull(ctx, holder, digest, dst)
+
+		return err //nolint:wrapcheck // the workspace names the artifact and the holder around it
+	}
+}
+
+// onWorker reports whether a step with image runs on a docker worker, tagged or the implicit local: one, and so can be handed inputs a worker holds; the rest run here and read every input from this disk.
+func onWorker(step config.Step, image string) bool {
+	return placementTag(step) != "" || image != ""
+}
+
 // placedTaskSpace is the step space for a task, leaving inputs on their
 // holders whenever the step is placed — the venue moves them through the
 // store when one is configured and pipes them through this machine when not;
 // otherwise the ordinary space, which pulls what it needs here.
 func placedTaskSpace(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, rt config.ResolvedTask, outputMapping map[string]string) (workspace.StepSpace, map[string]shell.RemoteInput, error) {
-	if placementTag(step) == "" {
+	if !onWorker(step, rt.Image) {
 		space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
 
 		return space, nil, err //nolint:wrapcheck // the caller names the task
@@ -78,8 +83,8 @@ func placedTaskSpace(ctx context.Context, bw workspace.BuildWorkspace, step conf
 }
 
 // placedPutSpace is placedTaskSpace for a put.
-func placedPutSpace(ctx context.Context, bw workspace.BuildWorkspace, step config.Step) (workspace.StepSpace, map[string]shell.RemoteInput, error) {
-	if placementTag(step) == "" {
+func placedPutSpace(ctx context.Context, cfg *config.Config, bw workspace.BuildWorkspace, step config.Step) (workspace.StepSpace, map[string]shell.RemoteInput, error) {
+	if !onWorker(step, cfg.PlacedImage(step)) {
 		space, err := bw.PutSpace(ctx, step.Put, step.InputNames(), step.InputsAll())
 
 		return space, nil, err //nolint:wrapcheck // the caller names the put
@@ -129,10 +134,12 @@ type heldSinkKey struct{}
 type heldSink struct {
 	held   map[string]string
 	holder string
+	// as is the artifact name a get's tree is held under, for a stage whose runner is built without the step.
+	as string
 }
 
-func withHeldSink(ctx context.Context) (context.Context, *heldSink) {
-	sink := &heldSink{}
+func withHeldSink(ctx context.Context, as string) (context.Context, *heldSink) {
+	sink := &heldSink{as: as}
 
 	return context.WithValue(ctx, heldSinkKey{}, sink), sink
 }
@@ -184,4 +191,14 @@ func inputDigests(space workspace.StepSpace) shell.InputDigests {
 	digests, _ := space.(shell.InputDigests)
 
 	return digests
+}
+
+// heldAs is the name the stage's sink holds a get's tree under; empty outside a stage, which holds nothing.
+func heldAs(ctx context.Context) string {
+	sink, _ := ctx.Value(heldSinkKey{}).(*heldSink)
+	if sink == nil {
+		return ""
+	}
+
+	return sink.as
 }

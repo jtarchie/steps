@@ -115,6 +115,11 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
+	err = bw.RestoreHeld(pullHeld)
+	if err != nil {
+		return fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
 	// Retention, registered BEFORE the event bus so it runs AFTER closeBus has
 	// flushed: what links a node to a run is an event naming its hash, and
 	// pruning while events were still queued would let a resumed run's older

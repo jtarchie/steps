@@ -1,0 +1,241 @@
+package e2e
+
+// An untagged image: step keeps its outputs in this machine's docker until something here reads them, as a step tagged onto a local: worker does (steps#259, phase 1).
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/jtarchie/steps/internal/cli"
+)
+
+// untaggedPayload is big enough that a transfer of it cannot hide under the metadata a placement always moves.
+const untaggedPayload = 4 << 20
+
+// movedNothing is the most a placement may count and still be said to have moved no payload: archive headers and a few small files.
+const movedNothing = 64 << 10
+
+// untaggedProducer writes a random payload and its sha256 into src, from an untagged image: step.
+func untaggedProducer() string {
+	return fmt.Sprintf(`  - task: make
+    image: %s
+    outputs: [src]
+    run: |
+      head -c %d /dev/urandom > src/blob.bin
+      sha256sum src/blob.bin | cut -d' ' -f1 > src/sum
+`, dockerE2EImage, untaggedPayload)
+}
+
+// TestUntaggedImageStepsPassAnArtifactInsideDocker: the producer's output never comes home and the consumer is not sent it, yet the consumer reads the producer's bytes.
+func TestUntaggedImageStepsPassAnArtifactInsideDocker(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+`+untaggedProducer()+fmt.Sprintf(`  - task: consume
+    image: %[1]s
+    inputs: [src]
+    outputs: [out]
+    run: |
+      sha256sum src/blob.bin | cut -d' ' -f1 > out/got
+      cp src/sum out/want
+  - task: publish
+    inputs: [out]
+    run: cp out/got %[2]s/got && cp out/want %[2]s/want
+`, dockerE2EImage, dir))
+
+	out, kept, err := runKept(t, path, nil)
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+
+	assertNeverLanded(t, kept)
+
+	got, want := readFileString(t, filepath.Join(dir, "got")), readFileString(t, filepath.Join(dir, "want"))
+	if got != want || strings.TrimSpace(got) == "" {
+		t.Errorf("the consumer hashed %q, the producer wrote %q: the consumer must read the producer's bytes", got, want)
+	}
+
+	placements := runPlacements(t, path)
+
+	if made := placementNamed(t, placements, "make"); made.BytesReceived > movedNothing {
+		t.Errorf("make received %d bytes home, want at most %d: its output stays in docker until something here reads it", made.BytesReceived, movedNothing)
+	}
+
+	if consumed := placementNamed(t, placements, "consume"); consumed.BytesSent > movedNothing {
+		t.Errorf("consume sent %d bytes, want at most %d: the tree it reads is already in docker", consumed.BytesSent, movedNothing)
+	}
+}
+
+// TestAHostStepReadsWhatAnUntaggedImageStepHeld: a step with no image runs here, so the held output is pulled home for it, whole.
+func TestAHostStepReadsWhatAnUntaggedImageStepHeld(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+`+untaggedProducer()+fmt.Sprintf(`  - task: read
+    inputs: [src]
+    run: cp src/blob.bin src/sum %s/
+`, dir))
+
+	mustRun(t, path)
+
+	requireSumMatches(t, dir)
+
+	if made := placementNamed(t, runPlacements(t, path), "make"); made.BytesReceived > movedNothing {
+		t.Errorf("make received %d bytes home, want at most %d: the host step pulls it on demand instead", made.BytesReceived, movedNothing)
+	}
+}
+
+// TestAResumeReadsWhatAnUntaggedImageStepHeld: the run that held the output is gone, so the resumed one learns where the bytes are from the kept tree; with a get first the steps live in the get's build rather than the job's.
+func TestAResumeReadsWhatAnUntaggedImageStepHeld(t *testing.T) {
+	for name, get := range map[string]string{"job build": "", "get build": `
+resource_types:
+- name: here
+  config:
+    check: printf '[{"ref":"v1"}]'
+    in: "true"
+
+resources:
+- name: tick
+  type: here
+  source: {}
+`} {
+		t.Run(name, func(t *testing.T) {
+			assertResumeReadsHeld(t, get)
+		})
+	}
+}
+
+func assertResumeReadsHeld(t *testing.T, resources string) {
+	t.Helper()
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	fixed := filepath.Join(dir, "fixed")
+
+	first := ""
+	if resources != "" {
+		first = "  - get: tick\n"
+	}
+
+	path := writePipeline(t, dir, resources+`
+jobs:
+- name: build
+  plan:
+`+first+untaggedProducer()+fmt.Sprintf(`  - task: fragile
+    run: test -f %s
+  - task: read
+    inputs: [src]
+    run: cp src/blob.bin src/sum %s/
+`, fixed, dir))
+
+	out := captureStdout(t, func() {
+		if cli.Run([]string{"run", path}) == nil {
+			t.Fatal("expected the fragile step to fail")
+		}
+	})
+
+	writePipelineFile(t, fixed, "")
+
+	out = captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--resume", resumeID(t, out)})
+		if err != nil {
+			t.Fatalf("resume failed: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "skip: make") {
+		t.Fatalf("the resume ran make again, so this test proves nothing about a held output:\n%s", out)
+	}
+
+	requireSumMatches(t, dir)
+}
+
+// TestAnUntaggedImageGetAndPutKeepTheTreeInDocker: a resource type with an image: holds its in: tree, and a put of that type is not sent a tree docker already has.
+func TestAnUntaggedImageGetAndPutKeepTheTreeInDocker(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+resource_types:
+- name: blob
+  image: %[1]s
+  config:
+    check: printf '[{"ref":"v1"}]'
+    in: |
+      head -c %[2]d /dev/urandom > blob.bin
+      sha256sum blob.bin | cut -d' ' -f1 > sum
+    out: test -s src/sum && test "$(sha256sum src/blob.bin | cut -d' ' -f1)" = "$(cat src/sum)" && printf '{"ref":"pushed"}'
+
+resources:
+- name: repo
+  type: blob
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: src
+    resource: repo
+  - put: repo
+    inputs: [src]
+`, dockerE2EImage, untaggedPayload))
+
+	out, kept, err := runKept(t, path, nil)
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+
+	assertNeverLanded(t, kept)
+
+	said := false
+
+	for _, row := range latestRunEvents(t, path) {
+		said = said || row.Text == `put: repo (version: {"ref":"pushed"})`
+	}
+
+	if !said {
+		t.Error("the put did not answer a version, so it did not read the get's bytes intact")
+	}
+
+	placements := runPlacements(t, path)
+
+	if got := placementNamed(t, placements, "src"); got.BytesReceived > movedNothing {
+		t.Errorf("the get received %d bytes home, want at most %d: its tree stays in docker", got.BytesReceived, movedNothing)
+	}
+
+	if put := placementNamed(t, placements, "repo"); put.BytesSent > movedNothing {
+		t.Errorf("the put sent %d bytes, want at most %d: the tree it reads is already in docker", put.BytesSent, movedNothing)
+	}
+}
+
+// requireSumMatches checks the blob a host step copied out against the sum its producer wrote.
+func requireSumMatches(t *testing.T, dir string) {
+	t.Helper()
+
+	blob, err := os.ReadFile(filepath.Join(dir, "blob.bin")) //nolint:gosec // a t.TempDir() file the pipeline wrote
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sum := sha256.Sum256(blob)
+
+	if got, want := hex.EncodeToString(sum[:]), strings.TrimSpace(readFileString(t, filepath.Join(dir, "sum"))); got != want || len(blob) != untaggedPayload {
+		t.Errorf("the host step read %d bytes hashing %s, want %d bytes hashing %s", len(blob), got, untaggedPayload, want)
+	}
+}

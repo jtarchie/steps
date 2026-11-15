@@ -102,6 +102,8 @@ type BuildWorkspace interface {
 	PlacedPutSpace(ctx context.Context, label string, inputs []string, all bool) (StepSpace, map[string]RemoteArtifact, error)
 	// HoldRemote records an output a placed step left on its worker.
 	HoldRemote(name string, remote RemoteArtifact) error
+	// RestoreHeld reads back the holds a previous process recorded in this tree, for a resume or a replay continuing in it; pull makes each one's Pull.
+	RestoreHeld(pull func(holder, digest string) func(context.Context, string) error) error
 	// FetchResource returns the directory for resource name, populated either
 	// from the cache entry for cacheKey or by calling fetch. fetch receives the
 	// directory to populate and is called at most once; when it is not called,

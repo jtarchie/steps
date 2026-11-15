@@ -106,7 +106,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 		return nil, fmt.Errorf("put %q: %w", step.Put, err)
 	}
 
-	space, remote, err := placedPutSpace(ctx, bw, step)
+	space, remote, err := placedPutSpace(ctx, cfg, bw, step)
 	if err != nil {
 		return nil, fmt.Errorf("put %q: %w", step.Put, err)
 	}

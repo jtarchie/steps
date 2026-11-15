@@ -164,7 +164,7 @@ jobs:
 - **Requires `root:`.** The cache has to outlive the run that filled it; a cache under a temp directory the provider deletes would be a slower way to fetch once. Rejected at load time.
 - **Keyed on content, not plan position** — a hash of the `in:` command, source, version, and execution settings (`image:`/`env:`/`user:`/`network:`), deliberately *not* the get node's merkle hash, so two jobs fetching the same version share one entry.
 - **A hit costs a copy** (copy-on-write where the filesystem offers it), but no fetch. **A failed fetch is never cached.** **A cache failure never fails a build** — anything wrong falls back to fetching. The startup sweep spares it.
-- **The cache is a reader on this disk.** A `get` placed on a worker (`tags:`) leaves its tree there until something here reads it — and with the cache on, the cache is that something: the tree comes home to be filed. See [infra.md](infra.md#resources-on-workers).
+- **The cache is a reader on this disk.** A `get` whose resource type has an `image:` leaves its tree in docker — on its worker (`tags:`), or this machine's daemon when it has no tag — until something here reads it, and with the cache on, the cache is that something: the tree comes home to be filed. See [infra.md](infra.md#resources-on-workers).
 
 ## Step output cache (`volatile:`)
 
@@ -201,7 +201,7 @@ jobs:
 - **`volatile:` is only valid on task and agent steps**, and never on a hook — anywhere else it would read as configured while binding nothing, so it is a load error.
 - **Requires `root:`.** Same reason the resource cache does: an entry has to outlive the run that wrote it. Without one, nothing is cached and nothing is stored.
 - **A hit costs a copy** (copy-on-write where the filesystem offers it), never a model call. **A failed step is never cached**, and **a cache failure never fails a build** — anything wrong falls back to running the step. Entries are evicted least-recently-used.
-- **The cache is a reader on this disk.** A placed step's outputs stay on its worker until something here reads them; with a durable `root:` the step cache is that something, and the outputs come home to be filed.
+- **The cache is a reader on this disk.** A container step's outputs stay in docker — on its worker, or this machine's daemon for an untagged `image:` step — until something here reads them; with a durable `root:` the step cache is that something, and the outputs come home to be filed.
 
 ## Task caches (`caches:`)
 
@@ -288,6 +288,7 @@ put: repo
 
 - **This is not the merkle cache.** The cache asks "has this *content* succeeded before", which is deliberately never true for a put or an agent. A resume asks something narrower and answerable for exactly those steps: "did **this run** already do this one".
 - **A failed run keeps its workspace**, and says where — the files a step had just written when it failed are what the resumed steps continue from.
+- **What docker holds for the run is remembered in that workspace.** An output a container step left in docker instead of bringing home is recorded beside the run's artifacts, so a resumed (or `--replay`ed) step that reads it pulls it then, as the run that made it would have. If the daemon or worker no longer holds it — evicted, or the machine gone — the step that reads it fails naming the artifact and the worker.
 - **The job name comes from the run id.** `--resume <id>` alone is enough.
 - **Steps are recorded as done on success only.** A failed step is exactly the one a resume must run again.
 - **A run is one build.** A `version: every` get builds each version as a run of its own, so a resume continues exactly the version that failed; its siblings are other runs, green or not. `steps runs steps -p <pipeline> <run>` lists what a resume will skip.

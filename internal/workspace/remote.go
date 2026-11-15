@@ -10,11 +10,25 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 
 	"github.com/jtarchie/steps/internal/config"
 )
+
+// heldFile records, beside artifacts/, what workers hold for the build: the in-memory record dies with the process, and a resume or a replay continues in this tree from another one.
+const heldFile = "held.json"
+
+// heldRecord is a RemoteArtifact without its Pull, which only the pipeline can make.
+type heldRecord struct {
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
+	Holder string `json:"holder"`
+}
 
 // RemoteArtifact is where an artifact's bytes are when they are not here.
 type RemoteArtifact struct {
@@ -65,11 +79,88 @@ func (b *isolatingBuild) HoldRemote(name string, remote RemoteArtifact) error {
 	}
 
 	b.remote[name] = remote
+	err = b.saveHeld()
 	b.remoteMu.Unlock()
 
 	b.forgetDigests([]string{name})
 
+	if err != nil {
+		return fmt.Errorf("remote artifact %q: %w", name, err)
+	}
+
 	return nil
+}
+
+// saveHeld writes every current hold, with remoteMu held. Renamed into place, so a process killed mid-write leaves the last whole record.
+func (b *isolatingBuild) saveHeld() error {
+	records := make(map[string]heldRecord, len(b.remote))
+	for name, remote := range b.remote {
+		records[name] = heldRecord{Name: remote.Name, Digest: remote.Digest, Holder: remote.Holder}
+	}
+
+	data, err := json.Marshal(records)
+	if err != nil {
+		return fmt.Errorf("recording what workers hold: %w", err)
+	}
+
+	path := filepath.Join(b.root, heldFile)
+
+	err = os.WriteFile(path+".tmp", data, 0o600)
+	if err == nil {
+		err = os.Rename(path+".tmp", path)
+	}
+
+	if err != nil {
+		return fmt.Errorf("recording what workers hold: %w", err)
+	}
+
+	return nil
+}
+
+// RestoreHeld reads back what a previous process recorded as held for this tree. A record whose artifact is on disk again is stale (a later capture or fetch replaced it, or a pull landed) and is skipped, which is also what makes not rewriting the file on every forget safe.
+func (b *isolatingBuild) RestoreHeld(pull func(holder, digest string) func(context.Context, string) error) error {
+	data, err := os.ReadFile(filepath.Join(b.root, heldFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("reading what workers hold for %s: %w", b.root, err)
+	}
+
+	var records map[string]heldRecord
+
+	err = json.Unmarshal(data, &records)
+	if err != nil {
+		return fmt.Errorf("reading what workers hold for %s: %w", b.root, err)
+	}
+
+	b.remoteMu.Lock()
+	defer b.remoteMu.Unlock()
+
+	if b.remote == nil {
+		b.remote = map[string]RemoteArtifact{}
+	}
+
+	for name, record := range records {
+		if b.staleHold(name, record) {
+			continue
+		}
+
+		b.remote[name] = RemoteArtifact{Name: record.Name, Digest: record.Digest, Holder: record.Holder, Pull: pull(record.Holder, record.Digest)}
+	}
+
+	return nil
+}
+
+func (b *isolatingBuild) staleHold(name string, record heldRecord) bool {
+	if config.ValidateArtifactPath(name) != nil || record.Digest == "" {
+		return true
+	}
+
+	_, err := os.Lstat(filepath.Join(b.artifacts, name))
+
+	return err == nil
 }
 
 func (b *isolatingBuild) remoteArtifact(name string) (RemoteArtifact, bool) {

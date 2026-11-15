@@ -64,14 +64,22 @@ func WithResourcePlacement(ctx context.Context) context.Context {
 	})
 }
 
-// hereRunner builds an untagged stage's runner through the venue, which puts a container stage with a tree on the implicit local: worker.
+// hereRunner builds an untagged stage's runner through the venue, which puts a container stage with a tree on the implicit local: worker; that one keeps its tree there as a tagged stage's worker does (steps#259).
 func hereRunner(ctx context.Context, spec shell.RunnerSpec) (shell.Runner, error) {
+	if spec.Image != "" && spec.Cwd != "" {
+		spec.DeferFetch, spec.HoldAs, spec.Keep = spec.FetchAll, heldAs(ctx), keepFrom(ctx)
+		spec.RemoteInputs = remoteInputsFrom(ctx)
+	}
+
 	runner, err := newRunner(venue.Worker{}, spec)
 	if err != nil {
 		return nil, err
 	}
 
-	return closingRunner{Runner: runner, onClose: func(r shell.Runner) { notePlacement(ctx, r) }}, nil
+	return closingRunner{Runner: runner, onClose: func(r shell.Runner) {
+		notePlacement(ctx, r)
+		noteHeld(ctx, r)
+	}}, nil
 }
 
 // placedRunner builds one stage's runner on its worker, reading what the
@@ -289,7 +297,7 @@ func runPlacedStage(ctx context.Context, step config.Step, stage func(context.Co
 
 		// Before Place, so the placer the stage dials through leaves what
 		// the worker kept where the stage can read it back (heldFrom).
-		ctx, _ = withHeldSink(ctx)
+		ctx, _ = withHeldSink(ctx, step.Get)
 
 		ctx, err = rsrc.Place(ctx, step)
 		if err != nil {

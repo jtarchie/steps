@@ -185,4 +185,17 @@ func TestZeroWorkerIsThisMachine(t *testing.T) {
 	if !errors.Is(err, errRemoteInputsHere) {
 		t.Errorf("remote inputs with no worker: %v, want errRemoteInputsHere", err)
 	}
+
+	spec.Image = "alpine:3"
+
+	boxed, err := NewRunner(Worker{}, spec)
+	if err != nil {
+		t.Fatalf("an untagged image: step offered a held input: %v, want the implicit local: worker to receive it (steps#259)", err)
+	}
+
+	_ = boxed.Close()
+
+	if _, ok := boxed.(plusRunner); !ok {
+		t.Errorf("an untagged image: step built a %T, want the implicit local: worker's", boxed)
+	}
 }
