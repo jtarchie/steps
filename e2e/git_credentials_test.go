@@ -34,6 +34,7 @@ func gitHTTPRemote(t *testing.T) (string, string) {
 	bare := filepath.Join(root, "x.git")
 	gitIn(t, root, "clone", "-q", "--bare", fixtureRepo(t, "served\n"), bare)
 	gitIn(t, bare, "config", "http.receivepack", "true")
+	quietRemote(t, bare)
 
 	backend := &cgi.Handler{
 		Path: gitPath,

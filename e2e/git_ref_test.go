@@ -15,8 +15,19 @@ func bareFixture(t *testing.T) string {
 
 	bare := filepath.Join(t.TempDir(), "x.git")
 	gitIn(t, t.TempDir(), "clone", "-q", "--bare", fixtureRepo(t, "served\n"), bare)
+	quietRemote(t, bare)
 
 	return bare
+}
+
+// quietRemote stops a push from leaving a process behind in bare. Since git
+// 2.47 receive-pack ends with `git maintenance run --auto --detach`, which
+// outlives the push and writes objects/maintenance.lock after the put returned;
+// a t.TempDir() cleanup racing it fails with "directory not empty" (#261).
+func quietRemote(t *testing.T, bare string) {
+	t.Helper()
+
+	gitIn(t, bare, "config", "receive.autogc", "false")
 }
 
 // refPipeline gets main, makes two commits (first, second) and records both shas, then puts with the given params.
