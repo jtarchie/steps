@@ -62,7 +62,7 @@ jobs:
 		t.Errorf("a pipeline whose jobs all passed is titled %q, want it to lead with ✓", title)
 	}
 
-	if icon := faviconOf(t, board); !strings.Contains(icon, "%2384c06d") {
+	if icon := faviconOf(t, board); !strings.Contains(icon, "%23a4cb82") {
 		t.Errorf("a pipeline whose jobs all passed wears %q, want the green disc", icon)
 	}
 }

@@ -451,3 +451,45 @@ func TestDeltaE2000MatchesSharmaTable(t *testing.T) {
 		}
 	}
 }
+
+// TestThePaletteIsColorBlindSafe: the six hues are told apart by people with every common color-vision deficiency, not only by people without one. Every pair stays ΔE2000 10 apart under simulated protanopia, deuteranopia and tritanopia, in both themes — the threshold at which Adobe's color-blindness checker (color.adobe.com/create/color-accessibility) stopped flagging the pairs it flagged in the old palette, so this test and that tool agree. A new hue joins the list, or says here why it does not.
+func TestThePaletteIsColorBlindSafe(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hues := []string{"green", "red", "yellow", "blue", "magenta", "cyan"}
+
+	for i, tokens := range themeTokens(t, css) {
+		for a := range hues {
+			for b := a + 1; b < len(hues); b++ {
+				for _, vision := range visions {
+					if d := deltaE2000(lab(vision.simulate(tokens[hues[a]])), lab(vision.simulate(tokens[hues[b]]))); d < 10 {
+						t.Errorf("%s, %s: --%s %s and --%s %s are only ΔE %.1f apart", themeNames[i], vision.name, hues[a], tokens[hues[a]], hues[b], tokens[hues[b]], d)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestTheFaviconDrawsInThePalette: the tab icon's dots are drawn server-side as SVG, so they hold their own copies of the dark theme's colors; a palette change that skipped them shipped a favicon in colors the page no longer uses.
+func TestTheFaviconDrawsInThePalette(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dark := themeTokens(t, css)[1]
+
+	for token, drawn := range map[string]string{"bg": colorBg, "dim": colorDim, "faint-line": colorFaint, "green": colorGreen, "red": colorRed, "yellow": colorYellow, "blue": colorBlue} {
+		if dark[token] != drawn {
+			t.Errorf("the favicon draws --%s as %s; the dark theme's is %s", token, drawn, dark[token])
+		}
+	}
+}

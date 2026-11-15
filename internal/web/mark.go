@@ -238,10 +238,10 @@ const (
 	colorBg     = "#111310"
 	colorDim    = "#83887b"
 	colorFaint  = "#565b50"
-	colorGreen  = "#84c06d"
+	colorGreen  = "#a4cb82"
 	colorRed    = "#e0645a"
-	colorYellow = "#d9a94a"
-	colorBlue   = "#7aa4d9"
+	colorYellow = "#d6a43d"
+	colorBlue   = "#4e93ff"
 )
 
 var discColors = map[disc]string{

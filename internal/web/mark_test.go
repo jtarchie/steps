@@ -86,7 +86,7 @@ func TestMarkWordsSayTheRingWithoutALeadingComma(t *testing.T) {
 func TestMarkFavicon(t *testing.T) {
 	t.Parallel()
 
-	const ring = "fill=%27none%27%20stroke=%27%23d9a94a%27"
+	const ring = "fill=%27none%27%20stroke=%27%23d6a43d%27"
 
 	for _, tc := range []struct {
 		name    string
@@ -95,9 +95,9 @@ func TestMarkFavicon(t *testing.T) {
 		notWant []string
 	}{
 		{"failed", mark{Disc: discFailed}, []string{"fill=%27%23e0645a%27"}, []string{ring, "%3Ctext"}},
-		{"passed and running", mark{Disc: discPassed, Ring: true}, []string{ring, "fill=%27%2384c06d%27"}, nil},
-		{"paused", mark{Disc: discPaused}, []string{"fill=%27%237aa4d9%27"}, nil},
-		{"waiting", mark{Disc: discFailed, Needs: 3}, []string{"fill=%27%23d9a94a%27", "%3E3%3C/text%3E"}, []string{"%23e0645a"}},
+		{"passed and running", mark{Disc: discPassed, Ring: true}, []string{ring, "fill=%27%23a4cb82%27"}, nil},
+		{"paused", mark{Disc: discPaused}, []string{"fill=%27%234e93ff%27"}, nil},
+		{"waiting", mark{Disc: discFailed, Needs: 3}, []string{"fill=%27%23d6a43d%27", "%3E3%3C/text%3E"}, []string{"%23e0645a"}},
 		{"overflowing", mark{Needs: 12}, []string{"%3E9+%3C/text%3E"}, []string{"12"}},
 		{"nine still fits", mark{Needs: 9}, []string{"font-size=%279%27", "%3E9%3C/text%3E"}, []string{"9+"}},
 		{"ringed count", mark{Ring: true, Needs: 9}, []string{ring, "font-size=%277%27", "%3E9%3C/text%3E"}, nil},
@@ -265,8 +265,8 @@ func TestAHiddenTabAsksForWhatThePageWouldDraw(t *testing.T) {
 	finishedRun(t, pipelines[0], "b-ok", "app-job", "succeeded")
 
 	for _, tc := range []struct{ page, route, color string }{
-		{"/", "/mark", "%2384c06d"},
-		{"/p/app", "/p/app/mark", "%2384c06d"},
+		{"/", "/mark", "%23a4cb82"},
+		{"/p/app", "/p/app/mark", "%23a4cb82"},
 		{"/p/app/runs/b-bad", "/p/app/runs/b-bad/mark", "%23e0645a"},
 	} {
 		_, page := get(t, server, tc.page)
