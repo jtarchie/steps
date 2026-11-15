@@ -153,7 +153,8 @@ tasks:
       # running `task` at once took 640s each and both FAILED, docker tests
       # that take two seconds alone taking two to four minutes. What a test
       # waits on is now fixed where it waited, tests that share nothing say
-      # t.Parallel, and docker-backed e2e tests stay one at a time.
+      # t.Parallel, and a docker-backed e2e test stays serial (overlapping them
+      # three-wide was measured and bought nothing: the VM is the bottleneck).
       #
       # checkptr is off inside modernc.org ONLY: the sqlite driver is C
       # transpiled to Go, pointer arithmetic by construction, and -race turns
@@ -171,7 +172,7 @@ tasks:
         [ $unit_status -eq 0 ] && [ $e2e_status -eq 0 ]
 
   test:race:
-    desc: "./e2e under the race detector — the race coverage task test leaves out for speed. `task` prints a line when it has not passed in 10 commits."
+    desc: "./e2e under the race detector — the race coverage task test leaves out for speed. ~13 minutes on a quiet machine, in one process. `task` prints a line when it has not passed in 10 commits."
     env:
       GORACE: atexit_sleep_ms=0
     cmds:
