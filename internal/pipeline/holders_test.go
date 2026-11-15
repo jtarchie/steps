@@ -104,3 +104,19 @@ func TestHoldRemoteOutputsRecordsEveryKeptOutput(t *testing.T) {
 		t.Errorf("a refused hold returned %v, want the workspace's error", err)
 	}
 }
+
+// TestOnlyARunnerBackedPutIsHandedHeldInputs: an mcp: out reads its params' files from this disk, so an image: on its type must not leave them in docker.
+func TestOnlyARunnerBackedPutIsHandedHeldInputs(t *testing.T) {
+	t.Parallel()
+
+	shellType := config.ResourceType{Image: "alpine:3"}
+	mcpType := config.ResourceType{Image: "alpine:3", Config: config.ResourceTypeConfig{MCP: &config.MCPResourceConfig{Server: "s"}}}
+
+	if !onWorker(config.Step{}, runnerImage(shellType)) {
+		t.Error("an untagged put whose shell type has an image: runs on the implicit local: worker and should be handed held inputs")
+	}
+
+	if onWorker(config.Step{}, runnerImage(mcpType)) {
+		t.Error("an untagged mcp: put would be handed held inputs it reads from this disk")
+	}
+}

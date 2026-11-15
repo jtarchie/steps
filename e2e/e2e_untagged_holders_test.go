@@ -239,3 +239,107 @@ func requireSumMatches(t *testing.T, dir string) {
 		t.Errorf("the host step read %d bytes hashing %s, want %d bytes hashing %s", len(blob), got, untaggedPayload, want)
 	}
 }
+
+// TestAReplayReadsWhatAnUntaggedImageStepHeld: the replayed step is the first reader, in a tree forked from a run that never brought the output home.
+func TestAReplayReadsWhatAnUntaggedImageStepHeld(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+
+	pipeline := func(read string) string {
+		return `
+jobs:
+- name: build
+  plan:
+` + untaggedProducer() + `  - task: read
+` + read
+	}
+
+	path := writePipeline(t, dir, pipeline("    run: \"true\"\n"))
+
+	err := cli.Run([]string{"run", path, "--keep-workspace"})
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	writePipeline(t, dir, pipeline(fmt.Sprintf("    inputs: [src]\n    run: cp src/blob.bin src/sum %s/\n", dir)))
+
+	captureStdout(t, func() {
+		err = cli.Run([]string{"run", path, "--replay", runIDFromStore(t, path), "--from", "read"})
+		if err != nil {
+			t.Fatalf("replay: %v", err)
+		}
+	})
+
+	requireSumMatches(t, dir)
+}
+
+// TestAHostPutReadsWhatAnUntaggedImageStepHeld: a put whose type has no image: runs here, so its input is pulled home for it.
+func TestAHostPutReadsWhatAnUntaggedImageStepHeld(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+resource_types:
+- name: sink
+  config:
+    check: printf '[]'
+    out: cp src/blob.bin src/sum %s/ && printf '{"ref":"pushed"}'
+
+resources:
+- name: target
+  type: sink
+  source: {}
+
+jobs:
+- name: build
+  plan:
+`, dir)+untaggedProducer()+`  - put: target
+    inputs: [src]
+`)
+
+	mustRun(t, path)
+
+	requireSumMatches(t, dir)
+}
+
+// TestTheStepCacheFilesWhatAnUntaggedImageStepHeld: the cache under root: is a reader here, so both steps are filed and the second run restores both.
+func TestTheStepCacheFilesWhatAnUntaggedImageStepHeld(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	sums := filepath.Join(dir, "sums")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+workspace:
+  root: %[1]s/ws
+
+jobs:
+- name: build
+  plan:
+`, dir)+untaggedProducer()+fmt.Sprintf(`  - task: consume
+    image: %[1]s
+    inputs: [src]
+    outputs: [out]
+    run: sha256sum src/blob.bin | cut -d' ' -f1 > out/got
+  - task: publish
+    volatile: true
+    inputs: [out]
+    run: cat out/got >> %[2]s
+`, dockerE2EImage, sums))
+
+	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--force")
+
+	lines := strings.Fields(readFileString(t, sums))
+	if len(lines) != 2 || lines[0] != lines[1] {
+		t.Errorf("the two runs saw %q, want one payload twice: make must be restored from the cache, not run again", lines)
+	}
+
+	for _, step := range []string{"make", "consume"} {
+		if got := storeNodeResult(t, path, step); !strings.Contains(got, `"reused":true`) {
+			t.Errorf("%s on the second run: %s, want it restored from the step cache", step, got)
+		}
+	}
+}
