@@ -147,6 +147,14 @@ func TestEvaluateStepGuardSeesTheViewTheStepGets(t *testing.T) {
 				When:         &config.WhenSpec{Run: "grep -q high evidence/risk.txt"},
 			},
 		},
+		{
+			name: "a load_var: reads its declared inputs",
+			step: config.Step{
+				LoadVar: "risk", VarFile: "facts/risk.txt",
+				Inputs: config.Inputs("facts"),
+				When:   &config.WhenSpec{Run: "test -s facts/risk.txt"},
+			},
+		},
 	}
 
 	for _, tc := range cases {

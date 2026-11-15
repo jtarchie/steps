@@ -29,6 +29,31 @@ func TestVarFlowThroughNestedSteps(t *testing.T) {
       inputs: [meta]
   - task: after
     run: echo ((tag))`, "((tag))"},
+		"a guarded capture does not escape its guard": {`
+  - load_var: tag
+    file: meta/v
+    inputs: [meta]
+    when: test -s meta/v
+  - task: after
+    when: test -s meta/v
+    run: echo ((tag))`, "((tag))"},
+		"nor reaches the guarded step's own on_success": {`
+  - do:
+    - load_var: tag
+      file: meta/v
+      inputs: [meta]
+    when: test -s meta/v
+    on_success:
+      task: tell
+      run: echo ((tag))`, "((tag))"},
+		"a guarded do: carries the capture to its consumers": {`
+  - do:
+    - load_var: tag
+      file: meta/v
+      inputs: [meta]
+    - task: after
+      run: echo ((tag))
+    when: test -s meta/v`, ""},
 		"a race yields only what every branch captured": {`
   - race:
       steps:

@@ -142,7 +142,7 @@ type guardInputs struct {
 func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec, guardInputs, error) {
 	kind, _ := step.Kind()
 
-	switch kind { //nolint:exhaustive // default covers config.StepKindGet and a malformed step alike — nothing to resolve here
+	switch kind { //nolint:exhaustive // default covers load_var, get and a malformed step alike — nothing to resolve but their declared inputs
 	case config.StepKindTask:
 		rt, err := cfg.ResolveTask(step)
 		if err != nil {
@@ -177,7 +177,11 @@ func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec,
 
 		return withIsolation(shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env}, resourceType.Isolation()),
 			guardInputs{inputs: step.InputNames(), all: step.InputsAll()}, nil
-	default: // config.StepKindGet, or a malformed step — nothing to resolve here
-		return shell.RunnerSpec{}, guardInputs{}, nil
+	default:
+		// Nothing to resolve: the step runs on the host over its own declared
+		// inputs, if any. A load_var: reads its file from exactly those
+		// (runLoadVarStep's TaskSpace); returning none here handed its guard an
+		// empty directory and a permanent false (#262).
+		return shell.RunnerSpec{}, guardInputs{inputs: step.InputNames()}, nil
 	}
 }
