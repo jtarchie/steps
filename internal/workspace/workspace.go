@@ -96,8 +96,8 @@ type BuildWorkspace interface {
 	// misspelled name is still an error the moment the step itself runs.
 	GuardSpace(ctx context.Context, label string, inputs []string, inputMapping map[string]string, all bool) (StepSpace, error)
 	// PlacedTaskSpace is TaskSpace for a step that runs on a worker, leaving
-	// inputs other workers hold on their holders, reported by declared name.
-	PlacedTaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, map[string]RemoteArtifact, error)
+	// inputs other workers hold on their holders, reported by declared name. lazy leaves an input that is not also an output uncopied until its venue asks (shell.LazyInputs).
+	PlacedTaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string, lazy bool) (StepSpace, map[string]RemoteArtifact, error)
 	// PlacedPutSpace is PutSpace, the same way.
 	PlacedPutSpace(ctx context.Context, label string, inputs []string, all bool) (StepSpace, map[string]RemoteArtifact, error)
 	// HoldRemote records an output a placed step left on its worker.

@@ -213,7 +213,7 @@ func TestAPlacedSpaceLeavesAHeldInputOnItsHolder(t *testing.T) {
 	bw := newBuild(t)
 	pulls := heldTree(t, bw)
 
-	space, remote, err := bw.PlacedTaskSpace(context.Background(), "consumer", []string{"src"}, []string{"out"}, nil, nil)
+	space, remote, err := bw.PlacedTaskSpace(context.Background(), "consumer", []string{"src"}, []string{"out"}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("PlacedTaskSpace: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestAPlacedSpacePullsAMappedInput(t *testing.T) {
 	bw := newBuild(t)
 	pulls := heldTree(t, bw)
 
-	space, remote, err := bw.PlacedTaskSpace(context.Background(), "consumer", []string{"code"}, nil, map[string]string{"code": "src"}, nil)
+	space, remote, err := bw.PlacedTaskSpace(context.Background(), "consumer", []string{"code"}, nil, map[string]string{"code": "src"}, nil, false)
 	if err != nil {
 		t.Fatalf("PlacedTaskSpace: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestAPlacedSpaceDoesNotClobberAHeldInputItAlsoOutputs(t *testing.T) {
 	bw := newBuild(t)
 	_ = heldTree(t, bw)
 
-	space, _, err := bw.PlacedTaskSpace(context.Background(), "editor", []string{"src"}, []string{"src"}, nil, nil)
+	space, _, err := bw.PlacedTaskSpace(context.Background(), "editor", []string{"src"}, []string{"src"}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("PlacedTaskSpace: %v", err)
 	}
@@ -373,7 +373,7 @@ func TestAPlacedSpaceCapturesAnOutputItsWorkerKept(t *testing.T) {
 	bw := newBuild(t)
 	_ = heldTree(t, bw)
 
-	space, _, err := bw.PlacedTaskSpace(context.Background(), "editor", []string{"src"}, []string{"src"}, nil, nil)
+	space, _, err := bw.PlacedTaskSpace(context.Background(), "editor", []string{"src"}, []string{"src"}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("PlacedTaskSpace: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestAPlacedSpacePullsAnInputTheHolderFiledUnderAnotherName(t *testing.T) {
 		t.Fatalf("HoldRemote: %v", err)
 	}
 
-	space, remote, err := bw.PlacedTaskSpace(context.Background(), "consumer", []string{"x"}, nil, nil, nil)
+	space, remote, err := bw.PlacedTaskSpace(context.Background(), "consumer", []string{"x"}, nil, nil, nil, false)
 	if err != nil {
 		t.Fatalf("PlacedTaskSpace: %v", err)
 	}

@@ -136,7 +136,10 @@ func placedTaskSpace(ctx context.Context, bw workspace.BuildWorkspace, step conf
 		return space, nil, err //nolint:wrapcheck // the caller names the task
 	}
 
-	space, remote, err := bw.PlacedTaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
+	// Only an image: task reads its inputs through volumes alone: a fix: agent, an assert: files: check or a tagged host command read this machine's copy.
+	lazy := rt.Image != "" && deferrable(step, rt)
+
+	space, remote, err := bw.PlacedTaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping, lazy)
 
 	return space, remoteInputs(remote), err
 }

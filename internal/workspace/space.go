@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/jtarchie/steps/internal/config"
 )
@@ -105,14 +106,14 @@ func (b *isolatingBuild) allArtifacts() ([]string, error) {
 }
 
 func (b *isolatingBuild) newSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, error) {
-	return b.newSpaceLeaving(ctx, label, inputs, outputs, inputMapping, outputMapping, nil)
+	return b.newSpaceLeaving(ctx, label, inputs, outputs, inputMapping, outputMapping, nil, false)
 }
 
 // newSpaceLeaving is newSpace with some inputs left on the workers that hold
 // them (PlacedTaskSpace): those are neither pulled nor materialized, and an
 // output of the same name is not created empty over the tree the worker
 // will place.
-func (b *isolatingBuild) newSpaceLeaving(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string, leaving map[string]RemoteArtifact) (StepSpace, error) {
+func (b *isolatingBuild) newSpaceLeaving(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string, leaving map[string]RemoteArtifact, lazy bool) (StepSpace, error) {
 	// The build-global counter (not the plan index) numbers the directory, so
 	// uniqueness never depends on the caller passing a distinct label.
 	n := b.stepCounter.Add(1)
@@ -123,7 +124,7 @@ func (b *isolatingBuild) newSpaceLeaving(ctx context.Context, label string, inpu
 		return nil, fmt.Errorf("could not create step workspace %q: %w", dir, err)
 	}
 
-	copied, err := b.materializeSpace(ctx, dir, inputs, outputs, inputMapping, outputMapping, leaving)
+	copied, pending, err := b.materializeSpace(ctx, dir, inputs, outputs, inputMapping, outputMapping, leaving, lazy && !b.keep)
 	if err != nil {
 		// Tear down whatever was already materialized under dir, so a
 		// mid-loop failure doesn't leak input copies until the
@@ -140,11 +141,11 @@ func (b *isolatingBuild) newSpaceLeaving(ctx context.Context, label string, inpu
 	return &isolatingSpace{
 		backend: b.backend, artifacts: b.artifacts, dir: dir,
 		outputs: outputs, outputMapping: outputMapping, keep: b.keep,
-		captured: b.superseded, left: leaving, build: b, copied: copied,
+		captured: b.superseded, left: leaving, build: b, copied: copied, pending: pending,
 	}, nil
 }
 
-// copiedInput is the artifact an input directory was copied from, and that artifact's generation when the copy began: a digest remembered at the same generation names these bytes.
+// copiedInput is the artifact an input directory was copied from, and that artifact's generation when the copy began: a digest remembered at the same generation names these bytes. A lazy input's generation is when its space was made, and its copy waits in pending.
 type copiedInput struct {
 	artifact   string
 	generation uint64
@@ -158,13 +159,14 @@ type copiedInput struct {
 // declared name (what the task's run: expects), while the artifact copied in /
 // captured out uses the mapped name. On any error the caller (newSpace)
 // removes dir.
-func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, inputs, outputs []string, inputMapping, outputMapping map[string]string, leaving map[string]RemoteArtifact) (map[string]copiedInput, error) {
+func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, inputs, outputs []string, inputMapping, outputMapping map[string]string, leaving map[string]RemoteArtifact, lazy bool) (map[string]copiedInput, map[string]string, error) {
 	copied := make(map[string]copiedInput, len(inputs))
+	pending := map[string]string{}
 
 	for _, in := range inputs {
 		err := config.ValidateArtifactName(in)
 		if err != nil {
-			return nil, fmt.Errorf("input %q: %w", in, err)
+			return nil, nil, fmt.Errorf("input %q: %w", in, err)
 		}
 
 		if _, left := leaving[in]; left {
@@ -175,28 +177,39 @@ func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, input
 
 		err = b.ensureLocal(ctx, artifact)
 		if err != nil {
-			return nil, fmt.Errorf("input %q: %w", in, err)
+			return nil, nil, fmt.Errorf("input %q: %w", in, err)
 		}
 
 		src := filepath.Join(b.artifacts, artifact)
 
 		err = rejectSymlinkSrc(src)
 		if err != nil {
-			return nil, fmt.Errorf("input %q: %w", in, err)
+			return nil, nil, fmt.Errorf("input %q: %w", in, err)
 		}
 
 		// Read before the copy, so a capture landing during it leaves a generation no remembered digest can match.
 		_, generation, _ := b.rememberedDigest(artifact)
+		copied[in] = copiedInput{artifact: artifact, generation: generation}
+
+		// An edited input stays eager: its copy here is what the step's changes come home over and what Capture writes back.
+		if lazy && !slices.Contains(outputs, in) {
+			pending[in] = src
+
+			err = b.backend.createEmpty(ctx, filepath.Join(dir, in))
+			if err != nil {
+				return nil, nil, fmt.Errorf("input %q: %w", in, err)
+			}
+
+			continue
+		}
 
 		err = b.backend.materialize(ctx, src, filepath.Join(dir, in))
 		if err != nil {
-			return nil, fmt.Errorf("materializing input %q: %w", in, err)
+			return nil, nil, fmt.Errorf("materializing input %q: %w", in, err)
 		}
-
-		copied[in] = copiedInput{artifact: artifact, generation: generation}
 	}
 
-	return copied, b.materializeOutputs(ctx, dir, inputs, outputs, outputMapping)
+	return copied, pending, b.materializeOutputs(ctx, dir, inputs, outputs, outputMapping)
 }
 
 // materializeOutputs is materializeSpace's output half, split out to stay
@@ -279,6 +292,9 @@ type isolatingSpace struct {
 	// build and copied answer KnownDigest/LearnDigest: what this build has already digested of each input's bytes.
 	build  *isolatingBuild
 	copied map[string]copiedInput
+	// pending are lazy inputs not yet copied, by declared name to their artifact path; pendingMu because a venue may ask from its own goroutine.
+	pendingMu sync.Mutex
+	pending   map[string]string
 }
 
 func (s *isolatingSpace) Dir() string { return s.dir }
@@ -291,8 +307,49 @@ func (s *isolatingSpace) KnownDigest(name string) (string, bool) {
 	}
 
 	digest, generation, ok := s.build.rememberedDigest(input.artifact)
+	if ok || !s.isPending(name) {
+		return digest, ok && generation == input.generation
+	}
+
+	// Walked off the artifact rather than a copy, which is the point of not making one; artifactDigest keeps it only if nothing replaced the artifact meanwhile.
+	_, err := s.build.artifactDigest(input.artifact)
+	if err != nil {
+		return "", false
+	}
+
+	digest, generation, ok = s.build.rememberedDigest(input.artifact)
 
 	return digest, ok && generation == input.generation
+}
+
+// Materialize copies a lazy input now, for a venue that missed its digest and needs the bytes; any other name is already here.
+func (s *isolatingSpace) Materialize(ctx context.Context, name string) error {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+
+	src, ok := s.pending[name]
+	if !ok {
+		return nil
+	}
+
+	// Into the placeholder, which a cache's mount point may already sit in.
+	err := s.backend.materialize(ctx, src, filepath.Join(s.dir, name))
+	if err != nil {
+		return fmt.Errorf("materializing input %q: %w", name, err)
+	}
+
+	delete(s.pending, name)
+
+	return nil
+}
+
+func (s *isolatingSpace) isPending(name string) bool {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+
+	_, ok := s.pending[name]
+
+	return ok
 }
 
 // LearnDigest keeps a digest a venue walked of input name's copy, for the next step reading the same artifact; rememberDigest drops it if the artifact moved since the copy.

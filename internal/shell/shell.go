@@ -169,6 +169,33 @@ type InputDigests interface {
 	LearnDigest(name, digest string)
 }
 
+// LazyInputs is a memo whose space left some inputs uncopied: a worker holding their digest never needs this machine's bytes, and cloning a large tree cost more than the step (steps#246).
+type LazyInputs interface {
+	Materialize(ctx context.Context, name string) error
+}
+
+// MaterializeInputs copies every input a lazy memo left out under cwd, for a venue that sends the whole tree.
+func MaterializeInputs(ctx context.Context, memo InputDigests, cwd string) error {
+	lazy, ok := memo.(LazyInputs)
+	if !ok {
+		return nil
+	}
+
+	entries, err := os.ReadDir(cwd)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	for _, entry := range entries {
+		err = lazy.Materialize(ctx, entry.Name())
+		if err != nil {
+			return fmt.Errorf("input %q: %w", entry.Name(), err)
+		}
+	}
+
+	return nil
+}
+
 // errTreeOutsideVolume is a container asked to work in a directory of this machine's, which only a bind mount could give it.
 var errTreeOutsideVolume = errors.New("a container reaches its tree through volumes, never a bind mount; build the runner with venue.NewRunner (steps#246)")
 

@@ -2,6 +2,7 @@ package venue
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -187,6 +188,85 @@ func TestAKnownInputDigestTheWorkerLacksWalksTheCopy(t *testing.T) {
 
 	if known.learned != want {
 		t.Errorf("learned %q after a miss; want the copy's own digest %q", known.learned, want)
+	}
+}
+
+// lazyMemo is a memo whose space has not copied the input yet; Materialize writes the bytes the known digest names.
+type lazyMemo struct {
+	memo
+
+	body   string
+	at     string
+	copies int
+}
+
+func (m *lazyMemo) Materialize(context.Context, string) error {
+	m.copies++
+
+	err := os.WriteFile(filepath.Join(m.at, "b.txt"), []byte(m.body), 0o600)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
+}
+
+// A hit on the known digest mounts the held tree and never asks for the copy; a miss asks for it before walking it.
+func TestALazyInputIsCopiedOnlyOnAMiss(t *testing.T) {
+	hostDockerSocket(t)
+
+	worker, err := ParseWorker("local:" + t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lazy := &lazyMemo{body: "published " + randomSuffix()}
+	s := newPlusSession(worker, shell.RunnerSpec{InputDigests: lazy})
+	t.Cleanup(func() { _ = s.close() })
+
+	ctx := t.Context()
+
+	_, err = s.dialDaemon(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	published := t.TempDir()
+	writeTreeFile(t, published, "b.txt", lazy.body)
+
+	digest, err := treedigest.Tree(published)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = s.docker.RemoveVolume(context.Background(), s.aliasName(digest)) })
+
+	placeholder := t.TempDir()
+	lazy.at = placeholder
+
+	// Miss: nothing holds it yet, so the copy is made, walked and filled.
+	lazy.known = digest
+
+	_, err = s.placeLocal(ctx, "tree", placeholder)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if lazy.copies != 1 {
+		t.Fatalf("a miss made %d copies; want 1, before the walk", lazy.copies)
+	}
+
+	// Hit: the worker now holds it under the known digest.
+	again := t.TempDir()
+	lazy.at = again
+
+	_, err = s.placeLocal(ctx, "tree", again)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if lazy.copies != 1 {
+		t.Errorf("a hit made a copy here (%d in all); want none", lazy.copies)
 	}
 }
 

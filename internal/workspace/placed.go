@@ -14,10 +14,10 @@ import (
 	"context"
 )
 
-func (b *isolatingBuild) PlacedTaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, map[string]RemoteArtifact, error) {
+func (b *isolatingBuild) PlacedTaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string, lazy bool) (StepSpace, map[string]RemoteArtifact, error) {
 	remote := b.leaveRemote(inputs, inputMapping)
 
-	space, err := b.newSpaceLeaving(ctx, label, inputs, outputs, inputMapping, outputMapping, remote)
+	space, err := b.newSpaceLeaving(ctx, label, inputs, outputs, inputMapping, outputMapping, remote, lazy)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -37,7 +37,7 @@ func (b *isolatingBuild) PlacedPutSpace(ctx context.Context, label string, input
 
 	remote := b.leaveRemote(inputs, nil)
 
-	space, err := b.newSpaceLeaving(ctx, label, inputs, nil, nil, nil, remote)
+	space, err := b.newSpaceLeaving(ctx, label, inputs, nil, nil, nil, remote, false)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -284,6 +284,11 @@ func (s *plusSession) placeLocal(ctx context.Context, name, dir string) (string,
 		}
 	}
 
+	err := s.materialize(ctx, name)
+	if err != nil {
+		return "", err
+	}
+
 	digest, err := treedigest.Tree(dir)
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
@@ -338,6 +343,21 @@ func (s *plusSession) placeRemote(ctx context.Context, name string, input shell.
 	s.sent.Add(pulled)
 
 	return s.placeLocal(ctx, "", staged)
+}
+
+// materialize has the space copy a lazy input here, for a miss that must walk and send it.
+func (s *plusSession) materialize(ctx context.Context, name string) error {
+	lazy, ok := s.spec.InputDigests.(shell.LazyInputs)
+	if !ok || name == "" {
+		return nil
+	}
+
+	err := lazy.Materialize(ctx, name)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
 }
 
 // inputDigests is the build's memo for input name, or nil where the copy may differ from the artifact: a cache at or under it puts a stand-in in the copy.

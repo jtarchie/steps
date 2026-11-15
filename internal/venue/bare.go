@@ -275,7 +275,12 @@ func (s *bareSession) upload(ctx context.Context) error {
 		return nil
 	}
 
-	err := s.untar(ctx, s.dir, func(w io.Writer) error { return wire.PackTree(w, s.spec.Cwd) })
+	err := shell.MaterializeInputs(ctx, s.spec.InputDigests, s.spec.Cwd)
+	if err != nil {
+		return fmt.Errorf("copying the step's inputs: %w", err)
+	}
+
+	err = s.untar(ctx, s.dir, func(w io.Writer) error { return wire.PackTree(w, s.spec.Cwd) })
 	if err != nil {
 		return fmt.Errorf("sending the step's tree: %w", err)
 	}
