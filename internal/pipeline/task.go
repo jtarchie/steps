@@ -200,7 +200,7 @@ func executeTask(
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	err = holdRemoteOutputs(bw, rt.Outputs, outputMapping, held, holder)
+	err = holdRemoteOutputs(ctx, bw, rt.Outputs, outputMapping, held, holder)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}

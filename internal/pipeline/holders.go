@@ -4,6 +4,9 @@ package pipeline
 
 import (
 	"context"
+	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
@@ -27,10 +30,12 @@ func deferrable(step config.Step, rt config.ResolvedTask) bool {
 // holdRemoteOutputs records each output the worker kept as an artifact held
 // there, with the pull that brings it home. Outputs the worker did not keep
 // came home the ordinary way and are captured as always.
-func holdRemoteOutputs(bw workspace.BuildWorkspace, outputs []string, mapping map[string]string, held map[string]string, holder string) error {
+func holdRemoteOutputs(ctx context.Context, bw workspace.BuildWorkspace, outputs []string, mapping map[string]string, held map[string]string, holder string) error {
 	if len(held) == 0 {
 		return nil
 	}
+
+	noteHolder(ctx, holder)
 
 	for _, out := range outputs {
 		digest, kept := held[out]
@@ -58,6 +63,60 @@ func pullHeld(holder, digest string) func(context.Context, string) error {
 		_, err := venue.Pull(ctx, holder, digest, dst)
 
 		return err //nolint:wrapcheck // the workspace names the artifact and the holder around it
+	}
+}
+
+// unpinTimeout bounds giving a finished run's pins back, which dials each worker that held something for it.
+const unpinTimeout = 30 * time.Second
+
+type runHoldersKey struct{}
+
+// runHolders are the workers a run held outputs on, each pinned there until the run releases it.
+type runHolders struct {
+	mu      sync.Mutex
+	holders map[string]bool
+}
+
+func withRunHolders(ctx context.Context) (context.Context, *runHolders) {
+	holders := &runHolders{holders: map[string]bool{}}
+
+	return context.WithValue(ctx, runHoldersKey{}, holders), holders
+}
+
+func noteHolder(ctx context.Context, holder string) {
+	holders, _ := ctx.Value(runHoldersKey{}).(*runHolders)
+	if holders == nil {
+		return
+	}
+
+	holders.mu.Lock()
+	holders.holders[holder] = true
+	holders.mu.Unlock()
+}
+
+// restoredPull is pullHeld for RestoreHeld, also learning each holder a previous process recorded, so a resume that succeeds releases what the failed attempt pinned.
+func restoredPull(ctx context.Context) func(holder, digest string) func(context.Context, string) error {
+	return func(holder, digest string) func(context.Context, string) error {
+		noteHolder(ctx, holder)
+
+		return pullHeld(holder, digest)
+	}
+}
+
+// unpin releases run's pins under its own context, the run's may be ending; an unreachable holder keeps them until they expire, which costs disk, never an output.
+func (h *runHolders) unpin(ctx context.Context, run string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unpinTimeout)
+	defer cancel()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// ponytail: a holder whose every output a failed attempt already pulled home is not in held.json, so a resume misses it and its pins wait out pinLifetime; recording holders apart from holds closes that.
+	for holder := range h.holders {
+		err := venue.Unpin(ctx, holder, run)
+		if err != nil {
+			slog.WarnContext(ctx, "venue.unpin_failed", "run", run, "error", err)
+		}
 	}
 }
 

@@ -88,7 +88,7 @@ func TestHoldRemoteOutputsRecordsEveryKeptOutput(t *testing.T) {
 
 	ws := &recordingHolder{held: map[string]workspace.RemoteArtifact{}}
 
-	err := holdRemoteOutputs(ws, outputs, mapping, kept, "ssh://w1")
+	err := holdRemoteOutputs(t.Context(), ws, outputs, mapping, kept, "ssh://w1")
 	if err != nil {
 		t.Fatalf("holdRemoteOutputs: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestHoldRemoteOutputsRecordsEveryKeptOutput(t *testing.T) {
 
 	refusing := &recordingHolder{held: map[string]workspace.RemoteArtifact{}, refuses: "binaries"}
 
-	err = holdRemoteOutputs(refusing, outputs, mapping, kept, "ssh://w1")
+	err = holdRemoteOutputs(t.Context(), refusing, outputs, mapping, kept, "ssh://w1")
 	if err == nil || !strings.Contains(err.Error(), "refused binaries") {
 		t.Errorf("a refused hold returned %v, want the workspace's error", err)
 	}

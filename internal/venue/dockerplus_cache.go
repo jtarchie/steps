@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -364,6 +365,12 @@ func memoDigest(memo shell.InputDigests, name string) (string, bool) {
 
 // hold files an output volume under its digest and keeps it past close, so the next step here finds it and nothing comes home.
 func (s *plusSession) hold(ctx context.Context, volume, digest string, size int64) error {
+	// Best effort: an unpinned hold is the exposure every hold had before pins, not a reason to lose the output.
+	err := s.pin(ctx, digest)
+	if err != nil {
+		slog.WarnContext(ctx, "venue.docker.pin_failed", "worker", s.worker.String(), "error", err)
+	}
+
 	// Through cached, which drops an alias whose volume changed since it was filed; publish alone would hand back that volume and drop this one, the real tree.
 	existing, hit, err := s.cached(ctx, digest)
 	if err != nil {

@@ -27,6 +27,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/treedigest"
 	"github.com/jtarchie/steps/internal/wire"
@@ -63,6 +64,8 @@ type plusSession struct {
 	socket string
 	// namespace keeps workers sharing one daemon from sharing its cache.
 	namespace string
+	// runID is the run whose outputs this session pins, read when it connects: close runs under no step's context.
+	runID string
 	// goos and goarch are the daemon's own, for the placement record.
 	goos, goarch string
 	// imageDigest is what the step's image resolved to on that daemon, asked once its container has run: before that, nothing has pulled it.
@@ -310,6 +313,8 @@ func (s *plusSession) connect(ctx context.Context) error {
 	s.goos, s.goarch, _ = s.docker.Platform(ctx)
 
 	s.watchDrain()
+
+	s.runID = events.RunID(ctx)
 
 	s.evict(ctx)
 	s.reapTaskCaches(ctx)

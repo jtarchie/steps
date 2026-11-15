@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,9 +101,8 @@ jobs:
 	}
 }
 
-// TestAResumeReadsWhatAnUntaggedImageStepHeld: the run that held the output is gone, so the resumed one learns where the bytes are from the kept tree; with a get first the steps live in the get's build rather than the job's.
-func TestAResumeReadsWhatAnUntaggedImageStepHeld(t *testing.T) {
-	for name, get := range map[string]string{"job build": "", "get build": `
+// resumeBuilds are the two builds a resumed step can live in: the job's, or with a get first, the get's.
+var resumeBuilds = map[string]string{"job build": "", "get build": `
 resource_types:
 - name: here
   config:
@@ -113,7 +113,11 @@ resources:
 - name: tick
   type: here
   source: {}
-`} {
+`} //nolint:gochecknoglobals // a fixed table two tests share
+
+// TestAResumeReadsWhatAnUntaggedImageStepHeld: the run that held the output is gone, so the resumed one learns where the bytes are from the kept tree; with a get first the steps live in the get's build rather than the job's.
+func TestAResumeReadsWhatAnUntaggedImageStepHeld(t *testing.T) {
+	for name, get := range resumeBuilds {
 		t.Run(name, func(t *testing.T) {
 			assertResumeReadsHeld(t, get)
 		})
@@ -341,5 +345,98 @@ jobs:
 		if got := storeNodeResult(t, path, step); !strings.Contains(got, `"reused":true`) {
 			t.Errorf("%s on the second run: %s, want it restored from the step cache", step, got)
 		}
+	}
+}
+
+// runPins lists the pin volumes run left in docker: what keeps its held outputs from another session's eviction.
+func runPins(t *testing.T, run string) []string {
+	t.Helper()
+
+	//nolint:gosec // a filter built from a run id this test read back
+	out, err := exec.CommandContext(t.Context(), "docker", "volume", "ls", "-q", "--filter", "label=steps.cache=pin", "--filter", "label=steps.run="+run).Output()
+	if err != nil {
+		t.Fatalf("listing pins: %v", err)
+	}
+
+	return strings.Fields(string(out))
+}
+
+// TestAFinishedRunReleasesWhatItPinned: a run that succeeds gives its held outputs back to eviction, so pins never outlast the run that needed them.
+func TestAFinishedRunReleasesWhatItPinned(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+`+untaggedProducer()+fmt.Sprintf(`  - task: read
+    inputs: [src]
+    run: cp src/blob.bin src/sum %s/
+`, dir))
+
+	mustRun(t, path)
+
+	if pins := runPins(t, lastRunID(t, path)); len(pins) != 0 {
+		t.Errorf("the finished run left pins %v: its outputs stay over the cache bound until the pin lifetime runs out", pins)
+	}
+}
+
+// TestAFailedRunKeepsItsPinsForTheResume: the failed run's held output stays pinned for --resume, and the resume, another process, releases it once it succeeds.
+func TestAFailedRunKeepsItsPinsForTheResume(t *testing.T) {
+	for name, get := range resumeBuilds {
+		t.Run(name, func(t *testing.T) {
+			assertResumeReleasesPins(t, get)
+		})
+	}
+}
+
+func assertResumeReleasesPins(t *testing.T, resources string) {
+	t.Helper()
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	fixed := filepath.Join(dir, "fixed")
+
+	first := ""
+	if resources != "" {
+		first = "  - get: tick\n"
+	}
+
+	path := writePipeline(t, dir, resources+`
+jobs:
+- name: build
+  plan:
+`+first+untaggedProducer()+fmt.Sprintf(`  - task: fragile
+    run: test -f %s
+  - task: read
+    inputs: [src]
+    run: cp src/blob.bin src/sum %s/
+`, fixed, dir))
+
+	out := captureStdout(t, func() {
+		if cli.Run([]string{"run", path}) == nil {
+			t.Fatal("expected the fragile step to fail")
+		}
+	})
+
+	run := resumeID(t, out)
+
+	if len(runPins(t, run)) == 0 {
+		t.Fatal("the failed run pinned nothing, so its held output is the cache's to evict before the resume reads it")
+	}
+
+	writePipelineFile(t, fixed, "")
+
+	_ = captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--resume", run})
+		if err != nil {
+			t.Fatalf("resume failed: %v", err)
+		}
+	})
+
+	if pins := runPins(t, run); len(pins) != 0 {
+		t.Errorf("the resumed run succeeded and left pins %v", pins)
 	}
 }

@@ -54,7 +54,7 @@ func (s *plusSession) evict(ctx context.Context) {
 	}
 
 	s.reclaim(ctx, volumes, named, layered)
-	s.trim(ctx, aliases, layered)
+	s.trim(ctx, aliases, layered, s.pinned(ctx, volumes))
 }
 
 // reclaim drops session volumes nothing names or layers on, once past orphanAge.
@@ -68,7 +68,8 @@ func (s *plusSession) reclaim(ctx context.Context, volumes []dockerapi.Volume, n
 	}
 }
 
-func (s *plusSession) trim(ctx context.Context, aliases []dockerapi.Volume, layered map[string]bool) {
+// trim leaves a pinned entry where it is, still counted: a run in flight needs it more than the bound does.
+func (s *plusSession) trim(ctx context.Context, aliases []dockerapi.Volume, layered, pinned map[string]bool) {
 	var total int64
 	for _, alias := range aliases {
 		total += sizeOf(alias)
@@ -82,7 +83,7 @@ func (s *plusSession) trim(ctx context.Context, aliases []dockerapi.Volume, laye
 		}
 
 		data := alias.Labels[cacheData]
-		if layered[data] {
+		if layered[data] || pinned[alias.Name] {
 			continue
 		}
 

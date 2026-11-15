@@ -99,6 +99,8 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	// Handed the ctx as it stands when the job ends, not as it stood here.
 	defer func() { releaseWorkers(ctx) }()
 
+	ctx, holders := withRunHolders(ctx)
+
 	// One register of step decisions per job run, for context: from: readers.
 	// Installed here rather than in runSteps because the build a get triggers
 	// re-enters runSteps, and a decision made before the get is still this
@@ -115,7 +117,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
-	err = bw.RestoreHeld(pullHeld)
+	err = bw.RestoreHeld(restoredPull(ctx))
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
@@ -212,6 +214,9 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	}
 
 	workspace.CloseBuild(bw, job.Name)
+
+	// Only a success: a failed run's tree is kept for --resume, which reads what it held.
+	holders.unpin(ctx, resume.id)
 
 	bestEffort(ctx, "FinishRun", st.FinishRun(context.WithoutCancel(ctx), resume.id, store.RunSucceeded))
 
