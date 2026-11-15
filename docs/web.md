@@ -216,9 +216,11 @@ has no resting state.
 The pipeline switcher carries the same count for every pipeline this daemon
 holds, and the root lists it per pipeline — otherwise a daemon holding
 several hides every one but the open tab. Each switcher row also leads with
-that pipeline's [mark](#the-tab-mark) — `✗` for a failed job, `⏸` paused,
-`◐` while something runs — so a broken pipeline is found by scanning one
-column rather than opening each.
+that pipeline's [mark](#the-tab-mark) — `✗` for a failed job, `⏸` paused —
+circled in yellow while something runs, or `◐` alone when nothing has
+finished yet, so a broken pipeline is found by scanning one column rather
+than opening each. A red pipeline being rebuilt is one circled `✗`, never
+`✗` and `◐` side by side.
 
 Activity is shown differently from attention, because a signal that is never
 quiet is one nobody reads. Runs in flight appear as a dim `◐N` beside a
@@ -528,7 +530,8 @@ The browser tab carries a **mark** for whatever the page is about: a run page
 marks that run, every other pipeline page marks the pipeline, and the root
 marks every pipeline at once. The favicon is a disc colored by status, with a
 yellow ring around it while something is running — so a red disc with a ring
-reads "broken, and a fix is building". The title leads with the same glyphs.
+reads "broken, and a fix is building". The title leads with the disc's glyph
+alone, since text cannot circle it; the icon beside it carries the ring.
 A pipeline is colored by each job's latest *finished* run: red when any of
 them failed or errored, blue while paused, green otherwise. The mark follows
 the page as it refreshes, and a run page's mark changes the instant the run

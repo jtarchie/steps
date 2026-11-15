@@ -241,10 +241,11 @@
      declines an error answer, which would replace it and end the poll. */}}
 {{define "markcarrier"}}<span id="mark" hidden data-icon="{{.Mark.Favicon}}" data-prefix="{{.Mark.TitlePrefix}}"{{with .MarkURL}} hx-get="{{.}}" hx-trigger="every[document.hidden] 30000ms" hx-swap="outerMorph" hx-status:4xx="swap:none" hx-status:5xx="swap:none"{{end}}></span>{{end}}
 
-{{/* A mark as glyphs: the disc in its status color and the ring in
-     running's, each a separate span so a red job being rebuilt reads as
-     both. The glyphs are hidden from a screen reader, which hears the words. */}}
-{{define "markglyph"}}<span class="mk"{{with .Words}} title="{{.}}"{{end}}><span aria-hidden="true">{{with .DiscGlyph}}<span class="st-{{$.Word}}">{{.}}</span>{{end}}{{if .Ring}}<span class="st-running">◐</span>{{end}}</span>{{with .Words}}<span class="visually-hidden">{{.}}</span>{{end}}</span>{{end}}
+{{/* A mark as one glyph: the disc in its status color, circled in running's
+     while a run goes — as the favicon and the jobs graph draw it — so a red
+     job being rebuilt reads as both without two glyphs side by side. The
+     glyph is hidden from a screen reader, which hears the words. */}}
+{{define "markglyph"}}<span class="mk{{if .Ringed}} ring{{end}}"{{with .Words}} title="{{.}}"{{end}}><span aria-hidden="true">{{with .DiscGlyph}}<span class="st-{{$.Word}}">{{.}}</span>{{else}}{{if .Ring}}<span class="st-running">◐</span>{{end}}{{end}}</span>{{with .Words}}<span class="visually-hidden">{{.}}</span>{{end}}</span>{{end}}
 
 {{/* Attention loud, activity quiet: what waits on a person is the yellow
      badge, what is merely in flight is dim, and neither draws at zero. */}}

@@ -152,8 +152,11 @@ body > header { position: sticky; top: 0; z-index: 20; }
 
 /* A switcher row's mark: the same badge, about a pipeline you are not looking
    at. */
-.mk { display: inline-block; min-width: 2.2ch; margin-right: 6px; }
+.mk { display: inline-block; min-width: 1.4em; margin-right: 6px; }
 .mk:empty, .mk > span:empty { margin-right: 0; }
+/* A fixed box whether ringed or not, so a run starting does not shift the name beside it. The ring is a border, not a box-shadow, because forced colors drop shadows. */
+.mk > span > span { display: inline-grid; place-items: center; box-sizing: border-box; width: 1.4em; height: 1.4em; border-radius: 50%; line-height: 1; }
+.mk.ring > span > span { border: 1.5px solid var(--yellow); }
 .pipemenu .slug { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .pipemenu .counts { margin-left: auto; display: flex; gap: 10px; font-variant-numeric: tabular-nums; }
 .pipemenu .counts .badge { margin-left: 0; }
@@ -276,10 +279,9 @@ tr.checkfail pre { margin: 0 0 4px; }
 .pipemenu .broken { color: var(--faint); cursor: default; }
 .broken-reason { white-space: pre-line; }
 .pipemenu a:hover { background: var(--panel2); text-decoration: none; }
-/* Every row reserves the marker's width, or the selected row's glyph sits a
-   column right of every other and the glyph column stops being one. */
-.pipemenu a::before, .pipemenu .broken::before { content: ""; display: inline-block; width: 1.5ch; flex: none; }
-.pipemenu a[aria-current="page"]::before { content: "›"; color: var(--green); }
+/* The open pipeline is marked the way the open tab is, an edge and weight rather than a › glyph beside its mark; the weight is what survives forced colors. */
+.pipemenu a[aria-current="page"] { box-shadow: inset 2px 0 0 var(--green); }
+.pipemenu a[aria-current="page"] .slug { font-weight: 600; }
 .pipemenu .hint { margin-left: auto; color: var(--faint); font-size: 11px; }
 
 /* A finger needs more than 30px of row. Every control in the bar grows to the

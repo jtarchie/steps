@@ -87,15 +87,17 @@ func (m mark) Words() string {
 	return words
 }
 
-// Glyph is the mark as text: the disc's glyph, then ◐ when something runs.
+// Glyph is the mark as text, one glyph: the disc, or ◐ when only running has anything to say. Text cannot circle a disc, so a ring around one is left to the favicon beside the title.
 func (m mark) Glyph() string {
-	glyph := discGlyphs[m.Disc]
-	if m.Ring {
-		glyph += "◐"
+	if glyph := discGlyphs[m.Disc]; glyph != "" || !m.Ring {
+		return glyph
 	}
 
-	return glyph
+	return "◐"
 }
+
+// Ringed is a disc with a run going: drawn as one glyph circled, never as the disc and ◐ side by side.
+func (m mark) Ringed() bool { return m.Ring && m.Disc != discNone }
 
 // TitlePrefix leads the document title: "(n) " for what waits on a person,
 // then the glyph — the part of a tab's title the strip still shows.
