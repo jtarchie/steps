@@ -52,7 +52,7 @@ func TestMarkTitlePrefix(t *testing.T) {
 		{mark{}, ""},
 		{mark{Disc: discFailed}, "✗ "},
 		{mark{Ring: true}, "◐ "},
-		{mark{Disc: discFailed, Ring: true}, "✗◐ "},
+		{mark{Disc: discFailed, Ring: true}, "✗ "},
 		{mark{Disc: discPassed, Needs: 2}, "(2) ✓ "},
 		{mark{Needs: 1}, "(1) "},
 	} {
@@ -141,7 +141,7 @@ func TestARedJobBeingRebuiltStaysRed(t *testing.T) {
 
 	got := pipelineMark(ctx, newReads(pipeline), 0)
 	if got.Disc != discFailed || !got.Ring {
-		t.Errorf("rebuilding a red job reads %q, want ✗◐", got.Glyph())
+		t.Errorf("rebuilding a red job reads %q, want ✗ ringed", got.Glyph())
 	}
 
 	err = pipeline.Store.FinishRun(ctx, "b-2", "succeeded")
@@ -378,6 +378,61 @@ func TestTheSwitcherButtonIsAboutThePipeline(t *testing.T) {
 
 	if !strings.HasPrefix(titleText(page), "✗ ") {
 		t.Errorf("the tab of a red run reads %q, want ✗", titleText(page))
+	}
+}
+
+// TestARunningMarkIsOneGlyph: a red job being rebuilt drew "✗◐", two glyphs jammed together; the ring now circles the disc, as the favicon and the jobs graph draw it, and ◐ stands alone only when there is no disc to circle.
+func TestARunningMarkIsOneGlyph(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	err := pipeline.Store.StartRun(context.Background(), store.NewRun{ID: "d-1", JobName: "deploy"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_, page := get(t, server, "/p/demo")
+	button := between(t, page, `id="pipebtn"`, "</button>")
+
+	if !strings.Contains(button, `<span class="st-running">◐</span>`) || strings.Contains(button, `class="mk ring"`) {
+		t.Errorf("a running pipeline with nothing finished should show ◐ alone, unringed:\n%s", button)
+	}
+
+	finishedRun(t, pipeline, "b-1", "build", "failed")
+
+	err = pipeline.Store.StartRun(context.Background(), store.NewRun{ID: "b-2", JobName: "build"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_, page = get(t, server, "/p/demo")
+	button = between(t, page, `id="pipebtn"`, "</button>")
+
+	if !strings.Contains(button, `class="mk ring"`) || !strings.Contains(button, `class="st-failed"`) || strings.Contains(button, "◐") {
+		t.Errorf("a red pipeline being rebuilt should be a ringed ✗ with no ◐ beside it:\n%s", button)
+	}
+
+	if title := titleText(page); !strings.HasPrefix(title, "✗ ") {
+		t.Errorf("the tab of a red pipeline being rebuilt reads %q, want a lone ✗", title)
+	}
+}
+
+// TestNoGlyphSitsBesideAMark: the ring that replaced ◐ is CSS, and so was the › that led the open pipeline's switcher row — sat against the mark, it read as a second glyph.
+func TestNoGlyphSitsBesideAMark(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !regexp.MustCompile(`\.mk\.ring [^{]*\{[^}]*border:`).Match(css) {
+		t.Error("app.css draws no ring for .mk.ring, so a running red pipeline reads as merely red")
+	}
+
+	if strings.Contains(string(css), `.pipemenu a[aria-current="page"]::before`) {
+		t.Error("the open pipeline's switcher row draws a glyph beside its mark")
 	}
 }
 
