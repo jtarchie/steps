@@ -222,10 +222,33 @@ func (c *Config) validateSharedTrees() error {
 				return nil //nolint:nilerr // an unresolvable agent is reported by its own check
 			}
 
-			return c.checkTreeSharers(label, ri, 0)
+			return c.checkTreeSharers(label, ri, ri, 0)
 		})
 		if err != nil {
 			return err
+		}
+	}
+
+	return c.validateExportTrees()
+}
+
+// validateExportTrees is validateSharedTrees for the agents an mcp_exports entry serves, which no job step names.
+func (c *Config) validateExportTrees() error {
+	for _, export := range c.MCPExports {
+		for _, spec := range export.Tools {
+			if spec.Agent == "" {
+				continue
+			}
+
+			ri, err := c.ResolveAgentInvocation(Step{Agent: spec.Agent})
+			if err != nil {
+				continue
+			}
+
+			err = c.checkTreeSharers(fmt.Sprintf("mcp_exports %q", export.Name), ri, ri, 0)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -239,18 +262,22 @@ func (c *Config) checkFixMCPCwd(label string, step Step) error {
 		return nil //nolint:nilerr // an unresolvable task is reported by its own check
 	}
 
-	specs := rt.Fix.Tools
-
 	agent, err := c.FindAgent(rt.Fix.Agent)
-	if err == nil && len(specs) == 0 {
-		specs = agent.Tools
+	if err != nil {
+		return nil //nolint:nilerr // an unknown fix agent is reported by its own check
+	}
+
+	// Resolved, not read off fix.tools: a bare name there selects the agent's mcp: grant.
+	specs, err := resolveEffectiveTools(agent.Tools, rt.Fix.Tools)
+	if err != nil {
+		return nil //nolint:nilerr // a bad selection is reported by its own check
 	}
 
 	return c.checkMCPCwd(fmt.Sprintf("%s: fix agent %q", label, rt.Fix.Agent), specs)
 }
 
-// checkTreeSharers walks ri's sub-agents, refusing one that reaches the tree from a different container; two host agents share this machine's tree whatever their fences. depth stops at a cycle, which validateAgentGraph reports.
-func (c *Config) checkTreeSharers(label string, ri ResolvedInvocation, depth int) error {
+// checkTreeSharers walks ri's sub-agents, refusing one that reaches the tree from a different container than runs, the invocation whose runner ri's commands actually go through; two host agents share this machine's tree whatever their fences. depth stops at a cycle, which validateAgentGraph reports.
+func (c *Config) checkTreeSharers(label string, ri, runs ResolvedInvocation, depth int) error {
 	if depth > maxSubAgentDepth {
 		return nil
 	}
@@ -272,11 +299,17 @@ func (c *Config) checkTreeSharers(label string, ri ResolvedInvocation, depth int
 			continue
 		}
 
-		if splitsTree(ri, child) {
+		if splitsTree(runs, child) {
 			return fmt.Errorf("%s: sub-agent %q works on agent %q's files but would run in a different container (image, env, user, network, privileged, container_limits and sandbox must match); see jtarchie/steps#246", label, spec.Agent, ri.AgentName)
 		}
 
-		err = c.checkTreeSharers(label, child, depth+1)
+		// An image: child reuses the runner it was handed (agent.preparedSubAgent.run); a host child builds its own.
+		childRuns := runs
+		if child.Image == "" {
+			childRuns = child
+		}
+
+		err = c.checkTreeSharers(label, child, childRuns, depth+1)
 		if err != nil {
 			return err
 		}

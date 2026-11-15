@@ -135,7 +135,7 @@ func Preflight(ctx context.Context, cfg *config.Config, agentNames []string, set
 			// a whole conversation for one that answered a single token.
 			if probeErr == nil {
 				healthyEndpoints[ri.BaseURL] = true
-			} else if !keepPin && !failOver(ctx, scope, agent, ri, settings) {
+			} else if !keepPin && !failOver(ctx, scope, agent, ri, settings, errors.Is(probeErr, errKeyLookup)) {
 				failures = append(failures, modelFailure{name: name, ri: ri, err: probeErr})
 			}
 
@@ -229,7 +229,9 @@ func withSubAgents(cfg *config.Config, names []string) []string {
 // is all a probe can produce; a model REFUSING a request is a different class
 // entirely, and falling over on one would silently reroute a legitimate
 // refusal to a possibly less suitable model.
-func failOver(ctx context.Context, scope pinScope, agent *config.Agent, primary config.ResolvedInvocation, settings *config.Preflight) bool {
+//
+// keyLost (the primary's key failed to fetch) fails over for this run only: a lapsed secret-source login says nothing about the model's health.
+func failOver(ctx context.Context, scope pinScope, agent *config.Agent, primary config.ResolvedInvocation, settings *config.Preflight, keyLost bool) bool {
 	for i := range agent.Fallback {
 		candidate, err := primary.WithSource(agent.Fallback[i].Source, agent)
 		if err != nil {
@@ -245,7 +247,14 @@ func failOver(ctx context.Context, scope pinScope, agent *config.Agent, primary 
 			continue
 		}
 
-		selectSource(scope, agent.Fallback[i].Source, i)
+		reason := "the primary model did not answer preflight"
+		if keyLost {
+			selectForRun(ctx, scope, agent.Fallback[i].Source, i)
+
+			reason = "the primary's key could not be fetched; this run only"
+		} else {
+			selectSource(scope, agent.Fallback[i].Source, i)
+		}
 
 		// Loud, not silent. A fallback model can produce meaningfully
 		// different output, and a quality dip caused by an outage must not
@@ -259,7 +268,7 @@ func failOver(ctx context.Context, scope pinScope, agent *config.Agent, primary 
 			"agent", agent.Name,
 			"from", primary.ModelName,
 			"to", candidate.ModelName,
-			"reason", "the primary model did not answer preflight")
+			"reason", reason)
 
 		return true
 	}

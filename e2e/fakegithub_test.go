@@ -616,8 +616,13 @@ func (f *fakeGitHub) servePull(w http.ResponseWriter, r *http.Request, number in
 }
 
 func (f *fakeGitHub) pullJSON(pr fakePR) map[string]any {
+	state := "open"
+	if pr.Closed {
+		state = "closed"
+	}
+
 	return map[string]any{
-		"number": pr.Number, "title": pr.Title, "body": pr.Body, "draft": pr.Draft, "html_url": f.html("pull", pr.Number),
+		"number": pr.Number, "title": pr.Title, "body": pr.Body, "draft": pr.Draft, "html_url": f.html("pull", pr.Number), "state": state,
 		"node_id": fmt.Sprintf("PR_node_%d", pr.Number),
 		"user":    map[string]any{"login": pr.Author},
 		"head":    map[string]any{"sha": pr.SHA, "ref": pr.Head, "repo": map[string]any{"full_name": f.repo}},

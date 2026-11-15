@@ -669,17 +669,24 @@ func oobEntries(body string) []string {
 	}
 }
 
-// #240: htmx 4 processes the page on a 0ms timer when it runs after parsing ended, which is when a deferred script runs — and an extension that had not arrived by then never sees the page, so a run page loaded that way never opened its event stream and showed no output until a reload re-rolled the race. As parser-blocking scripts, in this order, htmx waits for DOMContentLoaded and the extension has registered before it.
+// #240: htmx 4 processes the page on a 0ms timer when it runs after parsing ended, which is when a deferred script runs — and an extension that had not arrived by then never sees the page, so a run page loaded that way never opened its event stream and showed no output until a reload re-rolled the race. As parser-blocking scripts, in this order, htmx waits for DOMContentLoaded and the extension has registered before it; but a blocking htmx reads its meta config while constructing, so the meta must now precede it.
 func TestHtmxAndItsExtensionLoadBeforeThePageIsProcessed(t *testing.T) {
 	t.Parallel()
 
 	server, _ := testPipeline(t)
 
-	_, page := get(t, server, "/p/demo/")
+	code, page := get(t, server, "/p/demo")
+	if code != http.StatusOK {
+		t.Fatalf("GET /p/demo = %d", code)
+	}
 
 	core, sse := strings.Index(page, `<script src="/static/htmx.min.js"></script>`), strings.Index(page, `<script src="/static/hx-sse.min.js"></script>`)
 	if core < 0 || sse < core {
 		t.Error("htmx and its sse extension must load in that order with no defer or async: deferred, the extension can miss htmx's first pass and a live run page never streams")
+	}
+
+	if meta := strings.Index(page, `<meta name="htmx-config"`); meta < 0 || meta > core {
+		t.Error("the htmx-config meta must come before the htmx script: a blocking htmx reads it while constructing, so a meta below it is never applied")
 	}
 
 	_, htmx := get(t, server, "/static/htmx.min.js")

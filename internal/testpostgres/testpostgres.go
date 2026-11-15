@@ -25,7 +25,7 @@ import (
 // ErrUnavailable means this machine cannot run the test server — its binaries could not be had (the first run on a machine downloads them), cannot be trusted (canary), or cannot be started by this user (root: initdb refuses uid 0) — which a caller treats as a skip. Anything else Start returns is a failure.
 var ErrUnavailable = errors.New("the test postgres is unavailable on this machine")
 
-// RequireEnv names the variable that, set to 1, turns unobtainable or untrustworthy binaries from a skip into a failure, for a run that must not pass by not testing Postgres.
+// RequireEnv names the variable that, set to 1, turns ErrUnavailable from a skip into a failure, for a run that must not pass by not testing Postgres.
 const RequireEnv = "STEPS_REQUIRE_POSTGRES"
 
 // Fast trades durability for speed, for tests whose database dies with the run. A measurement leaves it out: Postgres' own defaults are what an operator gets.
@@ -64,15 +64,10 @@ func workRoot() string { return filepath.Join(os.TempDir(), "steps-testpg") }
 var terminate = func(pid int) { _ = syscall.Kill(pid, syscall.SIGTERM) }
 
 // startDB is a seam so a test can simulate a failed fetch or a taken port without depending on the machine's binaries.
-//
-// Root is refused before the attempt: initdb exits "cannot be run as root", so no configuration can make this work, and every caller already treats ErrUnavailable as "skip with this reason" — while STEPS_REQUIRE_POSTGRES=1 still turns it into the failure it is.
-var startDB = func(db *embeddedpostgres.EmbeddedPostgres) error {
-	if os.Geteuid() == 0 {
-		return unavailable(errors.New("initdb cannot be run as root, so no test postgres can start here"))
-	}
+var startDB = func(db *embeddedpostgres.EmbeddedPostgres) error { return db.Start() }
 
-	return db.Start()
-}
+// geteuid is a seam so the root refusal is testable by a user who is not root, outside startDB, which every other test replaces.
+var geteuid = os.Geteuid
 
 // canary is a seam so a test can stand in for a server that miscomputes. The linux-arm64 alpine build of 17.5 (gcc 6.3, musl) sums two bigints of 200 as 400<<64, so every SUM or AVG over a BIGINT column is wrong there and the tests that fail are not the ones at fault.
 var canary = func(ctx context.Context, url string) error {
@@ -100,7 +95,7 @@ var canary = func(ctx context.Context, url string) error {
 // unavailable is a skip for a caller, and a failure for a run that set RequireEnv.
 func unavailable(err error) error {
 	if os.Getenv(RequireEnv) == "1" {
-		return fmt.Errorf("%s=1 but the postgres binaries are unavailable: %w", RequireEnv, err)
+		return fmt.Errorf("%s=1 but the test postgres is unavailable: %w", RequireEnv, err)
 	}
 
 	return fmt.Errorf("%w: %w", ErrUnavailable, err)
@@ -111,6 +106,11 @@ const startAttempts = 3
 
 // Start sweeps first because a run killed outright never reached its own Stop. With STEPS_REQUIRE_POSTGRES=1 unobtainable binaries are a failure rather than an ErrUnavailable skip.
 func Start(settings map[string]string) (*Server, error) {
+	// initdb exits "cannot be run as root" and no configuration changes that, so it is unavailable rather than a failure.
+	if geteuid() == 0 {
+		return nil, unavailable(errors.New("initdb cannot be run as root, so no test postgres can start here"))
+	}
+
 	sweep()
 
 	var err error

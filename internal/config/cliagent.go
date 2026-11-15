@@ -153,6 +153,32 @@ func (c *Config) validateCLIAgents() error {
 	return c.checkCLIAgentReferences()
 }
 
+// ProjectHooksOnHost warns rather than refuses (#241): the CLI is always host-side, so a settings: project repo's hooks escape image:/tags:, yet a trusted repo there is a legitimate pipeline.
+func (c *Config) ProjectHooksOnHost() []string {
+	var warnings []string
+
+	for _, job := range c.Jobs {
+		_ = job.VisitSteps(func(label string, step *Step) error {
+			if step.Agent == "" {
+				return nil
+			}
+
+			ri, err := c.ResolveAgentInvocation(*step)
+			// tags: alone needs no check: checkPlacedAgent refuses a placed agent without image:.
+			if err != nil || ri.CLISettings != CLISettingsProject || ri.Image == "" {
+				return nil //nolint:nilerr // resolution failures are reported by the rule that owns them
+			}
+
+			warnings = append(warnings, fmt.Sprintf("%s (agent %q): settings: project loads the repo's .claude/ hooks, which run on this machine, not in the step's image: or tags: placement",
+				label, step.Agent))
+
+			return nil
+		})
+	}
+
+	return warnings
+}
+
 // checkHostedAgentBudgets is the mirror of the budget.tokens rejection above:
 // a dollar ceiling has no meaning for an agent this process drives, because
 // there is no cost figure on the wire to compare it against. Rejecting it

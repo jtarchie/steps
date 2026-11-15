@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -275,6 +276,11 @@ func TestResolveStepRuntimeCarriesEveryIsolationField(t *testing.T) {
 		spec, _, err := resolveStepRuntime(cfg, step)
 		if err != nil {
 			t.Fatalf("%s: resolveStepRuntime: %v", name, err)
+		}
+
+		// The step's own working directory (#247), not a step-less one.
+		if want := map[string]string{"task": shell.BuildDir("built"), "agent": shell.BuildDir("a"), "put": shell.PutDir}[name]; spec.Workdir != want {
+			t.Errorf("%s: Workdir = %q, want %q", name, spec.Workdir, want)
 		}
 
 		if spec.User != "uid" || spec.Network != "net" || !spec.Privileged || !spec.Sandbox || spec.CPUShares != limits.CPUShares() || spec.MemoryBytes != limits.MemoryBytes() {

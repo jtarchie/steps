@@ -7,7 +7,7 @@ import "fmt"
 // validateDo enforces the shape of a do: block.
 //
 // The block is a container, like in_parallel:/race:/ensemble:: it runs nothing
-// of its own, so an operation field written on it (inputs:, run:, image:) is a
+// of its own, so an operation field written on it (run:, image:) is a
 // step's field on a thing that is not a step, and belongs on one of the steps
 // inside. Rejected rather than ignored, since a run: on the block reads as if
 // it would run.
@@ -33,10 +33,18 @@ func (c *Config) validateDoBlock(label string, step *Step) error {
 		return fmt.Errorf("%s: do must list at least one step", label)
 	}
 
+	// inputs: stages files for the guard only — the guard is the one command a do: runs (#262).
+	if step.InputsDeclared() && !step.Guarded() {
+		return fmt.Errorf("%s: inputs on a do step only stages files for its when: guard, and this do: has none; set inputs on the step inside the block that reads them", label)
+	}
+
+	operation := *step
+	operation.Inputs = nil
+
 	// "a do" reads correctly in rejectOperationFields' message: "... is not
 	// valid on a do step; set it on the step inside the block that it
 	// describes".
-	err := c.rejectOperationFields(label, step, "a do")
+	err := c.rejectOperationFields(label, &operation, "a do")
 	if err != nil {
 		return err
 	}

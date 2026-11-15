@@ -90,9 +90,10 @@ func RenderVars(value string, vars map[string]string) string {
 //   - a try: body's captures stay inside it, since the try succeeds whether or
 //     not the body did;
 //   - a step with a when: guard yields nothing it captured, itself or nested:
-//     a false guard skips it green, so the plan (and its own on_success) goes
-//     on without the capture. Guard a do: around the load_var: and its
-//     consumers instead, so the consumers are skipped with it;
+//     a false guard skips it green, so the plan goes on without the capture.
+//     Its own on_success still sees them, since a skipped step fires no hooks.
+//     Guard a do: around the load_var: and its consumers instead, so the
+//     consumers are skipped with it;
 //   - hooks see what preceded the step, and on_success also what the step
 //     captured; nothing a hook captures escapes it.
 func (c *Config) validateVars() error {
@@ -179,8 +180,7 @@ func checkVarFlow(label string, step *Step, before varSet) (varSet, error) {
 		}
 	}
 
-	after = guaranteedPast(step, before, after)
-
+	// Unguarded captures: a guard-skipped step fires no hooks, so a running on_success ran after them.
 	err = checkHookFlow(step.Hooks, before, after, func(name string) string {
 		return fmt.Sprintf("%s (%s hook)", label, name)
 	})
@@ -188,18 +188,12 @@ func checkVarFlow(label string, step *Step, before varSet) (varSet, error) {
 		return nil, err
 	}
 
-	return after, nil
-}
-
-// guaranteedPast is what a step yields once the plan has moved past it. A
-// false when: guard skips the step as a success, so nothing it would have
-// captured is guaranteed past it — not even to its own on_success (#262).
-func guaranteedPast(step *Step, before, after varSet) varSet {
-	if step.When != nil && step.When.Run != "" {
-		return before
+	// A false when: skips the step green, so its captures are not guaranteed past it (#262).
+	if step.Guarded() {
+		return before, nil
 	}
 
-	return after
+	return after, nil
 }
 
 // checkBranchFlow checks a concurrent block's branches, each from what preceded

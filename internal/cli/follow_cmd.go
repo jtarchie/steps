@@ -122,16 +122,7 @@ func (r *RunsFollowCmd) target(ctx context.Context, st interface {
 },
 ) (store.RunRow, error) {
 	if r.RunID != "" {
-		run, ok, err := st.FindRunRow(ctx, r.RunID)
-		if err != nil {
-			return store.RunRow{}, fmt.Errorf("could not read run %q: %w", r.RunID, err)
-		}
-
-		if !ok {
-			return store.RunRow{}, fmt.Errorf("no run %q was recorded for pipeline %q", r.RunID, st.Pipeline())
-		}
-
-		return run, nil
+		return recordedRun(ctx, st, r.RunID)
 	}
 
 	runs, err := st.ListRuns(ctx, r.Job, 1)

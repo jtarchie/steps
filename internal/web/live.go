@@ -416,6 +416,12 @@ func (s *Server) flushBatch(
 
 	view := runView{Transcript: folder.View(inFlight)}
 
+	// The row's head names its worker's image and decides its toggle off these, so a stream without them draws a head the reload contradicts. Best-effort, as in assembleRun.
+	placements, err := pipelineOf(c).Store.RunPlacements(c.Request().Context(), run.ID)
+	if err == nil {
+		view.Placements = placements
+	}
+
 	// The same decoration assembleRun gives a full-page render (run.go)
 	// — a running agent step's countdown is drawn inside the per-step row,
 	// which this stream sends, so without this a step that starts (or is

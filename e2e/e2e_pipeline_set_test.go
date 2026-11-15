@@ -210,10 +210,7 @@ jobs:
 // read that row, failed the same check, and exited — with no endpoint left to
 // fix it through, because the endpoint is what the daemon was going to serve.
 //
-// A regular file where `workspace.root:` names a directory is the lever: the
-// provider's MkdirAll there fails with ENOTDIR for every user, root included —
-// so the workspace check still refuses, as the last thing that can, before the
-// durable record.
+// The lever is a file at `workspace.root:` — ENOTDIR for every user, root included — which refuses at NewProvider, before Probe/Validate (TestTheDaemonsWorkspaceCheckRefusesARootItCannotWrite covers those).
 func TestARefusedSetLeavesNothingForTheNextRestartToChokeOn(t *testing.T) {
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
@@ -362,7 +359,7 @@ func breakRoot(t *testing.T, root string) {
 		t.Fatal(err)
 	}
 
-	writePipelineFile(t, root, "") // 0o600, so no //nolint:gosec is needed (G306 asks for <= 0600)
+	writePipelineFile(t, root, "")
 }
 
 // repairRoot puts the directory back, so a test can go on to prove the pipeline
@@ -375,7 +372,7 @@ func repairRoot(t *testing.T, root string) {
 		t.Fatal(err)
 	}
 
-	err = os.Mkdir(root, 0o700) // G301 asks for <= 0750
+	err = os.Mkdir(root, 0o700)
 	if err != nil {
 		t.Fatal(err)
 	}

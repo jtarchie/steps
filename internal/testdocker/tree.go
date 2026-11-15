@@ -19,7 +19,7 @@ import (
 	"github.com/jtarchie/steps/internal/dockerapi"
 )
 
-// TreePath is where Tree mounts the volume: the path a placed step's tree has.
+// TreePath is where Tree mounts the volume. Any container path serves; a step's own is shell.BuildDir, GetDir or PutDir.
 const TreePath = "/steps/work"
 
 // holderImage carries the volume for the copies in and out; never started.

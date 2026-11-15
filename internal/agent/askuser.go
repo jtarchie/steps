@@ -455,7 +455,7 @@ func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Ques
 	terminal := g.promptTerminal(promptCtx, env, row)
 
 	for {
-		if done := g.poll(ctx, env, row, deadline); done != nil {
+		if done := g.poll(ctx, env, row, deadline, terminal); done != nil {
 			return done
 		}
 
@@ -581,7 +581,7 @@ func (g askGrant) expire(ctx context.Context, env toolEnv, row store.Question) m
 // poll reads the row once and returns the tool result when the wait is over:
 // somebody answered, the deadline passed, or the read failed. nil means keep
 // waiting.
-func (g askGrant) poll(ctx context.Context, env toolEnv, row store.Question, deadline time.Time) map[string]any {
+func (g askGrant) poll(ctx context.Context, env toolEnv, row store.Question, deadline time.Time, terminal <-chan string) map[string]any {
 	current, err := env.ask.st.QuestionStatus(ctx, row.ID)
 	if err != nil {
 		// The step can end inside this read, and then the read's error is the
@@ -600,6 +600,21 @@ func (g askGrant) poll(ctx context.Context, env toolEnv, row store.Question, dea
 	}
 
 	if time.Now().After(deadline) {
+		// An answer typed before the deadline can be sitting in the buffered
+		// terminal channel, unread because this poll ran first; expire() only
+		// re-reads the row, which holds nothing until it is recorded. Take it
+		// now, or a person who answered in time gets the default. A refused
+		// answer falls through: the deadline passed with nothing valid given.
+		select {
+		case answer := <-terminal:
+			if answer != "" {
+				if recorded, ok := g.recordTerminal(ctx, env, row, answer); ok {
+					return recorded
+				}
+			}
+		default:
+		}
+
 		return g.expire(ctx, env, row)
 	}
 

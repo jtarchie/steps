@@ -24,10 +24,12 @@ resources:
     repo: ((repo))
     labels: [self-build]
 # A command, not any comment: the factory replies on the same pull request as the same user, and a reply that could match would be the next build. Nothing it writes starts with /factory, and the rocket it leaves marks a command answered even after the state database is gone.
+# author: is the trust boundary. A command becomes a prompt to an agent with run_shell on this machine and then a push with GH_TOKEN, so a repo anyone can comment on must not be able to issue one. "@me" is the token's own user; list other trusted logins beside it.
 - name: steer
   type: github-comments
   source:
     repo: ((repo))
+    author: "@me"
     body: '^/factory\s+\S'
     labels: [factory]
     checkout: false
@@ -97,9 +99,11 @@ agents:
     assumption you will build on rather than asking about it. You do not write
     code.
 
+# implementer and reviewer hold run_shell, and their brief is text from GitHub (an issue, or in respond a pull request comment), so a prompt injection there is a shell on this machine. sandbox: true fences that shell to the step's workspace, with ~/.ssh, ~/.aws, ~/.config/gh and the other credential paths unreadable, so a hijacked command cannot plant anything in HOME or read the operator's keys. Not image:, because their checks need the repository's own toolchain, which is on this machine. Darwin only: elsewhere these steps refuse to start rather than run unfenced, so on Linux use image: with a toolchain image instead.
 - name: implementer
   source:
     model: "@claude/opus"
+  sandbox: true
   settings: project
   tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
   max_turns: 0
@@ -116,6 +120,7 @@ agents:
   source:
     model: "@claude/opus"
   reasoning_effort: high
+  sandbox: true
   settings: project
   tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
   max_turns: 0
@@ -193,7 +198,7 @@ jobs:
       steps-work/issues/<id>.md in the repository's issue format: "## What",
       "## Why", "## Notes". Do not mention the epic's number; the pipeline
       adds it.
-  # Deterministic gate between the model and GitHub: every id has both files, and each body ends naming its epic, which is the only link between the two and the thing `once` looks for.
+  # Deterministic gate between the model and GitHub: at least one id, each a plain file name, each with both files, and each body ends naming its epic, which is the only link between the two. An empty cut fails here because the marker is already on the epic, so a green run with no children could never be retried.
   - task: address
     inputs: [repo]
     outputs: [issues]
@@ -201,13 +206,16 @@ jobs:
       set -eu
       epic=$(cat repo/steps-work/epic.number)
       cp repo/steps-work/issues/index.json issues/index.json
-      for id in $(tr -d '[]" \n' < issues/index.json | tr ',' ' '); do
+      ids=$(grep -o '"[^"]*"' issues/index.json | tr -d '"')
+      test -n "$ids" || { echo "steps-work/issues/index.json names no issues" >&2; exit 1; }
+      for id in $ids; do
+        case "$id" in .*|*[!A-Za-z0-9._-]*) echo "issue id $id is not a plain file name" >&2; exit 1 ;; esac
         test -s "repo/steps-work/issues/$id.title" || { echo "issue $id has no title" >&2; exit 1; }
         test -s "repo/steps-work/issues/$id.md" || { echo "issue $id has no body" >&2; exit 1; }
         cp "repo/steps-work/issues/$id.title" "issues/$id.title"
         { cat "repo/steps-work/issues/$id.md"; printf '\nPart of #%s\n' "$epic"; } > "issues/$id.md"
       done
-      echo "proposing $(tr ',' '\n' < issues/index.json | wc -l | tr -d ' ') issue(s) for epic #$epic"
+      echo "proposing $(echo "$ids" | wc -l | tr -d ' ') issue(s) for epic #$epic"
   - across:
     - var: id
       from_file: issues/index.json
@@ -244,7 +252,7 @@ jobs:
     env: [GIT_CONFIG_GLOBAL]
     run: |
       set -eu
-      printf 'The factory could not finish this issue. Run `%s` has the reason; relabel the issue to try again.\n' "$STEPS_RUN_ID" > said/failed.md
+      printf 'The factory could not finish this issue. Run `%s` has the reason. To try again, delete branch `issue-((number))` if the run pushed it (closing its pull request), then relabel the issue.\n' "$STEPS_RUN_ID" > said/failed.md
       cd repo
       # Three outcomes, not two: ls-remote exits 2 for "no such branch", and anything else is a failure to ask, which must not read as a free branch.
       set +e
@@ -416,8 +424,11 @@ jobs:
     run: |
       set -eu
       printf 'The factory could not act on this. Run `%s` has the reason; edit the comment to ask again.\n' "$STEPS_RUN_ID" > said/failed.md
-      # Only a branch the factory names: the head of a pull request it did not open is not its to push.
-      head=$(grep -o '"ref": *"issue-[0-9][0-9]*"' steer/pr.json | head -1 | grep -o 'issue-[0-9]*')
+      # A comment on a closed or merged pull request would push to a branch nothing will merge again.
+      state=$(grep -o '"state": *"[a-z]*"' steer/pr.json | head -1)
+      case "$state" in *'"open"') ;; *) echo "pull request #$(cat steer/pr.number) is not open" >&2; exit 1 ;; esac
+      # Only a branch the factory names: the head of a pull request it did not open is not its to push. head -1 last, so no match reaches the message below rather than ending the script silently under set -e.
+      head=$(grep -o '"ref": *"issue-[0-9][0-9]*"' steer/pr.json | grep -o 'issue-[0-9][0-9]*' | head -1)
       test -n "$head" || { echo "pull request #$(cat steer/pr.number) is not on an issue-<n> branch" >&2; exit 1; }
       echo "$head" > said/head
       cd repo
@@ -425,11 +436,14 @@ jobs:
       # The get fetched one commit; a rebase needs the history both sides share.
       git fetch -q --unshallow origin 2>/dev/null || true
       git fetch -q origin "refs/heads/$head"
+      # The ref grep cannot tell head from base, nor this repository's branch from a fork's of the same name; the pull request's own head sha can.
+      leased=$(git rev-parse FETCH_HEAD)
+      test "$leased" = "$(cat ../steer/pr.sha)" || { echo "$head is at $leased, not pull request #$(cat ../steer/pr.number)'s head $(cat ../steer/pr.sha): not its branch, or it moved since" >&2; exit 1; }
+      echo "$leased" > ../said/before
       git checkout -q -B "$head" FETCH_HEAD
       git config user.name >/dev/null || git config user.name "steps factory"
       git config user.email >/dev/null || git config user.email "factory@steps.invalid"
       git rebase -q "$base" || { git rebase --abort; echo "$head does not rebase onto the default branch cleanly; resolve it by hand" >&2; exit 1; }
-      git rev-parse HEAD > ../said/before
       mkdir -p steps-work
       printf 'steps-work/\n.steps-agent-out/\n' >> .git/info/exclude
       { printf '# Review comment by %s on pull request #%s\n\n' "$(cat ../steer/comment.author)" "$(cat ../steer/pr.number)"; cat ../steer/comment.body; printf '\n'; } > steps-work/request.md
@@ -438,6 +452,9 @@ jobs:
   - load_var: head
     inputs: [said]
     file: said/head
+  - load_var: before
+    inputs: [said]
+    file: said/before
   - agent: implementer
     inputs: [repo]
     outputs: [repo]
@@ -482,13 +499,13 @@ jobs:
       git commit -q -m "Address review on #$(cat ../steer/pr.number)" -m "Answers $(cat ../steer/comment.url)"
       printf 'Addressed in %s.\n' "$(git rev-parse HEAD)" > ../said/reply.md
       echo "committed $(git rev-parse --short HEAD)"
-  # The branch was rebased, so this is a forced push, and one that refuses to overwrite a commit somebody pushed since the checkout read it.
+  # The branch was rebased, so this is a forced push, leased on the sha checkout fetched (not the rebased one): it refuses to overwrite a commit somebody pushed since.
   - put: branch
     inputs: [repo]
     params:
       repository: repo
       branch: ((head))
-      force: true
+      force_with_lease: ((before))
   - put: answered
     resource: note
     inputs: [steer, said]

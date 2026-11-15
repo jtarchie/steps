@@ -62,27 +62,42 @@ func ClearTaskCaches(ctx context.Context, raw string, keys []string, start bool)
 	return clearDirs(ctx, worker, keys)
 }
 
-func clearVolumes(ctx context.Context, worker Worker, keys []string) ([]ClearedCache, error) {
+// dialOnly reaches worker's daemon and nothing more: no orphan sweep, no busybox pull, which a caller only listing or removing volumes does not need.
+func dialOnly(ctx context.Context, worker Worker) (*plusSession, func(), error) {
 	s := newPlusSession(worker, shell.RunnerSpec{})
 
-	dial, err := s.daemonDialer(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("%w %q: %w", ErrWorker, worker.URL, err)
-	}
-
-	defer func() {
+	hangUpSSH := func() {
 		if client := s.conn.current(); client != nil {
 			_ = client.Close()
 		}
-	}()
+	}
 
-	docker, err := dockerapi.NewDialer(s.daemonName(), dial)
+	dial, err := s.daemonDialer(ctx)
+	if err != nil {
+		hangUpSSH()
+
+		return nil, nil, err
+	}
+
+	s.docker, err = dockerapi.NewDialer(s.daemonName(), dial)
+	if err != nil {
+		hangUpSSH()
+
+		return nil, nil, fmt.Errorf("%w", err)
+	}
+
+	return s, func() { _ = s.docker.Close(); hangUpSSH() }, nil
+}
+
+func clearVolumes(ctx context.Context, worker Worker, keys []string) ([]ClearedCache, error) {
+	s, hangUp, err := dialOnly(ctx, worker)
 	if err != nil {
 		return nil, fmt.Errorf("%w %q: %w", ErrWorker, worker.URL, err)
 	}
 
-	defer func() { _ = docker.Close() }()
+	defer hangUp()
 
+	docker := s.docker
 	cleared := make([]ClearedCache, 0, len(keys))
 
 	for _, key := range keys {

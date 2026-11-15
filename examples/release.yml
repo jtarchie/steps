@@ -79,11 +79,8 @@ tasks:
       | tar -xz -C /usr/local/bin --strip-components=1 "golangci-lint-$lint-linux-$arch/golangci-lint"
     export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"   # $HOME/go/bin: govulncheck, nilaway
 
-    # The postgres tests skip under root (initdb refuses it — #251) and the rest of the suite is exercised as
-    # written, so dockerd stays root (dind needs it) while the tests run as tester, who reaches its socket
-    # through the docker group. Docker lets any user bind port 0 and up; the suite uses 127.0.0.1:1 as a port
-    # nothing answers, and a parallel test's server took it.
-    sysctl -w net.ipv4.ip_unprivileged_port_start=1024
+    # Tests run as tester (docker group), not root: under root the postgres and permission tests skip (#251); dockerd stays root for dind.
+    sysctl -w net.ipv4.ip_unprivileged_port_start=1024   # docker opens every port to any user, and a parallel test's server took 127.0.0.1:1, the suite's port nothing answers
     adduser -D -h /home/tester tester
     addgroup tester docker 2>/dev/null || { addgroup -S docker && addgroup tester docker; }
     dind dockerd --host=unix:///var/run/docker.sock >/tmp/dockerd.log 2>&1 &   # dind nests cgroups; bare dockerd fails on cgroup v2

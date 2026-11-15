@@ -9,6 +9,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 func TestAnExportRefusesACommandThatLeavesACallersValueUnquoted(t *testing.T) {
@@ -71,6 +72,46 @@ func TestACallThatCannotStartIsStillReportedToTheHook(t *testing.T) {
 
 	if len(reported) != 1 || reported[0] != "say:note:false:" {
 		t.Errorf("hook saw %v, want the failed call reported once", reported)
+	}
+}
+
+// An exported image: agent has no parent runner to share, so its call must bring one built through the venue: shell.NewRunner refuses a container with a tree (#246).
+func TestAnExportedImageAgentIsHandedAContainerRunner(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Parse([]byte(`
+agents:
+- name: oncall
+  source: { model: openrouter/x, api_key_env: K }
+  image: alpine:3
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi
+mcp_exports:
+- {name: a, access: 'true', tools: [{agent: oncall}]}
+`), "test", nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	var built []shell.RunnerSpec
+
+	calls := newCallSpace(cfg, cfg.MCPExports[0], func(_ context.Context, spec shell.RunnerSpec) (shell.Runner, error) {
+		built = append(built, spec)
+
+		return shell.NewRunner(shell.RunnerSpec{})
+	})
+
+	env, done, err := calls.open(t.Context(), "oncall")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer done()
+
+	if env.runner == nil || len(built) != 1 || built[0].Image != "alpine:3" || built[0].Cwd != env.dir {
+		t.Errorf("open = runner %v, built %+v; want one alpine:3 runner over the call's directory %q", env.runner, built, env.dir)
 	}
 }
 

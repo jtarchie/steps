@@ -273,6 +273,53 @@ func TestARefusedRenameLeavesThePipelineWhereItWas(t *testing.T) {
 	}
 }
 
+// breakRoot's file fails NewProvider before the daemon's Probe (swept root, the rename) or Validate (unswept, the restart) runs, so only a root that exists but refuses the write proves those refuse; not t.Parallel() because the rename reads mcp logins from the process environment.
+func TestTheDaemonsWorkspaceCheckRefusesARootItCannotWrite(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes through a read-only mode; breakRoot's tests cover root")
+	}
+
+	isolateLogins(t)
+
+	held := servingDaemon(t)
+	root := t.TempDir()
+
+	setPipeline(t, held, "app", onRoot(root, "", "true"))
+
+	err := os.Chmod(root, 0o500) //nolint:gosec // read-only is the point: the workspace probe writes, and this root refuses it
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
+
+	err = held.Rename(t.Context(), "app", "renamed")
+	if !errors.Is(err, web.ErrRefused) {
+		t.Errorf("a rename onto a swept root that refuses the probe = %v, want refused", err)
+	}
+
+	held.Close()
+
+	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, 1)
+
+	server, err := web.New(nil, local)
+	if err != nil {
+		t.Fatalf("web.New: %v", err)
+	}
+
+	restarted := newDaemon(t.Context(), server, local, held.state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	t.Cleanup(restarted.Close)
+
+	err = restarted.load(t.Context())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if _, broken := server.BrokenReason("app"); !broken {
+		t.Error("a restart onto a root that refuses Validate serves app, want it held broken")
+	}
+}
+
 // A rename is refused while a build runs, but not while one waits: a queued build is a row keyed by the pipeline's id, so it moves with the name and runs under the new one.
 //
 // Not t.Parallel(): a rename moves mcp logins, which live in process environment.

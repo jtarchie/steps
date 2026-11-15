@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/scheduler"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // pinRecorder is enqueueRecorder remembering what each pinned trigger named.
@@ -55,6 +56,7 @@ func TestAPITriggerQueuesWhatWasAskedFor(t *testing.T) {
 		{"/api/pipelines/demo/jobs/build/trigger", `{"pin":{"number":"87"}}`, http.StatusAccepted},
 		{"/api/pipelines/demo/jobs/build/trigger", `{"pin":{"number":"87"},"force":true}`, http.StatusBadRequest},
 		{"/api/pipelines/demo/jobs/build/trigger", `{"pin":`, http.StatusBadRequest},
+		{"/api/pipelines/demo/jobs/build/trigger", `{"pins":{"number":"87"}}`, http.StatusBadRequest},
 		{"/api/pipelines/demo/jobs/nope/trigger", ``, http.StatusNotFound},
 		{"/api/pipelines/nobody/jobs/build/trigger", ``, http.StatusNotFound},
 		{"/api/pipelines/demo/runs/nope/rerun", ``, http.StatusNotFound},
@@ -70,6 +72,66 @@ func TestAPITriggerQueuesWhatWasAskedFor(t *testing.T) {
 
 	if got := strings.Join(runner.pins, "|"); got != "build trigger, pinned (cli) map[number:87]" {
 		t.Errorf("pinned = %q", got)
+	}
+}
+
+// A pin skips deploy's passed: [build] gate, so pinning a version build never passed is an admin's call; an operator may still pin one that passed, or trigger with none.
+func TestAnOperatorsPinIsHeldToThePassedGate(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	_, err := pipeline.Store.RecordVersions(ctx, "repo", []map[string]any{{"number": "87"}, {"number": "88"}}, 0)
+	if err != nil {
+		t.Fatalf("RecordVersions: %v", err)
+	}
+
+	err = pipeline.Store.RecordPassedVersion(ctx, store.Pass{JobName: "build", Resource: "repo", Version: `{"number":"87"}`, BuildID: "b1"})
+	if err != nil {
+		t.Fatalf("RecordPassedVersion: %v", err)
+	}
+
+	roles, err := CompileRoles([]string{`admin=UserID == "alex"`, `operator=true`})
+	if err != nil {
+		t.Fatalf("CompileRoles: %v", err)
+	}
+
+	runner := &pinRecorder{}
+	users := WithLocalUsers([]LocalUser{{Name: "alex", Hash: []byte(mustHash(t, "a"))}, {Name: "olly", Hash: []byte(mustHash(t, "o"))}})
+
+	server, err := New([]*Pipeline{pipeline}, runner, users, WithRoles(roles))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, tc := range []struct {
+		user, pass, body string
+		want             int
+	}{
+		{"olly", "o", `{"pin":{"number":"88"}}`, http.StatusForbidden},
+		{"olly", "o", `{"pin":{"number":"99"}}`, http.StatusForbidden},
+		{"olly", "o", `{"pin":{"number":"87"}}`, http.StatusAccepted},
+		{"olly", "o", ``, http.StatusAccepted},
+		{"alex", "a", `{"pin":{"number":"88"}}`, http.StatusAccepted},
+	} {
+		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/pipelines/demo/jobs/deploy/trigger", strings.NewReader(tc.body))
+		req.SetBasicAuth(tc.user, tc.pass)
+
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != tc.want {
+			t.Errorf("%s POST %s = %d, want %d: %s", tc.user, tc.body, rec.Code, tc.want, rec.Body.String())
+		}
+
+		if tc.want == http.StatusForbidden && !strings.Contains(rec.Body.String(), "needs the admin role") {
+			t.Errorf("%s POST %s refused without saying who may: %s", tc.user, tc.body, rec.Body.String())
+		}
+	}
+
+	if got := strings.Join(runner.pins, "|"); got != "deploy trigger, pinned (cli) map[number:87]|deploy trigger, pinned (cli) map[number:88]" {
+		t.Errorf("pinned = %q, want the operator's passed pin and the admin's", got)
 	}
 }
 

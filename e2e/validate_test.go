@@ -163,6 +163,23 @@ func TestValidateSecurityAuditExample(t *testing.T) {
 	}
 }
 
+// TestValidateFactoryExample holds examples/factory.yml as written: the e2e harness runs it with settings: and token_env: stripped, so only this sees the file a reader copies.
+func TestValidateFactoryExample(t *testing.T) {
+	t.Setenv("GH_TOKEN", fakeGitHubToken)
+
+	path := repoFile("examples", "factory.yml")
+
+	err := loadSchema(t).Validate(yamlAsJSONValue(t, path))
+	if err != nil {
+		t.Errorf("%s does not match steps.schema.json:\n%v", path, err)
+	}
+
+	err = cli.Run([]string{"validate", path, "--var", "repo=" + fakeRepo})
+	if err != nil {
+		t.Errorf("validate %s: %v", path, err)
+	}
+}
+
 // A built-in agent referenced with only a source: reaches the model carrying
 // the profile's persona and tool grant. This is the whole point of the
 // @builtin merge: the pipeline supplies the one thing it must (which model),

@@ -2,6 +2,8 @@ package venue
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -21,14 +23,22 @@ const (
 // ponytail: pinLifetime bounds a pin so a dead run cannot hold the cache over its bound forever; fixed at twice the default approval wait, since a held output can sit through one; a live run re-stamping its pins would let this shrink to minutes.
 var pinLifetime = 48 * time.Hour //nolint:gochecknoglobals // a test seam beside cacheBytes and orphanAge
 
-// pin keeps digest's alias from eviction until the run this session is part of releases it or the pin outlives pinLifetime. Made before the alias is looked up or published, so no eviction between the two can take it unpinned.
+// pin keeps digest's alias from eviction until the run this session is part of releases it or the pin outlives pinLifetime. Made before the alias is looked up or published, so no eviction between the two can take it unpinned. A session outside any run pins nothing: no Unpin could ever name it. Named by run and alias, so re-holding a digest in one run reuses its pin, whose lifetime runs from the first hold.
 func (s *plusSession) pin(ctx context.Context, digest string) error {
+	if s.runID == "" {
+		return nil
+	}
+
+	alias := s.aliasName(digest)
+
 	labels := shell.OwnershipLabels()
 	labels[cacheLabel] = "pin"
-	labels[pinLabel] = s.aliasName(digest)
+	labels[pinLabel] = alias
 	labels[runLabel] = s.runID
 
-	_, err := s.docker.CreateVolume(ctx, pinPrefix+randomSuffix(), labels, nil)
+	sum := sha256.Sum256([]byte(s.runID + "\x00" + alias))
+
+	_, err := s.docker.CreateVolume(ctx, pinPrefix+hex.EncodeToString(sum[:16]), labels, nil)
 	if err != nil {
 		return fmt.Errorf("pinning: %w", err)
 	}
@@ -66,23 +76,23 @@ func Unpin(ctx context.Context, holder, runID string) error {
 		return nil
 	}
 
-	s := newPlusSession(worker, shell.RunnerSpec{})
-	//nolint:contextcheck // close runs under its own bound
-	defer func() { _ = s.close() }()
-
-	_, err = s.dialDaemon(ctx)
+	s, hangUp, err := dialOnly(ctx, worker)
 	if err != nil {
 		return fmt.Errorf("worker %s: %w", holderAddress(holder), err)
 	}
 
-	pins, err := s.docker.ListVolumes(ctx, map[string]string{"steps.owner": "steps", cacheLabel: "pin", runLabel: runID})
+	defer hangUp()
+
+	docker := s.docker
+
+	pins, err := docker.ListVolumes(ctx, map[string]string{"steps.owner": "steps", cacheLabel: "pin", runLabel: runID})
 	if err != nil {
 		return fmt.Errorf("worker %s: %w", holderAddress(holder), err)
 	}
 
 	errs := make([]error, 0, len(pins))
 	for _, pin := range pins {
-		errs = append(errs, s.docker.RemoveVolume(ctx, pin.Name))
+		errs = append(errs, docker.RemoveVolume(ctx, pin.Name))
 	}
 
 	err = errors.Join(errs...)

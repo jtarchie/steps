@@ -221,6 +221,12 @@ func templateFuncs() template.FuncMap {
 		"pathseg":       url.PathEscape,
 		"keptOutputURL": keptOutputURL,
 		"jsonPre":       jsonPre,
+		// Process output: escape sequences are stripped (runview.Scrub, as
+		// the CLI does) so a colour code is not shown as `[31m` garbage.
+		// Applied at render, not record, so stored output stays raw for
+		// later steps and the kept full-output download.
+		"outputPre": func(raw string) template.HTML { return jsonPre(runview.Scrub(raw)) },
+		"scrub":     runview.Scrub,
 		// A version arrives as a store.VersionKey and a payload as a string;
 		// a template refuses either for a func taking the other.
 		"jsonLine": func(raw reflect.Value) template.HTML { return jsonLine(raw.String()) },

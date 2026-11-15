@@ -5,10 +5,12 @@ package agent
 // how the ordering rule came to be misremembered as unordered.
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/outcome"
 )
 
 func calls(names ...string) []recordedToolCall {
@@ -249,6 +251,22 @@ func TestMismatchPrefersTheFile(t *testing.T) {
 	err = expect.mismatch(calls("run_tests"))
 	if err != nil {
 		t.Errorf("mismatch = %v, want nil once both are met", err)
+	}
+}
+
+// A transfer that could not bring the files home says nothing about them, so it is never restated as the step failing its assert.files: (#246).
+func TestABrokenFetchIsNotBlamedOnTheFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	expect := newStepExpectation(&config.Assert{Files: []string{"answer/notes.md"}, Nudge: true}, dir, dir)
+	expect.bringHomeWith(func() error { return errors.New("the worker hung up") })
+
+	original := outcome.Fail(errors.New("the model gave up"))
+
+	err := agentConversation{expect: expect}.blameUnmet(original, nil)
+	if !errors.Is(err, original) || strings.Contains(err.Error(), "hung up") {
+		t.Errorf("blameUnmet = %v, want the step's own failure, not the transfer as a failed assert", err)
 	}
 }
 

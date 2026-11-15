@@ -63,7 +63,7 @@ func (v *ValidateCmd) Run() error {
 		return err
 	}
 
-	for _, warning := range pipeline.UnquotedShellValues(cfg) {
+	for _, warning := range append(pipeline.UnquotedShellValues(cfg), cfg.ProjectHooksOnHost()...) {
 		fmt.Fprintln(os.Stderr, "warning: "+warning)
 	}
 

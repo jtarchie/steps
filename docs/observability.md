@@ -32,7 +32,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 steps run pipeline.yml
 
 Everything else the OpenTelemetry SDK reads (headers, sampling, resource attributes, batching) applies as documented there.
 
-A collector that cannot be reached never fails a run. It is logged once per command, as a `telemetry.export_failed` warning naming the first error; the failed exports after it, and the final flush, are not logged again.
+A collector that cannot be reached never fails a run. It is logged as a `telemetry.error` warning naming the error, once per signal (`signal=traces` or `signal=metrics`, which can point at different collectors). While that signal keeps failing it is not logged again for 10 minutes, and the next warning counts the failures it held back (`suppressed`). A command shorter than that, which is most of them, warns once per signal; `steps web` is told again for as long as the collector stays down. An OpenTelemetry SDK error that is not a failed export is the same warning with `signal=otel`, so it is not mistaken for an unreachable collector.
 
 ## What is traced
 

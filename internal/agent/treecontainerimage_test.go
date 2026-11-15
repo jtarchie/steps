@@ -4,6 +4,8 @@ package agent
 
 import (
 	"bytes"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/agent/tree"
@@ -12,6 +14,41 @@ import (
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/testdocker"
 )
+
+// An image: agent with no tools: grant gets the read-only file tools, and they read the container's copy of the tree, not this machine's: the default grant reaches the tree like any other.
+func TestADefaultGrantImageAgentReadsTheContainer(t *testing.T) {
+	t.Parallel()
+	testdocker.Require(t)
+
+	dir := t.TempDir()
+	writeBytes(t, dir, "where.txt", []byte("from-the-volume"))
+	volume := testdocker.Tree(t, dir)
+	writeBytes(t, dir, "where.txt", []byte("from-this-machine"))
+
+	runner, err := shell.NewRunner(shell.RunnerSpec{Image: "alpine:3", MountPath: testdocker.TreePath, Volumes: volume.Volumes})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Cleanup(func() { shell.CloseRunner(runner, "test") })
+
+	prepared := preparedAgentStep{
+		dir: dir, runner: runner, lost: &tree.Lost{},
+		resolvedAgent: resolvedAgent{ri: config.ResolvedInvocation{AgentName: "hand", Image: "alpine:3"}},
+		space:         testStepSpace(t),
+	}
+	prepared.conv.env.dir = dir
+
+	prepared, err = prepared.openTree(t.Context())
+	if err != nil {
+		t.Fatalf("openTree: %v", err)
+	}
+
+	got := fmt.Sprint(execReadFile(t.Context(), map[string]any{"path": "where.txt"}, prepared.conv.env))
+	if !strings.Contains(got, "from-the-volume") {
+		t.Errorf("read_file(where.txt) = %s, want the container's copy", got)
+	}
+}
 
 // TestContainerTreeReadsAnImageWhole is the binary half of the container path:
 // the file crosses as a script's stdout, so a byte the shell or the capture

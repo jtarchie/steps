@@ -86,6 +86,41 @@ func TestNilConfigDefaultsToCopyIsolation(t *testing.T) {
 	}
 }
 
+// TestResourceDirIsEmptyEveryTime: a second ResourceDir for one name is a retried or resumed get, and an in: never sees the last attempt's leavings (#256).
+func TestResourceDirIsEmptyEveryTime(t *testing.T) {
+	t.Parallel()
+
+	bw, err := newTestCopyProvider(t).NewBuild(ctxT(), "b1")
+	if err != nil {
+		t.Fatalf("NewBuild: %v", err)
+	}
+	defer CloseBuild(bw, "b1")
+
+	first, err := bw.ResourceDir(ctxT(), "repo")
+	if err != nil {
+		t.Fatalf("ResourceDir: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(first, "partial"), []byte("x"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := bw.ResourceDir(ctxT(), "repo")
+	if err != nil {
+		t.Fatalf("ResourceDir: %v", err)
+	}
+
+	entries, err := os.ReadDir(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(entries) != 0 {
+		t.Errorf("ResourceDir handed back %d leftover entries, want an empty directory", len(entries))
+	}
+}
+
 // newTestCopyProvider builds an isolatingProvider rooted at a fresh t.TempDir().
 func newTestCopyProvider(t *testing.T) Provider {
 	t.Helper()

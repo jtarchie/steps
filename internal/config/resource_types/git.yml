@@ -195,6 +195,7 @@ config:
       GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=30'
       export GIT_SSH_COMMAND
     fi
+    # Every fetch passes --no-auto-gc (git 2.23+; on 2.29+ a synonym of --no-auto-maintenance): a detached maintenance run still writing here fails steps' removal of this checkout.
     git init -q .
     git remote add origin {{ .source.uri | shellquote }}
     {{- if index .source "tag_pattern" }}
@@ -204,7 +205,7 @@ config:
     # `git describe --tags --exact-match` works. The tag must still name the
     # commit check saw, or a tag moved since then would build something nobody planned.
     tag={{ .version.tag | shellquote }}
-    git fetch -q --no-tags origin "+refs/tags/*:refs/tags/*" || {
+    git fetch -q --no-tags --no-auto-gc origin "+refs/tags/*:refs/tags/*" || {
       printf 'git: could not fetch tag %s from %s\n' "$tag" {{ .source.uri | shellquote }} >&2
       exit 1
     }
@@ -219,8 +220,8 @@ config:
     fi
     git checkout -q {{ .version.ref | shellquote }}
     {{- else }}
-    git fetch -q --no-tags --depth 1 origin {{ .version.ref | shellquote }} 2>/dev/null \
-      || git fetch -q --no-tags origin {{ index .source "branch" | default "HEAD" | shellquote }}
+    git fetch -q --no-tags --no-auto-gc --depth 1 origin {{ .version.ref | shellquote }} 2>/dev/null \
+      || git fetch -q --no-tags --no-auto-gc origin {{ index .source "branch" | default "HEAD" | shellquote }}
     git checkout -q {{ .version.ref | shellquote }}
     {{- end }}
 

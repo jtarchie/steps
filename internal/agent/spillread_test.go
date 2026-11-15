@@ -108,6 +108,29 @@ func TestReadFileReadsTheSpillDirectoryHere(t *testing.T) {
 	}
 }
 
+// TestReadFileReadsTheSpillByItsShownName: a containerized agent is handed the spill under its own working directory (#247), and reads it back by that name whether it writes it absolute or relative, while any other relative path still goes to the container.
+func TestReadFileReadsTheSpillByItsShownName(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{"/tmp/build/abcd1234/.steps-agent-out/out-1.txt", ".steps-agent-out/out-1.txt", "./.steps-agent-out/out-1.txt"} {
+		env, stub, _ := spillEnv(t)
+		env.spillShown = "/tmp/build/abcd1234/" + tree.SpillDirName
+
+		got := execReadFile(t.Context(), map[string]any{"path": path}, env)
+		if content, _ := got["content"].(string); !strings.Contains(content, "the overflowing output") || len(stub.calls) != 0 {
+			t.Errorf("read_file(%q) = %v, container asked %v; want the spilled file, read here", path, got, stub.calls)
+		}
+	}
+
+	env, stub, _ := spillEnv(t)
+	env.spillShown = "/tmp/build/abcd1234/" + tree.SpillDirName
+
+	_ = execReadFile(t.Context(), map[string]any{"path": "data/AGENT.txt"}, env)
+	if len(stub.calls) == 0 {
+		t.Error("a relative path outside the spill directory was answered here, not by the container")
+	}
+}
+
 // TestSpillIsTheOnlyException holds the rule to being exactly one rule. Anything the model can WRITE has to land where run_shell can see it, and a search or a listing that answered from here would be describing a tree the shell is not working in — so every other tool goes to the container even for a path under the spill directory.
 func TestSpillIsTheOnlyException(t *testing.T) {
 	t.Parallel()

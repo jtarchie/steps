@@ -471,6 +471,19 @@ func TestMCPLoginRefusesNameWithDashP(t *testing.T) {
 	}
 }
 
+// A -p login's client secret is the daemon's to resolve, so a --secrets beside it could only be ignored.
+func TestMCPLoginRefusesSecretsWithDashP(t *testing.T) {
+	t.Parallel()
+
+	cmd := &MCPLoginCmd{PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}, Server: "tracker", Secrets: "web.yml"}
+	cmd.Target = "http://127.0.0.1:1"
+
+	err := cmd.Run()
+	if err == nil || !strings.Contains(err.Error(), "--secrets") {
+		t.Fatalf("mcp login -p with --secrets = %v, want refused naming --secrets", err)
+	}
+}
+
 // The daemon learns its authorize URL after the login starts and repeats it on every poll, so the terminal announces it once it exists and once only, or each poll opens another browser tab; not parallel, it sets BROWSER and captures stdout.
 func TestARemoteLoginAnnouncesItsURLOnce(t *testing.T) {
 	t.Setenv("BROWSER", "true")

@@ -33,7 +33,7 @@ import (
 // error. That is the whole point of a guard downstream of another guard —
 // see GuardSpace's own doc for why the leniency stops there.
 func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (bool, error) {
-	if step.When == nil || step.When.Run == "" {
+	if !step.Guarded() {
 		return true, nil
 	}
 
@@ -142,14 +142,14 @@ type guardInputs struct {
 func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec, guardInputs, error) {
 	kind, _ := step.Kind()
 
-	switch kind { //nolint:exhaustive // default covers load_var, get and a malformed step alike — nothing to resolve but their declared inputs
+	switch kind { //nolint:exhaustive // default covers load_var, approval, blocks, get and a malformed step alike — nothing to resolve but declared inputs
 	case config.StepKindTask:
 		rt, err := cfg.ResolveTask(step)
 		if err != nil {
 			return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve task: %w", err)
 		}
 
-		return withIsolation(shell.RunnerSpec{Image: rt.Image, Env: rt.Env}, rt.Isolation()),
+		return withIsolation(shell.RunnerSpec{Image: rt.Image, Env: rt.Env, Workdir: shell.BuildDir(step.Task)}, rt.Isolation()),
 			guardInputs{inputs: rt.Inputs, mapping: rt.InputMapping}, nil
 	case config.StepKindAgent:
 		ri, err := cfg.ResolveAgentInvocation(step)
@@ -160,7 +160,7 @@ func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec,
 		// An agent step's own space is staged from the step's declared inputs
 		// with no mapping (see internal/agent's prepareAgentStep), so this is
 		// the whole of its view.
-		return withIsolation(shell.RunnerSpec{Image: ri.Image, Env: ri.Env}, ri.Isolation()),
+		return withIsolation(shell.RunnerSpec{Image: ri.Image, Env: ri.Env, Workdir: shell.BuildDir(step.Agent)}, ri.Isolation()),
 			guardInputs{inputs: step.InputNames()}, nil
 	case config.StepKindTry:
 		return resolveStepRuntime(cfg, *step.Try)
@@ -175,13 +175,10 @@ func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec,
 			return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve put: %w", err)
 		}
 
-		return withIsolation(shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env}, resourceType.Isolation()),
+		return withIsolation(shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env, Workdir: shell.PutDir}, resourceType.Isolation()),
 			guardInputs{inputs: step.InputNames(), all: step.InputsAll()}, nil
 	default:
-		// Nothing to resolve: the step runs on the host over its own declared
-		// inputs, if any. A load_var: reads its file from exactly those
-		// (runLoadVarStep's TaskSpace); returning none here handed its guard an
-		// empty directory and a permanent false (#262).
+		// A load_var: reads its file from exactly its declared inputs (runLoadVarStep's TaskSpace); returning none handed its guard an empty directory and a permanent false (#262).
 		return shell.RunnerSpec{}, guardInputs{inputs: step.InputNames()}, nil
 	}
 }

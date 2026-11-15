@@ -37,13 +37,9 @@ func (r *RunsOutputCmd) print(ctx context.Context, st interface {
 },
 ) error {
 	// A typo or another pipeline's run is not "a run that printed nothing".
-	_, ok, err := st.FindRunRow(ctx, r.RunID)
+	_, err := recordedRun(ctx, st, r.RunID)
 	if err != nil {
-		return fmt.Errorf("could not read run %q: %w", r.RunID, err)
-	}
-
-	if !ok {
-		return fmt.Errorf("no run %q was recorded for pipeline %q", r.RunID, st.Pipeline())
+		return err
 	}
 
 	outputs, names, err := r.recorded(ctx, st)
@@ -60,7 +56,12 @@ func (r *RunsOutputCmd) print(ctx context.Context, st interface {
 	}
 
 	if len(outputs) == 0 {
-		return fmt.Errorf("no step %q recorded output in run %q; these did: %s", r.Step, r.RunID, strings.Join(names, ", "))
+		offered := make([]string, len(names))
+		for i, name := range names {
+			offered[i] = printableStepName(name)
+		}
+
+		return fmt.Errorf("no step %q recorded output in run %q; these did: %s", r.Step, r.RunID, strings.Join(offered, ", "))
 	}
 
 	for _, output := range outputs {
@@ -71,6 +72,24 @@ func (r *RunsOutputCmd) print(ctx context.Context, st interface {
 	}
 
 	return nil
+}
+
+// recordedRun is the run named, refused when this pipeline recorded none. The store's error already names the run, so it is returned unwrapped.
+func recordedRun(ctx context.Context, st interface {
+	store.Meta
+	store.Runs
+}, id string,
+) (store.RunRow, error) {
+	run, ok, err := st.FindRunRow(ctx, id)
+	if err != nil {
+		return store.RunRow{}, err //nolint:wrapcheck // the store names the run
+	}
+
+	if !ok {
+		return store.RunRow{}, fmt.Errorf("no run %q was recorded for pipeline %q", id, st.Pipeline())
+	}
+
+	return run, nil
 }
 
 // recorded is the named step's output events, and every step that has one, for the refusal to name.
@@ -98,7 +117,7 @@ func (r *RunsOutputCmd) recorded(ctx context.Context, st store.Events) ([]store.
 				names = append(names, row.StepName)
 			}
 
-			if row.StepName == r.Step {
+			if row.StepName == r.Step || printableStepName(row.StepName) == r.Step {
 				outputs = append(outputs, row)
 			}
 		}
@@ -109,16 +128,25 @@ func (r *RunsOutputCmd) recorded(ctx context.Context, st store.Events) ([]store.
 	}
 }
 
-// printStepNames lists the steps that recorded output, in the store's seq order — what the run recorded, first to last — and scrubbed, because a step's name is pipeline-authored text going onto an operator's terminal. Not elided, unlike a table cell: a line's whole point is being passable back as <step>.
+// printStepNames lists the steps that recorded output, in the store's seq order — what the run recorded, first to last. Not elided, unlike a table cell: a line's whole point is being passable back as <step>.
 func printStepNames(names []string) error {
 	for _, name := range names {
-		_, err := fmt.Fprintln(os.Stdout, runview.Scrub(name))
+		_, err := fmt.Fprintln(os.Stdout, printableStepName(name))
 		if err != nil {
 			return fmt.Errorf("could not write the step names: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// printableStepName is a step's name made safe for an operator's terminal and one line, yet still passable back as <step>: a name the scrub would change, or that spans lines, prints Go-quoted RAW, since a scrubbed name no longer matches the stored one and two raw names can scrub alike.
+func printableStepName(name string) string {
+	if runview.Scrub(name) != name || strings.Contains(name, "\n") {
+		return strconv.Quote(name)
+	}
+
+	return name
 }
 
 // printOutput writes the stored whole when the record elided it, and the record otherwise: a reaped or refused store leaves only the record.

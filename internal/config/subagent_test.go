@@ -325,6 +325,47 @@ jobs:
 			wantLoadError(t, path, tc.want)
 		})
 	}
+
+	// A treeless image child runs in its parent's container, so ITS child is held to that container, not to the image it names.
+	relay := `
+agents:
+- name: lead
+  source: { model: lmstudio/qwen }
+  image: busybox
+  tools: [{ agent: helper, description: Delegate. }]
+- name: helper
+  source: { model: lmstudio/qwen }
+  image: alpine
+  tools: [web_fetch, { agent: worker, description: Delegate. }]
+- name: worker
+  source: { model: lmstudio/qwen }
+  image: alpine
+jobs:
+- name: j
+  plan:
+  - agent: lead
+    messages: [x]
+`
+	wantLoadError(t, writeConfig(t, relay), `sub-agent "worker"`)
+
+	// An exported agent is a root as a step's is.
+	exported := `
+agents:
+- name: lead
+  source: { model: lmstudio/qwen }
+  tools: [{ agent: helper, description: Delegate. }]
+- name: helper
+  source: { model: lmstudio/qwen }
+  image: alpine
+jobs:
+- name: j
+  plan:
+  - task: t
+    run: "true"
+mcp_exports:
+- {name: e, access: 'true', tools: [{agent: lead}]}
+`
+	wantLoadError(t, writeConfig(t, exported), `sub-agent "helper"`)
 }
 
 // TestImageAgentRefusesRelativeMCPCwd: a stdio server runs on this machine, so a relative cwd: names a tree the containerized agent's edits never reach (#246).
@@ -381,4 +422,24 @@ jobs:
     fix: fixer
 `
 	wantLoadError(t, writeConfig(t, fix), "cwd: repo")
+
+	// fix.tools selects the agent's grant by bare name, which only resolving the grant reveals as the mcp: one.
+	selected := `
+mcp_servers:
+- name: lsp
+  command: gopls
+  cwd: repo
+agents:
+- name: fixer
+  source: { model: lmstudio/qwen }
+  tools: [{ mcp: lsp }, read_file]
+jobs:
+- name: j
+  plan:
+  - task: t
+    image: busybox
+    run: "true"
+    fix: { agent: fixer, tools: [lsp] }
+`
+	wantLoadError(t, writeConfig(t, selected), "cwd: repo")
 }

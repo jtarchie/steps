@@ -169,7 +169,8 @@ func (o *Output) sink(c Command, which Streams, label string, dst io.Writer) (io
 		w = io.MultiWriter(writers...)
 	}
 
-	if o.secrets.Empty() {
+	// nil, not Empty(): the set grows mid-run (an in_parallel: sibling resolving a ((var))), and the scrubber reads it live on every write.
+	if o.secrets == nil {
 		return w, capture
 	}
 

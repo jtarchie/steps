@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"time"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/labstack/echo/v5"
 )
@@ -37,7 +40,7 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 	// drainer started in between.
 	since := time.Now().UTC()
 
-	err = s.queueTrigger(c.Request().Context(), pipeline, name, "web", c.FormValue("force") == forceAll, nil)
+	err = s.queueTrigger(c.Request().Context(), pipeline, name, "web", c.FormValue("force") == forceAll, nil, s.roleOf(c))
 	if err != nil {
 		return err
 	}
@@ -51,8 +54,8 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 }
 
 // queueTrigger is a person's trigger of a job, from the page or from `steps runs trigger`; from says which. A pin makes it a row of its own, built against the version it names.
-func (s *Server) queueTrigger(ctx context.Context, pipeline *Pipeline, name, from string, force bool, pin map[string]string) error {
-	_, err := pipeline.Config().FindJob(name)
+func (s *Server) queueTrigger(ctx context.Context, pipeline *Pipeline, name, from string, force bool, pin map[string]string, role Role) error {
+	job, err := pipeline.Config().FindJob(name)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
 	}
@@ -67,27 +70,78 @@ func (s *Server) queueTrigger(ctx context.Context, pipeline *Pipeline, name, fro
 		return pausedRefusal(ctx, pipeline)
 	}
 
+	if len(pin) > 0 {
+		return s.queuePinnedTrigger(ctx, pipeline, job, name, from, force, pin, role)
+	}
+
 	reason := "trigger (" + from + ")"
 	if force {
 		reason = "trigger, no cache (" + from + ")"
 	}
 
-	if len(pin) > 0 {
-		// ponytail: a pinned trigger cannot also skip the cache; the force flag is per job in memory and a pinned row would spend another request's. Carry force on the row if anyone asks.
-		if force {
-			return echo.NewHTTPError(http.StatusBadRequest, "a pinned trigger cannot also skip the cache")
-		}
-
-		err = s.runner.EnqueuePinned(ctx, pipeline.Pipeline, name, "trigger, pinned ("+from+")", pin)
-	} else {
-		_, err = s.runner.Enqueue(ctx, pipeline.Pipeline, name, reason, force)
-	}
-
+	_, err = s.runner.Enqueue(ctx, pipeline.Pipeline, name, reason, force)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
 	return nil
+}
+
+// queuePinnedTrigger is queueTrigger's pinned row: refused with force, and held to the job's passed: gates below admin.
+func (s *Server) queuePinnedTrigger(ctx context.Context, pipeline *Pipeline, job *config.Job, name, from string, force bool, pin map[string]string, role Role) error {
+	// ponytail: a pinned trigger cannot also skip the cache; the force flag is per job in memory and a pinned row would spend another request's. Carry force on the row if anyone asks.
+	if force {
+		return echo.NewHTTPError(http.StatusBadRequest, "a pinned trigger cannot also skip the cache")
+	}
+
+	if role < RoleAdmin {
+		err := refuseUnpassedPin(ctx, pipeline, job, pin)
+		if err != nil {
+			return err
+		}
+	}
+
+	err := s.runner.EnqueuePinned(ctx, pipeline.Pipeline, name, "trigger, pinned ("+from+")", pin)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	return nil
+}
+
+// refuseUnpassedPin holds a non-admin's pin to the job's passed: gates. A pinned run takes its versions from the check rather than the green record, so it would build what upstream never passed — which Concourse does not let anyone do, and which here only an admin may.
+// ponytail: each constrained resource is judged alone; a fan-in whose pinned versions passed upstream in different builds gets through. Judge the set per upstream job (HasPassedVersionSet) if that matters.
+func refuseUnpassedPin(ctx context.Context, pipeline *Pipeline, job *config.Job, pin map[string]string) error {
+	constraints := job.PassedConstraints()
+
+	for _, resource := range slices.Sorted(maps.Keys(constraints)) {
+		upstream := constraints[resource]
+
+		green, err := pipeline.Store.GreenVersions(ctx, resource, upstream)
+		if err != nil {
+			return fmt.Errorf("web: %w", err)
+		}
+
+		if !slices.ContainsFunc(green, func(version map[string]any) bool { return pinMatches(version, pin) }) {
+			return echo.NewHTTPError(http.StatusForbidden, fmt.Sprintf(
+				"no version of %s matching that pin has passed %v; pinning past a passed: gate needs the admin role (an operator may pin a version that passed, or trigger without a pin)",
+				resource, upstream))
+		}
+	}
+
+	return nil
+}
+
+// pinMatches is resource.SelectVersion's matching, which depguard keeps out of this package: every pinned field present, compared as text.
+func pinMatches(version map[string]any, pin map[string]string) bool {
+	for key, want := range pin {
+		got, ok := version[key]
+		if !ok || fmt.Sprint(got) != want {
+			return false
+		}
+	}
+
+	return true
 }
 
 // handleRerun is Retry: fly rerun-build (#146), a recorded run against the
@@ -158,13 +212,16 @@ func (s *Server) handleAPITrigger(c *echo.Context) error {
 
 	var req TriggerRequest
 
-	// An empty body is the ordinary trigger, so only a body that is there has to parse.
-	err = json.NewDecoder(c.Request().Body).Decode(&req)
+	// An empty body is the ordinary trigger, so only a body that is there has to parse. A field this daemon does not know is refused: read as absent, a misspelled or newer-client pin would build the newest version instead.
+	decoder := json.NewDecoder(c.Request().Body)
+	decoder.DisallowUnknownFields()
+
+	err = decoder.Decode(&req)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return echo.NewHTTPError(http.StatusBadRequest, "the request body is not a trigger request: "+err.Error())
 	}
 
-	err = s.queueTrigger(c.Request().Context(), target, c.Param("job"), "cli", req.Force, req.Pin)
+	err = s.queueTrigger(c.Request().Context(), target, c.Param("job"), "cli", req.Force, req.Pin, s.roleOf(c))
 	if err != nil {
 		return err
 	}

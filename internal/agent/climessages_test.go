@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
 	"github.com/jtarchie/steps/internal/config"
 )
 
@@ -164,6 +165,26 @@ func TestCLIAgentOneMessageIsOneInvocation(t *testing.T) {
 
 	if got := strings.Count(askedLog(t, log), "--- invocation ---"); got != 1 {
 		t.Fatalf("the child was invoked %d time(s), want exactly 1", got)
+	}
+}
+
+// TestCLIAgentStopsOnALostTree: a placed CLI agent whose worker went away ends there, as the hosted loop does, rather than retrying or asking the next message against a tree nobody can reach (#241).
+func TestCLIAgentStopsOnALostTree(t *testing.T) {
+	log := recordingCLI(t)
+
+	prepared := cliPrepared(t, nil)
+	prepared.ri.Attempts = 3
+	prepared.conv.messages = []string{"Review the diff.", "Name the line it turns on."}
+	prepared.conv.env.lost = &tree.Lost{}
+	prepared.conv.env.lost.Note(fmt.Errorf("%w: worker reclaimed", tree.ErrNoAccess))
+
+	_, err := runCLIConversation(t.Context(), prepared, time.Minute)
+	if !errors.Is(err, tree.ErrNoAccess) {
+		t.Fatalf("err = %v, want the lost tree", err)
+	}
+
+	if got := strings.Count(askedLog(t, log), "--- invocation ---"); got != 1 {
+		t.Errorf("the child was invoked %d time(s) after its tree was lost, want 1", got)
 	}
 }
 

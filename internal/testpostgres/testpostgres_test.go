@@ -25,8 +25,40 @@ func fakeStart(t *testing.T, errs ...error) *int {
 
 	t.Cleanup(func() { startDB = orig })
 	fakeCanary(t, nil)
+	fakeEUID(t, 1000)
 
 	return &calls
+}
+
+func fakeEUID(t *testing.T, uid int) {
+	t.Helper()
+
+	orig := geteuid
+	geteuid = func() int { return uid }
+
+	t.Cleanup(func() { geteuid = orig })
+}
+
+func TestRootSkipsByDefault(t *testing.T) {
+	t.Setenv(RequireEnv, "")
+	calls := fakeStart(t)
+	fakeEUID(t, 0)
+
+	server, err := Start(nil)
+	if !errors.Is(err, ErrUnavailable) || server != nil || *calls != 0 {
+		t.Fatalf("Start as root = %v, %v after %d starts; want ErrUnavailable before any start", server, err, *calls)
+	}
+}
+
+func TestRootFailsWhenRequired(t *testing.T) {
+	t.Setenv(RequireEnv, "1")
+	fakeStart(t)
+	fakeEUID(t, 0)
+
+	_, err := Start(nil)
+	if err == nil || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want a failure that is not ErrUnavailable", err)
+	}
 }
 
 func fakeCanary(t *testing.T, answer error) {

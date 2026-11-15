@@ -27,9 +27,15 @@ func scopePins(t *testing.T, lifetime time.Duration) {
 func holdUnderRun(t *testing.T, worker, run string) (string, string) {
 	t.Helper()
 
+	return holdAs(events.WithRunID(t.Context(), run), t, worker, "head -c 65536 /dev/urandom > out/blob")
+}
+
+func holdAs(ctx context.Context, t *testing.T, worker, command string) (string, string) {
+	t.Helper()
+
 	runner := deferredRunner(t, worker)
 
-	err := shell.Run(events.WithRunID(t.Context(), run), runner, "head -c 65536 /dev/urandom > out/blob")
+	err := shell.Run(ctx, runner, command)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,5 +150,84 @@ func TestUnpinReleasesOnlyThatRunsOutputs(t *testing.T) {
 	_, err = Pull(t.Context(), holder, live, t.TempDir())
 	if err != nil {
 		t.Errorf("another run's pin was released with this one's: %v", err)
+	}
+}
+
+// A hold outside any run has no Unpin that could name it, so a pin there would only sit outside the bound until it expired.
+func TestAHoldOutsideARunPinsNothing(t *testing.T) {
+	worker := localWorker(t, t.TempDir()).Worker
+
+	scopeEviction(t, 8<<30, time.Hour)
+
+	digest, _ := holdAs(t.Context(), t, worker, "head -c 65536 /dev/urandom > out/blob")
+
+	if pins := pinsOf(t, digest); len(pins) != 0 {
+		t.Errorf("a hold under no run pinned %v, which nothing can release", pins)
+	}
+}
+
+// Re-holding one digest in a run keeps one pin, not one per hold for evict() to walk; another run holding the same digest keeps its own, which outlives the first run's release.
+func TestReholdingInOneRunReusesItsPin(t *testing.T) {
+	worker := localWorker(t, t.TempDir()).Worker
+
+	scopeEviction(t, 8<<30, time.Hour)
+
+	same := "printf reheld-" + strconv.Itoa(os.Getpid()) + " > out/blob"
+	first, holder := holdAs(events.WithRunID(t.Context(), "RUN-REHOLD"), t, worker, same)
+	again, _ := holdAs(events.WithRunID(t.Context(), "RUN-REHOLD"), t, worker, same)
+
+	if first != again {
+		t.Fatalf("digests %s and %s differ, so this test proves nothing about re-holding", first, again)
+	}
+
+	if pins := pinsOf(t, first); len(pins) != 1 {
+		t.Errorf("two holds in one run left pins %v, want one", pins)
+	}
+
+	holdAs(events.WithRunID(t.Context(), "RUN-OTHER"), t, worker, same)
+
+	err := Unpin(context.WithoutCancel(t.Context()), holder, "RUN-REHOLD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	evictAll(t, worker)
+
+	_, err = Pull(t.Context(), holder, first, t.TempDir())
+	if err != nil {
+		t.Errorf("another run's pin on the same digest went with this run's release: %v", err)
+	}
+}
+
+// Unpin only lists and removes volumes, so it skips a session's connect chores: the orphan sweep, and pulling busybox inside the caller's short cleanup bound.
+func TestUnpinOnlyReachesTheDaemon(t *testing.T) {
+	worker := localWorker(t, t.TempDir()).Worker
+
+	scopeEviction(t, 8<<30, time.Hour)
+
+	_, holder := holdUnderRun(t, worker, "RUN-LIGHT")
+
+	parsed, err := ParseWorker(holder)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s, hangUp, err := dialOnly(t.Context(), parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hangUp()
+
+	key := "docker " + s.daemonName()
+	swept.Delete(key)
+
+	err = Unpin(context.WithoutCancel(t.Context()), holder, "RUN-LIGHT")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, did := swept.Load(key); did {
+		t.Error("Unpin ran a session's connect chores (the orphan sweep) to remove volumes")
 	}
 }

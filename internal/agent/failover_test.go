@@ -204,6 +204,50 @@ func TestAMidRunFailureResumesOnTheNextSource(t *testing.T) {
 	}
 }
 
+// A served step never fetches a fallback's secret-backed key: the fetch runs a source command, possibly a prompt, for a source nothing used.
+func TestAServedStepFetchesNoFallbackKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	primaryURL, _ := togglableProbeEndpoint(t)
+	fallbackURL, _ := togglableProbeEndpoint(t)
+
+	fallback := pinSource("openai/backup", fallbackURL)
+	fallback.APIKeyEnv = "BACKUP_KEY"
+	fallback.Secrets = map[string]string{"BACKUP_KEY": "((ci:backup_key))"}
+
+	cfg := pinConfigWithFallbacks(t, "served", primaryURL, fallback)
+
+	ri, err := cfg.ResolveAgentInvocation(config.Step{Agent: "served"})
+	if err != nil {
+		t.Fatalf("ResolveAgentInvocation: %v", err)
+	}
+
+	var fetched []string
+
+	ctx := WithKeyLookup(t.Context(), "p", func(_ context.Context, name, _ string) (string, error) {
+		fetched = append(fetched, name)
+
+		return "backup-key", nil
+	})
+
+	_, served, err := runPreparedWithFailover(ctx, preparedAgentStep{
+		resolvedAgent: resolvedAgent{ri: ri, agent: &cfg.Agents[0], fallbackIndex: -1},
+		llm:           llmclient.New(ri, "test-key"),
+		conv:          agentConversation{system: "system", messages: []string{"prompt"}, maxTurns: testMaxTurns},
+	})
+	if err != nil {
+		t.Fatalf("a healthy primary failed the step: %v", err)
+	}
+
+	if served.swapped {
+		t.Fatal("the primary served, yet the step swapped sources")
+	}
+
+	if len(fetched) != 0 {
+		t.Errorf("fetched %v for a step the primary served, want no fallback key fetched", fetched)
+	}
+}
+
 // TestRemainingTurnsSpansTheCascade pins max_turns: as a ceiling on the STEP
 // rather than on each source it is tried on.
 //

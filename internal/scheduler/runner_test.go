@@ -963,6 +963,31 @@ jobs:
 	}
 }
 
+// A queued pin lays over the daemon's own --pin field by field, and never writes into it: the base is every other row's pin too.
+func TestRequestPinOverlaysTheDaemonsPin(t *testing.T) {
+	t.Parallel()
+
+	base := map[string]string{"branch": "main", "number": "1"}
+
+	got, err := requestPin(base, `{"number":"87"}`)
+	if err != nil {
+		t.Fatalf("requestPin: %v", err)
+	}
+
+	if fmt.Sprint(got) != "map[branch:main number:87]" {
+		t.Errorf("pin = %v, want the request's number over the daemon's branch", got)
+	}
+
+	if base["number"] != "1" {
+		t.Errorf("the daemon's pin became %v", base)
+	}
+
+	got, err = requestPin(nil, `{"number":"87"}`)
+	if err != nil || fmt.Sprint(got) != "map[number:87]" {
+		t.Errorf("with no daemon pin = %v, %v", got, err)
+	}
+}
+
 // drainable is one pipeline with one queued build of "build", for a test that drives DrainOne itself.
 func drainable(t *testing.T, dir, yaml string) (*LocalRunner, *Pipeline, store.Store) {
 	t.Helper()

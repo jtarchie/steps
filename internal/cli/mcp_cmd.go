@@ -300,6 +300,20 @@ func (m *MCPLoginCmd) loginSecrets(ctx context.Context, pipelineName string, srv
 	return SecretFlags{Config: m.Secrets}.probeSecrets(ctx, pipelineName)
 }
 
+// remoteFlags refuses the -c-only flags beside -p, which would otherwise be silently ignored.
+func (m *MCPLoginCmd) remoteFlags() error {
+	// -p already names the pipeline the login is filed under.
+	if len(m.Name) > 0 {
+		return errors.New("steps mcp login: --name names a -c file's pipeline; with -p the pipeline is already named")
+	}
+
+	if m.Secrets != "" {
+		return errors.New("steps mcp login: --secrets resolves a -c login's client secret; with -p the daemon resolves it from its own sources")
+	}
+
+	return nil
+}
+
 // Run is one of two logins, chosen by which pipeline was named. -c is a file here, so the login runs here: a loopback listener catches the redirect and the token lands in this user's config dir. -p is a pipeline a DAEMON serves, so the daemon runs it (daemon_login.go) — it is the machine that will spend the token, and one with no browser cannot be the loopback a redirect comes back to.
 func (m *MCPLoginCmd) Run() error {
 	if (m.Config == "") == (m.Pipeline == "") {
@@ -310,9 +324,9 @@ func (m *MCPLoginCmd) Run() error {
 	defer cancel()
 
 	if m.Pipeline != "" {
-		// -p already names the pipeline the login is filed under; a --name beside it would be silently ignored.
-		if len(m.Name) > 0 {
-			return errors.New("steps mcp login: --name names a -c file's pipeline; with -p the pipeline is already named")
+		err := m.remoteFlags()
+		if err != nil {
+			return err
 		}
 
 		return m.remote(ctx)

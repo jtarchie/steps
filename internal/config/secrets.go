@@ -301,10 +301,14 @@ func checkSourceSecrets(label string, source AgentSource) error {
 	return nil
 }
 
-// refuseExportedSourceSecrets is a load error because an export server has no run, and so no memo to resolve a key through.
+// refuseExportedSourceSecrets is a load error because an export server has no run, and so no memo to resolve a model's key or a server's token through.
 func (c *Config) refuseExportedSourceSecrets() error {
-	// ponytail: refused outright; give an export server its own expiring memo (secret.Resolver.ForChecks) and install the key lookup on its context to lift this.
+	// ponytail: refused outright; give an export server its own expiring memo (secret.Resolver.ForChecks) and install the key and token lookups on its context to lift this.
 	for _, export := range c.MCPExports {
+		if server := c.secretBackedGrant(export.Tools); server != "" {
+			return fmt.Errorf("mcp_exports %q: mcp server %q has auth.secrets:; an export has no run to resolve them in", export.Name, server)
+		}
+
 		for _, spec := range export.Tools {
 			if spec.Agent == "" {
 				continue
@@ -312,39 +316,17 @@ func (c *Config) refuseExportedSourceSecrets() error {
 
 			for _, name := range c.withSubAgents([]string{spec.Agent}) {
 				agent, err := c.FindAgent(name)
-				if err == nil && agent != nil && agentHasSourceSecrets(*agent) {
+				if err != nil || agent == nil {
+					continue
+				}
+
+				if agentHasSourceSecrets(*agent) {
 					return fmt.Errorf("mcp_exports %q: tool %q reaches agent %q, whose source has secrets:; an export has no run to resolve them in", export.Name, spec.Agent, name)
 				}
-			}
-		}
-	}
 
-	return c.refuseExportedMCPSecrets()
-}
-
-// refuseExportedMCPSecrets is refuseExportedSourceSecrets for a server's token: an export answers an MCP grant upstream, with no run to resolve the token in.
-func (c *Config) refuseExportedMCPSecrets() error {
-	for _, export := range c.MCPExports {
-		agents := []string{}
-
-		for _, spec := range export.Tools {
-			if spec.Agent != "" {
-				agents = append(agents, spec.Agent)
-			}
-		}
-
-		if server := c.secretBackedGrant(export.Tools); server != "" {
-			return fmt.Errorf("mcp_exports %q: mcp server %q has auth.secrets:; an export has no run to resolve them in", export.Name, server)
-		}
-
-		for _, name := range c.withSubAgents(agents) {
-			agent, err := c.FindAgent(name)
-			if err != nil || agent == nil {
-				continue
-			}
-
-			if server := c.secretBackedGrant(agent.Tools); server != "" {
-				return fmt.Errorf("mcp_exports %q: agent %q reaches mcp server %q, which has auth.secrets:; an export has no run to resolve them in", export.Name, name, server)
+				if server := c.secretBackedGrant(agent.Tools); server != "" {
+					return fmt.Errorf("mcp_exports %q: agent %q reaches mcp server %q, which has auth.secrets:; an export has no run to resolve them in", export.Name, name, server)
+				}
 			}
 		}
 	}

@@ -217,19 +217,13 @@ func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, re
 
 // requestPin is the daemon's own --pin with one request's pin laid over it: the request is the narrower word.
 func requestPin(base map[string]string, encoded string) (map[string]string, error) {
-	var pin map[string]string
+	// Unmarshal into a non-nil map keeps its entries, which is the overlay.
+	pinned := maps.Clone(base)
 
-	err := json.Unmarshal([]byte(encoded), &pin)
+	err := json.Unmarshal([]byte(encoded), &pinned)
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: a queued trigger's pin %q does not parse: %w", encoded, err)
 	}
-
-	pinned := maps.Clone(base)
-	if pinned == nil {
-		pinned = map[string]string{}
-	}
-
-	maps.Copy(pinned, pin)
 
 	return pinned, nil
 }
@@ -450,7 +444,7 @@ func (r *LocalRunner) DrainOne(ctx context.Context, target *Pipeline) bool {
 
 	id, jobName := claim.ID, claim.JobName
 
-	// Before anything can finalize the row without running it (a job the config dropped, one the breaker paused), since the claim is what spends a force. A rerun spends none: it skips the cache anyway, and the flag belongs to the job's ordinary row.
+	// Before anything can finalize the row without running it (a job the config dropped, one the breaker paused), since the claim is what spends a force. A rerun or a pinned trigger spends none: the flag belongs to the job's ordinary row.
 	force := r.base.Force
 	if claim.RerunOf == "" && claim.Pin == "" {
 		force = r.takeForce(target.Slug, jobName) || force

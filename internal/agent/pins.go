@@ -278,8 +278,15 @@ func selectedSource(scope pinScope) (sourceSelection, bool) {
 	return selectedSourceAt(scope, time.Now())
 }
 
-// runBoundaryKey carries the instant a run began.
+// runBoundaryKey carries the run a context belongs to.
 type runBoundaryKey struct{}
+
+// runBoundary holds sources chosen for this run alone (see failOver), so no later run inherits them.
+type runBoundary struct {
+	at      time.Time
+	mu      sync.Mutex
+	sources map[pinScope]sourceSelection
+}
 
 // WithRunBoundary stamps a context with the moment its run started, which is
 // the instant every pin read inside that run is judged against.
@@ -300,18 +307,46 @@ type runBoundaryKey struct{}
 // throughout. internal/pipeline stamps this once per job run, beside the
 // OpenRouter session, so concurrent jobs each carry their own.
 func WithRunBoundary(ctx context.Context) context.Context {
-	return context.WithValue(ctx, runBoundaryKey{}, time.Now())
+	return context.WithValue(ctx, runBoundaryKey{}, &runBoundary{at: time.Now(), sources: map[pinScope]sourceSelection{}})
 }
 
 // runInstant is when the current run began, or now for a caller that never
 // declared a run — every non-pipeline caller, and every test.
 func runInstant(ctx context.Context) time.Time {
-	at, ok := ctx.Value(runBoundaryKey{}).(time.Time)
+	run, ok := ctx.Value(runBoundaryKey{}).(*runBoundary)
 	if !ok {
 		return time.Now()
 	}
 
-	return at
+	return run.at
+}
+
+// selectForRun records nothing outside a run (a poll): there is no step to steer.
+func selectForRun(ctx context.Context, scope pinScope, source config.AgentSource, index int) {
+	run, ok := ctx.Value(runBoundaryKey{}).(*runBoundary)
+	if !ok {
+		return
+	}
+
+	run.mu.Lock()
+	defer run.mu.Unlock()
+
+	run.sources[scope] = sourceSelection{source: source, index: index}
+}
+
+// runSelection is the source selectForRun chose for this run, if any.
+func runSelection(ctx context.Context, scope pinScope) (sourceSelection, bool) {
+	run, ok := ctx.Value(runBoundaryKey{}).(*runBoundary)
+	if !ok {
+		return sourceSelection{}, false
+	}
+
+	run.mu.Lock()
+	defer run.mu.Unlock()
+
+	selection, ok := run.sources[scope]
+
+	return selection, ok
 }
 
 // selectedSourceAt is selectedSource judged against a caller-chosen instant.

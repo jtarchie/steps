@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,19 +75,30 @@ func TestAskUserPutsNothingToAHeadlessTerminal(t *testing.T) {
 
 	for _, headless := range []bool{false, true} {
 		fixture := newAskFixture(t)
-		fixture.env.ask.prompt = func(context.Context, store.Question) (string, bool) { return "typed", true }
+
+		var prompted atomic.Bool
+
+		fixture.env.ask.prompt = func(context.Context, store.Question) (string, bool) {
+			prompted.Store(true)
+
+			return "typed", true
+		}
 		fixture.ctx = events.WithOutput(fixture.ctx, events.Output{Headless: headless})
 
-		// The prompter answers at once, so its wait only has to outlast a loaded scheduler (#257); the headless case is the one that really waits its deadline out.
+		// The prompter answers at once, so its wait only has to outlast a loaded scheduler (#257). Headless expires on the second poll (askUserPollInterval) for any wait under it; the wait is only a stray prompter's head start, and the flag catches one the deadline beat.
 		want, wait := "typed", 30*time.Second
 		if headless {
-			want, wait = "fallback", 200*time.Millisecond
+			want, wait = "fallback", time.Second
 		}
 
 		result := fixture.ask(askGrant{defaultAnswer: "fallback", wait: wait}, "Ship it?")
 
 		if result["answer"] != want {
 			t.Errorf("headless=%v: answer = %v, want %q", headless, result, want)
+		}
+
+		if headless && prompted.Load() {
+			t.Error("a headless ask prompted the terminal")
 		}
 	}
 }
@@ -867,6 +879,36 @@ func TestAskUserExpiryYieldsToAnAnswerThatJustLanded(t *testing.T) {
 
 	if fixture.env.ask.state.aborted() != nil {
 		t.Error("a question somebody answered aborted the step anyway")
+	}
+}
+
+// TestAskUserExpiryTakesAnAnswerAlreadyTyped: the terminal answer lands in a
+// buffered channel the loop reads only after its poll, so a poll that finds
+// the deadline passed must take a typed answer waiting there rather than
+// expire over it.
+func TestAskUserExpiryTakesAnAnswerAlreadyTyped(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+
+	row, _, err := fixture.store.AskQuestion(fixture.ctx, store.Question{
+		RunID: "run-1", JobName: "release-note", AgentName: "writer", Question: "Which bump?",
+	})
+	if err != nil {
+		t.Fatalf("AskQuestion: %v", err)
+	}
+
+	typed := make(chan string, 1)
+	typed <- "minor"
+
+	result := impatient("").poll(fixture.ctx, fixture.env, row, time.Now().Add(-time.Second), typed)
+
+	if result["answer"] != "minor" || result["source"] != "terminal" {
+		t.Errorf("poll() = %v, want the answer typed before the deadline", result)
+	}
+
+	if fixture.env.ask.state.aborted() != nil {
+		t.Error("a question answered at the terminal aborted the step anyway")
 	}
 }
 

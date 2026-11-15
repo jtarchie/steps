@@ -501,7 +501,6 @@ func (d *daemon) start(
 	outsideRuns := pipeline.WithPollSecrets(loopCtx, name, d.interval)
 
 	target.Hooks = trigger.HookHandler(outsideRuns, d.interval, target.Config, st)
-	d.memos.Store(target.Slug, outsideRuns)
 
 	err := d.server.Add(target)
 	// Only reachable if two sets of one name interleaved, which the lock above prevents, so this is the assertion rather than a path.
@@ -511,6 +510,8 @@ func (d *daemon) start(
 
 		return
 	}
+
+	d.memos.Store(target.Slug, outsideRuns)
 
 	d.runner.SetProvider(name, provider)
 

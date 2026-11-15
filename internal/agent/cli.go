@@ -28,6 +28,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/jtarchie/steps/internal/agent/tree"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/retry"
@@ -206,6 +207,11 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		// on_error) rather than outcome.Fail, and retrying is deterministic
 		// waste: a second attempt just re-triggers the same fence.
 		if errors.Is(attemptErr, errCLIToolSurface) {
+			return retry.Stop(attemptErr)
+		}
+
+		// A resume would rejoin a worker that is gone.
+		if errors.Is(attemptErr, tree.ErrNoAccess) {
 			return retry.Stop(attemptErr)
 		}
 
@@ -804,6 +810,13 @@ func runCLIAttempt(
 
 	state.absorb(prepared.ri.ModelName, run, bridge)
 	prepared.conv.usage.addTokens(run.inputTokens, run.outputTokens)
+
+	// The latch the HTTP loop checks after each turn (conversation.go), ahead of runErr: a placed agent whose worker went away has nothing a resume or a nudge could reach, and the child's own exit is a symptom of that.
+	// ponytail: the child only stops when it exits; cancel execCLI from the bridge handler once a call notes the loss, so it does not spend to max_turns first.
+	lost := prepared.conv.env.lost.Taken()
+	if lost != nil {
+		return lost //nolint:wrapcheck // the latch's error is the failure, returned bare as the hosted loop does
+	}
 
 	if runErr != nil {
 		return runErr

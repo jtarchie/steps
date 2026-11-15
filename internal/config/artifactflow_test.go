@@ -26,6 +26,23 @@ func TestValidateArtifactFlowRunsWithoutWorkspace(t *testing.T) {
 	}
 }
 
+// TestValidateArtifactFlowDoGuardInputs: unchecked, a do:'s guard reads a directory that can never exist and is silently false.
+func TestValidateArtifactFlowDoGuardInputs(t *testing.T) {
+	t.Parallel()
+
+	job := &Job{
+		Name: "j",
+		Plan: []Step{
+			{Do: []Step{{Task: "work", Run: "true"}}, Inputs: Inputs("meta"), When: &WhenSpec{Run: "test -s meta/v"}},
+		},
+	}
+
+	err := ValidateArtifactFlow(&Config{}, job)
+	if err == nil || !strings.Contains(err.Error(), `(do "when: guard"): input "meta" is not a resource fetched`) {
+		t.Fatalf("err = %v, want the do:'s guard input refused", err)
+	}
+}
+
 func TestValidateArtifactFlowDeclaredProducer(t *testing.T) {
 	t.Parallel()
 

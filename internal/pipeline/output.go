@@ -87,8 +87,9 @@ func recordOutput(ctx context.Context, label string, withStdout bool) (context.C
 			sink = io.MultiWriter(prefixed, chunks)
 		}
 
+		// nil, not Empty(): the set grows mid-run (an in_parallel: sibling resolving a ((var))), and the scrubber reads it live on every write.
 		secrets := redact.SecretsFrom(ctx)
-		if secrets.Empty() {
+		if secrets == nil {
 			return sink
 		}
 

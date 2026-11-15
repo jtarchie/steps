@@ -114,6 +114,43 @@ The file is read on the machine running the pipeline, so it may not leave the st
 
 `load_var:` names share the one `((var))` namespace, so a name both passed with `--var` and captured by a `load_var:` goes to `--var`: supplied vars substitute textually before the file is parsed, leaving no `((name))` for the captured value to fill — the `load_var:` step still runs, but substitutes nothing. (Concourse keeps run-captured vars in a separate `((.:name))` namespace instead; see [conformance.md](conformance.md).)
 
+### A guarded capture
+
+A `when:`-guarded `load_var:` may be skipped green, so nothing after it can count on its value — a later `((tag))` is a load error. Put the capture and everything that uses it in one guarded `do:`: the guard skips all of them or none. The `do:`'s `inputs:` stage the file its guard reads; they reach the guard only, so the `load_var:` still declares its own.
+
+```yaml
+jobs:
+- name: release
+  plan:
+  - task: pick-tag
+    outputs: [meta]
+    run: printf 'v1.2.3\n' > meta/version.txt
+  - do:
+    - load_var: tag
+      inputs: [meta]
+      file: meta/version.txt
+    - task: announce
+      run: echo "releasing ((tag))"
+      assert:
+        stdout: releasing v1.2.3
+    inputs: [meta]                 # for the guard; the steps inside see only their own
+    when: test -s meta/version.txt
+  - task: no-tag
+    outputs: [empty]
+    run: touch empty/version.txt
+  - do:
+    - load_var: other
+      inputs: [empty]
+      file: empty/version.txt
+    - task: never
+      run: echo "releasing ((other))"
+    inputs: [empty]
+    when: test -s empty/version.txt # empty file: the whole block is skipped
+  assert:
+    execution: [pick-tag, tag, announce, no-tag]
+    outcome: succeeded
+```
+
 ### ⚠️ Vars are config, not secrets
 
 A substituted value is parsed, **hashed, and stored in `state.db`** like anything else written in the file. Vars separate shape from parameters; they are not a secret store. Keep credentials in a `secrets:` map ([secrets.md](secrets.md)), resolved by the daemon at run time and hashed only as the reference, or in the env-var references that exist for them (`api_key_env:`). A `secrets:` value is masked in what a step prints; an `api_key_env:` value is not, so a step that prints one has it stored and shown as printed (see [conformance.md](conformance.md)).
@@ -121,7 +158,7 @@ A substituted value is parsed, **hashed, and stored in `state.db`** like anythin
 ### The rest
 
 - **Substitution is textual and happens before the parse**, so a var can appear anywhere a value does — inside a URI, mid-command, as a whole mapping value — without steps maintaining a list of fields that might contain one.
-- **An unresolved `((name))` is a load error**, naming the var. Left alone it would reach a shell as that literal text and fail somewhere far from the mistake. A name a later `load_var:` produces is fine; one nothing supplies is not. Every step is checked, hooks and blocks included, and a captured name counts only where the run guarantees the capture happened: after it in plan order (`do:` children included), but not in a sibling branch of the same `in_parallel:` or `race:` — whether one branch sees another's value would be a race. After an `in_parallel:` every branch's captures are available; after a `race:` only the ones every branch makes. A `try:` body's captures stay inside it, and so do a `when:`-guarded step's — a false guard skips the step green, so wrap the `load_var:` and its consumers in one guarded `do:` instead. A hook sees what preceded its step, plus the step's own captures in `on_success:` only.
+- **An unresolved `((name))` is a load error**, naming the var. Left alone it would reach a shell as that literal text and fail somewhere far from the mistake. A name a later `load_var:` produces is fine; one nothing supplies is not. Every step is checked, hooks and blocks included, and a captured name counts only where the run guarantees the capture happened: after it in plan order (`do:` children included), but not in a sibling branch of the same `in_parallel:` or `race:` — whether one branch sees another's value would be a race. After an `in_parallel:` every branch's captures are available; after a `race:` only the ones every branch makes. A `try:` body's captures stay inside it, and so do a `when:`-guarded step's — a false guard skips the step green, so wrap the `load_var:` and its consumers in one guarded `do:` instead ([above](#a-guarded-capture)). A hook sees what preceded its step, plus the step's own captures in `on_success:` only — a guarded step's included, since a skipped step fires no hooks.
 - **A `load_var:` value is substituted before the step is hashed**, so two runs that captured different values never share a cache entry. Hashing the unsubstituted text would let a step that ran against `v1.2.3` satisfy a run that meant `v2.0.0`.
 - **The captured value is trimmed.** The common way to produce one is `git describe > version.txt`, whose trailing newline would otherwise land in the middle of a command.
 - **`load_var:` values are scoped to one job run.** A var captured in one run says nothing about the next.

@@ -15,7 +15,7 @@ import (
 // planner cannot know, and a cached node was by definition produced by a run
 // the guard already allowed.
 func withWhen(step config.Step, content map[string]any) map[string]any {
-	if step.When != nil && step.When.Run != "" {
+	if step.Guarded() {
 		content["when"] = step.When.Run
 	}
 

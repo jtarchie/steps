@@ -37,7 +37,7 @@ func TestVarFlowThroughNestedSteps(t *testing.T) {
   - task: after
     when: test -s meta/v
     run: echo ((tag))`, "((tag))"},
-		"nor reaches the guarded step's own on_success": {`
+		"but reaches the guarded step's own on_success, which a skip never fires": {`
   - do:
     - load_var: tag
       file: meta/v
@@ -45,7 +45,7 @@ func TestVarFlowThroughNestedSteps(t *testing.T) {
     when: test -s meta/v
     on_success:
       task: tell
-      run: echo ((tag))`, "((tag))"},
+      run: echo ((tag))`, ""},
 		"a guarded do: carries the capture to its consumers": {`
   - do:
     - load_var: tag

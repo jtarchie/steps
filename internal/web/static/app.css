@@ -813,7 +813,7 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 .stephead .name { font-weight: 600; }
 .step.skipped .stephead .name { color: var(--dim); font-weight: 400; }
 .stephead .note { color: var(--faint); }
-/* One line, cut rather than wrapped: wrapped, a worker and an image stacked into word-columns that tripled the row. The step's "placed on" line holds the whole of it, digest included. */
+/* One line, cut rather than wrapped: wrapped, a worker and an image stacked into word-columns that tripled the row. The step's placement line holds the whole of it, digest included. */
 .stephead .note.worker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Beats .stephead .note on specificity, which the bare .spendwarn rule does
    not — without this the "stopped early" badge renders in the same faint grey

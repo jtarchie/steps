@@ -534,13 +534,9 @@ func (r *RunsStepsCmd) printRunSteps(ctx context.Context, st interface {
 	store.Meta
 	store.Runs
 }) error {
-	run, ok, err := st.FindRunRow(ctx, r.RunID)
+	run, err := recordedRun(ctx, st, r.RunID)
 	if err != nil {
-		return fmt.Errorf("could not read run %q: %w", r.RunID, err)
-	}
-
-	if !ok {
-		return fmt.Errorf("no run %q was recorded for pipeline %q", r.RunID, st.Pipeline())
+		return err
 	}
 
 	steps, err := st.CompletedRunSteps(ctx, r.RunID)

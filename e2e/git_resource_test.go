@@ -42,6 +42,8 @@ func fixtureRepo(t *testing.T, content string) string {
 		}
 	}
 
+	quietRemote(t, dir)
+
 	err = os.WriteFile(filepath.Join(dir, "README.md"), []byte(content), 0o600)
 	if err != nil {
 		t.Fatal(err)

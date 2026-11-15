@@ -61,7 +61,7 @@ func NewExportServer(ctx context.Context, cfg *config.Config, export config.MCPE
 		return nil, fmt.Errorf("export %q: %w", export.Name, err)
 	}
 
-	calls := callSpace{export: export, kinds: callKinds(export.Tools), env: callEnv(export.Tools), runner: hooks.Runner}
+	calls := newCallSpace(cfg, export, hooks.Runner)
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: cfg.Name + "/" + export.Name, Version: "v1"}, nil)
 	served := &ExportServer{closers: closers}
 
@@ -160,13 +160,32 @@ func callEnv(specs []config.ToolSpec) map[string][]string {
 	return env
 }
 
-// callSpace makes what one call works in: nothing for an upstream call, a directory removed afterwards for the rest, and for a command the runner that places it. Nothing lives past the call, so two callers never share a file.
+// callSpace makes what one call works in: nothing for an upstream call, a directory removed afterwards for the rest, and for a command or an image: agent the runner that places it. Nothing lives past the call, so two callers never share a file.
 type callSpace struct {
 	export config.MCPExport
 	kinds  map[string]callKind
 	// env is each command's env: — what its runner passes through, and what is masked in what it returns.
 	env    map[string][]string
 	runner RunnerFactory
+	// agents are the exported image: agents' containers: with no parent runner to share, the child would build its own through shell.NewRunner, which refuses a tree (#246).
+	agents map[string]shell.RunnerSpec
+}
+
+func newCallSpace(cfg *config.Config, export config.MCPExport, runner RunnerFactory) callSpace {
+	agents := map[string]shell.RunnerSpec{}
+
+	for _, spec := range export.Tools {
+		if spec.Agent == "" {
+			continue
+		}
+
+		ri, err := cfg.ResolveAgentInvocation(config.Step{Agent: spec.Agent})
+		if err == nil && ri.Image != "" {
+			agents[spec.Agent] = containerSpec(ri.Image, "", ri.Env, ri.Isolation())
+		}
+	}
+
+	return callSpace{export: export, kinds: callKinds(export.Tools), env: callEnv(export.Tools), runner: runner, agents: agents}
 }
 
 // secrets are the values of tool's env: as they are now, the ones its result must not carry.
@@ -195,11 +214,19 @@ func (c callSpace) open(ctx context.Context, tool string) (toolEnv, func(), erro
 
 	remove := func() { _ = os.RemoveAll(dir) }
 
+	spec := containerSpec(c.export.Image, dir, c.env[tool], c.export.Isolation())
+
 	if kind == agentCall {
-		return toolEnv{dir: dir}, remove, nil
+		agent, ok := c.agents[tool]
+		if !ok {
+			return toolEnv{dir: dir}, remove, nil
+		}
+
+		spec = agent
+		spec.Cwd = dir
 	}
 
-	runner, err := c.runner.build(ctx, containerSpec(c.export.Image, dir, c.env[tool], c.export.Isolation()))
+	runner, err := c.runner.build(ctx, spec)
 	if err != nil {
 		remove()
 

@@ -30,11 +30,9 @@ func gitHTTPRemote(t *testing.T) (string, string) {
 		t.Skip("git http-backend not installed (alpine: apk add git-daemon); skipping built-in git resource type test")
 	}
 
-	root := t.TempDir()
-	bare := filepath.Join(root, "x.git")
-	gitIn(t, root, "clone", "-q", "--bare", fixtureRepo(t, "served\n"), bare)
+	bare := bareFixture(t)
+	root := filepath.Dir(bare)
 	gitIn(t, bare, "config", "http.receivepack", "true")
-	quietRemote(t, bare)
 
 	backend := &cgi.Handler{
 		Path: gitPath,

@@ -142,7 +142,8 @@ func runResolvedHookStep(ctx context.Context, scope hookScope, step config.Step)
 		return err
 	}
 
-	return runHookStep(ctx, scope, step)
+	// validateVars lets a hook reference a load_var: capture; without this it got the literal ((name)).
+	return runHookStep(ctx, scope, renderStepVars(ctx, step))
 }
 
 // runHookStep executes one hook step body — a task, put, or agent — with NO

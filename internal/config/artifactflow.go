@@ -188,6 +188,11 @@ func checkVarFileDeclared(jobName string, i int, step Step) error {
 func validateDoArtifactFlow(cfg *Config, jobName string, i int, step Step, available map[string]bool) error {
 	pre := maps.Clone(available)
 
+	err := checkInputsAvailable(jobName, i, "do", "when: guard", step.InputNames(), available)
+	if err != nil {
+		return err
+	}
+
 	for childIndex := range step.Do {
 		err := validateStepArtifactFlow(cfg, jobName, childIndex, step.Do[childIndex], available)
 		if err != nil {

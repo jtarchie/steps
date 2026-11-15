@@ -449,13 +449,17 @@ jobs:
   plan:
   - agent: boxed
     messages: [hi]
+  - agent: claude
+    messages: [hi]
 `))
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	if got := strings.Join(cfg.Jobs[0].Plan[0].Tags, ","); got != "gpu" {
-		t.Errorf("tags = %q, want the job's", got)
+	for i, step := range cfg.Jobs[0].Plan {
+		if got := strings.Join(step.Tags, ","); got != "gpu" {
+			t.Errorf("step %d tags = %q, want the job's", i, got)
+		}
 	}
 }
 

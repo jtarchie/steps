@@ -266,6 +266,7 @@ func TestResumeRefusesWhenTheKeptWorkspaceIsGone(t *testing.T) {
 func TestResumeRerunsAGetIntoAnEmptyDirectory(t *testing.T) {
 	dir := t.TempDir()
 	fixed := filepath.Join(dir, "fixed")
+	fetches := filepath.Join(dir, "fetches.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
 resource_types:
@@ -273,6 +274,7 @@ resource_types:
   config:
     check: echo '[{"n":"one"}]'
     in: |
+      echo fetch >> %[2]s
       test -z "$(ls -A)" || { echo "in: ran in a directory that is not empty: $(ls -A)" >&2; exit 3; }
       echo {{ .version.n | shellquote }} > n.txt
 
@@ -287,8 +289,8 @@ jobs:
   - get: repo
   - task: flaky
     inputs: [repo]
-    run: test -f %s
-`, fixed))
+    run: test -f %[1]s
+`, fixed, fetches))
 
 	runID, _ := failThenCapture(t, path)
 
@@ -298,6 +300,8 @@ jobs:
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}
+
+	assertLineCount(t, fetches, 2)
 }
 
 // TestARetriedGetStartsInAnEmptyDirectory: the same contract inside one run — attempt two must not see what attempt one left behind.

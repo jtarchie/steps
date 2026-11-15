@@ -150,8 +150,8 @@ func (c *Config) validateTagsOnAgent() error {
 //
 // The same split as an agent: an mcp: type's tool call and an expr: type's
 // program both run in this process and write the fetched files with their own
-// hands, so a tag could only move a fraction of the stage. Only a shell
-// type's check/in/out are commands a worker can run whole.
+// hands, so a tag could only move a fraction of the stage. Only a shell or
+// Concourse type's check/in/out are commands a worker can run whole.
 func (c *Config) validateTagsRejectNonShell() error {
 	for _, resource := range c.Resources {
 		if len(resource.Tags) == 0 {
@@ -201,7 +201,7 @@ func (c *Config) rejectNonShellPlacement(label, typeName string) error {
 	}
 
 	backend := resourceType.Config.Backend()
-	if backend == BackendShell {
+	if backend == BackendShell || backend == BackendConcourse {
 		return nil
 	}
 
@@ -209,7 +209,7 @@ func (c *Config) rejectNonShellPlacement(label, typeName string) error {
 		label, typeName, backend)
 }
 
-// checkPlacedAgent is the four things a tagged agent must be. A resolution failure answers nil rather than inventing a second error for it: whichever validator owns that failure reports it with the context this one lacks.
+// checkPlacedAgent is the three things a tagged agent must be. A resolution failure answers nil rather than inventing a second error for it: whichever validator owns that failure reports it with the context this one lacks.
 func (c *Config) checkPlacedAgent(label string, step Step) error {
 	ri, err := c.ResolveAgentInvocation(step)
 	if err != nil {

@@ -49,7 +49,6 @@ func (c *Config) desugarConcourseTypes() error {
 	return errors.Join(errs...)
 }
 
-// desugarConcourse is a free function rather than a method, since every other ResourceType method takes a value.
 func desugarConcourse(rt *ResourceType) error {
 	err := refuseBesideRegistryImage(*rt)
 	if err != nil {
@@ -63,7 +62,20 @@ func desugarConcourse(rt *ResourceType) error {
 
 	tag := "latest"
 	if given, ok := rt.Source["tag"]; ok {
-		tag = strings.TrimSpace(fmt.Sprint(given))
+		tag = ""
+		if given != nil {
+			// YAML reads an unquoted 1.10 as the number 1.1, so stringifying it would silently pull another image.
+			s, ok := given.(string)
+			if !ok {
+				return fmt.Errorf("source.tag must be a string, and YAML read this one as %v; quote it as written, e.g. tag: \"1.10\"", given)
+			}
+
+			tag = strings.TrimSpace(s)
+		}
+
+		if tag == "" {
+			return errors.New("source.tag is empty; omit it for latest, or name the tag")
+		}
 	}
 
 	rt.Image = repository + ":" + tag

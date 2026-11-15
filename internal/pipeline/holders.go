@@ -66,8 +66,8 @@ func pullHeld(holder, digest string) func(context.Context, string) error {
 	}
 }
 
-// unpinTimeout bounds giving a finished run's pins back, which dials each worker that held something for it.
-const unpinTimeout = 30 * time.Second
+// unpinTimeout bounds giving a finished run's pins back to one worker that held something for it.
+var unpinTimeout = 30 * time.Second //nolint:gochecknoglobals // a test seam, so a hung holder costs a test seconds
 
 type runHoldersKey struct{}
 
@@ -103,21 +103,29 @@ func restoredPull(ctx context.Context) func(holder, digest string) func(context.
 	}
 }
 
-// unpin releases run's pins under its own context, the run's may be ending; an unreachable holder keeps them until they expire, which costs disk, never an output.
+// unpin releases run's pins under its own context, the run's may be ending; an unreachable holder keeps them until they expire, which costs disk, never an output. Every holder at once, each under its own bound, so a hung one neither starves the rest nor adds its wait to theirs.
 func (h *runHolders) unpin(ctx context.Context, run string) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unpinTimeout)
-	defer cancel()
+	ctx = context.WithoutCancel(ctx)
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	var wg sync.WaitGroup
+
 	// ponytail: a holder whose every output a failed attempt already pulled home is not in held.json, so a resume misses it and its pins wait out pinLifetime; recording holders apart from holds closes that.
 	for holder := range h.holders {
-		err := venue.Unpin(ctx, holder, run)
-		if err != nil {
-			slog.WarnContext(ctx, "venue.unpin_failed", "run", run, "error", err)
-		}
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(ctx, unpinTimeout)
+			defer cancel()
+
+			err := venue.Unpin(ctx, holder, run)
+			if err != nil {
+				slog.WarnContext(ctx, "venue.unpin_failed", "run", run, "error", err)
+			}
+		})
 	}
+
+	wg.Wait()
 }
 
 // onWorker reports whether a step with image runs on a docker worker, tagged or the implicit local: one, and so can be handed inputs a worker holds; the rest run here and read every input from this disk.

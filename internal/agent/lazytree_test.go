@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/agent/tree"
@@ -75,7 +76,37 @@ func TestPreparingAContainerAgentStartsNothing(t *testing.T) {
 	}
 }
 
-// TestPreparingAHostAgentNeedsNoProbe keeps the laziness from costing the common case anything: with no image: there is no container to ask, so openTree must not run a command at all.
+// An image: agent whose grant reaches no container is told the container's would-be path (#247); one with no grant has the read-only file tools in the container, so it is told the path the probe reported.
+func TestAnImageAgentIsToldTheDirectoryItsFileToolsResolve(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		specs []config.ToolSpec
+		want  string
+	}{
+		"nothing reaching the container": {specs: []config.ToolSpec{{Builtin: config.WebFetchBuiltinName}}, want: "container"},
+		"the default grant":              {specs: nil, want: "probe"},
+	} {
+		dir := t.TempDir()
+		prepared := preparedAgentStep{
+			dir: dir, workdir: "/tmp/build/abcd1234", runner: &countingRunner{}, lost: &tree.Lost{},
+			resolvedAgent: resolvedAgent{ri: config.ResolvedInvocation{AgentName: "hand", Image: "alpine:3", ToolSpecs: tc.specs}},
+			space:         testStepSpace(t),
+		}
+
+		prepared, err := prepared.openTree(context.Background())
+		if err != nil {
+			t.Fatalf("%s: openTree: %v", name, err)
+		}
+
+		want := map[string]string{"container": "/tmp/build/abcd1234", "probe": "/work"}[tc.want]
+		if !strings.Contains(prepared.conv.system, want) {
+			t.Errorf("%s: system message does not name %s:\n%s", name, want, prepared.conv.system)
+		}
+	}
+}
+
+// TestPreparingAHostAgentNeedsNoProbekeeps the laziness from costing the common case anything: with no image: there is no container to ask, so openTree must not run a command at all.
 func TestPreparingAHostAgentNeedsNoProbe(t *testing.T) {
 	t.Parallel()
 

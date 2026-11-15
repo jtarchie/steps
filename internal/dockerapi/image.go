@@ -3,12 +3,12 @@ package dockerapi
 // Making sure an image is on the daemon.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/containerd/errdefs"
 	"github.com/distribution/reference"
@@ -49,18 +49,39 @@ func (c *Client) ImageDigest(ctx context.Context, image string) string {
 		return ""
 	}
 
-	return pickDigest(inspected.RepoDigests, inspected.ID)
+	return pickDigest(image, inspected.RepoDigests, inspected.ID)
 }
 
-// pickDigest prefers a registry digest: the image id differs between daemons holding the same pulled image, the registry digest does not.
-func pickDigest(repoDigests []string, id string) string {
-	for _, named := range repoDigests {
-		if _, digest, found := strings.Cut(named, "@"); found {
-			return digest
-		}
+// pickDigest prefers a registry digest: the image id differs between daemons holding the same pulled image, the registry digest does not. One image id can carry digests from several repositories (a mirror, a re-push), which need not be the same manifest, so the repository the step named wins.
+func pickDigest(image string, repoDigests []string, id string) string {
+	want := ""
+
+	named, err := reference.ParseNormalizedNamed(image)
+	if err == nil {
+		want = named.Name()
 	}
 
-	return id
+	first := ""
+
+	for _, entry := range repoDigests {
+		named, err := reference.ParseNormalizedNamed(entry)
+		if err != nil {
+			continue
+		}
+
+		canonical, ok := named.(reference.Canonical)
+		if !ok {
+			continue
+		}
+
+		if want != "" && named.Name() == want {
+			return canonical.Digest().String()
+		}
+
+		first = cmp.Or(first, canonical.Digest().String())
+	}
+
+	return cmp.Or(first, id)
 }
 
 // IsImageNotFound reports whether err is the daemon saying it does not have

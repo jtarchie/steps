@@ -170,22 +170,13 @@ func (b *isolatingBuild) ResourceDir(ctx context.Context, name string) (string, 
 		return "", fmt.Errorf("resource %q: %w", name, err)
 	}
 
-	dir := filepath.Join(b.artifacts, name)
-
-	// An in: always starts in an empty directory, as Concourse's does: a retried attempt or a resumed run (#256) otherwise fetches on top of the last attempt's leavings.
-	err = b.backend.remove(dir)
+	// Reset, not merely created: an in: always starts in an empty directory, as Concourse's does, and a retried attempt or a resumed run (#256) otherwise fetches on top of the last attempt's leavings.
+	err = b.ResetArtifact(ctx, name)
 	if err != nil {
-		return "", fmt.Errorf("could not empty resource dir %q: %w", dir, err)
+		return "", err
 	}
 
-	err = b.backend.createEmpty(ctx, dir)
-	if err != nil {
-		return "", fmt.Errorf("could not create resource dir %q: %w", dir, err)
-	}
-
-	b.superseded([]string{name})
-
-	return dir, nil
+	return filepath.Join(b.artifacts, name), nil
 }
 
 // ResetArtifact is what a collecting across: block uses (see
@@ -214,8 +205,7 @@ func (b *isolatingBuild) ResetArtifact(ctx context.Context, name string) error {
 		return fmt.Errorf("resetting artifact %q: %w", name, err)
 	}
 
-	b.forgetRemote([]string{name})
-	b.forgetDigests([]string{name})
+	b.superseded([]string{name})
 
 	return nil
 }

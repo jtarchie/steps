@@ -551,6 +551,9 @@ func (s Step) InputNames() []string {
 // InputsAll reports whether the step declared `inputs: all` (put steps only).
 func (s Step) InputsAll() bool { return s.Inputs != nil && s.Inputs.All }
 
+// Guarded reports whether the step carries a when: guard that can skip it.
+func (s Step) Guarded() bool { return s.When != nil && s.When.Run != "" }
+
 // VersionEvery reports whether this get declared `version: every` — the one
 // mode that runs the rest of the plan once per version. Every other spelling
 // (unset, "latest", a pinned mapping) resolves to a single version; see

@@ -35,6 +35,8 @@ type resolvedAgent struct {
 	primary config.ResolvedInvocation
 	// fallbackIndex is ri's position in the agent's fallback: list, or -1 when ri is still the primary (preflight picked nothing). It is where runPreparedWithFailover's mid-run cascade (failover.go) starts looking for the NEXT candidate, continuing the same ordered list preflight already walked rather than re-trying a source preflight just proved dead.
 	fallbackIndex int
+	// runOnly marks a source chosen for this run alone (selectForRun); serving on it must not become a lasting pin.
+	runOnly bool
 	// agent is the resolved agent definition, carried so the cascade reads the fallback: list resolveWithFailover already resolved rather than looking it up again. Never nil when resolveWithFailover returns no error.
 	agent *config.Agent
 }
@@ -421,11 +423,18 @@ func resolveWithFailover(ctx context.Context, cfg *config.Config, step config.St
 		return resolvedAgent{primary: primary, fallbackIndex: -1}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	// Judged against the run's start, not the wall clock: every step of one
-	// job must see the same source (see WithRunBoundary).
-	selection, ok := selectedSourceAt(agentPinScope(cfg, primary.AgentName), runInstant(ctx))
-	if !ok {
-		return resolvedAgent{ri: primary, primary: primary, agent: agent, fallbackIndex: -1}, nil
+	scope := agentPinScope(cfg, primary.AgentName)
+
+	selection, runOnly := runSelection(ctx, scope)
+	if !runOnly {
+		var ok bool
+
+		// Judged against the run's start, not the wall clock: every step of one
+		// job must see the same source (see WithRunBoundary).
+		selection, ok = selectedSourceAt(scope, runInstant(ctx))
+		if !ok {
+			return resolvedAgent{ri: primary, primary: primary, agent: agent, fallbackIndex: -1}, nil
+		}
 	}
 
 	effective, err := primary.WithSource(selection.source, agent)
@@ -433,7 +442,7 @@ func resolveWithFailover(ctx context.Context, cfg *config.Config, step config.St
 		return resolvedAgent{ri: primary, primary: primary, agent: agent, fallbackIndex: -1}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	return resolvedAgent{ri: effective, primary: primary, agent: agent, fallbackIndex: selection.index}, nil
+	return resolvedAgent{ri: effective, primary: primary, agent: agent, fallbackIndex: selection.index, runOnly: runOnly}, nil
 }
 
 // prepareStepPrompt resolves a run-time message_files: {artifact, path} (see

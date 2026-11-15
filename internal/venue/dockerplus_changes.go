@@ -73,7 +73,34 @@ func applyChanges(staging, dst string, listing map[string]map[string]bool) error
 		return fmt.Errorf("%w", err)
 	}
 
-	return overlayOnto(stage, home)
+	err = overlayOnto(stage, home)
+	if err != nil {
+		return err
+	}
+
+	return checkHomeLinks(home)
+}
+
+// checkHomeLinks holds every link in home, not only staged ones, to the fetch's landing rule: staging lacks the unchanged tree a link can chain through (a/up -> ..), and a changed link can make an untouched one climb out. An escaping link is removed, since home already holds it and a hook may still read the output.
+func checkHomeLinks(home *os.Root) error {
+	var escaped error
+
+	err := fs.WalkDir(home.FS(), ".", func(rel string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.Type()&fs.ModeSymlink == 0 {
+			return walkErr
+		}
+
+		landing := wire.CheckLanding(home, rel)
+		if landing == nil {
+			return nil
+		}
+
+		escaped = errors.Join(escaped, landing)
+
+		return home.Remove(rel)
+	})
+
+	return errors.Join(escaped, err)
 }
 
 // mergedListings runs listingScript over the merged view and the upper layer, both read-only.

@@ -1,6 +1,5 @@
-# A do: block runs nothing of its own, so an operation field on it is a step's
-# field on a thing that is not a step. It belongs on one of the steps inside.
-# expect: inputs is not valid on a do step
+# A do: runs nothing of its own, so an operation field belongs on a step inside.
+# expect: image is not valid on a do step
 
 jobs:
 - name: build
@@ -8,4 +7,4 @@ jobs:
   - do:
     - task: work
       run: echo working
-    inputs: [repo]
+    image: alpine

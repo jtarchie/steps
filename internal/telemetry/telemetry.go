@@ -10,7 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo-otel/v5"
@@ -24,6 +24,7 @@ import (
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -118,9 +119,9 @@ func Start(ctx context.Context, version string) (func(context.Context), error) {
 		return nil, err
 	}
 
-	// Never put back: otel's getter returns its own delegating holder, and handing that to its setter would make it delegate to itself.
-	exportWarned.Store(false)
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(warnExportOnce))
+	// Never put back: otel's default handler forwards for good to the first one ever set (a sync.Once in its setter), so restoring it would still land here.
+	warnings.reset()
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(warnings.handle))
 
 	previous := events.SetTracer(recorder)
 
@@ -131,25 +132,104 @@ func Start(ctx context.Context, version string) (func(context.Context), error) {
 
 		events.SetTracer(previous)
 
-		for _, shutdown := range []func(context.Context) error{stopTraces, stopMetrics} {
-			err := shutdown(ctx)
-			if err != nil {
-				warnExportOnce(err)
-			}
+		// Tagged here too: a collector that hangs makes Shutdown return a bare context error no exporter saw.
+		err := tag("traces", stopTraces(ctx))
+		if err != nil {
+			warnings.handle(err)
+		}
+
+		err = tag("metrics", stopMetrics(ctx))
+		if err != nil {
+			warnings.handle(err)
 		}
 	}, nil
 }
 
-// exportWarned is reset by each Start, so every command gets one warning of its own.
-var exportWarned atomic.Bool
+// repeatAfter is how long a signal that keeps failing stays quiet: a command shorter than it warns once, a daemon is told again while the failure lasts.
+const repeatAfter = 10 * time.Minute
 
-// warnExportOnce says a collector is failing once per command (#236): the SDK reports every batch it could not send and the final flush fails the same way, and none of the later lines says anything the first did not.
-func warnExportOnce(err error) {
-	if exportWarned.Swap(true) {
+// signalError marks an error as one signal's exporter's, so the handler, which otel calls with nothing but the error, can tell traces from metrics from the rest of the SDK.
+type signalError struct {
+	signal string
+	err    error
+}
+
+func (e signalError) Error() string { return e.err.Error() }
+func (e signalError) Unwrap() error { return e.err }
+
+func tag(signal string, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	return signalError{signal: signal, err: err}
+}
+
+type tracesExporter struct{ sdktrace.SpanExporter }
+
+func (e tracesExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	return tag("traces", e.SpanExporter.ExportSpans(ctx, spans))
+}
+
+type metricsExporter struct{ sdkmetric.Exporter }
+
+func (e metricsExporter) Export(ctx context.Context, rm *metricdata.ResourceMetrics) error {
+	return tag("metrics", e.Exporter.Export(ctx, rm))
+}
+
+// warner is otel's error handler (#236): the SDK reports every batch it could not send and the final flush fails the same way, so each signal warns once, then again only after repeatAfter while it keeps failing.
+type warner struct {
+	now func() time.Time
+
+	mu         sync.Mutex
+	last       map[string]time.Time
+	suppressed map[string]int
+}
+
+func newWarner(now func() time.Time) *warner {
+	w := &warner{now: now}
+	w.reset()
+
+	return w
+}
+
+var warnings = newWarner(time.Now)
+
+// reset is called by each Start, so every command gets warnings of its own.
+func (w *warner) reset() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.last = map[string]time.Time{}
+	w.suppressed = map[string]int{}
+}
+
+func (w *warner) handle(err error) {
+	signal, note := "otel", "an OpenTelemetry SDK error"
+
+	var tagged signalError
+	if errors.As(err, &tagged) {
+		signal, note = tagged.signal, "telemetry is not reaching its collector"
+	}
+
+	w.mu.Lock()
+
+	now := w.now()
+
+	last, warned := w.last[signal]
+	if warned && now.Sub(last) < repeatAfter {
+		w.suppressed[signal]++
+		w.mu.Unlock()
+
 		return
 	}
 
-	slog.Warn("telemetry.export_failed", "error", err, "note", "telemetry is not reaching its collector; later failures are not logged")
+	suppressed := w.suppressed[signal]
+	w.last[signal] = now
+	w.suppressed[signal] = 0
+	w.mu.Unlock()
+
+	slog.Warn("telemetry.error", "signal", signal, "error", err, "note", note, "suppressed", suppressed, "repeats_after", repeatAfter)
 }
 
 // unwind shuts down what Start already installed when a later step fails, under a context of its own because the caller's may be the reason Start failed.
@@ -174,7 +254,7 @@ func startTraces(ctx context.Context, res *resource.Resource, on bool) (trace.Tr
 		return nil, nil, fmt.Errorf("telemetry: %w", err)
 	}
 
-	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter), sdktrace.WithResource(res))
+	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(tracesExporter{exporter}), sdktrace.WithResource(res))
 	previous := otel.GetTracerProvider()
 	otel.SetTracerProvider(provider)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
@@ -197,7 +277,7 @@ func startMetrics(ctx context.Context, res *resource.Resource, on bool) (metric.
 		return nil, nil, fmt.Errorf("telemetry: %w", err)
 	}
 
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exporter)), sdkmetric.WithResource(res))
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricsExporter{exporter})), sdkmetric.WithResource(res))
 	previous := otel.GetMeterProvider()
 	otel.SetMeterProvider(provider)
 

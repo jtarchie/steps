@@ -568,17 +568,25 @@ func checkLinkTarget(name, target string) error {
 // checkLandings refuses a fetched tree any of whose symlinks resolves outside it once the whole tree exists. checkLinkTarget alone is lexical, and links chain: `a/b -> ..` makes a later `a/b/c` land at the root where its `../x` climbs out, and `b/../outside` climbs out whenever b is itself a link to the root. os.Root resolves the way the kernel does and refuses the escape; a target that merely does not exist, or stops at a file or a loop, cannot be reached through and is left alone.
 func checkLandings(dir *os.Root, links []string) error {
 	for _, name := range links {
-		_, err := dir.Stat(name)
-		if err == nil || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
-			continue
+		err := CheckLanding(dir, name)
+		if err != nil {
+			return err
 		}
-
-		target, _ := dir.Readlink(name)
-
-		return fmt.Errorf("%w: %q -> %q: %w", ErrUnsafeLink, name, target, err)
 	}
 
 	return nil
+}
+
+// CheckLanding is checkLandings for one link, for a tree assembled outside an unpack.
+func CheckLanding(dir *os.Root, name string) error {
+	_, err := dir.Stat(name)
+	if err == nil || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
+		return nil
+	}
+
+	target, _ := dir.Readlink(name)
+
+	return fmt.Errorf("%w: %q -> %q: %w", ErrUnsafeLink, name, target, err)
 }
 
 func unpackEntry(dir *os.Root, reader *tar.Reader, header *tar.Header, name string, fetched bool) error {

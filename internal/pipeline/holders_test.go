@@ -1,9 +1,19 @@
 package pipeline
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"net"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -102,6 +112,103 @@ func TestHoldRemoteOutputsRecordsEveryKeptOutput(t *testing.T) {
 	err = holdRemoteOutputs(t.Context(), refusing, outputs, mapping, kept, "ssh://w1")
 	if err == nil || !strings.Contains(err.Error(), "refused binaries") {
 		t.Errorf("a refused hold returned %v, want the workspace's error", err)
+	}
+}
+
+// silentHolder is a docker+ssh:// worker whose sshd accepts and never answers, as an unreachable machine's tunnel does; reached gets each connect.
+func silentHolder(t *testing.T, identity, knownHosts string, reached chan<- struct{}) string {
+	t.Helper()
+
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+		done  sync.WaitGroup
+	)
+
+	done.Go(func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
+
+			reached <- struct{}{}
+		}
+	})
+
+	t.Cleanup(func() {
+		_ = listener.Close()
+
+		done.Wait()
+
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	})
+
+	return "docker+ssh://" + listener.Addr().String() + "?" + url.Values{
+		"identity":    {identity},
+		"known_hosts": {knownHosts},
+		"ssh_config":  {"none"},
+	}.Encode()
+}
+
+// A run's pins come back from every holder at once: one holder that hangs must not take the time the others needed, nor add its wait to theirs.
+func TestUnpinReachesEveryHolderAtOnce(t *testing.T) {
+	old := unpinTimeout
+	unpinTimeout = 2 * time.Second
+
+	t.Cleanup(func() { unpinTimeout = old })
+
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	identity := filepath.Join(dir, "id")
+	knownHosts := filepath.Join(dir, "known_hosts")
+
+	err = errors.Join(
+		os.WriteFile(identity, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600),
+		os.WriteFile(knownHosts, nil, 0o600),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reached := make(chan struct{}, 2)
+	holders := &runHolders{holders: map[string]bool{
+		silentHolder(t, identity, knownHosts, reached): true,
+		silentHolder(t, identity, knownHosts, reached): true,
+	}}
+
+	started := time.Now()
+
+	holders.unpin(t.Context(), "RUN")
+
+	elapsed := time.Since(started)
+
+	if len(reached) != 2 {
+		t.Errorf("unpin reached %d of 2 holders: a hung one spent the other's time", len(reached))
+	}
+
+	if elapsed > unpinTimeout*3/2 {
+		t.Errorf("unpin took %s for two hung holders bounded at %s each: they were dialled one after another", elapsed, unpinTimeout)
 	}
 }
 

@@ -1254,6 +1254,7 @@ jobs:
 - **Hosted sources only**, including an agent used as a `fix:` agent or a sub-agent, and each `fallback:` source with a map of its own. A CLI source (`@claude/…`) refuses it: its key is handed to the CLI subprocess's environment, where the hooks of a `settings: project` repo run. An agent an `mcp_exports:` entry reaches refuses it too, since an export has no run to resolve a secret in.
 - **Masked once resolved**, in recorded output and in every tool result the model is sent. A key read from the environment is not.
 - **Fetched before the job's first step**, by the pre-run probe, even for an agent on a branch that never runs. See [secrets.md](secrets.md#when-a-secret-is-fetched).
+- **A key that cannot be fetched fails over for that run only.** With a `fallback:`, the run uses the first fallback that answers, but no [pin](#failover-fallback) is recorded: a lapsed secret-source login or a declined prompt says nothing about the model, so the next run tries the primary again. The `agent.failover` log line names this reason.
 - **Never hashed**, like `api_key_env:`: re-pointing or rotating a key re-runs nothing.
 
 ## Failover: `fallback:`
@@ -1398,7 +1399,7 @@ A bridged call's trajectory entry is recorded **de-namespaced**: `mcp__steps__re
 
 A CLI agent step runs with **no configuration scopes by default**. Your personal `~/.claude` never applies — no user settings, hooks, plugins, skills — and the repo's own `.claude/` scope loads only when the agent opts in with `settings: project` (as above). A pipeline whose behavior depends on who ran it is not a pipeline. The opt-in is hashed, so granting or revoking it invalidates the step's cache. It is also markedly cheaper: dropping user-level config cut a trivial one-step pipeline from ~76K prompt tokens to ~25K in a measured run.
 
-`--setting-sources`, `--strict-mcp-config` and `--tools ""` are the **entire** fence a `settings: project` step runs inside — three flags, all load-bearing. That matters most for `settings: project` **together with `image:`**: the CLI process itself is always host-side (see "Containerizing a CLI agent" below), so a fetched PR's own `.claude/settings.json` hooks execute on the orchestrator, not inside whatever container the step's tools run in. `image:` narrows what the *tools* can reach; it does not, and cannot, contain a `settings: project` agent's own config loading. Grant `settings:` only to a repo whose `.claude/` you trust the same way you trust its `run:` scripts.
+`--setting-sources`, `--strict-mcp-config` and `--tools ""` are the **entire** fence a `settings: project` step runs inside — three flags, all load-bearing. That matters most for `settings: project` **together with `image:`**: the CLI process itself is always host-side (see "Containerizing a CLI agent" below), so a fetched PR's own `.claude/settings.json` hooks execute on the orchestrator, not inside whatever container the step's tools run in. `image:` narrows what the *tools* can reach; it does not, and cannot, contain a `settings: project` agent's own config loading. Grant `settings:` only to a repo whose `.claude/` you trust the same way you trust its `run:` scripts. `steps validate` prints a warning for each agent step that combines the two.
 
 ### Verdicts are enforced at exit
 

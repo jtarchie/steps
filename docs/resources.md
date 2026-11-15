@@ -1436,8 +1436,8 @@ What steps does, and where it differs from Concourse:
 - **A `put` gets only the inputs it lists.** Concourse guesses them from `params:` when none are listed; steps does not guess, so list the ones `out` reads.
 - **Each check starts a fresh container**, so a resource that keeps a clone between checks (git does) clones again every poll.
 - **No `type:` other than `registry-image`**, and the type takes no `image:` or `config:`: the image's scripts are the config. `source:` on a type takes `repository` and `tag` only.
+- **`tag` must be a string.** Unquoted, YAML reads `tag: 1.10` as the number 1.1 and would pull the wrong image, so a tag that is not a string is refused at load: write `tag: "1.10"`. Concourse reads the same YAML the same way; steps refuses rather than guess.
 
-## Shell safety
 ## Shell safety
 
 Anything interpolated into a command is text substitution, so quote it:

@@ -122,6 +122,82 @@ jobs:
 	}
 }
 
+// TestGuardedLoadVarFeedsItsOnSuccess crosses #262's seam: the guard must see the input the capture reads, and on_success must be allowed the capture.
+func TestGuardedLoadVarFeedsItsOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "tag.log")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: pick-tag
+    inputs: []
+    outputs: [meta]
+    run: printf 'v1.2.3\n' > meta/version.txt
+  - load_var: tag
+    file: meta/version.txt
+    inputs: [meta]
+    when: test -s meta/version.txt
+    on_success:
+      task: announce
+      inputs: []
+      run: echo "shipping ((tag))" >> %s
+`, log))
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if got := readFileString(t, log); !strings.Contains(got, "shipping v1.2.3") {
+		t.Errorf("log = %q, want the guarded capture to run and reach its on_success", got)
+	}
+}
+
+// TestGuardedDoCarriesItsCapture: #262's shape; without inputs: on the do:, its guard read an empty dir and was always false.
+func TestGuardedDoCarriesItsCapture(t *testing.T) {
+	for name, tc := range map[string]struct {
+		write string
+		want  string
+	}{
+		"guard true":  {write: `printf 'v1.2.3\n' > meta/v`, want: "shipping v1.2.3\n"},
+		"guard false": {write: `touch meta/v`, want: ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			log := filepath.Join(dir, "tag.log")
+
+			path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: pick-tag
+    outputs: [meta]
+    run: %s
+  - do:
+    - load_var: tag
+      inputs: [meta]
+      file: meta/v
+    - task: announce
+      run: echo "shipping ((tag))" >> %s
+    inputs: [meta]
+    when: test -s meta/v
+`, tc.write, log))
+
+			err := cli.Run([]string{"run", path, "--job", "build"})
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+
+			got, _ := os.ReadFile(log) //nolint:gosec // a t.TempDir() file the test's own pipeline wrote
+			if string(got) != tc.want {
+				t.Errorf("log = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestLoadVarNeedsAFile covers the malformed step.
 func TestLoadVarNeedsAFile(t *testing.T) {
 	dir := t.TempDir()

@@ -243,11 +243,6 @@ func (e stepExpectation) owed(trajectory []recordedToolCall) (unmet []string, me
 	return append(files, calls...), strings.Join(parts, " ")
 }
 
-// mismatch is what the post-hoc check would report about the step right now
-// — the files first, since a missing deliverable outranks a skipped step of
-// the procedure — or nil when the step opted out or owes nothing. It reuses
-// the post-hoc wording so an operator reads the same sentence whichever path
-// reached the failure.
 // bringHomeWith names how the files check reaches a container's deferred writes.
 func (e stepExpectation) bringHomeWith(bring func() error) {
 	if e.files.home != nil {
@@ -255,6 +250,7 @@ func (e stepExpectation) bringHomeWith(bring func() error) {
 	}
 }
 
+// mismatch is what the post-hoc check would report now, files first since a missing deliverable outranks a skipped step, in the post-hoc wording so an operator reads one sentence whichever path reached the failure.
 func (e stepExpectation) mismatch(trajectory []recordedToolCall) error {
 	if !e.nudge {
 		return nil
@@ -356,9 +352,9 @@ func (e assertFilesExpectation) unmet() []string {
 // reworded, so an operator reads the same sentence whichever path reached the
 // failure.
 func (e assertFilesExpectation) mismatch() error {
-	err := e.home.fetch()
-	if err != nil {
-		return err
+	// No claim about files that never arrived: blameUnmet would restate infrastructure as the step failing, and the step's own Sync at the end reports the transfer.
+	if e.home.fetch() != nil {
+		return nil //nolint:nilerr // a failed fetch is the step's to report, not this file check's
 	}
 
 	//nolint:wrapcheck // the config package owns this message; rewording it here is the bug
@@ -386,10 +382,7 @@ func (e assertFilesExpectation) nudge(unmet []string) string {
 
 // rootFromAgentDir spells the step's directory from where the model works, never as a path on this machine: a containerized agent has no such path, and one on the host learns nothing from the operator's layout.
 func (e assertFilesExpectation) rootFromAgentDir() string {
-	rel, err := filepath.Rel(e.agentDir, e.dir)
-	if err != nil {
-		return "the step's directory"
-	}
+	rel, _ := filepath.Rel(e.agentDir, e.dir) // both absolute, so it cannot fail
 
 	return filepath.ToSlash(rel)
 }

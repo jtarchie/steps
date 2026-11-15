@@ -84,7 +84,7 @@ func (env toolEnv) files() tree.Tree {
 
 // readsSpill reports whether rel names something in the step's spill directory, which is the ONE path a containerized agent still reads from this machine.
 //
-// An oversized run_shell output is captured HERE even when the command ran elsewhere (shell.Capture stays on the orchestrator by design), written to a file under spillDir, and the model is handed that absolute path to read back. The file is the orchestrator's own record of the conversation and was never part of the step's tree, so it exists on this machine and nowhere else — a read routed into the container would correctly find nothing.
+// An oversized run_shell output is captured HERE even when the command ran elsewhere (shell.Capture stays on the orchestrator by design), written to a file under spillDir, and the model is handed a path to read back that hostSpill maps to it. The file is the orchestrator's own record of the conversation and was never part of the step's tree, so it exists on this machine and nowhere else — a read routed into the container would correctly find nothing.
 //
 // Deliberately the only exception, and deliberately read-only: write_file, edit_file, search_files and list_dir all stay in the container even for a path under spillDir, because anything the model can WRITE has to be somewhere run_shell can see it.
 func (env toolEnv) readsSpill(rel string) bool {
@@ -116,13 +116,17 @@ func (env toolEnv) showSpill(text string) string {
 	return strings.ReplaceAll(text, filepath.Clean(env.spillDir), env.spillShown)
 }
 
-// hostSpill is the reverse, for a path the model hands back: one under the shown name becomes the file on this machine, and anything else is returned as given.
+// hostSpill is the reverse, for a path the model hands back: one under the shown name, absolute or relative to the working directory it was told, becomes the file on this machine, and anything else is returned as given.
 func (env toolEnv) hostSpill(rel string) string {
 	if env.spillShown == "" || env.spillDir == "" {
 		return rel
 	}
 
 	clean := path.Clean(rel)
+	if !path.IsAbs(clean) {
+		clean = path.Join(path.Dir(env.spillShown), clean)
+	}
+
 	if clean != env.spillShown && !strings.HasPrefix(clean, env.spillShown+"/") {
 		return rel
 	}

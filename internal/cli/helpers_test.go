@@ -118,7 +118,7 @@ func breakRoot(t *testing.T, root string) {
 		t.Fatal(err)
 	}
 
-	writePipelineFile(t, root, "") // 0o600, so no //nolint:gosec is needed (G306 asks for <= 0600)
+	writePipelineFile(t, root, "")
 }
 
 // repairRoot puts the directory back, so a test can go on to prove the pipeline
@@ -131,7 +131,7 @@ func repairRoot(t *testing.T, root string) {
 		t.Fatal(err)
 	}
 
-	err = os.Mkdir(root, 0o700) // G301 asks for <= 0750
+	err = os.Mkdir(root, 0o700)
 	if err != nil {
 		t.Fatal(err)
 	}

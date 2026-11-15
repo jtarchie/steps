@@ -1,10 +1,16 @@
 package pipeline
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/redact"
 )
 
 type fakeClock struct{ at time.Time }
@@ -248,5 +254,31 @@ func TestHeadTailKeepsTheEndOfOneLongLine(t *testing.T) {
 	got := h.String(false)
 	if !strings.HasSuffix(got, strings.Repeat("l", 1000)+"end\n") {
 		t.Errorf("the long last line was not kept: record ends %q", got[max(0, len(got)-40):])
+	}
+}
+
+// TestRecordedOutputMasksAValueAddedAfterItStarted: a run's values grow while it runs (an in_parallel: sibling resolving a ((var))), so a recorder installed while there was nothing to mask still masks a value registered after it.
+func TestRecordedOutputMasksAValueAddedAfterItStarted(t *testing.T) {
+	t.Parallel()
+
+	const secret = "late-registered-secret-value"
+
+	var terminal bytes.Buffer
+
+	secrets := &redact.Secrets{}
+	ctx := redact.WithSecrets(events.WithOutput(context.Background(), events.Output{Stdout: &terminal, Stderr: io.Discard}), secrets)
+
+	ctx, rec := recordTaskOutput(ctx, "t")
+
+	secrets.Add(secret)
+	_, _ = io.WriteString(events.Stdout(ctx), "the value is "+secret+"\n")
+	rec.finish(ctx)
+
+	if strings.Contains(terminal.String(), secret) {
+		t.Errorf("terminal got the value unmasked: %q", terminal.String())
+	}
+
+	if !strings.Contains(terminal.String(), "the value is") {
+		t.Errorf("terminal got nothing of the line: %q", terminal.String())
 	}
 }

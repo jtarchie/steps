@@ -105,6 +105,16 @@ func TestStreamDrawsTheSameMarkupThePageDoes(t *testing.T) {
 
 	mustRecordResult(t, pipeline, "beef7654321", map[string]any{"response": "Looks fine.", "wrapped_up": true, "compactions": 1})
 
+	// The head of a placed row names its image, read off the placement rather than the event.
+	err = pipeline.Store.RecordPlacement(ctx, store.Placement{
+		RunID: "run-same", StepIndex: 3, StepName: "cell", JobName: "build", Slot: "cell",
+		Tag: "gpu", Address: "ssh://jt@box", GOOS: "linux", GOARCH: "arm64",
+		Image: "golang:1.25", ImageDigest: "sha256:0123456789abcdef0123",
+	})
+	if err != nil {
+		t.Fatalf("RecordPlacement: %v", err)
+	}
+
 	err = pipeline.Store.FinishRun(ctx, "run-same", "failed")
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
@@ -138,7 +148,7 @@ func TestStreamDrawsTheSameMarkupThePageDoes(t *testing.T) {
 		"stopped early",
 		"compacted ×1",
 		"Read main.go so far.",
-		"on gpu (ssh://jt@box)",
+		"on gpu (ssh://jt@box) · golang:1.25",
 		"1 failed",
 	} {
 		if !strings.Contains(stream, want) {
@@ -1210,5 +1220,47 @@ func TestStreamReportsAFailureOnce(t *testing.T) {
 
 	if strings.Contains(logs.String(), "web: web:") {
 		t.Errorf("the failure is wrapped twice over:\n%s", logs.String())
+	}
+}
+
+// TestOutputEscapesAreScrubbed: a colour code in process output is stripped on the page and the stream alike, not shown as `[31m` behind an invisible ESC.
+func TestOutputEscapesAreScrubbed(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-ansi", JobName: "build", Workspace: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-ansi", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "done", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepOutput, StepIndex: 0, StepName: "done", StepKind: "task", StepID: 1, Text: "\x1b[31mrecorded red\x1b[0m\n"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "done", StepKind: "task", StepID: 1, Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "live", StepKind: "task", StepID: 2},
+		{Type: events.TypeStepOutputChunk, StepIndex: 1, StepName: "live", StepKind: "task", StepID: 2, Status: "stdout", Text: "\x1b[1;32mchunk green\x1b[0m\n"},
+	})
+
+	_, page := get(t, server, "/p/demo/runs/run-ansi")
+
+	err = pipeline.Store.FinishRun(ctx, "run-ansi", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	raw := streamOf(t, server, "/p/demo/runs/run-ansi/events")
+
+	for name, body := range map[string]string{"page": page, "stream": raw} {
+		if strings.Contains(body, "\x1b") || strings.Contains(body, "[31m") {
+			t.Errorf("%s carries an escape sequence:\n%q", name, body)
+		}
+	}
+
+	for _, want := range []string{"recorded red", "chunk green"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lost the text %q:\n%s", want, page)
+		}
 	}
 }

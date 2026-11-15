@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,16 +14,80 @@ import (
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
-// A step's name is pipeline-authored YAML and the listing prints it onto an operator's terminal, so it goes through the same scrub as every other untrusted text; not parallel, it captures stdout.
-func TestRunsOutputWithoutAStepDropsAnOSC(t *testing.T) {
+// A step's name is pipeline-authored YAML and the listing prints it onto an operator's terminal, so a name holding an escape prints Go-quoted: no raw ESC reaches the terminal, and the line still names the step. Not parallel, it captures stdout.
+func TestRunsOutputWithoutAStepQuotesAnOSC(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "steps.db")
 	recordStepOutput(t, state, "\x1b]0;pwned\x07ty")
 
 	var err error
 
 	out := captureStdout(t, func() { err = Run([]string{"runs", "output", "RUN", "-p", "app", "--db", state}) })
-	if err != nil || out != "ty\n" {
-		t.Errorf("runs output with no step = %v, printing %q; want the step's name, scrubbed and alone", err, out)
+	if err != nil || out != `"\x1b]0;pwned\aty"`+"\n" {
+		t.Errorf("runs output with no step = %v, printing %q; want the raw name Go-quoted and alone", err, out)
+	}
+}
+
+// The listing's promise is that a line passes back as <step>; a scrubbed name would not match the stored one, so every listed line, quoted or not, must fetch its step's output. Not parallel, it captures stdout.
+func TestRunsOutputListedNamesPassBack(t *testing.T) {
+	for _, name := range []string{"plain", "\x1b]0;pwned\x07ty", "two\nlines", "\x1b[0m"} {
+		state := filepath.Join(t.TempDir(), "steps.db")
+		recordStepOutput(t, state, name)
+
+		var err error
+
+		listed := captureStdout(t, func() { err = Run([]string{"runs", "output", "RUN", "-p", "app", "--db", state}) })
+		if err != nil {
+			t.Fatalf("listing %q: %v", name, err)
+		}
+
+		line := strings.TrimSuffix(listed, "\n")
+		if line == "" || strings.ContainsAny(line, "\x1b\n") {
+			t.Errorf("step %q listed as %q; want one non-empty, escape-free line", name, line)
+		}
+
+		out := captureStdout(t, func() { err = Run([]string{"runs", "output", "RUN", line, "-p", "app", "--db", state}) })
+		if err != nil || out != "hi\n" {
+			t.Errorf("runs output RUN %s = %v, printing %q; want the step's output", line, err, out)
+		}
+	}
+}
+
+// Two raw names that scrub alike must not list alike, or one of them could never be asked for. Not parallel, it captures stdout.
+func TestRunsOutputNamesThatScrubAlikeListApart(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "steps.db")
+	recordStepOutput(t, state, "a\x07", "a")
+
+	var err error
+
+	out := captureStdout(t, func() { err = Run([]string{"runs", "output", "RUN", "-p", "app", "--db", state}) })
+	if err != nil || out != "\"a\\a\"\na\n" {
+		t.Errorf("runs output with no step = %v, printing %q; want the BEL-bearing name quoted and the plain one bare", err, out)
+	}
+}
+
+// A step name is unvalidated YAML and may hold a newline; the listing promises one name per line, so a shell loop must not read it as two steps. Not parallel, it captures stdout.
+func TestRunsOutputWithoutAStepKeepsAMultilineNameOnOneLine(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "steps.db")
+	recordStepOutput(t, state, "two\nlines")
+
+	var err error
+
+	out := captureStdout(t, func() { err = Run([]string{"runs", "output", "RUN", "-p", "app", "--db", state}) })
+	if err != nil || out != "\"two\\nlines\"\n" {
+		t.Errorf("runs output with no step = %v, printing %q; want the name quoted on one line", err, out)
+	}
+}
+
+// The refusal names the steps that did record output, and an error goes to the same terminal the listing does. Not parallel, it captures stdout.
+func TestRunsOutputRefusalScrubsTheNamesItOffers(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "steps.db")
+	recordStepOutput(t, state, "\x1b]0;pwned\x07ty")
+
+	var err error
+
+	_ = captureStdout(t, func() { err = Run([]string{"runs", "output", "RUN", "nobody", "-p", "app", "--db", state}) })
+	if err == nil || strings.Contains(err.Error(), "\x1b") || !strings.Contains(err.Error(), `these did: "\x1b]0;pwned\aty"`) {
+		t.Errorf("runs output nobody = %q, want the offered name Go-quoted", err)
 	}
 }
 
@@ -111,17 +176,17 @@ func TestRunsOutputRefusesAnotherPipelinesRun(t *testing.T) {
 	}
 }
 
-// faultyRunsStore is a real store whose run lookup faults, the way a replaced or locked state file does.
+// faultyRunsStore is a real store whose run lookup faults, the way a replaced or locked state file does — worded as both drivers word it, so a second wrap shows.
 type faultyRunsStore struct {
 	store.Store
 }
 
-func (faultyRunsStore) FindRunRow(context.Context, string) (store.RunRow, bool, error) {
-	return store.RunRow{}, false, errors.New("database disk image is malformed")
+func (faultyRunsStore) FindRunRow(_ context.Context, id string) (store.RunRow, bool, error) {
+	return store.RunRow{}, false, fmt.Errorf("could not read run %q: %w", id, errors.New("database disk image is malformed"))
 }
 
-// A store fault is reported as a fault, not dressed as an unknown id: a locked database is not a mistyped run.
-func TestRunsOutputReportsAStoreFailureLookingUpTheRun(t *testing.T) {
+// A store fault is reported as a fault, not dressed as an unknown id: a locked database is not a mistyped run. Every command that looks a run up by id says so once.
+func TestRunCommandsReportAStoreFailureLookingUpTheRun(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "steps.db")
 	recordStepOutput(t, state, "chatty")
 
@@ -132,18 +197,34 @@ func TestRunsOutputReportsAStoreFailureLookingUpTheRun(t *testing.T) {
 
 	defer func() { _ = st.Close() }()
 
-	err = (&RunsOutputCmd{RunID: "RUN"}).print(t.Context(), faultyRunsStore{st})
-	if err == nil || !strings.Contains(err.Error(), `could not read run "RUN"`) || !strings.Contains(err.Error(), "malformed") {
-		t.Errorf("err = %v, want the store's failure named with the run", err)
-	}
+	faulty := faultyRunsStore{st}
 
-	if err != nil && strings.Contains(err.Error(), "no run") {
-		t.Errorf("err = %v, want the fault, not an unknown id", err)
+	for name, lookup := range map[string]func() error{
+		"runs output": func() error { return (&RunsOutputCmd{RunID: "RUN"}).print(t.Context(), faulty) },
+		"runs steps":  func() error { return (&RunsStepsCmd{RunID: "RUN"}).printRunSteps(t.Context(), faulty) },
+		"runs follow": func() error {
+			_, err := (&RunsFollowCmd{RunID: "RUN"}).target(t.Context(), faulty)
+
+			return err
+		},
+	} {
+		err := lookup()
+		if err == nil || !strings.Contains(err.Error(), `could not read run "RUN"`) || !strings.Contains(err.Error(), "malformed") {
+			t.Errorf("%s: err = %v, want the store's failure named with the run", name, err)
+		}
+
+		if err != nil && strings.Count(err.Error(), "could not read run") != 1 {
+			t.Errorf("%s: err = %v, want the run named once, not wrapped again over the store's own wording", name, err)
+		}
+
+		if err != nil && strings.Contains(err.Error(), "no run") {
+			t.Errorf("%s: err = %v, want the fault, not an unknown id", name, err)
+		}
 	}
 }
 
 // recordStepOutput lands one run with one step_output event in a fresh state file.
-func recordStepOutput(t *testing.T, state, stepName string) {
+func recordStepOutput(t *testing.T, state string, stepNames ...string) {
 	t.Helper()
 
 	st, err := sqlite.OpenStore(state, "app")
@@ -156,9 +237,11 @@ func recordStepOutput(t *testing.T, state, stepName string) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = st.AppendRunEvent(t.Context(), store.RunEventRow{RunID: "RUN", Type: events.TypeStepOutput, StepName: stepName, Text: "hi"})
-	if err != nil {
-		t.Fatalf("AppendRunEvent: %v", err)
+	for _, stepName := range stepNames {
+		err = st.AppendRunEvent(t.Context(), store.RunEventRow{RunID: "RUN", Type: events.TypeStepOutput, StepName: stepName, Text: "hi"})
+		if err != nil {
+			t.Fatalf("AppendRunEvent: %v", err)
+		}
 	}
 
 	_ = st.Close()

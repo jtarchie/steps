@@ -54,7 +54,6 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (_
 	ctx = shell.DeferFetch(ctx)
 
 	// Here rather than at preparation, so a cached step never pays for the container its tools would have used — see preparedAgentStep.openTree. prepared is a value, so this settles the copy the conversation below actually runs from.
-
 	prepared, err = prepared.openTree(ctx)
 	if err != nil {
 		return conversationResult{}, servedSource{ri: prepared.ri, llm: prepared.llm}, err
@@ -98,6 +97,11 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (_
 	prepared.conv.usage = attachUsage(ctx, prepared.conv.usage)
 	defer prepared.conv.usage.finish(ctx)
 
+	return runCascade(ctx, cascadeCtx, prepared)
+}
+
+// runCascade tries the step's hosted sources in turn under cascadeCtx, resuming one conversation across them, until DecideCascade says to return.
+func runCascade(ctx, cascadeCtx context.Context, prepared preparedAgentStep) (conversationResult, servedSource, error) {
 	agent := prepared.agent
 	ri := prepared.ri
 	llm := prepared.llm
@@ -108,18 +112,25 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (_
 	for {
 		res, runErr := runOneConversation(cascadeCtx, ri, llm, conv, noAgentDeadline)
 
-		// A cascade is a search for a source that can finish the step within
-		// the step's own deadline, so both facts the decision needs beyond
-		// the error itself are gathered before it is made. Resolving the next
-		// candidate up front costs nothing: it is a config walk and an
-		// environment lookup, no request.
-		next, apiKey, nextIndex, hasNext := nextViableFallback(ctx, agent, ri, index)
+		// Only after a failed attempt: a candidate's key may be a secret-source fetch (a command, a prompt), and DecideCascade ignores hasNext for a source that served.
+		var (
+			next      config.ResolvedInvocation
+			apiKey    string
+			nextIndex int
+			hasNext   bool
+		)
+
+		if runErr != nil {
+			next, apiKey, nextIndex, hasNext = nextViableFallback(ctx, agent, ri, index)
+		}
 
 		verdict := llmclient.DecideCascade(llmclient.ClassifySource(ctx, runErr), hasNext, cascadeCtx.Err() != nil, swapped)
 
 		switch verdict.Pin {
 		case llmclient.PinThisSource:
-			pinServedSource(prepared.pin, agent, index)
+			if !prepared.runOnly {
+				pinServedSource(prepared.pin, agent, index)
+			}
 		case llmclient.DropPin:
 			releaseSource(prepared.pin)
 		case llmclient.LeavePin:

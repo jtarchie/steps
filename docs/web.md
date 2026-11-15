@@ -343,7 +343,9 @@ what it spent and where it ran on its own row.
   -p <pipeline>` prints the same whole output in a terminal, and the record
   itself for a step that stored nothing. Leaving the step off — `steps runs
   output <run> -p <pipeline>` — lists the steps that recorded output
-  instead, one per line, in the order each first did; a step still printing
+  instead, one per line, in the order each first did — a name holding a
+  control character or line break prints Go-quoted (`"two\nlines"`), and
+  that quoted line is accepted back as `<step>`; a step still printing
   joins the list when it finishes, the list naming only what this command can
   print. How, and for how long, is under [Live runs](#live-runs).
 - **An agent step expands into its conversation**: the model's text each turn,
@@ -402,7 +404,8 @@ what it spent and where it ran on its own row.
   placed: the tag, the platform the worker reported,
   how many bytes had to be pushed to it and how many came back, the identity
   it ran as, and the machine — plus the image if the step ran in a container
-  on it. A worker that named no identity — every
+  on it, with the digest it resolved to there (shortened; the row's head names
+  the image, and hovering it shows the digest). A worker that named no identity — every
   docker+ worker, whose step runs as its image's user — leaves it out rather
   than inventing `0:0`, which would read as root.
 
@@ -621,6 +624,7 @@ steps runs retry   -p app 46UMHVPYRA6YHB7M           # queue a retry of a record
 
 - A plain trigger merges into a run of that job already waiting, exactly as a second click of the button does.
 - **`--pin`** takes the same `field=value` pairs `steps run --pin` takes, and is repeatable. A pinned trigger is a queue row of its own, because it builds something the job's ordinary trigger does not; asking for the same pin twice while it waits is still one run. The pin is stored with the row, so a daemon restarted before the run starts still builds what you asked for.
+- **A pin skips `passed:`**: the pinned run builds the version the check names, whether or not the upstream jobs passed it. So on a job with a `passed:` get, an operator may only pin a version every job in that `passed:` has passed; pinning anything else needs the **admin** role and is refused 403 otherwise. Without `--role` rules everyone is an admin. Each constrained resource is judged on its own: a fan-in whose pinned versions passed upstream in different builds is not caught.
 - **`--force`** skips the step cache for that run. It cannot be combined with `--pin`.
 - **`retry`** rebuilds a past run against the versions it was built with, which is Concourse's `fly rerun-build`.
 - Each is refused where the button is: on a `--read-only` daemon, on a paused pipeline, for a job the configuration no longer names.

@@ -126,6 +126,10 @@ func TestSchemaRejectsInvalidPipelines(t *testing.T) {
 			name:     "built-in slack source key it does not read",
 			pipeline: "resources: [{name: m, type: slack-mentions, source: {chanels: [C1]}}]\njobs: [{name: j, plan: [{get: m}]}]\n",
 		},
+		{
+			name:     "registry-image tag YAML reads as a number",
+			pipeline: "resource_types: [{name: t, type: registry-image, source: {repository: a/b, tag: 1.10}}]\njobs: [{name: j, plan: []}]\n",
+		},
 	}
 
 	for _, test := range tests {

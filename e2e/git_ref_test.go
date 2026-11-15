@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,14 +21,96 @@ func bareFixture(t *testing.T) string {
 	return bare
 }
 
-// quietRemote stops a push from leaving a process behind in bare. Since git
-// 2.47 receive-pack ends with `git maintenance run --auto --detach`, which
-// outlives the push and writes objects/maintenance.lock after the put returned;
-// a t.TempDir() cleanup racing it fails with "directory not empty" (#261).
-func quietRemote(t *testing.T, bare string) {
+// quietRemote: since git 2.47 receive-pack's detached auto-maintenance outlives the push and writes objects/maintenance.lock, racing t.TempDir()'s cleanup into "directory not empty" (#261).
+func quietRemote(t *testing.T, repo string) {
 	t.Helper()
 
-	gitIn(t, bare, "config", "receive.autogc", "false")
+	gitIn(t, repo, "config", "receive.autogc", "false")
+}
+
+// Every fixture a put pushes into — bare, or a working repo pushed to on another branch (the factory's) — spawns no maintenance from receive-pack.
+func TestGitFixturesSpawnNoMaintenanceOnPush(t *testing.T) {
+	for name, remote := range map[string]func(*testing.T) string{
+		"bare": bareFixture,
+		"working": func(t *testing.T) string {
+			t.Helper()
+
+			return fixtureRepo(t, "served\n")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			target := remote(t)
+			trace := filepath.Join(t.TempDir(), "trace2")
+
+			cmd := exec.CommandContext(t.Context(), "git", "push", "-q", target, "HEAD:refs/heads/pushed") //nolint:gosec // fixture paths
+			cmd.Dir = fixtureRepo(t, "pusher\n")
+			cmd.Env = append(os.Environ(), "GIT_TRACE2_EVENT="+trace)
+
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("push: %v\n%s", err, out)
+			}
+
+			events, err := os.ReadFile(trace) //nolint:gosec // under t.TempDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if strings.Contains(string(events), `"maintenance"`) {
+				t.Errorf("receive-pack started git maintenance in the %s fixture:\n%s", name, events)
+			}
+		})
+	}
+}
+
+// A get's fetch spawns no detached maintenance in the checkout, which steps removes as the run ends: its lock file failed that removal.
+func TestEndToEndBuiltinGitGetSpawnsNoMaintenance(t *testing.T) {
+	for name, source := range map[string]string{
+		"branch": "branch: main",
+		"tag":    `tag_pattern: "v*"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			origin := fixtureRepo(t, "served\n")
+			gitIn(t, origin, "tag", "v1")
+
+			path := writePipeline(t, t.TempDir(), `
+resources:
+- name: repo
+  type: git
+  env: [GIT_TRACE2_EVENT]
+  source:
+    uri: `+origin+`
+    `+source+`
+jobs:
+- name: build
+  plan:
+  - get: repo
+`)
+
+			trace := filepath.Join(t.TempDir(), "trace2")
+			t.Setenv("GIT_TRACE2_EVENT", trace)
+
+			logs := captureStderr(t)
+
+			err := cli.Run([]string{path})
+			if err != nil {
+				t.Fatalf("run: %v\n%s", err, logs())
+			}
+
+			events, err := os.ReadFile(trace) //nolint:gosec // under t.TempDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !strings.Contains(string(events), `"hierarchy":"fetch"`) {
+				t.Fatalf("the trace holds no fetch, so it proves nothing:\n%s", events)
+			}
+
+			if strings.Contains(string(events), `"maintenance"`) {
+				t.Errorf("the get's fetch started git maintenance in its checkout:\n%s", events)
+			}
+		})
+	}
 }
 
 // refPipeline gets main, makes two commits (first, second) and records both shas, then puts with the given params.

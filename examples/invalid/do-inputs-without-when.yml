@@ -1,0 +1,14 @@
+# Children never see a do:'s inputs, so without a guard to read them they would only mislead.
+# expect: inputs on a do step only stages files for its when: guard
+
+jobs:
+- name: build
+  plan:
+  - task: fetch
+    outputs: [repo]
+    run: "true"
+  - do:
+    - task: work
+      inputs: [repo]
+      run: ls repo
+    inputs: [repo]
