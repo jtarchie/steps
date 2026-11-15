@@ -460,6 +460,8 @@ jobs:
 // fail at the prompt, so the remote has to be one that asks for credentials:
 // an unreachable one fails before any prompt and proves nothing.
 func TestEndToEndBuiltinGitFetchNeverPrompts(t *testing.T) {
+	t.Parallel()
+
 	clone := clonedFixtureRepo(t, "content\n", "ahead\n")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

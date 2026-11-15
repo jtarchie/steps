@@ -448,6 +448,8 @@ jobs:
 // live checks, so a tagged resource's check has to go where a run's would —
 // and be refused, not quietly run here, when nothing maps the tag.
 func TestEndToEndPlanChecksOnTheResourceWorker(t *testing.T) {
+	t.Parallel()
+
 	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()

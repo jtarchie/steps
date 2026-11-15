@@ -221,7 +221,6 @@ func scopeTestEnv(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("STEPS_ENCRYPTION_KEY", testEncryptionKey)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
 	t.Setenv("HOME", dir)
 	fakeBrowser(t)
 

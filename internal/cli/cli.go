@@ -105,11 +105,22 @@ type Streams struct {
 	Err io.Writer
 	// stop is RunContext's ctx.Done(), nil under Run and RunWith.
 	stop <-chan struct{}
+	// logLevel is the invocation's --log-level, for the handler a stderr of its own gets.
+	logLevel string
 }
 
 // context is a background context whose step output and notes go to these streams, where nothing installed means the process's own.
 func (s Streams) context() context.Context {
-	return events.WithOutput(context.Background(), events.Output{Stdout: s.Out, Stderr: s.Err})
+	return s.logs(events.WithOutput(context.Background(), events.Output{Stdout: s.Out, Stderr: s.Err}))
+}
+
+// logs is ctx with its log lines going to a stderr of the invocation's own, when it was handed one.
+func (s Streams) logs(ctx context.Context) context.Context {
+	if s.Err == nil || s.Err == io.Writer(os.Stderr) {
+		return ctx
+	}
+
+	return withLogs(ctx, s.Err, s.logLevel)
 }
 
 // cancellable is context() cancelled by the first SIGINT or SIGTERM, or by RunContext's ctx ending — the same stop, delivered to this invocation alone.
@@ -129,7 +140,7 @@ func (s Streams) cancellable() (context.Context, context.CancelFunc) {
 	return ctx, cancel
 }
 
-// RunWith is Run writing to streams instead of the process's stdout and stderr. Log lines are not part of it: slog has one handler per process and it stays on stderr.
+// RunWith is Run writing to streams instead of the process's stdout and stderr. Log lines follow when Err is not the process's own: slog has one handler per process, and it routes a record by the context it was logged with (see withLogs).
 func RunWith(streams Streams, args []string) error {
 	return RunContext(context.Background(), streams, args)
 }
@@ -150,13 +161,18 @@ func RunContext(ctx context.Context, streams Streams, args []string) error {
 
 	InitLogging(cli.LogLevel)
 
+	streams.stop = ctx.Done()
+	streams.logLevel = cli.LogLevel
+	// What this invocation logs before a command has a context of its own.
+	logs := streams.logs(ctx)
+
 	for _, flag := range kctx.Flags() {
 		if db, ok := flag.Target.Interface().(DB); ok {
-			warnPasswordInURL(string(db))
+			warnPasswordInURL(logs, string(db))
 		}
 	}
 
-	slog.DebugContext(ctx, "cli.parse", "command", kctx.Command(), "args", len(args))
+	slog.DebugContext(logs, "cli.parse", "command", kctx.Command(), "args", len(args))
 
 	// Telemetry outlives the stop: the spans of a cancelled run are the ones worth exporting.
 	flush, err := telemetry.Start(context.WithoutCancel(ctx), version())
@@ -164,8 +180,6 @@ func RunContext(ctx context.Context, streams Streams, args []string) error {
 		return err //nolint:wrapcheck // telemetry already says it is telemetry
 	}
 	defer flush(context.WithoutCancel(ctx))
-
-	streams.stop = ctx.Done()
 
 	return kctx.Run(streams) //nolint:wrapcheck // the Run methods above already wrap their own errors via wrapRunErr
 }

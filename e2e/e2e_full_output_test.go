@@ -91,6 +91,8 @@ func keptOf(t *testing.T, path string, output store.RunEventRow) (string, bool) 
 
 // The record elides the middle and says the whole was kept; the database holds every byte the step printed, and a step that printed little stores nothing.
 func TestAnElidedOutputIsKeptWholeInTheDatabase(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 jobs:
 - name: build
@@ -132,6 +134,8 @@ jobs:
 
 // What is kept is what the record would have held without its bound, after the scrubber: a secret printed in the middle is *** in the database.
 func TestAKeptOutputIsScrubbed(t *testing.T) {
+	t.Parallel()
+
 	dir, path, config, _ := cliSecretsFixture(t, nil)
 	writeVault(t, filepath.Join(dir, "vault"), map[string]string{cli.PipelineName(path) + "/gh_token": e2eSecretValue + "\n"})
 
@@ -152,17 +156,9 @@ jobs:
       seq 20001 40000
 `)
 
-	// Not runAndCapture: its pipe is read only once the run returns, and 40,000 lines fill it first.
-	orig := os.Stdout
-	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var err error
 
-	os.Stdout = devnull
-	err = stepsRun(t, []string{"run", "--config", config, "--progress", "plain", path})
-	os.Stdout = orig
-	_ = devnull.Close()
+	_ = captureStdout(t, func() { err = stepsRun(t, []string{"run", "--config", config, "--progress", "plain", path}) })
 
 	if err != nil {
 		t.Fatalf("run --config: %v", err)
@@ -182,40 +178,10 @@ jobs:
 	}
 }
 
-// A runaway step cannot fill the database: past the bound the output stops and says how much it dropped.
-func TestAKeptOutputIsBounded(t *testing.T) {
-	defer func(bound int64) { store.MaxStepOutputBytes = bound }(store.MaxStepOutputBytes)
-
-	store.MaxStepOutputBytes = 100_000
-
-	path := writePipeline(t, t.TempDir(), `
-jobs:
-- name: build
-  plan:
-  - task: runaway
-    run: yes x | head -c 400000
-`)
-
-	err := runSilently(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	whole, found := keptOf(t, path, stepOutput(t, recordedEvents(t, path), "runaway"))
-	head, trailer, cut := strings.Cut(whole, "\n... [")
-
-	switch {
-	case !found || !cut:
-		t.Fatalf("the output does not say it was cut (found %v, %d bytes)", found, len(whole))
-	case head != strings.Repeat("x\n", 50_000):
-		t.Errorf("the output kept %d bytes before its trailer, want exactly the %d-byte bound of what was printed", len(head), 100_000)
-	case !strings.Contains(trailer, "300000 further bytes"):
-		t.Errorf("the trailer does not count what was dropped: %q", trailer)
-	}
-}
-
 // A run reaped by run_history: takes its kept output with it, and the run that survives keeps its own.
 func TestPruningARunRemovesItsKeptOutput(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 defaults:
   run_history: 1
@@ -381,6 +347,9 @@ func TestTheRunPageServesAKeptOutput(t *testing.T) {
 
 // A step placed on a worker streams its output back to the process that runs the job, which keeps it.
 func TestAPlacedStepsElidedOutputIsKept(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	path := writePipeline(t, t.TempDir(), `

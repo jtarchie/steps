@@ -10,6 +10,9 @@ import (
 )
 
 func TestRealDOPipelineStepRunsOnALaunchedDroplet(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	region := os.Getenv("STEPS_TEST_DO_REGION")
 	if region == "" || os.Getenv("DIGITALOCEAN_ACCESS_TOKEN") == "" {
 		t.Skip("no DigitalOcean fixture — run hack/do-fixture.sh up, export what it prints and DIGITALOCEAN_ACCESS_TOKEN")

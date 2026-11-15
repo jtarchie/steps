@@ -90,6 +90,9 @@ const imageArtifactTask = `  - task: probe
 `
 
 func TestImageArtifactRunsInTheFetchedDigest(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	digest := alpineDigest(t)
@@ -140,6 +143,9 @@ func TestImageArtifactRunsInTheFetchedDigest(t *testing.T) {
 // override of its agents: entry may name the get too, and the agent's shell
 // tool runs in that reference.
 func TestImageArtifactAgentToolsRunInTheFetchedDigest(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	digest := alpineDigest(t)
@@ -187,6 +193,9 @@ defaults:
 }
 
 func TestImageArtifactGuardRunsInTheFetchedDigest(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	digest := alpineDigest(t)
@@ -206,6 +215,9 @@ func TestImageArtifactGuardRunsInTheFetchedDigest(t *testing.T) {
 }
 
 func TestImageArtifactRefusesAMalformedDigest(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	path := pipelinePath(t, t.TempDir())
@@ -352,6 +364,9 @@ func assertNoCanary(t *testing.T, path, out string) {
 // the fetch must still record the get's source, or an image: naming it later
 // in the plan has a digest and no repository to put it on.
 func TestImageArtifactResolvesAfterAResumeKeptTheGet(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	digest := alpineDigest(t)

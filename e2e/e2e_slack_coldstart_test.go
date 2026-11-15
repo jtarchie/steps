@@ -30,9 +30,9 @@ const coldStartThreadBudget = 5
 // TestEndToEndBuiltinSlackColdStartBoundsItsThreadFanOut is the regression:
 // a busy workspace's first check must not ask about every thread it can see.
 func TestEndToEndBuiltinSlackColdStartBoundsItsThreadFanOut(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	// Twenty threads, none of them mentioning the bot, each with a reply — a
 	// channel that has simply been in use for a while. Under the old rule all
 	// twenty qualified, because latest_reply > 0 is true of every thread that
@@ -64,9 +64,9 @@ func TestEndToEndBuiltinSlackColdStartBoundsItsThreadFanOut(t *testing.T) {
 // still has to be found. A cold start that asked about nothing would be cheap
 // and useless.
 func TestEndToEndBuiltinSlackColdStartStillAnswersTheNewestThreadMention(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	// Older chatter than the fixture's own thread, so the mention buried at
 	// 101.500 stays among the most recently active and must survive the trim.
 	for i := range 12 {

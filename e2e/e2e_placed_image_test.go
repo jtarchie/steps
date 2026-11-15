@@ -27,6 +27,9 @@ import (
 // is the other half — the tree that was sent has to be what the container
 // sees, or the step ran somewhere with none of its inputs.
 func TestPlacedStepRunsInAContainer(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

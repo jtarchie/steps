@@ -107,9 +107,9 @@ func stateIsEmpty(state State) bool {
 // listing and shell history that saw the command. Called once the logger is
 // installed rather than as the flag parses, which is before any logger
 // exists and would put a bare line on a daemon's slog-only terminal.
-func warnPasswordInURL(raw string) {
+func warnPasswordInURL(ctx context.Context, raw string) {
 	if postgres.HasPassword(raw) {
-		slog.Warn("db.password_in_url",
+		slog.WarnContext(ctx, "db.password_in_url",
 			"why", "--db carries a password, which process listings and shell history keep; set PGPASSWORD, or use ~/.pgpass or PGSERVICEFILE, instead")
 	}
 }

@@ -44,6 +44,8 @@ jobs:
 
 // tag_pattern tracks tags: one version per match, oldest first by version order, each checked out where describe names the tag, a tag object peeled to its commit.
 func TestEndToEndBuiltinGitTagPatternTracksTags(t *testing.T) {
+	t.Parallel()
+
 	origin := tagFixture(t)
 	dir := t.TempDir()
 	seen := filepath.Join(dir, "seen")
@@ -77,6 +79,8 @@ func TestEndToEndBuiltinGitTagPatternTracksTags(t *testing.T) {
 
 // No tag yet is an empty list: nothing to build, and no git error.
 func TestEndToEndBuiltinGitTagPatternWithNoTagsIsEmpty(t *testing.T) {
+	t.Parallel()
+
 	origin := fixtureRepo(t, "untagged\n")
 	dir := t.TempDir()
 	path := writePipeline(t, dir, fmt.Sprintf(tagPipeline, origin, filepath.Join(dir, "seen")))
@@ -140,6 +144,8 @@ jobs:
 
 // Release tooling finds the previous tag and the changelog from the checkout's own history, so a tag get is not shallow.
 func TestEndToEndBuiltinGitTagPatternGetKeepsHistoryAndTags(t *testing.T) {
+	t.Parallel()
+
 	origin := tagFixture(t)
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `

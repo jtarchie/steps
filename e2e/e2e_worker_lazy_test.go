@@ -19,6 +19,9 @@ import (
 // producer and a placed consumer on one machine, and nothing here reads
 // either output — so nothing comes home.
 func TestEndToEndPlacedOutputsStayOnTheWorkerWithNoLocalReader(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -56,6 +59,9 @@ jobs:
 // a local step at the end. The producer's row still says nothing came home
 // at the time it finished; the local step is what pulled the tree.
 func TestEndToEndALocalStepPullsAPlacedOutputWhenItReadsIt(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -79,6 +85,9 @@ func TestEndToEndALocalStepPullsAPlacedOutputWhenItReadsIt(t *testing.T) {
 // an in-process reader of the step's own outputs, so that step's tree comes
 // home as it always did.
 func TestEndToEndAssertFilesStillSeesAPlacedTasksOutputs(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -106,6 +115,9 @@ jobs:
 // TestEndToEndLoadVarReadsAPlacedOutput: load_var: reads a file in this
 // process, from a tree a worker holds.
 func TestEndToEndLoadVarReadsAPlacedOutput(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -176,6 +188,9 @@ jobs:
 // from answering for the whole job, so the get itself has to be the thing
 // that was cached.
 func TestEndToEndPlacedGetWithTheResourceCacheDialsNothingOnTheSecondBuild(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

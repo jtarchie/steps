@@ -21,6 +21,9 @@ import (
 
 // TestRealGCPPipelineStepRunsOnAnInstance is the whole feature end to end.
 func TestRealGCPPipelineStepRunsOnAnInstance(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	project := os.Getenv("STEPS_TEST_GCP_PROJECT")
 	zone := os.Getenv("STEPS_TEST_GCP_ZONE")
 	instance := os.Getenv("STEPS_TEST_GCP_INSTANCE")

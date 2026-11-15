@@ -222,9 +222,12 @@ func startWebFor(t *testing.T, path string, args ...string) *webProcess {
 // idle queue counts. A poll counts once EVERY resource has been checked since
 // the last one counted: the poller runs one poll at a time, checking each
 // resource and then enqueueing, so a full set of newer checks means every
-// earlier poll has finished enqueueing. Two, because the first is the poll that
-// saw what the test wrote, and only the one after it proves its enqueue landed.
-const settlePolls = 2
+// earlier poll has finished enqueueing. Three: the first may be a poll already
+// under way that read what was there BEFORE the test wrote, the second is the
+// one that saw the write, and only the one after it proves that enqueue landed.
+// It was two while check times were whole seconds, which hid the first case: two
+// polls could not count inside one second, so the wait outlasted the enqueue.
+const settlePolls = 3
 
 // settle is what `steps web --once` returning used to mean: one whole
 // poll-and-drain cycle, finished.
@@ -639,6 +642,8 @@ var contextLogKeys = []string{"pipeline", "revision", "run", "job", "step", "res
 // coincidental — with one, every line naming it would be a guess that
 // happened to be right.
 func TestDaemonLogLinesNameTheirPipeline(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	fixtures := []*watchFixture{newWatchFixtureIn(t, dir, "app"), newWatchFixtureIn(t, dir, "infra")}
 
@@ -689,6 +694,8 @@ func TestDaemonLogLinesNameTheirPipeline(t *testing.T) {
 
 // The daemon's terminal is slog and nothing else: a step's bytes, its lifecycle lines and the daemon's own announcements are read from the store or the browser, never echoed. Asked for repeatedly and regressed repeatedly, hence the test.
 func TestDaemonTerminalIsOnlySlog(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:

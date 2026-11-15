@@ -1119,6 +1119,9 @@ func benchSet(run *benchRun, key string, sent, disk int64) {
 
 // TestBenchVerifyRefusesAStaleTree: the content half of every hop is the consumer's own check, so it has to fail on a tree from another run, and on one whose bytes are not the ones digested.
 func TestBenchVerifyRefusesAStaleTree(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	for name, c := range map[string]struct{ tamper, want string }{

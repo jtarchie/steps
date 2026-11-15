@@ -19,12 +19,14 @@ type keptOutputsKey struct{}
 type keptOutputs struct {
 	st    store.Events
 	runID string
+	// limit is where one output stops: store.MaxStepOutputBytes, on the value rather than read from the package so a test of the bound sets its own and shares it with nobody.
+	limit int64
 	mu    sync.Mutex
 	next  map[int64]int
 }
 
 func withKeptOutputs(ctx context.Context, st store.Events, runID string) context.Context {
-	return context.WithValue(ctx, keptOutputsKey{}, &keptOutputs{st: st, runID: runID, next: map[int64]int{}})
+	return context.WithValue(ctx, keptOutputsKey{}, &keptOutputs{st: st, runID: runID, limit: store.MaxStepOutputBytes, next: map[int64]int{}})
 }
 
 func keptOutputsFrom(ctx context.Context) *keptOutputs {
@@ -44,7 +46,7 @@ func (k *keptOutputs) claim(stepID int64) int {
 	return n
 }
 
-// keptOutput is one output being appended to the store, bounded at store.MaxStepOutputBytes.
+// keptOutput is one output being appended to the store, bounded at its run's limit.
 type keptOutput struct {
 	*keptOutputs
 	stepID  int64
@@ -63,7 +65,7 @@ func (k *keptOutput) write(ctx context.Context, p []byte) {
 		return
 	}
 
-	room := max(store.MaxStepOutputBytes-k.taken, 0)
+	room := max(k.limit-k.taken, 0)
 	take := min(int64(len(p)), room)
 	k.dropped += int64(len(p)) - take
 	k.taken += take
@@ -95,7 +97,7 @@ func (k *keptOutput) flush(ctx context.Context) {
 // finish stores the rest, saying what the bound dropped, and reports whether the whole is there.
 func (k *keptOutput) finish(ctx context.Context) bool {
 	if k.dropped > 0 {
-		k.pending = fmt.Appendf(k.pending, "\n... [%d further bytes dropped: a kept output stops at %d bytes]\n", k.dropped, store.MaxStepOutputBytes)
+		k.pending = fmt.Appendf(k.pending, "\n... [%d further bytes dropped: a kept output stops at %d bytes]\n", k.dropped, k.limit)
 	}
 
 	k.flush(ctx)

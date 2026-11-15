@@ -53,6 +53,8 @@ jobs:
 // breach classifies as errored — an operational limit being hit, not the model
 // producing a bad answer — so on_error fires and on_failure does not.
 func TestAgentBudgetStopsTheStep(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	// Each turn reports 60 tokens against a 100-token cap, so the second one
@@ -100,6 +102,8 @@ func TestAgentBudgetStopsTheStep(t *testing.T) {
 // WZEQGPY4UK25Z2US: reply written, step red). A crossing response that asks
 // for more tools still fails — TestAgentBudgetStopsTheStep above.
 func TestAgentBudgetKeepsAFinalAnswerThatCrossesIt(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	fake := newFakeLLM(t,

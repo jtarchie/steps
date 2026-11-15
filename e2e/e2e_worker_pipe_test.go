@@ -23,7 +23,8 @@ func runKept(t *testing.T, path string, args []string) (string, string, error) {
 
 	var err error
 
-	logs := captureStderr(t)
+	// The kept-workspace line is logged as the workspace closes, with no context to route it by.
+	logs := captureProcessStderr(t)
 	out := captureStdout(t, func() {
 		err = stepsRun(t, append([]string{path, "--keep-workspace"}, args...))
 	})
@@ -234,6 +235,9 @@ jobs:
 // every such tree landed here first — a worker does not get to name files on
 // another.
 func TestEndToEndAWorkerCannotPlantAnEscapingLinkOnAnother(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

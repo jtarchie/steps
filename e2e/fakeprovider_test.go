@@ -814,12 +814,24 @@ func assertNoFile(t *testing.T, path string) {
 	}
 }
 
-// captureStderr redirects os.Stderr to a temp file for the rest of the test
+// captureStderr collects, until the test ends, what the invocations t makes through stepsRun write to stderr: a step's stderr, a warning, and the log lines of everything done under the invocation's context. A buffer per test, so tests reading their own stderr can run side by side. A line logged with no context is not in it — that is captureProcessStderr's, which swaps the process's stream and keeps its test serial.
+func captureStderr(t *testing.T) func() string {
+	t.Helper()
+
+	buffer := &lockedBuffer{}
+
+	stderrCaptures.Store(t.Name(), buffer)
+	t.Cleanup(func() { stderrCaptures.Delete(t.Name()) })
+
+	return buffer.String
+}
+
+// captureProcessStderr redirects os.Stderr to a temp file for the rest of the test
 // and returns a reader for what was written. The logger writes there
 // (initLogging), and cli.Run installs its own handler, so an in-process
 // slog.SetDefault would be overwritten the moment the CLI starts — the file
 // swap is what lets a test assert on what an operator would actually see.
-func captureStderr(t *testing.T) func() string {
+func captureProcessStderr(t *testing.T) func() string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "stderr.log")

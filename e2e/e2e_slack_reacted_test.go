@@ -26,9 +26,9 @@ import (
 //     reacted message and the last page, is found only if the check follows
 //     next_cursor.
 func TestEndToEndBuiltinSlackReactionWatch(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	workspace.tag("C1", "100.000", "robot_face", "UBOT")
 	workspace.tag("C1", "101.500", "robot_face", "UBOT", "U2")
 	workspace.tag("D1", "50.000", "robot_face", "U2")
@@ -134,6 +134,8 @@ jobs:
 // a workspace with many reacted messages costs every page there is; without
 // the guard a short list costs pages requests anyway.
 func TestEndToEndBuiltinSlackReactionWatchPages(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		tagged []string
 		pages  string
@@ -144,8 +146,6 @@ func TestEndToEndBuiltinSlackReactionWatchPages(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			server, workspace := fakeSlack(t)
-			t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
-
 			for _, ts := range tc.tagged {
 				workspace.tag("C1", ts, "robot_face", "UBOT")
 			}
@@ -185,9 +185,9 @@ jobs:
 // messages is cut at its newest end, which is where a fresh reaction usually
 // is. message.json must still be the reacted message, fetched on its own.
 func TestEndToEndBuiltinSlackReactionWatchLongThread(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	for i := range 1001 {
 		workspace.say(slackMsg{channel: "C1", ts: strconv.Itoa(200+i) + ".000", user: "U2", text: "more", parent: "101.000"})
 	}
@@ -226,9 +226,9 @@ jobs:
 // versions oldest first, and reactions.list answers newest first, so without
 // the sort a plain get builds the OLDEST reacted message as the latest.
 func TestEndToEndBuiltinSlackReactionWatchOldestFirst(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	workspace.tag("C1", "100.000", "robot_face", "UBOT")
 	workspace.tag("C1", "101.500", "robot_face", "UBOT")
 
@@ -263,9 +263,9 @@ jobs:
 // and ok:false. A check that read that as an empty page would report nothing,
 // forever, which looks exactly like nobody having reacted to anything.
 func TestEndToEndBuiltinSlackReactionWatchFailsOnRefusal(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	workspace.mu.Lock()
 	workspace.reactionError = map[string]string{"/api/reactions.list": "missing_scope"}
 	workspace.mu.Unlock()

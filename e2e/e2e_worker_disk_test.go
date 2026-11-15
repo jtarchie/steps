@@ -15,6 +15,9 @@ const diskSlack = 1 << 20
 
 // TestEndToEndPlacedStepRecordsTheDiskItsVolumesUse: a consumer on the producer's worker costs only its own output; one on the other worker had the tree poured into its cache too.
 func TestEndToEndPlacedStepRecordsTheDiskItsVolumesUse(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	const written = 256 << 10
@@ -82,6 +85,9 @@ jobs:
 
 // TestEndToEndPlacedStepIsWeighedWhenItsLastOutputComesHome: an output this machine already had is fetched back rather than held, so the weighing rides on whichever output was held, not on the last one named.
 func TestEndToEndPlacedStepIsWeighedWhenItsLastOutputComesHome(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	const written = 256 << 10

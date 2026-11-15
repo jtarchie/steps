@@ -8,6 +8,9 @@ import (
 )
 
 func TestSubAgentSharesItsParentsContainer(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

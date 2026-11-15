@@ -110,6 +110,9 @@ jobs:
 // shell command, it executes in a container, and the file it wrote through
 // the bind mount is readable by the agent's host-side read_file.
 func TestEndToEndAgentInContainer(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -150,6 +153,9 @@ func TestEndToEndAgentInContainer(t *testing.T) {
 // working directory would survive even without a shared container, proving
 // nothing.
 func TestEndToEndAgentContainerStatePersistsAcrossToolCalls(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -204,6 +210,9 @@ func TestEndToEndAgentContainerEnvPassthrough(t *testing.T) {
 // states: a failing command inside a container reaches the model as an
 // ordinary tool result it can react to, not as an error that kills the step.
 func TestEndToEndAgentContainerNonzeroExitIsData(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

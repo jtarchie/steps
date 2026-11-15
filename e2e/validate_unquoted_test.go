@@ -41,6 +41,8 @@ jobs:
 // one rendered bare into sh -c is shell syntax somebody else wrote. validate
 // says so, and still passes: quoting is a convention, not a load rule.
 func TestValidateWarnsOnUnquotedShellTemplateValues(t *testing.T) {
+	t.Parallel()
+
 	t.Run("unquoted", func(t *testing.T) {
 		stderr := captureStderr(t)
 		path := writePipeline(t, t.TempDir(), fmt.Sprintf(unquotedPipeline, "{{ .version.ref }}", "{{ .args.body }}"))
@@ -79,6 +81,8 @@ func TestValidateWarnsOnUnquotedShellTemplateValues(t *testing.T) {
 // The plain validate — no flags — is the one an author runs, and a warning
 // must not cost it its exit status.
 func TestValidateUnquotedWarningExitsZero(t *testing.T) {
+	t.Parallel()
+
 	stderr := captureStderr(t)
 	path := writePipeline(t, t.TempDir(), `
 resource_types:

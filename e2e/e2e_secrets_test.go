@@ -262,7 +262,7 @@ func inDatabase(t *testing.T, state, text string) bool {
 
 // A fix: agent was never granted the task's secrets: its tools run without them, so nothing it runs can print one into its transcript or hand one to the model.
 func TestFixAgentDoesNotInheritTheTasksSecrets(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+	t.Parallel()
 
 	fake := newFakeLLM(t,
 		callsTool("run_shell", map[string]any{"command": `printf 'seen=[%s]' "$TOKEN"`}),
@@ -328,7 +328,7 @@ jobs:
 
 // An agent's tools get its secrets, and the model never does: the tool result is scrubbed before it becomes the next message, which is also what the transcript records.
 func TestAgentSecretsReachItsToolsButNotTheModel(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+	t.Parallel()
 
 	dir := t.TempDir()
 	expected := filepath.Join(dir, "expected")
@@ -483,6 +483,8 @@ jobs:
 
 // A failed poll's error is stored and shown on the resource's page; one that quotes the resource's credential must not keep it.
 func TestAFailedChecksErrorIsScrubbed(t *testing.T) {
+	t.Parallel()
+
 	logs := captureStderr(t)
 
 	dir := t.TempDir()
@@ -539,7 +541,7 @@ jobs:
 
 // A sub-agent was granted nothing the parent step resolved: its tools run without the parent's secrets, the way a fix agent's do.
 func TestSubAgentDoesNotInheritTheParentsSecrets(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+	t.Parallel()
 
 	fake := newFakeLLM(t,
 		callsTool("helper", map[string]any{"request": "look"}),
@@ -600,6 +602,8 @@ jobs:
 
 // A get that fails inside a run records its error as the step's and the job's outcome, which the browser shows; an error quoting the resource's credential must be masked there too.
 func TestAFailedGetsErrorIsScrubbed(t *testing.T) {
+	t.Parallel()
+
 	logs := captureStderr(t)
 
 	dir := t.TempDir()

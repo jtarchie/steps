@@ -77,6 +77,9 @@ jobs:
 
 // TestAHostStepReadsWhatAnUntaggedImageStepHeld: a step with no image runs here, so the held output is pulled home for it, whole.
 func TestAHostStepReadsWhatAnUntaggedImageStepHeld(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -246,6 +249,9 @@ func requireSumMatches(t *testing.T, dir string) {
 
 // TestAReplayReadsWhatAnUntaggedImageStepHeld: the replayed step is the first reader, in a tree forked from a run that never brought the output home.
 func TestAReplayReadsWhatAnUntaggedImageStepHeld(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -280,6 +286,9 @@ jobs:
 
 // TestAHostPutReadsWhatAnUntaggedImageStepHeld: a put whose type has no image: runs here, so its input is pulled home for it.
 func TestAHostPutReadsWhatAnUntaggedImageStepHeld(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -310,6 +319,9 @@ jobs:
 
 // TestTheStepCacheFilesWhatAnUntaggedImageStepHeld: the cache under root: is a reader here, so both steps are filed and the second run restores both.
 func TestTheStepCacheFilesWhatAnUntaggedImageStepHeld(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

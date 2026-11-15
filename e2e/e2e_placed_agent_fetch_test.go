@@ -11,6 +11,9 @@ const fetchBlobBytes = 1 << 20
 
 // TestPlacedAgentFetchesItsOutputsOnceNotPerWrite counts the bytes that came home: six writes to a 1 MiB output used to bring it home six times.
 func TestPlacedAgentFetchesItsOutputsOnceNotPerWrite(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -66,6 +69,9 @@ jobs:
 
 // TestPlacedAgentNudgeSeesWhatItWrote: a files: nudge reads this machine's copy mid-step, so the tree has to come home before it looks or the model is told to write a file it already wrote.
 func TestPlacedAgentNudgeSeesWhatItWrote(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -117,6 +123,9 @@ jobs:
 
 // TestAnEditedInputComesHomeAsItsChanges: an input declared as an output came home whole after every command, so a one-line edit in a repository cost the repository (steps#246 S6). Only the overlay's upper layer travels now, and a deletion still reaches home.
 func TestAnEditedInputComesHomeAsItsChanges(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	path := writePipeline(t, t.TempDir(), fmt.Sprintf(`

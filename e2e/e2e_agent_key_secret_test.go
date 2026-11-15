@@ -165,7 +165,7 @@ jobs:
 
 // A sub-agent and a fix agent are hosted agents too: each needs a key, and the key never reaches a tool, so neither is refused the way an agent's own secrets: is.
 func TestSubAgentsAndFixAgentsUseASecretBackedKey(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+	t.Parallel()
 
 	_, path, config, vault := cliSecretsFixture(t, nil)
 	name := cli.PipelineName(path)

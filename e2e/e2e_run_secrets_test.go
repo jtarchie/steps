@@ -59,6 +59,8 @@ func runAndCapture(t *testing.T, args ...string) (printed string, err error) {
 
 // The step sees the variable; what it printed, whole or in two pieces, on either stream, is masked in the terminal and in the recorded output alike, and the value never reaches the database.
 func TestRunConfigResolvesSecretsAndScrubsTheTerminal(t *testing.T) {
+	t.Parallel()
+
 	for _, progress := range []string{"plain", "tty"} {
 		t.Run(progress, func(t *testing.T) {
 			dir, path, config, _ := cliSecretsFixture(t, nil)
@@ -113,6 +115,8 @@ jobs:
 
 // A reference falls through the lookup paths as it does on the daemon, and the pipeline name the paths are scoped on is the one `steps runs -p` calls the file.
 func TestRunConfigLookupFallsThroughAndMissingStops(t *testing.T) {
+	t.Parallel()
+
 	_, path, config, vault := cliSecretsFixture(t, map[string]string{"shared/gh_token": e2eSecretValue})
 	name := cli.PipelineName(path)
 
@@ -169,6 +173,8 @@ web:
 
 // A source the file does not define is found before the first step, not by the step that needs it.
 func TestRunAndTestConfigRefuseAnUndefinedSourceBeforeAnyStep(t *testing.T) {
+	t.Parallel()
+
 	dir, path, config, _ := cliSecretsFixture(t, nil)
 	marker := filepath.Join(dir, "ran")
 
@@ -195,6 +201,8 @@ jobs:
 
 // The file is held to the daemon's privilege checks: it names commands this user runs.
 func TestRunConfigRefusesAWritableConfigFile(t *testing.T) {
+	t.Parallel()
+
 	_, path, config, _ := cliSecretsFixture(t, nil)
 	writePipelineFile(t, path, "jobs:\n- name: build\n  plan:\n  - task: check\n    secrets: {TOKEN: ((ci:gh_token))}\n    run: echo hi\n")
 
@@ -213,6 +221,8 @@ func TestRunConfigRefusesAWritableConfigFile(t *testing.T) {
 
 // steps test is the same resolution, and its own FAIL line and error are terminal output too.
 func TestTestConfigResolvesAndScrubsAnAssertionFailure(t *testing.T) {
+	t.Parallel()
+
 	dir, path, config, _ := cliSecretsFixture(t, nil)
 	name := cli.PipelineName(path)
 	writeVault(t, filepath.Join(dir, "vault"), map[string]string{name + "/gh_token": e2eSecretValue})
@@ -253,6 +263,8 @@ jobs:
 
 // --resume and --replay re-resolve what the step they run needs: the reason this flag exists.
 func TestRunConfigResumeAndReplayResolveTheSecret(t *testing.T) {
+	t.Parallel()
+
 	dir, path, config, _ := cliSecretsFixture(t, nil)
 	name := cli.PipelineName(path)
 	writeVault(t, filepath.Join(dir, "vault"), map[string]string{name + "/gh_token": e2eSecretValue})
@@ -297,7 +309,7 @@ jobs:
 
 // An agent's tools get the variable, and the model is sent the masked result; a fix agent gets neither the variable nor the assertion's raw output.
 func TestRunConfigAgentToolResultsAndFixInputAreScrubbed(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+	t.Parallel()
 
 	dir, path, config, _ := cliSecretsFixture(t, nil)
 	name := cli.PipelineName(path)
@@ -371,7 +383,7 @@ jobs:
 
 // An agent tool streams live past recordOutput, so its terminal copy needs masking of its own (#255), whole or split across two writes.
 func TestRunConfigAgentToolStreamIsScrubbedOnTheTerminal(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+	t.Parallel()
 
 	for _, progress := range []string{"plain", "tty"} {
 		t.Run(progress, func(t *testing.T) {
@@ -444,6 +456,8 @@ func assertFixAgentSawNoSecret(t *testing.T, fixer *fakeLLM) {
 
 // A resource's check and in: resolve the same way, and what in: prints on either stream, or its failed check's error, is as masked on the terminal as a task's.
 func TestRunConfigResourceSecretsAreResolvedAndScrubbed(t *testing.T) {
+	t.Parallel()
+
 	dir, path, config, _ := cliSecretsFixture(t, nil)
 	name := cli.PipelineName(path)
 	writeVault(t, filepath.Join(dir, "vault"), map[string]string{name + "/gh_token": e2eSecretValue})
@@ -505,6 +519,8 @@ jobs:
 
 // A step keys on the reference, never the value: a rotated credential re-runs nothing.
 func TestRunConfigNeverHashesTheValue(t *testing.T) {
+	t.Parallel()
+
 	_, path, config, vault := cliSecretsFixture(t, nil)
 	name := cli.PipelineName(path)
 	writeVault(t, vault, map[string]string{name + "/gh_token": e2eSecretValue})

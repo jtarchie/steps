@@ -15,6 +15,9 @@ import (
 
 // TestAnUntaggedImageStepRunsLikeOneTaggedLocal runs one task both ways and compares what each saw: the same workdir, the same input, and no STEPS_WORKER for the untagged one.
 func TestAnUntaggedImageStepRunsLikeOneTaggedLocal(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -153,6 +156,9 @@ jobs:
 
 // TestAnUntaggedImageResourceRunsThroughVolumes: a get's in: is a container step with a tree too, so it takes the same path a task does.
 func TestAnUntaggedImageResourceRunsThroughVolumes(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -189,6 +195,9 @@ jobs:
 
 // TestAnEditBetweenContainerStepsReachesTheNext edits an input on the host between two image: steps, same size and within the same second: the build's digest memo must forget the first read, or the second mounts the tree the first one saw.
 func TestAnEditBetweenContainerStepsReachesTheNext(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -228,6 +237,9 @@ jobs:
 
 // TestAnImageStepRecordsWhichImageRan is #239: the placement names the image the step asked for and the digest it resolved to on the daemon that ran it, tagged or not, and `steps runs where` prints both.
 func TestAnImageStepRecordsWhichImageRan(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

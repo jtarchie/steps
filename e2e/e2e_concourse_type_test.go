@@ -10,6 +10,9 @@ import (
 const concourseTimeImage = "concourse/time-resource"
 
 func TestAStockConcourseResourceImageChecksGetsAndPuts(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

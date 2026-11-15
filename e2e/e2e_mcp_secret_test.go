@@ -110,8 +110,6 @@ func TestMCPBearerTokenComesFromASecretSource(t *testing.T) {
 	for _, command := range []string{"run", "test"} {
 		t.Run(command, func(t *testing.T) {
 			isolatePreflightPins(t)
-			t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
-
 			_, path, config, vault := cliSecretsFixture(t, nil)
 			name := cli.PipelineName(path)
 			writeVault(t, vault, map[string]string{name + "/tracker_token": e2eTrackerValue + "\n"})
@@ -155,8 +153,6 @@ func TestMCPBearerTokenComesFromASecretSource(t *testing.T) {
 // Two pipelines hold the same server definition and resolve its token to different credentials: the one whose token is refused must not condemn the other from the probe cache.
 func TestAnMCPProbeVerdictIsNotSharedAcrossPipelinesWithDifferentTokens(t *testing.T) {
 	isolatePreflightPins(t)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
-
 	dir, _, config, vault := cliSecretsFixture(t, nil)
 	writeVault(t, vault, map[string]string{"wrong/tracker_token": "not-the-token-0000", "right/tracker_token": e2eTrackerValue})
 
@@ -181,6 +177,8 @@ func TestAnMCPProbeVerdictIsNotSharedAcrossPipelinesWithDifferentTokens(t *testi
 
 // A secrets: map on a server is held to the one key api_key_env names, on a bearer server only.
 func TestMCPAuthSecretsAreRefusedWhereNothingWouldReadThem(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct{ name, auth, want string }{
 		{"a key api_key_env does not name", "{ type: bearer, api_key_env: TOKEN, secrets: { OTHER: ((ci:x)) } }", "api_key_env TOKEN is not a key of its secrets: map"},
 		{"a second key", "{ type: bearer, api_key_env: TOKEN, secrets: { TOKEN: ((ci:x)), OTHER: ((ci:y)) } }", "nothing would read OTHER"},
@@ -275,6 +273,8 @@ func TestAnMCPBackedResourceChecksWithASecretBackedToken(t *testing.T) {
 
 // steps mcp list reports rather than refuses: with the daemon's file the server is probed with its token, and without it the row says what is missing.
 func TestMCPListProbesASecretBackedServerWithConfig(t *testing.T) {
+	t.Parallel()
+
 	_, path, config, vault := cliSecretsFixture(t, nil)
 	writeVault(t, vault, map[string]string{cli.PipelineName(path) + "/tracker_token": e2eTrackerValue})
 
@@ -304,8 +304,6 @@ func TestMCPListProbesASecretBackedServerWithConfig(t *testing.T) {
 // validate --live resolves the token the way the daemon would, names its path, and probes the server with it.
 func TestValidateLiveResolvesAnMCPTokenAndNamesItsPath(t *testing.T) {
 	isolatePreflightPins(t)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
-
 	_, path, config, vault := cliSecretsFixture(t, nil)
 	name := cli.PipelineName(path)
 	writeVault(t, vault, map[string]string{name + "/tracker_token": e2eTrackerValue})
@@ -335,6 +333,8 @@ func TestValidateLiveResolvesAnMCPTokenAndNamesItsPath(t *testing.T) {
 
 // An export answers an MCP grant with no run, so a server whose token is a reference is refused there at load.
 func TestAnExportRefusesAServerWithASecretBackedToken(t *testing.T) {
+	t.Parallel()
+
 	path := pipelinePath(t, t.TempDir())
 	writePipelineFile(t, path, `
 mcp_servers:
@@ -371,8 +371,6 @@ func TestAFailedMCPTokenLookupIsNotRememberedAsADeadServer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolatePreflightPins(t)
-			t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
-
 			_, path, config, vault := cliSecretsFixture(t, nil)
 
 			server := startGuardedMCP(t)

@@ -34,9 +34,9 @@ jobs:
 
 // TestEndToEndSlackReplyHookDMsSourceChannel: a job-level hook has no inputs and no files, so the channel (a user id DMs) comes from source.channel and the text from params.text.
 func TestEndToEndSlackReplyHookDMsSourceChannel(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	path := slackChannelPipeline(t, server.URL, "    channel: UOPERATOR\n", `
 - name: build
   plan:
@@ -68,9 +68,9 @@ func TestEndToEndSlackReplyHookDMsSourceChannel(t *testing.T) {
 
 // TestEndToEndSlackReplyChannelPrecedence: an input's version beats the thread/ files, which beat source.channel.
 func TestEndToEndSlackReplyChannelPrecedence(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	byInput := slackChannelPipeline(t, server.URL, "    channel: CFALLBACK\n", `
 - name: answer
   plan:
@@ -109,9 +109,9 @@ func TestEndToEndSlackReplyChannelPrecedence(t *testing.T) {
 
 // TestEndToEndSlackReplyWithNoDestinationNamesEveryWay: the failure lists all three ways to say where to post.
 func TestEndToEndSlackReplyWithNoDestinationNamesEveryWay(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	path := slackChannelPipeline(t, server.URL, "", `
 - name: answer
   plan:
@@ -137,9 +137,9 @@ func TestEndToEndSlackReplyWithNoDestinationNamesEveryWay(t *testing.T) {
 
 // TestEndToEndSlackReplyTextRules: params.text is refused empty at load, and a put that also carries answer/reply.md fails rather than picking one.
 func TestEndToEndSlackReplyTextRules(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	empty := slackChannelPipeline(t, server.URL, "    channel: UOPERATOR\n", `
 - name: announce
   plan:

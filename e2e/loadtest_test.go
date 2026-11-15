@@ -47,6 +47,9 @@ func loadtestLevels(t *testing.T) []int {
 
 // TestLoadtestConcurrentJobs ramps N held no-op jobs against one daemon with every cap lifted, in two shapes: N pipelines of one job (the default --max-concurrent 1 each), and one pipeline of N jobs.
 func TestLoadtestConcurrentJobs(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	if os.Getenv("STEPS_LOADTEST") == "" {
 		t.Skip("advisory; run with `task loadtest`")
 	}

@@ -153,8 +153,8 @@ tasks:
       # running `task` at once took 640s each and both FAILED, docker tests
       # that take two seconds alone taking two to four minutes. What a test
       # waits on is now fixed where it waited, tests that share nothing say
-      # t.Parallel, and a docker-backed e2e test stays serial (overlapping them
-      # three-wide was measured and bought nothing: the VM is the bottleneck).
+      # t.Parallel, and docker-backed e2e tests overlap three at a time and no
+      # wider (the docker daemon is the ceiling past that).
       #
       # checkptr is off inside modernc.org ONLY: the sqlite driver is C
       # transpiled to Go, pointer arithmetic by construction, and -race turns

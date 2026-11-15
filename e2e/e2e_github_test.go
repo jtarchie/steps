@@ -106,6 +106,9 @@ func TestEndToEndGitHubPRFetchesTheTreeAndComments(t *testing.T) {
 // process, and a placed task reads it on the worker — the artifact travels
 // the way any fetched tree does.
 func TestEndToEndGitHubPRTreeReachesAWorker(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	fake := newFakeGitHub(t)
@@ -120,6 +123,9 @@ func TestEndToEndGitHubPRTreeReachesAWorker(t *testing.T) {
 // TestEndToEndGitHubPRTreeReachesAContainer: the same tree, bind-mounted
 // into a task's image, with its exec bit and symlink intact.
 func TestEndToEndGitHubPRTreeReachesAContainer(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	fake := newFakeGitHub(t)

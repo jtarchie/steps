@@ -21,7 +21,7 @@ jobs:
 `)
 
 	stdout := redirectStdout(t)
-	logs := captureStderr(t)
+	logs := captureProcessStderr(t)
 	state := filepath.Join(dir, "daemon.db")
 	served := startWeb(t, "--db", state)
 	served.state = state

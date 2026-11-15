@@ -53,6 +53,9 @@ const liveCLIModel = "@claude/haiku"
 // The inverse (an ungranted tool is denied) is covered by the fake-backed
 // suite; this is the direction a fake cannot answer.
 func TestLiveCLIGrantedWriteActuallyWrites(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireClaudeCLI(t)
 
 	dir := t.TempDir()
@@ -113,6 +116,9 @@ jobs:
 // package sets -- the failure mode being that a step quietly gains a
 // capability its pipeline never granted.
 func TestLiveCLIUngrantedToolIsWithheld(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireClaudeCLI(t)
 
 	dir := t.TempDir()
@@ -169,6 +175,9 @@ jobs:
 // its own tools correctly while still allowing a sub-agent to reach a native
 // one internally.
 func TestLiveCLIAttestationPassesAgainstTheRealBinary(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireClaudeCLI(t)
 
 	dir := t.TempDir()

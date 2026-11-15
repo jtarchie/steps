@@ -516,9 +516,9 @@ func slackTS(ts string) float64 {
 // that named the bot. An answer written without the question is worse than no
 // answer, and the only visible difference is this count.
 func TestEndToEndBuiltinSlackMentionsAndReply(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -629,9 +629,9 @@ jobs:
 // which takes the backlog and answers only its newest mention, and only then
 // is the cursor ahead of the parent.
 func TestEndToEndBuiltinSlackAnswersAReplyBehindTheCursor(t *testing.T) {
-	server, workspace := fakeSlackServing(t, nil)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlackServing(t, nil)
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -723,14 +723,14 @@ jobs:
 // holds for chat.postMessage on the put side, where a 429 fails a step whose
 // work is already done.
 func TestEndToEndBuiltinSlackSurvivesRateLimits(t *testing.T) {
+	t.Parallel()
+
 	server, workspace := fakeSlackRateLimiting(t, map[string]int{
 		"/api/auth.test":             1,
 		"/api/users.conversations":   1,
 		"/api/conversations.history": 1,
 		"/api/chat.postMessage":      1,
 	})
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
-
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -783,9 +783,9 @@ jobs:
 // message instead of a threaded one — thread_ts must be omitted entirely,
 // not sent empty, since Slack treats an empty thread_ts as an error.
 func TestEndToEndBuiltinSlackReplyWithoutThread(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -933,9 +933,9 @@ jobs:
 
 // TestEndToEndBuiltinSlackReaction is the type's happy path and its whole point: one put marks the message, a later one swaps that mark for another. The swap is a single put because a state change is one event — ✅ arriving while 👀 lingers reads as two bots — so this asserts both of its calls went out after the first put's, against the ts of the message rather than a thread.
 func TestEndToEndBuiltinSlackReaction(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -1038,13 +1038,13 @@ jobs:
 // and both arrive on any replay, resume, or re-run. Failing there would turn
 // re-running a build into a red one over an emoji.
 func TestEndToEndBuiltinSlackReactionToleratesSettledState(t *testing.T) {
+	t.Parallel()
+
 	server, workspace := fakeSlack(t)
 	workspace.reactionError = map[string]string{
 		"/api/reactions.add":    "already_reacted",
 		"/api/reactions.remove": "no_reaction",
 	}
-
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
 
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
@@ -1089,10 +1089,10 @@ jobs:
 // scope answers invalid_auth-shaped errors like this one, and a bot that
 // silently stops marking anything is the failure nobody notices.
 func TestEndToEndBuiltinSlackReactionFailsOnRefusal(t *testing.T) {
+	t.Parallel()
+
 	server, workspace := fakeSlack(t)
 	workspace.reactionError = map[string]string{"/api/reactions.add": "missing_scope"}
-
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
 
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
@@ -1143,9 +1143,9 @@ jobs:
 // rather than on its parent 101.000. The ❌ comes from a step's on_failure
 // hook, which is the failure path a pipeline actually wires this way.
 func TestEndToEndBuiltinSlackReactionOnMention(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -1218,9 +1218,9 @@ jobs:
 // convention cannot pick, params.from does, and without it the put fails
 // naming both rather than guessing.
 func TestEndToEndBuiltinSlackReplyNamesItsInput(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	pipeline := func(from string) string {
 		return `
 resources:
@@ -1293,9 +1293,9 @@ jobs:
 // the version route is forgetting inputs: [mentions], which drops the type to
 // its file fallback. The failure has to name the route, not a missing file.
 func TestEndToEndBuiltinSlackReplyWithNoInputGuides(t *testing.T) {
-	server, workspace := fakeSlack(t)
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+	t.Parallel()
 
+	server, workspace := fakeSlack(t)
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 

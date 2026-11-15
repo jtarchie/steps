@@ -43,6 +43,9 @@ func dockerSSHWorker(t *testing.T) (string, *testsshd.Server) {
 
 // The whole feature as a user sees it: a placed task runs in a container on the worker's daemon, its output comes home, and nothing but the step's files ever reaches the worker.
 func TestDockerSSHWorkerRunsAPlacedStep(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	worker, server := dockerSSHWorker(t)
 
 	dir := t.TempDir()
@@ -99,6 +102,9 @@ jobs:
 
 // The issue's test (#206): a placed task writes an output, a second placed step on the same worker reads it, and the shared input crosses once — when the local publish pulls it, never between the two.
 func TestDockerSSHWorkerKeepsWhatItProduces(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	worker, _ := dockerSSHWorker(t)
 
 	dir := t.TempDir()

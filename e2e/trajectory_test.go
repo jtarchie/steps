@@ -298,6 +298,8 @@ jobs:
 
 // Without the flag, the workspace is removed as before.
 func TestWorkspaceIsRemovedByDefault(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:

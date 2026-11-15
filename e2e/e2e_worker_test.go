@@ -45,6 +45,9 @@ jobs:
 // inputs reach the worker, its outputs come back into the local artifact
 // store, and a LATER step consumes them without knowing any of it happened.
 func TestEndToEndWorkerRoundTripsAStep(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -70,6 +73,9 @@ func TestEndToEndWorkerRoundTripsAStep(t *testing.T) {
 // way. A second run must skip it rather than re-run it, which is only true if
 // the tree that crossed the wire digests identically to one that never left.
 func TestEndToEndWorkerStepCachesLikeALocalOne(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -124,6 +130,9 @@ func TestEndToEndUnmappedTagRefusesBeforeRunning(t *testing.T) {
 // whole stack. A command that ran on a worker and exited nonzero has to reach
 // the pipeline as the step failing, so on_failure fires rather than on_error.
 func TestEndToEndWorkerFailureIsAStepFailure(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

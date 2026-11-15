@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -60,6 +61,8 @@ func chunkSeenWhileRunning(t *testing.T, path, text string, deadline time.Time) 
 
 // TestARunningStepsOutputIsRecordedAsItPrints: the first line is in the store before the step finishes, so a browser or `steps runs follow` reading the store can show it; once the step ends the live pieces are gone and one output record stands in their place.
 func TestARunningStepsOutputIsRecordedAsItPrints(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 jobs:
 - name: build
@@ -87,6 +90,8 @@ jobs:
 
 // TestAColourCodeIsNotCutAcrossLiveChunks (steps#265): a step that pauses right after an ESC has its partial line published by the hold, and the chunk recorded while it runs carries the whole `ESC [31m`, never its tail as text.
 func TestAColourCodeIsNotCutAcrossLiveChunks(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 jobs:
 - name: build
@@ -117,6 +122,8 @@ jobs:
 
 // TestACheckedTasksOutputIsRecordedAsItPrints: a task whose output is judged (assert:, fix:) streams like any other, rather than staying blank until it ends (steps#207).
 func TestACheckedTasksOutputIsRecordedAsItPrints(t *testing.T) {
+	t.Parallel()
+
 	const run = "echo first; sleep 3; echo second"
 
 	pipelines := map[string]func(dir string) string{
@@ -179,20 +186,9 @@ func assertOneOutputRecord(t *testing.T, path, want string) {
 	}
 }
 
-// runSilently runs the build with stdout on /dev/null: these runs print more than a pipe holds, and captureStdout reads its pipe only once the run is over.
+// runSilently runs the build with its stdout discarded: these runs print more than anything here reads.
 func runSilently(path string) error {
-	orig := os.Stdout
-	defer func() { os.Stdout = orig }()
-
-	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", os.DevNull, err)
-	}
-	defer func() { _ = devnull.Close() }()
-
-	os.Stdout = devnull
-
-	err = cli.Run([]string{"run", path, "--job", "build", "--progress", "plain"})
+	err := cli.RunWith(cli.Streams{Out: io.Discard, Err: os.Stderr}, []string{"run", path, "--job", "build", "--progress", "plain"})
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
@@ -212,6 +208,8 @@ func finishedStep(rows []store.RunEventRow, stepID int64) bool {
 
 // TestARecordedOutputKeepsItsTail: a step that prints more than the record holds keeps how it started AND how it ended, with the middle marked as elided — the last line is where a six-hour build says why it failed.
 func TestARecordedOutputKeepsItsTail(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 jobs:
 - name: build
@@ -248,6 +246,8 @@ jobs:
 
 // TestAResourceScriptsStderrIsRecordedAsItPrints: what a get's in: or a put's out: says on stderr is recorded while it runs and kept afterwards, and stdout is not — for out: it is the version the protocol parses, not something to show (steps#207).
 func TestAResourceScriptsStderrIsRecordedAsItPrints(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 resource_types:
 - name: slow

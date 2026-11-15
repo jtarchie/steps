@@ -87,6 +87,8 @@ jobs:
 
 // run_shell is the hand a model directs, so it is the command the sandbox exists for: the denial must come back to the model as tool output, not end the step.
 func TestSandboxedAgentShellCannotWriteOutside(t *testing.T) {
+	t.Parallel()
+
 	requireSandbox(t)
 
 	dir := t.TempDir()
@@ -119,8 +121,6 @@ jobs:
     inputs: []
     messages: ["write it"]
 `, fake.URL))
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
 
 	err := stepsRun(t, []string{"run", path, "--job", "publish"})
 	if err != nil {
@@ -212,6 +212,8 @@ jobs:
 
 // A when: guard runs in the step's own runtime, so it is fenced too: a guard that could write outside would be a hole beside every sandboxed step. Each touch failing skips its step, which is why none of them needs a working endpoint or resource.
 func TestSandboxedGuardsCannotWriteOutside(t *testing.T) {
+	t.Parallel()
+
 	requireSandbox(t)
 
 	dir := t.TempDir()
@@ -261,8 +263,6 @@ jobs:
     when: touch %[1]s/put-guard
 `, outside))
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
-
 	err := stepsRun(t, []string{"run", path, "--job", "build"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -275,6 +275,8 @@ jobs:
 
 // The two other places an agent gets a shell: a task's fix: agent runs under the TASK's fence, and a delegated child under its own agents: entry's.
 func TestSandboxReachesFixAndSubAgents(t *testing.T) {
+	t.Parallel()
+
 	requireSandbox(t)
 
 	escapes := func(target string) func(capturedRequest) turn {
@@ -286,8 +288,6 @@ func TestSandboxReachesFixAndSubAgents(t *testing.T) {
 			return callsTool("run_shell", map[string]any{"command": "touch " + target})
 		}
 	}
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
 
 	t.Run("fix", func(t *testing.T) {
 		target := filepath.Join(outsideDir(t), "fix-escaped")

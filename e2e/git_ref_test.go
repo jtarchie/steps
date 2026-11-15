@@ -157,6 +157,8 @@ func readSHA(t *testing.T, path string) string {
 
 // params.ref pushes that commit instead of HEAD; the put's version is the sha pushed.
 func TestEndToEndBuiltinGitPutRefPushesThatCommit(t *testing.T) {
+	t.Parallel()
+
 	bare := bareFixture(t)
 	dir := t.TempDir()
 	path := refPipeline(t, bare, dir, "      ref: HEAD~1\n")
@@ -183,6 +185,8 @@ func TestEndToEndBuiltinGitPutRefPushesThatCommit(t *testing.T) {
 
 // A ref that is no commit in the repository fails the put by name, and sends nothing.
 func TestEndToEndBuiltinGitPutBadRefFailsNamingIt(t *testing.T) {
+	t.Parallel()
+
 	bare := bareFixture(t)
 	path := refPipeline(t, bare, t.TempDir(), "      ref: no-such-commit\n")
 
@@ -204,6 +208,8 @@ func TestEndToEndBuiltinGitPutBadRefFailsNamingIt(t *testing.T) {
 
 // ref does not weaken the lease: the branch moved past it, so the push is refused.
 func TestEndToEndBuiltinGitPutRefKeepsTheLease(t *testing.T) {
+	t.Parallel()
+
 	bare := bareFixture(t)
 	stale := gitOut(t, bare, "rev-parse", "refs/heads/main")
 	moved := gitOut(t, bare, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit-tree", "-p", stale, "-m", "a teammate's", stale+"^{tree}")
@@ -229,6 +235,8 @@ func TestEndToEndBuiltinGitPutRefKeepsTheLease(t *testing.T) {
 
 // With the right lease and a force push, ref still lands the commit it names.
 func TestEndToEndBuiltinGitPutRefWithLeaseAdvances(t *testing.T) {
+	t.Parallel()
+
 	bare := bareFixture(t)
 	stale := gitOut(t, bare, "rev-parse", "refs/heads/main")
 	gitIn(t, bare, "update-ref", "refs/heads/pushed", stale)

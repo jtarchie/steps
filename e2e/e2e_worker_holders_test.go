@@ -253,6 +253,9 @@ func TestEndToEndAnotherWorkerIsStillCold(t *testing.T) {
 
 // TestEndToEndAnInputNamesAlikeLocalOrHeld: a tree has one digest wherever it is, so a step whose input was local last build and is held by a worker this build reuses its cached result rather than missing once.
 func TestEndToEndAnInputNamesAlikeLocalOrHeld(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

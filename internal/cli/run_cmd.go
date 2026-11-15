@@ -166,7 +166,7 @@ func (r *RunCmd) Run(streams Streams) error {
 		return err
 	}
 
-	slog.Info("pipeline.run", "pipeline", r.Path, "job", job.Name)
+	slog.InfoContext(ctx, "pipeline.run", "pipeline", r.Path, "job", job.Name)
 
 	// One invocation is one build, as `fly trigger-job` is; the rest wait for the next.
 	opts.Backlog = func(ctx context.Context, sets int) {
@@ -178,7 +178,7 @@ func (r *RunCmd) Run(streams Streams) error {
 
 	undraw()
 
-	slog.Info("pipeline.done", "pipeline", r.Path, "job", job.Name, "error", runErr)
+	slog.InfoContext(ctx, "pipeline.done", "pipeline", r.Path, "job", job.Name, "error", runErr)
 
 	// A successful manual run clears the job-failure circuit breaker: running the
 	// job by hand is the natural way to confirm a fix, and requiring a
@@ -270,7 +270,7 @@ func (t *TestCmd) Run(streams Streams) error {
 		failures []string
 	)
 
-	slog.Info("pipeline.test", "pipeline", t.Pipeline, "jobs", len(cfg.Jobs))
+	slog.InfoContext(ctx, "pipeline.test", "pipeline", t.Pipeline, "jobs", len(cfg.Jobs))
 
 	ctx, undraw := t.draw(ctx, streams.Out, st)
 	defer undraw()
@@ -295,7 +295,7 @@ func (t *TestCmd) Run(streams Streams) error {
 		_, _ = fmt.Fprintf(events.Stdout(ctx), "PASS %s\n", job.Name)
 	}
 
-	slog.Info("pipeline.test.done", "pipeline", t.Pipeline, "jobs", len(executed), "failed", len(failures))
+	slog.InfoContext(ctx, "pipeline.test.done", "pipeline", t.Pipeline, "jobs", len(executed), "failed", len(failures))
 
 	err = checkExecution(cfg, executed)
 	if err != nil {

@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"context"
+	"io"
 	"log/slog"
 	"os"
+	"slices"
 
 	"github.com/lmittmann/tint"
 
@@ -51,11 +54,59 @@ func parseLogLevel(level string) slog.Level {
 // CLI.LogLevel) makes that opt-in, via --log-level debug or
 // STEPS_LOG_LEVEL=debug, rather than the permanent default.
 func InitLogging(level string) {
-	slog.SetDefault(slog.New(telemetry.LogHandler(events.LogHandler(tint.NewTextHandler(os.Stderr, &tint.Options{
+	slog.SetDefault(slog.New(routedHandler{fallback: logHandler(os.Stderr, level, wantNoColor())}))
+}
+
+func logHandler(out io.Writer, level string, noColor bool) slog.Handler {
+	return telemetry.LogHandler(events.LogHandler(tint.NewTextHandler(out, &tint.Options{
 		Level:     parseLogLevel(level),
 		AddSource: true,
-		NoColor:   wantNoColor(),
-	})))))
+		NoColor:   noColor,
+	})))
+}
+
+type logKey struct{}
+
+// withLogs sends the log lines of everything done under ctx to out rather than the process's stderr. Only an invocation handed a stderr of its own gets one (RunWith from a test); a record logged with no context, or one that never passed through here, still lands on the process's.
+func withLogs(ctx context.Context, out io.Writer, level string) context.Context {
+	return context.WithValue(ctx, logKey{}, logHandler(out, level, true))
+}
+
+// routedHandler is the process's one slog handler, which is all slog allows: it hands each record to the handler its context carries, and to the process's own otherwise.
+type routedHandler struct {
+	fallback slog.Handler
+	// derive replays each WithAttrs and WithGroup on whichever handler a record goes to.
+	derive []func(slog.Handler) slog.Handler
+}
+
+func (r routedHandler) pick(ctx context.Context) slog.Handler {
+	handler := r.fallback
+
+	if own, ok := ctx.Value(logKey{}).(slog.Handler); ok {
+		handler = own
+	}
+
+	for _, derive := range r.derive {
+		handler = derive(handler)
+	}
+
+	return handler
+}
+
+func (r routedHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return r.pick(ctx).Enabled(ctx, level)
+}
+
+func (r routedHandler) Handle(ctx context.Context, record slog.Record) error {
+	return r.pick(ctx).Handle(ctx, record) //nolint:wrapcheck // a slog.Handler passes its handler's error through
+}
+
+func (r routedHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return routedHandler{fallback: r.fallback, derive: append(slices.Clone(r.derive), func(h slog.Handler) slog.Handler { return h.WithAttrs(attrs) })}
+}
+
+func (r routedHandler) WithGroup(name string) slog.Handler {
+	return routedHandler{fallback: r.fallback, derive: append(slices.Clone(r.derive), func(h slog.Handler) slog.Handler { return h.WithGroup(name) })}
 }
 
 // wantNoColor reports whether log output should skip ANSI color: either

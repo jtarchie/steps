@@ -12,8 +12,23 @@ import (
 	"github.com/jtarchie/steps/internal/cli"
 )
 
+// dockerSlots is how many docker-backed tests run at once. They wait on the daemon rather than on this machine, so a few overlap for free (measured alone: 87s one at a time, 42s three at a time, the same VM CPU either way); without a bound, ten at once beside another checkout's suite saturate the one docker VM every test process shares.
+var dockerSlots = make(chan struct{}, 3) //nolint:gochecknoglobals // a semaphore the package's docker tests share by design
+
+// dockerSlot holds one of dockerSlots until the test ends. Called straight after t.Parallel().
+func dockerSlot(t *testing.T) {
+	t.Helper()
+
+	dockerSlots <- struct{}{}
+
+	t.Cleanup(func() { <-dockerSlots })
+}
+
 // captures is each test's own stdout while it is inside captureStdout, by test name. A map rather than a swapped os.Stdout so that a test capturing its output can run beside another: the process's stream is one, and stepsRun hands each invocation the buffer of the test that made it.
 var captures sync.Map //nolint:gochecknoglobals // the registry stepsRun reads; keyed per test, so it is shared by nobody
+
+// stderrCaptures is captures for stderr; see captureStderr.
+var stderrCaptures sync.Map //nolint:gochecknoglobals // as captures
 
 // captureStdout returns what the invocations fn makes through stepsRun print to stdout.
 func captureStdout(t *testing.T, fn func()) string {
@@ -46,19 +61,33 @@ func streamsFor(t *testing.T) cli.Streams {
 
 	streams := cli.Streams{Out: os.Stdout, Err: os.Stderr}
 
-	for name := t.Name(); ; name = name[:strings.LastIndex(name, "/")] {
-		if buffer, ok := captures.Load(name); ok {
-			streams.Out, _ = buffer.(io.Writer)
+	if out, ok := captureOf(&captures, t.Name()); ok {
+		streams.Out = out
+	}
 
-			break
-		}
-
-		if !strings.Contains(name, "/") {
-			break
-		}
+	if errOut, ok := captureOf(&stderrCaptures, t.Name()); ok {
+		streams.Err = errOut
 	}
 
 	return streams
+}
+
+// captureOf is the capture open for the test called name, or for the nearest test it is a subtest of.
+func captureOf(registry *sync.Map, name string) (io.Writer, bool) {
+	for {
+		if buffer, ok := registry.Load(name); ok {
+			writer, isWriter := buffer.(io.Writer)
+
+			return writer, isWriter
+		}
+
+		cut := strings.LastIndex(name, "/")
+		if cut < 0 {
+			return nil, false
+		}
+
+		name = name[:cut]
+	}
 }
 
 // fixAgentServer returns a fake provider that answers every request with a

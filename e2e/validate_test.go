@@ -165,6 +165,8 @@ func TestValidateSecurityAuditExample(t *testing.T) {
 
 // TestValidateFactoryExample holds examples/factory.yml as written: the e2e harness runs it with settings: and token_env: stripped, so only this sees the file a reader copies.
 func TestValidateFactoryExample(t *testing.T) {
+	t.Parallel()
+
 	path := repoFile("examples", "factory.yml")
 
 	err := loadSchema(t).Validate(yamlAsJSONValue(t, path))

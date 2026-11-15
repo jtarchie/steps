@@ -13,6 +13,9 @@ import (
 
 // TestPlacedAgentSharesOneTreeWithItsShell places an agent on a local: worker and makes its file tools and its shell take turns on one file. Docker is required and the issue's "needs no docker" framing could not hold: `tags:` without `image:` stays refused, so the only placed agent there is runs its tools in a container on the worker.
 func TestPlacedAgentSharesOneTreeWithItsShell(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -96,6 +99,9 @@ jobs:
 
 // TestPlacedAgentWithDirStillFetchesItsOutputs covers the seam between dir: and the venue. An agent's runner is pointed at its dir:, while outputs: are named relative to the whole step directory — so sending only the subdirectory would upload a tree missing the agent's other inputs and then fetch its outputs from a path that does not exist, and the step would come home empty while reporting success.
 func TestPlacedAgentWithDirStillFetchesItsOutputs(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -161,6 +167,9 @@ jobs:
 
 // TestPlacedAgentUnderNetworkNoneStillReadsItsTree separates two things that now share a container: the file tools reach the tree through the image's userland, which needs no network, while run_shell's egress stays cut. Routing the tools through the same container would be a poor trade if it quietly re-opened the fence, or if it broke under it.
 func TestPlacedAgentUnderNetworkNoneStillReadsItsTree(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -281,6 +290,9 @@ func assertPlacedAgentRow(t *testing.T, row store.Placement) {
 
 // TestPlacedAgentRecordsWhereItRan holds an agent to a task's record: written once the conversation is finished with the runner, so the bytes it pushed are counted.
 func TestPlacedAgentRecordsWhereItRan(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -293,6 +305,9 @@ func TestPlacedAgentRecordsWhereItRan(t *testing.T) {
 
 // TestPlacedAgentRecordsWhereItFailed: the step that failed on a worker is the one whose machine somebody wants named.
 func TestPlacedAgentRecordsWhereItFailed(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -308,6 +323,9 @@ func TestPlacedAgentRecordsWhereItFailed(t *testing.T) {
 
 // TestPlacedAgentHookRecordsWhereItRan: a hook has no node, so its row is keyed on the hook's scope, as a task or put hook's is.
 func TestPlacedAgentHookRecordsWhereItRan(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

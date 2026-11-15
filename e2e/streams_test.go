@@ -30,18 +30,21 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// TestTwoInvocationsAtOnceEachWriteToTheirOwnStreams is the seam that lets this suite run in one process: an invocation writes what a person reads to the streams it was handed, never to the process's. Each of several runs at once must find its own step output, its own listing and nobody else's — a print left on os.Stdout shows up as a missing line here.
+// TestTwoInvocationsAtOnceEachWriteToTheirOwnStreams is the seam that lets this suite run in one process: an invocation writes what a person reads to the streams it was handed, never to the process's. Each of several runs at once must find its own step output, its own listing, its own log lines and nobody else's — a print left on os.Stdout, or a log line that lost its context, shows up as a missing line here.
 func TestTwoInvocationsAtOnceEachWriteToTheirOwnStreams(t *testing.T) {
 	t.Parallel()
 
 	const invocations = 4
 
 	outputs := make([]*lockedBuffer, invocations)
+	logs := make([]*lockedBuffer, invocations)
+	paths := make([]string, invocations)
 
 	var group sync.WaitGroup
 
 	for i := range invocations {
 		outputs[i] = &lockedBuffer{}
+		logs[i] = &lockedBuffer{}
 		dir := t.TempDir()
 		path := writePipeline(t, dir, fmt.Sprintf(`
 jobs:
@@ -52,8 +55,10 @@ jobs:
     run: echo marker-%d-of-a-step
 `, i))
 
+		paths[i] = path
+
 		group.Go(func() {
-			streams := cli.Streams{Out: outputs[i], Err: outputs[i]}
+			streams := cli.Streams{Out: outputs[i], Err: logs[i]}
 
 			for _, args := range [][]string{
 				{"validate", path},
@@ -79,10 +84,29 @@ jobs:
 			}
 		}
 
-		for other := range invocations {
-			if other != i && strings.Contains(got, fmt.Sprintf("marker-%d-of-a-step", other)) {
-				t.Errorf("invocation %d's stream carries invocation %d's output:\n%s", i, other, got)
-			}
+		assertOnlyItsOwn(t, i, got, logs[i].String(), paths)
+	}
+}
+
+// assertOnlyItsOwn: invocation i's stderr holds its own log lines, and neither of its streams holds another invocation's. slog has one handler per process, so a log line reaches an invocation's own stderr only by the context it was logged with.
+func assertOnlyItsOwn(t *testing.T, i int, got, logged string, paths []string) {
+	t.Helper()
+
+	if !strings.Contains(logged, " pipeline.run ") || !strings.Contains(logged, "pipeline="+paths[i]) {
+		t.Errorf("invocation %d's stderr does not carry its own log lines:\n%s", i, logged)
+	}
+
+	for other := range paths {
+		if other == i {
+			continue
+		}
+
+		if strings.Contains(got, fmt.Sprintf("marker-%d-of-a-step", other)) {
+			t.Errorf("invocation %d's stream carries invocation %d's output:\n%s", i, other, got)
+		}
+
+		if strings.Contains(logged, "pipeline="+paths[other]) {
+			t.Errorf("invocation %d's stderr carries invocation %d's log lines:\n%s", i, other, logged)
 		}
 	}
 }

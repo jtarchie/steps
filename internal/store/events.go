@@ -19,8 +19,8 @@ type Events interface {
 	StepOutput(ctx context.Context, runID string, stepID int64, n int, yield func(chunk []byte) error) (bool, error)
 }
 
-// MaxStepOutputBytes bounds what one step output keeps whole, so a runaway step cannot fill the database; a variable so a test can lower it.
-var MaxStepOutputBytes int64 = 64 << 20
+// MaxStepOutputBytes bounds what one step output keeps whole, so a runaway step cannot fill the database.
+const MaxStepOutputBytes int64 = 64 << 20
 
 // RunEventRow is one persisted run event — the stored form of events.Event,
 // which is what a finished run is replayed from.

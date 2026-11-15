@@ -11,6 +11,9 @@ import (
 
 // TestAFixAgentWithDirWorksBelowTheTaskAndRerunsItAtTheRoot pins both halves of dir: on a fix agent: the model's tools work in the subdirectory, and the rerun tool is the task's own command, run where the task runs it.
 func TestAFixAgentWithDirWorksBelowTheTaskAndRerunsItAtTheRoot(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -68,6 +71,9 @@ jobs:
 
 // TestAFixAgentsRepairReachesTheRerunAndComesHome: under volumes the repair has to land in the tree the rerun reads, and the repaired outputs have to reach this machine for the next step.
 func TestAFixAgentsRepairReachesTheRerunAndComesHome(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()

@@ -338,6 +338,8 @@ func assertSucceeded(t *testing.T, nodes []nodeRow, kind, resource string) {
 // not routable at all — is a load-bearing design invariant of route.go's
 // outcomeKey, and nothing else tests it end to end.
 func TestEndToEndAgentSadPath(t *testing.T) {
+	t.Parallel()
+
 	t.Run("model rejects", testSadPathModelRejects)
 	t.Run("provider unreachable", testSadPathProviderUnreachable)
 	t.Run("attempts retry the request", testSadPathAttemptsRetryTheRequest)
@@ -1123,6 +1125,8 @@ jobs:
 // "pipeline.run"/"pipeline.done" bracket, or how RunCmd hands ctx to
 // pipeline.RunJob) — this is the trip wire for that.
 func TestEndToEndLogsCarryTheRunID(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -1268,6 +1272,8 @@ jobs:
 
 // A green run's terminal carries no ERROR or WARN line: an operator reads either as something to act on, and a teardown that reports success as a failure trains them to stop reading.
 func TestAGreenRunLogsNoProblem(t *testing.T) {
+	t.Parallel()
+
 	path := writePipeline(t, t.TempDir(), `
 jobs:
 - name: build

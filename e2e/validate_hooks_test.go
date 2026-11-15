@@ -36,6 +36,8 @@ jobs:
 
 // The CLI process never leaves this machine, so a repo's .claude/ hooks run here whatever image: or tags: promise.
 func TestValidateWarnsProjectHooksRunOnThisMachine(t *testing.T) {
+	t.Parallel()
+
 	t.Run("project", func(t *testing.T) {
 		stderr := captureStderr(t)
 		path := writePipeline(t, t.TempDir(), fmt.Sprintf(hooksPipeline, "settings: project"))

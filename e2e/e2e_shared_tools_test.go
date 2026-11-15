@@ -310,6 +310,9 @@ jobs:
 
 // An export that names an image runs its commands there, as the container's user and with no network if it says so, each call in a fresh container over a volume of its own. The probe dials an IP: a hostname waits ~5s on DNS offline, which under the suite's load ran a call past the client's 30s.
 func TestAnExportedCommandRunsInTheContainerTheExportNames(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	testdocker.Require(t)
 
 	served := serveOps(t, `
@@ -457,6 +460,8 @@ mcp_exports:
 
 // A judged_by rule asks one of the pipeline's agents, which is told what is being asked and answers allow or deny; a rambling or failing judge is no.
 func TestAJudgedRuleAsksAnAgentAndAnythingButAllowRefuses(t *testing.T) {
+	t.Parallel()
+
 	upstream := startDocMCPServer(t, docMCPTool{
 		name:     "run_query",
 		required: []string{"sql"},
@@ -485,8 +490,6 @@ func TestAJudgedRuleAsksAnAgentAndAnythingButAllowRefuses(t *testing.T) {
 			return says("allow")
 		}
 	})
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
 
 	served := serveOps(t, `
 mcp_servers:

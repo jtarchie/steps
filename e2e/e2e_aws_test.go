@@ -30,6 +30,9 @@ import (
 // tree lives in that daemon's volumes. A local: worker proves the plumbing; only
 // this proves it survives the transport it was designed for.
 func TestRealAWSPlacedStepRunsInAContainer(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	instance := os.Getenv("STEPS_TEST_AWS_INSTANCE")
 	if instance == "" {
 		t.Skip("no AWS fixture — run hack/aws-fixture.sh up and export what it prints")

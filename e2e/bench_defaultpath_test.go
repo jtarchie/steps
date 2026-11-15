@@ -14,6 +14,9 @@ import (
 )
 
 func TestBenchDefaultPath(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	if os.Getenv("STEPS_BENCH_DEFAULT_PATH") == "" {
 		t.Skip("the default-path bench runs only on request: task bench:default-path")
 	}

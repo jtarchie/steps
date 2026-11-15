@@ -22,6 +22,9 @@ func buildDir(step string) string {
 }
 
 func TestAContainerStepWorksInConcoursesLayout(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 
 	dir := t.TempDir()
@@ -108,6 +111,9 @@ var spillPointer = regexp.MustCompile(`saved to (\S+)\.`)
 
 // TestAContainerizedAgentIsToldNoHostPath: the model's system message, every tool result and the spill pointer for an oversized output name the container's layout, and the pointer it is handed still reads back.
 func TestAContainerizedAgentIsToldNoHostPath(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
 	requireDockerE2E(t)
 	dir := t.TempDir()
 

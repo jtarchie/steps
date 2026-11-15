@@ -40,9 +40,11 @@ func TestMain(m *testing.M) {
 		// One docker+ cache namespace per test process: other packages and other checkouts share the daemon.
 		"STEPS_TEST_CACHE_NAMESPACE": strconv.Itoa(os.Getpid()) + "-",
 		"STEPS_TEST_AGENT_API_KEY":   "test-key",
-		"OPENROUTER_API_KEY":         "test-key-not-used-for-any-call",
-		"OPENCODE_API_KEY":           "test-key-not-used-for-any-call",
-		"ANTHROPIC_API_KEY":          "test-key-not-used-for-any-call",
+		// The fake Slack takes any token; a test about WHICH variable is read sets one of its own with another value.
+		"SLACK_BOT_TOKEN":    "xoxb-fake",
+		"OPENROUTER_API_KEY": "test-key-not-used-for-any-call",
+		"OPENCODE_API_KEY":   "test-key-not-used-for-any-call",
+		"ANTHROPIC_API_KEY":  "test-key-not-used-for-any-call",
 		// The fake GitHub answers to exactly this token, so a doc example and an
 		// e2e test reach it without a t.Setenv each.
 		"GH_TOKEN": fakeGitHubToken,

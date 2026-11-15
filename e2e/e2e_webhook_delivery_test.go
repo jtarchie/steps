@@ -385,6 +385,8 @@ jobs:
 
 // A webhook's secrets: holds the key secret_env names and nothing else, since a delivery runs no command to read another.
 func TestAWebhookRefusesASecretNothingWouldRead(t *testing.T) {
+	t.Parallel()
+
 	path := pipelinePath(t, t.TempDir())
 	writePipelineFile(t, path, `
 resources:

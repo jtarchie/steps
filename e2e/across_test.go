@@ -177,7 +177,7 @@ jobs:
 
 // TestValidateCountsTheAgentsThePipelineDeclares: the built-in @builtin/ agents every pipeline gets were counted too, so a pipeline with one agent reported five.
 func TestValidateCountsTheAgentsThePipelineDeclares(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "fake")
+	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "pipeline.yml")
 
