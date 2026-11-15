@@ -34,14 +34,14 @@ import (
 var docsCodeStyle = chroma.MustNewStyle("steps", chroma.StyleEntries{
 	chroma.Background:        "#d8d5c9 bg:#171a16", // --fg on --panel
 	chroma.Comment:           "italic #83887b",     // --dim
-	chroma.Keyword:           "#b98fcc",            // --magenta
-	chroma.NameTag:           "#7aa4d9",            // --blue: YAML keys
-	chroma.NameAttribute:     "#7aa4d9",
-	chroma.NameFunction:      "#6fbcb4", // --cyan
-	chroma.LiteralString:     "#84c06d", // --green
-	chroma.LiteralNumber:     "#d9a94a", // --yellow
-	chroma.KeywordType:       "#6fbcb4",
-	chroma.NameConstant:      "#d9a94a",
+	chroma.Keyword:           "#b98fc8",            // --magenta
+	chroma.NameTag:           "#4e93ff",            // --blue: YAML keys
+	chroma.NameAttribute:     "#4e93ff",
+	chroma.NameFunction:      "#75beb5", // --cyan
+	chroma.LiteralString:     "#a4cb82", // --green
+	chroma.LiteralNumber:     "#d6a43d", // --yellow
+	chroma.KeywordType:       "#75beb5",
+	chroma.NameConstant:      "#d6a43d",
 	chroma.Operator:          "#83887b",
 	chroma.Punctuation:       "#83887b",
 	chroma.GenericSubheading: "#83887b",
@@ -50,8 +50,8 @@ var docsCodeStyle = chroma.MustNewStyle("steps", chroma.StyleEntries{
 	// rendered flat, one colour, which made the single most valuable
 	// detection buy nothing.
 	chroma.GenericDeleted:  "#e0645a",      // --red: a removed line — the ANSI-16 reading this whole UI is built on
-	chroma.GenericInserted: "#84c06d",      // --green: an added line
-	chroma.GenericHeading:  "bold #7aa4d9", // --blue: `diff --git`/`Index:` lines, a markdown h1
+	chroma.GenericInserted: "#a4cb82",      // --green: an added line
+	chroma.GenericHeading:  "bold #4e93ff", // --blue: `diff --git`/`Index:` lines, a markdown h1
 	chroma.GenericStrong:   "bold",         // markdown **bold**, a diff's ! line
 	chroma.GenericEmph:     "italic",       // markdown _emph_
 })

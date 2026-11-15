@@ -198,7 +198,7 @@ func TestPagesAboveAPipelineDrawNoTabs(t *testing.T) {
 		}
 
 		menu := between(t, body, `id="pipemenu"`, "</div>")
-		if strings.Contains(menu, `aria-selected="true"`) {
+		if strings.Contains(menu, `aria-current="page"`) {
 			t.Errorf("%s switcher marks a pipeline as current on a page above all of them", page)
 		}
 	}
@@ -232,7 +232,7 @@ func TestDocsAndTheVersionLiveInTheFooter(t *testing.T) {
 			}
 		}
 
-		if head, _, _ := strings.Cut(body, "<main>"); strings.Contains(head, `href="/docs"`) {
+		if head, _, _ := strings.Cut(body, "<main"); strings.Contains(head, `href="/docs"`) {
 			t.Errorf("%s still offers docs in the header", page)
 		}
 	}

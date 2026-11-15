@@ -88,7 +88,7 @@ jobs:
       run: echo see steps runs
 `)
 
-	hookHead := regexp.MustCompile(`id="(step-\d+-[^"]*)_head"[^>]*>\s*<span class="chev[^"]*"></span>\s*<span class="stmark"[^>]*>[^<]*</span>\s*<span class="kind">hook</span>\s*<span class="name">on_failure · task explain-failure</span>`).FindStringSubmatch(page)
+	hookHead := regexp.MustCompile(`id="(step-\d+-[^"]*)_head"[^>]*>\s*<(?:button|span) [^>]*class="steptoggle"[^>]*>\s*<span class="chev[^"]*"></span>\s*<span class="stmark"[^>]*>[^<]*</span>\s*<span class="kind">hook</span>\s*<span class="name">on_failure · task explain-failure</span>`).FindStringSubmatch(page)
 	if hookHead == nil {
 		t.Fatalf("no row drawn for the job hook, kind hook, named after what it ran:\n%s", page)
 	}

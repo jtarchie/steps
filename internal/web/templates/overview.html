@@ -6,7 +6,7 @@
 {{/* What a screen reader hears as the page refreshes: one line per red pipeline, keyed by slug so the morph keeps a line that is still true and adds only the new one. Additions only: a page opened on a red fleet says nothing (a live region announces changes, not what it loaded with), a recovery removes its line silently, and activity never gets a line at all. Not atomic, or role="status" would re-read every red pipeline each time one more joined. */}}
 <div class="visually-hidden" id="red-news" role="status" aria-atomic="false" aria-relevant="additions" aria-label="Pipelines that turned red">{{range .Pipelines}}{{if .Red}}<p id="red-{{.Slug}}">{{.Slug}} is failing: {{.RedWords}}</p>{{end}}{{end}}</div>
 {{/* The keys drive the rows below; said in words for a screen reader too, since the hint itself is hidden from one. */}}
-<div class="transcripthead"><div class="keyhint" aria-hidden="true"><span><kbd>j</kbd>/<kbd>k</kbd> pipelines</span><span><kbd>h</kbd>/<kbd>l</kbd> jobs</span><span><kbd>enter</kbd> open</span></div></div>
+<div class="transcripthead"><div class="keyhint"><span class="keys" aria-hidden="true"><span><kbd>j</kbd>/<kbd>k</kbd> pipelines</span><span><kbd>h</kbd>/<kbd>l</kbd> jobs</span><span><kbd>enter</kbd> open</span></span><button type="button" class="keystoggle"><span class="when-on">turn keys off</span><span class="when-off">keys are off · turn on</span></button></div></div>
 <p class="visually-hidden" id="pipelines-keys">j and k, or the up and down arrows, move between pipelines; h and l, or the left and right arrows, move between a pipeline's jobs.</p>
 <div class="tablewrap" id="pipelines-table">
   <table class="pipelines" aria-describedby="pipelines-keys">

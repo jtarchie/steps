@@ -34,7 +34,7 @@ An agent whose `model:` resolves to OpenRouter (the `openrouter/` prefix, or a `
 
 OpenRouter tracks sticky routing "at the account level, per model, and per conversation" — and an `agents:` entry *is* the (model, persona, dials) bundle, so two different agents share no cacheable prefix and are not one conversation. The session key is therefore the job run **plus the agent name**:
 
-| | Same session? | Why |
+| Call | Same session? | Why |
 |---|---|---|
 | Turns of one step's conversation loop | yes | the whole prior history is re-sent each turn — the big win |
 | A `to:`/`verdicts:` revise loop re-entering a step | yes | same agent, same prefix, across separate visits |

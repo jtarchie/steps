@@ -863,7 +863,7 @@ The `--db` is there because a local run keeps its state beside the YAML, in `.st
 
 ### Three outcomes, deliberately different
 
-| | classification | why |
+| outcome | classification | why |
 |---|---|---|
 | approved | the plan continues | |
 | rejected | **failed** | a person decided; `on_failure` fires and a `to:` route can act on it |

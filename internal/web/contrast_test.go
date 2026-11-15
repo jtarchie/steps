@@ -222,3 +222,274 @@ func TestPausedBarKeepsItsTextReadable(t *testing.T) {
 		}
 	}
 }
+
+// TestFocusRingIsSeenOnEveryGround: the ring is how a keyboard reader knows where they are, so it is held to WCAG 1.4.11's 3:1 against every ground it can sit on, in both themes, and to 2px — the 2.4.13 minimum a 1px hairline in --yellow did not reach.
+func TestFocusRingIsSeenOnEveryGround(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rule := regexp.MustCompile(`(?m)^:focus-visible \{ outline: (\d+)px solid var\(--([a-z0-9-]+)\);`).FindSubmatch(css)
+	if rule == nil {
+		t.Fatal("no global :focus-visible outline this test can read")
+	}
+
+	if width, _ := strconv.Atoi(string(rule[1])); width < 2 {
+		t.Errorf("the focus ring is %dpx; 2px is the minimum", width)
+	}
+
+	for i, tokens := range themeTokens(t, css) {
+		for _, ground := range []string{"bg", "panel", "panel2", "code-bg"} {
+			if ratio := contrast(t, tokens[string(rule[2])], tokens[ground]); ratio < 3 {
+				t.Errorf("%s: the focus ring --%s on --%s is %.2f:1, under 3:1", themeNames[i], rule[2], ground, ratio)
+			}
+		}
+	}
+}
+
+// TestRunHistoryTicksDifferBeyondHue: a job's history strip is a row of small squares, one per run, with no glyph or word beside each — so two statuses drawn as the same shape are told apart by hue alone (WCAG 1.4.1), and red against green is exactly the pair red-green colour blindness loses. Two ticks must differ in SHAPE, or stay at least ΔE2000 10 apart under every simulated deficiency in both themes; 10 is the distance colour-blindness palette tools treat as clearly distinct for small marks, where ~2 is merely perceptible.
+func TestRunHistoryTicksDifferBeyondHue(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	statuses := []string{"passed", "failed", "errored", "aborted", "running", "queued"}
+	color, shape := tickLooks(t, css, statuses)
+
+	for i, tokens := range themeTokens(t, css) {
+		for a := range statuses {
+			for b := a + 1; b < len(statuses); b++ {
+				x, y := statuses[a], statuses[b]
+				if shape[x] != shape[y] {
+					continue
+				}
+
+				for _, vision := range visions {
+					if d := deltaE2000(lab(vision.simulate(tokens[color[x]])), lab(vision.simulate(tokens[color[y]]))); d < 10 {
+						t.Errorf("%s, %s: a %s tick and a %s tick are the same shape and only ΔE %.1f apart", themeNames[i], vision.name, x, y, d)
+					}
+				}
+			}
+		}
+	}
+}
+
+// tickLooks reads, per status, the color token its .st- class writes text in and the declarations its .tick rule adds beyond color and motion: its shape.
+func tickLooks(t *testing.T, css []byte, statuses []string) (color, shape map[string]string) {
+	t.Helper()
+
+	color, shape = map[string]string{}, map[string]string{}
+
+	for _, status := range statuses {
+		m := regexp.MustCompile(`(?m)^[^{\n]*\.st-` + status + `\b[^{\n]*\{ color: var\(--([a-z0-9-]+)\); \}`).FindSubmatch(css)
+		if m == nil {
+			t.Fatalf(".st-%s sets no color this test can read", status)
+		}
+
+		color[status] = string(m[1])
+
+		var decls []string
+		for _, rule := range regexp.MustCompile(`(?m)^\.tick\.st-`+status+` \{([^}]*)\}`).FindAllSubmatch(css, -1) {
+			for _, decl := range strings.Split(string(rule[1]), ";") {
+				if decl = strings.TrimSpace(decl); decl != "" && !strings.HasPrefix(decl, "animation") {
+					decls = append(decls, decl)
+				}
+			}
+		}
+
+		shape[status] = strings.Join(decls, ";")
+	}
+
+	return color, shape
+}
+
+type vision struct {
+	name     string
+	simulate func(hex string) [3]float64
+}
+
+// visions simulate dichromacy on linear sRGB with the models DaltonLens rates best (daltonlens.org/opensource-cvd-simulation): Viénot 1999 for protan and deutan, Brettel 1997 for tritan, which Viénot and Machado do not model. Matrices are DaltonLens' precomputed sRGB ones; every row sums to 1, so white stays white.
+var visions = []vision{
+	{"normal vision", linearRGB},
+	{"protanopia", func(hex string) [3]float64 {
+		return mul([3][3]float64{{0.11238, 0.88762, 0}, {0.11238, 0.88762, 0}, {0.00401, -0.00401, 1}}, linearRGB(hex))
+	}},
+	{"deuteranopia", func(hex string) [3]float64 {
+		return mul([3][3]float64{{0.29275, 0.70725, 0}, {0.29275, 0.70725, 0}, {-0.02234, 0.02234, 1}}, linearRGB(hex))
+	}},
+	{"tritanopia", func(hex string) [3]float64 {
+		rgb := linearRGB(hex)
+		if 0.03901*rgb[0]-0.02788*rgb[1]-0.01113*rgb[2] >= 0 {
+			return mul([3][3]float64{{1.01277, 0.13548, -0.14826}, {-0.01243, 0.86812, 0.14431}, {0.07589, 0.80500, 0.11911}}, rgb)
+		}
+
+		return mul([3][3]float64{{0.93678, 0.18979, -0.12657}, {0.06154, 0.81526, 0.12320}, {-0.37562, 1.12767, 0.24796}}, rgb)
+	}},
+}
+
+func linearRGB(hex string) [3]float64 {
+	var out [3]float64
+
+	for i := range out {
+		channel, _ := strconv.ParseUint(hex[1+2*i:3+2*i], 16, 8)
+
+		v := float64(channel) / 255
+		if v <= 0.04045 {
+			out[i] = v / 12.92
+		} else {
+			out[i] = math.Pow((v+0.055)/1.055, 2.4)
+		}
+	}
+
+	return out
+}
+
+func mul(m [3][3]float64, v [3]float64) [3]float64 {
+	var out [3]float64
+	for i := range out {
+		out[i] = math.Min(1, math.Max(0, m[i][0]*v[0]+m[i][1]*v[1]+m[i][2]*v[2]))
+	}
+
+	return out
+}
+
+// lab is CIE L*a*b* (D65) of a linear sRGB color.
+func lab(rgb [3]float64) [3]float64 {
+	x := (0.4124*rgb[0] + 0.3576*rgb[1] + 0.1805*rgb[2]) / 0.95047
+	y := 0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2]
+	z := (0.0193*rgb[0] + 0.1192*rgb[1] + 0.9505*rgb[2]) / 1.08883
+
+	f := func(t float64) float64 {
+		if t > 216.0/24389 {
+			return math.Cbrt(t)
+		}
+
+		return (24389.0/27*t + 16) / 116
+	}
+
+	return [3]float64{116*f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))}
+}
+
+// deltaE2000 is CIEDE2000 (Sharma, Wu and Dalal 2005).
+func deltaE2000(p, q [3]float64) float64 {
+	const rad = math.Pi / 180
+
+	c1, c2 := math.Hypot(p[1], p[2]), math.Hypot(q[1], q[2])
+	cBar7 := math.Pow((c1+c2)/2, 7)
+	g := 0.5 * (1 - math.Sqrt(cBar7/(cBar7+math.Pow(25, 7))))
+	a1, a2 := (1+g)*p[1], (1+g)*q[1]
+	c1p, c2p := math.Hypot(a1, p[2]), math.Hypot(a2, q[2])
+
+	hue := func(b, a float64) float64 {
+		h := math.Atan2(b, a) / rad
+		if h < 0 {
+			h += 360
+		}
+
+		return h
+	}
+
+	h1, h2 := hue(p[2], a1), hue(q[2], a2)
+
+	dh := h2 - h1
+
+	switch {
+	case c1p*c2p == 0:
+		dh = 0
+	case dh > 180:
+		dh -= 360
+	case dh < -180:
+		dh += 360
+	}
+
+	dL, dC, dH := q[0]-p[0], c2p-c1p, 2*math.Sqrt(c1p*c2p)*math.Sin(dh*rad/2)
+
+	lBar, cBarP, hBar := (p[0]+q[0])/2, (c1p+c2p)/2, h1+h2
+
+	if c1p*c2p != 0 {
+		if math.Abs(h1-h2) > 180 {
+			hBar = (h1 + h2 + 360) / 2
+		} else {
+			hBar = (h1 + h2) / 2
+		}
+	}
+
+	tt := 1 - 0.17*math.Cos((hBar-30)*rad) + 0.24*math.Cos(2*hBar*rad) + 0.32*math.Cos((3*hBar+6)*rad) - 0.2*math.Cos((4*hBar-63)*rad)
+	cP7 := math.Pow(cBarP, 7)
+	rc := 2 * math.Sqrt(cP7/(cP7+math.Pow(25, 7)))
+	sl := 1 + 0.015*(lBar-50)*(lBar-50)/math.Sqrt(20+(lBar-50)*(lBar-50))
+	sc, sh := 1+0.045*cBarP, 1+0.015*cBarP*tt
+	dTheta := (hBar - 275) / 25
+	rt := -math.Sin(2*30*math.Exp(-dTheta*dTheta)*rad) * rc
+
+	l, c, h := dL/sl, dC/sc, dH/sh
+
+	return math.Sqrt(l*l + c*c + h*h + rt*c*h)
+}
+
+// TestDeltaE2000MatchesSharmaTable pins the metric to rows of the published CIEDE2000 test data, so a typo in it cannot quietly loosen the tick check above.
+func TestDeltaE2000MatchesSharmaTable(t *testing.T) {
+	t.Parallel()
+
+	for _, row := range []struct {
+		p, q [3]float64
+		want float64
+	}{
+		{[3]float64{50, 2.6772, -79.7751}, [3]float64{50, 0, -82.7485}, 2.0425},
+		{[3]float64{50, 2.5, 0}, [3]float64{73, 25, -18}, 27.1492},
+		{[3]float64{60.2574, -34.0099, 36.2677}, [3]float64{60.4626, -34.1751, 39.4387}, 1.2644},
+		{[3]float64{22.7233, 20.0904, -46.6940}, [3]float64{23.0331, 14.9730, -42.5619}, 2.0373},
+	} {
+		if got := deltaE2000(row.p, row.q); math.Abs(got-row.want) > 1e-4 {
+			t.Errorf("ΔE2000(%v, %v) = %.4f, want %.4f", row.p, row.q, got, row.want)
+		}
+	}
+}
+
+// TestThePaletteIsColorBlindSafe: the six hues are told apart by people with every common color-vision deficiency, not only by people without one. Every pair stays ΔE2000 10 apart under simulated protanopia, deuteranopia and tritanopia, in both themes — the threshold at which Adobe's color-blindness checker (color.adobe.com/create/color-accessibility) stopped flagging the pairs it flagged in the old palette, so this test and that tool agree. A new hue joins the list, or says here why it does not.
+func TestThePaletteIsColorBlindSafe(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hues := []string{"green", "red", "yellow", "blue", "magenta", "cyan"}
+
+	for i, tokens := range themeTokens(t, css) {
+		for a := range hues {
+			for b := a + 1; b < len(hues); b++ {
+				for _, vision := range visions {
+					if d := deltaE2000(lab(vision.simulate(tokens[hues[a]])), lab(vision.simulate(tokens[hues[b]]))); d < 10 {
+						t.Errorf("%s, %s: --%s %s and --%s %s are only ΔE %.1f apart", themeNames[i], vision.name, hues[a], tokens[hues[a]], hues[b], tokens[hues[b]], d)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestTheFaviconDrawsInThePalette: the tab icon's dots are drawn server-side as SVG, so they hold their own copies of the dark theme's colors; a palette change that skipped them shipped a favicon in colors the page no longer uses.
+func TestTheFaviconDrawsInThePalette(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dark := themeTokens(t, css)[1]
+
+	for token, drawn := range map[string]string{"bg": colorBg, "dim": colorDim, "faint-line": colorFaint, "green": colorGreen, "red": colorRed, "yellow": colorYellow, "blue": colorBlue} {
+		if dark[token] != drawn {
+			t.Errorf("the favicon draws --%s as %s; the dark theme's is %s", token, drawn, dark[token])
+		}
+	}
+}
