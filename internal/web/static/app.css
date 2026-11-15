@@ -1292,6 +1292,20 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
  * annotation about it. */
 .log.output { color: var(--fg); }
 
+/* Its colour codes, as terminal-to-html classes (termout.go), onto the palette: SGR 30-37, bright 90-97 and xterm 0-15 share the six hues. Not drawn: backgrounds, xterm 16-255 and 24-bit (each would need its own contrast pass), and blink. */
+.term-fg1 { font-weight: bold; }
+.term-fg2, .term-fg30, .term-fgi90, .term-fgx0, .term-fgx8 { color: var(--dim); }
+.term-fg3 { font-style: italic; }
+.term-fg4 { text-decoration: underline; }
+.term-fg9 { text-decoration: line-through; }
+.term-fg31, .term-fgi91, .term-fgx1, .term-fgx9 { color: var(--red); }
+.term-fg32, .term-fgi92, .term-fgx2, .term-fgx10 { color: var(--green); }
+.term-fg33, .term-fgi93, .term-fgx3, .term-fgx11 { color: var(--yellow); }
+.term-fg34, .term-fgi94, .term-fgx4, .term-fgx12 { color: var(--blue); }
+.term-fg35, .term-fgi95, .term-fgx5, .term-fgx13 { color: var(--magenta); }
+.term-fg36, .term-fgi96, .term-fgx6, .term-fgx14 { color: var(--cyan); }
+.term-fg37, .term-fgi97, .term-fgx7, .term-fgx15 { color: var(--fg); }
+
 /* Marked, not hidden: an absent price is a fact about the provider, and
    rendering it as $0.00 would say the run was free. */
 .unpriced { font-style: italic; }

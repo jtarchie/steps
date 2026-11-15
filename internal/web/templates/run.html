@@ -341,5 +341,5 @@
 {{define "mcphint"}}{{with .Run.MCPMissingTool}}<div class="errhint">mcp server <code>{{.Server}}</code> answers, but has no tool named <code>{{.Tool}}</code> — an agent grants a tool it does not expose; <code>steps mcp tools</code> lists what it does</div>{{else}}{{if and .Run.MCPBlamed .Nav.HasMCP}}<div class="errhint">mcp server <code>{{.Run.MCPBlamed}}</code> — <a href="/p/{{.Nav.Current}}/mcp#mcp-{{.Run.MCPBlamed}}">is it connected?</a></div>{{end}}{{end}}{{end}}
 
 {{/* One note a step's machinery left. A warning says so in words, not only in colour. */}}
-{{define "chunk"}}<span>{{scrub .}}</span>{{end}}
+{{define "chunk"}}<span>{{outputChunk .}}</span>{{end}}
 {{define "notice"}}<div class="log notice{{if .Warn}} warn{{end}}">{{if .Warn}}warning: {{end}}{{.Text}}</div>{{end}}

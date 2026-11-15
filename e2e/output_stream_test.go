@@ -85,6 +85,36 @@ jobs:
 	assertOneOutputRecord(t, path, "first\nsecond")
 }
 
+// TestAColourCodeIsNotCutAcrossLiveChunks (steps#265): a step that pauses right after an ESC has its partial line published by the hold, and the chunk recorded while it runs carries the whole `ESC [31m`, never its tail as text.
+func TestAColourCodeIsNotCutAcrossLiveChunks(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: colour
+    run: "printf start; sleep 2; printf 'progress \\033'; sleep 2; printf '[31mred\\033[0m\\n'; sleep 3"
+`)
+
+	done := make(chan error, 1)
+
+	go func() { done <- runSilently(path) }()
+
+	if !chunkSeenWhileRunning(t, path, "red", time.Now().Add(30*time.Second)) {
+		t.Error("the coloured line was never recorded while the step was still running")
+	}
+
+	for _, row := range recordedEvents(t, path) {
+		if row.Type == events.TypeStepOutputChunk && (strings.HasPrefix(row.Text, "[") || strings.HasSuffix(row.Text, "\x1b")) {
+			t.Errorf("a live chunk was cut inside the colour code: %q", row.Text)
+		}
+	}
+
+	err := <-done
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
 // TestACheckedTasksOutputIsRecordedAsItPrints: a task whose output is judged (assert:, fix:) streams like any other, rather than staying blank until it ends (steps#207).
 func TestACheckedTasksOutputIsRecordedAsItPrints(t *testing.T) {
 	const run = "echo first; sleep 3; echo second"

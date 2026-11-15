@@ -962,8 +962,12 @@ func TestStreamSendsACarriageReturnAsTheLineItIsOnReload(t *testing.T) {
 		t.Errorf("a carriage return goes over as an entity the parser would not have made of it:\n%q", raw)
 	}
 
-	if !strings.Contains(sseHTML(raw), "10%\n20%\n30%") {
-		t.Errorf("the overwrites do not reach the reader as the lines a reload draws:\n%q", raw)
+	_, page := get(t, server, "/p/demo/runs/run-bar")
+
+	for name, body := range map[string]string{"page": page, "stream": sseHTML(raw)} {
+		if !strings.Contains(body, `<pre class="log output">30%</pre>`) || strings.Contains(body, "20%") {
+			t.Errorf("%s does not draw the overwrites as the terminal left them:\n%q", name, body)
+		}
 	}
 }
 
@@ -1223,7 +1227,7 @@ func TestStreamReportsAFailureOnce(t *testing.T) {
 	}
 }
 
-// TestOutputEscapesAreScrubbed: a colour code in process output is stripped on the page and the stream alike, not shown as `[31m` behind an invisible ESC.
+// TestOutputEscapesAreScrubbed: a colour code in process output is drawn as a colour on the page and the stream alike, not shown as `[31m` behind an invisible ESC.
 func TestOutputEscapesAreScrubbed(t *testing.T) {
 	t.Parallel()
 
@@ -1258,9 +1262,13 @@ func TestOutputEscapesAreScrubbed(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"recorded red", "chunk green"} {
+	for _, want := range []string{`<span class="term-fg31">recorded red</span>`, `<span class="term-fg32 term-fg1">chunk green</span>`} {
 		if !strings.Contains(page, want) {
-			t.Errorf("page lost the text %q:\n%s", want, page)
+			t.Errorf("page lost the coloured text %q:\n%s", want, page)
 		}
+	}
+
+	if !strings.Contains(raw, `<span class="term-fg31">recorded red</span>`) {
+		t.Errorf("stream lost the coloured text:\n%s", raw)
 	}
 }

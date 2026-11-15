@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/redact"
@@ -130,6 +131,82 @@ func TestChunkerCollapsesCarriageReturns(t *testing.T) {
 		t.Errorf("chunks = %q, want %q", *got, want)
 	}
 }
+
+// TestChunkerNeverCutsInsideAnEscapeOrARune (steps#265): a hold or size cut that lands inside `ESC [31m` or a multi-byte rune keeps the unfinished tail for the next chunk, since each chunk is drawn on its own and a split sequence shows as `[31m` text, a split rune as nothing.
+func TestChunkerNeverCutsInsideAnEscapeOrARune(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	pad := strings.Repeat("x", chunkBytes-2)
+
+	for name, writes := range map[string][]string{
+		"held escape":     {"progress \x1b", "[31mred\x1b[0m\n"},
+		"held csi params": {"progress \x1b[3", "1mred\x1b[0m\n"},
+		"held osc":        {"see \x1b]8;;https://x.test\x1b", "\\link\x1b]8;;\x1b\\\n"},
+		"held rune":       {"caf\xc3", "\xa9\n"},
+		"sized escape":    {pad + "\x1b[31mred\x1b[0m\n"},
+		"sized rune":      {pad + "x\xe2\x9c\x93 done\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			clock := &fakeClock{at: start}
+			got, emit := collecting()
+			c := newChunker(clock.now, emit)
+
+			for _, w := range writes {
+				clock.at = clock.at.Add(2 * time.Second)
+				_, _ = c.Write([]byte(w))
+			}
+
+			c.close()
+
+			if joined := strings.Join(*got, ""); joined != strings.Join(writes, "") {
+				t.Fatalf("chunks %q do not rejoin to what was written", *got)
+			}
+
+			for _, chunk := range *got {
+				assertWholeChunk(t, chunk)
+			}
+		})
+	}
+}
+
+// TestChunkerPublishesAnEscapeNobodyFinishes: holding a sequence back is bounded, so an OSC that never ends cannot hold a line forever.
+func TestChunkerPublishesAnEscapeNobodyFinishes(t *testing.T) {
+	t.Parallel()
+
+	clock := &fakeClock{at: time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)}
+	got, emit := collecting()
+	c := newChunker(clock.now, emit)
+
+	_, _ = c.Write([]byte("\x1b]0;" + strings.Repeat("t", chunkBytes)))
+
+	if len(*got) == 0 {
+		t.Errorf("an endless OSC of %d bytes was held, not published", chunkBytes)
+	}
+}
+
+// assertWholeChunk fails a chunk that holds half a rune or the tail of a sequence the chunk before it cut; the fixtures print no bracket of their own.
+func assertWholeChunk(t *testing.T, chunk string) {
+	t.Helper()
+
+	if !utf8.ValidString(chunk) {
+		t.Errorf("chunk %q ends in half a rune", tail(chunk))
+	}
+
+	if strings.IndexAny(chunk[:1], "0123456789;m") == 0 {
+		t.Errorf("chunk %q opens on the tail of a sequence the last one cut", chunk)
+	}
+
+	for i := range len(chunk) {
+		if strings.IndexByte("[]\\", chunk[i]) >= 0 && (i == 0 || chunk[i-1] != 0x1b) {
+			t.Errorf("chunk %q holds the tail of a sequence the last one cut", chunk)
+		}
+	}
+}
+
+func tail(s string) string { return s[max(0, len(s)-20):] }
 
 // TestHeadTailKeepsBothEndsInOrder: the record is how the step started and how it ended, with the cut named, because the last line is where a long build says why it failed — and a short output is kept whole, with no marker.
 func TestHeadTailKeepsBothEndsInOrder(t *testing.T) {

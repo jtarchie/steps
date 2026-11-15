@@ -1015,6 +1015,8 @@ linters:
             - "github.com/alecthomas/chroma/v3"
             - "github.com/alecthomas/chroma/v3/lexers"
             - "github.com/alecthomas/chroma/v3/formatters/html"
+            # terminal-to-html draws process output's colour codes as classes app.css maps onto the palette (termout.go).
+            - "github.com/jtarchie/terminal-to-html/v3"
             - "github.com/jtarchie/steps/docs"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/actor"

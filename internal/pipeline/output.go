@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/redact"
@@ -191,7 +192,7 @@ func (c *chunker) Write(p []byte) (int, error) {
 	case cut >= 0:
 		c.flush(cut + 1)
 	case c.buf.Len() >= chunkBytes, c.now().Sub(c.last) >= chunkHold:
-		c.flush(c.buf.Len())
+		c.flush(safeCut(held))
 	}
 
 	return len(p), nil
@@ -219,6 +220,8 @@ func (c *chunker) flush(n int) {
 			cut = chunkBytes
 			if nl := bytes.LastIndexByte(piece[:cut], '\n'); nl > 0 {
 				cut = nl + 1
+			} else if safe := safeCut(piece[:cut]); safe > 0 {
+				cut = safe
 			}
 		}
 
@@ -232,6 +235,82 @@ func (c *chunker) flush(n int) {
 		c.midLine = text[len(text)-1] != '\n'
 		c.emit(text)
 	}
+}
+
+// escapeLookback bounds how far back safeCut looks for an unfinished escape: an OSC that opened further back than this, or never ends, is published rather than holding the line.
+const escapeLookback = 1024
+
+// safeCut is how much of held can be published without ending inside an escape sequence or a multi-byte rune (steps#265): each chunk is drawn on its own, and a split sequence shows its tail as text, a split rune as nothing.
+func safeCut(held []byte) int {
+	n := len(held)
+
+	for i := max(0, n-escapeLookback); i < n; i++ {
+		if held[i] != 0x1b {
+			continue
+		}
+
+		end := escapeEnd(held, i+1)
+		if end < 0 {
+			n = i
+
+			break
+		}
+
+		i = end - 1
+	}
+
+	start := max(0, n-utf8.UTFMax)
+	for r := n - 1; r >= start; r-- {
+		if utf8.RuneStart(held[r]) {
+			if !utf8.FullRune(held[r:n]) {
+				n = r
+			}
+
+			break
+		}
+	}
+
+	return n
+}
+
+// escapeEnd is where the sequence whose ESC sits just before i ends, or -1 if held ends first. Its rules are runview.Scrub's: a CSI ends at its final byte, a string sequence at BEL, ST or a newline.
+func escapeEnd(held []byte, i int) int {
+	if i >= len(held) {
+		return -1
+	}
+
+	switch held[i] {
+	case '[':
+		return endAt(held, i+1, func(c byte) bool { return c < 0x20 || c > 0x3f })
+	case ']', 'P', 'X', '^', '_':
+		return stringEnd(held, i+1)
+	default:
+		return endAt(held, i, func(c byte) bool { return c < 0x20 || c > 0x2f })
+	}
+}
+
+// endAt is just past the first byte from i that final accepts, or -1.
+func endAt(held []byte, i int, final func(byte) bool) int {
+	for ; i < len(held); i++ {
+		if final(held[i]) {
+			return i + 1
+		}
+	}
+
+	return -1
+}
+
+func stringEnd(held []byte, i int) int {
+	for ; i < len(held); i++ {
+		switch {
+		case held[i] == 0x07, held[i] == '\n':
+			return i + 1
+		case held[i] == 0x1b && i+1 < len(held) && held[i+1] == '\\':
+			return i + 2
+		}
+	}
+
+	return -1
 }
 
 // collapseCR keeps, of every line, what a terminal would show after its carriage returns: the text after the last one. A chunk that opens with a return while the previous one left a line unfinished starts a new line instead, since the line it would overwrite has already been published.
