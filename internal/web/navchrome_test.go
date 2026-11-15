@@ -232,7 +232,7 @@ func TestDocsAndTheVersionLiveInTheFooter(t *testing.T) {
 			}
 		}
 
-		if head, _, _ := strings.Cut(body, "<main>"); strings.Contains(head, `href="/docs"`) {
+		if head, _, _ := strings.Cut(body, "<main"); strings.Contains(head, `href="/docs"`) {
 			t.Errorf("%s still offers docs in the header", page)
 		}
 	}

@@ -42,6 +42,7 @@
 <script src="/static/app.js" defer></script>
 </head>
 <body>
+<a class="skiplink" href="#main">skip to content</a>
 
 {{/* Everything in here counts work waiting on a person, so all of it goes
      stale on a page that is left open — which is every page, since they poll
@@ -49,6 +50,7 @@
      #statusline in its hx-select-oob; it used to be the <nav> alone, and the
      switcher's marks (which are about pipelines you are NOT looking at) were
      the half that never refreshed. */}}
+<header>
 <div class="statusline" id="statusline">
   <a class="brand" href="/"><b>steps</b> web</a>
   {{/* The bar is a PATH: steps / <pipeline> / <section>. The pipeline comes
@@ -97,8 +99,9 @@
   </div>
   {{template "actionbar" .}}
 </div>
+</header>
 
-<main>
+<main id="main" tabindex="-1">
 {{/* The sentence behind each badge, and the only place an item no tab owns —
      a paused pipeline — can appear at all.
 

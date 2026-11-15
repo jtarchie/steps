@@ -68,7 +68,11 @@ a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
 /* A link inside running text is underlined, because its color alone does not set it apart from the words around it. */
 .crumbs a, .metaline a:not(.hash), .deps a, .md a, .docs a { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 3px; }
-:focus-visible { outline: 1px solid var(--yellow); outline-offset: 1px; }
+:focus-visible { outline: 2px solid var(--yellow); outline-offset: 1px; }
+/* Off-screen until focused, then over the bar's brand: the first Tab lands here, so a keyboard reader skips the bar's dozen controls in one Enter. */
+.skiplink { position: absolute; left: 8px; top: -100px; z-index: 30; padding: 6px 10px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
+.skiplink:focus { top: 6px; }
+main:focus { outline: none; }
 
 code { font-family: var(--mono); color: var(--fg); }
 
@@ -78,14 +82,13 @@ code { font-family: var(--mono); color: var(--fg); }
  * BEFORE the tabs it scopes, drawn in the foreground weight the tabs get only
  * when current. Each segment is a cell with a hairline on its right, the way
  * a prompt separates its parts. */
+/* Sticky on the <header>, not the bar: a sticky box sticks only within its parent, and the landmark around the bar is exactly as tall as it. */
+body > header { position: sticky; top: 0; z-index: 20; }
 .statusline {
   display: flex;
   align-items: stretch;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
-  position: sticky;
-  top: 0;
-  z-index: 20;
   font-size: 12px;
   flex-wrap: wrap;
 }
@@ -478,8 +481,12 @@ td.faint, .faint { color: var(--faint); }
 .cell.live { box-shadow: inset 0 -2px 0 var(--yellow); }
 /* A job is its cell over its last runs, oldest first; an errored run is hollow, since the machine saying no is a different fix from a step saying no. */
 .lanejob { display: inline-grid; gap: 3px; }
-.hist { display: flex; gap: 2px; padding-left: 1px; }
-.tick { display: block; width: 7px; height: 7px; border-radius: 1px; background: currentColor; }
+/* Shape, not only hue, tells runs apart: a strip has no glyph per run, and red against green is the pair red-green colour blindness loses (TestRunHistoryTicksDifferBeyondHue). A failure stands taller than the row, a running run is half full. forced-color-adjust keeps them drawn under Windows high contrast, which would otherwise blank a background-only mark. */
+.hist { display: flex; align-items: flex-end; gap: 2px; padding-left: 1px; }
+.tick { display: block; width: 7px; height: 7px; border-radius: 1px; background: currentColor; forced-color-adjust: none; }
+.tick.st-failed { height: 11px; }
+.tick.st-running { background: linear-gradient(to top, currentColor 50%, transparent 50%); box-shadow: inset 0 0 0 1px currentColor; }
+.tick.st-queued { background: none; box-shadow: inset 0 -2px 0 currentColor; }
 .tick.st-errored { background: none; box-shadow: inset 0 0 0 1.5px currentColor; }
 .tick.st-aborted { background: var(--faint-line); }
 /* A slot no run fills yet: a floor line, not a block, so it cannot read as an aborted run. */
@@ -1288,6 +1295,8 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
 .docsnav a, .docstoc a { color: var(--dim); }
 .docsnav a { display: inline-block; padding: 3px 0; }
 .docsnav a:hover, .docstoc a:hover { color: var(--fg); }
+/* 24px tall, the WCAG 2.5.8 floor: a row of 12px links stacked at line height was 18px per target. */
+.docstoc a { display: inline-block; padding-block: 3px; }
 .docsnav a[aria-current="page"] { color: var(--green); }
 .docsgroup { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .docsgrouptitle { color: var(--faint); text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
@@ -1488,3 +1497,10 @@ pre.hl { color: var(--fg); background: var(--panel); }
 .hl-p { color: var(--dim); }
 .hl-s { color: var(--green); }
 /* hl:end */
+
+/* Windows high contrast replaces the page's colors with the system's, but not an SVG's fills: the graph kept its tints over a forced background. */
+@media (forced-colors: active) {
+  .dag .dagnode .dagbox, .dag .dagres rect { fill: Canvas; stroke: CanvasText; }
+  .dag .dagnode .dagname, .dag .dagnode .dagstatus, .dag .dagnode .dagqueued, .dag .dagres text { fill: CanvasText; }
+  .dag .dagnode:focus-visible .dagbox, .dag .dagres:focus-visible rect { stroke: Highlight; }
+}

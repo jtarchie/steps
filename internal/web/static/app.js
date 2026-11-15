@@ -579,6 +579,20 @@
     });
   }
 
+  // A wide table or code block scrolls inside itself, and a region that
+  // scrolls but cannot take focus is one a keyboard can never scroll (WCAG
+  // 2.1.1). Only the ones that overflow get a tab stop: a docs page has dozens
+  // of blocks, and a stop on each that fits would be noise.
+  function focusableScrollers() {
+    document.querySelectorAll('main pre, main table').forEach(function (el) {
+      if (el.scrollWidth > el.clientWidth) el.setAttribute('tabindex', '0');
+      else if (el.getAttribute('tabindex') === '0') el.removeAttribute('tabindex');
+    });
+  }
+  focusableScrollers();
+  window.addEventListener('resize', focusableScrollers);
+  document.addEventListener('htmx:after:swap', focusableScrollers);
+
   // A second only when something is actively counting; otherwise half a
   // minute is plenty for text measured in minutes and hours.
   var live = document.querySelector('time[data-elapsed-since], time[data-deadline]') !== null;
