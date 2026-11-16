@@ -565,8 +565,8 @@
           "description": "Only drafts (true) or only ready pull requests (false); both when unset."
         },
         "checkout": {
-          "type": "boolean",
-          "description": "Lay the tree at the version's commit into the artifact beside the metadata files. True unless set false."
+          "oneOf": [{"type": "boolean"}, {"const": "git"}],
+          "description": "What a get lays beside the metadata files: the tree at the version's commit (true, the default), nothing (false), or a git repository at that commit with origin/<base> fetched and history down to the merge base (git, which needs the git binary)."
         }
       }
     },
@@ -610,8 +610,8 @@
           "description": "Which comments to watch: conversation (a pull request's timeline), review (inline, on its diff), issue (an issue's timeline). Conversation and review when unset."
         },
         "checkout": {
-          "type": "boolean",
-          "description": "Lay the tree of the pull request a comment sits on into the artifact. True unless set false; an issue has no tree."
+          "oneOf": [{"type": "boolean"}, {"const": "git"}],
+          "description": "What a get lays down of the pull request a comment sits on, as github-prs' checkout: the tree (true, the default), nothing (false), or a git repository (git). An issue has no tree."
         },
         "skip_reacted": {
           "enum": ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"],

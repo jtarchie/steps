@@ -466,7 +466,7 @@ func githubCommentsIn(ctx context.Context, raw, version map[string]any, destDir 
 		return err
 	}
 
-	return writeMetadata(destDir, files)
+	return writeGetFiles(destDir, files, source.Checkout)
 }
 
 // reviewThreadLink is how a review comment names its thread: GitHub keeps
@@ -702,5 +702,5 @@ func fetchCommentedPR(ctx context.Context, client *githubClient, source config.G
 		return err
 	}
 
-	return fetchPullRequest(ctx, client, source.Repo, number, pull.Head.SHA, source.WantsTree(), destDir)
+	return fetchPullRequest(ctx, client, source.Repo, number, pull.Head.SHA, source.Checkout, destDir)
 }

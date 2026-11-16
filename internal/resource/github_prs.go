@@ -216,14 +216,14 @@ func githubPRsIn(ctx context.Context, raw, version map[string]any, destDir strin
 		return err
 	}
 
-	return fetchPullRequest(ctx, client, source.Repo, number, sha, source.WantsTree(), destDir)
+	return fetchPullRequest(ctx, client, source.Repo, number, sha, source.Checkout, destDir)
 }
 
 // fetchPullRequest lays down one pull request at one commit: the tree first,
 // when asked for, then the metadata beside it — written so a repository file
 // of the same name is a loud collision rather than a silent overwrite.
-func fetchPullRequest(ctx context.Context, client *githubClient, repo, number, sha string, tree bool, destDir string) error {
-	if tree {
+func fetchPullRequest(ctx context.Context, client *githubClient, repo, number, sha string, checkout config.GitHubCheckout, destDir string) error {
+	if checkout == config.GitHubCheckoutTree {
 		err := fetchTree(ctx, client, repo, sha, destDir)
 		if err != nil {
 			return err
@@ -233,7 +233,10 @@ func fetchPullRequest(ctx context.Context, client *githubClient, repo, number, s
 	var pull struct {
 		HTMLURL string `json:"html_url"`
 		Base    struct {
-			Ref string `json:"ref"`
+			Ref  string `json:"ref"`
+			Repo struct {
+				CloneURL string `json:"clone_url"`
+			} `json:"repo"`
 		} `json:"base"`
 	}
 
@@ -252,6 +255,8 @@ func fetchPullRequest(ctx context.Context, client *githubClient, repo, number, s
 		MergeBase struct {
 			SHA string `json:"sha"`
 		} `json:"merge_base_commit"`
+		AheadBy  int `json:"ahead_by"`
+		BehindBy int `json:"behind_by"`
 	}
 
 	_, err = client.getJSON(ctx, compare, &comparison)
@@ -268,14 +273,24 @@ func fetchPullRequest(ctx context.Context, client *githubClient, repo, number, s
 		return githubFailure(http.MethodGet, compare, diff)
 	}
 
-	return writeMetadata(destDir, map[string][]byte{
+	if checkout == config.GitHubCheckoutGit {
+		err = checkoutGit(ctx, gitClone{
+			url: pull.Base.Repo.CloneURL, token: client.token, number: number, sha: sha, base: pull.Base.Ref,
+			ahead: comparison.AheadBy, behind: comparison.BehindBy, dir: destDir,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return writeGetFiles(destDir, map[string][]byte{
 		prJSONFile:      pullJSON,
 		prDiffFile:      diff.body,
 		prNumberFile:    []byte(number),
 		prSHAFile:       []byte(sha),
 		prMergeBaseFile: []byte(comparison.MergeBase.SHA),
 		prURLFile:       []byte(pull.HTMLURL),
-	})
+	}, checkout)
 }
 
 // escapeRef keeps a branch's slashes, which the compare route reads as part

@@ -415,7 +415,7 @@ A version is `{number, sha}`: the pull request and its head commit, so a push is
 | `labels` | no | labels that must all be on it |
 | `base` | no | the branch it would merge into |
 | `draft` | no | `true` keeps only drafts, `false` only ready ones; both when unset |
-| `checkout` | no | `false` skips the tree and writes only the metadata files; default `true` |
+| `checkout` | no | `false` skips the tree and writes only the metadata files; `git` lays down a git repository instead of the tree ([below](#checkout-git-a-repository-to-run-git-in)); default `true` |
 | `token_env` | no | the variable holding the token; default `GH_TOKEN` |
 | `endpoint` | no | the REST API base; default `https://api.github.com`, and `https://<host>/api/v3` for GitHub Enterprise Server; plain `http` is accepted only for a loopback host (`localhost`, `127.0.0.0/8`, `::1`), because the token would otherwise travel in cleartext |
 
@@ -430,6 +430,45 @@ A version is `{number, sha}`: the pull request and its head commit, so a push is
 | `pr.url` | its page |
 
 The diff and the merge base are computed against the version's commit rather than read from the pull request, whose own diff is always of its *current* head, so a pinned or replayed version sees the change as it was. A repository that has a file of one of those names at its root is refused by name rather than overwritten; set `checkout: false` and fetch the tree with a `git` resource there.
+
+#### `checkout: git`: a repository to run git in
+
+The tree GitHub archives has no history, so `git merge-base`, `git diff origin/main...HEAD` and a push from it are impossible. `checkout: git` lays down a git repository instead, cloned by steps from the repository GitHub names for the pull request:
+
+- `HEAD` is the version's commit, detached;
+- `origin/<base>` is the base branch as of the get;
+- the history reaches the merge base of the two and, as far as GitHub's count of commits on each side allows, no further, so a large repository costs what the pull request touches. A base branch that moved between the count and the fetch deepens to full history rather than stop short;
+- the metadata files are written beside the tree as usual and listed in `.git/info/exclude`, so `git status` is clean and `git add -A` leaves them out;
+- the commit is fetched by id, then through `refs/pull/<number>/head` when a server refuses that. GitHub keeps every pull request's head there, a fork's included, so a pull request from a fork needs no access to the fork.
+
+The clone runs the `git` binary on the machine steps runs on, under the built-in [`git`](#the-built-in-git-type) type's rules: nothing of the operator's git configuration, credential helpers or ssh is read, nothing prompts, and the token is the one `token_env` names. It is sent as a header scoped to the clone URL and written nowhere, so `.git/config` holds no credential and a later step's `git fetch` in the repository is unauthenticated: give it a token of its own, as a [`git`](#the-built-in-git-type) put does.
+
+```yaml github=checkout-git
+resources:
+- name: pr
+  type: github-prs
+  source:
+    repo: acme/app
+    checkout: git
+
+jobs:
+- name: review
+  plan:
+  - get: pr
+    trigger: true
+    version: every
+  - task: changed
+    inputs: [pr]
+    run: |
+      cd pr
+      test "$(git merge-base HEAD origin/main)" = "$(cat pr.mergebase)"
+      echo "changed: $(git diff --name-only origin/main...HEAD); clean: $(git status --porcelain | wc -l | tr -d ' ')"
+    assert:
+      stdout: "changed: feature.txt; clean: 0"
+  assert:
+    execution: [pr, changed]
+    outcome: succeeded
+```
 
 **Being assigned is a trigger.** An assignment brings a pull request into the filtered set, which makes it a version the resource has never seen:
 
@@ -515,7 +554,7 @@ jobs:
 | `author` | no | who wrote it: one login, or a list of logins any of which may have. Compared without regard to case as GitHub compares logins; `@me` is the token's own user. `github-prs` and `github-issues` take one login only, since theirs is a search qualifier |
 | `body` | no | an [RE2](https://github.com/google/re2/wiki/Syntax) pattern the text must contain a match for; `^` anchors it to the start |
 | `kinds` | no | `conversation` (a pull request's timeline), `review` (inline, on a line of its diff), `issue` (an issue's timeline); default the first two |
-| `checkout` | no | `false` skips the pull request's tree; default `true`. An issue has no tree |
+| `checkout` | no | `false` skips the pull request's tree, `git` makes it a git repository as for `github-prs`; default `true`. An issue has no tree |
 | `labels` | no | labels that must all be on the issue or pull request the comment sits on, compared without regard to case as GitHub compares label names |
 | `skip_reacted` | no | a reaction (`+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes`) that, left by the token's own user, marks a comment done: it is not reported |
 | `include` | no | what around the comment a get also writes: `conversation`, `review_comments`, `reviews`, each as `<name>.json`; default none |

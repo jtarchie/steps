@@ -60,6 +60,8 @@ type fakePR struct {
 	Body string
 	// Opened says a put opened it, rather than the test filing it.
 	Opened bool
+	// AheadBy and BehindBy are what a compare of base...SHA counts: commits since the merge base on each side.
+	AheadBy, BehindBy int
 }
 
 type fakeIssue struct {
@@ -163,6 +165,12 @@ type fakeGitHub struct {
 	branches map[string]string
 	// patched counts PATCHes to pull requests, so a test can tell "changed nothing" from "changed it to the same".
 	patched int
+	// git is the repository served over smart HTTP, when a test serves one (fakegit_test.go).
+	git *fakeGitRepo
+	// gitRequests counts requests to it.
+	gitRequests int
+	// refuseSHAWants answers git as a server that serves only advertised refs.
+	refuseSHAWants bool
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
@@ -336,6 +344,7 @@ func (f *fakeGitHub) routes() http.Handler {
 		})
 	}
 
+	mux.Handle("/"+f.repo+".git/", f.gitHandler())
 	handle("POST /graphql", f.serveGraphQL)
 	handle("GET "+repo, func(w http.ResponseWriter, _ *http.Request) {
 		respondJSON(w, http.StatusOK, map[string]any{"full_name": f.repo, "default_branch": f.defaultBranch})
@@ -626,7 +635,7 @@ func (f *fakeGitHub) pullJSON(pr fakePR) map[string]any {
 		"node_id": fmt.Sprintf("PR_node_%d", pr.Number),
 		"user":    map[string]any{"login": pr.Author},
 		"head":    map[string]any{"sha": pr.SHA, "ref": pr.Head, "repo": map[string]any{"full_name": f.repo}},
-		"base":    map[string]any{"ref": pr.Base},
+		"base":    map[string]any{"ref": pr.Base, "repo": map[string]any{"full_name": f.repo, "clone_url": f.cloneURL()}},
 	}
 }
 
@@ -646,7 +655,7 @@ func (f *fakeGitHub) serveCompare(w http.ResponseWriter, r *http.Request, basehe
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{"merge_base_commit": map[string]any{"sha": pr.MergeBase}})
+	respondJSON(w, http.StatusOK, map[string]any{"merge_base_commit": map[string]any{"sha": pr.MergeBase}, "ahead_by": pr.AheadBy, "behind_by": pr.BehindBy})
 }
 
 // serveTarball builds the archive GitHub would: every path under one

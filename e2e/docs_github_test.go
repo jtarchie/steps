@@ -28,6 +28,8 @@ type docGitHubFixture struct {
 	reviews map[int][]fakeReview
 	// branches are the pushed branches a pull request can be opened from, with the commit each is at.
 	branches map[string]string
+	// git serves pull request #7 over a real repository, for checkout: git (fakegit_test.go).
+	git bool
 }
 
 // docGitHubLogin is the token's own user on every fake, so a fixture can
@@ -70,7 +72,8 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 			}
 		},
 	},
-	"assigned": {prs: []fakePR{docPR()}},
+	"assigned":     {prs: []fakePR{docPR()}},
+	"checkout-git": {git: true},
 	"comment-command": {
 		prs: []fakePR{docPR(), unlabeledDocPR()},
 		comments: []fakeComment{
@@ -279,6 +282,12 @@ func (fixture docGitHubFixture) serve(t *testing.T) *fakeGitHub {
 
 	for number, reviews := range fixture.reviews {
 		fake.reviews[number] = append(fake.reviews[number], reviews...)
+	}
+
+	if fixture.git {
+		repo := newFakeGitRepo(t)
+		fake.serveGit(repo)
+		fake.addPR(gitPR(repo))
 	}
 
 	return fake

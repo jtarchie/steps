@@ -105,9 +105,8 @@ type GitHubPRsSource struct {
 	Base string `yaml:"base,omitempty"`
 	// Draft, when set, keeps only drafts (true) or only ready ones (false).
 	Draft *bool `yaml:"draft,omitempty"`
-	// Checkout, true unless set false, lays the tree at the version's commit
-	// into the artifact beside the metadata files.
-	Checkout *bool `yaml:"checkout,omitempty"`
+	// Checkout is what the get lays beside the metadata files: the tree at the version's commit (true, the default), nothing (false), or a git repository at it (git).
+	Checkout GitHubCheckout `yaml:"checkout,omitempty"`
 }
 
 // Connection is where this resource talks to.
@@ -115,8 +114,43 @@ func (s GitHubPRsSource) Connection() GitHubConnection {
 	return GitHubConnection{Repo: s.Repo, TokenEnv: s.TokenEnv, Endpoint: s.Endpoint}
 }
 
-// WantsTree reports whether a get lays down the tree.
-func (s GitHubPRsSource) WantsTree() bool { return s.Checkout == nil || *s.Checkout }
+// GitHubCheckout is how a get lays down a pull request: the tree GitHub
+// archives (unset, or true), nothing (false), or a git repository (git).
+type GitHubCheckout string
+
+// The ways a get lays down a pull request; the zero value is the tree.
+const (
+	GitHubCheckoutTree GitHubCheckout = ""
+	GitHubCheckoutNone GitHubCheckout = "none"
+	GitHubCheckoutGit  GitHubCheckout = "git"
+)
+
+// UnmarshalYAML takes the boolean the field was before git joined it, or the word git. A quoted "true" is refused: it would read as true to a person and as a string to YAML.
+func (c *GitHubCheckout) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode && node.Tag == "!!bool" {
+		var tree bool
+
+		err := node.Decode(&tree)
+		if err != nil {
+			return fmt.Errorf("checkout: %w", err)
+		}
+
+		*c = GitHubCheckoutTree
+		if !tree {
+			*c = GitHubCheckoutNone
+		}
+
+		return nil
+	}
+
+	if node.Kind == yaml.ScalarNode && node.Value == string(GitHubCheckoutGit) {
+		*c = GitHubCheckoutGit
+
+		return nil
+	}
+
+	return fmt.Errorf("checkout at line %d must be true (the tree), false (no tree) or git (a git repository), not %q", node.Line, node.Value)
+}
 
 // GitHubIssuesSource is a github-issues resource's source:. Every filter narrows: an issue is a version only while it is open and matches all of them.
 type GitHubIssuesSource struct {
@@ -150,9 +184,8 @@ type GitHubCommentsSource struct {
 	// timeline), review (inline, on a line of its diff), issue (an issue's
 	// timeline). Default conversation and review.
 	Kinds []string `yaml:"kinds,omitempty"`
-	// Checkout, true unless set false, lays the tree of the pull request a
-	// comment sits on into the artifact. An issue has no tree.
-	Checkout *bool `yaml:"checkout,omitempty"`
+	// Checkout is what a get lays down of the pull request a comment sits on, as github-prs' checkout. An issue has no tree.
+	Checkout GitHubCheckout `yaml:"checkout,omitempty"`
 	// SkipReacted is a reaction that, left by the token's own user, marks a
 	// comment done: check does not report it. The mark lives on GitHub, so
 	// it outlasts a wiped state database, whose first check would otherwise
@@ -229,9 +262,6 @@ func validateGitHubLogins(logins GitHubLogins) error {
 func (s GitHubCommentsSource) Connection() GitHubConnection {
 	return GitHubConnection{Repo: s.Repo, TokenEnv: s.TokenEnv, Endpoint: s.Endpoint}
 }
-
-// WantsTree reports whether a get lays down the pull request's tree.
-func (s GitHubCommentsSource) WantsTree() bool { return s.Checkout == nil || *s.Checkout }
 
 // WatchedKinds is Kinds with its default filled in.
 func (s GitHubCommentsSource) WatchedKinds() []string {

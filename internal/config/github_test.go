@@ -1,7 +1,6 @@
 package config
 
 import (
-	"maps"
 	"strings"
 	"testing"
 )
@@ -320,19 +319,23 @@ func TestGitHubTokenIsARequirement(t *testing.T) {
 	}
 }
 
-// TestGitHubCheckoutDefaultsToTheTree: checkout: is true unless set false, on both resources that can lay a pull request down.
+// TestGitHubCheckoutDefaultsToTheTree: checkout: is the tree unless set false or git, on both resources that can lay a pull request down, and nothing else loads.
 func TestGitHubCheckoutDefaultsToTheTree(t *testing.T) {
 	t.Parallel()
 
-	for name, extra := range map[string]map[string]any{
-		"unset": {},
-		"true":  {"checkout": true},
-		"false": {"checkout": false},
+	for name, tc := range map[string]struct {
+		value any
+		want  GitHubCheckout
+	}{
+		"unset": {nil, GitHubCheckoutTree},
+		"true":  {true, GitHubCheckoutTree},
+		"false": {false, GitHubCheckoutNone},
+		"git":   {"git", GitHubCheckoutGit},
 	} {
 		raw := map[string]any{"repo": "acme/app"}
-		maps.Copy(raw, extra)
-
-		want := name != "false"
+		if tc.value != nil {
+			raw["checkout"] = tc.value
+		}
 
 		prs, err := ParseGitHubPRsSource(raw)
 		if err != nil {
@@ -344,8 +347,15 @@ func TestGitHubCheckoutDefaultsToTheTree(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 
-		if prs.WantsTree() != want || comments.WantsTree() != want {
-			t.Errorf("%s: prs %v, comments %v; want %v", name, prs.WantsTree(), comments.WantsTree(), want)
+		if prs.Checkout != tc.want || comments.Checkout != tc.want {
+			t.Errorf("%s: prs %q, comments %q; want %q", name, prs.Checkout, comments.Checkout, tc.want)
+		}
+	}
+
+	for _, bad := range []any{"svn", "true", "none", 1} {
+		_, err := ParseGitHubPRsSource(map[string]any{"repo": "acme/app", "checkout": bad})
+		if err == nil || !strings.Contains(err.Error(), "must be true (the tree), false (no tree) or git") {
+			t.Errorf("checkout: %#v loaded (err %v), want it refused naming the three choices", bad, err)
 		}
 	}
 }
