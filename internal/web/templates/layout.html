@@ -134,7 +134,7 @@
 <footer class="foot">
   <span class="ver"><b>steps</b> {{.Version}}</span>
   <nav aria-label="{{t "foot.about"}}"><a {{if eq .Section "docs"}}aria-current="page" {{end}}href="/docs">{{t "foot.docs"}}</a><a href="https://github.com/jtarchie/steps" rel="noopener">{{t "foot.source"}}</a></nav>
-  <nav class="langs" aria-label="{{t "lang.label"}}"><a {{if not .LangPicked}}aria-current="true" {{end}}href="{{printf "/lang?lang=&return=%s" (urlquery .Nav.URL)}}">{{t "lang.auto"}}</a>{{range languages}}<a lang="{{.Tag}}" {{if and $.LangPicked (eq .Tag $.Lang)}}aria-current="true" {{end}}href="{{printf "/lang?lang=%s&return=%s" .Tag (urlquery $.Nav.URL)}}">{{.Name}}</a>{{end}}</nav>
+  <form class="langs" method="get" action="/lang"><label for="lang">{{t "lang.label"}}</label><select id="lang" name="lang" aria-describedby="lang-note"><option value=""{{if not .LangPicked}} selected{{end}}>{{t "lang.auto"}}</option>{{range languages}}<option lang="{{.Tag}}" value="{{.Tag}}"{{if and $.LangPicked (eq .Tag $.Lang)}} selected{{end}}>{{.Name}}</option>{{end}}</select><input type="hidden" name="return" value="{{.Nav.URL}}"><button type="submit">{{t "lang.apply"}}</button><span class="visually-hidden" id="lang-note">{{t "lang.note"}}</span></form>
   <span class="copy">© {{year}} JT Archie</span>
 </footer>
 

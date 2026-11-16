@@ -102,7 +102,7 @@ func TestCatalogTextIsEscapedAndOnlyMarkupArgumentsAreRaw(t *testing.T) {
 }
 
 var (
-	dropBlocks = regexp.MustCompile(`(?is)<script\b.*?</script>|<style\b.*?</style>|<pre\b.*?</pre>|<code\b.*?</code>|<kbd\b.*?</kbd>|<svg\b.*?</svg>|<!--.*?-->|<h1 class="prompt">.*?</h1>|<nav class="langs".*?</nav>`)
+	dropBlocks = regexp.MustCompile(`(?is)<script\b.*?</script>|<style\b.*?</style>|<pre\b.*?</pre>|<code\b.*?</code>|<kbd\b.*?</kbd>|<svg\b.*?</svg>|<!--.*?-->|<h1 class="prompt">.*?</h1>|<form class="langs".*?</form>`)
 	tagRe      = regexp.MustCompile(`(?s)<[^>]*>`)
 	attrRe     = regexp.MustCompile(`\b(?:aria-label|title|placeholder|alt)="([^"]*)"`)
 	wordRe     = regexp.MustCompile(`[A-Za-z]{2,}`)

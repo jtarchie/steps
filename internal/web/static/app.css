@@ -348,8 +348,11 @@ main { width: 100%; max-width: 1000px; margin: 0 auto; padding: 26px 20px 48px; 
 .foot a { color: var(--dim); }
 .foot a:hover { color: var(--fg); }
 .foot a[aria-current="page"] { color: var(--green); }
-.foot .langs { margin-left: auto; display: flex; gap: 14px; }
-.foot .langs a[aria-current="true"] { color: var(--green); }
+.foot .langs { margin-left: auto; display: flex; align-items: center; gap: 8px; margin-block: 0; }
+.foot .langs label { color: var(--dim); }
+.foot .langs select, .foot .langs button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--faint-line); border-radius: 3px; padding: 2px 6px; }
+.foot .langs button { cursor: pointer; }
+.foot .langs [hidden] { display: none; }
 .foot .copy { margin-left: 0; }
 @media (max-width: 640px) { .foot { padding-left: 16px; padding-right: 16px; } .foot .copy { margin-left: 0; flex-basis: 100%; } .foot .langs { margin-left: 0; flex-basis: 100%; } }
 

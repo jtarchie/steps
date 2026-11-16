@@ -51,7 +51,7 @@ func TestThePickerOverridesTheBrowserAndRemembersIt(t *testing.T) {
 	}
 
 	_, body := getAs(t, server, "/p/demo", http.Header{"Accept-Language": {"en"}, "Cookie": {cookie.String()}})
-	if !strings.Contains(body, `<html lang="zh-CN">`) || !strings.Contains(body, `<a lang="zh-CN" aria-current="true"`) {
+	if !strings.Contains(body, `<html lang="zh-CN">`) || !strings.Contains(body, `<option lang="zh-CN" value="zh-CN" selected>`) {
 		t.Error("the choice did not beat the browser, or the picker does not show it")
 	}
 }
@@ -62,8 +62,12 @@ func TestThePickerOffersEveryLanguageByItsOwnName(t *testing.T) {
 	server, _ := testPipeline(t)
 
 	_, body := getAs(t, server, "/p/demo", nil)
-	if !strings.Contains(body, `<a aria-current="true" href="/lang?lang=&amp;return=`) || !strings.Contains(body, `>简体中文</a>`) {
+	if !strings.Contains(body, `<option value="" selected>auto</option>`) || !strings.Contains(body, `>简体中文</option>`) {
 		t.Error("with no choice the picker should read auto and offer every language by its own name")
+	}
+
+	if !strings.Contains(body, `<label for="lang">Language</label><select id="lang" name="lang" aria-describedby="lang-note">`) || !strings.Contains(body, `<button type="submit">Apply</button>`) {
+		t.Error("the picker must be a labelled select with an Apply button, so it works without script")
 	}
 }
 

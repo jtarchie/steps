@@ -558,6 +558,15 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
   });
 })();
 
+// The picker is a plain GET form with an Apply button that works without script; with script it applies on change, and the select's lang.note description is what tells a screen-reader user choosing reloads the page (WCAG 3.2.2).
+(function () {
+  var form = document.querySelector('form.langs');
+  if (!form) return;
+  var button = form.querySelector('button');
+  if (button) button.hidden = true;
+  form.querySelector('select').addEventListener('change', function () { form.requestSubmit(); });
+})();
+
 // On a phone the tabs are a strip that scrolls sideways, and the current one
 // can start off the right edge — the one tab a reader most needs to see is
 // the one telling them where they are. block:'nearest' keeps this from also

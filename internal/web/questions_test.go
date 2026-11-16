@@ -161,8 +161,9 @@ func TestQuestionsPageWithholdsTheControlWhenReadOnly(t *testing.T) {
 	askOne(t, pipeline)
 
 	_, body := get(t, server, "/p/demo/questions")
+	_, inMain, _ := strings.Cut(body, "<main")
 
-	if strings.Contains(body, "<form") {
+	if main, _, _ := strings.Cut(inMain, "</main>"); strings.Contains(main, "<form") {
 		t.Error("a read-only server offered an answer form")
 	}
 

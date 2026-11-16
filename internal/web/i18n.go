@@ -324,7 +324,7 @@ func (s *Server) cookieTag(value string) string {
 	return ""
 }
 
-// handleSetLanguage remembers a visitor's choice, or forgets it for an empty one so the browser's answer applies again. A GET, so the picker is plain links with no form for a read-only page to withhold; it sets only the reader's own cookie and holds nothing server-side.
+// handleSetLanguage remembers a visitor's choice, or forgets it for an empty one so the browser's answer applies again. A GET, so the picker is a form with no write for a read-only page to withhold; it sets only the reader's own cookie and holds nothing server-side.
 func (s *Server) handleSetLanguage(c *echo.Context) error {
 	if tag := s.cookieTag(c.FormValue("lang")); tag != "" {
 		setCookie(c, langCookie, tag, "/", 365*24*60*60)
