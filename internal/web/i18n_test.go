@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -140,7 +141,7 @@ func untranslated(page, fixture string) []string {
 
 	scan := func(text string) {
 		for _, word := range wordRe.FindAllString(html.UnescapeString(text), -1) {
-			if !fixtureWords[word] && !fixtureWords[strings.ToLower(word)] && !strings.Contains(fixture, word) {
+			if !fixtureWords[word] && !fixtureWords[strings.ToLower(word)] && !strings.Contains(fixture, word) && !strings.Contains(os.TempDir(), word) {
 				left = append(left, word)
 			}
 		}
