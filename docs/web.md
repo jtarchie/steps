@@ -179,8 +179,11 @@ first because every tab after it — jobs, runs, resources, approvals,
 questions, and mcp when the pipeline declares servers — is about that one
 pipeline; click its name to switch to another the daemon holds. The root,
 the docs and an error page sit above any pipeline, so they offer only the
-switcher and no tabs. On a phone the tabs become one strip that scrolls
-sideways, with the current one brought into view. **jump** (or `/`) opens a
+switcher and no tabs. On a phone, upright or held sideways, the header is one row: the pipeline, a ☰
+menu named for the section you are on, and **jump**. The menu holds the tabs,
+read-only, the theme and your account, and shows the total of every tab's
+count, so something waiting on you is still visible with the menu closed. A
+paused pipeline leaves a blue line under the bar. **jump** (or `/`) opens a
 palette that searches jobs, runs and pipelines across everything served.
 Beside it is the theme: **auto** follows the system's
 light or dark setting, and a press pins **light**, then **dark**, then back

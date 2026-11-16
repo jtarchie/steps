@@ -44,7 +44,7 @@ func TestTheUserMenuNamesWhoIsSignedIn(t *testing.T) {
 	}
 }
 
-// TestTheMenusShareOneOpenStateAndEscape: delegated like the switcher was, so a poll's morph cannot strand a listener, and Escape returns focus to the button that opened it. No JS runtime runs here; Firefox against a daemon is the behavioural check.
+// TestTheMenusShareOneOpenStateAndEscape: the switcher, the user menu and the phone's sections menu are delegated like the switcher was, so a poll's morph cannot strand a listener, and Escape returns focus to the button that opened it. No JS runtime runs here; Firefox against a daemon is the behavioural check.
 func TestTheMenusShareOneOpenStateAndEscape(t *testing.T) {
 	t.Parallel()
 
@@ -53,7 +53,7 @@ func TestTheMenusShareOneOpenStateAndEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, want := range []string{`pipebtn: 'pipemenu', userbtn: 'usermenu'`, `closest('#pipebtn, #userbtn')`, `e.key !== 'Escape'`, `btn.focus()`} {
+	for _, want := range []string{`pipebtn: 'pipemenu', userbtn: 'usermenu', navbtn: 'sections'`, `closest('#pipebtn, #userbtn, #navbtn')`, `e.key !== 'Escape'`, `btn.focus()`} {
 		if !strings.Contains(string(js), want) {
 			t.Errorf("app.js does not carry %s", want)
 		}

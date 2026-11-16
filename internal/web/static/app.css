@@ -298,26 +298,74 @@ tr.checkfail pre { margin: 0 0 4px; }
   .pipelines .btn { min-height: 36px; }
 }
 
-/* On a phone the path and the tabs are two rows: brand and switcher first,
-   the jump control at their right, then the tabs as one strip that scrolls
-   sideways behind a fade — nothing is folded into a menu, because the
-   badges on those tabs are the whole reason to look at the bar. */
-@media (max-width: 640px) {
-  .statusline .right { order: 2; padding-right: 6px; }
-  .tabs {
-    order: 3;
-    flex-basis: 100%;
-    overflow-x: auto;
-    scrollbar-width: none;
-    border-top: 1px solid var(--line-soft);
-    -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
-    mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
-  }
-  .tabs::-webkit-scrollbar { display: none; }
-  .tab:last-child { border-right: 0; padding-right: 28px; }
-  .actionbar { order: 4; }
+/* The tabs' stand-in on a phone; a wide screen has room for the tabs themselves. */
+.navbtn { display: none; }
+
+/* On a phone the header is ONE row — brand, pipeline, a menu named for the
+   section you are on, the palette — and the tabs, read-only, theme and
+   account fold into that menu. It was four rows and a fifth of the screen,
+   pinned over every page. The tabs were a sideways strip once so their
+   badges stayed in view; the menu button now carries their sum, so folding
+   them hides which tab is waiting, never that one is. A bar that only SAYS
+   something (paused, read-only) folds in too and leaves a blue rule; a bar
+   with buttons stays, since those are what a reader came to press. A phone
+   held sideways is wide but short, so height decides too: keyed on width
+   alone it got the desktop bar, 125px pinned on a 375px screen. */
+@media (max-width: 640px), (max-height: 500px) {
+  .statusline .brand { padding: 8px 10px; }
+  .statusline .brand .web { display: none; }
   .pipeswitch { min-width: 0; }
-  .pipebtn b { overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+  .pipebtn b { overflow: hidden; text-overflow: ellipsis; max-width: 30vw; }
+  .navbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 12px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--fg);
+    background: none;
+    border: 0;
+    border-right: 1px solid var(--line-soft);
+    cursor: pointer;
+  }
+  .navbtn::after { content: "☰"; color: var(--dim); font-size: 15px; }
+  .navbtn .badge { margin-left: 0; }
+  .navbtn[aria-expanded="true"] { background: var(--bg); box-shadow: inset 0 -2px 0 var(--green); }
+
+  /* Its children become the bar's own items, so the palette stays on the top row and the rest can move into the menu. */
+  .statusline .right { display: contents; }
+  .jumpbtn:not(.themebtn) { margin-left: auto; min-height: 44px; min-width: 44px; justify-content: center; padding: 0 12px; font-size: 15px; }
+  .jumpbtn kbd { display: none; }
+  /* Out of sight, not out of the accessibility tree: it is the button's whole name. */
+  .jumpbtn .lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+  .tabs { display: none; order: 3; flex-basis: 100%; flex-direction: column; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line); }
+  .tabs.open { display: flex; }
+  .tab { min-height: 44px; padding: 0 16px; font-size: 13px; border-right: 0; border-top: 1px solid var(--line-soft); }
+  .tab:first-child { border-top: 0; }
+  /* The weight is the mark forced colors keep; they drop the edge. */
+  .tab[aria-current="page"] { box-shadow: inset 3px 0 0 var(--green); font-weight: 600; }
+  .tab .badge { margin-left: auto; }
+
+  .statusline .ro, .statusline .themebtn, .statusline .usermenu { display: none; order: 4; min-height: 44px; align-items: center; padding: 0 16px; }
+  .statusline:has(.tabs.open) .ro, .statusline:has(.tabs.open) .themebtn, .statusline:has(.tabs.open) .usermenu { display: inline-flex; }
+  .statusline .themebtn { margin-left: auto; }
+  /* Open, the pinned header can be taller than a short screen, so it scrolls itself or its last rows are out of reach. */
+  .statusline:has(.tabs.open) { max-height: 100dvh; overflow-y: auto; }
+  /* The account's button would close the menu it lives in (one open record), so on a phone its links are the menu's own rows. */
+  .statusline .usermenu { flex-basis: 100%; flex-direction: column; align-items: stretch; padding: 0; margin: 0; border-left: 0; }
+  .statusline .usermenu .menuhead, .statusline .usermenu .pipemenu a, .statusline .usermenu .menubtn { display: flex; align-items: center; min-height: 44px; box-sizing: border-box; padding: 0 16px; font-size: 13px; }
+  .statusline .userbtn { display: none; }
+  .statusline .usermenu .pipemenu { display: block; position: static; min-width: 0; max-width: none; border: 0; border-top: 1px solid var(--line-soft); }
+
+  .actionbar { order: 5; }
+  .actionbar:not(:has(button, a)) { display: none; }
+  .statusline:has(.tabs.open) .actionbar:has(.group > *) { display: flex; }
+  /* Two :has() side by side, because one cannot hold another: nested, the whole rule is dropped. */
+  .statusline:has(> .actionbar.paused):not(:has(> .actionbar :is(button, a))) { border-bottom: 2px solid var(--blue); }
 }
 
 /* ---- page frame ---- */

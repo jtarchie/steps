@@ -330,7 +330,9 @@ func templateFuncs(loc *locale) template.FuncMap {
 		"mark":  statusMark[string],
 		// The tab badges: one lookup into the list nav() already gathered,
 		// rather than six count fields that could each be stale differently.
-		"attentionOn": attentionOn,
+		"attentionOn":   attentionOn,
+		"attentionTabs": attentionTabs,
+		"sectionTab":    sectionTab,
 		// The activity page narrowed by one more field: every name in a row is a link that filters by it.
 		"filterURL": withQuery,
 		// The name a tool is offered under, the same one an agent's grant uses.

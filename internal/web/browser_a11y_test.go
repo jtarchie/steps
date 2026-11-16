@@ -194,6 +194,10 @@ func TestEveryPagePassesAxe(t *testing.T) {
 
 	check("/p/demo with the switcher open", media("light", false), chromedp.Navigate(base+"/p/demo"), chromedp.Click(chromedp.CSS("#pipebtn")))
 	check("/p/demo with the palette open", media("light", false), chromedp.Navigate(base+"/p/demo"), chromedp.Click(chromedp.CSS("#jumpbtn")), chromedp.KeyEvent("b"), chromedp.Evaluate[chromedp.Void](`new Promise(done => setTimeout(done, 400))`, chromedp.EvalAwaitPromise))
+
+	for _, mode := range []struct{ name, scheme string }{{"light", "light"}, {"dark", "dark"}} {
+		check("/p/demo on a phone with the sections menu open ["+mode.name+"]", chromedp.EmulateViewport(375, 812, chromedp.EmulateMobile, chromedp.EmulateTouch), media(mode.scheme, false), chromedp.Navigate(base+"/p/demo"), chromedp.Click(chromedp.CSS("#navbtn")))
+	}
 }
 
 type tabStop struct {
