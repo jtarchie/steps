@@ -461,10 +461,12 @@ jobs:
     inputs: [pr]
     run: |
       cd pr
-      test "$(git merge-base HEAD origin/main)" = "$(cat pr.mergebase)"
-      echo "changed: $(git diff --name-only origin/main...HEAD); clean: $(git status --porcelain | wc -l | tr -d ' ')"
+      base=$(git merge-base HEAD origin/main)
+      test "$base" = "$(cat pr.mergebase)"
+      test -z "$(git status --porcelain)"
+      echo "changed: $(git diff --name-only "$base" HEAD)"
     assert:
-      stdout: "changed: feature.txt; clean: 0"
+      stdout: "changed: feature.txt"
   assert:
     execution: [pr, changed]
     outcome: succeeded
