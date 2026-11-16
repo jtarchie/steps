@@ -342,7 +342,7 @@ func TestARealAgentRunFoldsItsPromptsToOneLine(t *testing.T) {
 	t.Parallel()
 
 	fake := newFakeLLM(t, happyPathScript()...)
-	path := e2ePipeline(t, t.TempDir(), fake.URL, "")
+	path := e2ePipeline(t, t.TempDir(), fake.URL)
 
 	mustRun(t, "run", path, "--job", "build")
 
