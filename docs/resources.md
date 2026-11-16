@@ -36,7 +36,7 @@ jobs:
 | `token_env` | no | the variable holding an https token; see [Credentials](#credentials) |
 | `private_key_env` | no | the variable holding an ssh private key; see [Credentials](#credentials) |
 
-A local-path `uri` costs no network clone — the right call for a large repository — but the check reads that clone's refs as they are, so the version is whatever the clone last fetched, however long ago that was. `fetch: true` fixes that: each check first fetches `branch` from the clone's remote (`branch.<name>.remote`, else `origin`) into `refs/remotes/<remote>/<branch>` and reports that ref, so the version is the remote's head. It moves exactly that one ref — never the working tree, a local branch, tags or `FETCH_HEAD` — so a developer's own `main` sitting behind changes nothing. It needs an absolute path and a `branch:` (both checked at load; a remote `uri` is refused, being fresh already), git 2.29 or newer, a clone owned by the user running steps, and auth that never prompts (an ssh agent, a credential helper) — a poll has no terminal, so a prompt fails the fetch instead of waiting. A failed fetch fails the check, so `steps web` reports no version rather than a stale one; like any failing check, it holds back only this resource until a later check succeeds, and the pipeline's other resources keep triggering. Turning `fetch:` on changes which commit is reported, and `source:` is part of the cache key, so expect one fresh build. The built-in type refuses any other `source:` key, so a misspelled `fecth:` is a load error rather than a flag nobody reads.
+A local-path `uri` costs no network clone — the right call for a large repository — but the check reads that clone's refs as they are, so the version is whatever the clone last fetched, however long ago that was. `fetch: true` fixes that: each check first fetches `branch` from the clone's remote (`branch.<name>.remote`, else `origin`) into `refs/remotes/<remote>/<branch>` and reports that ref, so the version is the remote's head. It moves exactly that one ref — never the working tree, a local branch, tags or `FETCH_HEAD` — so a developer's own `main` sitting behind changes nothing. It needs an absolute path and a `branch:` (both checked at load; a remote `uri` is refused, being fresh already), git 2.32 or newer (what `GIT_CONFIG_GLOBAL` needs; every command of this type sets it), a clone owned by the user running steps, and a remote the resource can reach with what its `source:` names (see [Credentials](#credentials)): an ssh remote with neither `token_env` nor `private_key_env` fails the check by name, and a poll has no terminal, so a prompt fails the fetch instead of waiting. A failed fetch fails the check, so `steps web` reports no version rather than a stale one; like any failing check, it holds back only this resource until a later check succeeds, and the pipeline's other resources keep triggering. Turning `fetch:` on changes which commit is reported, and `source:` is part of the cache key, so expect one fresh build. The built-in type refuses any other `source:` key, so a misspelled `fecth:` is a load error rather than a flag nobody reads.
 
 ```yaml noexec=network
 resources:
@@ -85,9 +85,10 @@ jobs:
 
 ### Credentials
 
-Without `token_env` or `private_key_env`, git authenticates the way it does in your terminal: your `~/.gitconfig`, its credential helpers and `url.<base>.insteadOf` rewrites, `~/.ssh/config` and your ssh agent. Naming either one makes the resource use **that credential and nothing else**, as Concourse's git resource does by running in a container:
+A git resource authenticates with what its `source:` names and **nothing else**, as Concourse's git resource does by running in a container. Nothing of yours is read: not `~/.gitconfig`, its credential helpers or `url.<base>.insteadOf` rewrites, not `~/.ssh/config`, your ssh agent or your default keys. A poll runs unattended, and one that reached an agent which asks a person would ask every interval.
 
-- Your global and system git config are not read, so an `insteadOf` that turns `https://github.com/` into ssh, or a keychain helper, never joins in.
+- With neither `token_env` nor `private_key_env`, a public https `uri` and a local path work, and nothing else does. An ssh `uri` is a load error, and `fetch: true` on a clone whose remote is ssh fails the check naming `token_env`.
+- A local `uri`'s own `.git/config` is still read: that clone is what `source:` names.
 - `token_env` answers git's https credential request with `x-access-token` and the variable's value. It needs an https `uri`. With `fetch: true` the clone's remote is fetched at its https form even when it is spelled `git@host:path` or `ssh://`, into the same `refs/remotes/<remote>/<branch>`, so a developer's ssh origin never reaches the ssh agent.
 - `private_key_env` writes the key to a file only the step's user can read, removed when the command ends, and runs ssh with no config file, no agent and that key alone. It needs an ssh `uri`. Host keys are not checked, as Concourse's git resource does not check them.
 - The variable must be one the resource's commands can see: listed in its `env:`, or a key of its [`secrets:`](secrets.md), which keeps the value out of the daemon's own environment and masks it in output. Either way it is read inside the shell, never written into the rendered command. Unset or empty fails the command by name.
@@ -116,7 +117,7 @@ resources:
   source:
     uri: https://github.com/acme/app.git
     branch: main
-    token_env: GH_TOKEN          # this token only: ~/.gitconfig is not read
+    token_env: GH_TOKEN          # this token only
 - name: release
   type: git
   env: [GH_TOKEN]

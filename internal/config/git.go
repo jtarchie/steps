@@ -20,7 +20,7 @@ type GitSource struct {
 	Fetch  bool   `yaml:"fetch,omitempty"`
 	// TagPattern is a glob (v*) that makes the resource track tags instead of a branch: one version per matching tag on the remote. Steps' own; concourse's tag_filter and tag_regex walk a branch's history instead.
 	TagPattern string `yaml:"tag_pattern,omitempty"`
-	// TokenEnv names the variable holding an https token. Setting it, or PrivateKeyEnv, makes every git command ignore the operator's global and system config: a resource handed a credential uses that credential and nothing else. Concourse's git resource is always that isolated, by running in a container; making it the default here would break every remote that today authenticates through the operator's own credential helper or ssh agent.
+	// TokenEnv names the variable holding an https token. With or without one, no git command reads the operator's global or system config, ssh config or agent: what authenticates is named here or nothing does, as in Concourse's git resource, which gets there by running in a container. It was once the operator's config unless a credential was named, and an unattended poll then reached whatever that config pointed at (an ssh agent that asks a person).
 	TokenEnv string `yaml:"token_env,omitempty"`
 	// PrivateKeyEnv names the variable holding an ssh private key; see TokenEnv.
 	PrivateKeyEnv string `yaml:"private_key_env,omitempty"`
@@ -86,11 +86,13 @@ func checkGitCredentialURI(resource Resource, token, key string) error {
 
 	uri, _ := resource.Source["uri"].(string)
 	https := strings.HasPrefix(uri, "https://") || strings.HasPrefix(uri, "http://")
-	ssh := !https && (strings.Contains(uri, "://") || isSCPLike(uri))
+	ssh := isSSHURI(uri)
 
 	switch {
 	case token != "" && !https:
 		return fmt.Errorf("resource %q: source.token_env authenticates https, and %q is not an https uri", resource.Name, uri)
+	case key == "" && ssh:
+		return fmt.Errorf("resource %q: %q is an ssh uri and the git type reads no ssh agent, key or config of the operator's; name a key in source.private_key_env, or use the https uri with source.token_env", resource.Name, uri)
 	case key != "" && !ssh:
 		return fmt.Errorf("resource %q: source.private_key_env authenticates ssh, and %q is not an ssh uri", resource.Name, uri)
 	}
@@ -288,6 +290,17 @@ func validateGitFetch(name, uri, branch string) error {
 	}
 
 	return nil
+}
+
+// isSSHURI reports a uri git would hand to ssh.
+func isSSHURI(uri string) bool {
+	for _, scheme := range []string{"ssh://", "git+ssh://", "ssh+git://"} {
+		if strings.HasPrefix(uri, scheme) {
+			return true
+		}
+	}
+
+	return !strings.Contains(uri, "://") && isSCPLike(uri)
 }
 
 // isSCPLike reports git's scp-style `host:path`: a colon before any slash.

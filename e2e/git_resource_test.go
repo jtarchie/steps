@@ -553,12 +553,9 @@ jobs:
 	}
 }
 
-// The poll-safe ssh defaults are a fallback, not an override: an operator who
-// names their own GIT_SSH_COMMAND (a key, a jump host) through the resource's
-// env: must have it used, or fetch: fails auth that plain git gets right.
-func TestEndToEndBuiltinGitFetchKeepsTheOperatorsSSHCommand(t *testing.T) {
+// Nothing of the operator's authenticates a git resource: an ssh command handed in through env: or a ~/.gitconfig rewriting https to ssh once sent an unattended poll to an ssh agent that asks a person.
+func TestEndToEndBuiltinGitIgnoresTheOperatorsConfig(t *testing.T) {
 	clone := clonedFixtureRepo(t, "content\n", "ahead\n")
-	gitIn(t, clone, "remote", "set-url", "origin", "ssh://git@example.invalid/x.git")
 
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ssh-used")
@@ -569,30 +566,59 @@ func TestEndToEndBuiltinGitFetchKeepsTheOperatorsSSHCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	home := t.TempDir()
+
+	err = os.WriteFile(filepath.Join(home, ".gitconfig"),
+		[]byte("[url \"ssh://git@example.invalid/\"]\n\tinsteadOf = "+server.URL+"/\n[core]\n\tsshCommand = "+script+"\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", home)
 	t.Setenv("GIT_SSH_COMMAND", script)
 
-	path := writePipeline(t, dir, `
+	for name, tc := range map[string]struct{ origin, source, want string }{
+		"ssh origin under fetch": {"ssh://git@example.invalid/x.git", "uri: " + clone + "\n    branch: main\n    fetch: true", "set source.token_env"},
+		"https rewritten to ssh": {"", "uri: " + server.URL + "/x.git\n    branch: main", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if tc.origin != "" {
+				gitIn(t, clone, "remote", "set-url", "origin", tc.origin)
+			}
+
+			path := writePipeline(t, t.TempDir(), `
 resources:
 - name: repo
   type: git
   env: [GIT_SSH_COMMAND]
   source:
-    uri: `+clone+`
-    branch: main
-    fetch: true
+    `+tc.source+`
 jobs:
 - name: build
   plan:
   - get: repo
 `)
 
-	err = stepsRun(t, []string{path})
-	if err == nil {
-		t.Fatal("expected the check to fail: the operator's ssh command exits 1")
-	}
+			logs := captureStderr(t)
 
-	_, statErr := os.Stat(marker)
-	if statErr != nil {
-		t.Errorf("the operator's GIT_SSH_COMMAND never ran: %v", statErr)
+			err := stepsRun(t, []string{path})
+			if err == nil {
+				t.Fatal("expected the check to fail: nothing authenticates the remote")
+			}
+
+			if got := logs(); !strings.Contains(got, tc.want) {
+				t.Errorf("stderr lacks %q:\n%s", tc.want, got)
+			}
+
+			_, statErr := os.Stat(marker)
+			if statErr == nil {
+				t.Error("the operator's ssh command ran")
+			}
+		})
 	}
 }

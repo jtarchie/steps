@@ -103,8 +103,6 @@ resources:
     labels: [((label))]
 - name: repo
   type: git
-  # The same insteadOf hazard the put names, but the git type's commands are not this file's to edit: an operator whose ~/.gitconfig rewrites https to ssh points GIT_CONFIG_GLOBAL at one that does not.
-  env: [GIT_CONFIG_GLOBAL]
   source:
     uri: https://github.com/((repo)).git    # default branch
 - name: pr

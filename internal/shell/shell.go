@@ -620,7 +620,7 @@ func (h HostRunner) Close() error {
 // stdio MCP server, read access to the operator's full environment.
 //
 // A host-executed command that relies on any other exported variable —
-// including SSH_AUTH_SOCK for git-over-ssh — opts it back in by name via
+// including SSH_AUTH_SOCK for a command that wants the ssh agent — opts it back in by name via
 // the pipeline's env: (see hostEnvWith). Build metadata (see BuildMetadata) is
 // added on top of this baseline. SSH_AUTH_SOCK is deliberately not
 // in the baseline: the socket grants signing with every key the operator's

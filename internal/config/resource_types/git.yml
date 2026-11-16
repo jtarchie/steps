@@ -19,14 +19,8 @@
 # Requires the `git` binary. Set image: on your own copy of this type to run
 # it in a container instead.
 #
-# A credential named in source: (token_env, private_key_env) switches every
-# command to that credential alone: GIT_CONFIG_GLOBAL=/dev/null and
-# GIT_CONFIG_NOSYSTEM drop the operator's url.insteadOf rewrites and credential
-# helpers, and ssh gets -F /dev/null and IdentityAgent=none. Without one, the
-# operator's config is honored as before, since that is what authenticates most
-# remotes today. The credential is read from the environment inside the shell,
-# never templated, so it is in no argv and no rendered command.
-#
+# Nothing of the operator's is read, credential or not (no global or system git config, no ssh config, agent or default identity; GIT_CONFIG_GLOBAL needs git 2.32): it was once "the operator's config unless a credential is named", and an unattended poll then reached whatever that config pointed at, such as an ssh agent that asks a person. A local uri's own .git/config is still read, the clone being what source: names. The credential is read from the environment inside the shell, never templated, so it is in no argv and no rendered command.
+
 # out: pushes HEAD of params.repository, or params.ref when set. Concourse's
 # git resource takes the same param names; force_with_lease and ref are steps'. Its version is the pushed sha,
 # recorded in this resource's history like any put's, so a pipeline that both
@@ -35,12 +29,6 @@
 # branch is read as `index .source "branch"` rather than `.source.branch`
 # because templates render with missingkey=error: an absent optional key must
 # be asked for in a way that answers "nothing" instead of failing.
-# git-over-ssh needs the operator's ssh agent. SSH_AUTH_SOCK is not in the
-# baseline host env (it grants signing with every key the agent holds), so
-# the one resource type that inherently speaks ssh opts it in here, visibly.
-env:
-  - SSH_AUTH_SOCK
-
 config:
   # ls-remote is the cheapest possible "what is the head?" — no clone, no
   # working tree. An unknown branch prints nothing, which would otherwise be
@@ -50,8 +38,7 @@ config:
   # a --single-branch clone never updates refs/remotes/<r>/<b> otherwise, and
   # the check would read that ref forever. The flags keep the fetch to that
   # one ref (no FETCH_HEAD, tags or background gc in a developer's clone), and
-  # the prompt/ssh settings keep a poll with no terminal from hanging on one —
-  # the ssh ones only when the operator chose no ssh command of their own.
+  # the prompt/ssh settings keep a poll with no terminal from hanging on one.
   #
   # Every path turns prompting off, not only fetch:. An ls-remote of a private,
   # renamed or mistyped https uri is a 401, which git answers by asking for a
@@ -59,16 +46,18 @@ config:
   # and in a terminal it parks a poll on a question nobody expects.
   check: |
     set -e
-    export GIT_TERMINAL_PROMPT=0
+    export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+    export GIT_SSH_COMMAND='ssh -F /dev/null -o IdentityAgent=none -o IdentityFile=none -o BatchMode=yes -o ConnectTimeout=30'
+    unset GIT_SSH GIT_ASKPASS SSH_ASKPASS SSH_AUTH_SOCK
+    # The empty helper clears any the clone's own config lists.
+    export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=
     {{- if index .source "token_env" }}
     STEPS_GIT_TOKEN=$(printenv {{ .source.token_env | shellquote }}) || true
     if [ -z "$STEPS_GIT_TOKEN" ]; then
       printf 'git: source.token_env names %s, which is unset or empty here\n' {{ .source.token_env | shellquote }} >&2
       exit 1
     fi
-    # The empty helper first clears any the clone's own config lists.
-    export STEPS_GIT_TOKEN GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-    export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= GIT_CONFIG_KEY_1=credential.helper
+    export STEPS_GIT_TOKEN GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_1=credential.helper
     export GIT_CONFIG_VALUE_1='!f() { [ "$1" != get ] || printf "username=x-access-token\npassword=%s\n" "$STEPS_GIT_TOKEN"; }; f'
     {{- else if index .source "private_key_env" }}
     key=$(mktemp) && known=$(mktemp) && trap 'rm -f "$key" "$known"' EXIT
@@ -78,7 +67,6 @@ config:
       exit 1
     fi
     # ponytail: no host key is checked (Concourse's git resource does the same); add source.known_hosts when one must be.
-    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
     export GIT_SSH_COMMAND="ssh -F /dev/null -i '$key' -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no -o UserKnownHostsFile='$known' -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
     {{- end }}
     {{- if index .source "fetch" }}
@@ -99,11 +87,19 @@ config:
     esac
     {{- else }}
     from=$remote
-    {{- end }}
-    if [ -z "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git -C "$uri" config --get core.sshCommand || true)" ]; then
-      GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4'
-      export GIT_SSH_COMMAND
+    {{- if not (index .source "private_key_env") }}
+    # Fails here, by name, instead of as ssh's "Permission denied": nothing this resource was given can authenticate ssh.
+    case "$(git -C "$uri" config --get "remote.$remote.url" || true)" in
+      ssh://*|git+ssh://*|ssh+git://*) ssh_remote=1 ;;
+      *://*|/*|.*) ;;
+      *:*) ssh_remote=1 ;;
+    esac
+    if [ -n "${ssh_remote:-}" ]; then
+      printf 'git: remote %s of %s is ssh, and this resource reads no ssh agent, key or config of yours; set source.token_env to fetch its https form, or source.private_key_env\n' "$remote" "$uri" >&2
+      exit 1
     fi
+    {{- end }}
+    {{- end }}
     GIT_TERMINAL_PROMPT=0 git -C "$uri" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 \
       fetch --quiet --no-tags --no-write-fetch-head --no-auto-gc \
       -- "$from" "+refs/heads/$branch:refs/remotes/$remote/$branch" || {
@@ -114,10 +110,6 @@ config:
     refs=$(git ls-remote "$uri" "$want")
     ref=$(printf '%s\n' "$refs" | awk -v want="$want" '$2 == want { print $1; exit }')
     {{- else }}
-    if [ -z "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git config --get core.sshCommand || true)" ]; then
-      GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=30'
-      export GIT_SSH_COMMAND
-    fi
     {{- if index .source "tag_pattern" }}
     # ls-remote WITHOUT --refs: an annotated tag prints its own object and, on a
     # second line, `<tag>^{}` — the commit it points at, which is the version's
@@ -169,16 +161,18 @@ config:
   # surprise newer one.
   in: |
     set -e
-    export GIT_TERMINAL_PROMPT=0
+    export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+    export GIT_SSH_COMMAND='ssh -F /dev/null -o IdentityAgent=none -o IdentityFile=none -o BatchMode=yes -o ConnectTimeout=30'
+    unset GIT_SSH GIT_ASKPASS SSH_ASKPASS SSH_AUTH_SOCK
+    # The empty helper clears any the clone's own config lists.
+    export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=
     {{- if index .source "token_env" }}
     STEPS_GIT_TOKEN=$(printenv {{ .source.token_env | shellquote }}) || true
     if [ -z "$STEPS_GIT_TOKEN" ]; then
       printf 'git: source.token_env names %s, which is unset or empty here\n' {{ .source.token_env | shellquote }} >&2
       exit 1
     fi
-    # The empty helper first clears any the clone's own config lists.
-    export STEPS_GIT_TOKEN GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-    export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= GIT_CONFIG_KEY_1=credential.helper
+    export STEPS_GIT_TOKEN GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_1=credential.helper
     export GIT_CONFIG_VALUE_1='!f() { [ "$1" != get ] || printf "username=x-access-token\npassword=%s\n" "$STEPS_GIT_TOKEN"; }; f'
     {{- else if index .source "private_key_env" }}
     key=$(mktemp) && known=$(mktemp) && trap 'rm -f "$key" "$known"' EXIT
@@ -188,13 +182,8 @@ config:
       exit 1
     fi
     # ponytail: no host key is checked (Concourse's git resource does the same); add source.known_hosts when one must be.
-    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
     export GIT_SSH_COMMAND="ssh -F /dev/null -i '$key' -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no -o UserKnownHostsFile='$known' -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
     {{- end }}
-    if [ -z "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git config --get core.sshCommand || true)" ]; then
-      GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=30'
-      export GIT_SSH_COMMAND
-    fi
     # Every fetch passes --no-auto-gc (git 2.23+; on 2.29+ a synonym of --no-auto-maintenance): a detached maintenance run still writing here fails steps' removal of this checkout.
     git init -q .
     git remote add origin {{ .source.uri | shellquote }}
@@ -231,16 +220,18 @@ config:
   # credential.
   out: |
     set -e
-    export GIT_TERMINAL_PROMPT=0
+    export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+    export GIT_SSH_COMMAND='ssh -F /dev/null -o IdentityAgent=none -o IdentityFile=none -o BatchMode=yes -o ConnectTimeout=30'
+    unset GIT_SSH GIT_ASKPASS SSH_ASKPASS SSH_AUTH_SOCK
+    # The empty helper clears any the clone's own config lists.
+    export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=
     {{- if index .source "token_env" }}
     STEPS_GIT_TOKEN=$(printenv {{ .source.token_env | shellquote }}) || true
     if [ -z "$STEPS_GIT_TOKEN" ]; then
       printf 'git: source.token_env names %s, which is unset or empty here\n' {{ .source.token_env | shellquote }} >&2
       exit 1
     fi
-    # The empty helper first clears any the clone's own config lists.
-    export STEPS_GIT_TOKEN GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-    export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= GIT_CONFIG_KEY_1=credential.helper
+    export STEPS_GIT_TOKEN GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_1=credential.helper
     export GIT_CONFIG_VALUE_1='!f() { [ "$1" != get ] || printf "username=x-access-token\npassword=%s\n" "$STEPS_GIT_TOKEN"; }; f'
     {{- else if index .source "private_key_env" }}
     key=$(mktemp) && known=$(mktemp) && trap 'rm -f "$key" "$known"' EXIT
@@ -250,13 +241,8 @@ config:
       exit 1
     fi
     # ponytail: no host key is checked (Concourse's git resource does the same); add source.known_hosts when one must be.
-    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
     export GIT_SSH_COMMAND="ssh -F /dev/null -i '$key' -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no -o UserKnownHostsFile='$known' -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
     {{- end }}
-    if [ -z "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git config --get core.sshCommand || true)" ]; then
-      GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=30'
-      export GIT_SSH_COMMAND
-    fi
     branch={{ index .params "branch" | default (index .source "branch") | shellquote }}
     cd {{ .params.repository | shellquote }}
     {{- if index .params "ref" }}

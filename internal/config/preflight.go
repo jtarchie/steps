@@ -114,8 +114,8 @@ var literalEnvCall = regexp.MustCompile(`\benv\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*
 // red in the UI.
 //
 // It reads the env() calls rather than the type's env: list because that list
-// is an allow-list, not a requirement: git's SSH_AUTH_SOCK is optional, and
-// demanding it would refuse every https pipeline. Shell backends are skipped
+// is an allow-list, not a requirement: a name listed there may be optional,
+// and demanding it would refuse a pipeline that never needs it. Shell backends are skipped
 // for the same reason: an unset $VAR in a script may be deliberate.
 func (c *Config) checkResourceCredentials() []Problem {
 	var problems []Problem
