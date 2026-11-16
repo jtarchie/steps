@@ -1,3 +1,6 @@
+// The words this script draws come from the server on <body>, in the reader's language; none lives here.
+function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
+
 (function () {
   // Single-key shortcuts can be switched off (WCAG 2.1.4): a speech-input
   // user saying a word with a j in it would otherwise be walking the page.
@@ -67,9 +70,10 @@
     if (!button || !navigator.clipboard) return;
     navigator.clipboard.writeText(button.getAttribute('data-copy')).then(function () {
       var said = button.parentElement.querySelector('[data-copied]');
-      button.textContent = 'copied';
-      if (said) said.textContent = button.getAttribute('data-copy-said') || 'address copied';
-      setTimeout(function () { button.textContent = 'copy'; if (said) said.textContent = ''; }, 2000);
+      var was = button.textContent;
+      button.textContent = word('copied');
+      if (said) said.textContent = button.getAttribute('data-copy-said') || word('addresscopied');
+      setTimeout(function () { button.textContent = was; if (said) said.textContent = ''; }, 2000);
     });
   });
 
@@ -89,7 +93,7 @@
     if (!holder) return;
     var link = document.createElement('a');
     link.href = '/login?next=' + encodeURIComponent(window.location.pathname + window.location.search);
-    link.textContent = 'signed out · sign in again';
+    link.textContent = word('signedout');
     var item = document.createElement('li');
     item.className = 'atitem at-signedout';
     item.appendChild(link);
@@ -584,7 +588,7 @@
   function tick() {
     var now = Date.now();
     document.querySelectorAll('time[data-ago]').forEach(function (node) {
-      node.textContent = fmt(now - Date.parse(node.dataset.ago)) + ' ago';
+      node.textContent = word('ago').replace('%[1]s', fmt(now - Date.parse(node.dataset.ago)));
     });
     document.querySelectorAll('time[data-elapsed-since]').forEach(function (node) {
       node.textContent = fmt(now - Date.parse(node.dataset.elapsedSince));
@@ -596,7 +600,7 @@
       var later = turn && turn.nextElementSibling;
       while (later && !later.classList.contains('turn')) later = later.nextElementSibling;
       var running = step && step.classList.contains('running') && turn && !later;
-      node.textContent = running ? 'running ' + fmt(now - Date.parse(node.dataset.callSince)) : '';
+      node.textContent = running ? word('running').replace('%[1]s', fmt(now - Date.parse(node.dataset.callSince))) : '';
     });
     // The countdown counterpart: how long until a running agent step's
     // resolved timeout: expires, rather than how long it has run. Floored at
@@ -604,7 +608,7 @@
     // does not format.
     document.querySelectorAll('time[data-deadline]').forEach(function (node) {
       var remaining = Date.parse(node.dataset.deadline) - now;
-      node.textContent = remaining <= 0 ? 'expired' : fmt(remaining);
+      node.textContent = remaining <= 0 ? word('expired') : fmt(remaining);
     });
   }
 

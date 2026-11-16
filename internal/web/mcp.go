@@ -153,7 +153,7 @@ func (s *Server) handleMCP(c *echo.Context) error {
 		"Total":     len(servers),
 		"Exports":   exports,
 		"Serving":   s.exporter != nil,
-		"Title":     "mcp",
+		"Title":     s.renderer.localeOf(c).text("tab.mcp"),
 	})
 }
 

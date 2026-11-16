@@ -4,18 +4,18 @@
 {{/* The count sits inside the refreshed region, or it reads whatever it said
      at load while the refresh fills the table under it. */}}
 <div id="runs-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#runs-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
-<p class="metaline">{{len .Runs}} recent runs<span class="sep">·</span>{{.Nav.CurrentPath}}</p>
+<p class="metaline">{{t "runs.count" (len .Runs)}}<span class="sep">·</span>{{.Nav.CurrentPath}}</p>
 
 {{if .Runs}}
 <div class="tablewrap">
   <table>
     <thead>
-      <tr><th>Status</th><th>Job</th><th>Run</th><th>Started</th><th class="num">Duration</th></tr>
+      <tr><th>{{t "th.status"}}</th><th>{{t "th.job"}}</th><th>{{t "th.run"}}</th><th>{{t "th.started"}}</th><th class="num">{{t "th.duration"}}</th></tr>
     </thead>
     <tbody>
       {{range .Runs}}
       <tr>
-        <td><a class="st st-{{statusWord .Status}}" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{statusWord .Status}}</a></td>
+        <td><a class="st st-{{statusWord .Status}}" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{statusText .Status}}</a></td>
         <td><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a></td>
         <td class="dim"><a class="hash" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{short .ID}}</a></td>
         <td class="dim">{{agoTag .StartedAt}}</td>
@@ -26,7 +26,7 @@
   </table>
 </div>
 {{else}}
-<p class="faint">No runs recorded yet.</p>
+<p class="faint">{{t "runs.none"}}</p>
 {{end}}
 </div>
 {{end}}

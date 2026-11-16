@@ -295,7 +295,7 @@ func (s *Server) handleAuthorize(c *echo.Context) error {
 
 	// Until the client and its redirect check out, nothing may be sent anywhere: an error redirected to an address nobody registered is the open redirect this order prevents.
 	if !found || !contains(client.RedirectURIs, query.Get("redirect_uri")) {
-		return s.renderConsent(c, http.StatusBadRequest, consentPage{Problem: "This connection request names a client or a return address this daemon does not know, so it was not followed."})
+		return s.renderConsent(c, http.StatusBadRequest, consentPage{Problem: s.say(c, "consent.problem.unknown")})
 	}
 
 	refuse := func(code string) error {
@@ -365,7 +365,7 @@ func redirectHost(raw string) string {
 func (s *Server) handleConsent(c *echo.Context) error {
 	req, found := s.auths.consents.take(c.FormValue("consent"))
 	if !found || req.grant.Actor != actor.From(c.Request().Context()).String() {
-		return s.renderConsent(c, http.StatusBadRequest, consentPage{Problem: "That connection request expired or was not shown to you. Start again from the agent."})
+		return s.renderConsent(c, http.StatusBadRequest, consentPage{Problem: s.say(c, "consent.problem.expired")})
 	}
 
 	if c.FormValue("decision") != "allow" {
@@ -410,7 +410,7 @@ func (s *Server) renderConsent(c *echo.Context, status int, page consentPage) er
 	nav.Anchored = false
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
-	return c.Render(status, "consent", map[string]any{"Nav": nav, "Title": "authorize", "Ask": page})
+	return c.Render(status, "consent", map[string]any{"Nav": nav, "Title": s.renderer.localeOf(c).text("consent.title"), "Ask": page})
 }
 
 // ---- tokens ----

@@ -4,52 +4,52 @@
 {{/* Inside the region: a login finishing and a probe landing both move these
      counts, and a metaline left outside would go on describing the table the
      poll had already replaced. */}}
-<p class="metaline">{{.Total}} servers{{if .Attention}}<span class="sep">·</span>{{len .Attention}} need attention{{end}}{{with .Exports}}<span class="sep">·</span>{{len .}} exports{{end}}</p>
+<p class="metaline">{{t "mcp.servers" .Total}}{{if .Attention}}<span class="sep">·</span>{{t "mcp.needattention" (len .Attention)}}{{end}}{{with .Exports}}<span class="sep">·</span>{{t "mcp.exports" (len .)}}{{end}}</p>
 
 {{if .Total}}
-{{if .Exports}}<h2 class="eyebrow">servers <span class="unbold">what this pipeline connects to</span></h2>{{end}}
+{{if .Exports}}<h2 class="eyebrow">{{t "mcp.h.servers"}} <span class="unbold">{{t "mcp.h.servers.note"}}</span></h2>{{end}}
 <div class="tablewrap">
   <table class="mcp">
-    <thead><tr><th>Status</th><th>Server</th><th>Used by</th><th class="acts">Action</th></tr></thead>
+    <thead><tr><th>{{t "th.status"}}</th><th>{{t "mcp.th.server"}}</th><th>{{t "mcp.th.usedby"}}</th><th class="acts">{{t "th.action"}}</th></tr></thead>
     {{/* Two bodies rather than two tables: the columns have to line up across
          the groups, or the split costs the reader the comparison it was meant
          to make easier. */}}
     {{with .Attention}}
     <tbody>
-      <tr class="grouprow"><td colspan="4"><span class="eyebrow">needs attention <span class="unbold">{{len .}}</span></span></td></tr>
+      <tr class="grouprow"><td colspan="4"><span class="eyebrow">{{t "mcp.group.attention"}} <span class="unbold">{{len .}}</span></span></td></tr>
       {{range .}}{{template "mcprow" (mcpctx $ .)}}{{end}}
     </tbody>
     {{end}}
     {{with .Rest}}
     <tbody>
-      {{if $.Attention}}<tr class="grouprow"><td colspan="4"><span class="eyebrow">nothing to do <span class="unbold">{{len .}}</span></span></td></tr>{{end}}
+      {{if $.Attention}}<tr class="grouprow"><td colspan="4"><span class="eyebrow">{{t "mcp.group.rest"}} <span class="unbold">{{len .}}</span></span></td></tr>{{end}}
       {{range .}}{{template "mcprow" (mcpctx $ .)}}{{end}}
     </tbody>
     {{end}}
   </table>
 </div>
 
-<p class="faint mcp-note">Status is read from configuration, this machine and saved tokens — nothing is connected to until you ask. A token is saved per pipeline, on this daemon, so another pipeline naming the same server needs its own login.</p>
+<p class="faint mcp-note">{{t "mcp.note"}}</p>
 {{end}}
 
 {{with .Exports}}
-<h2 class="eyebrow">exports <span class="unbold">what this pipeline shares</span></h2>
+<h2 class="eyebrow">{{t "mcp.h.exports"}} <span class="unbold">{{t "mcp.h.exports.note"}}</span></h2>
 <div class="tablewrap">
   <table class="mcp-exports">
-    <thead><tr><th>Export</th><th class="num">Tools</th><th class="num">Connected</th><th class="num">Calls today</th></tr></thead>
+    <thead><tr><th>{{t "mcp.th.export"}}</th><th class="num">{{t "th.tools"}}</th><th class="num">{{t "th.connected"}}</th><th class="num">{{t "mcp.th.callstoday"}}</th></tr></thead>
     <tbody>
     {{range .}}
       <tr>
         <td><a href="/p/{{$.Nav.Current}}/mcp/exports/{{.Name}}">{{.Name}}</a></td>
         <td class="num dim">{{len .Tools}}</td>
-        <td class="num">{{if .People}}{{.People}} {{if eq .People 1}}person{{else}}people{{end}}<span class="dim"> · {{.Agents}} {{if eq .Agents 1}}agent{{else}}agents{{end}}</span>{{else}}<span class="faint">nobody</span>{{end}}</td>
+        <td class="num">{{if .People}}{{tn "people" .People}}<span class="dim"> · {{tn "agents" .Agents}}</span>{{else}}<span class="faint">{{t "mcp.nobody"}}</span>{{end}}</td>
         <td class="num">{{if .CallsToday}}{{.CallsToday}}{{else}}<span class="faint">0</span>{{end}}</td>
       </tr>
     {{end}}
     </tbody>
   </table>
 </div>
-{{if not $.Serving}}<p class="faint mcp-note">Not served here: exports are served only by a daemon people sign in to, and not by a read-only one.</p>{{end}}
+{{if not $.Serving}}<p class="faint mcp-note">{{t "export.notserved"}}</p>{{end}}
 {{end}}
 </div>
 {{end}}
@@ -60,39 +60,39 @@
 {{define "mcprow"}}{{$nav := .Page.Nav}}{{with .Row}}
 <tr id="mcp-{{.Name}}">
   <td class="stat">
-    {{if .Pending}}<span class="stamp st st-running">login in progress</span>
-    {{else}}<span class="stamp st st-{{.Mark}}">{{.Status}}</span>{{end}}
+    {{if .Pending}}<span class="stamp st st-running">{{t "mcp.loginprogress"}}</span>
+    {{else}}<span class="stamp st st-{{.Mark}}">{{mcpStatus .Status}}</span>{{end}}
   </td>
   <td class="who">
     <div class="name">{{.Name}}</div>
     {{/* What the server IS, on one dimmed line: transport, target and auth were
          three columns holding facts a reader checks once, and between them they
          took the width the status needed. */}}
-    <div class="mcp-meta" title="{{.Target}}">{{.Meta}}</div>
-    {{if .AuthorizeURL}}<div class="mcp-meta"><a href="{{.AuthorizeURL}}" rel="noopener">continue at the provider</a> — or a newer login replaced this one</div>{{end}}
-    {{if .Failed}}<div class="mcp-meta err">last login failed: {{.Failed}}</div>{{end}}
+    <div class="mcp-meta" title="{{.Target}}">{{foreign .Meta}}</div>
+    {{if .AuthorizeURL}}<div class="mcp-meta">{{th "mcp.continue" (extLink .AuthorizeURL (t "mcp.continue.link"))}}</div>{{end}}
+    {{if .Failed}}<div class="mcp-meta err">{{th "mcp.loginfailed" (foreign .Failed)}}</div>{{end}}
     {{with .Probe}}
       {{if .Running}}
-      <div class="mcp-meta">testing…</div>
+      <div class="mcp-meta">{{t "mcp.testing"}}</div>
       {{else}}
       {{/* Under the name and free to wrap, rather than in the status cell: a
            dial failure is a sentence, and a sentence in a status column sets
            the width of the whole table. */}}
-      <div class="mcp-meta{{if not .OK}} err{{end}}">tested {{agoTag .At}} · {{if and .OK .Tools}}<details class="jsonbox"><summary>{{.Detail}}</summary> <span class="toollist">{{range .Tools}}<code>{{.}}</code> {{end}}</span></details>{{else}}{{.Detail}}{{end}}</div>
+      <div class="mcp-meta{{if not .OK}} err{{end}}">{{th "mcp.tested" (agoTag .At)}} · {{if and .OK .Tools}}<details class="jsonbox"><summary>{{foreign .Detail}}</summary> <span class="toollist">{{range .Tools}}<code>{{.}}</code> {{end}}</span></details>{{else}}{{foreign .Detail}}{{end}}</div>
       {{end}}
     {{end}}
   </td>
-  <td class="dim uses">{{.UsedBy}}</td>
+  <td class="dim uses">{{if eq .UsedBy "(unused)"}}{{t "mcp.unused"}}{{else}}{{foreign .UsedBy}}{{end}}</td>
   <td class="acts">
     {{if $nav.ReadOnly}}
-      {{if .OAuth}}<span class="meta">read-only — <code>steps mcp login {{.Name}} -p {{$nav.Current}} --target &lt;url&gt;</code></span>{{end}}
+      {{if .OAuth}}<span class="meta">{{th "mcp.readonly" (code (printf "steps mcp login %v -p %v --target <url>" .Name $nav.Current))}}</span>{{end}}
     {{else}}
-      {{if .OAuth}}<form class="inline" method="post" action="/p/{{$nav.Current}}/mcp/{{.Name}}/connect"><button class="btn{{if not .CanTest}} primary{{end}}" type="submit">{{if .CanTest}}Re-connect{{else}}Connect{{end}}</button></form>{{end}}
+      {{if .OAuth}}<form class="inline" method="post" action="/p/{{$nav.Current}}/mcp/{{.Name}}/connect"><button class="btn{{if not .CanTest}} primary{{end}}" type="submit">{{if .CanTest}}{{t "mcp.reconnect"}}{{else}}{{t "mcp.connect"}}{{end}}</button></form>{{end}}
       {{/* Only where a connection could actually succeed. On a server whose
            credential is missing, a probe answers with the problem the status
            cell has just stated, in whatever words refused it — the same
            sentence twice, the second time long enough to widen the page. */}}
-      {{if .CanTest}}<form class="inline" method="post" action="/p/{{$nav.Current}}/mcp/{{.Name}}/test"><button class="btn" type="submit">Test</button></form>{{end}}
+      {{if .CanTest}}<form class="inline" method="post" action="/p/{{$nav.Current}}/mcp/{{.Name}}/test"><button class="btn" type="submit">{{t "mcp.test"}}</button></form>{{end}}
     {{end}}
   </td>
 </tr>

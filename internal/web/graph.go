@@ -138,6 +138,7 @@ type layout struct {
 	byID  map[string]int
 	// failing is each resource whose last check failed, by name.
 	failing map[string]store.CheckError
+	loc     *locale
 }
 
 func (g *layout) add(id string, kind nodeKind, name string, view int) int {
@@ -187,7 +188,12 @@ func without(list []int, value int) []int {
 // buildGraph lays out the board's job views as Concourse's pipeline graph,
 // marking every resource in failing.
 func buildGraph(views []jobView, failing map[string]store.CheckError) graphView {
-	g := &layout{byID: map[string]int{}, failing: failing}
+	return buildGraphIn(englishLocale(), views, failing)
+}
+
+// buildGraphIn is buildGraph in loc's words; the words set node widths, so the layout is per locale.
+func buildGraphIn(loc *locale, views []jobView, failing map[string]store.CheckError) graphView {
+	g := &layout{byID: map[string]int{}, failing: failing, loc: loc}
 
 	g.model(views)
 	g.rank()
@@ -212,7 +218,7 @@ func (g *layout) model(views []jobView) {
 	for _, view := range views {
 		for _, resource := range view.Outputs {
 			out := g.add("out:"+view.Name+":"+resource, kindOutput, resource, -1)
-			g.connect(jobs[view.Name], out, resource, false, view.Name+" puts "+resource)
+			g.connect(jobs[view.Name], out, resource, false, g.loc.text("graph.edge.puts", view.Name, resource))
 		}
 	}
 
@@ -230,7 +236,7 @@ func (g *layout) model(views []jobView) {
 
 			in := g.add("in:"+view.Name+":"+input.Resource, kindInput, input.Resource, -1)
 			g.nodes[in].equiv = input.Resource
-			g.connect(in, jobs[view.Name], input.Resource, !input.Trigger, inputTitle(input.Resource, view.Name, input.Trigger))
+			g.connect(in, jobs[view.Name], input.Resource, !input.Trigger, inputTitle(g.loc, input.Resource, view.Name, input.Trigger, ""))
 		}
 	}
 }
@@ -248,20 +254,25 @@ func (g *layout) modelPassed(jobs map[string]int, job string, input config.JobIn
 		source, ok := g.byID["out:"+upstream+":"+input.Resource]
 		if !ok {
 			source = g.add("via:"+upstream+":"+input.Resource, kindVia, input.Resource, -1)
-			g.connect(up, source, input.Resource, false, input.Resource+" from "+upstream)
+			g.connect(up, source, input.Resource, false, g.loc.text("graph.edge.from", input.Resource, upstream))
 		}
 
 		g.connect(source, jobs[job], input.Resource, !input.Trigger,
-			inputTitle(input.Resource, job, input.Trigger)+", once it has passed "+upstream)
+			inputTitle(g.loc, input.Resource, job, input.Trigger, upstream))
 	}
 }
 
-func inputTitle(resource, job string, trigger bool) string {
+func inputTitle(loc *locale, resource, job string, trigger bool, passed string) string {
+	key := "graph.edge.reads"
 	if trigger {
-		return resource + " triggers " + job
+		key = "graph.edge.triggers"
 	}
 
-	return resource + " is read by " + job + " and never triggers it"
+	if passed != "" {
+		return loc.text(key+".passed", resource, job, passed)
+	}
+
+	return loc.text(key, resource, job)
 }
 
 // rank puts every node one column past its deepest source, then pulls each
@@ -496,7 +507,7 @@ func (g *layout) size(views []jobView) {
 
 		node.left = g.ports(node.ins, true)
 		node.rght = g.ports(node.outs, false)
-		node.w = nodeWidth(views[node.view])
+		node.w = nodeWidth(g.loc, views[node.view])
 		node.h = max(dagNodeH, max(len(node.left), len(node.rght))*dagPortPitch+8)
 	}
 }
@@ -734,11 +745,11 @@ func (g *layout) placed(node *layoutNode, views []jobView) graphNode {
 		word, glyph := nodeStatus(view)
 
 		placed.Kind = "job"
-		placed.Status, placed.Glyph, placed.StatusClass = word, glyph, finishedClass(view)
+		placed.Status, placed.Glyph, placed.StatusClass = g.loc.word("status", word), glyph, finishedClass(view)
 		placed.Running = view.HasRun && statusWord(view.Latest.Status) == "running"
-		placed.Line = statusLine(view, time.Now())
-		placed.Title = nodeTitle(view)
-		placed.Label = jobLabel(view, time.Now())
+		placed.Line = statusLine(g.loc, view, time.Now())
+		placed.Title = nodeTitle(g.loc, view)
+		placed.Label = jobLabel(g.loc, view, time.Now())
 		placed.Queued = queuedBehind(view)
 		placed.RingX, placed.RingY = node.x-dagRingGap, node.y-dagRingGap
 		placed.RingW, placed.RingH = node.w+2*dagRingGap, node.h+2*dagRingGap
@@ -750,12 +761,12 @@ func (g *layout) placed(node *layoutNode, views []jobView) graphNode {
 		placed.NameY = node.y + dagResTextY
 	case kindInput, kindOutput, kindVia:
 		placed.Kind = "resource"
-		placed.Label = "resource " + node.name
+		placed.Label = g.loc.text("graph.resource.label", node.name)
 		placed.Text = g.resourceText(node)
 
 		if failed, ok := g.failing[node.name]; ok {
 			placed.CheckError, _, _ = strings.Cut(failed.Message, "\n")
-			placed.Label += ", check failing"
+			placed.Label = g.loc.text("graph.resource.labelfailing", node.name)
 		}
 		placed.NameY = node.y + dagResTextY
 	}
@@ -763,10 +774,10 @@ func (g *layout) placed(node *layoutNode, views []jobView) graphNode {
 	return placed
 }
 
-func nodeWidth(view jobView) int {
-	chars := max(utf8.RuneCountInString(view.Name), utf8.RuneCountInString(statusLine(view, time.Time{}))+dagAgeChars)
+func nodeWidth(loc *locale, view jobView) int {
+	chars := max(utf8.RuneCountInString(view.Name), utf8.RuneCountInString(statusLine(loc, view, time.Time{}))+dagAgeChars)
 	if queuedBehind(view) != nil {
-		chars += utf8.RuneCountInString(queuedSuffix)
+		chars += utf8.RuneCountInString(queuedSuffix(loc))
 	}
 
 	return max(int(dagCharW*float64(chars))+2*dagPadX, dagMinWidth)
@@ -779,18 +790,18 @@ const dagAgeChars = 4
 // statusLine is a job node's second line: what its latest run is doing or
 // did, how long ago it started, and the breaker when it holds the job. now
 // zero leaves the age out, which is how nodeWidth measures the rest.
-func statusLine(view jobView, now time.Time) string {
+func statusLine(loc *locale, view jobView, now time.Time) string {
 	word, glyph := nodeStatus(view)
 
-	line := glyph + " " + word
+	line := glyph + " " + loc.word("status", word)
 
 	if view.HasRun && !now.IsZero() && !view.Latest.StartedAt.IsZero() {
-		age, _ := agoCompact(now.Sub(view.Latest.StartedAt))
+		age, _ := agoCompactIn(loc, now.Sub(view.Latest.StartedAt))
 		line += " " + age
 	}
 
 	if view.Held {
-		line += " · held"
+		line += loc.text("graph.line.held")
 	}
 
 	return line

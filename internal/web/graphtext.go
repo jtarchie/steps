@@ -1,7 +1,6 @@
 package web
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -10,92 +9,90 @@ import (
 
 // nodeTitle is the detail a node's two lines leave out — what the list view's
 // duration and held columns said before the graph was the only view.
-func nodeTitle(view jobView) string {
+func nodeTitle(loc *locale, view jobView) string {
 	var parts []string
 
 	if view.HasRun {
-		verb := "took"
+		key := "graph.title.took"
 		if !finished(view.Latest.Status) {
-			verb = "running for"
+			key = "graph.title.runningfor"
 		}
 
-		parts = append(parts, "latest run "+verb+" "+formatDuration(view.Latest.Duration()))
+		parts = append(parts, loc.text(key, formatDuration(view.Latest.Duration())))
 	}
 
 	if view.Held {
-		plural := "s"
-		if view.Failures == 1 {
-			plural = ""
+		if view.HeldAt.IsZero() {
+			parts = append(parts, loc.count("graph.title.held", view.Failures))
+		} else {
+			parts = append(parts, loc.count("graph.title.heldago", view.Failures, formatAgoIn(loc, view.HeldAt)))
 		}
-
-		held := fmt.Sprintf("held after %d failure%s", view.Failures, plural)
-		if !view.HeldAt.IsZero() {
-			held += ", " + formatAgo(view.HeldAt)
-		}
-
-		parts = append(parts, held)
 	}
 
 	if view.Queued != nil {
-		waiting := "starting"
-		if view.Queued.WaitingOn != "" {
-			waiting = "waiting: " + view.Queued.WaitingOn
-		}
-
-		parts = append(parts, "a run is queued, "+waiting)
+		parts = append(parts, queuedWords(loc, view.Queued.WaitingOn))
 	}
 
-	return strings.Join(parts, "; ")
+	return strings.Join(parts, loc.text("graph.join"))
+}
+
+// queuedWords is "a run is queued" and what it waits on, whole, so a language can order it its own way.
+func queuedWords(loc *locale, waitingOn string) string {
+	if waitingOn == "" {
+		return loc.text("graph.title.queued.starting")
+	}
+
+	return loc.text("graph.title.queued.waiting", waitingOn)
 }
 
 // jobLabel is a job node's accessible name: "draft, passed 15 hours ago,
 // triggered by weekday, writes draft".
-func jobLabel(view jobView, now time.Time) string {
-	return strings.Join(append(append([]string{view.Name}, spokenStatus(view, now)...), spokenEdges(view)...), ", ")
+func jobLabel(loc *locale, view jobView, now time.Time) string {
+	return strings.Join(append(append([]string{view.Name}, spokenStatus(loc, view, now)...), spokenEdges(loc, view)...), loc.text("graph.label.join"))
 }
 
 // spokenStatus is what a node's status line and ring say, in words.
-func spokenStatus(view jobView, now time.Time) []string {
+func spokenStatus(loc *locale, view jobView, now time.Time) []string {
 	word, _ := nodeStatus(view)
-	parts := []string{word}
+	parts := []string{loc.word("status", word)}
 
 	if view.HasRun && !view.Latest.StartedAt.IsZero() {
-		_, spoken := agoCompact(now.Sub(view.Latest.StartedAt))
+		_, spoken := agoCompactIn(loc, now.Sub(view.Latest.StartedAt))
 		if finished(view.Latest.Status) {
-			parts[0] += " " + spoken
+			parts[0] = loc.text("graph.spoken.status", parts[0], spoken)
 		} else {
-			parts = append(parts, "started "+spoken)
+			parts = append(parts, loc.text("graph.spoken.started", spoken))
 		}
 	}
 
 	if run, ok := lastFinished(view); ok && !finished(view.Latest.Status) {
-		parts = append(parts, "last finished "+statusWord(run.Status))
+		parts = append(parts, loc.text("graph.spoken.lastfinished", loc.word("status", statusWord(run.Status))))
 	}
 
 	if view.Held {
-		parts = append(parts, "held")
+		parts = append(parts, loc.word("status", "held"))
 	}
 
 	if queued := queuedBehind(view); queued != nil {
-		waiting := "starting"
+		waiting := loc.text("graph.spoken.starting")
 		if queued.WaitingOn != "" {
-			waiting = "waiting: " + queued.WaitingOn
+			waiting = loc.text("graph.spoken.waiting", queued.WaitingOn)
 		}
 
-		parts = append(parts, "queued", waiting)
+		parts = append(parts, loc.word("status", "queued"), waiting)
 	}
 
 	return parts
 }
 
 // spokenEdges is what a node's edges say, in words.
-func spokenEdges(view jobView) []string {
+func spokenEdges(loc *locale, view jobView) []string {
 	var parts, triggers, reads []string
 
 	for _, input := range view.Inputs {
 		name := input.Resource
 		if len(input.Passed) > 0 {
-			name += " once it has passed " + spokenList(input.Passed)
+			name = loc.text("graph.spoken.passed", name, spokenList(loc, input.Passed))
 		}
 
 		if input.Trigger {
@@ -106,27 +103,27 @@ func spokenEdges(view jobView) []string {
 	}
 
 	if len(triggers) > 0 {
-		parts = append(parts, "triggered by "+spokenList(triggers))
+		parts = append(parts, loc.text("graph.spoken.triggered", spokenList(loc, triggers)))
 	}
 
 	if len(reads) > 0 {
-		parts = append(parts, "reads "+spokenList(reads))
+		parts = append(parts, loc.text("graph.spoken.reads", spokenList(loc, reads)))
 	}
 
 	if len(view.Outputs) > 0 {
-		parts = append(parts, "writes "+spokenList(view.Outputs))
+		parts = append(parts, loc.text("graph.spoken.writes", spokenList(loc, view.Outputs)))
 	}
 
 	return parts
 }
 
 // spokenList joins names the way a sentence does: "a", "a and b", "a, b and c".
-func spokenList(names []string) string {
+func spokenList(loc *locale, names []string) string {
 	if len(names) < 2 {
 		return strings.Join(names, "")
 	}
 
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	return loc.text("list.and", strings.Join(names[:len(names)-1], loc.text("list.sep")), names[len(names)-1])
 }
 
 // finishedClass colors a node by its latest FINISHED run — Concourse's
@@ -179,7 +176,7 @@ func nodeStatus(view jobView) (word, glyph string) {
 }
 
 // queuedSuffix is what a queued run adds to a node's status line, counted for its width.
-const queuedSuffix = " · ○ queued"
+func queuedSuffix(loc *locale) string { return " · ○ " + loc.text("jobs.queued") }
 
 // queuedBehind is the run queued behind a job's latest one, nil when there is none or when it is the only thing the node has to say.
 func queuedBehind(view jobView) *queuedJob {

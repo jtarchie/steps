@@ -28,6 +28,7 @@ import (
 // hx-morph-skip-children syncs the element's attributes and leaves its
 // children alone. See the template.
 type framer struct {
+	loc     *locale
 	server  *Server
 	page    map[string]any
 	drawn   *sentRows
@@ -219,7 +220,7 @@ func (f *framer) firstChildren(step *stepView) bool {
 }
 
 func (f *framer) render(name string, data any) error {
-	tmpl, ok := f.server.renderer.pages["run"]
+	tmpl, ok := f.server.renderer.page(f.loc, "run")
 	if !ok {
 		return fmt.Errorf("web: no run template to render %q with", name)
 	}

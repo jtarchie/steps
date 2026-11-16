@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/labstack/echo/v5"
@@ -38,7 +39,7 @@ func (s *Server) handleJobs(c *echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	rows, err := s.markQueued(ctx, reads, queue, views)
+	rows, err := s.markQueued(ctx, s.renderer.localeOf(c), reads, queue, views)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
@@ -48,14 +49,14 @@ func (s *Server) handleJobs(c *echo.Context) error {
 		"Nav":   s.nav(c),
 		"Title": c.Param("pipeline"),
 		"Jobs":  views,
-		"Graph": buildGraph(views, failingByName(failing)),
+		"Graph": buildGraphIn(s.renderer.localeOf(c), views, failingByName(failing)),
 		"Queue": rows,
 		"SHA":   pipeline.Config().Revision.SHA,
 	})
 }
 
 // markQueued fills in each job's queued run and what holds it back, and the queue table's rows with the same reasons, asked once per job.
-func (s *Server) markQueued(ctx context.Context, reads *pipelineReads, queue []store.QueueRow, views []jobView) ([]queueRowView, error) {
+func (s *Server) markQueued(ctx context.Context, loc *locale, reads *pipelineReads, queue []store.QueueRow, views []jobView) ([]queueRowView, error) {
 	pipeline := reads.target
 
 	reasons := map[string]string{}
@@ -65,7 +66,7 @@ func (s *Server) markQueued(ctx context.Context, reads *pipelineReads, queue []s
 			return text, nil
 		}
 
-		text, err := waitingOn(ctx, reads, s.capacity, queue, name)
+		text, err := waitingOnIn(ctx, loc, reads, s.capacity, queue, name)
 		reasons[name] = text
 
 		return text, err
@@ -222,7 +223,7 @@ func (s *Server) handleJobDetail(c *echo.Context) error {
 	return c.Render(http.StatusOK, "job", map[string]any{
 		"Nav":      s.nav(c),
 		"Title":    job.Name,
-		"Crumbs":   []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}, {Label: job.Name, URL: "/p/" + pipeline.Slug + "/jobs/" + job.Name}, {Label: "detail"}},
+		"Crumbs":   []crumb{{Label: s.renderer.localeOf(c).text("tab.jobs"), URL: "/p/" + pipeline.Slug}, {Label: job.Name, URL: "/p/" + pipeline.Slug + "/jobs/" + job.Name}, {Label: s.renderer.localeOf(c).text("job.crumb.detail")}},
 		"Job":      view,
 		"Bar":      barView{Job: job.Name, Held: view.Held},
 		"Runs":     runs,
@@ -246,7 +247,7 @@ func (s *Server) handleRunHistory(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "runs", map[string]any{
 		"Nav":   s.nav(c),
-		"Title": "runs",
+		"Title": s.renderer.localeOf(c).text("tab.runs"),
 		"Runs":  runs,
 	})
 }
@@ -319,4 +320,27 @@ func queuedRow(ctx context.Context, pipeline *Pipeline, queue []store.QueueRow, 
 	}
 
 	return store.QueueRow{}, false, nil
+}
+
+// waitingOnIn is follow.go's waitingOn in loc's words.
+func waitingOnIn(ctx context.Context, loc *locale, reads *pipelineReads, capacity Capacity, queue []store.QueueRow, name string) (string, error) {
+	_, err := reads.target.Config().FindJob(name)
+	if err != nil {
+		return "", nil //nolint:nilerr // a dropped job is a row with no reason, not a broken page
+	}
+
+	_, inFlight, _ := queuedState(queue, name, time.Time{})
+
+	checks, err := followChecksIn(ctx, loc, reads, capacity, name, false, inFlight)
+	if err != nil {
+		return "", err
+	}
+
+	for _, check := range checks {
+		if !check.Clear {
+			return check.Text, nil
+		}
+	}
+
+	return "", nil
 }

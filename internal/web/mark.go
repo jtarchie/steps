@@ -74,14 +74,20 @@ func (m mark) DiscGlyph() string { return discGlyphs[m.Disc] }
 func (m mark) Word() string { return discWords[m.Disc] }
 
 // Words is the mark said aloud, for a reader who cannot see the glyphs.
-func (m mark) Words() string {
-	words := m.Word()
+func (m mark) Words() string { return m.WordsIn(englishLocale()) }
+
+func (m mark) WordsIn(loc *locale) string {
+	words := ""
+	if word := m.Word(); word != "" {
+		words = loc.word("status", word)
+	}
+
 	if m.Ring {
 		if words != "" {
 			words += ", "
 		}
 
-		words += "running"
+		words += loc.word("status", "running")
 	}
 
 	return words

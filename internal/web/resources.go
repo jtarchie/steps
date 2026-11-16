@@ -92,7 +92,7 @@ func (s *Server) handleResource(c *echo.Context) error {
 		"Span":      len(consumers) + 1,
 		"Nav":       s.nav(c),
 		"Title":     res.Name,
-		"Crumbs":    []crumb{{Label: "resources", URL: "/p/" + pipeline.Slug + "/resources"}, {Label: res.Name}},
+		"Crumbs":    []crumb{{Label: s.renderer.localeOf(c).text("tab.resources"), URL: "/p/" + pipeline.Slug + "/resources"}, {Label: res.Name}},
 		"Resource":  res,
 		"Checked":   checked,
 		"Failing":   failingByName(failing)[res.Name],

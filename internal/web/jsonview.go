@@ -495,8 +495,12 @@ type jsonView struct {
 // agent run's page, and nearly none of them are ever opened. Summary and
 // Inline match jsonValue's; the block rendering and highlighting are skipped.
 func lazyValue(src string, seq int64, raw string) jsonView {
+	return lazyValueIn(englishLocale(), src, seq, raw)
+}
+
+func lazyValueIn(loc *locale, src string, seq int64, raw string) jsonView {
 	if strings.TrimSpace(raw) == "" {
-		return jsonValue(raw)
+		return jsonValueIn(loc, raw)
 	}
 
 	// At the depth limit no nested document is unwrapped, and unwrapping only
@@ -506,19 +510,19 @@ func lazyValue(src string, seq int64, raw string) jsonView {
 	if !ok {
 		text := strings.TrimRight(raw, "\n")
 		if !strings.Contains(text, "\n") && len(text) <= jsonInlineWidth {
-			return plainView(raw)
+			return plainViewIn(loc, raw)
 		}
 
-		return deferredView(src, seq, plainSummary(text, raw))
+		return deferredView(src, seq, plainSummaryIn(loc, text, raw))
 	}
 
 	if !node.inlineable() {
-		return deferredView(src, seq, jsonSummary(node, raw))
+		return deferredView(src, seq, jsonSummaryIn(loc, node, raw))
 	}
 
 	// Shallow says inline, but a short string may hold a document the full
 	// parse unfolds into a block.
-	view := jsonValue(raw)
+	view := jsonValueIn(loc, raw)
 	if !view.Inline {
 		return deferredView(src, seq, view.Summary)
 	}
@@ -534,11 +538,15 @@ const messageFoldBytes = 2000
 // messageValue is highlightMessage for a run page row: drawn in full when it
 // is short, otherwise folded behind a summary whose body is fetched on open.
 func messageValue(src string, seq int64, text string) jsonView {
+	return messageValueIn(englishLocale(), src, seq, text)
+}
+
+func messageValueIn(loc *locale, src string, seq int64, text string) jsonView {
 	if len(text) <= messageFoldBytes || strings.TrimSpace(text) == "" {
 		return jsonView{HTML: highlightMessage(text)}
 	}
 
-	return deferredView(src, seq, plainSummary(strings.TrimRight(text, "\n"), text))
+	return deferredView(src, seq, plainSummaryIn(loc, strings.TrimRight(text, "\n"), text))
 }
 
 func deferredView(src string, seq int64, summary string) jsonView {
@@ -547,14 +555,16 @@ func deferredView(src string, seq int64, summary string) jsonView {
 
 // jsonValue renders a payload for a transcript row: inline when it is small,
 // and otherwise as a block behind a summary the caller folds.
-func jsonValue(raw string) jsonView {
+func jsonValue(raw string) jsonView { return jsonValueIn(englishLocale(), raw) }
+
+func jsonValueIn(loc *locale, raw string) jsonView {
 	if strings.TrimSpace(raw) == "" {
 		return jsonView{Empty: true, Inline: true}
 	}
 
 	node, ok := parseJSONDocument(raw, 0)
 	if !ok {
-		return plainView(raw)
+		return plainViewIn(loc, raw)
 	}
 
 	var out strings.Builder
@@ -563,13 +573,13 @@ func jsonValue(raw string) jsonView {
 		node.writeInline(&out)
 
 		//nolint:gosec // G203: every span this emits is built here; values go through HTMLEscapeString
-		return jsonView{HTML: template.HTML(out.String()), Inline: true, Summary: jsonSummary(node, raw)}
+		return jsonView{HTML: template.HTML(out.String()), Inline: true, Summary: jsonSummaryIn(loc, node, raw)}
 	}
 
 	node.writeBlock(&out, 0)
 
 	//nolint:gosec // G203: as above — the only unescaped text is this file's own markup
-	return jsonView{HTML: template.HTML(out.String()), Summary: jsonSummary(node, raw)}
+	return jsonView{HTML: template.HTML(out.String()), Summary: jsonSummaryIn(loc, node, raw)}
 }
 
 // plainView renders a payload that is not a JSON document — a file's text, a
@@ -579,14 +589,16 @@ func jsonValue(raw string) jsonView {
 // Inline and Summary are computed from the raw text, not the highlighted
 // markup: a fold decision measured against markup length would be
 // meaningless.
-func plainView(raw string) jsonView {
+func plainView(raw string) jsonView { return plainViewIn(englishLocale(), raw) }
+
+func plainViewIn(loc *locale, raw string) jsonView {
 	text := strings.TrimRight(raw, "\n")
 	single := !strings.Contains(text, "\n")
 
 	view := jsonView{
 		HTML:    highlightPayload(text),
 		Inline:  single && len(text) <= jsonInlineWidth,
-		Summary: plainSummary(text, raw),
+		Summary: plainSummaryIn(loc, text, raw),
 	}
 
 	return view
@@ -652,10 +664,14 @@ func jsonLine(raw string) template.HTML {
 // the difference between "1 key" and "content" — one of those answers whether
 // this is the row worth expanding.
 func jsonSummary(node jsonNode, raw string) string {
+	return jsonSummaryIn(englishLocale(), node, raw)
+}
+
+func jsonSummaryIn(loc *locale, node jsonNode, raw string) string {
 	size := formatBytes(len(raw))
 
 	if node.kind == kindArray {
-		return fmt.Sprintf("array · %s · %s", plural(len(node.kids), "item"), size)
+		return loc.text("json.array", loc.count("json.items", len(node.kids)), size)
 	}
 
 	const maxNamed = 3
@@ -666,26 +682,20 @@ func jsonSummary(node jsonNode, raw string) string {
 			names = append(names, kid.key)
 		}
 
-		return fmt.Sprintf("%s · %s", strings.Join(names, ", "), size)
+		return loc.text("json.names", strings.Join(names, ", "), size)
 	}
 
-	return fmt.Sprintf("object · %s · %s", plural(len(node.kids), "key"), size)
+	return loc.text("json.object", loc.count("json.keys", len(node.kids)), size)
 }
 
 // plainSummary describes a folded non-JSON payload by the only two things it
 // has: how tall it is and how big it is.
-func plainSummary(text, raw string) string {
+func plainSummary(text, raw string) string { return plainSummaryIn(englishLocale(), text, raw) }
+
+func plainSummaryIn(loc *locale, text, raw string) string {
 	lines := strings.Count(text, "\n") + 1
 
-	return fmt.Sprintf("text · %s · %s", plural(lines, "line"), formatBytes(len(raw)))
-}
-
-func plural(n int, noun string) string {
-	if n == 1 {
-		return "1 " + noun
-	}
-
-	return fmt.Sprintf("%d %ss", n, noun)
+	return loc.text("json.text", loc.count("json.lines", lines), formatBytes(len(raw)))
 }
 
 // formatBytes renders a payload size in decimal units, matching the byte

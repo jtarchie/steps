@@ -119,17 +119,18 @@ func (s *Server) handleExportPage(c *echo.Context) error {
 		rows = append(rows, s.activityRowFor(entry))
 	}
 
+	loc := s.renderer.localeOf(c)
 	nav := s.nav(c)
 	nav.Anchored = true
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "export", map[string]any{
 		"Nav":     nav,
-		"Title":   export.Name + " · mcp",
-		"Crumbs":  []crumb{{Label: "mcp", URL: "/p/" + pipeline.Slug + "/mcp"}, {Label: export.Name}},
+		"Title":   export.Name + " · " + loc.text("tab.mcp"),
+		"Crumbs":  []crumb{{Label: loc.text("tab.mcp"), URL: "/p/" + pipeline.Slug + "/mcp"}, {Label: export.Name}},
 		"Export":  row,
 		"Address": address,
-		"Connect": connectGroups(export.Name, address),
+		"Connect": connectGroupsIn(loc, export.Name, address),
 		"Serving": s.exporter != nil,
 		"Recent":  rows,
 		"LogURL":  "/activity?" + url.Values{"pipeline": {pipeline.Slug}, "target": {export.Name}}.Encode(),

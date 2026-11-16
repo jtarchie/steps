@@ -147,6 +147,8 @@ type Server struct {
 	cronNext CronNext
 	// tracing is the outermost middleware when set, so a request any later one refuses is still traced. Nil in page tests, which keep talking to a bare echo.
 	tracing echo.MiddlewareFunc
+	// pseudo lets the test-only pseudo-locale be asked for; production never sets it.
+	pseudo bool
 }
 
 // WithVersion is the build version the footer prints; "dev" when unset, the
@@ -291,6 +293,8 @@ func (s *Server) routes() error {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	renderer.resolve = s.localeFor
+	renderer.picked = s.languagePicked
 	s.renderer = renderer
 	e.Renderer = renderer
 	e.HTTPErrorHandler = s.handleError
@@ -345,6 +349,7 @@ func (s *Server) routes() error {
 	e.GET("/activity", s.handleActivity)
 	e.POST(pauseAllPath, s.handlePauseAll)
 	e.POST(unpauseAllPath, s.handleUnpauseAll)
+	e.GET(langPath, s.handleSetLanguage)
 
 	if s.sessions != nil {
 		e.GET(loginPath, s.handleLoginPage)

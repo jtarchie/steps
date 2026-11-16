@@ -3,26 +3,26 @@
 <h1 class="prompt"><b>steps mcp {{$e.Name}}</b></h1>
 <div id="export-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#export-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph, #export-activity:outerMorph">
 <dl class="consent-facts export-facts">
-  <dt>address</dt>
-  <dd><code id="export-address">{{.Address}}</code> <button class="btn copybtn" type="button" data-copy="{{.Address}}" aria-describedby="export-address">copy</button><span class="visually-hidden" aria-live="polite" data-copied></span></dd>
-  <dt>access</dt>
+  <dt>{{t "export.address"}}</dt>
+  <dd><code id="export-address">{{.Address}}</code> <button class="btn copybtn" type="button" data-copy="{{.Address}}" aria-describedby="export-address">{{t "copy"}}</button><span class="visually-hidden" aria-live="polite" data-copied></span></dd>
+  <dt>{{t "export.access"}}</dt>
   <dd><code>{{$e.Access}}</code></dd>
-  {{with $e.Rate}}<dt>rate</dt><dd>{{.}} per person</dd>{{end}}
-  {{with $e.Rules}}<dt>rules</dt><dd>{{range .}}<code>{{.}}</code> {{end}}<span class="dim">on every tool</span></dd>{{end}}
-  {{if $e.RefusedToday}}<dt>refused</dt><dd>{{$e.RefusedToday}} refused by a rule today</dd>{{end}}
-  {{with $e.Image}}<dt>commands run in</dt><dd><code>{{.}}</code>{{with $e.Network}} <span class="dim">network {{.}}</span>{{end}}</dd>{{end}}
-  <dt>connected</dt>
-  <dd>{{if $e.People}}{{$e.People}} {{if eq $e.People 1}}person{{else}}people{{end}} · {{$e.Agents}} {{if eq $e.Agents 1}}agent{{else}}agents{{end}}{{else}}<span class="faint">nobody yet</span>{{end}}{{with $.Nav.Who}} · <a href="/connections">your connections</a>{{end}}</dd>
+  {{with $e.Rate}}<dt>{{t "export.rate"}}</dt><dd>{{t "export.perperson" .}}</dd>{{end}}
+  {{with $e.Rules}}<dt>{{t "export.rules"}}</dt><dd>{{range .}}<code>{{.}}</code> {{end}}<span class="dim">{{t "export.everytool"}}</span></dd>{{end}}
+  {{if $e.RefusedToday}}<dt>{{t "export.refused"}}</dt><dd>{{t "export.refusedtoday" $e.RefusedToday}}</dd>{{end}}
+  {{with $e.Image}}<dt>{{t "export.runin"}}</dt><dd><code>{{.}}</code>{{with $e.Network}} <span class="dim">{{t "export.network" .}}</span>{{end}}</dd>{{end}}
+  <dt>{{t "th.connected"}}</dt>
+  <dd>{{if $e.People}}{{tn "people" $e.People}} · {{tn "agents" $e.Agents}}{{else}}<span class="faint">{{t "export.nobodyyet"}}</span>{{end}}{{with $.Nav.Who}} · <a href="/connections">{{t "export.yourconnections"}}</a>{{end}}</dd>
 </dl>
-{{if not .Serving}}<p class="faint mcp-note">Not served here: exports are served only by a daemon people sign in to, and not by a read-only one.</p>{{end}}
+{{if not .Serving}}<p class="faint mcp-note">{{t "export.notserved"}}</p>{{end}}
 
 </div>
 
 {{/* Outside every refreshed region: which tab is open is the reader's, and a morph would hand it back to the server's default. */}}
 <section class="connect" aria-labelledby="connect-head">
-<h2 class="eyebrow" id="connect-head">connect your app</h2>
+<h2 class="eyebrow" id="connect-head">{{t "export.connect"}}</h2>
 <fieldset class="connect-tabs">
-  <legend class="visually-hidden">Which app are you using?</legend>
+  <legend class="visually-hidden">{{t "export.whichapp"}}</legend>
   {{range $g, $group := .Connect}}
   <span class="connect-group">{{$group.Name}} <span class="dim">· {{$group.Hint}}</span></span>
   {{range $c, $client := $group.Clients}}
@@ -35,7 +35,7 @@
       {{range $client.Steps}}
       <li>
         <h3>{{.Title}}</h3>
-        {{with .Menu}}<p class="connect-menu">{{range $i, $label := .}}{{if $i}} <span aria-hidden="true">→</span> {{end}}<strong>{{$label}}</strong>{{end}}</p>{{end}}
+        {{with .Menu}}<p class="connect-menu">{{range $i, $label := .}}{{if $i}} <span aria-hidden="true">→</span> {{end}}<strong{{enAttr}}>{{$label}}</strong>{{end}}</p>{{end}}
         {{with .Body}}<p>{{.}}</p>{{end}}
         {{if .Link}}<p><a class="btn" href="{{.Link}}">{{.LinkLabel}}</a></p>{{end}}
         {{with .Snippet}}{{template "connectsnippet" .}}{{end}}
@@ -47,37 +47,37 @@
   {{with $group.Fix}}<div class="connect-blocked">{{range $group.Clients}}{{if .Blocked}}<p id="blocked-{{.Slug}}">{{.Blocked}}</p>{{end}}{{end}}<p>{{.}}</p></div>{{end}}
   {{end}}
 </fieldset>
-<p class="faint mcp-note">The app sends you here to sign in and agree; nothing is shared until you do.</p>
+<p class="faint mcp-note">{{t "export.appsends"}}</p>
 </section>
 
 <div id="export-activity">
-<h2 class="eyebrow">tools <span class="unbold">{{len $e.Tools}}</span></h2>
+<h2 class="eyebrow">{{t "export.h.tools"}} <span class="unbold">{{len $e.Tools}}</span></h2>
 <div class="tablewrap">
   <table class="consent-tools">
-    <thead><tr><th>Tool</th><th>Fixed</th><th>Kind</th></tr></thead>
+    <thead><tr><th>{{t "th.tool"}}</th><th>{{t "th.fixed"}}</th><th>{{t "th.kind"}}</th></tr></thead>
     <tbody>
     {{range $e.Tools}}
       <tr>
-        <td><code>{{if and .MCP (not .MCPTool)}}{{if .MCPTools}}{{$server := .MCP}}{{range $i, $t := .MCPTools}}{{if $i}}, {{end}}{{$server}}__{{$t}}{{end}}{{else}}every tool {{.MCP}} offers{{end}}{{else}}{{toolName .}}{{end}}</code>{{with .Description}}<div class="dim">{{.}}</div>{{end}}</td>
-        <td>{{range $k, $v := .Args}}<code>{{$k}}={{$v}}</code> {{end}}{{with .Timeout}}<span class="dim">{{.}} limit</span>{{end}}{{range $k, $_ := .Params}} <span class="dim">{{$k}} limited</span>{{end}}{{range .Rules}} <code>{{.}}</code>{{end}}</td>
-        <td class="dim">{{if .Agent}}an agent that answers in prose{{else if .MCP}}mcp · {{.MCP}}{{else}}a command of this pipeline{{end}}</td>
+        <td><code>{{if and .MCP (not .MCPTool)}}{{if .MCPTools}}{{$server := .MCP}}{{range $i, $t := .MCPTools}}{{if $i}}, {{end}}{{$server}}__{{$t}}{{end}}{{else}}{{t "tool.every" .MCP}}{{end}}{{else}}{{toolName .}}{{end}}</code>{{with .Description}}<div class="dim">{{.}}</div>{{end}}</td>
+        <td>{{range $k, $v := .Args}}<code>{{$k}}={{$v}}</code> {{end}}{{with .Timeout}}<span class="dim">{{t "tool.limit" .}}</span>{{end}}{{range $k, $_ := .Params}} <span class="dim">{{t "export.limited" $k}}</span>{{end}}{{range .Rules}} <code>{{.}}</code>{{end}}</td>
+        <td class="dim">{{if .Agent}}{{t "tool.agent"}}{{else if .MCP}}{{t "tool.mcp" .MCP}}{{else}}{{t "tool.command"}}{{end}}</td>
       </tr>
     {{end}}
     </tbody>
   </table>
 </div>
 
-<h2 class="eyebrow">recent calls</h2>
+<h2 class="eyebrow">{{t "export.recent"}}</h2>
 {{if .Recent}}
 <div class="tablewrap">
   <table class="activity">
-    <thead><tr><th>When</th><th>Who</th><th>Action</th><th>What</th><th>Pipeline</th></tr></thead>
+    <thead><tr><th>{{t "th.when"}}</th><th>{{t "th.who"}}</th><th>{{t "th.action"}}</th><th>{{t "th.what"}}</th><th>{{t "th.pipeline"}}</th></tr></thead>
     <tbody>
     {{range .Recent}}
       <tr>
         <td class="dim">{{agoTag .At}}</td>
         <td>{{if .Actor}}{{template "actor" .Actor}}{{else}}<span class="faint">—</span>{{end}}</td>
-        <td>{{.Action}}</td>
+        <td>{{word "verb" .Action}}</td>
         <td>{{.Target}}{{with .Reason}} <span class="dim">“{{.}}”</span>{{end}}</td>
         <td>{{.Pipeline}}</td>
       </tr>
@@ -85,12 +85,12 @@
     </tbody>
   </table>
 </div>
-{{if ge $.Nav.Role 3}}<p class="metaline"><a href="{{.LogURL}}">the whole log for {{$e.Name}}</a></p>{{end}}
+{{if ge $.Nav.Role 3}}<p class="metaline"><a href="{{.LogURL}}">{{t "export.wholelog" $e.Name}}</a></p>{{end}}
 {{else}}
-<p class="faint">Nothing called yet.</p>
+<p class="faint">{{t "export.nothing"}}</p>
 {{end}}
-<p class="faint mcp-note">Defined in the pipeline file; change it with <code>steps pipeline set</code>.</p>
+<p class="faint mcp-note">{{th "export.defined" (code "steps pipeline set")}}</p>
 </div>
 {{end}}
 
-{{define "connectsnippet"}}<div class="connect-snippet"><pre>{{.}}</pre><button class="btn copybtn" type="button" data-copy="{{.}}" data-copy-said="copied">copy</button><span class="visually-hidden" aria-live="polite" data-copied></span></div>{{end}}
+{{define "connectsnippet"}}<div class="connect-snippet"><pre>{{.}}</pre><button class="btn copybtn" type="button" data-copy="{{.}}" data-copy-said="{{t "copy.said"}}">{{t "copy"}}</button><span class="visually-hidden" aria-live="polite" data-copied></span></div>{{end}}

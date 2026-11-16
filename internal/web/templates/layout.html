@@ -5,7 +5,7 @@
 {{define "attbadge"}}{{with .}}<span class="badge" title="{{.Detail}}"><span aria-hidden="true">●</span>{{.Count}}</span>{{end}}{{end}}
 
 {{define "layout"}}<!doctype html>
-<html lang="en">
+<html lang="{{.Lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -41,8 +41,8 @@
 <script src="/static/hx-sse.min.js"></script>
 <script src="/static/app.js" defer></script>
 </head>
-<body>
-<a class="skiplink" href="#main">skip to content</a>
+<body data-t-copied="{{t "client.copied"}}" data-t-addresscopied="{{t "client.addresscopied"}}" data-t-signedout="{{t "client.signedout"}}" data-t-ago="{{t "time.ago"}}" data-t-running="{{t "client.running"}}" data-t-expired="{{t "client.expired"}}">
+<a class="skiplink" href="#main">{{t "layout.skip"}}</a>
 
 {{/* Everything in here counts work waiting on a person, so all of it goes
      stale on a page that is left open — which is every page, since they poll
@@ -60,40 +60,40 @@
        error) the switcher reads as a picker and no tabs are drawn: tabs
        borrowed from the first pipeline looked like the root's own. */}}
   {{if .Nav.Pipelines}}<div class="pipeswitch">
-    <button class="pipebtn" id="pipebtn" type="button" aria-expanded="false" aria-controls="pipemenu">{{template "markglyph" .Nav.SwitchMark}}{{if .Nav.Anchored}}<span class="visually-hidden">pipeline </span><b>{{.Nav.Current}}</b>{{else}}pipelines{{end}} <span class="caret" aria-hidden="true">▾</span></button>
-    <div class="pipemenu" id="pipemenu" role="group" aria-label="Pipelines">
+    <button class="pipebtn" id="pipebtn" type="button" aria-expanded="false" aria-controls="pipemenu">{{template "markglyph" .Nav.SwitchMark}}{{if .Nav.Anchored}}<span class="visually-hidden">{{t "nav.pipeline"}} </span><b>{{.Nav.Current}}</b>{{else}}{{t "nav.pipelines"}}{{end}} <span class="caret" aria-hidden="true">▾</span></button>
+    <div class="pipemenu" id="pipemenu" role="group" aria-label="{{t "nav.pipelines.label"}}">
       {{range .Nav.Pipelines}}
       {{/* Not a link: a broken pipeline has no page to go to. Its reason is on the root and not here, because this shell also draws the error page a webhook sender gets, and that sender never passed this server's credentials. */}}
-      {{if .Broken}}<span class="broken">{{template "markglyph" .Mark}}<span class="slug">{{.Slug}}</span> <span class="hint">not serving</span></span>{{else}}
+      {{if .Broken}}<span class="broken">{{template "markglyph" .Mark}}<span class="slug">{{.Slug}}</span> <span class="hint">{{t "nav.notserving"}}</span></span>{{else}}
       <a class="pipeitem" {{if and $.Nav.Anchored (eq .Slug $.Nav.Current)}}aria-current="page" {{end}}href="/p/{{.Slug}}">{{template "markglyph" .Mark}}<span class="slug">{{.Slug}}</span>{{template "counts" .}}</a>{{end}}
       {{end}}
     </div>
   </div>
-  {{if .Nav.Anchored}}<nav class="tabs" aria-label="Sections">
-    <a class="tab" {{if eq .Section "jobs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}">jobs{{template "attbadge" (attentionOn .Nav "jobs")}}</a>
-    <a class="tab" {{if eq .Section "runs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/runs">runs</a>
-    <a class="tab" {{if eq .Section "resources"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/resources">resources{{template "attbadge" (attentionOn .Nav "resources")}}</a>
-    {{if .Nav.HasMCP}}<a class="tab" {{if eq .Section "mcp"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/mcp">mcp{{template "attbadge" (attentionOn .Nav "mcp")}}</a>{{end}}
-    <a class="tab" {{if eq .Section "approvals"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/approvals">approvals{{template "attbadge" (attentionOn .Nav "approvals")}}</a>
-    <a class="tab" {{if eq .Section "questions"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/questions">questions{{template "attbadge" (attentionOn .Nav "questions")}}</a>
+  {{if .Nav.Anchored}}<nav class="tabs" aria-label="{{t "nav.sections"}}">
+    <a class="tab" {{if eq .Section "jobs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}">{{t "tab.jobs"}}{{template "attbadge" (attentionOn .Nav "jobs")}}</a>
+    <a class="tab" {{if eq .Section "runs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/runs">{{t "tab.runs"}}</a>
+    <a class="tab" {{if eq .Section "resources"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/resources">{{t "tab.resources"}}{{template "attbadge" (attentionOn .Nav "resources")}}</a>
+    {{if .Nav.HasMCP}}<a class="tab" {{if eq .Section "mcp"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/mcp">{{t "tab.mcp"}}{{template "attbadge" (attentionOn .Nav "mcp")}}</a>{{end}}
+    <a class="tab" {{if eq .Section "approvals"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/approvals">{{t "tab.approvals"}}{{template "attbadge" (attentionOn .Nav "approvals")}}</a>
+    <a class="tab" {{if eq .Section "questions"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/questions">{{t "tab.questions"}}{{template "attbadge" (attentionOn .Nav "questions")}}</a>
   </nav>{{end}}{{end}}
   <div class="right">
     {{template "markcarrier" .Nav}}
-    {{if and .Nav.ReadOnly (not .Nav.ViewOnly)}}<span class="ro">read-only</span>{{end}}
+    {{if and .Nav.ReadOnly (not .Nav.ViewOnly)}}<span class="ro">{{t "nav.readonly"}}</span>{{end}}
     {{/* A button, not only a key: on a phone "/" is nowhere to be pressed,
          and the palette was unreachable there. The kbd is the hint for a
          reader with a keyboard and is hidden where there is none. */}}
-    {{if .Nav.Current}}<button class="jumpbtn" id="jumpbtn" type="button" title="jump to a job, run or pipeline"><span aria-hidden="true">⌕</span> jump <kbd>/</kbd></button>{{end}}
+    {{if .Nav.Current}}<button class="jumpbtn" id="jumpbtn" type="button" title="{{t "nav.jump.title"}}"><span aria-hidden="true">⌕</span> {{t "nav.jump"}} <kbd>/</kbd></button>{{end}}
     {{/* No label in the markup: #statusline is morphed on every poll, so text or an aria-label set by script would snap back. app.css writes the icon and the state word from html[data-theme], which no swap touches, and generated content is part of the button's accessible name. */}}
-    <button class="jumpbtn themebtn" id="themebtn" type="button" title="theme: auto follows the system, or pin light or dark"><span class="visually-hidden">theme </span><span class="themeicon" aria-hidden="true"></span><span class="themelabel"></span></button>
+    <button class="jumpbtn themebtn" id="themebtn" type="button" title="{{t "nav.theme.title"}}"><span class="visually-hidden">{{t "nav.theme"}} </span><span class="themeicon" aria-hidden="true"></span><span class="themelabel" data-auto="{{t "client.theme.auto"}}" data-light="{{t "client.theme.light"}}" data-dark="{{t "client.theme.dark"}}"></span></button>
     {{/* The signed-in person, last on the line, and the daemon-wide pages that are about people rather than pipelines. Not drawn where nobody signs in. */}}
     {{with .Nav.Who}}<div class="usermenu">
-      <button class="pipebtn userbtn" id="userbtn" type="button" aria-expanded="false" aria-controls="usermenu" title="{{(actorOf .).Label}}"><span class="visually-hidden">signed in as </span><span class="who">{{(actorOf .).ID}}</span> <span class="caret" aria-hidden="true">▾</span></button>
-      <div class="pipemenu" id="usermenu" role="group" aria-label="Account">
+      <button class="pipebtn userbtn" id="userbtn" type="button" aria-expanded="false" aria-controls="usermenu" title="{{actorLabel .}}"><span class="visually-hidden">{{t "nav.signedinas"}} </span><span class="who">{{(actorOf .).ID}}</span> <span class="caret" aria-hidden="true">▾</span></button>
+      <div class="pipemenu" id="usermenu" role="group" aria-label="{{t "nav.account"}}">
         <span class="menuhead">{{template "actor" .}}</span>
-        {{if ge $.Nav.Role 3}}<a href="/activity">activity</a>{{end}}
-        {{if $.Nav.CanSignOut}}<a href="/connections">connections</a>{{end}}
-        {{if $.Nav.CanSignOut}}<form method="post" action="/logout"><button class="menubtn" type="submit">sign out</button></form>{{end}}
+        {{if ge $.Nav.Role 3}}<a href="/activity">{{t "nav.activity"}}</a>{{end}}
+        {{if $.Nav.CanSignOut}}<a href="/connections">{{t "nav.connections"}}</a>{{end}}
+        {{if $.Nav.CanSignOut}}<form method="post" action="/logout"><button class="menubtn" type="submit">{{t "nav.signout"}}</button></form>{{end}}
       </div>
     </div>{{end}}
   </div>
@@ -119,7 +119,7 @@
      Anchored, because the list says "this pipeline" and carries that
      pipeline's Unpause: the root and /docs anchor their tabs to a pipeline
      they did not resolve, and an unnamed one of several is worse than none. */}}
-<div id="attention" role="status" aria-label="Needs attention">{{if and .Nav.Anchored .Nav.Attention}}<ul class="attention">
+<div id="attention" role="status" aria-label="{{t "attention.label"}}">{{if and .Nav.Anchored .Nav.Attention}}<ul class="attention">
   {{range .Nav.Attention}}<li class="atitem at-{{.Kind}}">
     <a href="{{.URL}}">{{.Detail}}</a>
   </li>{{end}}
@@ -133,14 +133,15 @@
      and the version — so a bug report can name the build. */}}
 <footer class="foot">
   <span class="ver"><b>steps</b> {{.Version}}</span>
-  <nav aria-label="About"><a {{if eq .Section "docs"}}aria-current="page" {{end}}href="/docs">docs</a><a href="https://github.com/jtarchie/steps" rel="noopener">source</a></nav>
+  <nav aria-label="{{t "foot.about"}}"><a {{if eq .Section "docs"}}aria-current="page" {{end}}href="/docs">{{t "foot.docs"}}</a><a href="https://github.com/jtarchie/steps" rel="noopener">{{t "foot.source"}}</a></nav>
+  <nav class="langs" aria-label="{{t "lang.label"}}"><a {{if not .LangPicked}}aria-current="true" {{end}}href="{{printf "/lang?lang=&return=%s" (urlquery .Nav.URL)}}">{{t "lang.auto"}}</a>{{range languages}}<a lang="{{.Tag}}" {{if and $.LangPicked (eq .Tag $.Lang)}}aria-current="true" {{end}}href="{{printf "/lang?lang=%s&return=%s" .Tag (urlquery $.Nav.URL)}}">{{.Name}}</a>{{end}}</nav>
   <span class="copy">© {{year}} JT Archie</span>
 </footer>
 
 <div class="palette-backdrop" id="palette-backdrop"></div>
-<div class="palette" id="palette" role="dialog" aria-label="Jump to" data-search="/p/{{.Nav.Current}}/search">
-  <input id="palette-input" type="text" role="combobox" aria-label="Jump to" aria-expanded="false" aria-controls="palette-list" aria-autocomplete="list" placeholder="jump to job, run, pipeline…" autocomplete="off">
-  <ul id="palette-list" role="listbox" aria-label="Results"></ul>
+<div class="palette" id="palette" role="dialog" aria-label="{{t "palette.label"}}" data-search="/p/{{.Nav.Current}}/search">
+  <input id="palette-input" type="text" role="combobox" aria-label="{{t "palette.label"}}" aria-expanded="false" aria-controls="palette-list" aria-autocomplete="list" placeholder="{{t "palette.placeholder"}}" autocomplete="off">
+  <ul id="palette-list" role="listbox" aria-label="{{t "palette.results"}}"></ul>
 </div>
 
 {{block "scripts" .}}{{end}}
@@ -154,33 +155,33 @@
      rides in the title for a reader who needs the exact id. */}}
 {{/* An approval and a question are drawn here, once, because the tab lists them and the run parked on one offers it too; return sends the person back to whichever page they decided from. */}}
 {{define "approvalcard"}}{{$nav := .Nav}}{{with .Item}}<div class="approval {{if ne .Status "pending"}}decided{{end}}">
-  <div class="meta"><a href="/p/{{$nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · requested {{agoTag .RequestedAt}}{{if not .DecidedAt.IsZero}} · decided {{agoTag .DecidedAt}}{{with .DecidedBy}} by {{template "actor" .}}{{end}}{{end}}</div>
+  <div class="meta"><a href="/p/{{$nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · {{th "card.requested" (agoTag .RequestedAt)}}{{if not .DecidedAt.IsZero}} · {{th "card.decided" (agoTag .DecidedAt)}}{{with .DecidedBy}} {{th "card.by" (actorTag .)}}{{end}}{{end}}</div>
   <div class="msg">{{.Message}}</div>
   {{if eq .Status "pending"}}
     {{if $nav.ViewOnly}}
-    <div class="meta">Deciding needs the operator role.</div>
+    <div class="meta">{{t "card.decide.needsrole"}}</div>
     {{else if $nav.ReadOnly}}
-    <div class="meta">This server is read-only. Decide with <code>steps approvals approve {{.ID}} -p {{$nav.Current}}</code>.</div>
+    <div class="meta">{{th "card.decide.readonly" (code (printf "steps approvals approve %v -p %v" .ID $nav.Current))}}</div>
     {{else}}
     <form class="decide" method="post" action="/p/{{$nav.Current}}/approvals/{{.ID}}">
       <input type="hidden" name="return" value="{{$nav.URL}}">
-      <input type="text" name="reason" placeholder="reason (recorded)" aria-label="Decision reason">
-      <button class="btn primary" type="submit" name="decision" value="approve">Approve</button>
-      <button class="btn danger" type="submit" name="decision" value="reject">Reject</button>
+      <input type="text" name="reason" placeholder="{{t "card.reason.placeholder"}}" aria-label="{{t "card.reason.label"}}">
+      <button class="btn primary" type="submit" name="decision" value="approve">{{t "card.approve"}}</button>
+      <button class="btn danger" type="submit" name="decision" value="reject">{{t "card.reject"}}</button>
     </form>
     {{end}}
   {{else}}
-  <div class="meta"><span class="stamp st st-{{if eq .Status "approved"}}passed{{else}}failed{{end}}">{{.Status}}</span>{{if .Reason}} — "{{.Reason}}"{{end}}</div>
+  <div class="meta"><span class="stamp st st-{{if eq .Status "approved"}}passed{{else}}failed{{end}}">{{word "status" .Status}}</span>{{if .Reason}} — "{{.Reason}}"{{end}}</div>
   {{end}}
 </div>{{end}}{{end}}
 {{define "questioncard"}}{{$nav := .Nav}}{{with .Item}}<div class="approval {{if ne .Status "pending"}}decided{{end}}">
-  <div class="meta"><a href="/p/{{$nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · {{.AgentName}} · asked {{agoTag .AskedAt}}{{if not .AnsweredAt.IsZero}} · answered {{agoTag .AnsweredAt}}{{with .AnsweredBy}} by {{template "actor" .}}{{end}}{{end}}</div>
+  <div class="meta"><a href="/p/{{$nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · {{.AgentName}} · {{th "card.asked" (agoTag .AskedAt)}}{{if not .AnsweredAt.IsZero}} · {{th "card.answered" (agoTag .AnsweredAt)}}{{with .AnsweredBy}} {{th "card.by" (actorTag .)}}{{end}}{{end}}</div>
   <div class="msg">{{.Question}}</div>
   {{if eq .Status "pending"}}
     {{if $nav.ViewOnly}}
-    <div class="meta">Answering needs the operator role.</div>
+    <div class="meta">{{t "card.answer.needsrole"}}</div>
     {{else if $nav.ReadOnly}}
-    <div class="meta">This server is read-only. Answer with <code>steps questions answer {{.ID}} &lt;answer&gt; -p {{$nav.Current}}</code>.</div>
+    <div class="meta">{{th "card.answer.readonly" (code (printf "steps questions answer %v <answer> -p %v" .ID $nav.Current))}}</div>
     {{else}}
     <!-- The free-text field and its own submit come FIRST, and the ordering is
          load-bearing: pressing Enter in a text input submits the form with its
@@ -190,23 +191,23 @@
          of what was typed. -->
     <form class="decide" method="post" action="/p/{{$nav.Current}}/questions/{{.ID}}">
       <input type="hidden" name="return" value="{{$nav.URL}}">
-      <input type="text" name="answer_text" placeholder="{{if .OptionsRequired}}one of the options below{{else}}answer in your own words{{end}}" aria-label="Answer">
-      <button class="btn primary" type="submit">Answer</button>
+      <input type="text" name="answer_text" placeholder="{{if .OptionsRequired}}{{t "card.answer.options"}}{{else}}{{t "card.answer.free"}}{{end}}" aria-label="{{t "card.answer.label"}}">
+      <button class="btn primary" type="submit">{{t "card.answer"}}</button>
       {{range .Options}}
       <button class="btn" type="submit" name="answer" value="{{.}}">{{.}}</button>
       {{end}}
     </form>
     {{end}}
   {{else}}
-  <div class="meta"><span class="stamp st st-{{if eq .Status "answered"}}passed{{else}}failed{{end}}">{{.Status}}</span>{{if .Answer}} — "{{.Answer}}"{{end}}</div>
+  <div class="meta"><span class="stamp st st-{{if eq .Status "answered"}}passed{{else}}failed{{end}}">{{word "status" .Status}}</span>{{if .Answer}} — "{{.Answer}}"{{end}}</div>
   {{end}}
 </div>{{end}}{{end}}
-{{define "actor"}}{{if .}}{{$a := actorOf .}}<span class="actor{{if or $a.Automatic $a.Unverified}} quiet{{end}}" title="{{.}}">{{$a.Label}}</span>{{end}}{{end}}
+{{define "actor"}}{{actorTag .}}{{end}}
 
 {{/* The way back up from a detail page. A crumb with a URL links; the last
      one — the page the reader is on — is plain text. Collection pages pass
      no Crumbs and render nothing. */}}
-{{define "crumbs"}}{{with .Crumbs}}<nav class="crumbs" aria-label="Breadcrumb">{{range .}}{{if .URL}}<a href="{{.URL}}">{{.Label}}</a><span class="csep">/</span>{{else}}<span class="here">{{.Label}}</span>{{end}}{{end}}</nav>{{end}}{{end}}
+{{define "crumbs"}}{{with .Crumbs}}<nav class="crumbs" aria-label="{{t "crumbs.label"}}">{{range .}}{{if .URL}}<a href="{{.URL}}">{{.Label}}</a><span class="csep">/</span>{{else}}<span class="here">{{.Label}}</span>{{end}}{{end}}</nav>{{end}}{{end}}
 
 {{/* One JSON payload, wherever it appears: inline on the row when it is
      small, and otherwise folded behind a summary naming what is inside it.
@@ -214,7 +215,7 @@
      JavaScript off and behaves identically on the live-stream path. A box
      with a Src has no body until it is opened: htmx fetches it into the
      <pre> on every open, and with JavaScript off the link opens it. */}}
-{{define "jsonvalue"}}{{if not .Empty}}{{if .Inline}}<span class="jsonline">{{.HTML}}</span>{{else if .Src}}<details class="jsonbox" hx-get="{{.Src}}" hx-trigger="toggle[this.open]" hx-target="#{{.Target}}" hx-swap="innerHTML"><summary>{{.Summary}}</summary><pre class="json" id="{{.Target}}"><a href="{{.Src}}">open</a></pre></details>{{else}}<details class="jsonbox"><summary>{{.Summary}}</summary><pre class="json">{{.HTML}}</pre></details>{{end}}{{end}}{{end}}
+{{define "jsonvalue"}}{{if not .Empty}}{{if .Inline}}<span class="jsonline">{{.HTML}}</span>{{else if .Src}}<details class="jsonbox" hx-get="{{.Src}}" hx-trigger="toggle[this.open]" hx-target="#{{.Target}}" hx-swap="innerHTML"><summary>{{.Summary}}</summary><pre class="json" id="{{.Target}}"><a href="{{.Src}}">{{t "json.open"}}</a></pre></details>{{else}}<details class="jsonbox"><summary>{{.Summary}}</summary><pre class="json">{{.HTML}}</pre></details>{{end}}{{end}}{{end}}
 
 {{/* An agent's recorded response, rendered as the markdown models actually
      write. See prose.go for what the renderer refuses to do with it. */}}
@@ -226,13 +227,13 @@
      live. A paused pipeline turns the bar blue and says nothing more, as
      Concourse's top bar does; a disabled button says why in its tooltip.
      The groups close back to back: a test finds the bar's end that way. */}}
-{{define "actionbar"}}{{if .Nav.Anchored}}<div class="actionbar{{if .Nav.Paused}} paused{{end}}" role="toolbar" aria-label="Actions"><div class="group">{{if .Nav.AllPaused}}<span class="st st-paused">everything is paused</span>{{if .Nav.CanPauseAll}}<form method="post" action="/unpause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="resume every pipeline; each goes back to its own pause state">▶ Resume all</button></form>{{end}}{{end}}{{if .Nav.ViewOnly}}<span class="rohint viewonly">you can view<span class="sep">·</span>triggering, approving and aborting need the operator role</span>{{else if .Nav.ReadOnly}}{{if .Nav.OwnPaused}}<span class="st st-paused">paused</span> <span class="dim">unpause with <code>steps pipeline unpause -p {{.Nav.Current}}</code></span>{{end}}{{else}}<form method="post" action="/p/{{.Nav.Current}}/{{if .Nav.OwnPaused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="{{if .Nav.OwnPaused}}resume polling and starting runs{{else}}stop polling and starting runs until unpaused{{end}}" aria-pressed="{{.Nav.OwnPaused}}">{{if .Nav.OwnPaused}}▶ Unpause{{else}}⏸ Pause{{end}}</button></form>{{end}}</div>{{with .Bar}}{{if not $.Nav.ReadOnly}}<div class="group">
-    {{if .Held}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/release"><button class="btn" type="submit" title="let new versions trigger {{.Job}} again">Release</button></form>{{end}}
-    {{if .Job}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/trigger"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="a new run of {{.Job}}, with the newest versions"{{end}}>↻ Trigger</button></form>
+{{define "actionbar"}}{{if .Nav.Anchored}}<div class="actionbar{{if .Nav.Paused}} paused{{end}}" role="toolbar" aria-label="{{t "bar.label"}}"><div class="group">{{if .Nav.AllPaused}}<span class="st st-paused">{{t "bar.allpaused"}}</span>{{if .Nav.CanPauseAll}}<form method="post" action="/unpause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="{{t "bar.resumeall.title"}}">▶ {{t "bar.resumeall"}}</button></form>{{end}}{{end}}{{if .Nav.ViewOnly}}<span class="rohint viewonly">{{t "bar.viewonly.a"}}<span class="sep">·</span>{{t "bar.viewonly.b"}}</span>{{else if .Nav.ReadOnly}}{{if .Nav.OwnPaused}}<span class="st st-paused">{{t "bar.paused"}}</span> <span class="dim">{{th "bar.unpausewith" (code (printf "steps pipeline unpause -p %v" .Nav.Current))}}</span>{{end}}{{else}}<form method="post" action="/p/{{.Nav.Current}}/{{if .Nav.OwnPaused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="{{if .Nav.OwnPaused}}{{t "bar.unpause.title"}}{{else}}{{t "bar.pause.title"}}{{end}}" aria-pressed="{{.Nav.OwnPaused}}">{{if .Nav.OwnPaused}}▶ {{t "bar.unpause"}}{{else}}⏸ {{t "bar.pause"}}{{end}}</button></form>{{end}}</div>{{with .Bar}}{{if not $.Nav.ReadOnly}}<div class="group">
+    {{if .Held}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/release"><button class="btn" type="submit" title="{{t "bar.release.title" .Job}}">{{t "bar.release"}}</button></form>{{end}}
+    {{if .Job}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/trigger"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "bar.trigger.title" .Job}}"{{end}}>↻ {{t "bar.trigger"}}</button></form>
     {{end}}
-    {{if .Retry}}<form method="post" action="/p/{{$.Nav.Current}}/runs/{{.RunID}}/rerun"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="run this build again, with the same inputs"{{end}}>⟲ Retry</button></form>{{end}}
-    {{if .Abort}}<form method="post" action="{{.Abort}}"><button class="btn danger" type="submit" title="stop it">■ Abort</button></form>{{end}}
-  </div>{{end}}{{end}}</div>{{else if and .Nav.Fleet (or .Nav.CanPauseAll .Nav.AllPaused)}}<div class="actionbar{{if .Nav.AllPaused}} paused{{end}}" role="toolbar" aria-label="Actions"><div class="group">{{if .Nav.AllPaused}}<span class="st st-paused">everything is paused</span>{{if .Nav.CanPauseAll}}<form method="post" action="/unpause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="resume every pipeline; each goes back to its own pause state">▶ Resume all</button></form>{{end}}{{else}}<form method="post" action="/pause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="stop polling and starting runs in every pipeline until resumed; each keeps its own pause state">⏸ Pause all</button></form>{{end}}</div></div>{{end}}{{end}}
+    {{if .Retry}}<form method="post" action="/p/{{$.Nav.Current}}/runs/{{.RunID}}/rerun"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "bar.retry.title"}}"{{end}}>⟲ {{t "bar.retry"}}</button></form>{{end}}
+    {{if .Abort}}<form method="post" action="{{.Abort}}"><button class="btn danger" type="submit" title="{{t "bar.abort.title"}}">■ {{t "bar.abort"}}</button></form>{{end}}
+  </div>{{end}}{{end}}</div>{{else if and .Nav.Fleet (or .Nav.CanPauseAll .Nav.AllPaused)}}<div class="actionbar{{if .Nav.AllPaused}} paused{{end}}" role="toolbar" aria-label="{{t "bar.label"}}"><div class="group">{{if .Nav.AllPaused}}<span class="st st-paused">{{t "bar.allpaused"}}</span>{{if .Nav.CanPauseAll}}<form method="post" action="/unpause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="{{t "bar.resumeall.title"}}">▶ {{t "bar.resumeall"}}</button></form>{{end}}{{else}}<form method="post" action="/pause-all"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="{{t "bar.pauseall.title"}}">⏸ {{t "bar.pauseall"}}</button></form>{{end}}</div></div>{{end}}{{end}}
 
 {{/* What <head> shows, kept where every visible poll's oob swap reaches it;
      app.js copies it into the favicon and the title (prefixed onto the
@@ -245,8 +246,8 @@
      while a run goes — as the favicon and the jobs graph draw it — so a red
      job being rebuilt reads as both without two glyphs side by side. The
      glyph is hidden from a screen reader, which hears the words. */}}
-{{define "markglyph"}}<span class="mk{{if .Ringed}} ring{{end}}"{{with .Words}} title="{{.}}"{{end}}><span aria-hidden="true">{{with .DiscGlyph}}<span class="st-{{$.Word}}">{{.}}</span>{{else}}{{if .Ring}}<span class="st-running">◐</span>{{end}}{{end}}</span>{{with .Words}}<span class="visually-hidden">{{.}}</span>{{end}}</span>{{end}}
+{{define "markglyph"}}{{$words := markWords .}}<span class="mk{{if .Ringed}} ring{{end}}"{{with $words}} title="{{.}}"{{end}}><span aria-hidden="true">{{with .DiscGlyph}}<span class="st-{{$.Word}}">{{.}}</span>{{else}}{{if .Ring}}<span class="st-running">◐</span>{{end}}{{end}}</span>{{with $words}}<span class="visually-hidden">{{.}}</span>{{end}}</span>{{end}}
 
 {{/* Attention loud, activity quiet: what waits on a person is the yellow
      badge, what is merely in flight is dim, and neither draws at zero. */}}
-{{define "counts"}}{{if or .Attention .InFlight}}<span class="counts">{{if .Attention}}<span class="badge" title="{{.Attention}} waiting on you"><span aria-hidden="true">●</span>{{.Attention}}<span class="visually-hidden"> waiting on you</span></span>{{end}}{{if .InFlight}}<span class="inflight" title="{{.InFlight}} running or queued"><span aria-hidden="true">◐</span>{{.InFlight}}<span class="visually-hidden"> running or queued</span></span>{{end}}</span>{{end}}{{end}}
+{{define "counts"}}{{if or .Attention .InFlight}}<span class="counts">{{if .Attention}}<span class="badge" title="{{t "counts.waiting" .Attention}}"><span aria-hidden="true">●</span>{{.Attention}}<span class="visually-hidden"> {{t "counts.waiting.sr"}}</span></span>{{end}}{{if .InFlight}}<span class="inflight" title="{{t "counts.inflight" .InFlight}}"><span aria-hidden="true">◐</span>{{.InFlight}}<span class="visually-hidden"> {{t "counts.inflight.sr"}}</span></span>{{end}}</span>{{end}}{{end}}

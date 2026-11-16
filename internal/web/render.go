@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"html/template"
 	"io"
 	"maps"
@@ -42,10 +43,22 @@ var assets embed.FS
 type renderer struct {
 	pages   map[string]*template.Template
 	version string
+
+	// resolve answers a request's locale; the server sets it, and a bare renderer is English.
+	resolve func(*http.Request) *locale
+	picked  func(*http.Request) bool
+
+	mu     sync.Mutex
+	others map[string]map[string]*template.Template
 }
 
 func newRenderer(version string) (*renderer, error) {
-	pages, err := parsedPages()
+	english, err := loadLocale(englishTag)
+	if err != nil {
+		return nil, err
+	}
+
+	pages, err := parsedPages(english)
 	if err != nil {
 		return nil, err
 	}
@@ -55,11 +68,54 @@ func newRenderer(version string) (*renderer, error) {
 	}
 
 	// The map is the server's own, the templates in it shared: a caller that drops a page must not drop it for every server.
-	return &renderer{pages: maps.Clone(pages), version: version}, nil
+	return &renderer{pages: maps.Clone(pages), version: version, others: map[string]map[string]*template.Template{}}, nil
 }
 
-// parsedPages is parsed once per process and shared by every server: the templates are embedded and their funcs hold no state, so each server parsing its own was the same work again, and an executed html/template is safe to share.
-var parsedPages = sync.OnceValues(func() (map[string]*template.Template, error) {
+// pagesFor is the template set whose funcs say loc's words. Each locale parses once, on first use, so production never pays for the pseudo-locale.
+func (r *renderer) pagesFor(loc *locale) (map[string]*template.Template, error) {
+	if loc == nil || loc.tag == englishTag {
+		return r.pages, nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if pages, ok := r.others[loc.tag]; ok {
+		return pages, nil
+	}
+
+	pages, err := parsedPages(loc)
+	if err != nil {
+		return nil, err
+	}
+
+	r.others[loc.tag] = pages
+
+	return pages, nil
+}
+
+// page is one template of loc's set.
+func (r *renderer) page(loc *locale, name string) (*template.Template, bool) {
+	pages, err := r.pagesFor(loc)
+	if err != nil {
+		return nil, false
+	}
+
+	tmpl, ok := pages[name]
+
+	return tmpl, ok
+}
+
+var parsedByLocale sync.Map
+
+// parsedPages parses every page against one locale, once per process and shared by every server: the templates are embedded and the only state in their funcs is the locale they were bound to, and an executed html/template is safe to share.
+func parsedPages(loc *locale) (map[string]*template.Template, error) {
+	once, _ := parsedByLocale.LoadOrStore(loc.tag, sync.OnceValues(func() (map[string]*template.Template, error) { return parseAll(loc) }))
+
+	return once.(func() (map[string]*template.Template, error))()
+}
+
+func parseAll(loc *locale) (map[string]*template.Template, error) {
 	layout, err := assets.ReadFile("templates/layout.html")
 	if err != nil {
 		return nil, fmt.Errorf("web: could not read layout: %w", err)
@@ -83,7 +139,7 @@ var parsedPages = sync.OnceValues(func() (map[string]*template.Template, error) 
 			return nil, fmt.Errorf("web: could not read %q: %w", file.Name(), readErr)
 		}
 
-		tmpl, parseErr := template.New(name).Funcs(templateFuncs()).Parse(string(layout))
+		tmpl, parseErr := template.New(name).Funcs(templateFuncs(loc)).Funcs(runFuncs(loc)).Parse(string(layout))
 		if parseErr != nil {
 			return nil, fmt.Errorf("web: could not parse layout for %q: %w", name, parseErr)
 		}
@@ -97,11 +153,13 @@ var parsedPages = sync.OnceValues(func() (map[string]*template.Template, error) 
 	}
 
 	return pages, nil
-})
+}
 
 // Render executes the named page inside the layout.
-func (r *renderer) Render(_ *echo.Context, w io.Writer, name string, data any) error {
-	tmpl, ok := r.pages[name]
+func (r *renderer) Render(c *echo.Context, w io.Writer, name string, data any) error {
+	loc := r.localeOf(c)
+
+	tmpl, ok := r.page(loc, name)
 	if !ok {
 		return fmt.Errorf("web: no template named %q", name)
 	}
@@ -114,6 +172,8 @@ func (r *renderer) Render(_ *echo.Context, w io.Writer, name string, data any) e
 	values["Page"] = name
 	values["Section"] = sectionOf(name)
 	values["Version"] = r.version
+	values["Lang"] = loc.tag
+	values["LangPicked"] = c != nil && r.resolve != nil && r.picked(c.Request())
 
 	if _, ok := values["Title"]; !ok {
 		values["Title"] = ""
@@ -192,13 +252,33 @@ func assetHandler(path, contentType string) echo.HandlerFunc {
 // templateFuncs are the formatting decisions the templates share. They live
 // here rather than in the templates because a duration rendered two ways on
 // two pages is a bug that only ever gets noticed by the person comparing them.
-func templateFuncs() template.FuncMap {
+func templateFuncs(loc *locale) template.FuncMap {
 	return template.FuncMap{
+		"t":           loc.text,
+		"foreign":     loc.foreign,
+		"enAttr":      loc.enAttr,
+		"extLink":     extLink,
+		"mcpStatus":   loc.mcpStatus,
+		"followWords": loc.followWords,
+
+		"languages":  languageChoices,
+		"word":       loc.word,
+		"join":       strings.Join,
+		"redWords":   func(p overviewPipeline) string { return p.RedWordsIn(loc) },
+		"cellTitle":  func(c versionCell) string { return c.TitleIn(loc) },
+		"budget":     func(d agentDialView) string { return d.BudgetIn(loc) },
+		"markWords":  func(m mark) string { return m.WordsIn(loc) },
+		"tn":         loc.count,
+		"statusText": func(raw reflect.Value) string { return loc.word("status", statusWord(raw.String())) },
+		"code":       func(s string) template.HTML { return template.HTML("<code>" + html.EscapeString(s) + "</code>") }, //nolint:gosec // escaped
+		"actorTag":   loc.actorTag,
+		"actorLabel": func(stored string) string { return loc.actorLabel(actor.Parse(stored)) },
+		"th":         loc.html,
 		"duration":   formatDuration,
-		"ago":        formatAgo,
-		"agoTag":     agoTag,
-		"nextTag":    nextTag,
-		"agoCompact": agoCompactTag,
+		"ago":        func(t time.Time) string { return formatAgoIn(loc, t) },
+		"agoTag":     func(t time.Time) template.HTML { return agoTagIn(loc, t) },
+		"nextTag":    func(t time.Time) template.HTML { return nextTagIn(loc, t) },
+		"agoCompact": func(t time.Time) template.HTML { return agoCompactTagIn(loc, t) },
 		"elapsedTag": elapsedTag,
 		"stamp":      formatStamp,
 		"short":      shortID,
@@ -321,18 +401,18 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dd %02dh", hours/24, hours%24)
 }
 
-// formatAgo renders how long ago something happened.
-func formatAgo(t time.Time) string {
+// formatAgoIn is formatAgo in loc's words. The duration inside keeps its spelling in every locale, so only the pattern around it moves.
+func formatAgoIn(loc *locale, t time.Time) string {
 	if t.IsZero() {
 		return "—"
 	}
 
 	elapsed := time.Since(t)
 	if elapsed < 0 {
-		return "just now"
+		return loc.text("time.justnow")
 	}
 
-	return formatDuration(elapsed) + " ago"
+	return loc.text("time.ago", formatDuration(elapsed))
 }
 
 // formatStamp renders an absolute local timestamp.
@@ -410,6 +490,8 @@ type sparkBar struct {
 	Height int
 	Failed bool
 	Title  string
+	// Dur and Status say the same thing Title does, apart, so a template can translate the words around them.
+	Dur, Status string
 }
 
 // sparkline turns a job's recent runs into bars scaled to the slowest, oldest
@@ -451,6 +533,8 @@ func sparkline(runs []store.RunRow) []sparkBar {
 			Height: height,
 			Failed: run.Status == store.RunFailed,
 			Title:  fmt.Sprintf("%s — %s", formatDuration(run.Duration()), statusWord(run.Status)),
+			Dur:    formatDuration(run.Duration()),
+			Status: statusWord(run.Status),
 		})
 	}
 
@@ -521,44 +605,48 @@ func statusMark[S ~string](status S) string {
 	}
 }
 
-// agoTag renders a relative timestamp as a <time> element carrying the
-// absolute instant, so the shared ticker can keep re-rendering it. Without
-// it, "4s ago" is baked at render time and is a lie by the time anyone reads
-// it — most visibly on a page that never reloads.
-func agoTag(t time.Time) template.HTML {
+func agoTagIn(loc *locale, t time.Time) template.HTML {
 	if t.IsZero() {
 		return `<span class="dim">—</span>`
 	}
 
 	//nolint:gosec // G203: both interpolations are machine-formatted, not input
 	return template.HTML(fmt.Sprintf(`<time data-ago=%q>%s</time>`,
-		t.UTC().Format(time.RFC3339Nano), template.HTMLEscapeString(formatAgo(t))))
+		t.UTC().Format(time.RFC3339Nano), template.HTMLEscapeString(formatAgoIn(loc, t))))
 }
 
 // agoCompact is a relative time in one coarse unit ("5d"), for places where
 // width is the constraint, plus the words a screen reader should say for it:
 // an abbreviation is read unpredictably ("5 d", "21 meters").
 func agoCompact(elapsed time.Duration) (short, spoken string) {
-	count, abbr, whole, ok := compactUnit(elapsed)
+	return agoCompactIn(englishLocale(), elapsed)
+}
+
+func agoCompactIn(loc *locale, elapsed time.Duration) (short, spoken string) {
+	count, abbr, unit, ok := compactUnit(elapsed)
 	if !ok {
-		return "now", "just now"
+		return loc.text("time.now.short"), loc.text("time.justnow")
 	}
 
-	return fmt.Sprintf("%d%s", count, abbr), fmt.Sprintf("%d %s ago", count, whole)
+	return fmt.Sprintf("%d%s", count, abbr), loc.count("time.ago."+unit, count)
 }
 
 // untilCompact is agoCompact looking forward.
 func untilCompact(ahead time.Duration) (short, spoken string) {
-	count, abbr, whole, ok := compactUnit(ahead)
-	if !ok {
-		return "now", "now"
-	}
-
-	return fmt.Sprintf("in %d%s", count, abbr), fmt.Sprintf("in %d %s", count, whole)
+	return untilCompactIn(englishLocale(), ahead)
 }
 
-// compactUnit floors a duration to its largest whole unit; whole is already pluralized.
-func compactUnit(d time.Duration) (count int, abbr, whole string, ok bool) {
+func untilCompactIn(loc *locale, ahead time.Duration) (short, spoken string) {
+	count, abbr, unit, ok := compactUnit(ahead)
+	if !ok {
+		return loc.text("time.now.short"), loc.text("time.now.spoken")
+	}
+
+	return loc.text("time.in.short", fmt.Sprintf("%d%s", count, abbr)), loc.count("time.in."+unit, count)
+}
+
+// compactUnit floors a duration to its largest whole unit; unit names the catalog family that says it in words.
+func compactUnit(d time.Duration) (count int, abbr, unit string, ok bool) {
 	units := []struct {
 		size        time.Duration
 		abbr, whole string
@@ -569,33 +657,24 @@ func compactUnit(d time.Duration) (count int, abbr, whole string, ok bool) {
 		{time.Second, "s", "second"},
 	}
 
-	for _, unit := range units {
-		count = int(d / unit.size)
+	for _, candidate := range units {
+		count = int(d / candidate.size)
 		if count < 1 {
 			continue
 		}
 
-		whole = unit.whole
-		if count != 1 {
-			whole += "s"
-		}
-
-		return count, unit.abbr, whole, true
+		return count, candidate.abbr, candidate.whole, true
 	}
 
 	return 0, "", "", false
 }
 
-// agoCompactTag is agoTag for the run strip: the abbreviation for the eye,
-// the words for assistive tech. No ticker attribute, unlike agoTag: the strip
-// re-renders from the server every 2.5s it is visible, so a second copy of
-// these thresholds in JavaScript would only be kept in step for nothing.
-func agoCompactTag(t time.Time) template.HTML {
+func agoCompactTagIn(loc *locale, t time.Time) template.HTML {
 	if t.IsZero() {
 		return `<span class="dim">—</span>`
 	}
 
-	short, spoken := agoCompact(time.Since(t))
+	short, spoken := agoCompactIn(loc, time.Since(t))
 
 	//nolint:gosec // G203: every interpolation is machine-formatted, not input
 	return template.HTML(fmt.Sprintf(`<time datetime=%q><span aria-hidden="true">%s</span><span class="visually-hidden">%s</span></time>`,
@@ -613,4 +692,19 @@ func elapsedTag(run store.RunRow) template.HTML {
 	//nolint:gosec // G203: both interpolations are machine-formatted, not input
 	return template.HTML(fmt.Sprintf(`<time data-elapsed-since=%q>%s</time>`,
 		run.StartedAt.UTC().Format(time.RFC3339Nano), template.HTMLEscapeString(formatDuration(run.Duration()))))
+}
+
+func (r *renderer) localeOf(c *echo.Context) *locale {
+	if c == nil || r.resolve == nil {
+		return englishLocale()
+	}
+
+	if loc, ok := c.Get(localeKey).(*locale); ok {
+		return loc
+	}
+
+	loc := r.resolve(c.Request())
+	c.Set(localeKey, loc)
+
+	return loc
 }

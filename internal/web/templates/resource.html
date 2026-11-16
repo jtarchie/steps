@@ -2,32 +2,32 @@
 <h1 class="prompt"><b>steps resource {{.Resource.Name}}</b></h1>
 <p class="metaline" id="resource-meta">
   {{.Resource.Type}}<span class="sep">·</span>
-  {{if .Checked.Name}}last checked {{ago .Checked.CheckedAt}}{{else}}<span class="faint">never checked</span>{{end}}
+  {{if .Checked.Name}}{{t "resource.lastchecked" (ago .Checked.CheckedAt)}}{{else}}<span class="faint">{{t "resource.neverchecked"}}</span>{{end}}
 </p>
 
 <div id="resource-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#resource-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#resource-meta:outerMorph,#statusline:outerMorph">
 {{/* Above the versions, because the list below it is what the check used to
      return and a reader who does not know it has stopped will read the top of
      it as current. */}}
-{{if .Failing.Name}}<div class="checkfail"><b>this resource is failing its check</b> <span class="meta">last tried {{agoTag .Failing.FailedAt}}</span><pre>{{.Failing.Message}}</pre></div>{{end}}
-<h2 class="eyebrow">Versions <span class="unbold">— newest first, capped by <code>version_history:</code></span></h2>
-{{if not .Consumers}}<p class="metaline faint">no job gets this resource</p>{{end}}
+{{if .Failing.Name}}<div class="checkfail"><b>{{t "resource.failingcheck"}}</b> <span class="meta">{{th "resource.lasttried" (agoTag .Failing.FailedAt)}}</span><pre>{{.Failing.Message}}</pre></div>{{end}}
+<h2 class="eyebrow">{{t "resource.versions"}} <span class="unbold">{{th "resource.versions.note" (code "version_history:")}}</span></h2>
+{{if not .Consumers}}<p class="metaline faint">{{t "resource.nojob"}}</p>{{end}}
 <div class="tablewrap">
   <table class="versions">
-    <thead><tr><th scope="col">Version</th>{{range .Consumers}}<th scope="col"><a href="/p/{{$.Nav.Current}}/jobs/{{pathseg .Job}}">{{.Job}}</a></th>{{end}}</tr></thead>
+    <thead><tr><th scope="col">{{t "th.version"}}</th>{{range .Consumers}}<th scope="col"><a href="/p/{{$.Nav.Current}}/jobs/{{pathseg .Job}}">{{.Job}}</a></th>{{end}}</tr></thead>
     <tbody>
       {{range .Rows}}
       <tr><th scope="row">{{jsonLine .Version}}</th>{{range .Cells}}
         {{- $run := .Latest}}
-        <td{{if $run.ID}} title="{{.Title}}"{{end}}>{{if $run.ID -}}
-          <span class="st st-{{statusWord $run.Status}}">{{statusWord $run.Status}}</span>
-          <a href="/p/{{$.Nav.Current}}/runs/{{pathseg $run.ID}}" aria-label="run {{$run.ID}}, {{statusWord $run.Status}}">{{short $run.ID}}</a>
-          <span class="when">{{agoTag $run.StartedAt}}{{if gt (len .Runs) 1}} · {{len .Runs}} runs{{end}}</span>
+        <td{{if $run.ID}} title="{{cellTitle .}}"{{end}}>{{if $run.ID -}}
+          <span class="st st-{{statusWord $run.Status}}">{{statusText $run.Status}}</span>
+          <a href="/p/{{$.Nav.Current}}/runs/{{pathseg $run.ID}}" aria-label="{{t "resource.runlabel" $run.ID (statusText $run.Status)}}">{{short $run.ID}}</a>
+          <span class="when">{{agoTag $run.StartedAt}}{{if gt (len .Runs) 1}} · {{t "resource.runs" (len .Runs)}}{{end}}</span>
         {{- else -}}
-          <span class="st st-{{.Class}}">{{.State}}</span>
+          <span class="st st-{{.Class}}">{{word "cell" .State}}</span>
         {{- end}}</td>{{end}}</tr>
       {{else}}
-      <tr><td class="faint" colspan="{{$.Span}}">never checked</td></tr>
+      <tr><td class="faint" colspan="{{$.Span}}">{{t "resource.neverchecked"}}</td></tr>
       {{end}}
     </tbody>
   </table>

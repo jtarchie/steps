@@ -74,12 +74,14 @@ func (a agentDialView) UncappedBudget() bool { return a.BudgetTokens == 0 && a.B
 // Budget renders the ceiling in the unit it is metered in. One column rather
 // than two: the spellings are mutually exclusive by source kind, so a second
 // column would be empty on every row of a pipeline that does not mix them.
-func (a agentDialView) Budget() string {
+func (a agentDialView) Budget() string { return a.BudgetIn(englishLocale()) }
+
+func (a agentDialView) BudgetIn(loc *locale) string {
 	if a.BudgetUSD > 0 {
 		return FormatUSD(a.BudgetUSD)
 	}
 
-	return thousands(a.BudgetTokens) + " tokens"
+	return loc.text("dials.tokens", thousands(a.BudgetTokens))
 }
 
 // UncappedTimeout is the same for the deadline, and it is the one that had to

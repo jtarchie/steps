@@ -1,12 +1,12 @@
 {{define "page"}}
-<h1 class="prompt"><b>steps run {{.Job}}</b> <span class="st st-queued">queued</span></h1>
+<h1 class="prompt"><b>steps run {{.Job}}</b> <span class="st st-queued">{{t "status.queued"}}</span></h1>
 
 <div class="waiting">
-  <p class="waitline"><span class="cursor" aria-hidden="true">▍</span> <span id="follow-state">queued</span></p>
+  <p class="waitline"><span class="cursor" aria-hidden="true">▍</span> <span id="follow-state">{{t "status.queued"}}</span></p>
   {{/* What the drain checks before it claims, filled by the poll below; the first blocking line is the answer to "why hasn't it started?". */}}
   <ul class="followchecks" id="follow-checks" aria-live="polite"></ul>
-  <p class="faint" id="follow-hint">This forwards to the run as soon as it starts.</p>
-  <p><a href="/p/{{.Nav.Current}}/jobs/{{.Job}}">← back to {{.Job}}</a></p>
+  <p class="faint" id="follow-hint">{{t "follow.hint"}}</p>
+  <p><a href="/p/{{.Nav.Current}}/jobs/{{.Job}}">← {{t "follow.back" .Job}}</a></p>
 </div>
 {{end}}
 
@@ -23,7 +23,8 @@
   var deadline = Date.now() + 120000;
   var checks = document.getElementById('follow-checks');
 
-  var words = { pending: 'queued', running: 'starting', waiting: 'waiting for the queue', failed: 'failed', aborted: 'aborted' };
+  var W = {{followWords}};
+  var words = W.states;
   var terminal = { failed: true, aborted: true };
 
   function drawChecks(list) {
@@ -36,7 +37,7 @@
       mark.textContent = check.clear ? '✓ ' : '⟳ ';
       var state = document.createElement('span');
       state.className = 'visually-hidden';
-      state.textContent = check.clear ? 'clear: ' : 'blocking: ';
+      state.textContent = check.clear ? W.clear : W.blocking;
       li.append(mark, state, check.text);
       checks.append(li);
     });
@@ -46,22 +47,22 @@
     fetch(url).then(function (r) { return r.json(); }).then(function (data) {
       if (data.run) { window.location.replace(data.url); return; }
 
-      state.textContent = words[data.state] || 'queued';
+      state.textContent = words[data.state] || W.queued;
       drawChecks(data.checks);
 
       if (terminal[data.state]) {
-        hint.textContent = data.error || ('the trigger ' + data.state + ' before any step ran');
+        hint.textContent = data.error || W[data.state];
         return;
       }
 
       if (Date.now() > deadline) {
-        hint.textContent = 'Stopped checking. Reload to look again.';
+        hint.textContent = W.stopped;
         return;
       }
 
       setTimeout(poll, 700);
     }).catch(function () {
-      state.textContent = 'lost contact with the server';
+      state.textContent = W.lost;
     });
   }
 
