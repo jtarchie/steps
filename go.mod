@@ -11,8 +11,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.347.0
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.83.0
 	github.com/aws/smithy-go v1.28.9
-	github.com/chromedp/cdproto v0.159.0
-	github.com/chromedp/chromedp v0.23.0
+	github.com/chromedp/cdproto v0.160.3
+	github.com/chromedp/chromedp v0.23.1
 	github.com/containerd/errdefs v1.0.0
 	github.com/digitalocean/godo v1.240.0
 	github.com/distribution/reference v0.6.0
@@ -27,7 +27,7 @@ require (
 	github.com/kevinburke/ssh_config v1.6.0
 	github.com/klauspost/compress v1.20.4
 	github.com/labstack/echo-otel/v5 v5.0.0
-	github.com/labstack/echo/v5 v5.4.5
+	github.com/labstack/echo/v5 v5.4.6
 	github.com/lmittmann/tint v1.2.1
 	github.com/markbates/goth v1.82.0
 	github.com/moby/moby/api v1.57.0
@@ -85,7 +85,7 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
-	github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 // indirect
+	github.com/go-json-experiment/json v1.27.2 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
@@ -121,7 +121,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20261110000943-09e21b237f2c // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261110000943-09e21b237f2c // indirect
 	google.golang.org/grpc v1.85.0 // indirect
-	modernc.org/libc v1.81.0 // indirect
+	modernc.org/libc v1.81.2 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.12.1 // indirect
+	modernc.org/memory v1.13.0 // indirect
 )
