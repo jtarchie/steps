@@ -472,7 +472,7 @@ func stepBlock(t *testing.T, page, name string) string {
 	return page[start : start+end]
 }
 
-// TestARunPageNamesAStepsImageOnce: which image a step ran in is one line in its body — the get it came from, the reference it resolved to, the machine — where it used to be a note and a placement line saying the same reference twice. The terminal still prints the note: it has no placement line to fold it into.
+// TestARunPageNamesAStepsImageOnce: a step's image is said once, in its row header, short; the get it came from and the whole reference ride that header's tooltip. Its body used to say the reference twice more — an image note and the placement line — and the terminal, which has no header, still prints the note.
 func TestARunPageNamesAStepsImageOnce(t *testing.T) {
 	t.Parallel()
 	dockerSlot(t)
@@ -481,6 +481,7 @@ func TestARunPageNamesAStepsImageOnce(t *testing.T) {
 
 	digest := alpineDigest(t)
 	ref := "alpine@" + digest
+	hex := strings.TrimPrefix(digest, "sha256:")
 	path := pipelinePath(t, t.TempDir())
 	imageArtifactPipeline(t, path, "alpine", digest, "", imageArtifactTask)
 
@@ -500,15 +501,11 @@ func TestARunPageNamesAStepsImageOnce(t *testing.T) {
 	block := stepBlock(t, page, "probe")
 	text := visibleText(block)
 
-	if strings.Contains(block, `class="log notice">image:`) {
-		t.Errorf("the probe body still carries the image note beside its placement line:\n%s", text)
+	if got := strings.Count(text, hex[:12]); got != 1 || strings.Contains(text, hex) {
+		t.Errorf("the probe's row names its image %d times (want once, short): %q", got, text)
 	}
 
-	if !strings.Contains(text, "image toolchain → "+ref+" · ") {
-		t.Errorf("the probe's placement line does not say which get its image came from: %q", text)
-	}
-
-	if got := strings.Count(text, strings.TrimPrefix(digest, "sha256:")); got != 1 {
-		t.Errorf("the probe's row spells the whole digest %d times, want once: %q", got, text)
+	if !strings.Contains(block, `title="toolchain → `+ref+`"`) {
+		t.Errorf("the probe's header tooltip does not carry the get and the whole reference:\n%s", block)
 	}
 }

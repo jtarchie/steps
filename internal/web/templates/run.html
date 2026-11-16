@@ -198,8 +198,8 @@
      so a matrix's cells are INSIDE the matrix's markup rather than beside it.
      Takes a stepctx because a Go template's {{$.}} is the top-level argument
      and this needs both the page (for pipeline-scoped links) and the step. */}}
-{{/* Where a step ran, one line: the image first, named by the get it came from when it came from one, then the machine. First in an agent's body, whose conversation would otherwise put it a screen below the row; last in any other's. */}}
-{{define "placement"}}{{$step := .Step}}{{range .Page.Run.StepPlacements $step}}<div class="agentmeta">{{with .ImageRef}}{{$image := .}}{{with $step.ImageSource}}{{$image = printf "%s → %s" . $image}}{{end}}{{t "step.image" $image}} · {{end}}{{if not $step.Worker}}{{with .Tag}}{{.}} · {{end}}{{end}}{{.Address}} · {{.Platform}} · {{t "step.sent" .Sent}} · {{t "step.back" .Received}}{{with .Identity}} · {{th "step.as" (runident .)}}{{end}}</div>{{end}}{{end}}
+{{/* Where a step ran: the machine, never the image, which the row header already names. First in an agent's body, whose conversation would otherwise put it a screen below the row; last in any other's. */}}
+{{define "placement"}}{{$step := .Step}}{{range .Page.Run.StepPlacements $step}}<div class="agentmeta">{{if not $step.Worker}}{{with .Tag}}{{.}} · {{end}}{{end}}{{.Address}} · {{.Platform}} · {{t "step.sent" .Sent}} · {{t "step.back" .Received}}{{with .Identity}} · {{th "step.as" (runident .)}}{{end}}</div>{{end}}{{end}}
 
 {{define "step"}}
 {{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}
@@ -212,7 +212,7 @@
     {{if $run.MCPBlamedOn $step}}{{template "mcphint" $page}}{{end}}
     {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · {{t "step.contenthash" (short $step.Hash)}}{{end}}</div>{{end}}
     {{if and $step.ImageNote.Text (not ($run.StepPlacements $step))}}{{template "notice" $step.ImageNote}}{{end}}
-    {{range $step.Notes}}{{template "notice" .}}{{end}}
+    {{range $run.StepNotes $step}}{{template "notice" .}}{{end}}
     {{range $i, $out := $step.Outputs}}<pre class="log output">{{outputPre $out}}</pre>{{with keptOutputURL $page.Nav.Current $run.Run.ID $step $i}}<div class="log">{{th "step.fulloutput" (runlink . (t "step.fulloutput.link"))}}</div>{{end}}{{end}}
     {{if $step.Streaming}}<pre class="log output" id="{{$anchor}}_live">{{range $step.Streaming}}{{template "chunk" .}}{{end}}</pre>{{end}}
 
@@ -290,6 +290,7 @@
         {{if .Unreported}}<span class="r-sep">·</span><b class="r-skip">{{t "step.r.unreported" .Unreported}}</b>{{end}}
       </span>{{end}}{{end}}
       {{$image := ""}}{{$ref := ""}}{{range $run.StepPlacements $step}}{{if .Image}}{{$image = .ShortImage}}{{$ref = .ImageRef}}{{end}}{{end}}
+      {{with $step.ImageSource}}{{if $ref}}{{$ref = printf "%s → %s" . $ref}}{{end}}{{end}}
       {{if or $step.Worker $image}}<span class="note worker"{{with $ref}} title="{{.}}"{{end}}>{{with $step.Worker}}<span class="on">{{t "step.on" .}}</span>{{end}}{{if and $step.Worker $image}} · {{end}}{{with $image}}<span class="img">{{.}}</span>{{end}}</span>{{end}}
       <span class="dur">
         {{if and (not $step.Skipped) (not $step.Running)}}{{duration $step.Duration}}{{end}}

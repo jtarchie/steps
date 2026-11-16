@@ -496,7 +496,6 @@
  "step.finish": "finish",
  "step.fulloutput": "%[1]s, as text: the record above elides its middle",
  "step.fulloutput.link": "full output",
- "step.image": "image %[1]v",
  "step.link": "Link to this step",
  "step.model": "model %[1]s",
  "step.noend": "did not report an end",

@@ -496,7 +496,6 @@
  "step.finish": "término",
  "step.fulloutput": "%[1]s, como texto: o registro acima omite o meio",
  "step.fulloutput.link": "saída completa",
- "step.image": "imagem %[1]v",
  "step.link": "Link para este passo",
  "step.model": "modelo %[1]s",
  "step.noend": "não informou um fim",

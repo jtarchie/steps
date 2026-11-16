@@ -481,7 +481,6 @@
  "step.finish": "结束",
  "step.fulloutput": "%[1]s，以文本形式：上面的记录省略了它的中间部分",
  "step.fulloutput.link": "完整输出",
- "step.image": "镜像 %[1]v",
  "step.link": "链接到此步骤",
  "step.model": "模型 %[1]s",
  "step.noend": "没有报告结束",

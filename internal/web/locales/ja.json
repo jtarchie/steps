@@ -481,7 +481,6 @@
  "step.finish": "終了",
  "step.fulloutput": "%[1]s、テキストとして: 上の記録は中間部分を省略しています",
  "step.fulloutput.link": "完全な出力",
- "step.image": "イメージ %[1]v",
  "step.link": "このステップへのリンク",
  "step.model": "モデル %[1]s",
  "step.noend": "終了が報告されませんでした",
