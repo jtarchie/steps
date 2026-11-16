@@ -377,8 +377,22 @@ func Publish(ctx context.Context, event Event) {
 
 // Note publishes a TypeStepNote under the run and step ctx names, or the job (StepIndex -1) outside a step. With no bus to tell — none installed, or one already closed, which is where a job's deferred worker release speaks — it writes the line to Stdout(ctx) instead, or logs it when ctx is Headless, because a note is often the only record of what it says.
 func Note(ctx context.Context, level, text string) {
-	text = scrubFrom(ctx)(text)
-	event := Event{Type: TypeStepNote, RunID: RunID(ctx), StepID: StepID(ctx), Status: level, Text: text}
+	note(ctx, Event{Status: level, Text: text})
+}
+
+// NoteImage names the note a step's image: resolution makes; its Detail is the artifact the image: named.
+const NoteImage = "image"
+
+// ImageNote is the note that a step's image: named the artifact source and ran in ref. Its Text is the line every note reader has always printed; Name and Detail are for a reader that draws the image beside the step's placement instead, and would otherwise say the reference twice.
+func ImageNote(ctx context.Context, source, ref string) {
+	note(ctx, Event{Status: NoteInfo, Text: "image: " + source + " → " + ref, Name: NoteImage, Detail: source})
+}
+
+func note(ctx context.Context, event Event) {
+	scrub := scrubFrom(ctx)
+	level, text := event.Status, scrub(event.Text)
+	event.Type, event.RunID, event.StepID, event.Text, event.Detail = TypeStepNote, RunID(ctx), StepID(ctx), text, scrub(event.Detail)
+
 	if event.StepID == 0 {
 		event.StepIndex = -1
 	}

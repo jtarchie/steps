@@ -198,6 +198,9 @@
      so a matrix's cells are INSIDE the matrix's markup rather than beside it.
      Takes a stepctx because a Go template's {{$.}} is the top-level argument
      and this needs both the page (for pipeline-scoped links) and the step. */}}
+{{/* Where a step ran, one line: the image first, named by the get it came from when it came from one, then the machine. First in an agent's body, whose conversation would otherwise put it a screen below the row; last in any other's. */}}
+{{define "placement"}}{{$step := .Step}}{{range .Page.Run.StepPlacements $step}}<div class="agentmeta">{{with .ImageRef}}{{$image := .}}{{with $step.ImageSource}}{{$image = printf "%s → %s" . $image}}{{end}}{{t "step.image" $image}} · {{end}}{{if not $step.Worker}}{{with .Tag}}{{.}} · {{end}}{{end}}{{.Address}} · {{.Platform}} · {{t "step.sent" .Sent}} · {{t "step.back" .Received}}{{with .Identity}} · {{th "step.as" (runident .)}}{{end}}</div>{{end}}{{end}}
+
 {{define "step"}}
 {{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}
 {{$anchor := $step.Anchor}}
@@ -205,8 +208,10 @@
   {{template "stephead" (stepctx $page $step)}}
   {{if $run.StepHasBody $step}}<div class="stepbody" id="{{$anchor}}_body">
     {{with $step.Error}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
+    {{if eq $step.Kind "agent"}}{{template "placement" (stepctx $page $step)}}{{end}}
     {{if $run.MCPBlamedOn $step}}{{template "mcphint" $page}}{{end}}
     {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · {{t "step.contenthash" (short $step.Hash)}}{{end}}</div>{{end}}
+    {{if and $step.ImageNote.Text (not ($run.StepPlacements $step))}}{{template "notice" $step.ImageNote}}{{end}}
     {{range $step.Notes}}{{template "notice" .}}{{end}}
     {{range $i, $out := $step.Outputs}}<pre class="log output">{{outputPre $out}}</pre>{{with keptOutputURL $page.Nav.Current $run.Run.ID $step $i}}<div class="log">{{th "step.fulloutput" (runlink . (t "step.fulloutput.link"))}}</div>{{end}}{{end}}
     {{if $step.Streaming}}<pre class="log output" id="{{$anchor}}_live">{{range $step.Streaming}}{{template "chunk" .}}{{end}}</pre>{{end}}
@@ -234,7 +239,7 @@
     {{end}}
     {{if $step.Note}}<div class="agentmeta">{{t "step.note" $step.Note}}</div>{{end}}
     {{range $run.StepUsage $step}}<div class="agentmeta">{{t "step.model" (or .ModelServed .ModelReq)}}{{if and .ModelServed (ne .ModelServed .ModelReq)}} {{t "step.askedfor" .ModelReq}}{{end}} · {{t "step.prompt" (thousands .Prompt)}} · {{t "step.completion" (thousands .Completion)}} · {{t "step.cached" (thousands .Cached)}}{{if .Reasoning}} · {{t "step.reasoning" (thousands .Reasoning)}}{{end}} · {{costOrUnpriced .Cost}}{{if .Ceiling}} {{t "step.of" .Ceiling}}{{else if $run.ConfigDrifted}} · {{th "step.ceiling" (runspan (t "step.ceiling.drift.title") (t "step.ceiling.drift"))}}{{else if .CeilingKnown}} · {{t "step.uncapped"}}{{else}} · {{th "step.ceiling" (runspan (t "step.ceiling.unknown.title") (t "step.ceiling.unknown"))}}{{end}}{{with .FinishReason}} · {{t "step.finish"}} {{end}}{{if .Truncated}}<span class="spendwarn">{{t "step.truncated" (lower .FinishReason)}}</span>{{else if .FailedAfter}}<span class="spendwarn" title="{{t "step.failedafter.title"}}">{{t "step.stepfailed" (lower .FinishReason)}}</span>{{else}}{{lower .FinishReason}}{{end}}</div>{{end}}
-    {{range $run.StepPlacements $step}}<div class="agentmeta">{{if not $step.Worker}}{{with .Tag}}{{.}} · {{end}}{{end}}{{.Address}}{{with .ImageRef}} · {{.}}{{end}} · {{.Platform}} · {{t "step.sent" .Sent}} · {{t "step.back" .Received}}{{with .Identity}} · {{th "step.as" (runident .)}}{{end}}</div>{{end}}
+    {{if ne $step.Kind "agent"}}{{template "placement" (stepctx $page $step)}}{{end}}
   </div>{{end}}
   {{if $step.Container}}<div class="substeps" id="{{$anchor}}_substeps">
     {{range $step.Children}}{{template "step" (stepctx $page .)}}{{end}}

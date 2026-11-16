@@ -41,7 +41,7 @@ func resolveStepImage(ctx context.Context, cfg *config.Config, jobName string, s
 	}
 
 	reference := resolved.Unwrap().Image
-	events.Note(ctx, events.NoteInfo, fmt.Sprintf("image: %s → %s", step.Unwrap().Image, reference))
+	events.ImageNote(ctx, step.Unwrap().Image, reference)
 
 	if placementTag(resolved) == "" {
 		err = shell.PrepareImages(ctx, []string{reference})

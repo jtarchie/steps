@@ -454,3 +454,61 @@ func TestARunPageNamesAStepsImageShortInItsRow(t *testing.T) {
 		t.Errorf("the probe row spells out the whole digest: %q", head)
 	}
 }
+
+// stepBlock is a step's whole row on a run page, head and body, as the visible text a reader sees.
+func stepBlock(t *testing.T, page, name string) string {
+	t.Helper()
+
+	start := strings.Index(page, `-`+name+`_head"`)
+	if start < 0 {
+		t.Fatalf("the run page draws no row for %q", name)
+	}
+
+	end := strings.Index(page[start:], `<div id="step-`)
+	if end < 0 {
+		end = len(page) - start
+	}
+
+	return page[start : start+end]
+}
+
+// TestARunPageNamesAStepsImageOnce: which image a step ran in is one line in its body — the get it came from, the reference it resolved to, the machine — where it used to be a note and a placement line saying the same reference twice. The terminal still prints the note: it has no placement line to fold it into.
+func TestARunPageNamesAStepsImageOnce(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
+	requireDockerE2E(t)
+
+	digest := alpineDigest(t)
+	ref := "alpine@" + digest
+	path := pipelinePath(t, t.TempDir())
+	imageArtifactPipeline(t, path, "alpine", digest, "", imageArtifactTask)
+
+	out := captureStdout(t, func() { mustRun(t, path) })
+	if !strings.Contains(out, "image: toolchain → "+ref) {
+		t.Errorf("the terminal no longer names the resolved reference:\n%s", out)
+	}
+
+	server, pipeline := webServerFor(t, path)
+
+	runs, err := pipeline.Store.ListRuns(t.Context(), "build", 1)
+	if err != nil || len(runs) == 0 {
+		t.Fatalf("ListRuns = %v, %v", runs, err)
+	}
+
+	_, page := webGet(t, server, "/p/"+pipeline.Slug+"/runs/"+runs[0].ID)
+	block := stepBlock(t, page, "probe")
+	text := visibleText(block)
+
+	if strings.Contains(block, `class="log notice">image:`) {
+		t.Errorf("the probe body still carries the image note beside its placement line:\n%s", text)
+	}
+
+	if !strings.Contains(text, "image toolchain → "+ref+" · ") {
+		t.Errorf("the probe's placement line does not say which get its image came from: %q", text)
+	}
+
+	if got := strings.Count(text, strings.TrimPrefix(digest, "sha256:")); got != 1 {
+		t.Errorf("the probe's row spells the whole digest %d times, want once: %q", got, text)
+	}
+}

@@ -104,11 +104,11 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 	// uid-0-is-root-not-silence contract went unproven on those days.
 	for _, want := range []string{
 		"gpu", "linux/arm64", "64.0 MiB", "1.0 MiB",
-		">0:0<", "aws://" + instance + " · golang:1.25@sha256:0123456789ab", "1.0 MiB back",
+		">0:0<", "1.0 MiB back",
 		// #239: on the row itself, so which image ran is read without opening the step; the digest rides its tooltip and the placed-on line, not the row.
 		`<span class="note worker" title="golang:1.25@sha256:0123456789ab"><span class="on">on gpu (aws://i-0abc123def4567890)</span> · <span class="img">golang:1.25</span></span>`,
-		// The row already names the worker, so the detail line starts at the machine rather than saying gpu twice.
-		`<div class="agentmeta">aws://` + instance + ` · golang:1.25@sha256:0123456789ab · linux/arm64`,
+		// The image leads the detail line, and the row already names the worker, so the machine follows without saying gpu twice.
+		`<div class="agentmeta">image golang:1.25@sha256:0123456789ab · aws://` + instance + ` · linux/arm64`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the run page does not show %q", want)
@@ -216,5 +216,56 @@ func TestFormatBinaryBytesCoversEveryUnitAndItsBoundary(t *testing.T) {
 		if got := FormatBinaryBytes(want.bytes); got != want.text {
 			t.Errorf("FormatBinaryBytes(%d) = %q, want %q", want.bytes, got, want.text)
 		}
+	}
+}
+
+// TestAStepNamesItsImageOnceWhereverItRan: the image note becomes the start of the placement line, which leads an agent's body because its conversation would otherwise push it a screen below the row; with no placement line, the note is still said.
+func TestAStepNamesItsImageOnceWhereverItRan(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+	hash := strings.Repeat("d", 64)
+	note := store.RunEventRow{Type: events.TypeStepNote, StepIndex: 0, StepID: 1, Status: events.NoteInfo, Text: "image: toolchain → alpine@sha256:abc", Name: events.NoteImage, Detail: "toolchain"}
+
+	for _, runID := range []string{"placed", "unplaced"} {
+		err := pipeline.Store.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		appendEvents(t, pipeline.Store, runID, []store.RunEventRow{
+			{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 1},
+			note,
+			{Type: events.TypeAgentUser, StepIndex: 0, StepName: "review", StepID: 1, Text: "Review it."},
+			{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 1, Status: "succeeded", Hash: hash},
+		})
+	}
+
+	mustRecordResult(t, pipeline, hash, map[string]any{})
+
+	err := pipeline.Store.RecordPlacement(ctx, store.Placement{
+		RunID: "placed", StepIndex: 0, StepName: "review", JobName: "build",
+		NodeHash: hash, Slot: hash, Address: "local:", GOOS: "linux", GOARCH: "arm64", Image: "alpine@sha256:abc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, placed := get(t, server, "/p/demo/runs/placed")
+	line := strings.Index(placed, `<div class="agentmeta">image toolchain → alpine@sha256:abc · local: · linux/arm64`)
+	turn := strings.Index(placed, `<div class="turn user`)
+
+	if line < 0 || turn < 0 || line > turn {
+		t.Errorf("the agent's placement line (at %d) does not lead its conversation (at %d)", line, turn)
+	}
+
+	if strings.Contains(placed, `class="log notice">image:`) {
+		t.Error("the image note is said beside the placement line that already says it")
+	}
+
+	_, unplaced := get(t, server, "/p/demo/runs/unplaced")
+	if !strings.Contains(unplaced, `class="log notice">image: toolchain → alpine@sha256:abc<`) {
+		t.Error("a step with no placement line lost the note naming its image")
 	}
 }

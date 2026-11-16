@@ -148,6 +148,34 @@ func TestNotesHangOnTheirStep(t *testing.T) {
 	}
 }
 
+// TestAnImageNoteIsTheStepsImageSourceNotANote: the page names the image on the step's placement line, which already carries the reference, so the note that would repeat it is held as the artifact it names instead of in Notes. A note with no step stays a run note.
+func TestAnImageNoteIsTheStepsImageSourceNotANote(t *testing.T) {
+	t.Parallel()
+
+	rows := []store.RunEventRow{
+		{Seq: 1, Type: events.TypeStepStarted, StepName: "probe", StepID: 1},
+		{Seq: 2, Type: events.TypeStepNote, StepID: 1, Status: events.NoteInfo, Text: "image: toolchain → alpine@sha256:abc", Name: events.NoteImage, Detail: "toolchain"},
+		{Seq: 3, Type: events.TypeStepNote, StepID: 1, Status: events.NoteInfo, Text: "pulled alpine"},
+		{Seq: 4, Type: events.TypeStepFinished, StepName: "probe", StepID: 1, Status: "succeeded"},
+	}
+
+	folder := NewFolder()
+	changes := folder.Add(rows, nil)
+	probe := folder.View(store.RunRow{ID: "R"}).Steps[0]
+
+	if probe.ImageSource != "toolchain" || probe.ImageNote.Text != "image: toolchain → alpine@sha256:abc" {
+		t.Errorf("ImageSource = %q, ImageNote = %+v, want the artifact and the note that named it", probe.ImageSource, probe.ImageNote)
+	}
+
+	if len(probe.Notes) != 1 || probe.Notes[0].Text != "pulled alpine" {
+		t.Errorf("notes = %+v, want only the note that is not about the image", probe.Notes)
+	}
+
+	if !changes[probe.Key()].Other {
+		t.Error("an image note did not mark its row changed, so the live stream would not redraw it")
+	}
+}
+
 // TestCompactionHangsOnItsStep covers the compaction marker and badge: an
 // agent_compaction row folds in as a turn (an unlisted type is silently
 // dropped), and the count reads from a stored result's float64 as well as an
