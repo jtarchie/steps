@@ -308,8 +308,10 @@ tr.checkfail pre { margin: 0 0 4px; }
    badges stayed in view; the menu button now carries their sum, so folding
    them hides which tab is waiting, never that one is. A bar that only SAYS
    something (paused, read-only) folds in too and leaves a blue rule; a bar
-   with buttons stays, since those are what a reader came to press. */
-@media (max-width: 640px) {
+   with buttons stays, since those are what a reader came to press. A phone
+   held sideways is wide but short, so height decides too: keyed on width
+   alone it got the desktop bar, 125px pinned on a 375px screen. */
+@media (max-width: 640px), (max-height: 500px) {
   .statusline .brand { padding: 8px 10px; }
   .statusline .brand .web { display: none; }
   .pipeswitch { min-width: 0; }
@@ -335,7 +337,7 @@ tr.checkfail pre { margin: 0 0 4px; }
 
   /* Its children become the bar's own items, so the palette stays on the top row and the rest can move into the menu. */
   .statusline .right { display: contents; }
-  .jumpbtn:not(.themebtn) { margin-left: auto; min-height: 44px; padding: 0 12px; font-size: 15px; }
+  .jumpbtn:not(.themebtn) { margin-left: auto; min-height: 44px; min-width: 44px; justify-content: center; padding: 0 12px; font-size: 15px; }
   .jumpbtn kbd { display: none; }
   /* Out of sight, not out of the accessibility tree: it is the button's whole name. */
   .jumpbtn .lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -344,12 +346,20 @@ tr.checkfail pre { margin: 0 0 4px; }
   .tabs.open { display: flex; }
   .tab { min-height: 44px; padding: 0 16px; font-size: 13px; border-right: 0; border-top: 1px solid var(--line-soft); }
   .tab:first-child { border-top: 0; }
-  .tab[aria-current="page"] { box-shadow: inset 3px 0 0 var(--green); }
+  /* The weight is the mark forced colors keep; they drop the edge. */
+  .tab[aria-current="page"] { box-shadow: inset 3px 0 0 var(--green); font-weight: 600; }
   .tab .badge { margin-left: auto; }
 
   .statusline .ro, .statusline .themebtn, .statusline .usermenu { display: none; order: 4; min-height: 44px; align-items: center; padding: 0 16px; }
   .statusline:has(.tabs.open) .ro, .statusline:has(.tabs.open) .themebtn, .statusline:has(.tabs.open) .usermenu { display: inline-flex; }
   .statusline .themebtn { margin-left: auto; }
+  /* Open, the pinned header can be taller than a short screen, so it scrolls itself or its last rows are out of reach. */
+  .statusline:has(.tabs.open) { max-height: 100dvh; overflow-y: auto; }
+  /* The account's button would close the menu it lives in (one open record), so on a phone its links are the menu's own rows. */
+  .statusline .usermenu { flex-basis: 100%; flex-direction: column; align-items: stretch; padding: 0; margin: 0; border-left: 0; }
+  .statusline .usermenu .menuhead, .statusline .usermenu .pipemenu a, .statusline .usermenu .menubtn { display: flex; align-items: center; min-height: 44px; box-sizing: border-box; padding: 0 16px; font-size: 13px; }
+  .statusline .userbtn { display: none; }
+  .statusline .usermenu .pipemenu { display: block; position: static; min-width: 0; max-width: none; border: 0; border-top: 1px solid var(--line-soft); }
 
   .actionbar { order: 5; }
   .actionbar:not(:has(button, a)) { display: none; }
