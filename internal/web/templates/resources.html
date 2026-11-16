@@ -4,11 +4,11 @@
 {{/* Inside the region, not above it: the count changes with the config a
      reload swaps in, and left outside it would keep reporting the old number
      over a table the poll had already refreshed. */}}
-<p class="metaline">{{len .Resources}} resources<span class="sep">·</span>versions recorded by check</p>
+<p class="metaline">{{t "resources.count" (len .Resources)}}<span class="sep">·</span>{{t "resources.note"}}</p>
 
 <div class="tablewrap">
   <table>
-    <thead><tr><th>Resource</th><th>Type</th><th>Latest version</th><th>Checked</th></tr></thead>
+    <thead><tr><th>{{t "th.resource"}}</th><th>{{t "th.type"}}</th><th>{{t "th.latest"}}</th><th>{{t "th.checked"}}</th></tr></thead>
     <tbody>
       {{range .Resources}}
       {{$seen := index $.Checked .Name}}
@@ -16,13 +16,13 @@
       <tr>
         <td><a href="/p/{{$.Nav.Current}}/resources/{{.Name}}">{{.Name}}</a></td>
         <td class="dim">{{.Type}}</td>
-        <td class="dim">{{if $seen.Name}}{{jsonLine $seen.Version}}{{else}}<span class="faint">never checked</span>{{end}}</td>
+        <td class="dim">{{if $seen.Name}}{{jsonLine $seen.Version}}{{else}}<span class="faint">{{t "resource.neverchecked"}}</span>{{end}}</td>
         {{/* The recorded version is what the last SUCCESSFUL check saw, and a
              failing check leaves it exactly where it was — so this cell says
              when it last worked, and the row below says it has stopped. Not
              the failure time: every failing poll rewrites that, so a resource
              down since Tuesday would read "4s ago" forever. */}}
-        <td class="dim">{{if $broken.Name}}<span class="st st-failed">failing</span> {{if $seen.Name}}{{ago $seen.CheckedAt}}{{else}}<span class="faint">never worked</span>{{end}}{{else if $seen.Name}}{{ago $seen.CheckedAt}}{{else}}—{{end}}</td>
+        <td class="dim">{{if $broken.Name}}<span class="st st-failed">{{t "resource.failing"}}</span> {{if $seen.Name}}{{ago $seen.CheckedAt}}{{else}}<span class="faint">{{t "resource.neverworked"}}</span>{{end}}{{else if $seen.Name}}{{ago $seen.CheckedAt}}{{else}}—{{end}}</td>
       </tr>
       {{if $broken.Name}}<tr class="checkfail"><td colspan="4"><pre>{{$broken.Message}}</pre></td></tr>{{end}}
       {{end}}

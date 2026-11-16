@@ -21,10 +21,7 @@ package web
 // What that leaves is short by construction. If this list ever needs to
 // scroll, something was admitted that should not have been.
 
-import (
-	"context"
-	"fmt"
-)
+import "context"
 
 // attentionItem is one thing waiting on a person.
 type attentionItem struct {
@@ -47,7 +44,7 @@ type attentionItem struct {
 // Every probe answers nil rather than an error, and a read that fails answers
 // nil too. This runs on every render of every page, including the 2.5s
 // self-poll — a store hiccup must cost a line of the banner, never the page.
-func (s *Server) attention(ctx context.Context, reads *pipelineReads) []attentionItem {
+func (s *Server) attention(ctx context.Context, reads *pipelineReads, loc *locale) []attentionItem {
 	target := reads.target
 	if target == nil || target.Store == nil {
 		return nil
@@ -56,11 +53,11 @@ func (s *Server) attention(ctx context.Context, reads *pipelineReads) []attentio
 	base := "/p/" + target.Slug
 
 	found := []*attentionItem{
-		pausedJobsItem(ctx, reads, base),
-		failingChecksItem(ctx, reads, base),
-		s.mcpItem(target, base),
-		approvalsItem(ctx, reads, base),
-		questionsItem(ctx, reads, base),
+		pausedJobsItem(ctx, reads, base, loc),
+		failingChecksItem(ctx, reads, base, loc),
+		s.mcpItem(target, base, loc),
+		approvalsItem(ctx, reads, base, loc),
+		questionsItem(ctx, reads, base, loc),
 	}
 
 	items := make([]attentionItem, 0, len(found))
@@ -76,7 +73,7 @@ func (s *Server) attention(ctx context.Context, reads *pipelineReads) []attentio
 
 // pausedJobsItem: the breaker took these out of rotation on their own, and
 // nothing puts them back without a person.
-func pausedJobsItem(ctx context.Context, reads *pipelineReads, base string) *attentionItem {
+func pausedJobsItem(ctx context.Context, reads *pipelineReads, base string, loc *locale) *attentionItem {
 	jobs, err := reads.HeldJobs(ctx)
 	if err != nil || len(jobs) == 0 {
 		return nil
@@ -84,14 +81,14 @@ func pausedJobsItem(ctx context.Context, reads *pipelineReads, base string) *att
 
 	return &attentionItem{
 		Kind: "jobs", Tab: "jobs", Count: len(jobs), URL: base,
-		Detail: countOf(len(jobs), "job", "jobs") + " held by the breaker after repeated failures",
+		Detail: loc.count("attention.held", len(jobs)),
 	}
 }
 
 // failingChecksItem names the CONSEQUENCE, not the row: a poll aborts on the
 // first resource that errors, so one broken check stops the pipeline
 // triggering at all — which is the part a reader could not have guessed.
-func failingChecksItem(ctx context.Context, reads *pipelineReads, base string) *attentionItem {
+func failingChecksItem(ctx context.Context, reads *pipelineReads, base string, loc *locale) *attentionItem {
 	failing, err := reads.CheckErrors(ctx)
 	if err != nil {
 		return nil
@@ -121,13 +118,8 @@ func failingChecksItem(ctx context.Context, reads *pipelineReads, base string) *
 		return nil
 	}
 
-	detail := "1 resource is failing its check — nothing is polled until it succeeds"
-	if count > 1 {
-		detail = fmt.Sprintf("%d resources are failing their checks — nothing is polled until they succeed", count)
-	}
-
 	return &attentionItem{
-		Kind: "checks", Tab: "resources", Count: count, URL: base + "/resources", Detail: detail,
+		Kind: "checks", Tab: "resources", Count: count, URL: base + "/resources", Detail: loc.count("attention.checks", count),
 	}
 }
 
@@ -138,7 +130,7 @@ func failingChecksItem(ctx context.Context, reads *pipelineReads, base string) *
 // used right now" is a judgment that took three sources to settle (the
 // configuration, this machine, and whoever holds the token) and a second copy
 // of it would drift from the page a reader is sent to.
-func (s *Server) mcpItem(target *Pipeline, base string) *attentionItem {
+func (s *Server) mcpItem(target *Pipeline, base string, loc *locale) *attentionItem {
 	needing := 0
 
 	for _, server := range target.Config().MCPServers {
@@ -153,12 +145,12 @@ func (s *Server) mcpItem(target *Pipeline, base string) *attentionItem {
 
 	return &attentionItem{
 		Kind: "mcp", Tab: "mcp", Count: needing, URL: base + "/mcp",
-		Detail: countOf(needing, "mcp server needs", "mcp servers need") + " a connection",
+		Detail: loc.count("attention.mcp", needing),
 	}
 }
 
 // approvalsItem: a run is parked and a person is the gate.
-func approvalsItem(ctx context.Context, reads *pipelineReads, base string) *attentionItem {
+func approvalsItem(ctx context.Context, reads *pipelineReads, base string, loc *locale) *attentionItem {
 	pending, err := reads.PendingApprovals(ctx)
 	if err != nil || len(pending) == 0 {
 		return nil
@@ -166,12 +158,12 @@ func approvalsItem(ctx context.Context, reads *pipelineReads, base string) *atte
 
 	return &attentionItem{
 		Kind: "approvals", Tab: "approvals", Count: len(pending), URL: base + "/approvals",
-		Detail: countOf(len(pending), "approval is", "approvals are") + " waiting for a decision",
+		Detail: loc.count("attention.approvals", len(pending)),
 	}
 }
 
 // questionsItem: an agent is parked on an answer.
-func questionsItem(ctx context.Context, reads *pipelineReads, base string) *attentionItem {
+func questionsItem(ctx context.Context, reads *pipelineReads, base string, loc *locale) *attentionItem {
 	pending, err := reads.PendingQuestions(ctx)
 	if err != nil || len(pending) == 0 {
 		return nil
@@ -179,18 +171,8 @@ func questionsItem(ctx context.Context, reads *pipelineReads, base string) *atte
 
 	return &attentionItem{
 		Kind: "questions", Tab: "questions", Count: len(pending), URL: base + "/questions",
-		Detail: countOf(len(pending), "question is", "questions are") + " waiting for an answer",
+		Detail: loc.count("attention.questions", len(pending)),
 	}
-}
-
-// countOf writes "1 job" or "4 jobs", the caller supplying both words because
-// English pluralizes the verb too ("approval is", "approvals are").
-func countOf(n int, one, many string) string {
-	if n == 1 {
-		return "1 " + one
-	}
-
-	return fmt.Sprintf("%d %s", n, many)
 }
 
 // attentionTotal is everything one pipeline is waiting on, which is what a

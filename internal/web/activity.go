@@ -289,7 +289,7 @@ func (s *Server) handleActivity(c *echo.Context) error {
 
 	for _, f := range []struct{ key, label, value string }{
 		{"pipeline", "pipeline", filter.Pipeline},
-		{"actor", "person", actor.Parse(filter.Actor).Label()},
+		{"actor", "person", s.renderer.localeOf(c).actorLabel(actor.Parse(filter.Actor))},
 		{"action", "action", filter.Action},
 		{"target", "what", filter.Target},
 	} {
@@ -304,7 +304,7 @@ func (s *Server) handleActivity(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "activity", map[string]any{
 		"Nav":     nav,
-		"Title":   "activity",
+		"Title":   s.renderer.localeOf(c).text("nav.activity"),
 		"Section": "activity",
 		"Rows":    rows,
 		"Filters": filters,

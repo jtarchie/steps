@@ -983,6 +983,9 @@ linters:
             - "github.com/chromedp/chromedp"
             - "github.com/chromedp/cdproto"
             - "github.com/labstack/echo/v5"
+            # The locale matcher and the CLDR plural rules for the UI's catalogs; already linked into the binary through pgx.
+            - "golang.org/x/text/language"
+            - "golang.org/x/text/feature/plural"
             # bcrypt verifies a local user's password against the hash an operator gave, so the daemon never holds the password itself.
             - "golang.org/x/crypto/bcrypt"
             # expr compiles the --role rules: an expression about the signed-in person, which can read fields and nothing else.

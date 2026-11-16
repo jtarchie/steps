@@ -209,7 +209,7 @@ func TestTheCopyButtonSaysItCopied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, want := range []string{`closest('[data-copy]')`, `navigator.clipboard.writeText`, `'copied'`, `'address copied'`} {
+	for _, want := range []string{`closest('[data-copy]')`, `navigator.clipboard.writeText`, `word('copied')`, `word('addresscopied')`} {
 		if !strings.Contains(string(js), want) {
 			t.Errorf("app.js does not carry %s", want)
 		}

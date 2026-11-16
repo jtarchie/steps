@@ -25,14 +25,16 @@ func (s *Server) handleFollow(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
 	}
 
+	loc := s.renderer.localeOf(c)
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "follow", map[string]any{
 		"Nav":   s.nav(c),
 		"Title": name,
 		"Crumbs": []crumb{
-			{Label: "jobs", URL: "/p/" + pipeline.Slug},
+			{Label: loc.text("tab.jobs"), URL: "/p/" + pipeline.Slug},
 			{Label: name, URL: "/p/" + pipeline.Slug + "/jobs/" + name + "/detail"},
-			{Label: "queued"},
+			{Label: loc.text("status.queued")},
 		},
 		"Job":   name,
 		"Bar":   barView{Abort: "/p/" + pipeline.Slug + "/jobs/" + name + "/queued/abort"},
@@ -95,7 +97,7 @@ func (s *Server) handleLatestRun(c *echo.Context) error {
 	var checks []followCheck
 
 	if state == store.QueuePending || state == store.QueueRunning {
-		checks, err = followChecks(ctx, readsOf(c, pipeline), s.capacity, name, state == store.QueueRunning, inFlight)
+		checks, err = followChecksIn(ctx, s.renderer.localeOf(c), readsOf(c, pipeline), s.capacity, name, state == store.QueueRunning, inFlight)
 		if err != nil {
 			return err
 		}
@@ -154,7 +156,7 @@ type followCheck struct {
 }
 
 // followChecks asks only what the drain itself asks (admits, then ClaimNextJob's limits), so a line never blames something that is not holding the run back. The limits stop mattering once a worker has claimed it.
-func followChecks(ctx context.Context, reads *pipelineReads, capacity Capacity, name string, claimed bool, inFlight int) ([]followCheck, error) {
+func followChecksIn(ctx context.Context, loc *locale, reads *pipelineReads, capacity Capacity, name string, claimed bool, inFlight int) ([]followCheck, error) {
 	pipeline := reads.target
 
 	paused, err := reads.PausedErr(ctx)
@@ -162,13 +164,13 @@ func followChecks(ctx context.Context, reads *pipelineReads, capacity Capacity, 
 		return nil, fmt.Errorf("web: %w", err)
 	}
 
-	checks := []followCheck{{Text: "the pipeline is not paused", Clear: true}}
+	checks := []followCheck{{Text: loc.text("follow.check.notpaused"), Clear: true}}
 	if paused {
-		checks[0] = followCheck{Text: "the pipeline is paused"}
+		checks[0] = followCheck{Text: loc.text("follow.check.paused")}
 	}
 
 	if claimed {
-		return append(checks, followCheck{Text: "a worker has claimed it", Clear: true}), nil
+		return append(checks, followCheck{Text: loc.text("follow.check.claimed"), Clear: true}), nil
 	}
 
 	job, err := pipeline.Config().FindJob(name)
@@ -182,41 +184,41 @@ func followChecks(ctx context.Context, reads *pipelineReads, capacity Capacity, 
 			return nil, fmt.Errorf("web: %w", err)
 		}
 
-		check := followCheck{Text: "its serial group is free", Clear: true}
+		check := followCheck{Text: loc.text("follow.check.serialfree"), Clear: true}
 		if holder != "" {
-			check = followCheck{Text: holder + " holds its serial group"}
+			check = followCheck{Text: loc.text("follow.check.serialheld", holder)}
 		}
 
 		checks = append(checks, check)
 	}
 
-	if check, limited := maxInFlightCheck(job, inFlight); limited {
+	if check, limited := maxInFlightCheckIn(loc, job, inFlight); limited {
 		checks = append(checks, check)
 	}
 
-	if check, limited := maxRunsCheck(capacity); limited {
+	if check, limited := maxRunsCheckIn(loc, capacity); limited {
 		checks = append(checks, check)
 	}
 
-	return append(checks, followCheck{Text: "no worker has claimed it yet"}), nil
+	return append(checks, followCheck{Text: loc.text("follow.check.unclaimed")}), nil
 }
 
 // maxInFlightCheck is the follow line for the job's max_in_flight, and false when it has none.
-func maxInFlightCheck(job *config.Job, inFlight int) (followCheck, bool) {
+func maxInFlightCheckIn(loc *locale, job *config.Job, inFlight int) (followCheck, bool) {
 	limit := job.EffectiveMaxInFlight()
 	if limit == config.UnlimitedInFlight {
 		return followCheck{}, false
 	}
 
 	if inFlight >= limit {
-		return followCheck{Text: fmt.Sprintf("its max_in_flight (%d) is full", limit)}, true
+		return followCheck{Text: loc.text("follow.check.mif.full", limit)}, true
 	}
 
-	return followCheck{Text: fmt.Sprintf("its max_in_flight (%d) has room", limit), Clear: true}, true
+	return followCheck{Text: loc.text("follow.check.mif.room", limit), Clear: true}, true
 }
 
 // maxRunsCheck is the follow line for --max-runs, and false when the daemon has no such limit.
-func maxRunsCheck(capacity Capacity) (followCheck, bool) {
+func maxRunsCheckIn(loc *locale, capacity Capacity) (followCheck, bool) {
 	if capacity == nil {
 		return followCheck{}, false
 	}
@@ -227,31 +229,8 @@ func maxRunsCheck(capacity Capacity) (followCheck, bool) {
 	}
 
 	if active >= limit {
-		return followCheck{Text: fmt.Sprintf("the server's --max-runs (%d) is full", limit)}, true
+		return followCheck{Text: loc.text("follow.check.maxruns.full", limit)}, true
 	}
 
-	return followCheck{Text: fmt.Sprintf("the server's --max-runs (%d) has room", limit), Clear: true}, true
-}
-
-// waitingOn is the first check holding a job's pending row back, the line the follow page leads with. A job the configuration no longer names has nothing to check, which reads as empty rather than as a 404 for the whole board.
-func waitingOn(ctx context.Context, reads *pipelineReads, capacity Capacity, queue []store.QueueRow, name string) (string, error) {
-	_, err := reads.target.Config().FindJob(name)
-	if err != nil {
-		return "", nil //nolint:nilerr // a dropped job is a row with no reason, not a broken page
-	}
-
-	_, inFlight, _ := queuedState(queue, name, time.Time{})
-
-	checks, err := followChecks(ctx, reads, capacity, name, false, inFlight)
-	if err != nil {
-		return "", err
-	}
-
-	for _, check := range checks {
-		if !check.Clear {
-			return check.Text, nil
-		}
-	}
-
-	return "", nil
+	return followCheck{Text: loc.text("follow.check.maxruns.room", limit), Clear: true}, true
 }

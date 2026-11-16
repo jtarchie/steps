@@ -1,12 +1,12 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps questions</b></h1>
-<p class="metaline">a step asked for a fact it could not get any other way — an answer here is the same record `steps questions answer` writes</p>
+<p class="metaline">{{t "questions.note"}}</p>
 <div id="questions-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#questions-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
 
 {{range .Questions}}
 {{template "questioncard" (waitctx $.Nav .)}}
 {{else}}
-<p class="faint">No questions asked yet.</p>
+<p class="faint">{{t "questions.none"}}</p>
 {{end}}
 </div>
 {{end}}

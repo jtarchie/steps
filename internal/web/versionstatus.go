@@ -36,10 +36,12 @@ func (c versionCell) Latest() store.RunRow {
 }
 
 // Title lists every run of the version in the job, for the cell's tooltip.
-func (c versionCell) Title() string {
+func (c versionCell) Title() string { return c.TitleIn(englishLocale()) }
+
+func (c versionCell) TitleIn(loc *locale) string {
 	lines := make([]string, len(c.Runs))
 	for i, run := range c.Runs {
-		lines[i] = statusMark(run.Status) + " " + shortID(run.ID) + " " + statusWord(run.Status)
+		lines[i] = statusMark(run.Status) + " " + shortID(run.ID) + " " + loc.word("status", statusWord(run.Status))
 	}
 
 	return strings.Join(lines, "\n")

@@ -275,7 +275,7 @@ func (s *Server) handleSignInCallback(c *echo.Context) error {
 
 	pending, found := s.pending.take(state)
 	if !found || !startedHere || pending.provider != c.Param("provider") {
-		return s.renderLogin(c, http.StatusBadRequest, "", "that sign-in expired or was not started here — try again")
+		return s.renderLogin(c, http.StatusBadRequest, "", s.say(c, "login.expired"))
 	}
 
 	provider, _ := s.providerNamed(pending.provider)
@@ -284,7 +284,7 @@ func (s *Server) handleSignInCallback(c *echo.Context) error {
 	if err != nil {
 		slog.WarnContext(ctx, "web.signin_failed", "provider", provider.Name, "error", err)
 
-		return s.renderLogin(c, http.StatusUnauthorized, "", "couldn't sign you in with "+provider.Label)
+		return s.renderLogin(c, http.StatusUnauthorized, "", s.say(c, "login.failedwith", provider.Label))
 	}
 
 	err = s.startSession(c, who)

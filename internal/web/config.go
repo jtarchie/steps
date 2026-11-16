@@ -42,14 +42,16 @@ func (s *Server) handleConfig(c *echo.Context) error {
 		includes = append(includes, include{Path: path, Body: highlightCode(revision.Includes[path], path)})
 	}
 
+	loc := s.renderer.localeOf(c)
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "config", map[string]any{
 		"Nav":      s.nav(c),
 		"SHA":      revision.SHA,
-		"Title":    "config " + shortID(revision.SHA),
+		"Title":    loc.text("config.crumb", shortID(revision.SHA)),
 		"Body":     highlightYAML(revision.Source),
 		"Includes": includes,
-		"Crumbs":   []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}, {Label: "config " + shortID(revision.SHA)}},
+		"Crumbs":   []crumb{{Label: loc.text("tab.jobs"), URL: "/p/" + pipeline.Slug}, {Label: loc.text("config.crumb", shortID(revision.SHA))}},
 	})
 }
 

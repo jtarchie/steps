@@ -67,7 +67,7 @@ func (s *Server) nav(c *echo.Context) navData {
 
 	for _, pipeline := range served {
 		reads := readsOf(c, pipeline)
-		items := s.attention(ctx, reads)
+		items := s.attention(ctx, reads, s.renderer.localeOf(c))
 		gathered[pipeline.Slug] = items
 
 		nav.Pipelines = append(nav.Pipelines, pipelineSummary{

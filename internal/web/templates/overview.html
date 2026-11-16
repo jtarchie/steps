@@ -2,44 +2,44 @@
 <h1 class="prompt"><b>steps</b></h1>
 <div id="overview-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#overview-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph">
 {{/* The feed below shows its own length; the header counts only what wants a person. */}}
-<p class="metaline">{{len .Pipelines}} pipelines{{with .Tally.Paused}}<span class="sep">·</span><span class="st-paused">{{.}} paused</span>{{end}}{{with .Tally.Failing}}<span class="sep">·</span><span class="st-failed">{{.}} failing</span>{{end}}{{with .Tally.Broken}}<span class="sep">·</span><span class="st-failed">{{.}} broken</span>{{end}}</p>
+<p class="metaline">{{t "overview.count" (len .Pipelines)}}{{with .Tally.Paused}}<span class="sep">·</span><span class="st-paused">{{t "overview.paused" .}}</span>{{end}}{{with .Tally.Failing}}<span class="sep">·</span><span class="st-failed">{{t "overview.failing" .}}</span>{{end}}{{with .Tally.Broken}}<span class="sep">·</span><span class="st-failed">{{t "overview.broken" .}}</span>{{end}}</p>
 {{/* What a screen reader hears as the page refreshes: one line per red pipeline, keyed by slug so the morph keeps a line that is still true and adds only the new one. Additions only: a page opened on a red fleet says nothing (a live region announces changes, not what it loaded with), a recovery removes its line silently, and activity never gets a line at all. Not atomic, or role="status" would re-read every red pipeline each time one more joined. */}}
-<div class="visually-hidden" id="red-news" role="status" aria-atomic="false" aria-relevant="additions" aria-label="Pipelines that turned red">{{range .Pipelines}}{{if .Red}}<p id="red-{{.Slug}}">{{.Slug}} is failing: {{.RedWords}}</p>{{end}}{{end}}</div>
+<div class="visually-hidden" id="red-news" role="status" aria-atomic="false" aria-relevant="additions" aria-label="{{t "overview.red.label"}}">{{range .Pipelines}}{{if .Red}}<p id="red-{{.Slug}}">{{t "overview.red" .Slug (redWords .)}}</p>{{end}}{{end}}</div>
 {{/* The keys drive the rows below; said in words for a screen reader too, since the hint itself is hidden from one. */}}
-<div class="transcripthead"><div class="keyhint"><span class="keys" aria-hidden="true"><span><kbd>j</kbd>/<kbd>k</kbd> pipelines</span><span><kbd>h</kbd>/<kbd>l</kbd> jobs</span><span><kbd>enter</kbd> open</span></span><button type="button" class="keystoggle"><span class="when-on">turn keys off</span><span class="when-off">keys are off · turn on</span></button></div></div>
-<p class="visually-hidden" id="pipelines-keys">j and k, or the up and down arrows, move between pipelines; h and l, or the left and right arrows, move between a pipeline's jobs.</p>
+<div class="transcripthead"><div class="keyhint"><span class="keys" aria-hidden="true"><span><kbd>j</kbd>/<kbd>k</kbd> {{t "overview.keys.pipelines"}}</span><span><kbd>h</kbd>/<kbd>l</kbd> {{t "overview.keys.jobs"}}</span><span><kbd>enter</kbd> {{t "overview.keys.open"}}</span></span><button type="button" class="keystoggle"><span class="when-on">{{t "overview.keys.off"}}</span><span class="when-off">{{t "overview.keys.on"}}</span></button></div></div>
+<p class="visually-hidden" id="pipelines-keys">{{t "overview.keys.help"}}</p>
 <div class="tablewrap" id="pipelines-table">
   <table class="pipelines" aria-describedby="pipelines-keys">
     <thead>
-      <tr><th>Pipeline</th><th>Jobs</th><th>Latest</th><th>Next</th><th><span class="visually-hidden">Pause</span></th></tr>
+      <tr><th>{{t "th.pipeline"}}</th><th>{{t "th.jobs"}}</th><th>{{t "th.latest.run"}}</th><th>{{t "th.next"}}</th><th><span class="visually-hidden">{{t "bar.pause"}}</span></th></tr>
     </thead>
     <tbody>
       {{range .Pipelines}}
       {{if .Broken}}
       {{/* Held and not served: no pages behind it, so no links and no pause, and the state said in words rather than only in red. */}}
       <tr class="red" data-slug="{{.Slug}}">
-        <td class="pname">{{template "markglyph" .Mark}}{{.Slug}} <span class="st st-failed">broken</span></td>
-        <td colspan="4" class="broken-reason">{{.Broken}}</td>
+        <td class="pname">{{template "markglyph" .Mark}}{{.Slug}} <span class="st st-failed">{{t "overview.broken.word"}}</span></td>
+        <td colspan="4" class="broken-reason" lang="en">{{.Broken}}</td>
       </tr>
       {{else}}
       {{/* Red rows carry weight; the rest step back. Order never changes, so emphasis, not position, is what finds the red one. */}}
       <tr{{if or .Paused .Red}} class="{{if .Paused}}paused{{end}}{{if and .Paused .Red}} {{end}}{{if .Red}}red{{end}}"{{end}} data-slug="{{.Slug}}">
         {{/* Only what is not normal gets a word: a healthy row is its mark, name, jobs and last run. The mark already draws a pause unless a failure outranks it, so the chip is only for then. */}}
-        <td class="pname">{{template "markglyph" .Mark}}<a href="/p/{{.Slug}}"{{if .Red}} aria-describedby="red-{{.Slug}}"{{end}}>{{.Slug}}</a>{{template "counts" .}}{{if and .Paused (ne .Mark.Word "paused")}} <span class="st st-paused">paused</span>{{end}}</td>
+        <td class="pname">{{template "markglyph" .Mark}}<a href="/p/{{.Slug}}"{{if .Red}} aria-describedby="red-{{.Slug}}"{{end}}>{{.Slug}}</a>{{template "counts" .}}{{if and .Paused (ne .Mark.Word "paused")}} <span class="st st-paused">{{word "status" "paused"}}</span>{{end}}</td>
         {{/* One cell per job, named, colored by its latest finished run and barred while one is in flight; under it the job's last runs, oldest first, so a job that broke once reads apart from one that keeps breaking. An arrow joins a job to the one whose passed: it takes. */}}
-        <td class="jobchips">{{$slug := .Slug}}{{if not .Chips}}<span class="faint">no jobs</span>{{end}}<span class="cellrow">{{range $i, $c := .Chips}}{{if $i}}<span class="jobsep" aria-hidden="true">{{if .Fed}}→{{else}}·{{end}}</span>{{end}}<span class="lanejob"><a class="cell {{.Class}}{{if .Running}} live{{end}}" href="/p/{{$slug}}/jobs/{{.Name}}" title="{{.Name}}: {{.Word}}{{if .Running}}, running{{end}}" aria-label="{{.Name}}, {{.Word}}{{if .Running}}, running{{end}}" tabindex="-1"><span class="glyph" aria-hidden="true">{{.Glyph}}</span><span aria-hidden="true">{{.Name}}</span></a>{{with .History}}<span class="hist" aria-hidden="true">{{range $c.Empty}}<i class="tick empty"></i>{{end}}{{range .}}<i class="tick st-{{statusWord .Status}}"></i>{{end}}</span>{{end}}</span>{{end}}</span></td>
+        <td class="jobchips">{{$slug := .Slug}}{{if not .Chips}}<span class="faint">{{t "overview.nojobs"}}</span>{{end}}<span class="cellrow">{{range $i, $c := .Chips}}{{if $i}}<span class="jobsep" aria-hidden="true">{{if .Fed}}→{{else}}·{{end}}</span>{{end}}<span class="lanejob"><a class="cell {{.Class}}{{if .Running}} live{{end}}" href="/p/{{$slug}}/jobs/{{.Name}}" title="{{if .Running}}{{t "overview.chip.title.running" .Name (word "status" .Word)}}{{else}}{{t "overview.chip.title" .Name (word "status" .Word)}}{{end}}" aria-label="{{if .Running}}{{t "overview.chip.label.running" .Name (word "status" .Word)}}{{else}}{{t "overview.chip.label" .Name (word "status" .Word)}}{{end}}" tabindex="-1"><span class="glyph" aria-hidden="true">{{.Glyph}}</span><span aria-hidden="true">{{.Name}}</span></a>{{with .History}}<span class="hist" aria-hidden="true">{{range $c.Empty}}<i class="tick empty"></i>{{end}}{{range .}}<i class="tick st-{{statusWord .Status}}"></i>{{end}}</span>{{end}}</span>{{end}}</span></td>
         {{/* On a red row, the run that made it red; otherwise the newest. Running counts up; finished is one coarse unit. A pass says only which job and when; anything else adds its word but no glyph, which the mark and the red cell already drew. */}}
         <td class="lastrun">
-          {{if not .HasRun}}<span class="faint">never ran</span>
-          {{else if eq (statusWord .Latest.Status) "passed"}}<a href="/p/{{.Slug}}/runs/{{.Latest.ID}}"><span class="visually-hidden">passed </span>{{.Latest.JobName}} {{agoCompact .Latest.StartedAt}}</a>
-          {{else}}<a class="st-{{statusWord .Latest.Status}}" href="/p/{{.Slug}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a> <span class="dim">{{.Latest.JobName}} {{if .Latest.FinishedAt.IsZero}}{{elapsedTag .Latest}}{{else}}{{agoCompact .Latest.StartedAt}}{{end}}</span>{{end}}
+          {{if not .HasRun}}<span class="faint">{{word "status" "never ran"}}</span>
+          {{else if eq (statusWord .Latest.Status) "passed"}}<a href="/p/{{.Slug}}/runs/{{.Latest.ID}}"><span class="visually-hidden">{{word "status" "passed"}} </span>{{.Latest.JobName}} {{agoCompact .Latest.StartedAt}}</a>
+          {{else}}<a class="st-{{statusWord .Latest.Status}}" href="/p/{{.Slug}}/runs/{{.Latest.ID}}">{{statusText .Latest.Status}}</a> <span class="dim">{{.Latest.JobName}} {{if .Latest.FinishedAt.IsZero}}{{elapsedTag .Latest}}{{else}}{{agoCompact .Latest.StartedAt}}{{end}}</span>{{end}}
         </td>
         {{/* Blank while paused: the mark says so. One trigger named, the rest counted, so the column cannot push the table sideways. */}}
-        <td class="next">{{if not (or .Paused $.Nav.AllPaused)}}{{with .Next}}{{if not .At.IsZero}}{{nextTag .At}}{{end}}{{if .On}}{{if not .At.IsZero}} · {{end}}<span title="on {{range $i, $r := .On}}{{if $i}}, {{end}}{{$r}}{{end}}">on {{.Lead}}{{with .Rest}}<span aria-hidden="true"> +{{len .}}</span><span class="visually-hidden">{{range .}}, {{.}}{{end}}</span>{{end}}</span>{{else if .At.IsZero}}<span class="faint">manual</span>{{end}}{{end}}{{end}}</td>
+        <td class="next">{{if not (or .Paused $.Nav.AllPaused)}}{{with .Next}}{{if not .At.IsZero}}{{nextTag .At}}{{end}}{{if .On}}{{if not .At.IsZero}} · {{end}}<span title="{{t "overview.on" (join .On ", ")}}">{{t "overview.on" .Lead}}{{with .Rest}}<span aria-hidden="true"> +{{len .}}</span><span class="visually-hidden">{{range .}}, {{.}}{{end}}</span>{{end}}</span>{{else if .At.IsZero}}<span class="faint">{{t "overview.manual"}}</span>{{end}}{{end}}{{end}}</td>
         {{/* Out of the way until the row is hovered or focused: not what the
              root is looked at for, and a click from the pipeline's own page. */}}
         <td class="rowextra">
-          {{if not $.Nav.ReadOnly}}<form class="inline" method="post" action="/p/{{.Slug}}/{{if .Paused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="{{$.Nav.URL}}"><button class="btn{{if .Paused}} primary{{end}}" type="submit">{{if .Paused}}Unpause{{else}}Pause{{end}}</button></form>{{end}}
+          {{if not $.Nav.ReadOnly}}<form class="inline" method="post" action="/p/{{.Slug}}/{{if .Paused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="{{$.Nav.URL}}"><button class="btn{{if .Paused}} primary{{end}}" type="submit">{{if .Paused}}{{t "bar.unpause"}}{{else}}{{t "bar.pause"}}{{end}}</button></form>{{end}}
         </td>
       </tr>
       {{end}}
@@ -48,19 +48,19 @@
   </table>
 </div>
 
-<h2 class="eyebrow">Recent runs</h2>
+<h2 class="eyebrow">{{t "overview.recent"}}</h2>
 {{if .Runs}}
 <div class="tablewrap" id="recent-runs">
   <table>
     <thead>
-      <tr><th>Pipeline</th><th>Job</th><th>Run</th><th>Started</th><th class="num">Duration</th></tr>
+      <tr><th>{{t "th.pipeline"}}</th><th>{{t "th.job"}}</th><th>{{t "th.run"}}</th><th>{{t "th.started"}}</th><th class="num">{{t "th.duration"}}</th></tr>
     </thead>
     <tbody>
       {{range .Runs}}
       <tr>
         <td><a href="/p/{{.Pipeline}}">{{.Pipeline}}</a></td>
         <td><a href="/p/{{.Pipeline}}/jobs/{{.JobName}}">{{.JobName}}</a></td>
-        <td><a class="st st-{{statusWord .Status}}" href="/p/{{.Pipeline}}/runs/{{.ID}}">{{statusWord .Status}}</a> <span class="dim">{{short .ID}}</span></td>
+        <td><a class="st st-{{statusWord .Status}}" href="/p/{{.Pipeline}}/runs/{{.ID}}">{{statusText .Status}}</a> <span class="dim">{{short .ID}}</span></td>
         <td class="dim">{{agoTag .StartedAt}}</td>
         <td class="num dim">{{elapsedTag .RunRow}}</td>
       </tr>
@@ -68,9 +68,9 @@
     </tbody>
   </table>
 </div>
-{{if .More}}<p class="metaline"><a class="more" href="{{.MoreURL}}">show {{.MoreCount}} runs</a></p>{{end}}
+{{if .More}}<p class="metaline"><a class="more" href="{{.MoreURL}}">{{t "overview.more" .MoreCount}}</a></p>{{end}}
 {{else}}
-<p class="faint">No runs recorded yet.</p>
+<p class="faint">{{t "runs.none"}}</p>
 {{end}}
 </div>
 {{end}}

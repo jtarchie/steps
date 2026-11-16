@@ -60,7 +60,7 @@ func (s *Server) handleConnections(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "connections", map[string]any{
 		"Nav":      nav,
-		"Title":    "connections",
+		"Title":    s.renderer.localeOf(c).text("nav.connections"),
 		"Rows":     rows,
 		"Everyone": everyone,
 		"CanAll":   s.roleOfPerson(c) >= RoleAdmin,

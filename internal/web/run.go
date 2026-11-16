@@ -128,7 +128,7 @@ func (s *Server) handleRun(c *echo.Context) error {
 		"Bar":       runBar(pipeline, view.Run, jobErr == nil),
 		"Title":     runTitle(view.Run),
 		"Crumbs": []crumb{
-			{Label: "jobs", URL: "/p/" + pipeline.Slug},
+			{Label: s.renderer.localeOf(c).text("tab.jobs"), URL: "/p/" + pipeline.Slug},
 			{Label: view.Run.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + view.Run.JobName + "/detail"},
 			{Label: "#" + shortID(view.Run.ID)},
 		},
@@ -255,17 +255,18 @@ func (s *Server) handleNode(c *echo.Context) error {
 
 	// A node knows which job recorded it, but not which run a reader came
 	// from — so the trail goes up through the job when there is one.
-	crumbs := []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}}
+	loc := s.renderer.localeOf(c)
+	crumbs := []crumb{{Label: loc.text("tab.jobs"), URL: "/p/" + pipeline.Slug}}
 	if node.JobName != "" {
 		crumbs = append(crumbs, crumb{Label: node.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + node.JobName + "/detail"})
 	}
 
-	crumbs = append(crumbs, crumb{Label: "node " + shortID(hash)})
+	crumbs = append(crumbs, crumb{Label: loc.text("node.crumb", shortID(hash))})
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "node", map[string]any{
 		"Nav":        s.nav(c),
-		"Title":      "node " + shortID(hash),
+		"Title":      loc.text("node.crumb", shortID(hash)),
 		"Crumbs":     crumbs,
 		"Node":       node,
 		"Content":    node.Content,

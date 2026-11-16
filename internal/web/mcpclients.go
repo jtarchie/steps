@@ -52,8 +52,8 @@ type connectGroup struct {
 }
 
 // connectTryIt is the last step of every tab. Success has to be something the reader sees happen — an answer coming back — and listing the tools is a question every export can answer.
-func connectTryIt(name string) connectStep {
-	return connectStep{Title: "Ask it something", Body: "If an answer comes back, it is working.", Snippet: "Using " + name + ", list the tools you have."}
+func connectTryIt(l *locale, name string) connectStep {
+	return connectStep{Title: l.text("connect.try.title"), Body: l.text("connect.try.body"), Snippet: "Using " + name + ", list the tools you have."}
 }
 
 // cursorDeepLink is Cursor's one-click install: the config object it would otherwise be hand-fed, base64'd whole. https://cursor.com/docs/mcp
@@ -80,26 +80,30 @@ func configBlock(container, name string, entry map[string]any) string {
 
 // connectGroups is every tab for one export. The server is named after the export alone: clients prefix each tool with it (mcp__<server>__<tool>) under a 64-character cap, and an export's tools are already server__tool.
 func connectGroups(name, address string) []connectGroup {
-	signIn := "Sign in to steps if it asks, then press Allow on the page that names " + name + "."
+	return connectGroupsIn(englishLocale(), name, address)
+}
+
+func connectGroupsIn(l *locale, name, address string) []connectGroup {
+	signIn := l.text("connect.signin", name)
 
 	groups := []connectGroup{{
-		Name: "From your machine",
-		Hint: "terminal or editor",
+		Name: l.text("connect.group.machine"),
+		Hint: l.text("connect.group.machine.hint"),
 		Clients: []connectClient{
 			{
 				Slug: "claude-code",
 				Name: "Claude Code",
 				Steps: []connectStep{
 					{
-						Title:   "Run this in your terminal",
-						Body:    "--scope user registers it once for every project; without it the server exists only in the folder you ran it in.",
+						Title:   l.text("connect.cc.run"),
+						Body:    l.text("connect.cc.run.body"),
 						Snippet: "claude mcp add --transport http --scope user " + name + " " + address,
 					},
 					{
-						Title: "Open the MCP list and authenticate",
-						Body:  "Type /mcp in Claude Code, choose " + name + ", then Authenticate.",
+						Title: l.text("connect.cc.auth"),
+						Body:  l.text("connect.cc.auth.body", name),
 					},
-					{Title: "Agree in the browser", Body: signIn},
+					{Title: l.text("connect.agree"), Body: signIn},
 				},
 			},
 			{
@@ -107,20 +111,20 @@ func connectGroups(name, address string) []connectGroup {
 				Name: "Cursor",
 				Steps: []connectStep{
 					{
-						Title:     "Install it with one click",
-						Body:      "Cursor opens and asks to confirm.",
+						Title:     l.text("connect.oneclick"),
+						Body:      l.text("connect.cursor.confirm"),
 						Link:      cursorDeepLink(name, address),
-						LinkLabel: "Add " + name + " to Cursor",
+						LinkLabel: l.text("connect.addto", name, "Cursor"),
 					},
 					{
-						Title:   "Or add it by hand",
-						Body:    "If the button did nothing, put this in ~/.cursor/mcp.json instead.",
+						Title:   l.text("connect.byhand"),
+						Body:    l.text("connect.cursor.byhand"),
 						Snippet: configBlock("mcpServers", name, map[string]any{"type": "http", "url": address}),
 					},
 					{
-						Title: "Sign in",
+						Title: l.text("connect.signin.title"),
 						Menu:  []string{"Settings", "MCP"},
-						Body:  name + " shows Needs login — click it. " + signIn,
+						Body:  l.text("connect.cursor.signin", name, signIn),
 					},
 				},
 			},
@@ -129,28 +133,28 @@ func connectGroups(name, address string) []connectGroup {
 				Name: "VS Code",
 				Steps: []connectStep{
 					{
-						Title:     "Install it with one click",
-						Body:      "On VS Code Insiders, use the by-hand path below instead.",
+						Title:     l.text("connect.oneclick"),
+						Body:      l.text("connect.vscode.insiders"),
 						Link:      vscodeDeepLink(name, address),
-						LinkLabel: "Add " + name + " to VS Code",
+						LinkLabel: l.text("connect.addto", name, "VS Code"),
 					},
 					{
-						Title:   "Or add it by hand",
+						Title:   l.text("connect.byhand"),
 						Menu:    []string{"Command Palette", "MCP: Add Server", "HTTP"},
-						Body:    "Paste this address when it asks for the URL, and name it " + name + ".",
+						Body:    l.text("connect.vscode.paste", name),
 						Snippet: address,
 					},
-					{Title: "Sign in when prompted", Body: "VS Code asks permission to authenticate, then opens the browser. " + signIn},
+					{Title: l.text("connect.vscode.prompted"), Body: l.text("connect.vscode.signin", signIn)},
 				},
 			},
 			{
 				Slug: "codex",
 				Name: "Codex",
 				Steps: []connectStep{
-					{Title: "Register the server", Snippet: "codex mcp add " + name + " --url " + address},
+					{Title: l.text("connect.codex.register"), Snippet: "codex mcp add " + name + " --url " + address},
 					{
-						Title:   "Sign in",
-						Body:    "This opens a browser window and keeps the token for you. " + signIn,
+						Title:   l.text("connect.signin.title"),
+						Body:    l.text("connect.codex.signin", signIn),
 						Snippet: "codex mcp login " + name,
 					},
 				},
@@ -160,11 +164,11 @@ func connectGroups(name, address string) []connectGroup {
 				Name: "Gemini CLI",
 				Steps: []connectStep{
 					{
-						Title:   "Add this to ~/.gemini/settings.json",
-						Body:    "Merge it into the mcpServers block if you already have one.",
+						Title:   l.text("connect.gemini.add"),
+						Body:    l.text("connect.gemini.merge"),
 						Snippet: configBlock("mcpServers", name, map[string]any{"httpUrl": address}),
 					},
-					{Title: "Restart Gemini CLI and sign in", Body: "It finds the sign-in on its own and opens a browser the first time it connects. " + signIn},
+					{Title: l.text("connect.gemini.restart"), Body: l.text("connect.gemini.signin", signIn)},
 				},
 			},
 			{
@@ -172,11 +176,11 @@ func connectGroups(name, address string) []connectGroup {
 				Name: "Windsurf",
 				Steps: []connectStep{
 					{
-						Title:   "Add this to ~/.codeium/windsurf/mcp_config.json",
-						Body:    `On Windows the file is under %USERPROFILE%\.codeium\windsurf\.`,
+						Title:   l.text("connect.windsurf.add"),
+						Body:    l.text("connect.windsurf.windows", `%USERPROFILE%`),
 						Snippet: configBlock("mcpServers", name, map[string]any{"serverUrl": address}),
 					},
-					{Title: "Refresh, then sign in", Menu: []string{"Cascade", "MCP servers", "Refresh"}, Body: signIn},
+					{Title: l.text("connect.windsurf.refresh"), Menu: []string{"Cascade", "MCP servers", "Refresh"}, Body: signIn},
 				},
 			},
 			{
@@ -185,80 +189,80 @@ func connectGroups(name, address string) []connectGroup {
 				// https://zed.dev/docs/ai/mcp
 				Steps: []connectStep{
 					{
-						Title:   "Add this to Zed's settings.json",
+						Title:   l.text("connect.zed.add"),
 						Menu:    []string{"Zed", "Settings", "Open Settings"},
-						Body:    "Merge it into the context_servers block if you already have one. Leave out any headers: without them, Zed signs in with OAuth.",
+						Body:    l.text("connect.zed.merge"),
 						Snippet: configBlock("context_servers", name, map[string]any{"url": address}),
 					},
-					{Title: "Check that it started, then sign in", Menu: []string{"Settings", "AI", "MCP Servers"}, Body: "Zed asks you to authenticate the first time it connects. " + signIn},
+					{Title: l.text("connect.zed.check"), Menu: []string{"Settings", "AI", "MCP Servers"}, Body: l.text("connect.zed.signin", signIn)},
 				},
 			},
 			{
 				Slug: "manual",
-				Name: "Anything else",
+				Name: l.text("connect.manual.name"),
 				Steps: []connectStep{
 					{
-						Title:   "Add this entry to your app's MCP config",
-						Body:    "Most apps read a block like this one — a project's .mcp.json, for one. Restart the app afterwards.",
+						Title:   l.text("connect.manual.add"),
+						Body:    l.text("connect.manual.body"),
 						Snippet: configBlock("mcpServers", name, map[string]any{"type": "http", "url": address}),
 					},
-					{Title: "Or, if it only asks for an address", Snippet: address},
-					{Title: "Authorize it", Body: "steps speaks OAuth and registers apps on its own; there is no key or token to paste. " + signIn},
+					{Title: l.text("connect.manual.addr"), Snippet: address},
+					{Title: l.text("connect.manual.authorize"), Body: l.text("connect.manual.signin", signIn)},
 				},
 			},
 		},
 	}, {
-		Name: "From the vendor's servers",
-		Hint: "chat apps",
+		Name: l.text("connect.group.vendor"),
+		Hint: l.text("connect.group.vendor.hint"),
 		Clients: []connectClient{
 			{
 				Slug: "claude",
 				Name: "Claude",
 				// https://support.claude.com/en/articles/11175166
-				Caveat: "A Free plan allows one custom connector. On Team and Enterprise, an owner adds it under Organization settings → Connectors.",
+				Caveat: l.text("connect.claude.caveat"),
 				Vendor: "Anthropic",
 				Steps: []connectStep{
 					{
-						Title:     "Open Claude's connector settings",
+						Title:     l.text("connect.claude.open"),
 						Menu:      []string{"Customize", "Connectors"},
-						Body:      "In the Claude app, or on claude.ai in a browser.",
+						Body:      l.text("connect.claude.where"),
 						Link:      "https://claude.ai/settings/connectors?modal=add-custom-connector",
-						LinkLabel: "Open Claude connector settings",
+						LinkLabel: l.text("connect.claude.open.link"),
 					},
-					{Title: "Choose to add a custom connector", Menu: []string{"+ Add", "Add custom connector"}, Body: "Name it " + name + "."},
-					{Title: "Paste this address into the URL box", Body: "Then press Add. Leave the advanced settings alone — there is no key to enter.", Snippet: address},
-					{Title: "Agree when the window opens", Body: signIn},
+					{Title: l.text("connect.claude.choose"), Menu: []string{"+ Add", "Add custom connector"}, Body: l.text("connect.nameit", name)},
+					{Title: l.text("connect.claude.paste"), Body: l.text("connect.claude.paste.body"), Snippet: address},
+					{Title: l.text("connect.claude.agree"), Body: signIn},
 				},
 			},
 			{
 				Slug: "chatgpt",
 				Name: "ChatGPT",
 				// https://developers.openai.com/plugins/deploy/connect-chatgpt
-				Caveat:     "Account and workspace policies decide who may add a custom MCP server; on a work account an admin may have to allow it first.",
+				Caveat:     l.text("connect.chatgpt.caveat"),
 				Vendor:     "OpenAI",
 				NeedsHTTPS: true,
 				Steps: []connectStep{
 					{
-						Title:     "Open ChatGPT's plugins",
+						Title:     l.text("connect.chatgpt.open"),
 						Menu:      []string{"+", "Add custom MCP server"},
-						Body:      "Name it " + name + ".",
+						Body:      l.text("connect.nameit", name),
 						Link:      "https://chatgpt.com/plugins",
-						LinkLabel: "Open ChatGPT plugins",
+						LinkLabel: l.text("connect.chatgpt.open.link"),
 					},
-					{Title: "Paste this address under Connection", Body: "Choose the endpoint URL, not Tunnel. For authentication, choose OAuth.", Snippet: address},
-					{Title: "Create it, then agree when it asks", Body: "ChatGPT registers itself on its own. " + signIn},
+					{Title: l.text("connect.chatgpt.paste"), Body: l.text("connect.chatgpt.paste.body"), Snippet: address},
+					{Title: l.text("connect.chatgpt.create"), Body: l.text("connect.chatgpt.signin", signIn)},
 				},
 			},
 		},
 	}}
 
-	tryIt := connectTryIt(name)
+	tryIt := connectTryIt(l, name)
 	for g := range groups {
 		for c := range groups[g].Clients {
 			groups[g].Clients[c].Steps = append(groups[g].Clients[c].Steps, tryIt)
 		}
 
-		groups[g].Fix = judgeReach(groups[g].Clients, address)
+		groups[g].Fix = judgeReachIn(l, groups[g].Clients, address)
 	}
 
 	return groups
@@ -266,6 +270,10 @@ func connectGroups(name, address string) []connectGroup {
 
 // judgeReach says, for each app whose vendor makes the connection, whether that vendor can reach address, and returns how to fix it when one cannot. A private hostname looks like a public one from here, so a public-looking address gets a warning rather than a pass.
 func judgeReach(clients []connectClient, address string) string {
+	return judgeReachIn(englishLocale(), clients, address)
+}
+
+func judgeReachIn(l *locale, clients []connectClient, address string) string {
 	parsed, err := url.Parse(address)
 	if err != nil {
 		parsed = &url.URL{}
@@ -282,16 +290,16 @@ func judgeReach(clients []connectClient, address string) string {
 		case client.Vendor == "":
 			continue
 		case private:
-			client.Blocked = client.Name + " connects from " + client.Vendor + "'s servers, which cannot reach " + host + "."
+			client.Blocked = l.text("connect.blocked.private", client.Name, client.Vendor, host)
 		case client.NeedsHTTPS && parsed.Scheme != "https":
-			client.Blocked = client.Name + " only connects to an https address."
+			client.Blocked = l.text("connect.blocked.https", client.Name)
 		default:
-			client.Reach = client.Vendor + "'s servers make this connection, not your machine, so " + host + " must be reachable from the internet."
+			client.Reach = l.text("connect.reach", client.Vendor, host)
 
 			continue
 		}
 
-		fix = "To offer these, start steps web with --external-url set to an https address reachable from the internet."
+		fix = l.text("connect.fix")
 	}
 
 	return fix

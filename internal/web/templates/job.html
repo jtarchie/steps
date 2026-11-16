@@ -3,25 +3,25 @@
   <div>
     <h1 class="prompt"><b>steps job {{.Job.Name}}</b></h1>
     <p class="metaline" id="job-meta">
-      {{len .Runs}} runs recorded
-      {{if .Job.Held}}<span class="sep">·</span><span class="st st-held">held</span> after {{.Job.Failures}} failure{{if ne .Job.Failures 1}}s{{end}}<span class="sep">·</span>will not trigger on new versions{{if .Nav.ReadOnly}}<span class="sep">·</span>release with <code>steps jobs release {{.Job.Name}} -p {{.Nav.Current}}</code>{{end}}{{end}}
+      {{t "job.runs" (len .Runs)}}
+      {{if .Job.Held}}<span class="sep">·</span><span class="st st-held">{{word "status" "held"}}</span> {{tn "job.afterfailures" .Job.Failures}}<span class="sep">·</span>{{t "job.notrigger"}}{{if .Nav.ReadOnly}}<span class="sep">·</span>{{th "job.releasewith" (code (printf "steps jobs release %v -p %v" .Job.Name .Nav.Current))}}{{end}}{{end}}
     </p>
   </div>
 </div>
 
 {{if .Job.Upstream}}
-<h2 class="eyebrow">Depends on</h2>
+<h2 class="eyebrow">{{t "job.dependson"}}</h2>
 <p class="deps">
   {{range .Job.Upstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a>
-  <span class="arrow">must have passed for</span> <span class="res">{{.Resource}}</span><br>{{end}}
+  <span class="arrow">{{t "job.musthavepassed"}}</span> <span class="res">{{.Resource}}</span><br>{{end}}
 </p>
 {{end}}
 
 {{if .Job.Downstream}}
-<h2 class="eyebrow">Feeds</h2>
+<h2 class="eyebrow">{{t "job.feeds"}}</h2>
 <p class="deps">
   {{range .Job.Downstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a>
-  <span class="arrow">waits on</span> <span class="res">{{.Resource}}</span> <span class="arrow">from this job</span><br>{{end}}
+  <span class="arrow">{{t "job.waitson"}}</span> <span class="res">{{.Resource}}</span> <span class="arrow">{{t "job.fromthisjob"}}</span><br>{{end}}
 </p>
 {{end}}
 
@@ -30,47 +30,47 @@
      without a reload. htmx re-reads this page every 2.5s and morphs in what
      changed; the metaline and the nav badges ride along out of band. */}}
 <div id="job-runs" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#job-runs" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#job-meta:outerMorph,#statusline:outerMorph">
-<h2 class="eyebrow">Run history
+<h2 class="eyebrow">{{t "job.history"}}
   {{if .Spark}}
-  <svg class="spark" width="{{mul2 (len .Spark)}}" height="16" viewBox="0 0 {{mul2 (len .Spark)}} 16" aria-label="Duration trend">
-    {{range $i, $bar := .Spark}}<rect x="{{mul2 $i}}" y="{{sub16 $bar.Height}}" width="6" height="{{$bar.Height}}" class="{{if $bar.Failed}}bad{{else}}ok{{end}}"><title>{{$bar.Title}}</title></rect>{{end}}
+  <svg class="spark" width="{{mul2 (len .Spark)}}" height="16" viewBox="0 0 {{mul2 (len .Spark)}} 16" aria-label="{{t "job.spark"}}">
+    {{range $i, $bar := .Spark}}<rect x="{{mul2 $i}}" y="{{sub16 $bar.Height}}" width="6" height="{{$bar.Height}}" class="{{if $bar.Failed}}bad{{else}}ok{{end}}"><title>{{t "job.spark.title" $bar.Dur (word "status" $bar.Status)}}</title></rect>{{end}}
   </svg>
   {{end}}
 </h2>
 <div class="tablewrap">
   <table>
-    <thead><tr><th>Run</th><th>Status</th><th>Started</th><th class="num">Duration</th><th>Workspace</th></tr></thead>
+    <thead><tr><th>{{t "th.run"}}</th><th>{{t "th.status"}}</th><th>{{t "th.started"}}</th><th class="num">{{t "th.duration"}}</th><th>{{t "th.workspace"}}</th></tr></thead>
     <tbody>
       {{range .Runs}}
       <tr>
         <td><a class="hash" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{short .ID}}</a></td>
-        <td><span class="st st-{{statusWord .Status}}">{{statusWord .Status}}</span></td>
+        <td><span class="st st-{{statusWord .Status}}">{{statusText .Status}}</span></td>
         <td class="dim">{{agoTag .StartedAt}}</td>
         <td class="num dim">{{elapsedTag .}}</td>
         <td class="faint">{{.Workspace}}</td>
       </tr>
       {{else}}
-      <tr><td colspan="5" class="faint">No runs recorded yet.</td></tr>
+      <tr><td colspan="5" class="faint">{{t "runs.none"}}</td></tr>
       {{end}}
     </tbody>
   </table>
 </div>
 
 {{if .Dials}}
-<h2 class="eyebrow">Agent dials <span class="unbold">— the limits each agent STEP runs under (a fix: or sub-agent has its own)</span></h2>
+<h2 class="eyebrow">{{t "job.dials"}} <span class="unbold">{{t "job.dials.note"}}</span></h2>
 <div class="tablewrap">
   <table class="kv">
-    <thead><tr><th>Agent</th><th>Step</th><th class="num"><abbr title="A hosted agent's turn is one request/tool-execute round driven by steps. A cli agent's is whatever the child reports as num_turns — one per tool round, pooled across every message: in the step — which runs far higher for the same work.">Turns</abbr></th><th class="num">Context</th><th>Deadline</th><th class="num">Budget</th></tr></thead>
+    <thead><tr><th>{{t "th.agent"}}</th><th>{{t "th.step"}}</th><th class="num"><abbr title="{{t "dials.turns.title"}}">{{t "th.turns"}}</abbr></th><th class="num">{{t "th.context"}}</th><th>{{t "th.deadline"}}</th><th class="num">{{t "th.budget"}}</th></tr></thead>
     <tbody>
       {{range .Dials}}
       <tr>
         <td>{{.Agent}}</td>
         <td class="dim">{{.Where}}</td>
-        {{if .Broken}}<td colspan="4"><span class="err">{{.Broken}}</span></td>
-        {{else}}<td class="num">{{if .UncappedTurns}}<span class="faint">uncapped</span>{{else}}{{.Turns}}{{end}}</td>
-        <td class="num">{{if .UncappedContext}}<span class="faint">uncapped</span>{{else}}{{thousands .ContextBytes}}{{end}}</td>
-        <td class="dim">{{if .UncappedTimeout}}<span class="faint">uncapped</span>{{else if .Timeout}}{{.Timeout}}{{else}}<span class="faint">default</span>{{end}}</td>
-        <td class="num">{{if .UncappedBudget}}<span class="faint">uncapped{{if .BlockTokens}} per cell{{end}}</span>{{else}}{{.Budget}}{{end}}{{if .BlockTokens}} <span class="dim" title="The across: block's own budget:, which every cell spends together — the block stops admitting cells once it is gone. It is the one spend ceiling enforced on this step besides the agent's own.">· {{thousands .BlockTokens}} tokens for the matrix</span>{{end}}</td>{{end}}
+        {{if .Broken}}<td colspan="4"><span class="err" lang="en">{{.Broken}}</span></td>
+        {{else}}<td class="num">{{if .UncappedTurns}}<span class="faint">{{t "dials.uncapped"}}</span>{{else}}{{.Turns}}{{end}}</td>
+        <td class="num">{{if .UncappedContext}}<span class="faint">{{t "dials.uncapped"}}</span>{{else}}{{thousands .ContextBytes}}{{end}}</td>
+        <td class="dim">{{if .UncappedTimeout}}<span class="faint">{{t "dials.uncapped"}}</span>{{else if .Timeout}}{{.Timeout}}{{else}}<span class="faint">{{t "dials.default"}}</span>{{end}}</td>
+        <td class="num">{{if .UncappedBudget}}<span class="faint">{{if .BlockTokens}}{{t "dials.uncapped.cell"}}{{else}}{{t "dials.uncapped"}}{{end}}</span>{{else}}{{budget .}}{{end}}{{if .BlockTokens}} <span class="dim" title="{{t "dials.matrix.title"}}">· {{t "dials.matrix" (thousands .BlockTokens)}}</span>{{end}}</td>{{end}}
       </tr>
       {{end}}
     </tbody>
@@ -79,10 +79,10 @@
 {{end}}
 
 {{if .Versions}}
-<h2 class="eyebrow">Passed versions <span class="unbold">— what this job has passed against</span></h2>
+<h2 class="eyebrow">{{t "job.passed"}} <span class="unbold">{{t "job.passed.note"}}</span></h2>
 <div class="tablewrap">
   <table class="kv">
-    <thead><tr><th>Resource</th><th>Version</th><th>Recorded</th></tr></thead>
+    <thead><tr><th>{{t "th.resource"}}</th><th>{{t "th.version"}}</th><th>{{t "th.recorded"}}</th></tr></thead>
     <tbody>
       {{range .Versions}}
       <tr><td>{{.Resource}}</td><td>{{jsonLine .Version}}</td><td class="dim">{{ago .RecordedAt}}</td></tr>

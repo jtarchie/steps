@@ -128,20 +128,22 @@ func (p overviewPipeline) Red() bool {
 
 // RedWords is what the root's live region says of a red row: the jobs that
 // made it red, or that it is not being served at all.
-func (p overviewPipeline) RedWords() string {
+func (p overviewPipeline) RedWords() string { return p.RedWordsIn(englishLocale()) }
+
+func (p overviewPipeline) RedWordsIn(loc *locale) string {
 	if p.Broken != "" {
-		return "not being served"
+		return loc.text("overview.notserved")
 	}
 
 	words := []string{}
 
 	for _, chip := range p.Chips {
 		if chip.Red() {
-			words = append(words, chip.Name+" "+chip.Word)
+			words = append(words, loc.text("overview.red.chip", chip.Name, loc.word("status", chip.Word)))
 		}
 	}
 
-	return strings.Join(words, ", ")
+	return strings.Join(words, loc.text("list.sep"))
 }
 
 // overviewTally is the overview header's count of rows that want a person.
@@ -372,9 +374,9 @@ func cronAt(cfg *config.Config, name string, cronNext CronNext, now time.Time) (
 	return at, err == nil && !at.IsZero()
 }
 
-// nextTag is how long until a cron slot, with the clock time for a pointer and both for a screen reader. Relative because a clock time needed a day beside it to mean anything, and named the wrong day a week out.
-func nextTag(at time.Time) template.HTML {
-	short, spoken := untilCompact(time.Until(at))
+// nextTagIn is how long until a cron slot, with the clock time for a pointer and both for a screen reader. Relative because a clock time needed a day beside it to mean anything, and named the wrong day a week out.
+func nextTagIn(loc *locale, at time.Time) template.HTML {
+	short, spoken := untilCompactIn(loc, time.Until(at))
 	clock := at.Format("Mon Jan 2 15:04 MST")
 
 	//nolint:gosec // G203: every interpolation is machine-formatted, not input

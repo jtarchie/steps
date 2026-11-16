@@ -93,7 +93,7 @@ func TestTheRunningToolCallIsTickedByTheScript(t *testing.T) {
 	for _, want := range []string{
 		"document.querySelectorAll('time[data-call-since]')",
 		"step.classList.contains('running')",
-		"'running ' + fmt(now - Date.parse(node.dataset.callSince))",
+		"word('running').replace('%[1]s', fmt(now - Date.parse(node.dataset.callSince)))",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("app.js lacks %q", want)

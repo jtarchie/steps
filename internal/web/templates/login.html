@@ -3,17 +3,17 @@
 <h1 class="prompt"><b>steps login</b></h1>
 {{with .Problem}}<p class="metaline signin-problem" role="alert">{{.}}</p>{{end}}
 {{if .Providers}}<div class="signin-providers">
-  {{range .Providers}}<a class="btn" href="/auth/{{.Name}}?next={{$.Next}}">Continue with {{.Label}}</a>{{end}}
+  {{range .Providers}}<a class="btn" href="/auth/{{.Name}}?next={{$.Next}}">{{t "login.continue" .Label}}</a>{{end}}
 </div>{{end}}
 {{if .Local}}
-{{if .Providers}}<p class="signin-or">or with a local account</p>{{end}}
+{{if .Providers}}<p class="signin-or">{{t "login.or"}}</p>{{end}}
 <form class="signin-form" method="post" action="/login">
   <input type="hidden" name="next" value="{{.Next}}">
-  <label for="signin-user">user</label>
+  <label for="signin-user">{{t "login.user"}}</label>
   <input id="signin-user" name="username" type="text" autocomplete="username" value="{{.Username}}" {{if and (not .Username) (not .Providers)}}autofocus{{end}} required>
-  <label for="signin-pass">password</label>
+  <label for="signin-pass">{{t "login.password"}}</label>
   <input id="signin-pass" name="password" type="password" autocomplete="current-password" {{if .Username}}autofocus{{end}} required>
-  <button class="btn primary" type="submit">Sign in</button>
+  <button class="btn primary" type="submit">{{t "login.signin"}}</button>
 </form>
 {{end}}
 </div>

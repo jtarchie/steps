@@ -100,7 +100,7 @@ func (s *Server) renderLogin(c *echo.Context, status int, username, problem stri
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(status, "login", map[string]any{
 		"Nav":       navData{URL: c.Request().URL.RequestURI()},
-		"Title":     "sign in",
+		"Title":     s.renderer.localeOf(c).text("login.title"),
 		"Next":      safeNext(c.QueryParam("next")),
 		"Username":  username,
 		"Problem":   problem,
@@ -114,7 +114,7 @@ func (s *Server) handleLogin(c *echo.Context) error {
 
 	// One sentence for every failure: which half was wrong is what somebody guessing names wants to know.
 	if !s.auth.matches(username, password) {
-		return s.renderLogin(c, http.StatusUnauthorized, username, "couldn't sign you in")
+		return s.renderLogin(c, http.StatusUnauthorized, username, s.say(c, "login.failed"))
 	}
 
 	err := s.startSession(c, actor.Local(username))

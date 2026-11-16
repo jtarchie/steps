@@ -51,7 +51,7 @@ func TestTheScriptSaysWhenTheSessionEnded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, want := range []string{`'htmx:before:response'`, `ctx.response.status !== 401`, `e.preventDefault()`, `getElementById('attention')`, `'signed out · sign in again'`, `'/login?next='`} {
+	for _, want := range []string{`'htmx:before:response'`, `ctx.response.status !== 401`, `e.preventDefault()`, `getElementById('attention')`, `word('signedout')`, `'/login?next='`} {
 		if !strings.Contains(string(js), want) {
 			t.Errorf("app.js does not carry %s", want)
 		}

@@ -227,11 +227,11 @@ tr.checkfail pre { margin: 0 0 4px; }
 @media (hover: none) { .jumpbtn kbd { display: none; } }
 /* The theme toggle's icon and word come from html[data-theme], never from markup a poll could morph back. */
 :root:not([data-theme]) .themebtn .themeicon::before { content: "◐"; }
-:root:not([data-theme]) .themebtn .themelabel::after { content: "auto"; }
+:root:not([data-theme]) .themebtn .themelabel::after { content: attr(data-auto); }
 :root[data-theme="light"] .themebtn .themeicon::before { content: "○"; }
-:root[data-theme="light"] .themebtn .themelabel::after { content: "light"; }
+:root[data-theme="light"] .themebtn .themelabel::after { content: attr(data-light); }
 :root[data-theme="dark"] .themebtn .themeicon::before { content: "●"; }
-:root[data-theme="dark"] .themebtn .themelabel::after { content: "dark"; }
+:root[data-theme="dark"] .themebtn .themelabel::after { content: attr(data-dark); }
 @media (max-width: 600px) { .themebtn .themelabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } }
 
 /* pipeline switcher: the path's middle segment */

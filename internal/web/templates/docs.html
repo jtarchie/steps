@@ -1,17 +1,17 @@
 {{define "page"}}
 <div class="docsnav">
-  <a {{if eq "README.md" $.Name}}aria-current="page"{{end}} href="/docs/README.md">start here</a>
-  {{range .Groups}}<span class="docsgroup"><span class="docsgrouptitle">{{.Title}}</span>
-    {{range .Pages}}<a {{if eq . $.Name}}aria-current="page"{{end}} href="/docs/{{.}}">{{trimMD .}}</a>{{end}}
+  <a {{if eq "README.md" $.Name}}aria-current="page"{{end}} href="/docs/README.md">{{t "docs.start"}}</a>
+  {{range .Groups}}<span class="docsgroup"><span class="docsgrouptitle"{{enAttr}}>{{.Title}}</span>
+    {{range .Pages}}<a {{if eq . $.Name}}aria-current="page"{{end}} href="/docs/{{.}}"{{enAttr}}>{{trimMD .}}</a>{{end}}
   </span>{{end}}
 </div>
 {{if .TOC}}
-<nav class="docstoc" aria-label="On this page">
-  <span class="docsgrouptitle">on this page</span>
-  {{range .TOC}}<a href="#{{.ID}}">{{.Text}}</a>{{end}}
+<nav class="docstoc" aria-label="{{t "docs.onpage.label"}}">
+  <span class="docsgrouptitle">{{t "docs.onpage"}}</span>
+  {{range .TOC}}<a href="#{{.ID}}"{{enAttr}}>{{.Text}}</a>{{end}}
 </nav>
 {{end}}
-<article class="docs">
+<article class="docs"{{enAttr}}>
 {{.HTML}}
 </article>
 {{end}}

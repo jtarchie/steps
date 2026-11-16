@@ -437,6 +437,7 @@ func (s *Server) flushBatch(
 	// every later flush renders it as a swap onto an id the page never drew.
 	// Whole flush or nothing.
 	frame := framer{
+		loc:    s.renderer.localeOf(c),
 		server: s,
 		// The `step` template reads one thing off the nav — the slug its
 		// node links are scoped by — and s.nav() would buy that with the two
