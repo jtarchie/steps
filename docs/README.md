@@ -144,6 +144,8 @@ The cache is what makes this usable under `steps web`: without it every poll int
 
 Add `--syntax-only` to `steps validate` to check the file alone — the right flag for a pre-commit hook or a CI lint that should not need the pipeline's production credentials on hand.
 
+Add `--require-image` to make `steps validate` fail when anything in the pipeline would run a command on a host rather than in a container, and name each place: a task without `image:`, an agent without `image:` whose tools reach files or a shell (the default file tools included, and a sub-agent's, which run where its parent does), a resource whose type runs `check`/`in`/`out` on the host (the built-in `git` type does, and a copy of it under another name with `image:` does not), a `github-prs` or `github-comments` resource with `checkout: git`, and an `mcp_servers:` entry with a `command:`. A `sandbox:` fences a host command and it is still reported. What runs inside steps itself, an `expr:`, `cron`, `webhook` or other `github-*` resource, needs no image. `--allow-host=check,deploy` accepts the tasks, agents, resources or MCP servers it names, and refuses a name that matches nothing, so a typo cannot read as an exception granted. It is a flag rather than a pipeline key so the file being checked cannot exempt itself.
+
 ## Editor support
 
 [`steps.schema.json`](../steps.schema.json) is a JSON Schema for the pipeline format. Point your editor at it with a modeline on the first line of a pipeline:

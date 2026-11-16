@@ -41,7 +41,11 @@ type ValidateCmd struct {
 	Config string `help:"with --live, the daemon's config file (steps web --config): every secret reference is resolved as the daemon would, and the path that answered is shown, never the value" name:"config" placeholder:"FILE" type:"path"`
 	// Name is here because --live dials oauth servers with the pipeline's own login, which is filed under this name, and --config renders it as {{ .pipeline }} in every lookup path.
 	Name map[string]string `help:"name the pipeline is set as: what its mcp logins are filed under and what {{ .pipeline }} renders as in a secret lookup path, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
-	DB   DB                `help:"state database the logins are sealed into: a sqlite file path, sqlite:// or postgres:// url (default: .steps/<pipeline>.db beside the YAML)"                                     name:"db"   placeholder:"URL"`
+	// RequireImage is a policy gate rather than a depth: whether the file runs anything outside a container is knowable from the file alone, so it holds under --syntax-only too.
+	RequireImage bool `help:"fail when any task, agent's tools, resource type or mcp server would run a command on the host instead of in an image" name:"require-image"`
+	// AllowHost is a flag, not a pipeline key, so the file under review cannot exempt itself from the check its reviewer runs.
+	AllowHost []string `help:"with --require-image, the tasks, agents, resources and mcp servers allowed to run on the host anyway, by name (comma-separated, repeatable)" name:"allow-host" placeholder:"NAME" sep:","`
+	DB        DB       `help:"state database the logins are sealed into: a sqlite file path, sqlite:// or postgres:// url (default: .steps/<pipeline>.db beside the YAML)" name:"db"         placeholder:"URL"`
 }
 
 // Run loads the pipeline (which runs every config-level validator) and then
@@ -69,7 +73,7 @@ func (v *ValidateCmd) Run(streams Streams) error {
 		say(streams.Err, "warning: "+warning)
 	}
 
-	err = fileProblems(cfg)
+	err = errors.Join(fileProblems(cfg), v.hostProblems(cfg))
 	if err != nil {
 		return err
 	}
@@ -126,6 +130,40 @@ func fileProblems(cfg *config.Config) error {
 	return errors.Join(errs...)
 }
 
+// hostProblems is --require-image: every place the pipeline would run a command on a host, less the ones --allow-host names. A name in --allow-host that names nothing on the list is refused, since a typo there would otherwise read as an exception granted.
+func (v *ValidateCmd) hostProblems(cfg *config.Config) error {
+	if !v.RequireImage {
+		return nil
+	}
+
+	found := cfg.HostCommands()
+	allowed := map[string]bool{}
+
+	var lines []string
+
+	for _, host := range found {
+		if slices.Contains(v.AllowHost, host.Name) {
+			allowed[host.Name] = true
+
+			continue
+		}
+
+		lines = append(lines, fmt.Sprintf("  %s: %s (--allow-host=%s)", host.Where, host.Why, host.Name))
+	}
+
+	for _, name := range v.AllowHost {
+		if !allowed[name] {
+			return fmt.Errorf("--allow-host=%s: nothing in %s runs on the host under that name", name, v.Pipeline)
+		}
+	}
+
+	if len(lines) > 0 {
+		return fmt.Errorf("%s runs commands on the host, and --require-image allows none:\n%s", v.Pipeline, strings.Join(lines, "\n"))
+	}
+
+	return nil
+}
+
 // machineProblems is the other two depths: what this machine cannot supply,
 // and — under --live — what the services themselves say when asked.
 //
@@ -167,6 +205,10 @@ func (v *ValidateCmd) checkDepth() error {
 
 	if v.Job != "" && !v.Live {
 		return errors.New("--job narrows the live probe: pass --live with it, or drop it to check the whole file")
+	}
+
+	if len(v.AllowHost) > 0 && !v.RequireImage {
+		return errors.New("--allow-host names exceptions to --require-image: pass --require-image with it, or drop it")
 	}
 
 	if v.Config != "" && !v.Live {
