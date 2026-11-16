@@ -375,6 +375,21 @@ func (p PlacementView) ImageRef() string {
 
 const shortDigest = 12
 
+// ShortImage is the image as a row header names it. A tag is short already and says more than its digest, so it is shown as written; an image pinned by digest is only that digest, 70-odd characters that once ran into the step's name, so it is cut the way Docker cuts an id. The whole reference rides the row's tooltip and the body's placement line.
+func (p PlacementView) ShortImage() string {
+	_, pinned, ok := strings.Cut(p.Image, "@")
+	if !ok {
+		return p.Image
+	}
+
+	_, hex, found := strings.Cut(pinned, ":")
+	if !found || len(hex) < shortDigest {
+		return p.Image
+	}
+
+	return "[" + hex[:shortDigest] + "]"
+}
+
 // mcpBlame finds the mcp server an error names. Two spellings, because internal/mcp writes two: a credential refusal names the server directly, and a dial failure names what it was connecting TO. Anything else is not an mcp failure and must not be decorated as one — a page that offers the same suggestion under every red run is one nobody reads.
 var mcpBlame = regexp.MustCompile(`mcp(?:: connect to| server) "([^"]+)"`)
 

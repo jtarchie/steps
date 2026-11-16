@@ -404,3 +404,53 @@ func TestImageArtifactResolvesAfterAResumeKeptTheGet(t *testing.T) {
 		t.Errorf("the image step did not run in the kept get's reference:\n%s", out)
 	}
 }
+
+// stepHead is the visible text of a step's row header on a run page: its kind, name and whatever is drawn beside them.
+func stepHead(t *testing.T, page, name string) string {
+	t.Helper()
+
+	start := strings.Index(page, `-`+name+`_head"`)
+	if start < 0 {
+		t.Fatalf("the run page draws no row for %q", name)
+	}
+
+	end := strings.Index(page[start:], `class="stepbody"`)
+	if end < 0 {
+		end = len(page) - start
+	}
+
+	return visibleText(page[start : start+end])
+}
+
+// TestARunPageNamesAStepsImageShortInItsRow: the row header carries the digest the way Docker shortens one, so two rows can be compared at a glance; the full reference is for the body, where it has room.
+func TestARunPageNamesAStepsImageShortInItsRow(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
+	requireDockerE2E(t)
+
+	digest := alpineDigest(t)
+	path := pipelinePath(t, t.TempDir())
+	imageArtifactPipeline(t, path, "alpine", digest, "", imageArtifactTask)
+
+	_ = captureStdout(t, func() { mustRun(t, path) })
+
+	server, pipeline := webServerFor(t, path)
+
+	runs, err := pipeline.Store.ListRuns(t.Context(), "build", 1)
+	if err != nil || len(runs) == 0 {
+		t.Fatalf("ListRuns = %v, %v", runs, err)
+	}
+
+	_, page := webGet(t, server, "/p/"+pipeline.Slug+"/runs/"+runs[0].ID)
+	head := stepHead(t, page, "probe")
+	hex := strings.TrimPrefix(digest, "sha256:")
+
+	if !strings.Contains(head, "["+hex[:12]+"]") {
+		t.Errorf("the probe row does not show the short digest [%s]: %q", hex[:12], head)
+	}
+
+	if strings.Contains(head, hex) {
+		t.Errorf("the probe row spells out the whole digest: %q", head)
+	}
+}

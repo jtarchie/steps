@@ -488,6 +488,8 @@ type jsonView struct {
 	// opened; set, HTML is empty and Target names the element it lands in.
 	Src    string
 	Target string
+	// First is a folded message's opening words, the one line its row shows: a prompt is the same on every run of a job, so the row says which one it is and leaves the reading to whoever opens it.
+	First string
 }
 
 // lazyValue is jsonValue for a tool call or result, whose folded body is
@@ -530,23 +532,40 @@ func lazyValueIn(loc *locale, src string, seq int64, raw string) jsonView {
 	return view
 }
 
-// messageFoldBytes is the longest system or user message drawn on its row.
-// A task prompt is routinely 16 kB, re-sent on every turn of a long run, and
+// messageFoldBytes is the longest system or user message whose body is drawn
+// into the page, folded; anything longer is fetched when it is opened. A task
+// prompt is routinely 16 kB, re-sent on every turn of a long run, and
 // highlighting those was most of what the page waited on.
 const messageFoldBytes = 2000
 
-// messageValue is highlightMessage for a run page row: drawn in full when it
-// is short, otherwise folded behind a summary whose body is fetched on open.
+// messageFirstRunes is how much of a folded message its row carries: more than a wide row shows, which CSS cuts with an ellipsis, so no width is decided here.
+const messageFirstRunes = 160
+
+// messageValue is a system or user message on a run page row: always folded to its opening words and size, since a prompt is the same text on every run and was 60% of a review's first screen. Short, its body is drawn inside the fold; long, it is fetched on open.
 func messageValue(src string, seq int64, text string) jsonView {
-	return messageValueIn(englishLocale(), src, seq, text)
+	if len(text) <= messageFoldBytes || strings.TrimSpace(text) == "" {
+		return messageFold(text)
+	}
+
+	return jsonView{First: messageFirst(text), Summary: formatBytes(len(text)), Src: src, Target: fmt.Sprintf("turn-%d", seq)}
 }
 
-func messageValueIn(loc *locale, src string, seq int64, text string) jsonView {
-	if len(text) <= messageFoldBytes || strings.TrimSpace(text) == "" {
+// messageFold is the same fold with its body always drawn in, for a page with no turn to fetch it from (a node's transcript has no event seq). A blank message is not a box that opens onto nothing.
+func messageFold(text string) jsonView {
+	if strings.TrimSpace(text) == "" {
 		return jsonView{HTML: highlightMessage(text)}
 	}
 
-	return deferredView(src, seq, plainSummaryIn(loc, strings.TrimRight(text, "\n"), text))
+	return jsonView{First: messageFirst(text), Summary: formatBytes(len(text)), HTML: highlightMessage(text)}
+}
+
+func messageFirst(text string) string {
+	first := []rune(strings.Join(strings.Fields(text), " "))
+	if len(first) > messageFirstRunes {
+		first = first[:messageFirstRunes]
+	}
+
+	return string(first)
 }
 
 func deferredView(src string, seq int64, summary string) jsonView {
@@ -687,10 +706,6 @@ func jsonSummaryIn(loc *locale, node jsonNode, raw string) string {
 
 	return loc.text("json.object", loc.count("json.keys", len(node.kids)), size)
 }
-
-// plainSummary describes a folded non-JSON payload by the only two things it
-// has: how tall it is and how big it is.
-func plainSummary(text, raw string) string { return plainSummaryIn(englishLocale(), text, raw) }
 
 func plainSummaryIn(loc *locale, text, raw string) string {
 	lines := strings.Count(text, "\n") + 1

@@ -319,3 +319,46 @@ func writeE2EPipeline(t *testing.T, path, body string) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+// turnBlock is one transcript turn's markup: from its opening div to the next turn's.
+func turnBlock(t *testing.T, page, role string) string {
+	t.Helper()
+
+	start := strings.Index(page, `<div class="turn `+role)
+	if start < 0 {
+		t.Fatalf("the run page draws no %s turn", role)
+	}
+
+	end := strings.Index(page[start+1:], `<div class="turn `)
+	if end < 0 {
+		return page[start:]
+	}
+
+	return page[start : start+1+end]
+}
+
+// TestARealAgentRunFoldsItsPromptsToOneLine: an agent's system and opening prompts are the same on every run of a job, so the page shows each as one line that opens in place, and what the agent DID is on the reader's first screen instead of a screen below them.
+func TestARealAgentRunFoldsItsPromptsToOneLine(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeLLM(t, happyPathScript()...)
+	path := e2ePipeline(t, t.TempDir(), fake.URL, "")
+
+	mustRun(t, "run", path, "--job", "build")
+
+	server, pipeline := webServerFor(t, path)
+
+	runs, err := pipeline.Store.ListRuns(t.Context(), "build", 1)
+	if err != nil || len(runs) == 0 {
+		t.Fatalf("ListRuns = %v, %v", runs, err)
+	}
+
+	_, page := webGet(t, server, "/p/"+pipeline.Slug+"/runs/"+runs[0].ID)
+
+	for _, role := range []string{"system", "user"} {
+		block := turnBlock(t, page, role)
+		if !strings.Contains(block, `<details class="jsonbox msg"`) || !strings.Contains(block, `<span class="msgfirst">`) {
+			t.Errorf("the %s prompt is not folded to one line:\n%s", role, block)
+		}
+	}
+}

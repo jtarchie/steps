@@ -284,8 +284,8 @@
         {{if .Skipped}}<span class="r-sep">·</span><b class="r-skip">{{t "step.r.skipped" .Skipped}}</b>{{end}}
         {{if .Unreported}}<span class="r-sep">·</span><b class="r-skip">{{t "step.r.unreported" .Unreported}}</b>{{end}}
       </span>{{end}}{{end}}
-      {{$image := ""}}{{$ref := ""}}{{range $run.StepPlacements $step}}{{if .Image}}{{$image = .Image}}{{$ref = .ImageRef}}{{end}}{{end}}
-      {{if or $step.Worker $image}}<span class="note worker"{{with $ref}} title="{{.}}"{{end}}>{{with $step.Worker}}{{t "step.on" .}}{{end}}{{if and $step.Worker $image}} · {{end}}{{$image}}</span>{{end}}
+      {{$image := ""}}{{$ref := ""}}{{range $run.StepPlacements $step}}{{if .Image}}{{$image = .ShortImage}}{{$ref = .ImageRef}}{{end}}{{end}}
+      {{if or $step.Worker $image}}<span class="note worker"{{with $ref}} title="{{.}}"{{end}}>{{with $step.Worker}}<span class="on">{{t "step.on" .}}</span>{{end}}{{if and $step.Worker $image}} · {{end}}{{with $image}}<span class="img">{{.}}</span>{{end}}</span>{{end}}
       <span class="dur">
         {{if and (not $step.Skipped) (not $step.Running)}}{{duration $step.Duration}}{{end}}
         {{if $step.Running}}<time class="live" data-elapsed-since="{{rfc3339 $step.Started}}">{{duration $step.Elapsed}}</time>{{end}}
@@ -312,7 +312,7 @@
       <div class="what">
         {{if .Name}}<code>{{.Name}}</code>{{end}}
         {{if .Text}}
-          {{if .IsMessage}}{{with messageValue $src .Seq .Text}}{{if .Src}}{{template "jsonvalue" .}}{{else}}<span class="say">{{.HTML}}</span>{{end}}{{end}}
+          {{if .IsMessage}}{{with messageValue $src .Seq .Text}}{{if .First}}{{template "msgvalue" .}}{{else}}<span class="say">{{.HTML}}</span>{{end}}{{end}}
           {{else if .IsModelText}}<div class="prose">{{template "prosebody" .Text}}</div>
           {{else}}<span class="say">{{.Text}}</span>{{end}}
         {{end}}

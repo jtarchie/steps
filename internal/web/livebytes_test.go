@@ -171,7 +171,8 @@ func TestStreamBytesGrowLinearlyWithChildren(t *testing.T) {
 }
 
 // turnRun records one agent step that got `turns` turns of the given type,
-// each about `size` bytes and carrying a marker of its own, and returns the
+// each about `size` bytes and carrying a marker of its own at its END — a
+// folded message's row shows its opening words, which are not its body — and returns the
 // page and the stream a watcher who connected after the first event gets.
 func turnRun(t *testing.T, kind string, turns, size int) (string, string) {
 	t.Helper()
@@ -191,7 +192,7 @@ func turnRun(t *testing.T, kind string, turns, size int) (string, string) {
 	line := strings.Repeat("x", 63) + `\n`
 	for i := range turns {
 		row := store.RunEventRow{Type: kind, StepIndex: 0, StepName: "review", StepID: 1, Name: "read_file"}
-		body := fmt.Sprintf(`TURN-MARKER-%d\n%s`, i, strings.Repeat(line, size/len(line)))
+		body := fmt.Sprintf(`%sTURN-MARKER-%d`, strings.Repeat(line, size/len(line)), i)
 
 		if kind == events.TypeAgentUser {
 			row.Name = ""

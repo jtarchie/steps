@@ -106,7 +106,7 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 		"gpu", "linux/arm64", "64.0 MiB", "1.0 MiB",
 		">0:0<", "aws://" + instance + " · golang:1.25@sha256:0123456789ab", "1.0 MiB back",
 		// #239: on the row itself, so which image ran is read without opening the step; the digest rides its tooltip and the placed-on line, not the row.
-		`<span class="note worker" title="golang:1.25@sha256:0123456789ab">on gpu (aws://i-0abc123def4567890) · golang:1.25</span>`,
+		`<span class="note worker" title="golang:1.25@sha256:0123456789ab"><span class="on">on gpu (aws://i-0abc123def4567890)</span> · <span class="img">golang:1.25</span></span>`,
 		// The row already names the worker, so the detail line starts at the machine rather than saying gpu twice.
 		`<div class="agentmeta">aws://` + instance + ` · golang:1.25@sha256:0123456789ab · linux/arm64`,
 	} {
@@ -132,6 +132,24 @@ func TestImageRefShortensTheDigestAndNeverRepeatsIt(t *testing.T) {
 		got := PlacementView{Placement: store.Placement{Image: tc.image, ImageDigest: tc.digest}}.ImageRef()
 		if got != tc.want {
 			t.Errorf("%s: ImageRef = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// TestShortImageCutsOnlyADigestPin: a row names a tag as written, since it is short and says more than its digest, and cuts an image pinned by digest to the twelve characters Docker shows for an id.
+func TestShortImageCutsOnlyADigestPin(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct{ image, want string }{
+		"a tag":                {"golang:1.27", "golang:1.27"},
+		"pinned by digest":     {"localhost:5050/backerkit@sha256:af8016cedcbfed4c8c85", "[af8016cedcbf]"},
+		"a pin too short":      {"golang@sha256:abc", "golang@sha256:abc"},
+		"a pin with no scheme": {"golang@af8016cedcbfed4c", "golang@af8016cedcbfed4c"},
+		"no container":         {"", ""},
+	} {
+		got := PlacementView{Placement: store.Placement{Image: tc.image, ImageDigest: "sha256:0123456789abcdef0123"}}.ShortImage()
+		if got != tc.want {
+			t.Errorf("%s: ShortImage = %q, want %q", name, got, tc.want)
 		}
 	}
 }

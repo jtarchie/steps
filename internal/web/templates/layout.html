@@ -217,6 +217,11 @@
      <pre> on every open, and with JavaScript off the link opens it. */}}
 {{define "jsonvalue"}}{{if not .Empty}}{{if .Inline}}<span class="jsonline">{{.HTML}}</span>{{else if .Src}}<details class="jsonbox" hx-get="{{.Src}}" hx-trigger="toggle[this.open]" hx-target="#{{.Target}}" hx-swap="innerHTML"><summary>{{.Summary}}</summary><pre class="json" id="{{.Target}}"><a href="{{.Src}}">{{t "json.open"}}</a></pre></details>{{else}}<details class="jsonbox"><summary>{{.Summary}}</summary><pre class="json">{{.HTML}}</pre></details>{{end}}{{end}}{{end}}
 
+{{/* A system or user message, folded to its opening words and size. Its body
+     is the same <pre> a long message is fetched into, so a prompt opens the
+     same way at any length: drawn in when short, fetched on open when long. */}}
+{{define "msgvalue"}}<details class="jsonbox msg"{{with .Src}} hx-get="{{.}}" hx-trigger="toggle[this.open]" hx-target="#{{$.Target}}" hx-swap="innerHTML"{{end}}><summary><span class="msgfirst">{{.First}}</span><span class="msgsize"> · {{.Summary}}</span></summary>{{if .Src}}<pre class="json" id="{{.Target}}"><a href="{{.Src}}">{{t "json.open"}}</a></pre>{{else}}<pre class="json">{{.HTML}}</pre>{{end}}</details>{{end}}
+
 {{/* An agent's recorded response, rendered as the markdown models actually
      write. See prose.go for what the renderer refuses to do with it. */}}
 {{define "prosebody"}}<div class="md">{{prose .}}</div>{{end}}
