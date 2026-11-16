@@ -21,7 +21,10 @@ package web
 // What that leaves is short by construction. If this list ever needs to
 // scroll, something was admitted that should not have been.
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // attentionItem is one thing waiting on a person.
 type attentionItem struct {
@@ -185,6 +188,39 @@ func attentionTotal(items []attentionItem) int {
 
 	return total
 }
+
+// attentionTabs is every tab's badge added up, for the phone's menu button that stands in for the tabs; nil when no tab has one.
+func attentionTabs(nav navData) *attentionItem {
+	var total attentionItem
+
+	details := []string{}
+
+	for _, item := range nav.Attention {
+		if item.Tab == "" {
+			continue
+		}
+
+		total.Count += item.Count
+		details = append(details, item.Detail)
+	}
+
+	if total.Count == 0 {
+		return nil
+	}
+
+	total.Detail = strings.Join(details, "; ")
+
+	return &total
+}
+
+// sectionTabs are the sections a pipeline's tabs name, and the catalog key each is drawn with.
+var sectionTabs = map[string]string{
+	"jobs": "tab.jobs", "runs": "tab.runs", "resources": "tab.resources",
+	"mcp": "tab.mcp", "approvals": "tab.approvals", "questions": "tab.questions",
+}
+
+// sectionTab is the catalog key of the tab a page belongs to, empty for a page under no tab.
+func sectionTab(section string) string { return sectionTabs[section] }
 
 // attentionOn is the template's lookup: the item a tab's badge draws, or nil.
 // Returned as a pointer so `{{with}}` renders nothing for a clean tab without

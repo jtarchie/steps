@@ -52,7 +52,7 @@
      the half that never refreshed. */}}
 <header>
 <div class="statusline" id="statusline">
-  <a class="brand" href="/"><b>steps</b> web</a>
+  <a class="brand" href="/"><b>steps</b><span class="web"> web</span></a>
   {{/* The bar is a PATH: steps / <pipeline> / <section>. The pipeline comes
        before the tabs because every tab is relative to it — at the far right
        it was the last thing read, and "jobs" clicked from / landed on a
@@ -69,7 +69,9 @@
       {{end}}
     </div>
   </div>
-  {{if .Nav.Anchored}}<nav class="tabs" aria-label="{{t "nav.sections"}}">
+  {{/* On a phone the tabs fold behind this button, which names the section you are on and carries the count of everything they would have badged: folding the tabs must not hide what is waiting on you, which is the reason to look at the bar. Hidden on a wide screen, where the tabs are the bar. */}}
+  {{if .Nav.Anchored}}<button class="navbtn" id="navbtn" type="button" aria-expanded="false" aria-controls="sections">{{with sectionTab .Section}}<span class="cur">{{t .}}</span> {{end}}{{with attentionTabs .Nav}}{{template "attbadge" .}} {{end}}<span class="visually-hidden">{{t "nav.sections"}}</span></button>
+  <nav class="tabs" id="sections" aria-label="{{t "nav.sections"}}">
     <a class="tab" {{if eq .Section "jobs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}">{{t "tab.jobs"}}{{template "attbadge" (attentionOn .Nav "jobs")}}</a>
     <a class="tab" {{if eq .Section "runs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/runs">{{t "tab.runs"}}</a>
     <a class="tab" {{if eq .Section "resources"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/resources">{{t "tab.resources"}}{{template "attbadge" (attentionOn .Nav "resources")}}</a>
@@ -83,7 +85,7 @@
     {{/* A button, not only a key: on a phone "/" is nowhere to be pressed,
          and the palette was unreachable there. The kbd is the hint for a
          reader with a keyboard and is hidden where there is none. */}}
-    {{if .Nav.Current}}<button class="jumpbtn" id="jumpbtn" type="button" title="{{t "nav.jump.title"}}"><span aria-hidden="true">⌕</span> {{t "nav.jump"}} <kbd>/</kbd></button>{{end}}
+    {{if .Nav.Current}}<button class="jumpbtn" id="jumpbtn" type="button" title="{{t "nav.jump.title"}}"><span aria-hidden="true">⌕</span><span class="lbl"> {{t "nav.jump"}}</span> <kbd>/</kbd></button>{{end}}
     {{/* No label in the markup: #statusline is morphed on every poll, so text or an aria-label set by script would snap back. app.css writes the icon and the state word from html[data-theme], which no swap touches, and generated content is part of the button's accessible name. */}}
     <button class="jumpbtn themebtn" id="themebtn" type="button" title="{{t "nav.theme.title"}}"><span class="visually-hidden">{{t "nav.theme"}} </span><span class="themeicon" aria-hidden="true"></span><span class="themelabel" data-auto="{{t "client.theme.auto"}}" data-light="{{t "client.theme.light"}}" data-dark="{{t "client.theme.dark"}}"></span></button>
     {{/* The signed-in person, last on the line, and the daemon-wide pages that are about people rather than pipelines. Not drawn where nobody signs in. */}}

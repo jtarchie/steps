@@ -30,7 +30,7 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
   // The user menu is the same control at the other end of the line, so the
   // two share one record: at most one is open, and Escape closes it and
   // hands focus back to its button.
-  var menus = { pipebtn: 'pipemenu', userbtn: 'usermenu' };
+  var menus = { pipebtn: 'pipemenu', userbtn: 'usermenu', navbtn: 'sections' };
   var openMenu = '';
 
   function paintSwitcher() {
@@ -44,7 +44,7 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
   }
 
   document.addEventListener('click', function (e) {
-    var btn = e.target.closest('#pipebtn, #userbtn');
+    var btn = e.target.closest('#pipebtn, #userbtn, #navbtn');
     openMenu = btn && openMenu !== btn.id ? btn.id : '';
     paintSwitcher();
   });
@@ -565,16 +565,6 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
   var button = form.querySelector('button');
   if (button) button.hidden = true;
   form.querySelector('select').addEventListener('change', function () { form.requestSubmit(); });
-})();
-
-// On a phone the tabs are a strip that scrolls sideways, and the current one
-// can start off the right edge — the one tab a reader most needs to see is
-// the one telling them where they are. block:'nearest' keeps this from also
-// scrolling the page. Once, at load: after that the strip is theirs.
-(function () {
-  var current = document.querySelector('.tabs .tab[aria-current="page"]');
-  var strip = current && current.parentElement;
-  if (strip && strip.scrollWidth > strip.clientWidth) current.scrollIntoView({inline: 'center', block: 'nearest'});
 })();
 
 // Keep relative times honest. The server renders the text once; a page left
