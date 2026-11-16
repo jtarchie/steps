@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -62,9 +63,23 @@ jobs:
 	}
 }
 
-// TestRetryOnARunPageRebuildsThatBuild: the browser's Retry is the CLI's --rerun, carried across the queue — the claim has to hand the recorded run and build to RunJob, which a test of either half alone never shows.
+// TestRetryOnARunPageRebuildsThatBuild: the browser's Retry is the CLI's --rerun, carried across the queue — the claim has to hand the recorded run and build to RunJob, which a test of either half alone never shows. The form posted is the one the page draws, on the run page's bar and on the job page's history row alike, so a button pointed at the wrong run fails here too.
 func TestRetryOnARunPageRebuildsThatBuild(t *testing.T) {
 	t.Parallel()
+
+	for _, page := range []struct{ name, path string }{
+		{"run page", "/runs/%s"},
+		{"job page history", "/jobs/build/detail"},
+	} {
+		t.Run(page.name, func(t *testing.T) {
+			t.Parallel()
+			retryRebuildsThatBuild(t, page.path)
+		})
+	}
+}
+
+func retryRebuildsThatBuild(t *testing.T, pagePath string) {
+	t.Helper()
 
 	dir := t.TempDir()
 	versions := filepath.Join(dir, "versions.json")
@@ -121,6 +136,8 @@ jobs:
 
 	writePipelineFile(t, versions, `[{"n":"one"},{"n":"two"}]`)
 
+	requireRetryDrawn(t, served.addr, "/p/"+name+strings.Replace(pagePath, "%s", runs[0].ID, 1), "/p/"+name+"/runs/"+runs[0].ID+"/rerun")
+
 	if status := postEmpty(t, "http://"+served.addr+"/p/"+name+"/runs/"+runs[0].ID+"/rerun"); status != http.StatusOK {
 		t.Fatalf("POST rerun answered %d, want the follow page", status)
 	}
@@ -148,4 +165,39 @@ func waitForLines(t *testing.T, path string, want int) {
 	if got := countLines(t, path); got != want {
 		t.Fatalf("%s has %d lines, want %d", path, got, want)
 	}
+}
+
+// requireRetryDrawn fails unless the page at path draws a form posting to rerun.
+func requireRetryDrawn(t *testing.T, addr, path, rerun string) {
+	t.Helper()
+
+	if page := pageGet(t, addr, path); !strings.Contains(page, `action="`+rerun+`"`) {
+		t.Fatalf("%s draws no Retry posting to %s:\n%s", path, rerun, page)
+	}
+}
+
+// pageGet is one GET of a page served without auth, returning its body.
+func pageGet(t *testing.T, addr, path string) string {
+	t.Helper()
+
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s = %d:\n%s", path, resp.StatusCode, body)
+	}
+
+	return string(body)
 }

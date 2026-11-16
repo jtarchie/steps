@@ -38,8 +38,8 @@
   {{end}}
 </h2>
 <div class="tablewrap">
-  <table>
-    <thead><tr><th>{{t "th.run"}}</th><th>{{t "th.status"}}</th><th>{{t "th.started"}}</th><th class="num">{{t "th.duration"}}</th><th>{{t "th.workspace"}}</th></tr></thead>
+  <table class="jobruns">
+    <thead><tr><th>{{t "th.run"}}</th><th>{{t "th.status"}}</th><th>{{t "th.started"}}</th><th class="num">{{t "th.duration"}}</th>{{if not $.Nav.ReadOnly}}<th class="rowextra"><span class="visually-hidden">{{t "th.action"}}</span></th>{{end}}</tr></thead>
     <tbody>
       {{range .Runs}}
       <tr>
@@ -47,7 +47,7 @@
         <td><span class="st st-{{statusWord .Status}}">{{statusText .Status}}</span></td>
         <td class="dim">{{agoTag .StartedAt}}</td>
         <td class="num dim">{{elapsedTag .}}</td>
-        <td class="faint">{{.Workspace}}</td>
+        {{if not $.Nav.ReadOnly}}<td class="rowextra">{{if ne .Status "running"}}<form class="inline" method="post" action="/p/{{$.Nav.Current}}/runs/{{.ID}}/rerun"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "bar.retry.title"}}"{{end}}>⟲ {{t "bar.retry"}}</button></form>{{end}}</td>{{end}}
       </tr>
       {{else}}
       <tr><td colspan="5" class="faint">{{t "runs.none"}}</td></tr>

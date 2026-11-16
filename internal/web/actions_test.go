@@ -213,3 +213,90 @@ func writableServerWithPipeline(t *testing.T) (*Server, *Pipeline) {
 
 	return server, pipeline
 }
+
+// TestTheJobPagesHistoryRetriesEachFinishedRun: Retry sits on each history row, posting to the same route as the run page's; a live row has nothing to retry. The workspace path it replaces is on the run page.
+func TestTheJobPagesHistoryRetriesEachFinishedRun(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := writableServerWithPipeline(t)
+	seedJobHistory(t, pipeline)
+
+	table := historyTable(t, server)
+
+	for _, id := range []string{"bad", "good"} {
+		want := `<td class="rowextra"><form class="inline" method="post" action="/p/demo/runs/` + id + `/rerun"><button class="btn" type="submit" title="run this build again, with the same inputs">⟲ Retry</button></form></td>`
+		if !strings.Contains(table, want) {
+			t.Errorf("finished run %s has no Retry in its row:\n%s", id, table)
+		}
+	}
+
+	if strings.Contains(table, "/runs/live/rerun") {
+		t.Error("a running run's row offers Retry")
+	}
+
+	if strings.Contains(table, "/tmp/ws-") || strings.Contains(table, ">Workspace<") {
+		t.Errorf("the history still shows the workspace:\n%s", table)
+	}
+}
+
+// TestAJobHistoryRetryWaitsLikeTheOverviewsPause: hidden until the row is hovered or focused, as the overview's rowextra is; disabled with its reason while paused; not drawn at all on a read-only server.
+func TestAJobHistoryRetryWaitsLikeTheOverviewsPause(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := writableServerWithPipeline(t)
+	readOnly, roPipeline := testPipeline(t)
+
+	seedJobHistory(t, pipeline)
+	seedJobHistory(t, roPipeline)
+
+	err := pipeline.Store.Pause(t.Context())
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	if table := historyTable(t, server); !strings.Contains(table, `action="/p/demo/runs/bad/rerun"><button class="btn" type="submit" disabled title="the pipeline is paused">⟲ Retry</button>`) {
+		t.Errorf("a paused pipeline's Retry is not disabled with its reason:\n%s", table)
+	}
+
+	if table := historyTable(t, readOnly); strings.Contains(table, "/rerun") || strings.Contains(table, "rowextra") {
+		t.Errorf("a read-only server's history offers Retry:\n%s", table)
+	}
+
+	_, css := get(t, server, "/static/app.css")
+	if !cssRule(css, ".jobruns .rowextra", "opacity: 0") || !cssRule(css, ".jobruns tr:hover .rowextra", "opacity: 1") || !cssRule(css, ".jobruns tr:focus-within .rowextra", "opacity: 1") {
+		t.Error("a history row's Retry does not wait for the row, as the overview's Pause does")
+	}
+}
+
+// seedJobHistory records a failed, a passed and a still-running run of build.
+func seedJobHistory(t *testing.T, pipeline *Pipeline) {
+	t.Helper()
+
+	for _, run := range []struct {
+		id     string
+		status store.RunStatus
+	}{{"bad", "failed"}, {"good", "succeeded"}, {"live", ""}} {
+		err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: run.id, JobName: "build", Workspace: "/tmp/ws-" + run.id})
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+
+		if run.status == "" {
+			continue
+		}
+
+		err = pipeline.Store.FinishRun(t.Context(), run.id, run.status)
+		if err != nil {
+			t.Fatalf("FinishRun: %v", err)
+		}
+	}
+}
+
+// historyTable is the job page's run-history table.
+func historyTable(t *testing.T, server *Server) string {
+	t.Helper()
+
+	_, page := get(t, server, "/p/demo/jobs/build/detail")
+
+	return between(t, page, `id="job-runs"`, "</table>")
+}

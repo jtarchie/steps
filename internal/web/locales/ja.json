@@ -553,7 +553,6 @@
  "th.what": "対象",
  "th.when": "日時",
  "th.who": "ユーザー",
- "th.workspace": "ワークスペース",
  "time.ago": "%[1]s前",
  "time.ago.day.other": "%[1]d 日前",
  "time.ago.hour.other": "%[1]d 時間前",

@@ -536,6 +536,13 @@ td.faint, .faint { color: var(--faint); }
 @media (hover: none) {
   .pipelines .rowextra { opacity: 1; }
 }
+/* A job's history offers Retry the same way: there on the row a reader is on,
+   out of the way of fifty others. */
+.jobruns .rowextra { text-align: right; white-space: nowrap; width: 1%; opacity: 0; }
+.jobruns tr:hover .rowextra, .jobruns tr:focus-within .rowextra { opacity: 1; }
+@media (hover: none) {
+  .jobruns .rowextra { opacity: 1; }
+}
 /* Narrow, a row stacks rather than scrolls: the name, the cells under
    it, the last run under those, then pause — shown, since a hidden line
    here would only be a gap. The last run used to share the name's line, and
