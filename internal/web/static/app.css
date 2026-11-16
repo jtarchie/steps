@@ -846,6 +846,11 @@ html[data-keys="off"] .keystoggle .when-off { display: inline; }
 .stephead .note.worker { display: inline-flex; min-width: 0; white-space: pre; }
 .stephead .note.worker > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .stephead .note.worker > .on { flex-shrink: 1000; }
+/* The digest is never cut, at any width: the note gives way down to the digest and no further, and the spend beside it wraps instead. Only a phone's own rule once said so, and tablet widths cut it. */
+.stephead .note.worker { min-width: min-content; }
+/* A spend or placement line breaks between its parts, never inside one: "11.5" over "KiB back" tore a number from its unit. The image reference has no spaces to break at and may break anywhere. */
+.stephead .note.usage .seg, .agentmeta .seg { white-space: nowrap; }
+.agentmeta .seg.img { white-space: normal; overflow-wrap: anywhere; }
 /* Beats .stephead .note on specificity, which the bare .spendwarn rule does
    not — without this the "stopped early" badge renders in the same faint grey
    as the ordinary verdict note beside it, and the distinction it exists for

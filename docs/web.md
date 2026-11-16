@@ -360,10 +360,11 @@ what it spent and where it ran on its own row.
   timed-out step, usually the answer to where the time went. Its system and
   opening prompts are the same on every run of a job, so each is one line —
   its first words and size — that opens in place.
-- **Which image a step ran in is said once, in its row**: a tag as written
-  (`golang:1.25`), an image pinned by digest cut to its first twelve
-  characters (`[af8016cedcbf]`). Hover it for the whole reference and the
-  `get` it came from. The step's body names only the machine.
+- **Which image a step ran in is named whole once, in its body**: the step's
+  placement line starts with the `get` it came from and the whole reference
+  (`image toolchain → alpine@sha256:…`), then the machine. Its row only points
+  at it: a tag as written (`golang:1.25`), an image pinned by digest cut to its
+  first twelve characters (`[af8016cedcbf]`), never cut shorter at any width.
 - **Every payload is rendered as JSON, not printed.** A call's arguments, a
   tool result, a node's content map, a resource version: parsed and
   highlighted, in the order they were recorded. A document that arrived escaped

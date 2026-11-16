@@ -7,7 +7,7 @@ import (
 
 // sameAsEnglish lists the entries a translation may legitimately leave word-for-word English (loanwords, product terms, cognates); anything else identical to English is an untranslated string that slipped through.
 var sameAsEnglish = map[string][]string{
-	"tab.mcp": {"ja", "zh-CN", "es", "pt-BR"}, "tool.mcp": {"ja", "zh-CN", "es", "pt-BR"}, "dials.tokens": {"ja", "zh-CN", "es", "pt-BR"},
+	"tab.mcp": {"ja", "zh-CN", "es", "pt-BR"}, "tool.mcp": {"ja", "zh-CN", "es", "pt-BR"}, "dials.tokens": {"ja", "zh-CN", "es", "pt-BR"}, "step.tokens": {"ja", "zh-CN", "es", "pt-BR"},
 	"actor.webhook":   {"ja", "es", "pt-BR"},
 	"filter.pipeline": {"es", "pt-BR"}, "nav.pipeline": {"es", "pt-BR"}, "nav.pipelines": {"es", "pt-BR"}, "nav.pipelines.label": {"es", "pt-BR"},
 	"overview.count": {"es", "pt-BR"}, "overview.keys.pipelines": {"es", "pt-BR"}, "th.pipeline": {"es", "pt-BR"},

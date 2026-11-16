@@ -107,8 +107,8 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 		">0:0<", "1.0 MiB back",
 		// #239: on the row itself, so which image ran is read without opening the step; the digest rides its tooltip and the placed-on line, not the row.
 		`<span class="note worker" title="golang:1.25@sha256:0123456789ab"><span class="on">on gpu (aws://i-0abc123def4567890)</span> · <span class="img">golang:1.25</span></span>`,
-		// The row header names the image and the worker, so the detail line is the machine alone, without saying either twice.
-		`<div class="agentmeta">aws://` + instance + ` · linux/arm64`,
+		// The row header points at the image short; the placement line names it whole, once, then the machine, without saying the worker twice.
+		`<div class="agentmeta"><span class="seg img">image&nbsp;golang:1.25@sha256:0123456789ab</span> · <span class="seg">aws://` + instance + `</span> · <span class="seg">linux/arm64</span>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the run page does not show %q", want)
@@ -257,7 +257,7 @@ func TestAStepNamesItsImageOnceWhereverItRan(t *testing.T) {
 	}
 
 	_, placed := get(t, server, "/p/demo/runs/placed")
-	line := strings.Index(placed, `<div class="agentmeta">local: · linux/arm64`)
+	line := strings.Index(placed, `<div class="agentmeta"><span class="seg img">image&nbsp;toolchain → alpine@sha256:abc</span> · <span class="seg">local:</span>`)
 	turn := strings.Index(placed, `<div class="turn user`)
 
 	if line < 0 || turn < 0 || line > turn {

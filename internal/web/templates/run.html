@@ -199,7 +199,7 @@
      Takes a stepctx because a Go template's {{$.}} is the top-level argument
      and this needs both the page (for pipeline-scoped links) and the step. */}}
 {{/* Where a step ran: the machine, never the image, which the row header already names. First in an agent's body, whose conversation would otherwise put it a screen below the row; last in any other's. */}}
-{{define "placement"}}{{$step := .Step}}{{range .Page.Run.StepPlacements $step}}<div class="agentmeta">{{if not $step.Worker}}{{with .Tag}}{{.}} · {{end}}{{end}}{{.Address}} · {{.Platform}} · {{t "step.sent" .Sent}} · {{t "step.back" .Received}}{{with .Identity}} · {{th "step.as" (runident .)}}{{end}}</div>{{end}}{{end}}
+{{define "placement"}}{{$step := .Step}}{{range .Page.Run.StepPlacements $step}}<div class="agentmeta">{{with .ImageRef}}<span class="seg img">{{t "step.image"}}&nbsp;{{with $step.ImageSource}}{{.}} → {{end}}{{.}}</span> · {{end}}{{if not $step.Worker}}{{with .Tag}}<span class="seg">{{.}}</span> · {{end}}{{end}}<span class="seg">{{.Address}}</span> · <span class="seg">{{.Platform}}</span> · <span class="seg">{{t "step.sent" .Sent}}</span> · <span class="seg">{{t "step.back" .Received}}</span>{{with .Identity}} · <span class="seg">{{th "step.as" (runident .)}}</span>{{end}}</div>{{end}}{{end}}
 
 {{define "step"}}
 {{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}
@@ -280,7 +280,7 @@
     {{if $step.CompactionStalled}}<span class="note spendwarn" title="{{t "step.stalled.title"}}">{{t "step.stalled"}}</span>{{end}}
     {{$usage := $run.StepUsage $step}}{{range $usage}}{{if .Truncated}}<span class="note spendwarn" title="{{t "step.cut.title"}}">{{t "step.cut"}}</span>{{end}}{{end}}
     <span class="headmeta">
-      {{range $usage}}<span class="note usage">{{or .ModelServed .ModelReq}} · {{t "step.usage" (thousands .Total) .CachePercent}}{{with .Cost}} · {{.}}{{end}}</span>{{end}}
+      {{range $usage}}<span class="note usage"><span class="seg">{{or .ModelServed .ModelReq}}</span> · <span class="seg">{{t "step.tokens" (thousands .Total)}}</span> · <span class="seg">{{t "step.cachedpct" .CachePercent}}</span>{{with .Cost}} · <span class="seg">{{.}}</span>{{end}}</span>{{end}}
       {{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
         <span>{{tn "step.cells" .Cells}}</span>
         {{if .Passed}}<span class="r-sep">·</span><b class="r-pass">{{t "step.r.passed" .Passed}}</b>{{end}}
@@ -318,7 +318,7 @@
       <div class="what">
         {{if .Name}}<code>{{.Name}}</code>{{end}}
         {{if .Text}}
-          {{if .IsMessage}}{{with messageValue $src .Seq .Text}}{{if .First}}{{template "msgvalue" .}}{{else}}<span class="say">{{.HTML}}</span>{{end}}{{end}}
+          {{if .IsMessage}}{{with speaker (t (or (and (eq .Type "agent_system") "who.system") "who.user")) (messageValue $src .Seq .Text)}}{{if .First}}{{template "msgvalue" .}}{{else}}<span class="say">{{.HTML}}</span>{{end}}{{end}}
           {{else if .IsModelText}}<div class="prose">{{template "prosebody" .Text}}</div>
           {{else}}<span class="say">{{.Text}}</span>{{end}}
         {{end}}

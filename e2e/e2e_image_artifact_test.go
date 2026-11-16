@@ -425,7 +425,7 @@ func TestARunPageNamesAStepsImageShortInItsRow(t *testing.T) {
 
 	digest := alpineDigest(t)
 	path := pipelinePath(t, t.TempDir())
-	imageArtifactPipeline(t, path, "alpine", digest, "", imageArtifactTask)
+	imageArtifactPipeline(t, path, "alpine", digest, imageArtifactTask)
 
 	_ = captureStdout(t, func() { mustRun(t, path) })
 
@@ -466,7 +466,7 @@ func stepBlock(t *testing.T, page, name string) string {
 	return page[start : start+end]
 }
 
-// TestARunPageNamesAStepsImageOnce: a step's image is said once, in its row header, short; the get it came from and the whole reference ride that header's tooltip. Its body used to say the reference twice more — an image note and the placement line — and the terminal, which has no header, still prints the note.
+// TestARunPageNamesAStepsImageOnce: a step's whole image reference is said once, on its body's placement line, with the get it came from; the row header only points at it short. The body used to say it twice — an image note and the placement line — and the terminal, which has no placement line, still prints the note.
 func TestARunPageNamesAStepsImageOnce(t *testing.T) {
 	t.Parallel()
 	dockerSlot(t)
@@ -477,7 +477,7 @@ func TestARunPageNamesAStepsImageOnce(t *testing.T) {
 	ref := "alpine@" + digest
 	hex := strings.TrimPrefix(digest, "sha256:")
 	path := pipelinePath(t, t.TempDir())
-	imageArtifactPipeline(t, path, "alpine", digest, "", imageArtifactTask)
+	imageArtifactPipeline(t, path, "alpine", digest, imageArtifactTask)
 
 	out := captureStdout(t, func() { mustRun(t, path) })
 	if !strings.Contains(out, "image: toolchain → "+ref) {
@@ -495,8 +495,13 @@ func TestARunPageNamesAStepsImageOnce(t *testing.T) {
 	block := stepBlock(t, page, "probe")
 	text := visibleText(block)
 
-	if got := strings.Count(text, hex[:12]); got != 1 || strings.Contains(text, hex) {
-		t.Errorf("the probe's row names its image %d times (want once, short): %q", got, text)
+	// The row points at it short; the body's placement line names it whole, once, where a touch or keyboard reader can reach it.
+	if got := strings.Count(text, hex); got != 1 {
+		t.Errorf("the probe names its whole image %d times (want once, on its placement line): %q", got, text)
+	}
+
+	if !strings.Contains(text, "image\u00a0toolchain → "+ref) {
+		t.Errorf("the probe's placement line does not name the get and the whole reference: %q", text)
 	}
 
 	if !strings.Contains(block, `title="toolchain → `+ref+`"`) {

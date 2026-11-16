@@ -53,9 +53,9 @@
 {{define "turns"}}
 {{range .}}
   {{if eq .Type "system"}}
-  <div class="turn system"><span class="who">{{t "who.system"}}</span><div class="what">{{with messageFold .Text}}{{if .First}}{{template "msgvalue" .}}{{else}}<span class="say">{{.HTML}}</span>{{end}}{{end}}</div></div>
+  <div class="turn system"><span class="who">{{t "who.system"}}</span><div class="what">{{with speaker (t "who.system") (messageFold .Text)}}{{if .First}}{{template "msgvalue" .}}{{else}}<span class="say">{{.HTML}}</span>{{end}}{{end}}</div></div>
   {{else if eq .Type "user"}}
-  <div class="turn user"><span class="who">{{t "who.user"}}</span><div class="what">{{with messageFold .Text}}{{if .First}}{{template "msgvalue" .}}{{else}}<span class="say">{{.HTML}}</span>{{end}}{{end}}</div></div>
+  <div class="turn user"><span class="who">{{t "who.user"}}</span><div class="what">{{with speaker (t "who.user") (messageFold .Text)}}{{if .First}}{{template "msgvalue" .}}{{else}}<span class="say">{{.HTML}}</span>{{end}}{{end}}</div></div>
   {{else if eq .Type "text"}}
   <div class="turn model"><span class="who">{{t "who.model"}}</span><div class="what"><div class="prose">{{template "prosebody" .Text}}</div></div></div>
   {{else if eq .Type "call"}}

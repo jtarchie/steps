@@ -98,26 +98,26 @@ func TestARowCutsTheWorkerBeforeTheDigest(t *testing.T) {
 	}
 }
 
-// On a phone an agent's row puts its spend and its image on one line; the spend wraps, and the digest keeps every character.
-func TestAPhoneKeepsAnAgentsDigestWhole(t *testing.T) {
-	ctx := browser(t)
-	server, pipeline := testPipeline(t)
+// agentRun is a passed agent step with spend, placed in a digest-pinned image, the reviewer of a pr-review run.
+func agentRun(t *testing.T, pipeline *Pipeline, runID string) {
+	t.Helper()
+
 	hash := strings.Repeat("e", 64)
 	cost := 10.39
 
-	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "run-agent", JobName: "build", Workspace: "/tmp/ws"})
+	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	appendEvents(t, pipeline.Store, "run-agent", []store.RunEventRow{
+	appendEvents(t, pipeline.Store, runID, []store.RunEventRow{
 		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
 		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1, Status: "succeeded", Hash: hash},
 	})
 	mustRecordResult(t, pipeline, hash, map[string]any{"response": "fine"})
 
 	err = pipeline.Store.RecordAgentUsage(t.Context(), store.AgentUsage{
-		RunID: "run-agent", StepIndex: 0, StepName: "reviewer", JobName: "build",
+		RunID: runID, StepIndex: 0, StepName: "reviewer", JobName: "build",
 		NodeHash: hash, ModelReq: "opus", Total: 1_481_145, Cached: 1_461_436, CostUSD: &cost, FinishReason: "end_turn",
 	})
 	if err != nil {
@@ -125,27 +125,98 @@ func TestAPhoneKeepsAnAgentsDigestWhole(t *testing.T) {
 	}
 
 	err = pipeline.Store.RecordPlacement(t.Context(), store.Placement{
-		RunID: "run-agent", StepIndex: 0, StepName: "reviewer", JobName: "build",
-		NodeHash: hash, Slot: hash, Address: "local:", GOOS: "linux", GOARCH: "arm64", Image: "localhost:5050/backerkit@sha256:" + strings.Repeat("af8016ce", 8),
+		RunID: runID, StepIndex: 0, StepName: "reviewer", JobName: "build",
+		NodeHash: hash, Slot: hash, Address: "local:", GOOS: "linux", GOARCH: "arm64", BytesReceived: 11_776,
+		Image: "localhost:5050/backerkit@sha256:" + strings.Repeat("af8016ce", 8),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = pipeline.Store.FinishRun(t.Context(), "run-agent", "succeeded")
+	err = pipeline.Store.FinishRun(t.Context(), runID, "succeeded")
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// At every width an agent's row keeps its digest whole: the spend beside it wraps instead. It was once whole on a phone, which had its own rule, and cut at tablet widths, which had none.
+func TestAnAgentsDigestIsWholeAtEveryWidth(t *testing.T) {
+	ctx := browser(t)
+	server, pipeline := testPipeline(t)
+	agentRun(t, pipeline, "run-agent")
 
 	listener := httptest.NewServer(server.Handler())
 	t.Cleanup(listener.Close)
 
-	cut := must(ctx, t, chromedp.Evaluate[string](`(() => {
+	for _, width := range []int64{375, 700, 768, 900, 1024, 1280} {
+		cut := must(ctx, t, chromedp.Evaluate[string](`(() => {
   const img = document.querySelector('#transcript .stephead .note.worker .img');
   return img ? String(img.scrollWidth - img.clientWidth) : 'no image chip';
-})()`), chromedp.EmulateViewport(375, 812), media("dark", false), chromedp.Navigate(listener.URL+"/p/demo/runs/run-agent"))
+})()`), chromedp.EmulateViewport(width, 900), media("dark", false), chromedp.Navigate(listener.URL+"/p/demo/runs/run-agent"))
 
-	if cut != "0" {
-		t.Errorf("on a phone the agent row's digest chip is cut by %spx", cut)
+		if cut != "0" {
+			t.Errorf("at %dpx the agent row's digest chip is cut by %spx", width, cut)
+		}
+	}
+}
+
+// On a phone a step's spend and placement wrap only between their parts: "11.5" over "KiB back" or "98%" over "cached" is a number torn from its unit.
+func TestAPhoneBreaksSpendAndPlacementOnlyBetweenParts(t *testing.T) {
+	ctx := browser(t)
+	server, pipeline := testPipeline(t)
+	agentRun(t, pipeline, "run-agent")
+
+	listener := httptest.NewServer(server.Handler())
+	t.Cleanup(listener.Close)
+
+	for _, width := range []int64{320, 340, 360, 375, 390, 414} {
+		torn := must(ctx, t, chromedp.Evaluate[[]string](`(() => {
+  const parts = [...document.querySelectorAll('#transcript .note.usage .seg, #transcript .agentmeta .seg:not(.img)')];
+  if (parts.length < 6) return ['only ' + parts.length + ' parts'];
+  return parts.filter(e => {
+    const range = document.createRange();
+    range.selectNodeContents(e);
+    return new Set([...range.getClientRects()].map(r => Math.round(r.top))).size > 1;
+  }).map(e => e.textContent);
+})()`), chromedp.EmulateViewport(width, 812), media("dark", false), chromedp.Navigate(listener.URL+"/p/demo/runs/run-agent"))
+
+		if len(torn) > 0 {
+			t.Errorf("at %dpx these parts break across lines: %q", width, torn)
+		}
+	}
+}
+
+// A folded prompt's speaker is a label beside its <summary>, which a reader tabbing from fold to fold never hears: the summary itself says who is speaking.
+func TestAFoldedPromptSaysWhoIsSpeaking(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	hash := strings.Repeat("f", 64)
+
+	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "run-prompts", JobName: "build", Workspace: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-prompts", []store.RunEventRow{
+		{Type: events.TypeJobStarted, StepIndex: -1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeAgentSystem, StepIndex: 0, StepName: "reviewer", StepID: 1, Text: "Everything you write goes out under my name."},
+		{Type: events.TypeAgentUser, StepIndex: 0, StepName: "reviewer", StepID: 1, Text: strings.Repeat("Review the staged change. ", 100)},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1, Status: "succeeded", Hash: hash},
+	})
+	mustRecordResult(t, pipeline, hash, map[string]any{"response": "fine"})
+
+	err = pipeline.Store.FinishRun(t.Context(), "run-prompts", "succeeded")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, page := get(t, server, "/p/demo/runs/run-prompts")
+
+	for _, who := range []string{"system", "user"} {
+		if !strings.Contains(page, `<summary><span class="visually-hidden">`+who+`: </span>`) {
+			t.Errorf("the folded %s prompt's summary does not name its speaker:\n%s", who, page)
+		}
 	}
 }

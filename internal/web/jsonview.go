@@ -490,6 +490,15 @@ type jsonView struct {
 	Target string
 	// First is a folded message's opening words, the one line its row shows: a prompt is the same on every run of a job, so the row says which one it is and leaves the reading to whoever opens it.
 	First string
+	// Who is a folded message's speaker, said inside its summary: the label beside it is outside the <summary> a keyboard reader lands on.
+	Who string
+}
+
+// speaker names who said a folded message.
+func speaker(who string, view jsonView) jsonView {
+	view.Who = who
+
+	return view
 }
 
 // lazyValue is jsonValue for a tool call or result, whose folded body is

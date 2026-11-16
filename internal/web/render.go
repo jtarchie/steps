@@ -297,6 +297,7 @@ func templateFuncs(loc *locale) template.FuncMap {
 		"lazyValue":    lazyValue,
 		"messageValue": messageValue,
 		"messageFold":  messageFold,
+		"speaker":      speaker,
 		// hx-get is a plain attribute to html/template: HTML-escaped, never
 		// URL-encoded, so a name's `#` or `?` would end the path early.
 		"pathseg":       url.PathEscape,
