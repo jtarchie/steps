@@ -836,13 +836,16 @@ html[data-keys="off"] .keystoggle .when-off { display: inline; }
   color: var(--dim);
 }
 .step.skipped .stephead .kind { color: var(--faint); }
-.stephead .name { font-weight: 600; }
+.stephead .name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 /* The toggle carries the head's leading cells, laid out as the head lays them out, so becoming a real <button> moved nothing. */
-.steptoggle { display: flex; align-items: baseline; gap: 12px; min-width: 0; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+/* Never shrunk: a shrunk toggle let the name spill out of it, under the image note beside it. The note is what gives way; a name too long for the row wraps (max-width) rather than widening it. */
+.steptoggle { display: flex; flex: none; max-width: 100%; align-items: baseline; gap: 12px; min-width: 0; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .step.skipped .stephead .name { color: var(--dim); font-weight: 400; }
 .stephead .note { color: var(--faint); }
-/* One line, cut rather than wrapped: wrapped, a worker and an image stacked into word-columns that tripled the row. The step's placement line holds the whole of it, digest included. */
-.stephead .note.worker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* One line, cut rather than wrapped: wrapped, a worker and an image stacked into word-columns that tripled the row. The step's placement line holds the whole of it, digest included. The worker is cut before the image: a digest cut short no longer tells two images apart. */
+.stephead .note.worker { display: inline-flex; min-width: 0; white-space: pre; }
+.stephead .note.worker > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.stephead .note.worker > .on { flex-shrink: 1000; }
 /* Beats .stephead .note on specificity, which the bare .spendwarn rule does
    not — without this the "stopped early" badge renders in the same faint grey
    as the ordinary verdict note beside it, and the distinction it exists for
@@ -961,6 +964,11 @@ html[data-keys="off"] .keystoggle .when-off { display: inline; }
 .jsonbox > summary::before { content: "▸"; font-family: var(--mono); color: var(--faint); margin-right: 5px; }
 .jsonbox[open] > summary::before { content: "▾"; }
 .jsonbox > summary:hover { color: var(--fg); }
+/* A folded message is one row whatever its length: its opening words are cut by the row, never wrapped, and the size after them always shows. Mono, unlike a payload's summary, because the words are the message's own. */
+.jsonbox.msg { display: block; min-width: 0; }
+.jsonbox.msg > summary { display: flex; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+.jsonbox.msg .msgfirst { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.jsonbox.msg .msgsize { flex: none; color: var(--faint); white-space: pre; }
 .jsonbox > summary:hover::before { color: var(--dim); }
 
 pre.json {
@@ -1260,6 +1268,9 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
     min-width: 0;
   }
   .headmeta .dur { margin-left: auto; white-space: normal; text-align: right; }
+  /* Beside an agent's spend, the digest moves to the next line whole: cut short it no longer tells two images apart, and squeezed beside it the spend broke one word per line. */
+  .headmeta { flex-wrap: wrap; }
+  .headmeta .note.worker { flex: none; max-width: 100%; }
 
   .turn { flex-wrap: wrap; gap: 2px 10px; }
   .turn .who { width: auto; }

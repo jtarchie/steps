@@ -104,11 +104,11 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 	// uid-0-is-root-not-silence contract went unproven on those days.
 	for _, want := range []string{
 		"gpu", "linux/arm64", "64.0 MiB", "1.0 MiB",
-		">0:0<", "aws://" + instance + " · golang:1.25@sha256:0123456789ab", "1.0 MiB back",
+		">0:0<", "1.0 MiB back",
 		// #239: on the row itself, so which image ran is read without opening the step; the digest rides its tooltip and the placed-on line, not the row.
-		`<span class="note worker" title="golang:1.25@sha256:0123456789ab">on gpu (aws://i-0abc123def4567890) · golang:1.25</span>`,
-		// The row already names the worker, so the detail line starts at the machine rather than saying gpu twice.
-		`<div class="agentmeta">aws://` + instance + ` · golang:1.25@sha256:0123456789ab · linux/arm64`,
+		`<span class="note worker" title="golang:1.25@sha256:0123456789ab"><span class="on">on gpu (aws://i-0abc123def4567890)</span> · <span class="img">golang:1.25</span></span>`,
+		// The row header names the image and the worker, so the detail line is the machine alone, without saying either twice.
+		`<div class="agentmeta">aws://` + instance + ` · linux/arm64`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the run page does not show %q", want)
@@ -132,6 +132,24 @@ func TestImageRefShortensTheDigestAndNeverRepeatsIt(t *testing.T) {
 		got := PlacementView{Placement: store.Placement{Image: tc.image, ImageDigest: tc.digest}}.ImageRef()
 		if got != tc.want {
 			t.Errorf("%s: ImageRef = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// TestShortImageCutsOnlyADigestPin: a row names a tag as written, since it is short and says more than its digest, and cuts an image pinned by digest to the twelve characters Docker shows for an id.
+func TestShortImageCutsOnlyADigestPin(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct{ image, want string }{
+		"a tag":                {"golang:1.27", "golang:1.27"},
+		"pinned by digest":     {"localhost:5050/backerkit@sha256:af8016cedcbfed4c8c85", "[af8016cedcbf]"},
+		"a pin too short":      {"golang@sha256:abc", "golang@sha256:abc"},
+		"a pin with no scheme": {"golang@af8016cedcbfed4c", "golang@af8016cedcbfed4c"},
+		"no container":         {"", ""},
+	} {
+		got := PlacementView{Placement: store.Placement{Image: tc.image, ImageDigest: "sha256:0123456789abcdef0123"}}.ShortImage()
+		if got != tc.want {
+			t.Errorf("%s: ShortImage = %q, want %q", name, got, tc.want)
 		}
 	}
 }
@@ -197,6 +215,59 @@ func TestFormatBinaryBytesCoversEveryUnitAndItsBoundary(t *testing.T) {
 	} {
 		if got := FormatBinaryBytes(want.bytes); got != want.text {
 			t.Errorf("FormatBinaryBytes(%d) = %q, want %q", want.bytes, got, want.text)
+		}
+	}
+}
+
+// TestAStepNamesItsImageOnceWhereverItRan: the row header names the image, so the body says it nowhere — not as a note, and not on the placement line, which leads an agent's body because its conversation would otherwise push it a screen below the row. A run recorded before the note carried its parts hides the same note by its exact text; with no placement line, the note is the only place the image is said, and stays.
+func TestAStepNamesItsImageOnceWhereverItRan(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+	hash := strings.Repeat("d", 64)
+	structured := store.RunEventRow{Type: events.TypeStepNote, StepIndex: 0, StepID: 1, Status: events.NoteInfo, Text: "image: toolchain → alpine@sha256:abc", Name: events.NoteImage, Detail: "toolchain"}
+	legacy := store.RunEventRow{Type: events.TypeStepNote, StepIndex: 0, StepID: 1, Status: events.NoteInfo, Text: "image: toolchain → alpine@sha256:abc"}
+	other := store.RunEventRow{Type: events.TypeStepNote, StepIndex: 0, StepID: 1, Status: events.NoteInfo, Text: "image: toolchain → alpine@sha256:def"}
+
+	for runID, note := range map[string]store.RunEventRow{"placed": structured, "legacy": legacy, "other": other, "unplaced": structured} {
+		err := pipeline.Store.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		appendEvents(t, pipeline.Store, runID, []store.RunEventRow{
+			{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 1},
+			note,
+			{Type: events.TypeAgentUser, StepIndex: 0, StepName: "review", StepID: 1, Text: "Review it."},
+			{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 1, Status: "succeeded", Hash: hash},
+		})
+	}
+
+	mustRecordResult(t, pipeline, hash, map[string]any{})
+
+	for _, runID := range []string{"placed", "legacy", "other"} {
+		err := pipeline.Store.RecordPlacement(ctx, store.Placement{
+			RunID: runID, StepIndex: 0, StepName: "review", JobName: "build",
+			NodeHash: hash, Slot: hash, Address: "local:", GOOS: "linux", GOARCH: "arm64", Image: "alpine@sha256:abc",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, placed := get(t, server, "/p/demo/runs/placed")
+	line := strings.Index(placed, `<div class="agentmeta">local: · linux/arm64`)
+	turn := strings.Index(placed, `<div class="turn user`)
+
+	if line < 0 || turn < 0 || line > turn {
+		t.Errorf("the agent's placement line (at %d) does not lead its conversation (at %d)", line, turn)
+	}
+
+	for runID, wantNote := range map[string]bool{"placed": false, "legacy": false, "other": true, "unplaced": true} {
+		_, page := get(t, server, "/p/demo/runs/"+runID)
+		if got := strings.Contains(page, `class="log notice">image: toolchain`); got != wantNote {
+			t.Errorf("%s: the body shows the image note = %v, want %v", runID, got, wantNote)
 		}
 	}
 }

@@ -16,9 +16,6 @@ func runFuncs(loc *locale) template.FuncMap {
 	return template.FuncMap{
 		"jsonValue": func(raw string) jsonView { return jsonValueIn(loc, raw) },
 		"lazyValue": func(src string, seq int64, raw string) jsonView { return lazyValueIn(loc, src, seq, raw) },
-		"messageValue": func(src string, seq int64, text string) jsonView {
-			return messageValueIn(loc, src, seq, text)
-		},
 		// html/template writes an apostrophe in a string as &#39;; the markup this page always had carried it bare, so body text with one comes through here.
 		"runtext": func(key string, args ...any) template.HTML {
 			return template.HTML(strings.ReplaceAll(esc(loc.text(key, args...)), "&#39;", "'")) //nolint:gosec // escaped

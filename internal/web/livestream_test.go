@@ -148,7 +148,7 @@ func TestStreamDrawsTheSameMarkupThePageDoes(t *testing.T) {
 		"stopped early",
 		"compacted ×1",
 		"Read main.go so far.",
-		"on gpu (ssh://jt@box) · golang:1.25",
+		`<span class="on">on gpu (ssh://jt@box)</span> · <span class="img">golang:1.25</span>`,
 		"1 failed",
 	} {
 		if !strings.Contains(stream, want) {

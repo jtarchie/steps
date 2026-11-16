@@ -583,29 +583,39 @@ func TestFormatBytesChangesUnitAtAThousand(t *testing.T) {
 	}
 }
 
-// TestMessageValueFoldsOnlyALongMessage: a message up to messageFoldBytes is
-// drawn on its row as it always was; one byte more is a box whose body is
-// fetched on open, because highlighting it is what the page was waiting on.
-func TestMessageValueFoldsOnlyALongMessage(t *testing.T) {
+// TestMessageValueAlwaysFolds: every message is one row, its opening words and
+// size, because a prompt is the same text on every run of a job. Up to
+// messageFoldBytes its body is drawn inside the fold; one byte more is fetched
+// on open, because highlighting it is what the page was waiting on.
+func TestMessageValueAlwaysFolds(t *testing.T) {
 	t.Parallel()
 
-	short := strings.Repeat("a", messageFoldBytes)
+	short := "Review this diff.\n\n" + strings.Repeat("a", messageFoldBytes-19)
 
 	got := messageValue("/src", 7, short)
-	if got.Src != "" || got.HTML != highlightMessage(short) {
-		t.Errorf("a %d-byte message folded: src %q, html %d bytes", len(short), got.Src, len(got.HTML))
+	if got.Src != "" || got.HTML != highlightMessage(short) || got.First != "Review this diff. "+strings.Repeat("a", messageFirstRunes-18) || got.Summary != "2.0 kB" {
+		t.Errorf("a %d-byte message is not folded with its body drawn in: src %q, first %q, summary %q, html %d bytes", len(short), got.Src, got.First, got.Summary, len(got.HTML))
 	}
 
 	long := short + "\nb"
 
 	got = messageValue("/src", 7, long)
-	if got.HTML != "" || got.Src != "/src" || got.Target != "turn-7" || got.Summary != plainSummary(long, long) {
+	if got.HTML != "" || got.Src != "/src" || got.Target != "turn-7" || got.First == "" {
 		t.Errorf("a %d-byte message drew its body: %+v", len(long), got)
 	}
+}
 
-	// Nothing to read is not a box that opens onto nothing.
+// TestMessageFoldDrawsWhatItCannotFetch: a node's transcript has no turn to fetch a body from, so its fold carries the body whatever its length; and nothing to read is not a box that opens onto nothing.
+func TestMessageFoldDrawsWhatItCannotFetch(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("a", messageFoldBytes+1)
+	if got := messageFold(long); got.Src != "" || got.HTML != highlightMessage(long) {
+		t.Errorf("messageFold left a %d-byte body to fetch from a page that has nowhere to fetch it", len(long))
+	}
+
 	blank := strings.Repeat(" \n", messageFoldBytes)
-	if got := messageValue("/src", 7, blank); got.Src != "" {
+	if got := messageValue("/src", 7, blank); got.Src != "" || got.First != "" {
 		t.Errorf("a blank %d-byte message folded behind %q", len(blank), got.Summary)
 	}
 }

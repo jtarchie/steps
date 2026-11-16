@@ -357,7 +357,13 @@ what it spent and where it ran on its own row.
   UTC); a reply that took more than a tenth of the step's `timeout:` is flagged,
   so the slow ones stand out on a folded page. A step that failed while waiting
   on the model says how long that last request had been in flight — for a
-  timed-out step, usually the answer to where the time went.
+  timed-out step, usually the answer to where the time went. Its system and
+  opening prompts are the same on every run of a job, so each is one line —
+  its first words and size — that opens in place.
+- **Which image a step ran in is said once, in its row**: a tag as written
+  (`golang:1.25`), an image pinned by digest cut to its first twelve
+  characters (`[af8016cedcbf]`). Hover it for the whole reference and the
+  `get` it came from. The step's body names only the machine.
 - **Every payload is rendered as JSON, not printed.** A call's arguments, a
   tool result, a node's content map, a resource version: parsed and
   highlighted, in the order they were recorded. A document that arrived escaped

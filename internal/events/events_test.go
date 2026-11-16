@@ -312,6 +312,33 @@ func TestNoteStampsTheRunAndStep(t *testing.T) {
 	}
 }
 
+// TestImageNoteSaysTheLineAndCarriesItsParts: every reader of notes prints the line it always printed, and the page, which draws the image on the step's placement line instead, reads which artifact it came from without parsing that line.
+func TestImageNoteSaysTheLineAndCarriesItsParts(t *testing.T) {
+	t.Parallel()
+
+	bus := New(nil)
+
+	var got []Event
+
+	defer bus.Observe(func(event Event) { got = append(got, event) })()
+
+	ImageNote(WithStepID(WithRunID(WithBus(context.Background(), bus), "run-7"), 3), "toolchain", "alpine@sha256:abc")
+
+	want := Event{Type: TypeStepNote, RunID: "run-7", StepID: 3, Status: NoteInfo, Text: "image: toolchain → alpine@sha256:abc", Name: NoteImage, Detail: "toolchain"}
+	if len(got) != 1 || got[0].Type != want.Type || got[0].RunID != want.RunID || got[0].StepID != want.StepID ||
+		got[0].Status != want.Status || got[0].Text != want.Text || got[0].Name != want.Name || got[0].Detail != want.Detail {
+		t.Errorf("image note = %+v, want %+v", got, want)
+	}
+
+	var printed bytes.Buffer
+
+	ImageNote(WithOutput(context.Background(), Output{Stdout: &printed}), "toolchain", "alpine@sha256:abc")
+
+	if printed.String() != "image: toolchain → alpine@sha256:abc\n" {
+		t.Errorf("an image note with no bus printed %q", printed.String())
+	}
+}
+
 // TestOutputDefaultsToTheProcessStreams covers the seam every package writes human-facing bytes through: the process's own streams unless a renderer installed its writers.
 func TestOutputDefaultsToTheProcessStreams(t *testing.T) {
 	t.Parallel()

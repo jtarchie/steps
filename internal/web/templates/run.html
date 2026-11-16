@@ -198,6 +198,9 @@
      so a matrix's cells are INSIDE the matrix's markup rather than beside it.
      Takes a stepctx because a Go template's {{$.}} is the top-level argument
      and this needs both the page (for pipeline-scoped links) and the step. */}}
+{{/* Where a step ran: the machine, never the image, which the row header already names. First in an agent's body, whose conversation would otherwise put it a screen below the row; last in any other's. */}}
+{{define "placement"}}{{$step := .Step}}{{range .Page.Run.StepPlacements $step}}<div class="agentmeta">{{if not $step.Worker}}{{with .Tag}}{{.}} · {{end}}{{end}}{{.Address}} · {{.Platform}} · {{t "step.sent" .Sent}} · {{t "step.back" .Received}}{{with .Identity}} · {{th "step.as" (runident .)}}{{end}}</div>{{end}}{{end}}
+
 {{define "step"}}
 {{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}
 {{$anchor := $step.Anchor}}
@@ -205,9 +208,11 @@
   {{template "stephead" (stepctx $page $step)}}
   {{if $run.StepHasBody $step}}<div class="stepbody" id="{{$anchor}}_body">
     {{with $step.Error}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
+    {{if eq $step.Kind "agent"}}{{template "placement" (stepctx $page $step)}}{{end}}
     {{if $run.MCPBlamedOn $step}}{{template "mcphint" $page}}{{end}}
     {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · {{t "step.contenthash" (short $step.Hash)}}{{end}}</div>{{end}}
-    {{range $step.Notes}}{{template "notice" .}}{{end}}
+    {{if and $step.ImageNote.Text (not ($run.StepPlacements $step))}}{{template "notice" $step.ImageNote}}{{end}}
+    {{range $run.StepNotes $step}}{{template "notice" .}}{{end}}
     {{range $i, $out := $step.Outputs}}<pre class="log output">{{outputPre $out}}</pre>{{with keptOutputURL $page.Nav.Current $run.Run.ID $step $i}}<div class="log">{{th "step.fulloutput" (runlink . (t "step.fulloutput.link"))}}</div>{{end}}{{end}}
     {{if $step.Streaming}}<pre class="log output" id="{{$anchor}}_live">{{range $step.Streaming}}{{template "chunk" .}}{{end}}</pre>{{end}}
 
@@ -234,7 +239,7 @@
     {{end}}
     {{if $step.Note}}<div class="agentmeta">{{t "step.note" $step.Note}}</div>{{end}}
     {{range $run.StepUsage $step}}<div class="agentmeta">{{t "step.model" (or .ModelServed .ModelReq)}}{{if and .ModelServed (ne .ModelServed .ModelReq)}} {{t "step.askedfor" .ModelReq}}{{end}} · {{t "step.prompt" (thousands .Prompt)}} · {{t "step.completion" (thousands .Completion)}} · {{t "step.cached" (thousands .Cached)}}{{if .Reasoning}} · {{t "step.reasoning" (thousands .Reasoning)}}{{end}} · {{costOrUnpriced .Cost}}{{if .Ceiling}} {{t "step.of" .Ceiling}}{{else if $run.ConfigDrifted}} · {{th "step.ceiling" (runspan (t "step.ceiling.drift.title") (t "step.ceiling.drift"))}}{{else if .CeilingKnown}} · {{t "step.uncapped"}}{{else}} · {{th "step.ceiling" (runspan (t "step.ceiling.unknown.title") (t "step.ceiling.unknown"))}}{{end}}{{with .FinishReason}} · {{t "step.finish"}} {{end}}{{if .Truncated}}<span class="spendwarn">{{t "step.truncated" (lower .FinishReason)}}</span>{{else if .FailedAfter}}<span class="spendwarn" title="{{t "step.failedafter.title"}}">{{t "step.stepfailed" (lower .FinishReason)}}</span>{{else}}{{lower .FinishReason}}{{end}}</div>{{end}}
-    {{range $run.StepPlacements $step}}<div class="agentmeta">{{if not $step.Worker}}{{with .Tag}}{{.}} · {{end}}{{end}}{{.Address}}{{with .ImageRef}} · {{.}}{{end}} · {{.Platform}} · {{t "step.sent" .Sent}} · {{t "step.back" .Received}}{{with .Identity}} · {{th "step.as" (runident .)}}{{end}}</div>{{end}}
+    {{if ne $step.Kind "agent"}}{{template "placement" (stepctx $page $step)}}{{end}}
   </div>{{end}}
   {{if $step.Container}}<div class="substeps" id="{{$anchor}}_substeps">
     {{range $step.Children}}{{template "step" (stepctx $page .)}}{{end}}
@@ -284,8 +289,9 @@
         {{if .Skipped}}<span class="r-sep">·</span><b class="r-skip">{{t "step.r.skipped" .Skipped}}</b>{{end}}
         {{if .Unreported}}<span class="r-sep">·</span><b class="r-skip">{{t "step.r.unreported" .Unreported}}</b>{{end}}
       </span>{{end}}{{end}}
-      {{$image := ""}}{{$ref := ""}}{{range $run.StepPlacements $step}}{{if .Image}}{{$image = .Image}}{{$ref = .ImageRef}}{{end}}{{end}}
-      {{if or $step.Worker $image}}<span class="note worker"{{with $ref}} title="{{.}}"{{end}}>{{with $step.Worker}}{{t "step.on" .}}{{end}}{{if and $step.Worker $image}} · {{end}}{{$image}}</span>{{end}}
+      {{$image := ""}}{{$ref := ""}}{{range $run.StepPlacements $step}}{{if .Image}}{{$image = .ShortImage}}{{$ref = .ImageRef}}{{end}}{{end}}
+      {{with $step.ImageSource}}{{if $ref}}{{$ref = printf "%s → %s" . $ref}}{{end}}{{end}}
+      {{if or $step.Worker $image}}<span class="note worker"{{with $ref}} title="{{.}}"{{end}}>{{with $step.Worker}}<span class="on">{{t "step.on" .}}</span>{{end}}{{if and $step.Worker $image}} · {{end}}{{with $image}}<span class="img">{{.}}</span>{{end}}</span>{{end}}
       <span class="dur">
         {{if and (not $step.Skipped) (not $step.Running)}}{{duration $step.Duration}}{{end}}
         {{if $step.Running}}<time class="live" data-elapsed-since="{{rfc3339 $step.Started}}">{{duration $step.Elapsed}}</time>{{end}}
@@ -312,7 +318,7 @@
       <div class="what">
         {{if .Name}}<code>{{.Name}}</code>{{end}}
         {{if .Text}}
-          {{if .IsMessage}}{{with messageValue $src .Seq .Text}}{{if .Src}}{{template "jsonvalue" .}}{{else}}<span class="say">{{.HTML}}</span>{{end}}{{end}}
+          {{if .IsMessage}}{{with messageValue $src .Seq .Text}}{{if .First}}{{template "msgvalue" .}}{{else}}<span class="say">{{.HTML}}</span>{{end}}{{end}}
           {{else if .IsModelText}}<div class="prose">{{template "prosebody" .Text}}</div>
           {{else}}<span class="say">{{.Text}}</span>{{end}}
         {{end}}

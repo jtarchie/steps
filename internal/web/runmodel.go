@@ -264,6 +264,35 @@ func (r runView) StepHasBody(step *stepView) bool {
 	return step.HasBody() || len(r.StepUsage(step)) > 0 || len(r.StepPlacements(step)) > 0
 }
 
+// StepNotes is the step's notes as its body shows them: without the image note a run recorded before that note carried its parts (events.ImageNote), when it names exactly the image this step's placement recorded. The row header names that image, and the note was the second of three places a reader met it.
+func (r runView) StepNotes(step *stepView) []runview.Note {
+	placed := r.StepPlacements(step)
+
+	notes := make([]runview.Note, 0, len(step.Notes))
+
+	for _, note := range step.Notes {
+		if !restatesImage(note.Text, placed) {
+			notes = append(notes, note)
+		}
+	}
+
+	return notes
+}
+
+func restatesImage(text string, placed []PlacementView) bool {
+	if !strings.HasPrefix(text, "image: ") {
+		return false
+	}
+
+	for _, placement := range placed {
+		if placement.Image != "" && strings.HasSuffix(text, " → "+placement.Image) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // StepHasDetail is runview's HasDetail over StepHasBody.
 func (r runView) StepHasDetail(step *stepView) bool {
 	return step.Container() || r.StepHasBody(step)
@@ -374,6 +403,21 @@ func (p PlacementView) ImageRef() string {
 }
 
 const shortDigest = 12
+
+// ShortImage is the image as a row header names it. A tag is short already and says more than its digest, so it is shown as written; an image pinned by digest is only that digest, 70-odd characters that once ran into the step's name, so it is cut the way Docker cuts an id. The whole reference rides the row's tooltip and the body's placement line.
+func (p PlacementView) ShortImage() string {
+	_, pinned, ok := strings.Cut(p.Image, "@")
+	if !ok {
+		return p.Image
+	}
+
+	_, hex, found := strings.Cut(pinned, ":")
+	if !found || len(hex) < shortDigest {
+		return p.Image
+	}
+
+	return "[" + hex[:shortDigest] + "]"
+}
 
 // mcpBlame finds the mcp server an error names. Two spellings, because internal/mcp writes two: a credential refusal names the server directly, and a dial failure names what it was connecting TO. Anything else is not an mcp failure and must not be decorated as one — a page that offers the same suggestion under every red run is one nobody reads.
 var mcpBlame = regexp.MustCompile(`mcp(?:: connect to| server) "([^"]+)"`)

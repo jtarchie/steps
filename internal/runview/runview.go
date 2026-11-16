@@ -139,6 +139,9 @@ type Step struct {
 	Streaming []string
 	// Notes is what the step's machinery said about it, in order.
 	Notes []Note
+	// ImageSource is the artifact the step's image: named, when it named one, and ImageNote the note that said so. Held apart from Notes because the page says it on the step's placement line, which already carries the reference the note would repeat; a step that failed before it was placed has no such line, and shows the note.
+	ImageSource string
+	ImageNote   Note
 	// unreported is set by settle, never by the fold: see Unreported.
 	unreported bool
 	// collateral is set by settle: an abort beside a sibling that really
@@ -569,6 +572,7 @@ func (s Step) HasBody() bool {
 		len(s.Outputs) > 0 ||
 		len(s.Streaming) > 0 ||
 		len(s.Notes) > 0 ||
+		s.ImageNote.Text != "" ||
 		s.Error != "" ||
 		s.Response() != "" ||
 		s.Note() != "" ||
@@ -1008,6 +1012,12 @@ func attachNote(view *Transcript, index map[string]int, row store.RunEventRow) (
 
 	// Only by id: a note carries no name, so the (index, name) fallback would file every one under whatever step held index 0.
 	if position, seen := index[stepKey(row)]; seen && row.StepID != 0 {
+		if row.Name == events.NoteImage {
+			view.Steps[position].ImageSource, view.Steps[position].ImageNote = row.Detail, note
+
+			return position, Change{Other: true}
+		}
+
 		view.Steps[position].Notes = append(view.Steps[position].Notes, note)
 
 		return position, Change{Other: true}
