@@ -181,7 +181,8 @@ func (c *stepCache) actionKey(digests func(string) (string, error), req StepCach
 // All-or-nothing on presence too: an entry missing any declared output is
 // treated as a miss and left alone, so a store interrupted halfway can only
 // ever cost a re-run.
-func (c *stepCache) restore(ctx context.Context, key, path, artifacts string, req StepCacheRequest) bool {
+// held are the outputs the entry records as trees docker holds, already claimed; they are not on this disk to restore, and RestoreStep hands them on.
+func (c *stepCache) restore(ctx context.Context, key, path, artifacts string, req StepCacheRequest, held map[string]heldRecord) bool {
 	// A request with no outputs has nothing to restore, so every check below
 	// passes vacuously and this would report a hit against an empty cache —
 	// silently skipping a step whose entire result is its side effect.
@@ -199,6 +200,10 @@ func (c *stepCache) restore(ctx context.Context, key, path, artifacts string, re
 	missing := make([]string, 0, len(req.Outputs))
 
 	for _, out := range req.Outputs {
+		if _, ok := held[out]; ok {
+			continue
+		}
+
 		_, err := os.Stat(filepath.Join(path, out))
 		if err != nil {
 			missing = append(missing, out)
@@ -209,7 +214,7 @@ func (c *stepCache) restore(ctx context.Context, key, path, artifacts string, re
 		return false
 	}
 
-	staged, err := c.stageOutputs(ctx, path, artifacts, req)
+	staged, err := c.stageOutputs(ctx, path, artifacts, req, held)
 	defer c.discardStaged(staged)
 
 	if err != nil {
@@ -241,10 +246,14 @@ type stagedOutput struct{ tmp, dst string }
 
 // stageOutputs materializes every declared output beside its destination,
 // touching no existing artifact.
-func (c *stepCache) stageOutputs(ctx context.Context, path, artifacts string, req StepCacheRequest) ([]stagedOutput, error) {
+func (c *stepCache) stageOutputs(ctx context.Context, path, artifacts string, req StepCacheRequest, held map[string]heldRecord) ([]stagedOutput, error) {
 	staged := make([]stagedOutput, 0, len(req.Outputs))
 
 	for _, out := range req.Outputs {
+		if _, ok := held[out]; ok {
+			continue
+		}
+
 		src := filepath.Join(path, out)
 
 		// The same guard the resource cache applies to its entries: a cache
@@ -302,14 +311,28 @@ func (c *stepCache) discardStaged(staged []stagedOutput) {
 // Built whole beside path and renamed into place, because restore reads an
 // output's mere presence as cached: an entry filled in place and interrupted
 // mid-copy would serve an empty output as a hit.
-func (c *stepCache) store(ctx context.Context, key, path, artifacts string, digests func(string) (string, error), req StepCacheRequest) error {
+//
+// held outputs are filed as where docker holds them, not as bytes, and an
+// entry with any is not mirrored: the mirror needs the bytes here.
+func (c *stepCache) store(ctx context.Context, key, path, artifacts string, digests func(string) (string, error), req StepCacheRequest, held map[string]heldRecord) error {
 	err := replaceTree(path, c.backend.remove, func(staged string) error {
 		mkErr := os.MkdirAll(staged, 0o750)
 		if mkErr != nil {
 			return fmt.Errorf("creating cache entry: %w", mkErr)
 		}
 
+		if len(held) > 0 {
+			heldErr := writeHeld(staged, held)
+			if heldErr != nil {
+				return heldErr
+			}
+		}
+
 		for _, out := range req.Outputs {
+			if _, ok := held[out]; ok {
+				continue
+			}
+
 			src := filepath.Join(artifacts, mappedName(out, req.OutputMapping))
 
 			symErr := rejectSymlinkSrc(src)
@@ -330,7 +353,10 @@ func (c *stepCache) store(ctx context.Context, key, path, artifacts string, dige
 	}
 
 	c.entries.prune()
-	c.publish(ctx, key, path, digests, req)
+
+	if len(held) == 0 {
+		c.publish(ctx, key, path, digests, req)
+	}
 
 	slog.DebugContext(ctx, "workspace.step_cache_store", "entry", path)
 
@@ -357,11 +383,19 @@ func (b *isolatingBuild) RestoreStep(ctx context.Context, req StepCacheRequest) 
 		return StepCacheResult{}, fmt.Errorf("unusable step cache key %q", key)
 	}
 
-	hit := b.stepCache.restore(ctx, key, path, b.artifacts, req)
+	// Claimed before anything is replaced: a held tree docker has since evicted makes the whole entry a miss, which costs a run and nothing else.
+	held, err := claimEntry(ctx, path)
+	if err != nil {
+		slog.WarnContext(ctx, "workspace.step_cache_held_miss", "entry", path, "error", err)
+
+		return StepCacheResult{Key: key}, nil
+	}
+
+	hit := b.stepCache.restore(ctx, key, path, b.artifacts, req, held)
 
 	if hit {
 		// The restored outputs are here now, whatever a worker still holds.
-		b.forgetRemote(artifactNames(req.Outputs, req.OutputMapping))
+		b.forgetRemote(artifactNames(unheld(req, held), req.OutputMapping))
 	}
 
 	// Unconditionally, not only on a hit: a restore that failed PART WAY has
@@ -369,6 +403,16 @@ func (b *isolatingBuild) RestoreStep(ctx context.Context, req StepCacheRequest) 
 	// would describe bytes that are gone — which is precisely how a later
 	// step's action key comes out right for content that is no longer there.
 	b.forgetDigests(artifactNames(req.Outputs, req.OutputMapping))
+
+	if hit {
+		// The held outputs are where the step that made them left them; the next container step mounts them there.
+		err = b.holdRestored(ctx, held, req.OutputMapping)
+		if err != nil {
+			slog.WarnContext(ctx, "workspace.step_cache_held_miss", "entry", path, "error", err)
+
+			return StepCacheResult{Key: key}, nil
+		}
+	}
 
 	return StepCacheResult{Key: key, Hit: hit}, nil
 }
@@ -388,16 +432,23 @@ func (b *isolatingBuild) StoreStep(ctx context.Context, key string, req StepCach
 		return fmt.Errorf("unusable step cache key %q", key)
 	}
 
-	// The entry lives on this disk, so the cache is a local reader: outputs
-	// a placed step left on its worker come home to be filed.
+	// An output docker holds is filed as where it is, so it stays there; the
+	// rest are on this disk, or come home to be filed when there is no way to
+	// reach docker or an artifact store needs the bytes.
+	held := b.heldOutputs(ctx, req)
+
 	for _, out := range req.Outputs {
+		if _, ok := held[out]; ok {
+			continue
+		}
+
 		err = b.ensureLocal(ctx, mappedName(out, req.OutputMapping))
 		if err != nil {
 			return err
 		}
 	}
 
-	return b.stepCache.store(ctx, key, path, b.artifacts, b.artifactDigest, req)
+	return b.stepCache.store(ctx, key, path, b.artifacts, b.artifactDigest, req, held)
 }
 
 // validateCachedNames holds a request's declared names to the same rules

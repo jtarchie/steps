@@ -5,6 +5,7 @@ package e2e
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -317,17 +318,11 @@ jobs:
 	requireSumMatches(t, dir)
 }
 
-// TestTheStepCacheFilesWhatAnUntaggedImageStepHeld: the cache under --workspace-root is a reader here, so both steps are filed and the second run restores both.
-func TestTheStepCacheFilesWhatAnUntaggedImageStepHeld(t *testing.T) {
-	t.Parallel()
-	dockerSlot(t)
+// stepCacheOfHeldPipeline is make then consume, both untagged image: steps, then a host step that records what consume hashed.
+func stepCacheOfHeldPipeline(t *testing.T, dir, sums string) string {
+	t.Helper()
 
-	requireDockerE2E(t)
-
-	dir := t.TempDir()
-	sums := filepath.Join(dir, "sums")
-
-	path := writePipeline(t, dir, `
+	return writePipeline(t, dir, `
 jobs:
 - name: build
   plan:
@@ -341,8 +336,27 @@ jobs:
     inputs: [out]
     run: cat out/got >> %[2]s
 `, dockerE2EImage, sums))
+}
+
+// TestTheStepCacheKeepsWhatAnUntaggedImageStepHeldInDocker: the entry records where docker holds the outputs, so filing them brings nothing home, and the second run hands the held trees on rather than running either step.
+func TestTheStepCacheKeepsWhatAnUntaggedImageStepHeldInDocker(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	sums := filepath.Join(dir, "sums")
+	path := stepCacheOfHeldPipeline(t, dir, sums)
 
 	mustRun(t, "run", path, "--force", "--workspace-root", wsRoot(path))
+
+	if made := placementNamed(t, runPlacements(t, path), "make"); made.BytesReceived > movedNothing {
+		t.Errorf("make received %d bytes home, want at most %d: the step cache files a held output where docker holds it", made.BytesReceived, movedNothing)
+	}
+
+	assertNeverLanded(t, wsRoot(path))
+
 	mustRun(t, "run", path, "--force", "--workspace-root", wsRoot(path))
 
 	lines := strings.Fields(readFileString(t, sums))
@@ -355,6 +369,128 @@ jobs:
 			t.Errorf("%s on the second run: %s, want it restored from the step cache", step, got)
 		}
 	}
+
+	assertNeverLanded(t, wsRoot(path))
+}
+
+// TestAStepCacheEntryDockerEvictedIsAMiss: the bytes were docker's to keep, so once docker lets them go the entry answers nothing, and the step runs rather than the build failing on an input nobody holds.
+func TestAStepCacheEntryDockerEvictedIsAMiss(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	sums := filepath.Join(dir, "sums")
+	path := stepCacheOfHeldPipeline(t, dir, sums)
+
+	mustRun(t, "run", path, "--force", "--workspace-root", wsRoot(path))
+
+	evictHeld(t, wsRoot(path))
+
+	mustRun(t, "run", path, "--force", "--workspace-root", wsRoot(path))
+
+	if got := storeNodeResult(t, path, "make"); strings.Contains(got, `"reused":true`) {
+		t.Errorf("make on the second run: %s, want it run again: docker no longer holds what its entry names", got)
+	}
+
+	if lines := strings.Fields(readFileString(t, sums)); len(lines) != 2 || lines[0] == lines[1] {
+		t.Errorf("the two runs saw %q, want two different payloads: make ran twice", lines)
+	}
+}
+
+// evictHeld removes the digest alias of every tree a step cache entry under root names, which is what the worker's own eviction does.
+func evictHeld(t *testing.T, root string) {
+	t.Helper()
+
+	records, err := filepath.Glob(filepath.Join(root, "steps-cache", "*", ".held.json"))
+	if err != nil || len(records) == 0 {
+		t.Fatalf("no step cache entry names a held tree (%v), so there is nothing to evict", err)
+	}
+
+	for _, record := range records {
+		var held map[string]struct {
+			Digest string `json:"digest"`
+		}
+
+		err = json.Unmarshal([]byte(readFileString(t, record)), &held)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, tree := range held {
+			//nolint:gosec // a filter built from a digest this test read back
+			out, err := exec.CommandContext(t.Context(), "docker", "volume", "ls", "-q", "--filter", "label=steps.cache=alias", "--filter", "label=steps.digest="+tree.Digest).Output()
+			if err != nil {
+				t.Fatalf("listing aliases: %v", err)
+			}
+
+			for _, alias := range strings.Fields(string(out)) {
+				//nolint:gosec // a volume name docker just listed
+				err = exec.CommandContext(t.Context(), "docker", "volume", "rm", alias).Run()
+				if err != nil {
+					t.Fatalf("removing %s: %v", alias, err)
+				}
+			}
+		}
+	}
+}
+
+// TestTheResourceCacheKeepsAnImageGetsTreeInDocker: the entry is where docker holds the fetched tree, so filing it brings nothing home, and the second build is handed that tree without fetching.
+func TestTheResourceCacheKeepsAnImageGetsTreeInDocker(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	seen := filepath.Join(dir, "seen")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+resource_types:
+- name: blob
+  image: %[1]s
+  config:
+    check: printf '[{"ref":"v1"}]'
+    in: |
+      head -c %[2]d /dev/urandom > blob.bin
+      sha256sum blob.bin | cut -d' ' -f1 > sum
+
+resources:
+- name: repo
+  type: blob
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: src
+    resource: repo
+  - task: read
+    image: %[1]s
+    volatile: true
+    inputs: [src]
+    outputs: [out]
+    run: cp src/sum out/sum
+  - task: record
+    volatile: true
+    inputs: [out]
+    run: cat out/sum >> %[3]s
+`, dockerE2EImage, untaggedPayload, seen))
+
+	mustRun(t, "run", path, "--force", "--workspace-root", wsRoot(path))
+
+	if got := placementNamed(t, runPlacements(t, path), "src"); got.BytesReceived > movedNothing {
+		t.Errorf("the get received %d bytes home, want at most %d: the resource cache files its tree where docker holds it", got.BytesReceived, movedNothing)
+	}
+
+	mustRun(t, "run", path, "--force", "--workspace-root", wsRoot(path))
+
+	if lines := strings.Fields(readFileString(t, seen)); len(lines) != 2 || lines[0] != lines[1] {
+		t.Errorf("the two builds read %q, want one fetch twice: the second must be handed the cached tree", lines)
+	}
+
+	assertNeverLanded(t, wsRoot(path))
 }
 
 // runPins lists the pin volumes run left in docker: what keeps its held outputs from another session's eviction.

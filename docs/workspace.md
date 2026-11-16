@@ -143,7 +143,7 @@ Agent and `put` steps make their chains unskippable, so without a cache a real r
 - **Keyed on content, not plan position** — a hash of the type's `in:` command, the resource's `source:`, the get's `params:`, the version, and execution settings (`image:`/`env:`/`user:`/`network:`), deliberately *not* the get node's merkle hash, so two jobs fetching the same version share one entry.
 - **Bounded by count, never age**: `--resource-cache-max` entries (default 50), least-recently-used evicted first.
 - **A failed fetch is never cached.** **A cache failure never fails a build** — anything wrong falls back to fetching. The startup sweep spares it.
-- **The cache is a reader on this disk.** A `get` whose resource type has an `image:` leaves its tree in docker — on its worker (`tags:`), or this machine's daemon when it has no tag — until something here reads it, and under a durable root the cache is that something: the tree comes home to be filed. See [infra.md](infra.md#resources-on-workers).
+- **A tree in docker stays in docker.** A `get` whose resource type has an `image:` leaves its tree in docker — on its worker (`tags:`), or this machine's daemon when it has no tag — filed there by digest. The cache records which docker holds which digest, not the bytes, so a hit hands the next build that same tree and the first container step to read it mounts a copy-on-write view of it: nothing crosses to this disk unless a host step reads it. A hit first asks that docker to keep the tree for the run (the pin a run's own held outputs get), and one it has since evicted is a miss: the get fetches again. See [infra.md](infra.md#resources-on-workers).
 - **A host `get` costs a copy** on a hit (copy-on-write where the filesystem offers it), but no fetch.
 
 ## Step output cache (`volatile:`)
@@ -181,7 +181,7 @@ jobs:
 - **`volatile:` is only valid on task and agent steps**, and never on a hook — anywhere else it would read as configured while binding nothing, so it is a load error.
 - **Requires a durable root.** Same reason the resource cache does: an entry has to outlive the run that wrote it. Without one, nothing is cached and nothing is stored.
 - **A hit costs a copy** (copy-on-write where the filesystem offers it), never a model call. **A failed step is never cached**, and **a cache failure never fails a build** — anything wrong falls back to running the step. Entries are bounded by count (200), least-recently-used evicted first.
-- **The cache is a reader on this disk.** A container step's outputs stay in docker — on its worker, or this machine's daemon for an untagged `image:` step — until something here reads them; under a durable root the step cache is that something, and the outputs come home to be filed.
+- **A container step's outputs stay in docker.** They stay where the step ran — on its worker, or this machine's daemon for an untagged `image:` step — filed there by digest, and the entry records which docker holds which digest rather than the bytes. A hit hands the outputs on as those same held trees, so the next container step mounts a copy-on-write view of them and nothing crosses to this disk unless a host step reads them. The bytes are bounded by that docker's own cache (by size, oldest first, never what a run in flight has pinned); a hit first pins them for the run, and an entry whose trees docker has since evicted is a miss, so the step runs. With `--artifact-store` the outputs still come home, since an off-machine mirror needs the bytes.
 
 ## Task caches (`caches:`)
 

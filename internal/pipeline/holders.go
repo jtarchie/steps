@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -64,6 +65,19 @@ func pullHeld(holder, digest string) func(context.Context, string) error {
 
 		return err //nolint:wrapcheck // the workspace names the artifact and the holder around it
 	}
+}
+
+// claimTimeout bounds asking a holder to keep a cached tree: a holder that is gone must cost a cache miss, not the run.
+const claimTimeout = 30 * time.Second
+
+// claimHeld pins a cached tree on its holder for this run, which then releases it as it does what its own steps held there.
+func claimHeld(ctx context.Context, holder, digest string) error {
+	noteHolder(ctx, holder)
+
+	ctx, cancel := context.WithTimeout(ctx, claimTimeout)
+	defer cancel()
+
+	return venue.Claim(ctx, holder, digest, events.RunID(ctx)) //nolint:wrapcheck // the workspace names the entry around it
 }
 
 // unpinTimeout bounds giving a finished run's pins back to one worker that held something for it.

@@ -102,3 +102,40 @@ func Unpin(ctx context.Context, holder, runID string) error {
 
 	return nil
 }
+
+// Claim pins holder's tree under digest for run, then checks the tree is still there: what a cache hit on a held tree asks before handing it on, so the hit cannot be evicted between the answer and the step that mounts it. A holder that no longer has it is errNotHeld, which the caller reads as a miss. The caller bounds ctx: the holder may be a machine that is gone.
+func Claim(ctx context.Context, holder, digest, runID string) error {
+	worker, err := ParseWorker(holder)
+	if err != nil {
+		return err
+	}
+
+	if !worker.dockerPlus() {
+		return fmt.Errorf("worker %q: %w", holder, errHoldsNothing)
+	}
+
+	s, hangUp, err := dialOnly(ctx, worker)
+	if err != nil {
+		return fmt.Errorf("worker %s: %w", holderAddress(holder), err)
+	}
+
+	defer hangUp()
+
+	s.runID = runID
+
+	err = s.pin(ctx, digest)
+	if err != nil {
+		return fmt.Errorf("worker %s: %w", holderAddress(holder), err)
+	}
+
+	_, _, err = s.lookup(ctx, digest)
+	if dockerapi.IsNotFound(err) {
+		return fmt.Errorf("worker %s: %s: %w", holderAddress(holder), digest, errNotHeld)
+	}
+
+	if err != nil {
+		return fmt.Errorf("worker %s: %w", holderAddress(holder), err)
+	}
+
+	return nil
+}

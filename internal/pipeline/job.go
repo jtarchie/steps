@@ -100,6 +100,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	defer func() { releaseWorkers(ctx) }()
 
 	ctx, holders := withRunHolders(ctx)
+	ctx = workspace.WithHolds(ctx, workspace.Holds{Pull: pullHeld, Claim: claimHeld})
 
 	// One register of step decisions per job run, for context: from: readers.
 	// Installed here rather than in runSteps because the build a get triggers

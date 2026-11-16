@@ -152,12 +152,24 @@ func (b *isolatingBuild) FetchResource(ctx context.Context, name, cacheKey strin
 		return dir, fetch(dir)
 	}
 
-	// The cache lives on this disk, so it is a local reader: a tree a placed
-	// in: left on its worker comes home to be filed.
+	path, ok := b.cache.entries.path(cacheKey)
+	if ok && b.fetchHeld(ctx, path, name) {
+		return dir, nil
+	}
+
+	_, docker := holdsFrom(ctx)
+
+	// A tree an image: in: left in docker is filed there as a pointer, so it stays in docker; without a way to reach docker the cache is a reader on this disk, and the tree comes home to be filed.
 	return dir, b.cache.Fetch(ctx, cacheKey, dir, func() error {
 		err := fetch(dir)
 		if err != nil {
 			return err
+		}
+
+		if remote, held := b.remoteArtifact(name); held && docker && ok {
+			b.cache.storeHeld(ctx, path, remote)
+
+			return errFiledHeld
 		}
 
 		return b.ensureLocal(ctx, name)

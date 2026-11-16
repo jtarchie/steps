@@ -5,8 +5,10 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 )
 
 // cacheDirName is the directory under an isolating root that holds cached
@@ -65,6 +67,12 @@ func (c *resourceCache) Fetch(ctx context.Context, key, dst string, fetch func()
 	}
 
 	err := fetch()
+	if errors.Is(err, errFiledHeld) {
+		c.entries.prune()
+
+		return nil
+	}
+
 	if err != nil {
 		return err
 	}
@@ -81,6 +89,12 @@ func (c *resourceCache) Fetch(ctx context.Context, key, dst string, fetch func()
 func (c *resourceCache) restore(ctx context.Context, path, dst string) bool {
 	_, err := os.Stat(path)
 	if err != nil {
+		return false
+	}
+
+	// A pointer at a tree docker holds is fetchHeld's to answer; copied, it would hand the get a directory holding only the record.
+	_, err = os.Stat(filepath.Join(path, heldEntryFile))
+	if err == nil {
 		return false
 	}
 
