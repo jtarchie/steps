@@ -71,7 +71,7 @@ func TestACookieBeatsTheHeader(t *testing.T) {
 		t.Error("the cookie did not win")
 	}
 
-	_, body = getAs(t, server, "/p/demo", http.Header{"Accept-Language": {"ja, fr;q=0.5"}})
+	_, body = getAs(t, server, "/p/demo", http.Header{"Accept-Language": {"fr, de;q=0.5"}})
 	if !strings.Contains(body, `<html lang="en">`) {
 		t.Error("an unsupported language did not fall back to English")
 	}
@@ -101,7 +101,7 @@ func TestCatalogTextIsEscapedAndOnlyMarkupArgumentsAreRaw(t *testing.T) {
 }
 
 var (
-	dropBlocks = regexp.MustCompile(`(?is)<script\b.*?</script>|<style\b.*?</style>|<pre\b.*?</pre>|<code\b.*?</code>|<kbd\b.*?</kbd>|<svg\b.*?</svg>|<!--.*?-->|<h1 class="prompt">.*?</h1>`)
+	dropBlocks = regexp.MustCompile(`(?is)<script\b.*?</script>|<style\b.*?</style>|<pre\b.*?</pre>|<code\b.*?</code>|<kbd\b.*?</kbd>|<svg\b.*?</svg>|<!--.*?-->|<h1 class="prompt">.*?</h1>|<nav class="langs".*?</nav>`)
 	tagRe      = regexp.MustCompile(`(?s)<[^>]*>`)
 	attrRe     = regexp.MustCompile(`\b(?:aria-label|title|placeholder|alt)="([^"]*)"`)
 	wordRe     = regexp.MustCompile(`[A-Za-z]{2,}`)
@@ -111,7 +111,7 @@ var (
 var fixtureWords = map[string]bool{
 	"demo": true, "build": true, "deploy": true, "repo": true, "compile": true, "ship": true, "mock": true,
 	"steps": true, "web": true, "dev": true, "JT": true, "Archie": true, "http": true, "https": true, "github": true, "com": true,
-	"tmp": true, "ws": true, "yml": true, "ms": true, "beef": true, "fx": true, "task": true, "english": true, "users": true, "jtarchie": true,
+	"tmp": true, "ws": true, "yml": true, "ms": true, "beef": true, "fx": true, "task": true, "users": true, "jtarchie": true,
 }
 
 // dropEnglish removes elements marked lang="en": server messages and the docs body stay English on purpose, and the mark is what tells a screen reader so.

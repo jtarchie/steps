@@ -29,8 +29,8 @@ const (
 	localeKey = "steps.locale"
 )
 
-// supported lists the production locales, in the order the matcher indexes them. #266 adds ja, es and pt-BR after zh-CN.
-var supported = []language.Tag{language.English, language.MustParse("zh-CN")}
+// supported lists the production locales, in the order the matcher indexes them. the picker lists them in this order.
+var supported = []language.Tag{language.English, language.MustParse("zh-CN"), language.Japanese, language.Spanish, language.MustParse("pt-BR")}
 
 var matcher = language.NewMatcher(supported)
 
@@ -287,7 +287,7 @@ func englishLocale() *locale { return english() }
 // langChoice is one row of the footer's picker; names are in their own language, so a reader who cannot read the current one can still find theirs.
 type langChoice struct{ Tag, Name string }
 
-var languageNames = map[string]string{"en": "English", "zh-CN": "简体中文"}
+var languageNames = map[string]string{"en": "English", "zh-CN": "简体中文", "ja": "日本語", "es": "Español", "pt-BR": "Português (Brasil)"}
 
 func languageChoices() []langChoice {
 	choices := make([]langChoice, 0, len(supported))

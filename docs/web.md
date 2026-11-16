@@ -499,7 +499,7 @@ bounds that.
 
 ## Language
 
-The browser UI speaks English and Simplified Chinese (`zh-CN`). The page uses the `steps-lang` cookie if the reader set one, then the browser's `Accept-Language`, then English; Traditional Chinese browsers (`zh-TW`, `zh-HK`) get Simplified Chinese. The footer's picker (`auto`, `English`, `简体中文`) sets or clears that cookie, and `auto` goes back to asking the browser.
+The browser UI speaks English, Simplified Chinese (`zh-CN`), Japanese (`ja`), Spanish (`es`) and Brazilian Portuguese (`pt-BR`). The page uses the `steps-lang` cookie if the reader set one, then the browser's `Accept-Language`, then English. A browser asking for a close relative gets the nearest language: Traditional Chinese (`zh-TW`, `zh-HK`) gets `zh-CN`, `pt` and `pt-PT` get `pt-BR`, and Galician (`gl`) gets `es`. The footer's picker (`auto` and one link per language, each in its own name) sets or clears that cookie, and `auto` goes back to asking the browser.
 
 Only the browser UI is translated. The command line, logs, these docs, pipeline YAML, and the messages the `/api` routes return stay in English, and where one of them shows on a translated page it is marked `lang="en"`. The words `pipeline`, `job`, `step`, `resource`, `agent`, `task`, `get` and `put` stay English everywhere, because they are what people type in YAML. Durations, timestamps and counts such as `4m 05s` and `34,500` are spelled the same in every language.
 

@@ -13,7 +13,7 @@ func TestSimplifiedChineseIsServedToBrowsersThatAskForIt(t *testing.T) {
 
 	server, _ := testPipeline(t)
 
-	for _, ask := range []string{"zh-CN", "zh", "zh-TW", "zh-HK", "ja, zh-CN;q=0.5"} {
+	for _, ask := range []string{"zh-CN", "zh", "zh-TW", "zh-HK", "fr, zh-CN;q=0.5"} {
 		_, body := getAs(t, server, "/p/demo", http.Header{"Accept-Language": {ask}})
 
 		if !strings.Contains(body, `<html lang="zh-CN">`) || !strings.Contains(body, ">运行</a>") {
@@ -104,6 +104,31 @@ func TestEveryPageSpeaksChineseWhereTheCatalogDoes(t *testing.T) {
 		for _, english := range []string{">runs<", ">approvals<", "skip to content", "Trigger queue", "back to jobs", " ago<"} {
 			if strings.Contains(page, english) {
 				t.Errorf("%s: still says %q in Chinese", path, english)
+			}
+		}
+	}
+}
+
+func TestEachLanguageIsMatchedAndSpoken(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	seedPseudoFixtures(t, pipeline)
+
+	for ask, tag := range map[string]string{
+		"ja": "ja", "ja-JP": "ja", "es": "es", "es-MX": "es", "gl": "es", "pt": "pt-BR", "pt-PT": "pt-BR", "pt-BR": "pt-BR",
+	} {
+		for _, path := range []string{"/p/demo", "/p/demo/runs", "/p/demo/approvals", "/p/demo/runs/fx1", "/nosuch"} {
+			_, page := getAs(t, server, path, http.Header{"Accept-Language": {ask}})
+
+			if !strings.Contains(page, `<html lang="`+tag+`">`) {
+				t.Errorf("%s as %q: not served in %s", path, ask, tag)
+			}
+
+			for _, english := range []string{"skip to content", "Trigger queue", "back to jobs", ">approvals<", " ago<", ">runs<"} {
+				if strings.Contains(page, english) {
+					t.Errorf("%s as %q: still says %q", path, ask, english)
+				}
 			}
 		}
 	}
