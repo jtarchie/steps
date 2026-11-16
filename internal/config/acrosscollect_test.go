@@ -124,8 +124,6 @@ func TestAcrossOutputsValidation(t *testing.T) {
 		{
 			name: "outputs on the try: wrapper is dead text, refused",
 			pipeline: `
-workspace:
-  strategy: copy
 jobs:
 - name: j
   plan:
@@ -143,8 +141,6 @@ jobs:
 		{
 			name: "a hook on the cell declaring outputs is refused",
 			pipeline: `
-workspace:
-  strategy: copy
 jobs:
 - name: j
   plan:
@@ -166,8 +162,6 @@ jobs:
 		{
 			name: "a hook inheriting outputs from its tasks: entry is refused too",
 			pipeline: `
-workspace:
-  strategy: copy
 tasks:
 - name: annotate
   run: "true"
@@ -191,8 +185,6 @@ jobs:
 		{
 			name: "a do: child declaring outputs is refused",
 			pipeline: `
-workspace:
-  strategy: copy
 jobs:
 - name: j
   plan:
@@ -210,8 +202,6 @@ jobs:
 		{
 			name: "an in_parallel branch declaring outputs is refused",
 			pipeline: `
-workspace:
-  strategy: copy
 jobs:
 - name: j
   plan:
@@ -230,8 +220,6 @@ jobs:
 		{
 			name: "a collecting matrix wrapping another across: is refused",
 			pipeline: `
-workspace:
-  strategy: copy
 jobs:
 - name: j
   plan:
@@ -252,8 +240,6 @@ jobs:
 		{
 			name: "a hostile static value fails at load even beside a file axis",
 			pipeline: `
-workspace:
-  strategy: copy
 jobs:
 - name: j
   plan:
@@ -292,8 +278,6 @@ jobs:
 		{
 			name: "outputs inherited from the tasks: entry",
 			pipeline: `
-workspace:
-  strategy: copy
 tasks:
 - name: work
   run: "true"
@@ -312,8 +296,6 @@ jobs:
 		{
 			name: "declared on the step is fine",
 			pipeline: `
-workspace:
-  strategy: copy
 jobs:
 - name: j
   plan:

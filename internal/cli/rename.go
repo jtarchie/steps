@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/web"
@@ -56,7 +55,7 @@ func (d *daemon) Rename(ctx context.Context, from, to string) error {
 		return fmt.Errorf("%w: could not rename %q to %q: %w", web.ErrRefused, from, to, err)
 	}
 
-	st, provider, err := d.open(to, cfg)
+	st, provider, err := d.open(to)
 	if err != nil {
 		return d.undoRename(ctx, served, from, to, err)
 	}
@@ -131,13 +130,13 @@ func (d *daemon) refuseWhileRunning(name string) error {
 }
 
 // Split from start because all of it can still refuse, which a rename must hear while the old name is still served.
-func (d *daemon) open(name string, cfg *config.Config) (store.Store, workspace.Provider, error) {
+func (d *daemon) open(name string) (store.Store, workspace.Provider, error) {
 	st, err := openState(d.state, name)
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not open state for %q: %w", name, err)
 	}
 
-	provider, err := d.provider(cfg, st)
+	provider, err := d.provider(st)
 	if err != nil {
 		release(st)
 

@@ -218,7 +218,7 @@ jobs:
 // read that row, failed the same check, and exited — with no endpoint left to
 // fix it through, because the endpoint is what the daemon was going to serve.
 //
-// The lever is a file at `workspace.root:` — ENOTDIR for every user, root included — which refuses at NewProvider, before Probe/Validate (TestTheDaemonsWorkspaceCheckRefusesARootItCannotWrite covers those).
+// The lever is a file at `--workspace-root` — ENOTDIR for every user, root included — which refuses at NewProvider, before Probe/Validate (TestTheDaemonsWorkspaceCheckRefusesARootItCannotWrite covers those).
 func TestARefusedSetLeavesNothingForTheNextRestartToChokeOn(t *testing.T) {
 	t.Parallel()
 
@@ -229,8 +229,6 @@ func TestARefusedSetLeavesNothingForTheNextRestartToChokeOn(t *testing.T) {
 	breakRoot(t, root)
 
 	writePipelineFile(t, path, `
-workspace:
-  root: `+root+`
 jobs:
 - name: build
   plan:
@@ -239,7 +237,7 @@ jobs:
     run: echo built
 `)
 
-	served := startWebFor(t, path, "--interval", "1h", "--skip-set")
+	served := startWebFor(t, path, "--interval", "1h", "--skip-set", "--workspace-root", root)
 
 	err := stepsRun(t, []string{"pipeline", "set", "-p", "app", "-c", path, "-n", "--target", served.target()})
 	if err == nil {
@@ -254,7 +252,7 @@ jobs:
 
 	// The proof: a daemon reading what that set left behind still starts, and
 	// still serves nothing rather than refusing to run at all.
-	restarted := startWeb(t, "--db", served.state, "--interval", "1h")
+	restarted := startWeb(t, "--db", served.state, "--interval", "1h", "--workspace-root", root)
 	defer restarted.stop(t)
 
 	code, body := restarted.get(t, "/")
@@ -274,17 +272,17 @@ func TestARestartServesTheRestAndShowsTheBrokenOne(t *testing.T) {
 		t.Fatalf("/p/healthy = %d after a restart with a broken neighbour, want it served", code)
 	}
 
-	if reason := restarted.onrootBrokenReason(t); !strings.Contains(reason, "workspace") {
-		t.Errorf("/api/pipelines lists onroot broken with %q, want the workspace named", reason)
+	if reason := restarted.onrootBrokenReason(t); !strings.Contains(reason, "not found on PATH") {
+		t.Errorf("/api/pipelines lists onroot broken with %q, want the missing mcp command named", reason)
 	}
 
 	code, page := restarted.get(t, "/")
-	if code != http.StatusOK || !strings.Contains(page, "onroot") || !strings.Contains(page, "not serving") || !strings.Contains(page, "workspace") {
+	if code != http.StatusOK || !strings.Contains(page, "onroot") || !strings.Contains(page, "not serving") || !strings.Contains(page, "not found on PATH") {
 		t.Errorf("/ = %d, want the overview naming the broken pipeline rather than redirecting past it:\n%s", code, page)
 	}
 
 	err := stepsRun(t, []string{"pipeline", "get", "-p", "onroot", "--target", restarted.target()})
-	if err == nil || !strings.Contains(err.Error(), "workspace") {
+	if err == nil || !strings.Contains(err.Error(), "not found on PATH") {
 		t.Errorf("steps pipeline get on the broken pipeline = %v, want the reason", err)
 	}
 
@@ -293,11 +291,11 @@ func TestARestartServesTheRestAndShowsTheBrokenOne(t *testing.T) {
 	restarted.stop(t)
 }
 
-// assertASetRepairs fixes the root and sets the same configuration again, which is the ordinary repair.
-func assertASetRepairs(t *testing.T, restarted *webProcess, root, path string) {
+// assertASetRepairs puts the tool back and sets the same configuration again, which is the ordinary repair.
+func assertASetRepairs(t *testing.T, restarted *webProcess, tool, path string) {
 	t.Helper()
 
-	repairRoot(t, root)
+	writeTool(t, tool)
 
 	out := captureStdout(t, func() { restarted.set(t, "onroot", path) })
 	if !strings.Contains(out, "repaired") {
@@ -313,7 +311,7 @@ func assertASetRepairs(t *testing.T, restarted *webProcess, root, path string) {
 	}
 }
 
-// restartWithABrokenPipeline sets healthy and onroot, stops, makes onroot's workspace root a file where a directory belongs — so the provider's MkdirAll fails with ENOTDIR for every user, root included — and restarts, returning the root and onroot's pipeline file.
+// restartWithABrokenPipeline sets healthy and onroot, stops, removes the command onroot's mcp server names — something this machine checks of one pipeline and not the other, which a daemon-wide --workspace-root no longer is — and restarts, returning the command's path and onroot's pipeline file.
 func restartWithABrokenPipeline(t *testing.T) (*webProcess, string, string) {
 	t.Helper()
 
@@ -326,16 +324,14 @@ func restartWithABrokenPipelineOn(t *testing.T, state string) (*webProcess, stri
 
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
-	root := filepath.Join(dir, "root")
+	tool := filepath.Join(dir, "tool")
 
-	err := os.Mkdir(root, 0o700)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeTool(t, tool)
 
 	writePipelineFile(t, path, `
-workspace:
-  root: `+root+`
+mcp_servers:
+- name: probe
+  command: `+tool+`
 jobs:
 - name: build
   plan:
@@ -352,9 +348,22 @@ jobs:
 	served.set(t, "onroot", path)
 	served.stop(t)
 
-	breakRoot(t, root)
+	err := os.Remove(tool)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	return startWeb(t, "--db", state, "--interval", "1h"), root, path
+	return startWeb(t, "--db", state, "--interval", "1h"), tool, path
+}
+
+// writeTool puts an executable at path, which is all an mcp server's command needs to pass the set-time check.
+func writeTool(t *testing.T, path string) {
+	t.Helper()
+
+	err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o700) //nolint:gosec // an executable is the point
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // breakRoot leaves a workspace root this machine cannot supply for ANY user: a
@@ -372,22 +381,6 @@ func breakRoot(t *testing.T, root string) {
 	}
 
 	writePipelineFile(t, root, "")
-}
-
-// repairRoot puts the directory back, so a test can go on to prove the pipeline
-// runs once its workspace can be supplied again.
-func repairRoot(t *testing.T, root string) {
-	t.Helper()
-
-	err := os.RemoveAll(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = os.Mkdir(root, 0o700)
-	if err != nil {
-		t.Fatal(err)
-	}
 }
 
 // onrootBrokenReason is why /api/pipelines lists onroot as held and not served, empty when it does not.

@@ -368,9 +368,6 @@ func TestEndToEndPRReviewFanOutIsConcurrent(t *testing.T) {
 	})
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 defaults:
   preflight:
     disabled: true

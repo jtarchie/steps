@@ -744,9 +744,6 @@ func benchArtifactStore(t *testing.T, env benchEnv, nonce string) []hopRow {
 	}
 
 	path := writePipeline(t, dir, `
-workspace:
-  root: `+root+`
-
 jobs:
 - name: stored
   plan:
@@ -768,14 +765,14 @@ jobs:
     run: test -s out/note.bin
 `)
 
-	first := benchInvoke(t, path, env, []string{"stored"}, "--artifact-store", store)
+	first := benchInvoke(t, path, env, []string{"stored"}, "--workspace-root", root, "--artifact-store", store)
 
 	err := os.RemoveAll(root)
 	if err != nil {
 		t.Fatalf("removing the workspace root: %v", err)
 	}
 
-	second := benchInvoke(t, path, env, []string{"stored"}, "--artifact-store", store)
+	second := benchInvoke(t, path, env, []string{"stored"}, "--workspace-root", root, "--artifact-store", store)
 
 	row := hopRow{hop: "6", route: "store→here", how: "artifact store"}
 

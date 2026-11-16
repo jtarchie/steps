@@ -5,85 +5,30 @@ import (
 	"testing"
 )
 
-func TestValidateWorkspaceCacheRequiresRoot(t *testing.T) {
+// TestWorkspaceBlockIsRefusedNamingItsReplacement: every key the block had is the operator's now, so a pipeline still carrying one is told where it went rather than "field workspace not found".
+func TestWorkspaceBlockIsRefusedNamingItsReplacement(t *testing.T) {
 	t.Parallel()
 
-	cfg := &Config{Workspace: &WorkspaceConfig{
-		Strategy: "copy",
-		Cache:    &CacheConfig{Resources: true},
-	}}
+	for name, block := range map[string]string{
+		"root":     "  root: /var/lib/steps\n",
+		"cache":    "  cache:\n    resources: true\n    max_entries: 20\n",
+		"strategy": "  strategy: copy\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	err := cfg.validateWorkspace()
-	if err == nil {
-		t.Fatal("expected cache.resources without root: to be rejected")
-	}
+			path := writeConfig(t, "jobs:\n- name: build\n  plan:\n  - task: build\n    run: echo hi\nworkspace:\n"+block)
 
-	if !strings.Contains(err.Error(), "requires workspace.root") {
-		t.Errorf("error = %v, want it to name the missing root", err)
-	}
-}
+			_, err := LoadConfig(path)
+			if err == nil {
+				t.Fatal("a pipeline with a workspace: block loaded")
+			}
 
-// TestValidateWorkspaceCacheDisabledNeedsNoRoot pins that only ENABLING the
-// cache carries the root requirement: `cache: {resources: false}` is how a
-// pipeline turns it off while keeping its tuning, and that must stay legal.
-func TestValidateWorkspaceCacheDisabledNeedsNoRoot(t *testing.T) {
-	t.Parallel()
-
-	cfg := &Config{Workspace: &WorkspaceConfig{
-		Strategy: "copy",
-		Cache:    &CacheConfig{Resources: false, MaxEntries: 10},
-	}}
-
-	err := cfg.validateWorkspace()
-	if err != nil {
-		t.Errorf("validateWorkspace: %v", err)
-	}
-}
-
-func TestValidateWorkspaceCacheRejectsNegativeMaxEntries(t *testing.T) {
-	t.Parallel()
-
-	cfg := &Config{Workspace: &WorkspaceConfig{
-		Strategy: "copy",
-		Root:     "/tmp/ws",
-		Cache:    &CacheConfig{Resources: true, MaxEntries: -1},
-	}}
-
-	err := cfg.validateWorkspace()
-	if err == nil {
-		t.Error("expected a negative max_entries to be rejected")
-	}
-}
-
-func TestCacheHelpersDefaultSafely(t *testing.T) {
-	t.Parallel()
-
-	var nilWS *WorkspaceConfig
-
-	if nilWS.CacheEnabled() {
-		t.Error("a nil workspace should not report the cache as enabled")
-	}
-
-	if got := nilWS.CacheMaxEntries(); got != DefaultCacheMaxEntries {
-		t.Errorf("CacheMaxEntries() = %d, want the default %d", got, DefaultCacheMaxEntries)
-	}
-
-	ws := &WorkspaceConfig{Cache: &CacheConfig{Resources: true}}
-	if got := ws.CacheMaxEntries(); got != DefaultCacheMaxEntries {
-		t.Errorf("CacheMaxEntries() = %d, want the default when unset", got)
-	}
-}
-
-func TestCacheHelpersReadTheConfiguredCache(t *testing.T) {
-	t.Parallel()
-
-	ws := &WorkspaceConfig{Cache: &CacheConfig{Resources: true, MaxEntries: 7}}
-
-	if !ws.CacheEnabled() {
-		t.Error("cache.resources: true should report the cache as enabled")
-	}
-
-	if got := ws.CacheMaxEntries(); got != 7 {
-		t.Errorf("CacheMaxEntries() = %d, want the configured 7", got)
+			for _, want := range []string{"line 6", "workspace: is no longer a pipeline key", "delete the block", "--workspace-root", "resource cache is always on", "--resource-cache-max", "strategy: was removed"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not say %q", err, want)
+				}
+			}
+		})
 	}
 }

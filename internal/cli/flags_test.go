@@ -178,3 +178,22 @@ func TestVersionFallsBackToTheModuleVersion(t *testing.T) {
 		t.Errorf("no build info = %q, want dev", got)
 	}
 }
+
+// A daemon always keeps its trees: beside its sqlite file, or for a postgres one where the default state would be; never a temp directory removed at exit, which would keep no cache at all.
+func TestADaemonsWorkspaceRootIsDurableByDefault(t *testing.T) {
+	t.Parallel()
+
+	for state, want := range map[State]string{
+		"/var/lib/steps/state.db":        "/var/lib/steps/workspace",
+		State(DefaultDaemonState):        ".steps/workspace",
+		"postgres://steps@db.invalid/ci": ".steps/workspace",
+	} {
+		if got := daemonWorkspaceRoot(state); got != want {
+			t.Errorf("daemonWorkspaceRoot(%s) = %q, want %q", state, got, want)
+		}
+	}
+
+	if got := (ExecFlags{WorkspaceRoot: "/srv/trees"}).workspace(daemonWorkspaceRoot("/var/lib/steps/state.db")).Root; got != "/srv/trees" {
+		t.Errorf("--workspace-root /srv/trees gave root %q, want the flag to win over the default", got)
+	}
+}

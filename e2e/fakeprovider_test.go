@@ -788,6 +788,11 @@ func writePipeline(t *testing.T, dir, yaml string) string {
 	return path
 }
 
+// wsRoot is the durable --workspace-root a test keeps beside its pipeline file.
+func wsRoot(path string) string {
+	return filepath.Join(filepath.Dir(path), "ws")
+}
+
 // readFileString returns path's contents, failing the test if it's missing.
 // Used to assert on the side effects a pipeline's own shell commands left in
 // the test's directory — the only durable view of a run's filesystem work,

@@ -30,14 +30,10 @@ import (
 // the endpoint is part of an agent's hashed content, so a second provider on a
 // second port would be a different step and would miss the cache for a reason
 // that has nothing to do with what is under test.
-func stepCachePipeline(t *testing.T, dir, endpoint, root, publishLog, fetchLog, notifyLog, notes string) string {
+func stepCachePipeline(t *testing.T, dir, endpoint, publishLog, fetchLog, notifyLog, notes string) string {
 	t.Helper()
 
 	return writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-  root: %[2]s
-
 defaults:
   preflight:
     disabled: true
@@ -47,8 +43,8 @@ resource_types:
   config:
     check: echo '[{"ref":"v1"}]'
     in: |
-      echo '%[5]s' > NOTES.txt
-      echo fetched >> %[4]s
+      echo '%[4]s' > NOTES.txt
+      echo fetched >> %[3]s
 
 resources:
 - name: repo
@@ -77,15 +73,15 @@ jobs:
     inputs: [report]
     outputs: [published]
     run: |
-      cat report/summary.md >> %[3]s
-      echo >> %[3]s
+      cat report/summary.md >> %[2]s
+      echo >> %[2]s
       cp report/summary.md published/
   - task: notify
-    run: echo notified >> %[6]s
+    run: echo notified >> %[5]s
   assert:
     execution: [repo, reviewer, publish, notify]
     outcome: succeeded
-`, endpoint, root, publishLog, fetchLog, notes, notifyLog))
+`, endpoint, publishLog, fetchLog, notes, notifyLog))
 }
 
 // stepCacheScript is the conversation the reviewer has when it actually runs.
@@ -125,9 +121,9 @@ func TestStepCacheReusesAnAgentStep(t *testing.T) {
 	notifyLog := filepath.Join(dir, "notify.log")
 
 	fake := newFakeLLM(t, stepCacheScript()...)
-	path := stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, notifyLog, stepCacheNotes)
+	path := stepCachePipeline(t, dir, fake.URL, publishLog, fetchLog, notifyLog, stepCacheNotes)
 
-	mustRun(t, "test", path)
+	mustRun(t, "test", "--workspace-root", root, path)
 
 	if got := fake.requestCount(); got != len(stepCacheScript()) {
 		t.Fatalf("provider requests on the first run = %d, want %d", got, len(stepCacheScript()))
@@ -141,7 +137,7 @@ func TestStepCacheReusesAnAgentStep(t *testing.T) {
 	// declared input are unchanged, so its entry is found and no model is
 	// asked anything. The script is exhausted, so a request would also fail
 	// the fake — the count is the assertion that says why.
-	mustRun(t, "test", path)
+	mustRun(t, "test", "--workspace-root", root, path)
 
 	if got := fake.requestCount(); got != len(stepCacheScript()) {
 		t.Errorf("provider requests after the rerun = %d, want %d — the rerun asked the model %d more time(s)",
@@ -156,10 +152,10 @@ func TestStepCacheReusesAnAgentStep(t *testing.T) {
 		t.Errorf("the reused agent step's report did not reach the second run's publish step; got %q", got)
 	}
 
-	// The get is not cached — a resource fetch has its own cache, opted into
-	// separately — so a reused agent step does not silently freeze the rest of
-	// the plan.
-	assertLineCount(t, fetchLog, 2)
+	// The get's version is unchanged, so the resource cache, always on under a
+	// durable root as Concourse's is, hands the second build the tree it
+	// fetched rather than running in: again.
+	assertLineCount(t, fetchLog, 1)
 
 	// The output-less task ran both times. A step with nothing to restore must
 	// never be "reused": that is not reuse, it is dropping whatever its run:
@@ -189,13 +185,13 @@ func TestStepCacheRerunsWhenAnInputChanges(t *testing.T) {
 
 	fake := newFakeLLM(t, stepCacheScriptTimes(2)...)
 
-	mustRun(t, "test", stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, notifyLog, stepCacheNotes))
+	mustRun(t, "test", "--workspace-root", root, stepCachePipeline(t, dir, fake.URL, publishLog, fetchLog, notifyLog, stepCacheNotes))
 
 	// Same plan, same agent, same endpoint — only what the get: fetches is
 	// different, which is a change no plan-time hash of the agent step can
 	// see.
 	changed := "The widget catalog is seeded from catalog.toml on boot."
-	mustRun(t, "test", stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, notifyLog, changed))
+	mustRun(t, "test", "--workspace-root", root, stepCachePipeline(t, dir, fake.URL, publishLog, fetchLog, notifyLog, changed))
 
 	if got := fake.requestCount(); got != 2*len(stepCacheScript()) {
 		t.Errorf("provider requests across both runs = %d, want %d (different input bytes are different work)",
@@ -213,18 +209,18 @@ func TestStepCacheRerunsWhenThePromptChanges(t *testing.T) {
 	dir, root := t.TempDir(), t.TempDir()
 	fake := newFakeLLM(t, stepCacheScriptTimes(2)...)
 
-	path := stepCachePipeline(t, dir, fake.URL, root,
+	path := stepCachePipeline(t, dir, fake.URL,
 		filepath.Join(dir, "publish.log"), filepath.Join(dir, "fetch.log"), filepath.Join(dir, "notify.log"), stepCacheNotes)
 
-	mustRun(t, "test", path)
-	mustRun(t, "test", path)
+	mustRun(t, "test", "--workspace-root", root, path)
+	mustRun(t, "test", "--workspace-root", root, path)
 
 	if got := fake.requestCount(); got != len(stepCacheScript()) {
 		t.Fatalf("provider requests after an unchanged rerun = %d, want %d — the step was not cached, so nothing below proves anything", got, len(stepCacheScript()))
 	}
 
 	rewritePipeline(t, path, "Review the notes and summarize them.", "Review the notes and list every file they name.")
-	mustRun(t, "test", path)
+	mustRun(t, "test", "--workspace-root", root, path)
 
 	if got := fake.requestCount(); got != 2*len(stepCacheScript()) {
 		t.Errorf("provider requests after the prompt changed = %d, want %d — the cached step was served for a prompt it never ran", got, 2*len(stepCacheScript()))
@@ -243,7 +239,7 @@ func TestStepCacheVolatileAgentAlwaysRuns(t *testing.T) {
 
 	fake := newFakeLLM(t, stepCacheScriptTimes(2)...)
 
-	path := stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, notifyLog, stepCacheNotes)
+	path := stepCachePipeline(t, dir, fake.URL, publishLog, fetchLog, notifyLog, stepCacheNotes)
 	volatileAgent := strings.Replace(
 		readFileString(t, path),
 		"  - agent: reviewer\n",
@@ -252,8 +248,8 @@ func TestStepCacheVolatileAgentAlwaysRuns(t *testing.T) {
 	)
 	path = writePipeline(t, dir, volatileAgent)
 
-	mustRun(t, "test", path)
-	mustRun(t, "test", path)
+	mustRun(t, "test", "--workspace-root", root, path)
+	mustRun(t, "test", "--workspace-root", root, path)
 
 	if got := fake.requestCount(); got != 2*len(stepCacheScript()) {
 		t.Errorf("provider requests across both runs = %d, want %d (volatile: must never be reused)",
@@ -303,19 +299,19 @@ func TestStepCacheRerunsWhenAGrantsTermsChange(t *testing.T) {
 			dir, root := t.TempDir(), t.TempDir()
 			fake := newFakeLLM(t, append(append([]turn{}, script...), script...)...)
 
-			path := stepCachePipeline(t, dir, fake.URL, root,
+			path := stepCachePipeline(t, dir, fake.URL,
 				filepath.Join(dir, "publish.log"), filepath.Join(dir, "fetch.log"), filepath.Join(dir, "notify.log"), stepCacheNotes)
 
 			rewritePipeline(t, path, "  tools: [read_file, write_file]\n", grants[0])
-			mustRun(t, "test", path)
-			mustRun(t, "test", path)
+			mustRun(t, "test", "--workspace-root", root, path)
+			mustRun(t, "test", "--workspace-root", root, path)
 
 			if got := fake.requestCount(); got != len(script) {
 				t.Fatalf("provider requests after an unchanged rerun = %d, want %d — the step was not cached, so nothing below proves anything", got, len(script))
 			}
 
 			rewritePipeline(t, path, grants[0], grants[1])
-			mustRun(t, "test", path)
+			mustRun(t, "test", "--workspace-root", root, path)
 
 			if got := fake.requestCount(); got != 2*len(script) {
 				t.Errorf("provider requests after the grant changed = %d, want %d — the cached step was served under terms it never ran with", got, 2*len(script))
@@ -332,7 +328,7 @@ func TestStepCacheRerunsWhenTheNudgeIsRemoved(t *testing.T) {
 	script := stepCacheScript()
 	fake := newFakeLLM(t, append(stepCacheScript(), script...)...)
 
-	path := stepCachePipeline(t, dir, fake.URL, root,
+	path := stepCachePipeline(t, dir, fake.URL,
 		filepath.Join(dir, "publish.log"), filepath.Join(dir, "fetch.log"), filepath.Join(dir, "notify.log"), stepCacheNotes)
 
 	const (
@@ -342,15 +338,15 @@ func TestStepCacheRerunsWhenTheNudgeIsRemoved(t *testing.T) {
 	)
 
 	rewritePipeline(t, path, messages, messages+assert+nudge)
-	mustRun(t, "test", path)
-	mustRun(t, "test", path)
+	mustRun(t, "test", "--workspace-root", root, path)
+	mustRun(t, "test", "--workspace-root", root, path)
 
 	if got := fake.requestCount(); got != len(script) {
 		t.Fatalf("provider requests after an unchanged rerun = %d, want %d — the step was not cached, so nothing below proves anything", got, len(script))
 	}
 
 	rewritePipeline(t, path, assert+nudge, assert)
-	mustRun(t, "test", path)
+	mustRun(t, "test", "--workspace-root", root, path)
 
 	if got := fake.requestCount(); got != 2*len(script) {
 		t.Errorf("provider requests after the nudge was removed = %d, want %d — the cached step was served as if it had run unaided", got, 2*len(script))

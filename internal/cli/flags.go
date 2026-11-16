@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/postgres"
 	"github.com/jtarchie/steps/internal/trigger"
+	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // StateFlags are the two flags every command that opens a state database
@@ -202,6 +204,14 @@ type ExecFlags struct {
 	Answer        []string          `help:"answer an ask_user question in advance, e.g. --answer 'which bump=minor' (repeatable)"             name:"answer"`
 	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                                               help:"leave the build workspace on disk instead of deleting it"`
 	NoPreflight   bool              `help:"skip the pre-run health check of the models and MCP servers a job needs"                           name:"no-preflight"`
+	// The machine's, never the pipeline's: a pipeline names no machine, so where trees live and what is kept between builds is the operator's to say (the workspace: block that held these is refused at load).
+	WorkspaceRoot    string `env:"STEPS_WORKSPACE_ROOT"                                                                                                        help:"keep build trees, the step cache and task caches under this directory (steps run: a temp directory removed at exit; steps web: workspace/ beside its state database)" name:"workspace-root" placeholder:"DIR"`
+	ResourceCacheMax int    `help:"how many fetched resource versions --workspace-root keeps for later builds, least recently used evicted first (default 50)" name:"resource-cache-max"`
+}
+
+// workspace is the Settings a provider is built from, with root standing in for an unset --workspace-root (empty keeps the temp directory).
+func (e ExecFlags) workspace(root string) *workspace.Settings {
+	return &workspace.Settings{Root: cmp.Or(e.WorkspaceRoot, root), ResourceCacheMaxEntries: e.ResourceCacheMax}
 }
 
 // DeliverFlags is --deliver, apart from ExecFlags because only the local commands take it: a daemon receives deliveries at POST /p/<pipeline>/hooks/<resource>.
@@ -286,6 +296,15 @@ func (h HistoryFlags) Apply(cfg *config.Config) {
 // a daemon is handed pipelines by `steps pipeline set`, and the commands that
 // read what it recorded are handed a NAME. See docs/web.md.
 const DefaultDaemonState = ".steps/steps.db"
+
+// daemonWorkspaceRoot is where a daemon keeps build trees when --workspace-root says nothing: beside its sqlite file, so one directory holds what the daemon keeps; a postgres daemon has no such directory and takes .steps/ in its working directory, where the default state would be. Always durable: a daemon is the long-lived process its step and task caches are for.
+func daemonWorkspaceRoot(state State) string {
+	if state.postgres() {
+		return filepath.Join(filepath.Dir(DefaultDaemonState), "workspace")
+	}
+
+	return filepath.Join(filepath.Dir(string(state)), "workspace")
+}
 
 // DaemonStatePath is the state database `steps web` and the read commands use.
 func DaemonStatePath(db DB) State {

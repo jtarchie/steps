@@ -35,7 +35,7 @@ func drainable(t *testing.T, dir, yaml string) (*scheduler.LocalRunner, *Pipelin
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}

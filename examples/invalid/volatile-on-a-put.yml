@@ -5,9 +5,6 @@
 # nothing. Refused rather than ignored.
 # expect: volatile is only valid on task and agent steps
 
-workspace:
-  strategy: copy
-
 resource_types:
 - name: dummy
   config:

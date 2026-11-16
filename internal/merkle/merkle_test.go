@@ -184,17 +184,17 @@ func TestTaskNodeContentAlwaysCarriesInputsOutputs(t *testing.T) {
 // TestTaskNodeContentInputsOutputsAffectHash pins that inputs/outputs are
 // always part of a task node's identity: every step materializes its view
 // from its declarations, so changing them changes what the step executes
-// against — workspace: block or not.
+// against.
 func TestTaskNodeContentInputsOutputsAffectHash(t *testing.T) {
 	t.Parallel()
 
 	base := config.ResolvedTask{Name: "build", Run: "echo hi"}
 	withIO := config.ResolvedTask{Name: "build", Run: "echo hi", Inputs: []string{"repo"}, Outputs: []string{"built"}}
 
-	mustHash := func(t *testing.T, rt config.ResolvedTask, ws *config.WorkspaceConfig) string {
+	mustHash := func(t *testing.T, rt config.ResolvedTask) string {
 		t.Helper()
 
-		content, err := TaskNodeContent(&config.Config{Workspace: ws}, config.Step{}, rt)
+		content, err := TaskNodeContent(&config.Config{}, config.Step{}, rt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -207,13 +207,8 @@ func TestTaskNodeContentInputsOutputsAffectHash(t *testing.T) {
 		return hash
 	}
 
-	if mustHash(t, base, nil) == mustHash(t, withIO, nil) {
-		t.Error("declaring inputs/outputs did not change the hash with no workspace: block")
-	}
-
-	ws := &config.WorkspaceConfig{Strategy: "copy"}
-	if mustHash(t, base, ws) == mustHash(t, withIO, ws) {
-		t.Error("declaring inputs/outputs did not change the hash with a workspace: block")
+	if mustHash(t, base) == mustHash(t, withIO) {
+		t.Error("declaring inputs/outputs did not change the hash")
 	}
 }
 
@@ -225,10 +220,10 @@ func TestPutNodeContentInputsAffectHash(t *testing.T) {
 	rt := config.ResourceType{Config: config.ResourceTypeConfig{Out: "true"}}
 	source := map[string]any{"key": "v"}
 
-	mustHash := func(t *testing.T, inputs []string, ws *config.WorkspaceConfig) string {
+	mustHash := func(t *testing.T, inputs []string) string {
 		t.Helper()
 
-		content, err := PutNodeContent(&config.Config{Workspace: ws}, config.Step{}, rt, nil, source, nil, inputs, false)
+		content, err := PutNodeContent(&config.Config{}, config.Step{}, rt, nil, source, nil, inputs, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -241,13 +236,8 @@ func TestPutNodeContentInputsAffectHash(t *testing.T) {
 		return hash
 	}
 
-	if mustHash(t, nil, nil) == mustHash(t, []string{"built"}, nil) {
-		t.Error("declaring inputs did not change a put node's hash with no workspace: block")
-	}
-
-	ws := &config.WorkspaceConfig{Strategy: "copy"}
-	if mustHash(t, nil, ws) == mustHash(t, []string{"built"}, ws) {
-		t.Error("declaring inputs did not change a put node's hash with a workspace: block")
+	if mustHash(t, nil) == mustHash(t, []string{"built"}) {
+		t.Error("declaring inputs did not change a put node's hash")
 	}
 }
 
@@ -287,10 +277,10 @@ func TestTaskImageAffectsHashRegardlessOfWorkspace(t *testing.T) {
 	withImage := config.ResolvedTask{Name: "build", Run: "echo hi", Image: "alpine"}
 	withOtherImage := config.ResolvedTask{Name: "build", Run: "echo hi", Image: "golang:1.26"}
 
-	mustHash := func(t *testing.T, rt config.ResolvedTask, ws *config.WorkspaceConfig) string {
+	mustHash := func(t *testing.T, rt config.ResolvedTask) string {
 		t.Helper()
 
-		content, err := TaskNodeContent(&config.Config{Workspace: ws}, config.Step{}, rt)
+		content, err := TaskNodeContent(&config.Config{}, config.Step{}, rt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -303,14 +293,12 @@ func TestTaskImageAffectsHashRegardlessOfWorkspace(t *testing.T) {
 		return hash
 	}
 
-	for _, ws := range []*config.WorkspaceConfig{nil, {Strategy: "copy"}} {
-		if mustHash(t, base, ws) == mustHash(t, withImage, ws) {
-			t.Errorf("setting image did not change the task hash (ws=%v)", ws)
-		}
+	if mustHash(t, base) == mustHash(t, withImage) {
+		t.Error("setting image did not change the task hash")
+	}
 
-		if mustHash(t, withImage, ws) == mustHash(t, withOtherImage, ws) {
-			t.Errorf("two different images produced the same task hash (ws=%v)", ws)
-		}
+	if mustHash(t, withImage) == mustHash(t, withOtherImage) {
+		t.Error("two different images produced the same task hash")
 	}
 }
 

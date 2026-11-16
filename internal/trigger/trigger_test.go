@@ -622,7 +622,7 @@ func TestWatchRejectsNonPositiveInterval(t *testing.T) {
 
 	st := mustOpenStore(t, dir)
 
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}

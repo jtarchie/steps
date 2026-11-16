@@ -121,9 +121,6 @@ jobs:
 		{
 			name: "job-level hook with inputs",
 			pipeline: `
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:
@@ -157,9 +154,6 @@ jobs:
 		{
 			name: "job-level hook's own nested hook with inputs",
 			pipeline: `
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:

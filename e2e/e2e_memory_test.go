@@ -12,14 +12,10 @@ import (
 // memoryPipeline is a bot answering one message from one user: a task writes
 // the user's id where the agent's memory: reads its scope, and the message is
 // the prompt. Both come in as vars, so each run is a different conversation.
-// outputs: and a workspace root are what make the agent step cacheable at
+// outputs: and a --workspace-root are what make the agent step cacheable at
 // all, which the last run of TestEndToEndAgentMemory depends on.
-func memoryPipeline(endpoint, root string) string {
+func memoryPipeline(endpoint string) string {
 	return fmt.Sprintf(`
-workspace:
-  strategy: copy
-  root: %s
-
 defaults:
   preflight:
     disabled: true
@@ -45,7 +41,7 @@ jobs:
       scope_from: who/user
     messages:
     - ((message))
-`, root, endpoint)
+`, endpoint)
 }
 
 var memoryIDPattern = regexp.MustCompile(`\[(\d+)\] prefers code samples`)
@@ -63,7 +59,7 @@ func TestEndToEndAgentMemory(t *testing.T) {
 	t.Parallel()
 
 	fake := newRoutedFakeLLM(t, memoryBot)
-	path := writePipeline(t, t.TempDir(), memoryPipeline(fake.URL, t.TempDir()))
+	path := writePipeline(t, t.TempDir(), memoryPipeline(fake.URL))
 	run := memoryRunner(t, fake, path)
 
 	first := run("U1", "I prefer code samples")
@@ -127,7 +123,7 @@ func memoryRunner(t *testing.T, fake *fakeLLM, path string) func(user, message s
 
 		before := fake.requestCount()
 
-		mustRun(t, "run", path, "--job", "answer", "--var", "user="+user, "--var", "message="+message)
+		mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--job", "answer", "--var", "user="+user, "--var", "message="+message)
 
 		if fake.requestCount() == before {
 			t.Fatalf("run as %s with %q made no request — a cache hit", user, message)
@@ -156,7 +152,7 @@ func TestEndToEndMemoryCommand(t *testing.T) {
 	t.Parallel()
 
 	fake := newRoutedFakeLLM(t, memoryBot)
-	path := writePipeline(t, t.TempDir(), memoryPipeline(fake.URL, t.TempDir()))
+	path := writePipeline(t, t.TempDir(), memoryPipeline(fake.URL))
 	run := memoryRunner(t, fake, path)
 
 	run("U1", "I prefer code samples")

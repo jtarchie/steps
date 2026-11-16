@@ -254,7 +254,7 @@ func (d *daemon) restoreLocked(ctx context.Context, name, from string) error {
 		return fmt.Errorf("web: %q cannot run here: %w", name, err)
 	}
 
-	provider, err := d.provider(cfg, st)
+	provider, err := d.provider(st)
 	if err != nil {
 		release(st)
 
@@ -298,7 +298,7 @@ func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.
 	}
 
 	// Resolved BEFORE the record, because the record is durable and this is the last thing that can refuse: a workspace this machine cannot supply used to leave current_revision_id naming a configuration the next restart refused, and a daemon that refuses to start has no endpoint left to fix it through.
-	provider, err := d.workspaceFor(cfg, st, existing)
+	provider, err := d.workspaceFor(st, existing)
 	if err != nil {
 		d.closeIfNew(st, serving)
 

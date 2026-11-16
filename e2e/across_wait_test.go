@@ -12,9 +12,6 @@ func acrossWaitPipeline(t *testing.T, dir, endpoint string, ceiling, reserve int
 	t.Helper()
 
 	return writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 defaults:
   preflight:
     disabled: true

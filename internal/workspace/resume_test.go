@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/config"
 )
 
 // The tree a restart resumes is a stale build by every sign the sweep reads, so only being named spares it — by a path that may be spelled relative to where the root was.
@@ -24,7 +22,7 @@ func TestTheSweepSparesATreeARestartResumes(t *testing.T) {
 		}
 	}
 
-	provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy", Root: root}, false)
+	provider, err := NewProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +69,7 @@ func TestResumingContinuesOneRunAndLeavesTheProviderAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy", Root: root}, false)
+	provider, err := NewProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

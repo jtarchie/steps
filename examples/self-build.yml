@@ -3,7 +3,7 @@
 # One PR per labeled open issue in a repo you own: a draft once implemented, marked ready once reviewed.
 #
 #   steps validate examples/self-build.yml --var repo=owner/name --var label=self-build
-#   steps run      examples/self-build.yml --job implement --var repo=owner/name --var label=self-build
+#   steps run      examples/self-build.yml --job implement --var repo=owner/name --var label=self-build --workspace-root .steps/workspace
 #   steps web && steps pipeline set -c examples/self-build.yml -v repo=owner/name -v label=self-build   # picks up newly labeled issues
 #
 # Needs: git, gh (logged in, `repo` scope), claude, node on PATH, and GH_TOKEN set (export GH_TOKEN=$(gh auth token)) for the issue get. Label an
@@ -12,14 +12,14 @@
 # var because two factories watching one label race each other to the branch:
 # a laptop and a daemon building the same repo each take their own.
 
-# A durable root is the only switch the step output cache has: with one, a task
+# A durable --workspace-root (steps web always has one) is the only switch the step output cache has: with one, a task
 # or agent step is keyed on its own content plus a digest of its inputs, and a
 # hit restores its outputs instead of re-running it. That is what makes a rerun
 # after a failed late step cost nothing — the phases before it are already
 # bought, and an agent rerun is lossy anyway (a second conversation does not
-# reproduce the tree the first one wrote). `cache.resources` keeps the fetched
-# clone across builds too; neither get has side effects, which is the
-# assertion enabling it makes.
+# reproduce the tree the first one wrote). The resource cache keeps the fetched
+# clone across builds too; neither get has side effects, which the resource
+# contract assumes of every in:.
 #
 # Nothing is marked `volatile:`. `prep` is the one candidate — it reads the
 # remote — but it also writes a reflog, and a reflog carries a timestamp: rerun
@@ -27,11 +27,6 @@
 # cached `prep` skips the remote check only when every input is unchanged, i.e.
 # on a rerun of a build already started, which is exactly when reaching the
 # `put` is the point.
-workspace:
-  root: .steps/workspace
-  cache:
-    resources: true
-
 resource_types:
 # A put: publishing must never be a cached skip. `draft: true` opens a draft PR from the implementer's snapshot so the work is visible during review; without it, the reviewed HEAD is pushed and the PR marked ready (created first if the draft put never managed to).
 - name: github-pr

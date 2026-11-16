@@ -1,0 +1,17 @@
+# Where build trees live is the operator's, never the pipeline's: the root is
+# `--workspace-root` on steps run and steps web, the resource cache is always on
+# under it (as Concourse's is), its size is `--resource-cache-max`, and copy was
+# the only strategy. A pipeline still carrying the block is told where each key
+# went rather than "field workspace not found".
+# expect: workspace: is no longer a pipeline key
+
+workspace:
+  root: /var/lib/steps
+  cache:
+    resources: true
+
+jobs:
+- name: build
+  plan:
+  - task: t
+    run: 'true'

@@ -26,8 +26,8 @@ type ClearedCache struct {
 	Err   error
 }
 
-// ClearTaskCaches empties the caches of the task or agent step named step in job, on this machine and on every worker it is placed on; cachePath, when set, picks one. Refusals come back before anything is removed, so a refused clear removes nothing; per-cache failures are each result's Err.
-func ClearTaskCaches(ctx context.Context, cfg *config.Config, jobName, step, cachePath string, start bool) ([]ClearedCache, error) {
+// ClearTaskCaches empties the caches of the task or agent step named step in job, on this machine under root and on every worker it is placed on; cachePath, when set, picks one. Refusals come back before anything is removed, so a refused clear removes nothing; per-cache failures are each result's Err.
+func ClearTaskCaches(ctx context.Context, cfg *config.Config, root, jobName, step, cachePath string, start bool) ([]ClearedCache, error) {
 	// ponytail: run from a terminal against the file and its --worker mappings only; a steps web route, clearing with the daemon's own pipelines and workers, is the upgrade.
 	paths, tags, implicit, err := stepCaches(cfg, jobName, step, cachePath)
 	if err != nil {
@@ -64,7 +64,7 @@ func ClearTaskCaches(ctx context.Context, cfg *config.Config, jobName, step, cac
 		keys = append(keys, workspace.TaskCacheKey(cfg.Name, jobName, step, p))
 	}
 
-	cleared, err := clearLocal(cfg.Workspace, paths, keys)
+	cleared, err := clearLocal(root, paths, keys)
 	if err != nil {
 		return cleared, err
 	}
@@ -87,16 +87,16 @@ func clearOnWorkers(ctx context.Context, implicit bool, workers map[string]strin
 	return cleared
 }
 
-func clearLocal(ws *config.WorkspaceConfig, paths, keys []string) ([]ClearedCache, error) {
+func clearLocal(root string, paths, keys []string) ([]ClearedCache, error) {
 	const here = "this machine"
 
-	if ws == nil || ws.Root == "" {
-		return []ClearedCache{{Where: here, Note: "no workspace.root is set, so no cache outlives its run"}}, nil
+	if root == "" {
+		return []ClearedCache{{Where: here, Note: "no --workspace-root was given, so there is no kept cache to clear here (a daemon's is workspace/ beside its state database)"}}, nil
 	}
 
-	found, err := workspace.ClearTaskCaches(ws, keys)
+	found, err := workspace.ClearTaskCaches(&workspace.Settings{Root: root}, keys)
 	if err != nil {
-		return nil, fmt.Errorf("clearing the caches under %s: %w", ws.Root, err)
+		return nil, fmt.Errorf("clearing the caches under %s: %w", root, err)
 	}
 
 	cleared := make([]ClearedCache, 0, len(paths))

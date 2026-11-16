@@ -17,6 +17,8 @@ type ClearTaskCacheCmd struct {
 	CachePath string            `help:"clear only this cache path (default: every one the step declares)"                 name:"cache-path"                     short:"c"`
 	Worker    map[string]string `help:"map a step tag to a worker, as steps run takes it; a placed step's cache is there" name:"worker"`
 	Start     bool              `help:"start a stopped aws:// or gcp:// worker to clear it, and stop it again"            name:"start"`
+	// The root the runs used, as they were given it: the pipeline no longer says.
+	WorkspaceRoot string `env:"STEPS_WORKSPACE_ROOT" help:"the --workspace-root the step ran under, whose kept caches are cleared (a daemon's is workspace/ beside its state database)" name:"workspace-root" placeholder:"DIR"`
 	// Name alone of StateFlags: the cache is keyed by the pipeline's name, and nothing here opens the state database.
 	Name map[string]string `help:"name the pipeline as steps run --name does, e.g. --name infra=infra/pipeline.yml" name:"name"`
 }
@@ -40,7 +42,7 @@ func (c *ClearTaskCacheCmd) Run(streams Streams) error {
 		return fmt.Errorf("%w", err)
 	}
 
-	cleared, err := pipeline.ClearTaskCaches(ctx, cfg, c.Job, c.Step, c.CachePath, c.Start)
+	cleared, err := pipeline.ClearTaskCaches(ctx, cfg, c.WorkspaceRoot, c.Job, c.Step, c.CachePath, c.Start)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

@@ -33,7 +33,7 @@ func TestWebUIRendersARealAgentRun(t *testing.T) {
 
 	dir := t.TempDir()
 	fake := newFakeLLM(t, happyPathScript()...)
-	path := e2ePipeline(t, dir, fake.URL, "")
+	path := e2ePipeline(t, dir, fake.URL)
 
 	mustRun(t, "run", path, "--job", "build")
 
@@ -106,7 +106,7 @@ func TestWebUILiveStreamDrawsTheSameRunThePageDoes(t *testing.T) {
 
 	dir := t.TempDir()
 	fake := newFakeLLM(t, happyPathScript()...)
-	path := e2ePipeline(t, dir, fake.URL, "")
+	path := e2ePipeline(t, dir, fake.URL)
 
 	mustRun(t, "run", path, "--job", "build")
 

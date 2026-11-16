@@ -533,9 +533,6 @@ defaults:
   preflight:
     disabled: true
 
-workspace:
-  strategy: copy
-
 agents:
 - name: reviewer
   source:

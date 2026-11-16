@@ -22,9 +22,6 @@ func TestEndToEndAcrossCollectsCellOutputs(t *testing.T) {
 	log := filepath.Join(dir, "seen.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:
@@ -63,9 +60,6 @@ func TestEndToEndAcrossCollectDoesNotClobberConcurrently(t *testing.T) {
 	log := filepath.Join(dir, "seen.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:
@@ -118,9 +112,6 @@ func TestEndToEndAcrossCollectsAgentCells(t *testing.T) {
 	})
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 defaults:
   preflight:
     disabled: true
@@ -169,9 +160,6 @@ func TestEndToEndAcrossCollectFailedCellContributesNothing(t *testing.T) {
 	log := filepath.Join(dir, "seen.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:
@@ -213,9 +201,6 @@ func TestEndToEndAcrossCollectCellsRerun(t *testing.T) {
 	ran := filepath.Join(dir, "ran.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:
@@ -252,9 +237,6 @@ func TestEndToEndAcrossCollectReplacesStaleArtifact(t *testing.T) {
 	log := filepath.Join(dir, "seen.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:
@@ -299,9 +281,6 @@ func TestEndToEndAcrossCollectAllCellsFailedLeavesEmptyArtifact(t *testing.T) {
 	log := filepath.Join(dir, "seen.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:
@@ -336,9 +315,6 @@ func TestEndToEndAcrossCollectFromFile(t *testing.T) {
 	log := filepath.Join(dir, "seen.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:
@@ -380,9 +356,6 @@ func TestEndToEndAcrossCollectRejectsAPathHostileItem(t *testing.T) {
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:

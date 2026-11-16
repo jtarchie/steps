@@ -15,7 +15,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 )
 
-// Provider is built once per CLI invocation from cfg.Workspace (nil taking
+// Provider is built once per CLI invocation from the operator's Settings (nil taking
 // every default — see NewProvider). It owns whatever on-disk root its strategy
 // needs and fails fast, at startup, on anything that would only surface as a
 // confusing mid-build error otherwise (wrong platform, wrong filesystem,
@@ -44,7 +44,7 @@ type Provider interface {
 	Spare(dirs []string)
 	// AttachArtifactStore wires the two halves of the artifact store into the
 	// step cache, reporting whether anything was attached — false with no
-	// durable workspace.root:, where there is no local cache to mirror.
+	// durable --workspace-root, where there is no local cache to mirror.
 	AttachArtifactStore(blobs BlobStore, index StepIndex) bool
 	Close() error
 }
@@ -115,7 +115,7 @@ type BuildWorkspace interface {
 	FetchResource(ctx context.Context, name, cacheKey string, fetch func(dir string) error) (string, error)
 	// RestoreStep computes a step's action key and, when an entry for it
 	// holds every declared output, materializes them into the artifact store.
-	// With no durable workspace.root: it answers "miss, no key" — there is
+	// With no durable --workspace-root it answers "miss, no key" — there is
 	// nowhere for an entry to outlive the run that wrote it.
 	RestoreStep(ctx context.Context, req StepCacheRequest) (StepCacheResult, error)
 	// StoreStep files the outputs a step just captured under key. Called only
@@ -187,12 +187,35 @@ func sanitizeLabel(label string) string {
 // unconditionally, including on the failure path — so the files an agent or
 // task had just edited when it failed, the most useful thing to look at, were
 // always already gone by the time the error reached the terminal.
-func NewProvider(ws *config.WorkspaceConfig, keep bool) (Provider, error) {
+func NewProvider(ws *Settings, keep bool) (Provider, error) {
 	if ws == nil {
-		ws = &config.WorkspaceConfig{}
+		ws = &Settings{}
+	}
+
+	if ws.ResourceCacheMaxEntries < 0 {
+		return nil, fmt.Errorf("--resource-cache-max %d must not be negative", ws.ResourceCacheMaxEntries)
 	}
 
 	return newCopyProvider(ws, keep)
+}
+
+// Settings are where and how a machine keeps build trees: the operator's decision (a flag on steps run and steps web), never the pipeline's, since a pipeline names no machine.
+type Settings struct {
+	// Root is where build trees, the step cache, task caches and the resource cache live; empty is a temp directory removed at the end of the invocation, which keeps none of them past it.
+	Root string
+	// ResourceCacheMaxEntries bounds the resource cache by count; 0 takes DefaultResourceCacheMaxEntries. The cache itself is always on under a durable Root, as Concourse's resource caches are: a fetched version is reused by type, source, params and version.
+	ResourceCacheMaxEntries int
+}
+
+// DefaultResourceCacheMaxEntries bounds the resource cache when the operator does not say how big: big enough that a handful of resources never evicts what it still wants, small enough that an abandoned pipeline's entries are bounded.
+const DefaultResourceCacheMaxEntries = 50
+
+func (s *Settings) resourceCacheMax() int {
+	if s.ResourceCacheMaxEntries <= 0 {
+		return DefaultResourceCacheMaxEntries
+	}
+
+	return s.ResourceCacheMaxEntries
 }
 
 // keepWorkspace reports that root is being left in place, and reports whether

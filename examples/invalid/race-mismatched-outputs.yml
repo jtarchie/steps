@@ -3,9 +3,6 @@
 # what those outputs are.
 # expect: every race branch must declare the same outputs
 
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:

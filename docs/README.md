@@ -158,7 +158,7 @@ That gives completion and inline errors while you type. `steps validate` remains
 
 ## Re-running one step: `--replay`
 
-An agent step makes its chain unskippable, and unskippable propagates forward — so editing the *last* agent step's prompt re-runs every step before it, at full price, except those the [step cache](workspace.md#step-output-cache-volatile) can answer (a durable `workspace.root:`, declared `outputs:`, and none of the exclusions it lists, such as `verdicts:` or hooks). That is the single most expensive thing about authoring an agent pipeline.
+An agent step makes its chain unskippable, and unskippable propagates forward — so editing the *last* agent step's prompt re-runs every step before it, at full price, except those the [step cache](workspace.md#step-output-cache-volatile) can answer (a durable `--workspace-root`, declared `outputs:`, and none of the exclusions it lists, such as `verdicts:` or hooks). That is the single most expensive thing about authoring an agent pipeline.
 
 ```bash
 steps run pipeline.yml --replay r-8f2a1c --from synthesizer

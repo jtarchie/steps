@@ -677,7 +677,7 @@ func TestValidateArtifactFlowArtifactImage(t *testing.T) {
 func TestValidateArtifactFlowUnknownInputErrors(t *testing.T) {
 	t.Parallel()
 
-	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	cfg := &Config{}
 	job := &Job{
 		Name: "build",
 		Plan: []Step{
@@ -694,7 +694,7 @@ func TestValidateArtifactFlowUnknownInputErrors(t *testing.T) {
 func TestValidateArtifactFlowChainedOutputsResolve(t *testing.T) {
 	t.Parallel()
 
-	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	cfg := &Config{}
 	job := &Job{
 		Name: "build",
 		Plan: []Step{
@@ -719,7 +719,7 @@ func TestValidateArtifactFlowChainedOutputsResolve(t *testing.T) {
 func TestValidateArtifactFlowGetsAccumulateInSharedWorkspace(t *testing.T) {
 	t.Parallel()
 
-	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	cfg := &Config{}
 
 	t.Run("task output before a later get is visible", func(t *testing.T) {
 		t.Parallel()
@@ -783,7 +783,7 @@ func TestValidateArtifactFlowGetsAccumulateInSharedWorkspace(t *testing.T) {
 func TestValidateArtifactFlowStepHooks(t *testing.T) {
 	t.Parallel()
 
-	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	cfg := &Config{}
 
 	t.Run("on_success hook may consume the step's own output", func(t *testing.T) {
 		t.Parallel()
@@ -893,7 +893,7 @@ func TestValidateArtifactFlowNoOpWithoutWorkspace(t *testing.T) {
 func TestValidateArtifactFlowPutProducesNothing(t *testing.T) {
 	t.Parallel()
 
-	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	cfg := &Config{}
 	job := &Job{
 		Name: "build",
 		Plan: []Step{
@@ -913,7 +913,7 @@ func TestValidateArtifactFlowPutProducesNothing(t *testing.T) {
 func TestValidateArtifactFlowExplicitGetAfterPut(t *testing.T) {
 	t.Parallel()
 
-	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	cfg := &Config{}
 	job := &Job{
 		Name: "build",
 		Plan: []Step{
@@ -935,7 +935,7 @@ func TestValidateArtifactFlowExplicitGetAfterPut(t *testing.T) {
 func TestValidateArtifactFlowPutHooksSeeNoPutArtifact(t *testing.T) {
 	t.Parallel()
 
-	cfg := &Config{Workspace: &WorkspaceConfig{Strategy: "copy"}}
+	cfg := &Config{}
 	job := &Job{
 		Name: "build",
 		Plan: []Step{

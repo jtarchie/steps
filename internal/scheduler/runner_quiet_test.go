@@ -92,7 +92,7 @@ jobs:
         run: "true"
 `)
 
-	provider, err := workspace.NewProvider(target.Config().Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}

@@ -16,8 +16,6 @@ func TestParallelOutputsSeesEnsembleMembers(t *testing.T) {
 	t.Parallel()
 
 	path := writeConfig(t, `
-workspace:
-  strategy: copy
 agents:
 - name: a
   source: { model: openai/test }

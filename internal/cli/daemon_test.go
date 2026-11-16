@@ -66,22 +66,22 @@ func TestTheDaemonStampsMachinesWithItsDatabasesIdentity(t *testing.T) {
 	}
 }
 
-// The stale-build sweep removes every b-* directory under a workspace.root: with no ownership check, so a neighbour set, or renamed, onto the same root deleted the build in flight there.
+// The stale-build sweep removes every b-* directory under a --workspace-root with no ownership check, so a neighbour set, or renamed, onto the same root deleted the build in flight there.
 //
 // Not t.Parallel(): a rename moves mcp logins, which live in process environment.
 func TestANeighbourOnTheSameRootLeavesABuildInFlightAlone(t *testing.T) {
 	isolateLogins(t)
 
 	held := servingDaemon(t)
-	root := t.TempDir()
+	root := held.exec.WorkspaceRoot
 	gate := filepath.Join(t.TempDir(), "gate")
 
-	setPipeline(t, held, "a", onRoot(root, "", "while [ ! -e "+gate+" ]; do sleep 0.02; done; echo built > out/x"))
+	setPipeline(t, held, "a", onRoot("while [ ! -e "+gate+" ]; do sleep 0.02; done; echo built > out/x"))
 	enqueue(t, held, "a")
 
 	build := buildInFlight(t, root)
 
-	setPipeline(t, held, "b", onRoot(root, "", "true"))
+	setPipeline(t, held, "b", onRoot("true"))
 
 	err := held.Rename(t.Context(), "b", "c")
 	if err != nil {
@@ -105,10 +105,10 @@ func TestARenameRefusedWhileABuildRunsNamesThatBuild(t *testing.T) {
 	isolateLogins(t)
 
 	held := servingDaemon(t)
-	root := t.TempDir()
+	root := held.exec.WorkspaceRoot
 	gate := filepath.Join(t.TempDir(), "gate")
 
-	setPipeline(t, held, "app", onRoot(root, "", "while [ ! -e "+gate+" ]; do sleep 0.02; done; echo built > out/x"))
+	setPipeline(t, held, "app", onRoot("while [ ! -e "+gate+" ]; do sleep 0.02; done; echo built > out/x"))
 	enqueue(t, held, "app")
 	buildInFlight(t, root)
 
@@ -192,48 +192,6 @@ func gatedJobs(gate string, n int) string {
 	return source.String()
 }
 
-// A set that changed workspace: over a durable root used to install a provider keeping every build, to dodge the sweep — so each run from then on left its tree behind until a restart.
-func TestAChangedWorkspaceBlockStillRemovesItsBuilds(t *testing.T) {
-	t.Parallel()
-
-	for _, change := range []struct {
-		name, cache string
-		move        bool
-	}{
-		{name: "the root moved", move: true},
-		{name: "only the cache changed", cache: "  cache:\n    resources: true\n"},
-	} {
-		t.Run(change.name, func(t *testing.T) {
-			t.Parallel()
-
-			held := servingDaemon(t)
-			root := t.TempDir()
-
-			setPipeline(t, held, "app", onRoot(root, "", "echo built > out/x"))
-
-			if change.move {
-				root = t.TempDir()
-			}
-
-			setPipeline(t, held, "app", onRoot(root, change.cache, "echo built > out/x"))
-			enqueue(t, held, "app")
-
-			if status := finishedRun(t, held, "app"); status != "succeeded" {
-				t.Fatalf("the run %s, want succeeded", status)
-			}
-
-			left, err := filepath.Glob(filepath.Join(root, "b-*"))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if len(left) > 0 {
-				t.Errorf("a successful run under the replaced workspace left %v behind", left)
-			}
-		})
-	}
-}
-
 // A rename is one UPDATE and what serves the new name is built after it, so a refusal there used to leave the pipeline served under neither name while the database — and so the next restart — named the new one.
 //
 // Not t.Parallel(): the rename consults mcp logins, which live in process environment, and a real user's login directory for the new name would refuse it for the wrong reason.
@@ -241,9 +199,9 @@ func TestARefusedRenameLeavesThePipelineWhereItWas(t *testing.T) {
 	isolateLogins(t)
 
 	held := servingDaemon(t)
-	root := t.TempDir()
+	root := held.exec.WorkspaceRoot
 
-	setPipeline(t, held, "app", onRoot(root, "", "echo built > out/x"))
+	setPipeline(t, held, "app", onRoot("echo built > out/x"))
 
 	breakRoot(t, root)
 
@@ -282,9 +240,9 @@ func TestTheDaemonsWorkspaceCheckRefusesARootItCannotWrite(t *testing.T) {
 	isolateLogins(t)
 
 	held := servingDaemon(t)
-	root := t.TempDir()
+	root := held.exec.WorkspaceRoot
 
-	setPipeline(t, held, "app", onRoot(root, "", "true"))
+	setPipeline(t, held, "app", onRoot("true"))
 
 	err := os.Chmod(root, 0o500) //nolint:gosec // read-only is the point: the workspace probe writes, and this root refuses it
 	if err != nil {
@@ -307,7 +265,7 @@ func TestTheDaemonsWorkspaceCheckRefusesARootItCannotWrite(t *testing.T) {
 		t.Fatalf("web.New: %v", err)
 	}
 
-	restarted := newDaemon(t.Context(), server, local, held.state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	restarted := newDaemon(t.Context(), server, local, held.state, held.exec, HistoryFlags{}, time.Hour)
 	t.Cleanup(restarted.Close)
 
 	err = restarted.load(t.Context())
@@ -508,7 +466,7 @@ func serveOn(t *testing.T, held *daemon, name string, st store.Store, source str
 		t.Fatalf("record: %v", err)
 	}
 
-	provider, err := held.provider(cfg, st)
+	provider, err := held.provider(st)
 	if err != nil {
 		t.Fatalf("provider: %v", err)
 	}
@@ -545,7 +503,7 @@ func servingDaemon(t testing.TB) *daemon {
 		t.Fatalf("web.New: %v", err)
 	}
 
-	held := newDaemon(t.Context(), server, local, State(filepath.Join(t.TempDir(), "steps.db")), ExecFlags{}, HistoryFlags{}, time.Hour)
+	held := newDaemon(t.Context(), server, local, State(filepath.Join(t.TempDir(), "steps.db")), ExecFlags{WorkspaceRoot: t.TempDir()}, HistoryFlags{}, time.Hour)
 	held.ready = func() error { return nil }
 	t.Cleanup(held.Close)
 
@@ -561,10 +519,9 @@ func setPipeline(t testing.TB, held *daemon, name, source string) {
 	}
 }
 
-// onRoot is one job building under a durable workspace.root:, with extra spliced into the workspace block.
-func onRoot(root, extra, run string) string {
-	return "workspace:\n  root: " + root + "\n" + extra +
-		"jobs:\n- name: build\n  plan:\n  - task: work\n    outputs: [out]\n    run: " + strconv.Quote(run) + "\n"
+// onRoot is one job, which builds under the daemon's --workspace-root.
+func onRoot(run string) string {
+	return "jobs:\n- name: build\n  plan:\n  - task: work\n    outputs: [out]\n    run: " + strconv.Quote(run) + "\n"
 }
 
 func served(t *testing.T, held *daemon, name string) *web.Pipeline {
@@ -739,7 +696,7 @@ func TestTheFirstSetOnARootSweepsWhatACrashLeftThere(t *testing.T) {
 	t.Parallel()
 
 	held := servingDaemon(t)
-	root := t.TempDir()
+	root := held.exec.WorkspaceRoot
 	stale := filepath.Join(root, "b-crashed")
 
 	err := os.Mkdir(stale, 0o750)
@@ -747,7 +704,7 @@ func TestTheFirstSetOnARootSweepsWhatACrashLeftThere(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	setPipeline(t, held, "app", onRoot(root, "", "true"))
+	setPipeline(t, held, "app", onRoot("true"))
 
 	_, err = os.Stat(stale)
 	if !errors.Is(err, os.ErrNotExist) {
@@ -852,7 +809,7 @@ func TestARestartSkipsAPipelineThisMachineCannotRunAndServesTheRest(t *testing.T
 		t.Fatalf("web.New: %v", err)
 	}
 
-	restarted := newDaemon(t.Context(), server, local, held.state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	restarted := newDaemon(t.Context(), server, local, held.state, held.exec, HistoryFlags{}, time.Hour)
 	t.Cleanup(restarted.Close)
 
 	err = restarted.load(t.Context())
@@ -908,7 +865,7 @@ func TestARestartClosesTheRunAKilledDaemonLeftRunning(t *testing.T) {
 		t.Fatalf("web.New: %v", err)
 	}
 
-	restarted := newDaemon(t.Context(), server, local, held.state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	restarted := newDaemon(t.Context(), server, local, held.state, held.exec, HistoryFlags{}, time.Hour)
 	t.Cleanup(restarted.Close)
 
 	err = restarted.load(t.Context())
@@ -926,17 +883,21 @@ func TestARestartClosesTheRunAKilledDaemonLeftRunning(t *testing.T) {
 	}
 }
 
-// brokenOnRestart leaves "app" held and unserved by a restarted daemon, its workspace root a regular file where the provider needs the directory — a break no user writes through, root included (#251).
+// brokenOnRestart leaves "app" held and unserved by a restarted daemon: the command its mcp server names is gone, which this machine checks of that pipeline alone (a daemon-wide root broken would break its neighbours too). It returns the command's path, which writeTool repairs.
 func brokenOnRestart(t *testing.T) (*daemon, string) {
 	t.Helper()
 
 	held := servingDaemon(t)
-	root := t.TempDir()
+	tool := filepath.Join(t.TempDir(), "tool")
 
-	setPipeline(t, held, "app", onRoot(root, "", "true"))
+	writeTool(t, tool)
+	setPipeline(t, held, "app", "mcp_servers:\n- name: probe\n  command: "+tool+"\n"+onRoot("true"))
 	held.Close()
 
-	breakRoot(t, root)
+	err := os.Remove(tool)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, 1)
 
@@ -945,7 +906,7 @@ func brokenOnRestart(t *testing.T) (*daemon, string) {
 		t.Fatalf("web.New: %v", err)
 	}
 
-	restarted := newDaemon(t.Context(), server, local, held.state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	restarted := newDaemon(t.Context(), server, local, held.state, held.exec, HistoryFlags{}, time.Hour)
 	t.Cleanup(restarted.Close)
 
 	err = restarted.load(t.Context())
@@ -957,7 +918,7 @@ func brokenOnRestart(t *testing.T) (*daemon, string) {
 		t.Fatal("app is not held broken, so this proves nothing")
 	}
 
-	return restarted, root
+	return restarted, tool
 }
 
 // A restore that fails lets go of its handle beside pipelines already restored and writing to the same file, so it must not compact it.
@@ -967,10 +928,10 @@ func TestAFailedRestoreDoesNotCompactTheFile(t *testing.T) {
 	isolateLogins(t)
 
 	held := servingDaemon(t)
-	root := t.TempDir()
+	root := held.exec.WorkspaceRoot
 
 	setPipeline(t, held, "kept", idlePipeline)
-	setPipeline(t, held, "app", onRoot(root, "", "true"))
+	setPipeline(t, held, "app", onRoot("true"))
 	held.Close()
 
 	// Freed after the exit's own compaction, so only a compaction during the restart can reclaim them.
@@ -1002,7 +963,7 @@ func TestAFailedRestoreDoesNotCompactTheFile(t *testing.T) {
 		t.Fatalf("web.New: %v", err)
 	}
 
-	restarted := newDaemon(t.Context(), server, local, held.state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	restarted := newDaemon(t.Context(), server, local, held.state, held.exec, HistoryFlags{}, time.Hour)
 	t.Cleanup(restarted.Close)
 
 	err = restarted.load(t.Context())
@@ -1062,11 +1023,11 @@ func TestARenameOntoOrFromABrokenPipelineIsRefused(t *testing.T) {
 func TestASetRepairsABrokenPipeline(t *testing.T) {
 	isolateLogins(t)
 
-	restarted, root := brokenOnRestart(t)
+	restarted, tool := brokenOnRestart(t)
 
-	repairRoot(t, root)
+	writeTool(t, tool)
 
-	result, err := restarted.Set(t.Context(), "app", web.SetRequest{Source: onRoot(root, "", "true")})
+	result, err := restarted.Set(t.Context(), "app", web.SetRequest{Source: onRoot("true")})
 	if err != nil {
 		t.Fatalf("set: %v", err)
 	}

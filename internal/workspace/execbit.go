@@ -90,7 +90,7 @@ func rootExecBitVia(dir string, stat func(string) (fs.FileMode, error)) *bool {
 func validateRootHoldsExecBit(root string) error {
 	held := rootExecBit(root)
 	if held != nil && !*held {
-		return fmt.Errorf("%w: %q did not give back the executable bit just set on a file there — every tree materialized under it comes back missing one, and the step cache reads that as an edit. Point workspace.root: at a filesystem that can hold one",
+		return fmt.Errorf("%w: %q did not give back the executable bit just set on a file there — every tree materialized under it comes back missing one, and the step cache reads that as an edit. Point --workspace-root at a filesystem that can hold one",
 			errLossyRoot, root)
 	}
 

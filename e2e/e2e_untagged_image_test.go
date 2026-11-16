@@ -107,14 +107,11 @@ func TestAnUntaggedImageStepsCacheIsAVolume(t *testing.T) {
 	report := filepath.Join(dir, "runs.txt")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[1]s
-
 jobs:
 - name: build
   plan:
   - task: compile
-    image: %[3]s
+    image: %[2]s
     volatile: true
     caches:
     - path: .gocache
@@ -127,13 +124,13 @@ jobs:
   - task: publish
     volatile: true
     inputs: [out]
-    run: cat out/runs >> %[2]s
-`, root, report, dockerE2EImage))
+    run: cat out/runs >> %[1]s
+`, report, dockerE2EImage))
 
-	mustRun(t, "run", path, "--force")
-	mustRun(t, "run", path, "--force")
-	mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile")
-	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--workspace-root", root, "--force")
+	mustRun(t, "run", path, "--workspace-root", root, "--force")
+	mustRun(t, "clear-task-cache", path, "--workspace-root", root, "-j", "build", "-s", "compile")
+	mustRun(t, "run", path, "--workspace-root", root, "--force")
 
 	if got := readFileString(t, report); got != "1\n2\n1\n" {
 		t.Errorf("runs reported %q, want the second run to see the cache and the run after the clear to start cold (\"1\\n2\\n1\\n\")", got)

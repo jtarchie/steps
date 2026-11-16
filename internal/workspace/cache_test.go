@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/config"
 )
 
 // cachingBuild builds a provider with the resource cache enabled over root,
@@ -16,11 +14,7 @@ import (
 func cachingBuild(t *testing.T, root string, maxEntries int) BuildWorkspace {
 	t.Helper()
 
-	provider, err := NewProvider(&config.WorkspaceConfig{
-		Strategy: "copy",
-		Root:     root,
-		Cache:    &config.CacheConfig{Resources: true, MaxEntries: maxEntries},
-	}, false)
+	provider, err := NewProvider(&Settings{Root: root, ResourceCacheMaxEntries: maxEntries}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,11 +249,7 @@ func TestSweepStaleBuildsSpareTheCache(t *testing.T) {
 	}
 
 	// A fresh provider over the same root sweeps on Validate.
-	provider, err := NewProvider(&config.WorkspaceConfig{
-		Strategy: "copy",
-		Root:     root,
-		Cache:    &config.CacheConfig{Resources: true},
-	}, false)
+	provider, err := NewProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,41 +267,46 @@ func TestSweepStaleBuildsSpareTheCache(t *testing.T) {
 	}
 }
 
-// TestNoCacheWithoutOptIn keeps the default behavior exactly as it was: the
-// in: of every get runs on every build unless a pipeline says otherwise.
-func TestNoCacheWithoutOptIn(t *testing.T) {
+// TestResourceCacheIsOnUnderADurableRootOnly: Concourse keeps resource caches with no opt-in, so a durable root reuses a fetch; a temp root is removed with the invocation, so nothing there is kept to reuse.
+func TestResourceCacheIsOnUnderADurableRootOnly(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	fetches := 0
+	for name, tc := range map[string]struct {
+		settings func(t *testing.T) *Settings
+		want     int
+	}{
+		"durable root": {func(t *testing.T) *Settings { t.Helper(); return &Settings{Root: t.TempDir()} }, 1},
+		"temp root":    {func(*testing.T) *Settings { return nil }, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	fetch := func(string) error {
-		fetches++
+			settings := tc.settings(t)
+			fetches := 0
 
-		return nil
-	}
+			for range 2 {
+				provider, err := NewProvider(settings, false)
+				if err != nil {
+					t.Fatal(err)
+				}
 
-	for range 2 {
-		provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy", Root: root}, false)
-		if err != nil {
-			t.Fatal(err)
-		}
+				bw, err := provider.NewBuild(context.Background(), "build")
+				if err != nil {
+					t.Fatal(err)
+				}
 
-		bw, err := provider.NewBuild(context.Background(), "build")
-		if err != nil {
-			t.Fatal(err)
-		}
+				_, err = bw.FetchResource(context.Background(), "repo", "key-abc", func(string) error { fetches++; return nil })
+				if err != nil {
+					t.Fatal(err)
+				}
 
-		_, err = bw.FetchResource(context.Background(), "repo", "key-abc", fetch)
-		if err != nil {
-			t.Fatal(err)
-		}
+				_ = provider.Close()
+			}
 
-		_ = provider.Close()
-	}
-
-	if fetches != 2 {
-		t.Errorf("fetches = %d, want 2 — the cache must be off unless the pipeline opts in", fetches)
+			if fetches != tc.want {
+				t.Errorf("fetches = %d, want %d", fetches, tc.want)
+			}
+		})
 	}
 }
 

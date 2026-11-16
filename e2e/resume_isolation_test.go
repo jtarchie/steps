@@ -25,9 +25,6 @@ func TestResumeUnderIsolationContinuesWhereItStopped(t *testing.T) {
 		}
 
 		return fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 resources:
 - name: seed
   type: mock

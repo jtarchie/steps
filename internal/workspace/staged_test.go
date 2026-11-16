@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/config"
 )
 
 // interruptedBackend is the copy backend whose materialize, while failing is
@@ -116,11 +114,7 @@ func TestStepCacheInterruptedStoreIsAMiss(t *testing.T) {
 func resourceFetcher(t *testing.T, root string) (Provider, func() string, *int) {
 	t.Helper()
 
-	provider, err := NewProvider(&config.WorkspaceConfig{
-		Strategy: "copy",
-		Root:     root,
-		Cache:    &config.CacheConfig{Resources: true, MaxEntries: 10},
-	}, false)
+	provider, err := NewProvider(&Settings{Root: root, ResourceCacheMaxEntries: 10}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

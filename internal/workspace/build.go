@@ -214,7 +214,7 @@ func (b *isolatingBuild) ResetArtifact(ctx context.Context, name string) error {
 // it, through backend.remove.
 func (b *isolatingBuild) Close() error {
 	// The provider prints its own kept-root line when it owns the root; a
-	// build under a user-supplied workspace.root: has none, so say it here.
+	// build under a user-supplied --workspace-root has none, so say it here.
 	if b.keep {
 		slog.Debug("workspace.kept", "dir", b.root)
 

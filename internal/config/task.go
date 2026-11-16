@@ -64,8 +64,7 @@ type Task struct {
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// (default) means no timeout. Inherited by task steps unless overridden.
 	Timeout string `yaml:"timeout,omitempty"`
-	// Inputs/Outputs are consulted only when a pipeline sets workspace: (see
-	// WorkspaceConfig); a referencing step's own Inputs/Outputs, if
+	// Inputs/Outputs are what a step using this task sees; a referencing step's own Inputs/Outputs, if
 	// non-nil, override these for that step only — mirroring how Fix works.
 	//
 	// Inputs is the same *InputSpec a step carries, so `inputs:` means one

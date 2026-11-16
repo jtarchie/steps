@@ -19,9 +19,6 @@ func TestRunJobIsolatedTaskSeesOnlyDeclaredInputsAndOutputs(t *testing.T) {
 	path := pipelinePath(t, dir)
 
 	pipeline := `
-workspace:
-  strategy: copy
-
 resource_types:
 - name: dummy
   config:
@@ -75,9 +72,6 @@ func TestRunJobIsolatedGetAliasMappingAndPutAll(t *testing.T) {
 	path := pipelinePath(t, dir)
 
 	pipeline := `
-workspace:
-  strategy: copy
-
 resource_types:
 - name: dummy
   config:
@@ -127,9 +121,6 @@ func TestRunJobIsolatedPutSeesOnlyDeclaredInputs(t *testing.T) {
 	path := pipelinePath(t, dir)
 
 	pipeline := `
-workspace:
-  strategy: copy
-
 resource_types:
 - name: dummy
   config:
@@ -177,9 +168,6 @@ func TestRunJobIsolatedUnknownInputFailsAtPlanTimeEvenWithForce(t *testing.T) {
 	path := pipelinePath(t, dir)
 
 	pipeline := fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:
@@ -216,9 +204,6 @@ func TestRunJobIsolatedMerkleSkipRespectsInputsChange(t *testing.T) {
 		t.Helper()
 
 		pipeline := fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 resource_types:
 - name: dummy
   config:

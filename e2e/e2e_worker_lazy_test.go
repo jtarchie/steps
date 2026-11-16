@@ -198,11 +198,6 @@ func TestEndToEndPlacedGetWithTheResourceCacheDialsNothingOnTheSecondBuild(t *te
 
 	pipeline := func(publishAs string) string {
 		return writePipeline(t, dir, `
-workspace:
-  root: `+filepath.Join(dir, "ws-root")+`
-  cache:
-    resources: true
-
 resource_types:
 - name: counted
   image: `+dockerE2EImage+`
@@ -230,6 +225,7 @@ jobs:
 	}
 
 	path := pipeline("first.txt")
+	workers = append(workers, "--workspace-root", filepath.Join(dir, "ws-root"))
 	mustRun(t, append([]string{path}, workers...)...)
 
 	edited := pipeline("second.txt")

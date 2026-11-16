@@ -226,7 +226,7 @@ func move(ctx context.Context, src, dst string) error {
 }
 
 // ClearTaskCaches deletes the caches keyed by keys under ws's root, reporting which were there; ws must name a root, since under a temp one no cache outlives its run.
-func ClearTaskCaches(ws *config.WorkspaceConfig, keys []string) (map[string]bool, error) {
+func ClearTaskCaches(ws *Settings, keys []string) (map[string]bool, error) {
 	provider, err := NewProvider(ws, false)
 	if err != nil {
 		return nil, err

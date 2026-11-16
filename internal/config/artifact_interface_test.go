@@ -312,8 +312,6 @@ func TestArtifactMappingValidation(t *testing.T) {
 		t.Parallel()
 
 		wantLoadError(t, writeConfig(t, `
-workspace:
-  strategy: copy
 agents:
 - name: r
   source: { model: lmstudio/qwen }
@@ -333,8 +331,6 @@ jobs:
 		t.Parallel()
 
 		wantLoadError(t, writeConfig(t, `
-workspace:
-  strategy: copy
 jobs:
 - name: j
   plan:
@@ -349,8 +345,6 @@ jobs:
 		t.Parallel()
 
 		cfg := loadOK(t, `
-workspace:
-  strategy: copy
 tasks:
 - name: build
   run: "true"

@@ -17,9 +17,6 @@ func TestRaceKeepsTheFirstSuccess(t *testing.T) {
 	slow := filepath.Join(dir, "slow.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:
@@ -49,9 +46,6 @@ func TestRaceIgnoresAFailingBranch(t *testing.T) {
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:
@@ -76,9 +70,6 @@ func TestRaceFailsWhenEveryBranchFails(t *testing.T) {
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:
@@ -114,9 +105,6 @@ func TestRaceWinnersOutputsReachTheNextStep(t *testing.T) {
 	marker := filepath.Join(dir, "seen.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:

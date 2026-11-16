@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/config"
 )
 
 func readFile(t *testing.T, path string) string {
@@ -125,7 +123,7 @@ func TestResourceDirIsEmptyEveryTime(t *testing.T) {
 func newTestCopyProvider(t *testing.T) Provider {
 	t.Helper()
 
-	p, err := newCopyProvider(&config.WorkspaceConfig{Strategy: "copy", Root: t.TempDir()}, false)
+	p, err := newCopyProvider(&Settings{Root: t.TempDir()}, false)
 	if err != nil {
 		t.Fatalf("newCopyProvider: %v", err)
 	}
@@ -527,7 +525,7 @@ func TestIsolatingProviderSweepsStaleBuilds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy", Root: root}, false)
+	provider, err := NewProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +564,7 @@ func TestIsolatingProviderKeepSkipsTheSweep(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy", Root: root}, true)
+	provider, err := NewProvider(&Settings{Root: root}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +594,7 @@ func TestProbeChecksTheRootWithoutSweepingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy", Root: root}, false)
+	provider, err := NewProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +637,7 @@ func TestIsolatingProviderBuildDirsDoNotCollideAcrossInvocations(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	cfg := &config.WorkspaceConfig{Strategy: "copy", Root: root}
+	cfg := &Settings{Root: root}
 
 	newBuildDir := func(t *testing.T) string {
 		t.Helper()
@@ -672,7 +670,7 @@ func TestIsolatingProviderBuildDirsDoNotCollideAcrossInvocations(t *testing.T) {
 	}
 }
 
-// openOwnedBuild opens a provider on a root it owns (no workspace.root:) and one build under it.
+// openOwnedBuild opens a provider on a root it owns (no --workspace-root) and one build under it.
 func openOwnedBuild(t *testing.T) (Provider, string, string, BuildWorkspace) {
 	t.Helper()
 

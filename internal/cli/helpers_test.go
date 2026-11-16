@@ -104,6 +104,16 @@ func writePipelineFile(t *testing.T, path, pipeline string) {
 	}
 }
 
+// writeTool puts an executable at path, all an mcp server's command needs to pass the set-time check.
+func writeTool(t *testing.T, path string) {
+	t.Helper()
+
+	err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o700) //nolint:gosec // an executable is the point
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // breakRoot leaves a workspace root this machine cannot supply for ANY user: a
 // regular file where the provider needs the directory, so the MkdirAll it does
 // there fails with ENOTDIR. A read-only mode cannot stand in for this — root

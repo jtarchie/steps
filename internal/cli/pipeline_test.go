@@ -256,7 +256,7 @@ func TestAskTakesAYesAndNothingElse(t *testing.T) {
 func TestARepairIsCompareAndSet(t *testing.T) {
 	isolateLogins(t)
 
-	restarted, root := brokenOnRestart(t)
+	restarted, tool := brokenOnRestart(t)
 	restarted.server.SetManager(restarted)
 
 	daemon := httptest.NewServer(restarted.server.Handler())
@@ -270,14 +270,14 @@ func TestARepairIsCompareAndSet(t *testing.T) {
 		t.Fatalf("get = %q, %v; want app held broken", broken, err)
 	}
 
-	repairRoot(t, root)
+	writeTool(t, tool)
 
-	_, err = restarted.Set(t.Context(), "app", web.SetRequest{Source: onRoot(root, "", "echo theirs")})
+	_, err = restarted.Set(t.Context(), "app", web.SetRequest{Source: onRoot("echo theirs")})
 	if err != nil {
 		t.Fatalf("the other repair: %v", err)
 	}
 
-	_, err = client.set("app", web.SetRequest{Source: onRoot(root, "", "echo mine"), ExpectSHA: current.SHA})
+	_, err = client.set("app", web.SetRequest{Source: onRoot("echo mine"), ExpectSHA: current.SHA})
 	if err == nil {
 		t.Error("a repair read before another set overwrote it, uncompared")
 	}

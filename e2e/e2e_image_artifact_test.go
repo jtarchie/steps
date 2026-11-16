@@ -52,33 +52,27 @@ func alpineDigest(t *testing.T) string {
 }
 
 // imageArtifactPipeline is a get of a fake image resource whose version is
-// {digest}, and a task that runs in it. root, when set, turns the step cache
-// on.
-func imageArtifactPipeline(t *testing.T, path, repository, digest, root, plan string) {
+// {digest}, and a task that runs in it.
+func imageArtifactPipeline(t *testing.T, path, repository, digest, plan string) {
 	t.Helper()
 
-	workspace := ""
-	if root != "" {
-		workspace = fmt.Sprintf("workspace:\n  strategy: copy\n  root: %s\n", root)
-	}
-
-	writePipelineFile(t, path, fmt.Sprintf(`%[1]s
+	writePipelineFile(t, path, fmt.Sprintf(`
 resource_types:
 - name: fake-image
   config:
-    check: echo '[{"digest":"%[3]s"}]'
+    check: echo '[{"digest":"%[2]s"}]'
     in: "true"
 
 resources:
 - name: toolchain
   type: fake-image
-  source: {repository: %[2]s, password: %[4]s}
+  source: {repository: %[1]s, password: %[3]s}
 
 jobs:
 - name: build
   plan:
   - get: toolchain
-%[5]s`, workspace, repository, digest, imageArtifactCanary, plan))
+%[4]s`, repository, digest, imageArtifactCanary, plan))
 }
 
 const imageArtifactTask = `  - task: probe
@@ -100,9 +94,9 @@ func TestImageArtifactRunsInTheFetchedDigest(t *testing.T) {
 	path := pipelinePath(t, t.TempDir())
 	root := t.TempDir()
 
-	imageArtifactPipeline(t, path, "alpine", digest, root, imageArtifactTask)
+	imageArtifactPipeline(t, path, "alpine", digest, imageArtifactTask)
 
-	out := captureStdout(t, func() { mustRun(t, path) })
+	out := captureStdout(t, func() { mustRun(t, path, "--workspace-root", root) })
 
 	// The host has no /etc/alpine-release, so this line proves the container.
 	if !strings.Contains(out, "release=3.") {
@@ -122,7 +116,7 @@ func TestImageArtifactRunsInTheFetchedDigest(t *testing.T) {
 	// Unchanged: the planner and the executor hash the same resolved
 	// reference, so the task is chain-skipped rather than run.
 	// Not merely reused from the step cache, which would mask a disagreement.
-	out = captureStdout(t, func() { mustRun(t, path) })
+	out = captureStdout(t, func() { mustRun(t, path, "--workspace-root", root) })
 	if strings.Contains(out, "release=") || strings.Contains(out, "outputs reused") {
 		t.Errorf("an unchanged rerun was not chain-skipped; planner and executor disagree about the task's hash:\n%s", out)
 	}
@@ -131,9 +125,9 @@ func TestImageArtifactRunsInTheFetchedDigest(t *testing.T) {
 	// and the task declares no inputs, so the image reference is the only
 	// thing left to move its step-cache key. Hashing the literal name would
 	// come back "outputs reused".
-	imageArtifactPipeline(t, path, "docker.io/library/alpine", digest, root, imageArtifactTask)
+	imageArtifactPipeline(t, path, "docker.io/library/alpine", digest, imageArtifactTask)
 
-	out = captureStdout(t, func() { mustRun(t, path) })
+	out = captureStdout(t, func() { mustRun(t, path, "--workspace-root", root) })
 	if !strings.Contains(out, "release=3.") {
 		t.Errorf("a new image reference was served from the step cache:\n%s", out)
 	}
@@ -157,7 +151,7 @@ func TestImageArtifactAgentToolsRunInTheFetchedDigest(t *testing.T) {
 		says("done"),
 	)
 
-	imageArtifactPipeline(t, path, "alpine", digest, "", fmt.Sprintf(`  - agent: inspector
+	imageArtifactPipeline(t, path, "alpine", digest, fmt.Sprintf(`  - agent: inspector
     image: toolchain
     messages: [Say which release this is.]
 
@@ -201,7 +195,7 @@ func TestImageArtifactGuardRunsInTheFetchedDigest(t *testing.T) {
 	digest := alpineDigest(t)
 	path := pipelinePath(t, t.TempDir())
 
-	imageArtifactPipeline(t, path, "alpine", digest, "", `  - try:
+	imageArtifactPipeline(t, path, "alpine", digest, `  - try:
       task: guarded
       image: toolchain
       run: echo guarded-ran
@@ -221,7 +215,7 @@ func TestImageArtifactRefusesAMalformedDigest(t *testing.T) {
 	requireDockerE2E(t)
 
 	path := pipelinePath(t, t.TempDir())
-	imageArtifactPipeline(t, path, "alpine", "latest", "", imageArtifactTask)
+	imageArtifactPipeline(t, path, "alpine", "latest", imageArtifactTask)
 
 	err := stepsRun(t, []string{path})
 	if err == nil {
@@ -374,7 +368,7 @@ func TestImageArtifactResolvesAfterAResumeKeptTheGet(t *testing.T) {
 	path := pipelinePath(t, dir)
 	marker := filepath.Join(dir, "fixed")
 
-	imageArtifactPipeline(t, path, "alpine", digest, "", fmt.Sprintf(`  - task: first
+	imageArtifactPipeline(t, path, "alpine", digest, fmt.Sprintf(`  - task: first
     run: echo first
   - task: fragile
     run: test -f %s

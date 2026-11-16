@@ -6,9 +6,6 @@
 # clobber collection exists to remove. Refused rather than corrupted.
 # expect: a matrix cell's hooks and nested steps must not declare outputs
 
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:

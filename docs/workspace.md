@@ -114,63 +114,43 @@ jobs:
 
 Mapping keys must be a subset of the resolved task's declared inputs/outputs, and mapping values must be plain artifact names.
 
-## Tuning materialization: the `workspace:` block
+## Where trees live: `--workspace-root`
 
-Optional tuning for *how* trees are materialized — not a switch that turns isolation on:
+Where a machine keeps its build trees is the operator's decision, not the pipeline's: a pipeline names no machine. `steps run`, `steps test` and `steps web` take it as a flag, and a daemon's [configuration file](web.md#configuration-file) as `workspace-root:`:
 
-```yaml
-workspace:
-  strategy: copy        # the only strategy, and the default
-
-jobs:
-- name: build
-  plan:
-  - task: hello
-    run: echo hi
-  assert:
-    execution: [hello]
-    outcome: succeeded
+```sh
+steps run pipeline.yml --workspace-root /var/lib/steps/workspace
+steps web                       # workspace/ beside its state database, always
 ```
 
-- Each input is a copy, and a copy-on-write one where the filesystem offers it: `cp -c` (APFS clonefile) on macOS, `cp --reflink=auto` on Linux (btrfs, XFS with reflink). `strategy`/`root` are never hashed, so moving the root invalidates no one's cache. The `inputs:`/`outputs:`/mapping declarations themselves **are** hashed unconditionally: they're the step's executed view, so changing them re-runs the step.
-- **`strategy: btrfs` was removed** and is refused at load. `copy` already shares file data on a btrfs root through reflink; omit `strategy:`.
+- **`steps run` and `steps test` default to a temp directory** removed when they exit, which keeps nothing between runs: no step cache, no task caches, no resource cache. Name a root to keep them.
+- **`steps web` always has a durable root**: `--workspace-root`, or `workspace/` beside its sqlite state file (`.steps/workspace` for the default database, and in the working directory for a postgres one). Every pipeline it serves builds there.
+- **`workspace:` in a pipeline is a load error** that names where each of its keys went: `root:` is `--workspace-root`, `cache.resources:` is gone (the resource cache is always on, below), `cache.max_entries:` is `--resource-cache-max`, and `strategy:` needs no replacement.
+- Each input is a copy, and a copy-on-write one where the filesystem offers it: `cp -c` (APFS clonefile) on macOS, `cp --reflink=auto` on Linux (btrfs, XFS with reflink). The root is never hashed, so moving it invalidates no one's cache. The `inputs:`/`outputs:`/mapping declarations themselves **are** hashed unconditionally: they're the step's executed view, so changing them re-runs the step.
 - This is corruption hygiene, not a sandbox: shell commands can still reach outside the materialized directory via absolute paths, same as always.
 - The provider is built once per CLI invocation and validated at startup — wrong platform, wrong filesystem, missing binaries all fail fast, before any step runs.
-- **A `root:` whose filesystem cannot hold an executable bit is refused**, and measured rather than assumed: startup writes a file under the root, sets `0700`, reads the mode back, and removes it. The bit is content — the step cache hashes it — so a root on vfat or exfat (whose `fmask`/`dmask` synthesize a fixed mode), on CIFS without unix extensions, or on 9p/virtiofs under Lima or Docker Desktop would hand back trees whose scripts are no longer scripts, with the cache reading the loss as an edit and nothing reporting it. This is the same refusal a worker gets at the handshake (see [infra.md](infra.md)), for the same reason, on a directory you name rather than a machine you dial.
+- **A root whose filesystem cannot hold an executable bit is refused**, and measured rather than assumed: startup writes a file under the root, sets `0700`, reads the mode back, and removes it. The bit is content — the step cache hashes it — so a root on vfat or exfat (whose `fmask`/`dmask` synthesize a fixed mode), on CIFS without unix extensions, or on 9p/virtiofs under Lima or Docker Desktop would hand back trees whose scripts are no longer scripts, with the cache reading the loss as an edit and nothing reporting it. This is the same refusal a worker gets at the handshake (see [infra.md](infra.md)), for the same reason, on a directory you name rather than a machine you dial.
 - **Leftovers from a crashed run are swept at startup** (a SIGKILL'd process never removed its build directory). The sweep only touches directories this provider created, is best-effort, and is skipped under `--keep-workspace` — that flag means "leave the files for me to look at".
-- **A step's full output is not in the workspace.** When a step prints past what its record holds, the whole output is stored in the state database, not under `root:`, because it belongs to the run rather than the build tree and lives exactly as long as the run's record does. See [web.md](web.md#live-runs).
+- **A step's full output is not in the workspace.** When a step prints past what its record holds, the whole output is stored in the state database, not under the root, because it belongs to the run rather than the build tree and lives exactly as long as the run's record does. See [web.md](web.md#live-runs).
 - **`outputs:` on an `across:` step collects**: each cell's capture lands under the cell's own coordinates inside the declared artifact (`findings/alpha/…`) — see [control-flow.md](control-flow.md).
 - Fix agents (`fix:`) run inside the failing task's own already-materialized working directory, not a fresh one — they need the exact state the task failed in.
 
-## Cross-build resource cache (`cache:`)
+## Cross-build resource cache
 
-Agent and `put` steps make their chains unskippable, so a real run re-fetches every `get` from scratch — the network and disk paid again every time. The cache keeps fetched versions across builds:
+Agent and `put` steps make their chains unskippable, so without a cache a real run re-fetches every `get` from scratch. Under a durable root a fetched version is kept and reused by later builds, as Concourse's resource caches are: no pipeline switch, no per-resource opt-out.
 
-```yaml noexec=root
-workspace:
-  root: /var/lib/steps
-  cache:
-    resources: true
-    max_entries: 50    # optional; least-recently-used evicted first
-
-jobs:
-- name: build
-  plan:
-  - task: hello
-    run: echo hi
-```
-
-- **Off by default, and the reason matters.** A cached version's `in:` does **not** run again. That is correct under the resource contract — the same version materializes the same content — but a resource type whose `in:` has side effects beyond writing the directory (bumping a counter, posting a notification) would see those stop happening. Enabling the cache is you asserting your `in:` is a pure fetch.
-- **Requires `root:`.** The cache has to outlive the run that filled it; a cache under a temp directory the provider deletes would be a slower way to fetch once. Rejected at load time.
-- **Keyed on content, not plan position** — a hash of the `in:` command, source, version, and execution settings (`image:`/`env:`/`user:`/`network:`), deliberately *not* the get node's merkle hash, so two jobs fetching the same version share one entry.
-- **A hit costs a copy** (copy-on-write where the filesystem offers it), but no fetch. **A failed fetch is never cached.** **A cache failure never fails a build** — anything wrong falls back to fetching. The startup sweep spares it.
-- **The cache is a reader on this disk.** A `get` whose resource type has an `image:` leaves its tree in docker — on its worker (`tags:`), or this machine's daemon when it has no tag — until something here reads it, and with the cache on, the cache is that something: the tree comes home to be filed. See [infra.md](infra.md#resources-on-workers).
+- **A cached version's `in:` does not run again.** That is the resource contract — the same version materializes the same content — and it is Concourse's behavior. A type whose `in:` has side effects beyond writing the directory (bumping a counter, posting a notification) is outside that contract; make what varies part of the version.
+- **Keyed on content, not plan position** — a hash of the type's `in:` command, the resource's `source:`, the get's `params:`, the version, and execution settings (`image:`/`env:`/`user:`/`network:`), deliberately *not* the get node's merkle hash, so two jobs fetching the same version share one entry.
+- **Bounded by count, never age**: `--resource-cache-max` entries (default 50), least-recently-used evicted first.
+- **A failed fetch is never cached.** **A cache failure never fails a build** — anything wrong falls back to fetching. The startup sweep spares it.
+- **The cache is a reader on this disk.** A `get` whose resource type has an `image:` leaves its tree in docker — on its worker (`tags:`), or this machine's daemon when it has no tag — until something here reads it, and under a durable root the cache is that something: the tree comes home to be filed. See [infra.md](infra.md#resources-on-workers).
+- **A host `get` costs a copy** on a hit (copy-on-write where the filesystem offers it), but no fetch.
 
 ## Step output cache (`volatile:`)
 
 The resource cache above keeps what a `get` fetched. This one keeps what a **task or agent step produced**, so the steps that cost money can skip too.
 
-It turns on by itself as soon as `workspace.root:` names a durable directory — there is no second switch. A step is looked up before it runs, and on a hit its declared `outputs:` are restored into the artifact store and the plan carries on with the next step:
+It turns on by itself under a durable `--workspace-root` (which `steps web` always has) — there is no second switch. A step is looked up before it runs, and on a hit its declared `outputs:` are restored into the artifact store and the plan carries on with the next step:
 
 ```
 agent: reviewer
@@ -199,9 +179,9 @@ jobs:
 - **A step that declares no `outputs:` is never cached.** A hit restores declared artifacts and nothing else, so for such a step there is nothing to reuse — skipping it would just drop whatever its `run:` did, which is why `put:` is excluded too. A step with no outputs therefore already re-runs every time; `volatile:` is how a step *with* outputs says the same thing.
 - **What else is never cached**, for the same reason: a step with `verdicts:` or `to:` (a decision the store records and routing keys on), one declaring `context: { from: ... }` (it reads an upstream decision the key cannot see), one with hooks (a hit fires none, like any skip), a task with `fix:`, and an `across:` cell. A `when:` guard is *not* a bar: it is evaluated first, and a step it lets through is work like any other.
 - **`volatile:` is only valid on task and agent steps**, and never on a hook — anywhere else it would read as configured while binding nothing, so it is a load error.
-- **Requires `root:`.** Same reason the resource cache does: an entry has to outlive the run that wrote it. Without one, nothing is cached and nothing is stored.
-- **A hit costs a copy** (copy-on-write where the filesystem offers it), never a model call. **A failed step is never cached**, and **a cache failure never fails a build** — anything wrong falls back to running the step. Entries are evicted least-recently-used.
-- **The cache is a reader on this disk.** A container step's outputs stay in docker — on its worker, or this machine's daemon for an untagged `image:` step — until something here reads them; with a durable `root:` the step cache is that something, and the outputs come home to be filed.
+- **Requires a durable root.** Same reason the resource cache does: an entry has to outlive the run that wrote it. Without one, nothing is cached and nothing is stored.
+- **A hit costs a copy** (copy-on-write where the filesystem offers it), never a model call. **A failed step is never cached**, and **a cache failure never fails a build** — anything wrong falls back to running the step. Entries are bounded by count (200), least-recently-used evicted first.
+- **The cache is a reader on this disk.** A container step's outputs stay in docker — on its worker, or this machine's daemon for an untagged `image:` step — until something here reads them; under a durable root the step cache is that something, and the outputs come home to be filed.
 
 ## Task caches (`caches:`)
 
@@ -264,9 +244,9 @@ jobs:
 - **Never hashed, never an artifact.** A warm cache must not make identical work look different, so it reaches neither the merkle hash nor the step cache's key, is not passed to other steps, and is never captured or mirrored to the artifact store.
 - **Paths**: relative, inside the working directory. A cache may sit inside an input (`src/node_modules`), shadowing that part of it; it may not be or contain an input, overlap an output, or overlap another cache — a load error each.
 - **Concurrent runs of one step**: the first takes the cache, a second starts empty, and whichever finishes last is kept. (Concourse starts both warm from a copy; steps moves the directory rather than copying it, so a multi-GB cache costs nothing to attach.)
-- **Lifetime**: here, under a durable `root:` they outlive the run, least-recently-used evicted past 50; without one they last only the run, like everything else in a temp root. On a worker they are not bounded yet — as Concourse's are not without a `ttl:` — so a long-lived worker's disk is yours to watch.
-- **Reaped when the pipeline stops naming it**, as Concourse's `set-pipeline` reaps the caches of removed jobs and steps: when a placed step connects to its worker, that pipeline's caches there that its current config no longer declares (a renamed or removed job, step or path) are removed. Only that pipeline's, only on that worker, and never one a running step has mounted. A worker is only reached when a step is placed on it, so a worker nothing runs on keeps what it has; this machine's own caches under `root:` are bounded instead, least-recently-used past 50.
-- **Clearing**: `steps clear-task-cache pipeline.yml -j build -s compile` empties the step's caches so its next run starts cold — Concourse's `fly clear-task-cache`. `-c .gocache` clears one path (compared cleaned, so `./.gocache/` is the same path). It clears this machine's copy under `root:`, and for a placed step the worker's too, which takes the same `--worker <tag>=<url>` a run does; an unmapped tag is refused before anything is removed. A cache a running step is using is refused by the worker's docker daemon: reported, the rest still cleared, and the command exits nonzero. On this machine and on an `ssh://` worker a running step has moved its cache into its own directory, so a clear then finds nothing to remove, and the run files the cache back when it ends; as Concourse leaves a cache in use alone, clear again once the run is done. A `launch` worker took its caches with it when the job ended, so there is nothing to clear; a `stopped` one keeps them on a disk only a start reaches, so it takes `--start`, which starts it, clears and stops it again.
+- **Lifetime**: here, under a durable root they outlive the run, least-recently-used evicted past 50; without one they last only the run, like everything else in a temp root. On a worker they are not bounded yet — as Concourse's are not without a `ttl:` — so a long-lived worker's disk is yours to watch.
+- **Reaped when the pipeline stops naming it**, as Concourse's `set-pipeline` reaps the caches of removed jobs and steps: when a placed step connects to its worker, that pipeline's caches there that its current config no longer declares (a renamed or removed job, step or path) are removed. Only that pipeline's, only on that worker, and never one a running step has mounted. A worker is only reached when a step is placed on it, so a worker nothing runs on keeps what it has; this machine's own caches under the root are bounded instead, least-recently-used past 50.
+- **Clearing**: `steps clear-task-cache pipeline.yml -j build -s compile` empties the step's caches so its next run starts cold — Concourse's `fly clear-task-cache`. `-c .gocache` clears one path (compared cleaned, so `./.gocache/` is the same path). It clears this machine's copy under `--workspace-root` (pass the one the runs used; a daemon's is `workspace/` beside its state database), and for a placed step the worker's too, which takes the same `--worker <tag>=<url>` a run does; an unmapped tag is refused before anything is removed. A cache a running step is using is refused by the worker's docker daemon: reported, the rest still cleared, and the command exits nonzero. On this machine and on an `ssh://` worker a running step has moved its cache into its own directory, so a clear then finds nothing to remove, and the run files the cache back when it ends; as Concourse leaves a cache in use alone, clear again once the run is done. A `launch` worker took its caches with it when the job ended, so there is nothing to clear; a `stopped` one keeps them on a disk only a start reaches, so it takes `--start`, which starts it, clears and stops it again.
 
 ## Resuming a failed run
 
@@ -302,7 +282,7 @@ When `steps web` stops with a build running, the next start picks the build up r
 
 - **The run keeps its id.** Its queue row goes back on the queue carrying the run, and the run it starts is the same run continued: same page, same history, one entry in `steps runs`.
 - **Every step the run finished is skipped**, of every kind — a task, a get, an agent, a put. **The step that was cut off runs again from scratch**: nothing of its process survives the restart, so it starts over in the tree the finished steps left.
-- **The workspace is kept for it.** The restart's sweep of stale build directories under a `root:` leaves the tree of every run it is about to resume.
+- **The workspace is kept for it.** The restart's sweep of stale build directories under the root leaves the tree of every run it is about to resume.
 - **Agent steps are never reattached.** A conversation lives inside the daemon, and a CLI agent's tools call back into it, so a restart ends the conversation it was in. What recovers an agent is this resume (a finished agent is never asked again), the [step cache](#step-output-cache-volatile) (an agent whose inputs did not change is restored rather than run), and [`attempts:`](attempts-timeout.md) (the interrupted agent's own retry budget).
 - **A run somebody aborted is never resumed**, and neither is one that had already finished when the process died: the restart closes its queue row with the run's own status rather than queueing it again.
 - **When there is nothing to resume in, the job is built from the top as a new run** — the tree is gone, or the run's record cannot be trusted (the reasons `--resume` refuses, above). The interrupted run stays aborted beside it, and the daemon logs `web.job.resume_refused` saying why.

@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/config"
 )
 
 // stepCacheProvider is a copy-strategy provider over a durable root, which is
@@ -14,7 +12,7 @@ import (
 func stepCacheProvider(t *testing.T, root string) Provider {
 	t.Helper()
 
-	provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy", Root: root}, false)
+	provider, err := NewProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +298,7 @@ func TestStepCacheNeverHitsWithoutOutputs(t *testing.T) {
 func TestStepCacheNeedsADurableRoot(t *testing.T) {
 	t.Parallel()
 
-	provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy"}, false)
+	provider, err := NewProvider(&Settings{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

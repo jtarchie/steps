@@ -39,21 +39,14 @@ func factoryAgainstFakes(t *testing.T, dir, llm, github, repo string) string {
 		pointed = strings.ReplaceAll(pointed, "  sandbox: true\n", "")
 	}
 
-	// The example's root is relative to wherever steps runs, which for a test is this package's directory: every factory test would share one step cache inside the source tree, and one test's cached agent step would answer another's.
-	const root = "  root: .steps/workspace\n"
-	if !strings.Contains(pointed, root) {
-		t.Fatalf("examples/factory.yml names no %q to move into the test's own directory", strings.TrimSpace(root))
-	}
-
-	pointed = strings.Replace(pointed, root, "  root: "+filepath.Join(dir, "workspace")+"\n", 1)
-
 	return writePipeline(t, dir, injectFakeProvider(t, pointed, llm, "", false))
 }
 
 func runFactory(t *testing.T, path, job string) error {
 	t.Helper()
 
-	_, err := runAndCapture(t, "run", path, "--job", job, "--var", "repo="+fakeRepo)
+	// Its own root beside the file: one shared root would let one test's cached agent step answer another's.
+	_, err := runAndCapture(t, "run", path, "--job", job, "--var", "repo="+fakeRepo, "--workspace-root", filepath.Join(filepath.Dir(path), "workspace"))
 
 	return err
 }

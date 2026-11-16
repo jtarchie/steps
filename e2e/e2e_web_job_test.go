@@ -19,7 +19,7 @@ func TestJobLinkLandsOnItsLatestRun(t *testing.T) {
 
 	dir := t.TempDir()
 	fake := newFakeLLM(t, happyPathScript()...)
-	path := e2ePipeline(t, dir, fake.URL, "")
+	path := e2ePipeline(t, dir, fake.URL)
 
 	server, pipeline := webServerFor(t, path)
 	job := "/p/" + pipeline.Slug + "/jobs/build"

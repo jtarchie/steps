@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/config"
 )
 
 // inputDigests is shell.InputDigests, which this package may not import: a venue finds the memo by these two methods alone.
@@ -20,7 +18,7 @@ type inputDigests interface {
 func memoBuild(t *testing.T) BuildWorkspace {
 	t.Helper()
 
-	provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy"}, false)
+	provider, err := NewProvider(&Settings{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

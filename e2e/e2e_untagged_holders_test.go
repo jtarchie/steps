@@ -317,7 +317,7 @@ jobs:
 	requireSumMatches(t, dir)
 }
 
-// TestTheStepCacheFilesWhatAnUntaggedImageStepHeld: the cache under root: is a reader here, so both steps are filed and the second run restores both.
+// TestTheStepCacheFilesWhatAnUntaggedImageStepHeld: the cache under --workspace-root is a reader here, so both steps are filed and the second run restores both.
 func TestTheStepCacheFilesWhatAnUntaggedImageStepHeld(t *testing.T) {
 	t.Parallel()
 	dockerSlot(t)
@@ -327,14 +327,11 @@ func TestTheStepCacheFilesWhatAnUntaggedImageStepHeld(t *testing.T) {
 	dir := t.TempDir()
 	sums := filepath.Join(dir, "sums")
 
-	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[1]s/ws
-
+	path := writePipeline(t, dir, `
 jobs:
 - name: build
   plan:
-`, dir)+untaggedProducer()+fmt.Sprintf(`  - task: consume
+`+untaggedProducer()+fmt.Sprintf(`  - task: consume
     image: %[1]s
     inputs: [src]
     outputs: [out]
@@ -345,8 +342,8 @@ jobs:
     run: cat out/got >> %[2]s
 `, dockerE2EImage, sums))
 
-	mustRun(t, "run", path, "--force")
-	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--force", "--workspace-root", wsRoot(path))
+	mustRun(t, "run", path, "--force", "--workspace-root", wsRoot(path))
 
 	lines := strings.Fields(readFileString(t, sums))
 	if len(lines) != 2 || lines[0] != lines[1] {

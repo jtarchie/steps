@@ -136,7 +136,7 @@ jobs:
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -256,7 +256,7 @@ jobs:
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -438,7 +438,7 @@ jobs:
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -525,7 +525,7 @@ jobs:
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -612,7 +612,7 @@ jobs:
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -1007,7 +1007,7 @@ func drainable(t *testing.T, dir, yaml string) (*LocalRunner, *Pipeline, store.S
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -1058,7 +1058,7 @@ jobs:
         run: "true"
 `)
 
-	provider, err := workspace.NewProvider(target.Config().Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}

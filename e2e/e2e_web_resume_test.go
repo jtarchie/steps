@@ -14,12 +14,11 @@ import (
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
-// A durable workspace.root: is the case the restart's stale-build sweep reaches, and volatile: keeps the step cache from passing for a resume.
+// A daemon's root is always durable, which is the case the restart's stale-build sweep reaches, and volatile: keeps the step cache from passing for a resume.
 func TestARestartResumesTheBuildItInterrupted(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	root := filepath.Join(dir, "ws")
 	first := filepath.Join(dir, "first")
 	second := filepath.Join(dir, "second")
 	started := filepath.Join(dir, "started")
@@ -40,8 +39,6 @@ defaults:
 agents:
 - name: reviewer
   source: { model: openai/test-model, endpoint: `+fake.URL+`/v1/, api_key_env: STEPS_TEST_AGENT_API_KEY }
-workspace:
-  root: `+root+`
 jobs:
 - name: build
   interruptible: true
@@ -209,8 +206,6 @@ func restartKeepsTheApproval(t *testing.T, agents, before string) {
 defaults:
   preflight:
     disabled: true`+agents+`
-workspace:
-  root: `+filepath.Join(dir, "ws")+`
 jobs:
 - name: deploy
   interruptible: true

@@ -39,14 +39,13 @@ import (
 // step workspaces are torn down when the build closes and are not
 // inspectable after the fact.
 //
-// workspaceBlock is prepended verbatim: "" for the default workspace, or a
-// workspace: block. Either way the inputs:/outputs: declarations physically
-// scope what each step sees, which is what makes the artifact-flow assertions
-// load-bearing rather than incidentally true (see docs/workspace.md).
-func e2ePipeline(t *testing.T, dir, endpoint, workspaceBlock string) string {
+// The inputs:/outputs: declarations physically scope what each step sees,
+// which is what makes the artifact-flow assertions load-bearing rather than
+// incidentally true (see docs/workspace.md).
+func e2ePipeline(t *testing.T, dir, endpoint string) string {
 	t.Helper()
 
-	yaml := workspaceBlock + fmt.Sprintf(`
+	yaml := fmt.Sprintf(`
 defaults:
   preflight:
     disabled: true
@@ -143,29 +142,18 @@ func happyPathScript() []turn {
 // tool compilation on the wire, tool execution, required-tool forcing,
 // verdict routing, artifact flow into the put, and store persistence. It
 // finishes by rerunning the pipeline to pin down the caching contract.
-//
-// It runs the identical fixture with no workspace: block and with an explicit
-// one, so the default a pipeline gets and the strategy it can name are held
-// to the same artifact flow.
 func TestEndToEndAgentHappyPath(t *testing.T) {
 	t.Parallel()
 
-	for _, mode := range []struct{ name, workspace string }{
-		{"default workspace", ""},
-		{"explicit copy workspace", "workspace:\n  strategy: copy\n"},
-	} {
-		t.Run(mode.name, func(t *testing.T) {
-			runHappyPath(t, mode.workspace)
-		})
-	}
+	runHappyPath(t)
 }
 
-func runHappyPath(t *testing.T, workspaceBlock string) {
+func runHappyPath(t *testing.T) {
 	t.Helper()
 
 	dir := t.TempDir()
 	fake := newFakeLLM(t, happyPathScript()...)
-	path := e2ePipeline(t, dir, fake.URL, workspaceBlock)
+	path := e2ePipeline(t, dir, fake.URL)
 
 	mustRun(t, path)
 
@@ -231,7 +219,7 @@ func runHappyPath(t *testing.T, workspaceBlock string) {
 	// rerun even though their own content is unchanged.
 
 	fake2 := newFakeLLM(t, happyPathScript()...)
-	rerunPath := e2ePipeline(t, dir, fake2.URL, workspaceBlock)
+	rerunPath := e2ePipeline(t, dir, fake2.URL)
 
 	mustRun(t, rerunPath)
 
@@ -359,7 +347,7 @@ func testSadPathModelRejects(t *testing.T) {
 		callsTool("verdict", map[string]any{"choice": "reject", "note": "claims are unsupported"}),
 		says("Rejected."),
 	)
-	path := e2ePipeline(t, dir, fake.URL, "")
+	path := e2ePipeline(t, dir, fake.URL)
 
 	err := stepsRun(t, []string{path})
 	if err == nil {
@@ -430,7 +418,7 @@ func testSadPathProviderUnreachable(t *testing.T) {
 	}
 
 	fake := newFakeLLM(t, outage...)
-	path := e2ePipeline(t, dir, fake.URL, "")
+	path := e2ePipeline(t, dir, fake.URL)
 
 	logs := captureStderr(t)
 

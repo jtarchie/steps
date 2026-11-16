@@ -27,11 +27,6 @@ type Config struct {
 	// agent uses when it names none, preflight tuning, the delegation budget,
 	// and the version/run/memory caps. See Defaults.
 	Defaults *Defaults `yaml:"defaults,omitempty"`
-	// Workspace opts the pipeline into Concourse-style per-step isolation.
-	// Absent (the default) keeps every step in a triggered build sharing one
-	// mutable directory, exactly as before this field existed. See
-	// WorkspaceConfig.
-	Workspace *WorkspaceConfig `yaml:"workspace,omitempty"`
 	// Assert, at the top level, names the ordered set of job names that
 	// `steps test` must have run (see Assert). It's a self-verification
 	// meta-check, never hashed.
@@ -76,9 +71,14 @@ func parseSource(source []byte, name string, label string, fsys Files) (*Config,
 
 	var cfg Config
 
+	err := refuseWorkspaceBlock(source)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline YAML %q: %w", label, err)
+	}
+
 	expanded, remap := expandInParallelShorthand(source)
 
-	err := strictUnmarshal(expanded, &cfg)
+	err = strictUnmarshal(expanded, &cfg)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse pipeline YAML %q: %w", label, remap(err))
 	}
@@ -146,7 +146,6 @@ func (c *Config) validate() error {
 		c.validateTaskInputsAll,
 		c.validateStepFieldPlacement,
 		c.validateTrySteps,
-		c.validateWorkspace,
 		c.validateArtifactDecls,
 		c.validateResourceTypes,
 		c.validateStepResource,

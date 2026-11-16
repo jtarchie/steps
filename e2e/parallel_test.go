@@ -158,9 +158,6 @@ func TestInParallelBranchesCannotSeeSiblingOutputs(t *testing.T) {
 	dir := t.TempDir()
 
 	path := writePipeline(t, dir, `
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:
@@ -195,9 +192,6 @@ func TestInParallelOutputsAreAvailableAfterTheBlock(t *testing.T) {
 	marker := filepath.Join(dir, "seen.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:

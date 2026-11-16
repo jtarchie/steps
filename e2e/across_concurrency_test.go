@@ -27,9 +27,6 @@ func TestAcrossMaxInFlightRunsCellsConcurrently(t *testing.T) {
 	log := filepath.Join(dir, "overlap.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:
@@ -76,9 +73,6 @@ func TestAcrossMaxInFlightKeepsExecutionOrderDeterministic(t *testing.T) {
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:
@@ -112,9 +106,6 @@ func TestAcrossMaxInFlightReportsEveryFailure(t *testing.T) {
 	log := filepath.Join(dir, "ran.log")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:
@@ -157,9 +148,6 @@ func TestAcrossMaxInFlightIsNotHashed(t *testing.T) {
 
 	pipeline := func(width int) string {
 		return fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 jobs:
 - name: fan
   plan:

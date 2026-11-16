@@ -682,7 +682,7 @@ A get writes no tree, since an issue has none, only these:
 | `issue.comments.json` | every comment on it, oldest first, as GitHub's API describes them |
 | `issue.md` | the issue to read: `# <title> (#<number>)`, its page, its body, then each comment under `## Comment by <login>, <created_at>` |
 
-`issue.md` carries the discussion because a decision recorded in a comment after the issue was filed is part of what the work must do, and a plan built from the body alone builds the option the discussion rejected. **A get fetches the issue as it is now**, whichever version it is handed: an issue has no commit to pin it to, so a replay or a later job sees today's title, body and comments. With [`cache.resources:`](workspace.md#cross-build-resource-cache-cache) on, a version already fetched is not fetched again, so a later job sees the issue as it was when the version was first fetched instead.
+`issue.md` carries the discussion because a decision recorded in a comment after the issue was filed is part of what the work must do, and a plan built from the body alone builds the option the discussion rejected. **A get fetches the issue as it is now**, whichever version it is handed: an issue has no commit to pin it to, so a replay or a later job sees today's title, body and comments. Under a durable `--workspace-root` the [resource cache](workspace.md#cross-build-resource-cache) is on, so a version already fetched is not fetched again, so a later job sees the issue as it was when the version was first fetched instead.
 
 A `github-pr-comment` put handed a `github-issues` get posts on that issue, as above: the type is named for pull requests, but GitHub files the comment under the issue either way, and a `github-label` put labels it the same way.
 

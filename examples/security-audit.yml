@@ -35,9 +35,6 @@
 #
 # Needs: GH_TOKEN (`export GH_TOKEN=$(gh auth token)`), `node`, a docker daemon, a model.
 
-workspace:
-  strategy: copy    # the default, stated because the collecting matrices below require it
-
 defaults:
   # Swap per run without editing this file:
   #   STEPS_MODEL=opencode/kimi-k3 steps run examples/security-audit.yml --job audit

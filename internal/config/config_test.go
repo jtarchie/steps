@@ -39,64 +39,6 @@ func wantLoadError(t *testing.T, path, want string) {
 	}
 }
 
-func TestConfigValidateWorkspaceStrategy(t *testing.T) {
-	t.Parallel()
-
-	t.Run("unknown strategy", func(t *testing.T) {
-		t.Parallel()
-
-		path := writeConfig(t, `
-workspace:
-  strategy: rsync
-jobs:
-- name: build
-  plan:
-  - task: build
-    inputs: []
-    run: echo hi
-`)
-		wantLoadError(t, path, `workspace.strategy "rsync" must be copy`)
-	})
-
-	t.Run("options: is gone with btrfs", func(t *testing.T) {
-		t.Parallel()
-
-		path := writeConfig(t, `
-workspace:
-  strategy: copy
-  options:
-    compression: zstd
-jobs:
-- name: build
-  plan:
-  - task: build
-    inputs: []
-    run: echo hi
-`)
-		wantLoadError(t, path, "options")
-	})
-
-	t.Run("valid copy config loads cleanly", func(t *testing.T) {
-		t.Parallel()
-
-		path := writeConfig(t, `
-workspace:
-  strategy: copy
-jobs:
-- name: build
-  plan:
-  - task: build
-    inputs: []
-    run: echo hi
-`)
-
-		_, err := LoadConfig(path)
-		if err != nil {
-			t.Fatalf("LoadConfig: %v", err)
-		}
-	})
-}
-
 // TestConfigArtifactDeclsWithoutWorkspaceLoad confirms inputs:/outputs: are a
 // validated contract that loads WITHOUT a workspace: block (they used to be a
 // load-time error there). Without isolation they don't change what a step
@@ -151,9 +93,6 @@ func TestConfigValidateArtifactDeclsStepKindRestrictions(t *testing.T) {
 		t.Parallel()
 
 		path := writeConfig(t, `
-workspace:
-  strategy: copy
-
 resource_types:
 - name: dummy
   config:
@@ -178,9 +117,6 @@ jobs:
 		t.Parallel()
 
 		path := writeConfig(t, `
-workspace:
-  strategy: copy
-
 resource_types:
 - name: dummy
   config:
@@ -209,9 +145,6 @@ func TestConfigValidateArtifactNames(t *testing.T) {
 		t.Parallel()
 
 		path := writeConfig(t, `
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:
@@ -226,9 +159,6 @@ jobs:
 		t.Parallel()
 
 		path := writeConfig(t, `
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:
@@ -291,8 +221,7 @@ func slicesEqual(a, b []string) bool {
 }
 
 // TestExampleWorkspaceLoadsCleanly guards testdata/workspace.yml against
-// silently drifting out of sync with the workspace: schema/validation rules
-// it's meant to demonstrate.
+// silently drifting out of sync with the isolation rules it demonstrates.
 func TestExampleWorkspaceLoadsCleanly(t *testing.T) {
 	t.Parallel()
 
@@ -310,7 +239,6 @@ func TestResolveTaskInputsOutputsOverride(t *testing.T) {
 	t.Parallel()
 
 	cfg := &Config{
-		Workspace: &WorkspaceConfig{Strategy: "copy"},
 		Tasks: []Task{
 			{Name: "build", Run: "echo hi", Inputs: Inputs("repo"), Outputs: []string{"built"}},
 		},

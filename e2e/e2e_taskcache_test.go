@@ -17,14 +17,10 @@ import (
 )
 
 // taskCachePipeline counts its runs in a cache dir; --force and volatile: because a skipped step never runs, so would never touch the cache.
-func taskCachePipeline(t *testing.T, dir, root, report string) string {
+func taskCachePipeline(t *testing.T, dir, report string) string {
 	t.Helper()
 
 	return writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-  root: %[1]s
-
 jobs:
 - name: build
   plan:
@@ -37,9 +33,9 @@ jobs:
       n=$(cat .gocache/runs 2>/dev/null || echo 0)
       n=$((n + 1))
       echo "$n" > .gocache/runs
-      echo "$n" >> %[2]s
+      echo "$n" >> %[1]s
       echo built > bin/app
-`, root, report))
+`, report))
 }
 
 // TestEndToEndTaskCacheSurvivesToTheNextRun: the cache survives, and a warm cache never moves the node hash.
@@ -48,10 +44,10 @@ func TestEndToEndTaskCacheSurvivesToTheNextRun(t *testing.T) {
 
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
-	path := taskCachePipeline(t, dir, filepath.Join(dir, "ws"), report)
+	path := taskCachePipeline(t, dir, report)
 
-	mustRun(t, "run", path, "--force")
-	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
 
 	got := readFileString(t, report)
 	if got != "1\n2\n" {
@@ -84,9 +80,6 @@ func TestEndToEndAgentCacheSurvivesToTheNextRun(t *testing.T) {
 	fake := newFakeLLM(t, append(run, run...)...)
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[2]s
-
 defaults:
   preflight:
     disabled: true
@@ -108,10 +101,10 @@ jobs:
     volatile: true
     messages:
       - Build it.
-`, fake.URL, filepath.Join(dir, "ws")))
+`, fake.URL))
 
-	mustRun(t, "run", path, "--force")
-	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
 
 	if got := readFileString(t, report); got != "1\n2\n" {
 		t.Errorf("runs reported %q, want the second run to see the first's cache (\"1\\n2\\n\")", got)
@@ -126,9 +119,6 @@ func TestEndToEndPlacedTaskCacheStaysOnItsWorker(t *testing.T) {
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[1]s
-
 jobs:
 - name: build
   plan:
@@ -147,11 +137,11 @@ jobs:
   - task: publish
     volatile: true
     inputs: [out]
-    run: cat out/runs >> %[2]s
-`, filepath.Join(dir, "ws"), report))
+    run: cat out/runs >> %[1]s
+`, report))
 
-	mustRun(t, "run", path, "--force", "--worker", "box=local:")
-	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box=local:")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box=local:")
 
 	if got := readFileString(t, report); got != "1\n2\n" {
 		t.Errorf("runs reported %q, want the second run to see the worker's cache (\"1\\n2\\n\")", got)
@@ -195,9 +185,6 @@ func TestEndToEndSSHWorkerTaskCacheStaysOnItsWorker(t *testing.T) {
 	report := filepath.Join(dir, "runs.txt")
 	worker := testsshd.New(t).URL
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[1]s
-
 jobs:
 - name: build
   plan:
@@ -215,11 +202,11 @@ jobs:
   - task: publish
     volatile: true
     inputs: [out]
-    run: cat out/runs >> %[2]s
-`, filepath.Join(dir, "ws"), report))
+    run: cat out/runs >> %[1]s
+`, report))
 
-	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
-	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box="+worker)
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box="+worker)
 
 	if got := readFileString(t, report); got != "1\n2\n" {
 		t.Errorf("runs reported %q, want the second run to see the worker's cache (\"1\\n2\\n\")", got)
@@ -238,9 +225,6 @@ func TestEndToEndPlacedAgentCacheStaysOnItsWorker(t *testing.T) {
 	fake := newFakeLLM(t, append(run, run...)...)
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[3]s
-
 defaults:
   preflight:
     disabled: true
@@ -268,11 +252,11 @@ jobs:
   - task: publish
     volatile: true
     inputs: [out]
-    run: cat out/runs >> %[4]s
-`, fake.URL, dockerE2EImage, filepath.Join(dir, "ws"), report))
+    run: cat out/runs >> %[3]s
+`, fake.URL, dockerE2EImage, report))
 
-	mustRun(t, "run", path, "--force", "--worker", "box=local:")
-	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box=local:")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box=local:")
 
 	if got := readFileString(t, report); got != "1\n2\n" {
 		t.Errorf("runs reported %q, want the second run to see the worker's cache (\"1\\n2\\n\")", got)
@@ -290,26 +274,23 @@ func TestEndToEndPlacedStepCacheNeverCrossesTheWire(t *testing.T) {
 
 	pipeline := func(tags string) string {
 		return fmt.Sprintf(`
-workspace:
-  root: %[1]s
-
 jobs:
 - name: build
   plan:
   - task: compile
-    %[2]s
+    %[1]s
     volatile: true
     caches:
     - path: .gocache
-    run: head -c %[3]d /dev/zero > .gocache/marker
-`, filepath.Join(dir, "ws"), tags, markerBytes)
+    run: head -c %[2]d /dev/zero > .gocache/marker
+`, tags, markerBytes)
 	}
 
 	path := writePipeline(t, dir, pipeline(""))
-	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
 
 	writePipelineFile(t, path, pipeline("tags: [box]"))
-	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box="+worker)
 
 	var sent int64
 
@@ -337,9 +318,6 @@ func TestEndToEndPlacedAgentCacheNeverCrossesTheWire(t *testing.T) {
 
 	pipeline := func(tags string) string {
 		return fmt.Sprintf(`
-workspace:
-  root: %[3]s
-
 defaults:
   preflight:
     disabled: true
@@ -359,19 +337,19 @@ jobs:
 - name: build
   plan:
   - agent: builder
-    %[4]s
+    %[3]s
     volatile: true
     messages:
       - Build it.
-`, fake.URL, dockerE2EImage, filepath.Join(dir, "ws"), tags)
+`, fake.URL, dockerE2EImage, tags)
 	}
 
 	path := writePipeline(t, dir, pipeline(""))
-	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
 
 	writePipelineFile(t, path, pipeline("tags: [box]"))
 
-	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box=local:")
 
 	// No lower bound: a tree the daemon already holds by digest is sent as 0 bytes, and an earlier test in the process leaves this near-empty workspace's twin.
 	if sent := placementNamed(t, runPlacements(t, path), "builder").BytesSent; sent >= markerBytes {
@@ -384,14 +362,11 @@ func placedCachePipeline(t *testing.T, dir, placement, report string) string {
 	t.Helper()
 
 	return writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[1]s
-
 jobs:
 - name: build
   plan:
   - task: compile
-    %[2]s
+    %[1]s
     volatile: true
     caches:
     - path: .gocache
@@ -404,8 +379,8 @@ jobs:
   - task: publish
     volatile: true
     inputs: [out]
-    run: cat out/runs >> %[3]s
-`, filepath.Join(dir, "ws"), placement, report))
+    run: cat out/runs >> %[2]s
+`, placement, report))
 }
 
 // TestEndToEndClearTaskCacheEmptiesTheLocalCache: fly clear-task-cache's job, against a cache this machine keeps.
@@ -414,16 +389,18 @@ func TestEndToEndClearTaskCacheEmptiesTheLocalCache(t *testing.T) {
 
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
-	path := taskCachePipeline(t, dir, filepath.Join(dir, "ws"), report)
+	path := taskCachePipeline(t, dir, report)
 
-	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
 
-	out := captureStdout(t, func() { mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile") })
+	out := captureStdout(t, func() {
+		mustRun(t, "clear-task-cache", path, "--workspace-root", wsRoot(path), "-j", "build", "-s", "compile")
+	})
 	if !strings.Contains(out, "cleared .gocache") {
 		t.Errorf("clear-task-cache printed %q, want it to say it cleared .gocache", out)
 	}
 
-	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
 
 	if got := readFileString(t, report); got != "1\n1\n" {
 		t.Errorf("runs reported %q, want the run after the clear to start cold (\"1\\n1\\n\")", got)
@@ -437,9 +414,6 @@ func TestEndToEndClearTaskCacheOnlyThePathNamed(t *testing.T) {
 	dir := t.TempDir()
 	report := filepath.Join(dir, "runs.txt")
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[1]s
-
 jobs:
 - name: build
   plan:
@@ -453,20 +427,20 @@ jobs:
         n=$(cat $c/runs 2>/dev/null || echo 0)
         n=$((n + 1))
         echo "$n" > $c/runs
-        printf '%%s=%%s ' "$c" "$n" >> %[2]s
+        printf '%%s=%%s ' "$c" "$n" >> %[1]s
       done
-      echo >> %[2]s
-`, filepath.Join(dir, "ws"), report))
+      echo >> %[1]s
+`, report))
 
-	mustRun(t, "run", path, "--force")
-	mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile", "-c", "./.a/")
-	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
+	mustRun(t, "clear-task-cache", path, "--workspace-root", wsRoot(path), "-j", "build", "-s", "compile", "-c", "./.a/")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
 
 	if got := readFileString(t, report); got != ".a=1 .b=1 \n.a=1 .b=2 \n" {
 		t.Errorf("runs reported %q, want only .a cleared", got)
 	}
 
-	err := stepsRun(t, []string{"clear-task-cache", path, "-j", "build", "-s", "compile", "-c", ".c"})
+	err := stepsRun(t, []string{"clear-task-cache", path, "--workspace-root", wsRoot(path), "-j", "build", "-s", "compile", "-c", ".c"})
 	if err == nil || !strings.Contains(err.Error(), ".a, .b") {
 		t.Errorf("clearing an undeclared path: %v, want a refusal naming the step's paths", err)
 	}
@@ -503,8 +477,8 @@ jobs:
 	}
 
 	out := captureStdout(t, func() { mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile") })
-	if !strings.Contains(out, "workspace.root") {
-		t.Errorf("with no workspace.root it printed %q, want it to say no cache outlives a run", out)
+	if !strings.Contains(out, "--workspace-root") {
+		t.Errorf("with no --workspace-root it printed %q, want it to say no cache outlives a run", out)
 	}
 }
 
@@ -516,17 +490,17 @@ func TestEndToEndClearTaskCacheRefusesAnUnmappedWorker(t *testing.T) {
 	report := filepath.Join(dir, "runs.txt")
 
 	path := placedCachePipeline(t, dir, "", report)
-	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
 
 	placedCachePipeline(t, dir, "tags: [box]", report)
 
-	err := stepsRun(t, []string{"clear-task-cache", path, "-j", "build", "-s", "compile"})
+	err := stepsRun(t, []string{"clear-task-cache", path, "--workspace-root", wsRoot(path), "-j", "build", "-s", "compile"})
 	if err == nil || !strings.Contains(err.Error(), "--worker box=") {
 		t.Fatalf("clearing a placed step with no --worker: %v, want a refusal naming the tag", err)
 	}
 
 	placedCachePipeline(t, dir, "", report)
-	mustRun(t, "run", path, "--force")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force")
 
 	if got := readFileString(t, report); got != "1\n2\n" {
 		t.Errorf("runs reported %q, want the refused clear to leave the local cache warm (\"1\\n2\\n\")", got)
@@ -541,13 +515,13 @@ func TestEndToEndClearTaskCacheOnACloudWorker(t *testing.T) {
 	path := placedCachePipeline(t, dir, "tags: [box]", filepath.Join(dir, "runs.txt"))
 
 	out := captureStdout(t, func() {
-		mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=aws://launch/lt-0123456789abcdef0?region=us-east-2")
+		mustRun(t, "clear-task-cache", path, "--workspace-root", wsRoot(path), "-j", "build", "-s", "compile", "--worker", "box=aws://launch/lt-0123456789abcdef0?region=us-east-2")
 	})
 	if !strings.Contains(out, "worker box: nothing to clear") {
 		t.Errorf("a launch-rung worker printed %q, want it to say there is nothing to clear", out)
 	}
 
-	err := stepsRun(t, []string{"clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=aws://stopped/i-0123456789abcdef0?region=us-east-2"})
+	err := stepsRun(t, []string{"clear-task-cache", path, "--workspace-root", wsRoot(path), "-j", "build", "-s", "compile", "--worker", "box=aws://stopped/i-0123456789abcdef0?region=us-east-2"})
 	if err == nil || !strings.Contains(err.Error(), "--start") {
 		t.Errorf("a stopped worker without --start: %v, want a refusal naming --start", err)
 	}
@@ -562,18 +536,18 @@ func TestEndToEndClearTaskCacheOnADockerWorker(t *testing.T) {
 	report := filepath.Join(dir, "runs.txt")
 	path := placedCachePipeline(t, dir, "tags: [box]\n    image: "+dockerE2EImage, report)
 
-	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box=local:")
 
 	release := holdTaskCacheVolumes(t)
 
-	err := stepsRun(t, []string{"clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=local:"})
+	err := stepsRun(t, []string{"clear-task-cache", path, "--workspace-root", wsRoot(path), "-j", "build", "-s", "compile", "--worker", "box=local:"})
 	if err == nil {
 		t.Error("clearing a volume a container mounts succeeded, want the daemon's refusal reported as a failure")
 	}
 
 	release()
-	mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box=local:")
-	mustRun(t, "run", path, "--force", "--worker", "box=local:")
+	mustRun(t, "clear-task-cache", path, "--workspace-root", wsRoot(path), "-j", "build", "-s", "compile", "--worker", "box=local:")
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box=local:")
 
 	if got := readFileString(t, report); got != "1\n1\n" {
 		t.Errorf("runs reported %q, want the run after the clear to start cold (\"1\\n1\\n\")", got)
@@ -633,9 +607,9 @@ func TestEndToEndClearTaskCacheOnAnSSHWorker(t *testing.T) {
 	worker := testsshd.New(t).URL
 	path := placedCachePipeline(t, dir, "tags: [box]", report)
 
-	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
-	mustRun(t, "clear-task-cache", path, "-j", "build", "-s", "compile", "--worker", "box="+worker)
-	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box="+worker)
+	mustRun(t, "clear-task-cache", path, "--workspace-root", wsRoot(path), "-j", "build", "-s", "compile", "--worker", "box="+worker)
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box="+worker)
 
 	if got := readFileString(t, report); got != "1\n1\n" {
 		t.Errorf("runs reported %q, want the run after the clear to start cold (\"1\\n1\\n\")", got)
@@ -654,33 +628,30 @@ func reapPipeline(t *testing.T, dir, placement, report string, v2 bool) string {
 	const count = `count() { n=$(($(cat "$1/n" 2>/dev/null || echo 0) + 1)); echo "$n" > "$1/n"; echo "$n"; }`
 
 	return writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[1]s
-
 jobs:
 - name: build
   plan:
   - task: compile
-    %[3]s
+    %[2]s
     volatile: true
     outputs: [cout]
-    caches: %[4]s
+    caches: %[3]s
     run: |
-      %[7]s
-      %[5]s > cout/r
-  - task: %[6]s
-    %[3]s
+      %[6]s
+      %[4]s > cout/r
+  - task: %[5]s
+    %[2]s
     volatile: true
     outputs: [lout]
     caches: [{path: .c}]
     run: |
-      %[7]s
+      %[6]s
       echo "c=$(count .c)" > lout/r
   - task: publish
     volatile: true
     inputs: [cout, lout]
-    run: cat cout/r lout/r >> %[2]s
-`, filepath.Join(dir, "ws"), report, placement, compileCaches, compileRun, lint, count))
+    run: cat cout/r lout/r >> %[1]s
+`, report, placement, compileCaches, compileRun, lint, count))
 }
 
 // assertReaped runs v1, another pipeline beside it, v2, then both again: a cache v2 no longer names starts cold, the one it kept stays warm, and another pipeline's is never touched.
@@ -711,7 +682,7 @@ func TestEndToEndPlacedTaskCacheOfARemovedStepIsReaped(t *testing.T) {
 	t.Cleanup(func() { removeTaskCacheVolumes(t) })
 
 	assertReaped(t, "tags: [box]\n    image: "+dockerE2EImage, func(path string) {
-		mustRun(t, "run", path, "--force", "--worker", "box=local:")
+		mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box=local:")
 	})
 }
 
@@ -721,7 +692,7 @@ func TestEndToEndSSHWorkerTaskCacheOfARemovedStepIsReaped(t *testing.T) {
 	worker := testsshd.New(t).URL
 
 	assertReaped(t, "tags: [box]", func(path string) {
-		mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+		mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box="+worker)
 	})
 }
 
@@ -735,9 +706,9 @@ func TestEndToEndTaskCacheReapStaysInItsWorker(t *testing.T) {
 	placement := "tags: [box]\n    image: " + dockerE2EImage
 	here, there := "box=local:"+filepath.Join(dir, "here"), "box=local:"+filepath.Join(dir, "there")
 
-	mustRun(t, "run", reapPipeline(t, dir, placement, report, false), "--force", "--worker", here)
-	mustRun(t, "run", reapPipeline(t, dir, placement, report, true), "--force", "--worker", there)
-	mustRun(t, "run", reapPipeline(t, dir, placement, report, false), "--force", "--worker", here)
+	mustRun(t, "run", reapPipeline(t, dir, placement, report, false), "--workspace-root", filepath.Join(dir, "ws"), "--force", "--worker", here)
+	mustRun(t, "run", reapPipeline(t, dir, placement, report, true), "--workspace-root", filepath.Join(dir, "ws"), "--force", "--worker", there)
+	mustRun(t, "run", reapPipeline(t, dir, placement, report, false), "--workspace-root", filepath.Join(dir, "ws"), "--force", "--worker", here)
 
 	if got, want := readFileString(t, report), "a=1 b=1\nc=1\na=1\nc=1\na=2 b=2\nc=2\n"; got != want {
 		t.Errorf("runs reported %q, want %q: v2 on the other worker reaps only its own caches", got, want)
@@ -752,9 +723,6 @@ func TestEndToEndSSHWorkerCacheThatCannotBeRestoredIsEmpty(t *testing.T) {
 	report := filepath.Join(dir, "runs.txt")
 	worker := testsshd.New(t).URL
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[1]s
-
 jobs:
 - name: build
   plan:
@@ -775,11 +743,11 @@ jobs:
   - task: publish
     volatile: true
     inputs: [out]
-    run: cat out/runs >> %[2]s
-`, filepath.Join(dir, "ws"), report))
+    run: cat out/runs >> %[1]s
+`, report))
 
-	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
-	mustRun(t, "run", path, "--force", "--worker", "box="+worker)
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box="+worker)
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path), "--force", "--worker", "box="+worker)
 
 	if got := readFileString(t, report); got != "1\n2\n" {
 		t.Errorf("runs reported %q, want both to run and the restorable cache kept (\"1\\n2\\n\")", got)
@@ -796,9 +764,6 @@ func TestEndToEndAgentContextSeesItsCache(t *testing.T) {
 
 	pipeline := func(context string) string {
 		return writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[2]s
-
 defaults:
   preflight:
     disabled: true
@@ -823,14 +788,14 @@ jobs:
   - agent: builder
     volatile: true
     inputs: [src]
-    %[3]s
+    %[2]s
     messages:
       - Build it.
-`, fake.URL, filepath.Join(dir, "ws"), context))
+`, fake.URL, context))
 	}
 
-	mustRun(t, "run", pipeline(""), "--force")
-	mustRun(t, "run", pipeline("context_paths: [src/cache/notes]"), "--force")
+	mustRun(t, "run", pipeline(""), "--workspace-root", filepath.Join(dir, "ws"), "--force")
+	mustRun(t, "run", pipeline("context_paths: [src/cache/notes]"), "--workspace-root", filepath.Join(dir, "ws"), "--force")
 
 	if second := fake.request(3); !second.toolResultContains("from-cache") {
 		t.Errorf("the second run's context read %q, want the cache's notes (from-cache)", second.toolResults())
@@ -848,9 +813,6 @@ func TestEndToEndAgentCacheSurvivesAFailedPrepare(t *testing.T) {
 
 	pipeline := func(context string) string {
 		return writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  root: %[2]s
-
 defaults:
   preflight:
     disabled: true
@@ -870,20 +832,20 @@ jobs:
   plan:
   - agent: builder
     volatile: true
-    %[3]s
+    %[2]s
     messages:
       - Build it.
-`, fake.URL, filepath.Join(dir, "ws"), context))
+`, fake.URL, context))
 	}
 
-	mustRun(t, "run", pipeline(""), "--force")
+	mustRun(t, "run", pipeline(""), "--workspace-root", filepath.Join(dir, "ws"), "--force")
 
-	err := stepsRun(t, []string{"run", pipeline("context_paths: [.cache/missing]"), "--force"})
+	err := stepsRun(t, []string{"run", pipeline("context_paths: [.cache/missing]"), "--workspace-root", filepath.Join(dir, "ws"), "--force"})
 	if err == nil {
 		t.Fatal("a context path the cache does not hold was not refused")
 	}
 
-	mustRun(t, "run", pipeline(""), "--force")
+	mustRun(t, "run", pipeline(""), "--workspace-root", filepath.Join(dir, "ws"), "--force")
 
 	if got := readFileString(t, report); got != "kept\n" {
 		t.Errorf("the run after the refused one saw %q, want the cache the first run kept (\"kept\\n\")", got)

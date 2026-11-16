@@ -191,9 +191,6 @@ func TestResumeUnknownRunUnderIsolation(t *testing.T) {
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
-workspace:
-  strategy: copy
-
 jobs:
 - name: publish
   plan:

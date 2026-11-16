@@ -77,7 +77,7 @@ func TestWatchRefusesToStartOnAnUnsatisfiableCheck(t *testing.T) {
 		mcpTriggerPipeline(ts.URL), "tool: list_versions", "tool: search_versions", 1))
 	st := mustOpenStore(t, dir)
 
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestWatchStartsDespiteATransientOutage(t *testing.T) {
 	// surviving — unreachable now, fine in a minute.
 	cfg := loadConfig(t, dir, mcpTriggerPipeline("http://127.0.0.1:1/mcp"))
 
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestWatchPreflightsAgentMCPServers(t *testing.T) {
 	cfg := loadConfig(t, dir, agentMCPPipeline(ts.URL))
 	st := mustOpenStore(t, dir)
 
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	provider, err := workspace.NewProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}

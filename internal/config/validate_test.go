@@ -394,8 +394,6 @@ func TestTaskInputsAcceptsTheSameFormsAsAStep(t *testing.T) {
 	t.Parallel()
 
 	path := writeConfig(t, `
-workspace:
-  strategy: copy
 tasks:
 - name: build
   run: "true"

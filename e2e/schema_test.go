@@ -109,8 +109,8 @@ func TestSchemaRejectsInvalidPipelines(t *testing.T) {
 			pipeline: "jobs: [{name: j}]\n",
 		},
 		{
-			name:     "unknown workspace strategy",
-			pipeline: "workspace: {strategy: rsync}\njobs: [{name: j, plan: []}]\n",
+			name:     "a workspace block, which moved to the operator's flags",
+			pipeline: "workspace: {root: /tmp/r}\njobs: [{name: j, plan: []}]\n",
 		},
 		{
 			name:     "custom tool without a run",
@@ -206,7 +206,6 @@ func schemaDefsByType() map[string]reflect.Type {
 		"defaults":             reflect.TypeOf(config.Defaults{}),
 		"stepMemory":           reflect.TypeOf(config.StepMemory{}),
 		"taskCache":            reflect.TypeOf(config.TaskCache{}),
-		"workspace":            reflect.TypeOf(config.WorkspaceConfig{}),
 		"webhookSource":        reflect.TypeOf(config.WebhookSource{}),
 		"webhookSignature":     reflect.TypeOf(config.WebhookSignature{}),
 		"cronSource":           reflect.TypeOf(config.CronSource{}),

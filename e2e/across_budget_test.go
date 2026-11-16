@@ -250,9 +250,6 @@ func TestAcrossBudgetBindsUnderConcurrency(t *testing.T) {
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(800))
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 defaults:
   preflight:
     disabled: true
@@ -298,9 +295,6 @@ func TestAcrossBudgetBindsAtFullWidth(t *testing.T) {
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 defaults:
   preflight:
     disabled: true
@@ -347,9 +341,6 @@ func TestAcrossBudgetReservesTheCellAgentsOwnBudget(t *testing.T) {
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
-workspace:
-  strategy: copy
-
 defaults:
   preflight:
     disabled: true

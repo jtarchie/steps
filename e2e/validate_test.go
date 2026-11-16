@@ -78,8 +78,6 @@ func TestValidateChecksArtifactFlowInEveryJob(t *testing.T) {
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
-workspace:
-  strategy: copy
 jobs:
 - name: fine
   plan:

@@ -1,6 +1,6 @@
 package workspace
 
-// workspace.root: is an operator-settable directory that trees are unpacked
+// --workspace-root is an operator-settable directory that trees are unpacked
 // into and DIGESTED from, which is the same silent loss the venue refuses a
 // worker for — available here without any worker involved.
 
@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/config"
 )
 
 // TestCopyProviderRefusesARootThatCannotHoldAnExecutableBit is the reason the
@@ -34,7 +32,7 @@ func TestCopyProviderRefusesARootThatCannotHoldAnExecutableBit(t *testing.T) {
 
 	t.Cleanup(func() { rootExecBit = previous })
 
-	provider, err := newCopyProvider(&config.WorkspaceConfig{Root: root}, false) //nolint:exhaustruct // Root is the field under test
+	provider, err := newCopyProvider(&Settings{Root: root}, false) //nolint:exhaustruct // Root is the field under test
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +43,7 @@ func TestCopyProviderRefusesARootThatCannotHoldAnExecutableBit(t *testing.T) {
 	}
 
 	// The root, because that is the thing to act on: the answer is to point
-	// workspace.root: somewhere else.
+	// --workspace-root somewhere else.
 	if !strings.Contains(err.Error(), root) {
 		t.Errorf("error = %v, want it to name the root that was refused", err)
 	}
@@ -57,7 +55,7 @@ func TestCopyProviderRefusesARootThatCannotHoldAnExecutableBit(t *testing.T) {
 func TestCopyProviderAcceptsAnOrdinaryRoot(t *testing.T) {
 	t.Parallel()
 
-	provider, err := newCopyProvider(&config.WorkspaceConfig{Root: t.TempDir()}, false) //nolint:exhaustruct // Root is the field under test
+	provider, err := newCopyProvider(&Settings{Root: t.TempDir()}, false) //nolint:exhaustruct // Root is the field under test
 	if err != nil {
 		t.Fatal(err)
 	}

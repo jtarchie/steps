@@ -684,7 +684,6 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"MCPExport":        reflect.TypeOf(config.MCPExport{}),
 		"Defaults":         reflect.TypeOf(config.Defaults{}),
 		"StepMemory":       reflect.TypeOf(config.StepMemory{}),
-		"WorkspaceConfig":  reflect.TypeOf(config.WorkspaceConfig{}),
 		"WebhookSource":    reflect.TypeOf(config.WebhookSource{}),
 		"WebhookSignature": reflect.TypeOf(config.WebhookSignature{}),
 		"CronSource":       reflect.TypeOf(config.CronSource{}),
@@ -791,7 +790,6 @@ func eachOf(doc map[string]any, key string, fn func(any)) {
 func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 	record(used, "Config", doc)
 	record(used, "Defaults", doc["defaults"])
-	record(used, "WorkspaceConfig", doc["workspace"])
 	record(used, "Assert", doc["assert"])
 	record(used, "Access", doc["access"])
 

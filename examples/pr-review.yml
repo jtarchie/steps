@@ -16,9 +16,6 @@
 #
 # Needs: GH_TOKEN (`export GH_TOKEN=$(gh auth token)`), and a model.
 
-workspace:
-  strategy: copy    # the default, stated because the collecting matrix below requires it
-
 defaults:
   # Swap per run without editing this file:
   #   STEPS_MODEL=opencode/kimi-k3 steps run examples/pr-review.yml --job review

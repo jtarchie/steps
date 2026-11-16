@@ -57,9 +57,6 @@
         "$ref": "#/$defs/job"
       }
     },
-    "workspace": {
-      "$ref": "#/$defs/workspace"
-    },
     "assert": {
       "$ref": "#/$defs/assert"
     },
@@ -2243,39 +2240,6 @@
         "nudge": {
           "type": "boolean",
           "description": "Agent steps only. Tell the model which files/tool_calls it still owes at the moment it tries to stop (up to five times), and refuse a verdict over the same gap. Opt-in: without it the assert is a silent post-hoc check. Not valid alongside stdout/verdict, which name a conclusion rather than an obligation."
-        }
-      }
-    },
-    "workspace": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Tune the per-step isolation every pipeline runs under (a step sees only its declared inputs:). Absent takes every default: a system temp root.",
-      "properties": {
-        "strategy": {
-          "enum": [
-            "copy"
-          ],
-          "description": "How step trees are materialized: copy, copy-on-write where the filesystem offers it. The only strategy and the default."
-        },
-        "root": {
-          "type": "string",
-          "description": "Where step trees are materialized; a system temp directory when unset. Required by the caches, which must outlive a run."
-        },
-        "cache": {
-          "type": "object",
-          "additionalProperties": false,
-          "description": "Reuse fetched resource versions across builds. Requires root:. Off by default: a cached version's in: does not run again, so enabling it asserts that in: is a pure fetch.",
-          "properties": {
-            "resources": {
-              "type": "boolean",
-              "description": "Enable the cross-build resource cache."
-            },
-            "max_entries": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "How many cached versions to keep, least-recently-used evicted first. 0 takes the default."
-            }
-          }
         }
       }
     },

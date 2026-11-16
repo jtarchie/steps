@@ -4,12 +4,8 @@
 # Demonstrates workspace isolation mechanics in depth. Isolation is not
 # optional — every pipeline runs this way: each task/agent step sees only the
 # named inputs:/outputs: it declares, materialized as a fresh copy, and only
-# declared outputs are captured back. The workspace: block below is TUNING
-# (which strategy materializes trees, where the root lives), not a switch;
-# an absent block means strategy: copy under a system temp root.
-workspace:
-  strategy: copy   # the only strategy and the default, spelled out for the tour
-
+# declared outputs are captured back. Where the trees live is the operator's
+# --workspace-root, never this file.
 # Every agent below inherits this model, so it is named once rather than on
 # every agent. openrouter/qwen/qwen3.7-flash is a cheap tool-calling model
 # ($0.03/M in, $0.13/M out, 1M context); the openrouter/ prefix supplies both

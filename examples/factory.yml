@@ -2,14 +2,9 @@
 
 # A software factory over one repository (steps#139): an `epic` issue becomes proposed issues (decompose), an issue a person relabels `self-build` becomes a draft pull request (implement), and a comment starting `/factory` on that pull request becomes a commit on its branch (respond). A person is needed only to promote a proposed issue and to merge; there is no approval step, because timeouts bound the spend and merge is the approval.
 
-# Run it: `steps validate examples/factory.yml --var repo=owner/name`, then `steps web` and `steps pipeline set -c examples/factory.yml -v repo=owner/name`. Needs git and claude on PATH and GH_TOKEN set (`export GH_TOKEN=$(gh auth token)`); everything that talks to GitHub is a built-in resource type, so nothing shells out to gh.
+# Run it: `steps validate examples/factory.yml --var repo=owner/name`, then `steps web` (whose durable --workspace-root keeps the step and resource caches) and `steps pipeline set -c examples/factory.yml -v repo=owner/name`. Needs git and claude on PATH and GH_TOKEN set (`export GH_TOKEN=$(gh auth token)`); everything that talks to GitHub is a built-in resource type, so nothing shells out to gh.
 
 # The labels are the columns: `epic` (a spec too big for one pull request), `self-build/proposed` (an issue decompose wrote, built by nothing until relabeled), `self-build` (build this one), `factory` (on every pull request the factory opened, the only place respond answers).
-
-workspace:
-  root: .steps/workspace
-  cache:
-    resources: true
 
 resources:
 - name: epic

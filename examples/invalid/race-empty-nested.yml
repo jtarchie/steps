@@ -4,9 +4,6 @@
 # problem — a config typo that took down a watch process.
 # expect: race.steps needs at least two branches
 
-workspace:
-  strategy: copy
-
 jobs:
 - name: build
   plan:

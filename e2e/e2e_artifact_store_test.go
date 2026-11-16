@@ -92,12 +92,10 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // artifactStorePipeline is a two-step job whose first step records every real
 // execution in a side-effect file — the thing a cache hit must NOT touch —
 // and whose second step consumes the first's output.
-func artifactStorePipeline(t *testing.T, dir, root, publishLine string) string {
+func artifactStorePipeline(t *testing.T, dir, publishLine string) string {
 	t.Helper()
 
 	return writePipeline(t, dir, `
-workspace:
-  root: `+root+`
 jobs:
 - name: build
   plan:
@@ -124,9 +122,9 @@ func TestEndToEndArtifactStoreRematerializesEvictedOutputs(t *testing.T) {
 
 	storeFlag := "s3://cas/team?endpoint=" + url + "&region=us-east-1"
 
-	path := artifactStorePipeline(t, dir, root,
+	path := artifactStorePipeline(t, dir,
 		"cp data/result.txt "+filepath.Join(dir, "published.txt"))
-	mustRun(t, path, "--artifact-store", storeFlag)
+	mustRun(t, path, "--workspace-root", root, "--artifact-store", storeFlag)
 
 	if fake.puts == 0 {
 		t.Fatal("the run published nothing to the artifact store")
@@ -143,7 +141,7 @@ func TestEndToEndArtifactStoreRematerializesEvictedOutputs(t *testing.T) {
 	// A changed SECOND step keeps the chain skip from answering for the whole
 	// job, so the first step has to come from the step cache — whose bytes
 	// are now only in the store.
-	edited := artifactStorePipeline(t, dir, root,
+	edited := artifactStorePipeline(t, dir,
 		"cp data/result.txt "+filepath.Join(dir, "published-again.txt"))
 
 	err = os.Rename(edited, path)
@@ -151,7 +149,7 @@ func TestEndToEndArtifactStoreRematerializesEvictedOutputs(t *testing.T) {
 		t.Fatalf("editing the pipeline: %v", err)
 	}
 
-	mustRun(t, path, "--artifact-store", storeFlag)
+	mustRun(t, path, "--workspace-root", root, "--artifact-store", storeFlag)
 
 	executions := readFileString(t, filepath.Join(dir, "executions"))
 	if strings.Count(executions, "ran") != 1 {
@@ -176,9 +174,9 @@ func TestEndToEndArtifactStoreIsOptIn(t *testing.T) {
 	dir := t.TempDir()
 	fake, _ := newFakeS3(t)
 
-	path := artifactStorePipeline(t, dir, filepath.Join(dir, "ws-root"),
+	path := artifactStorePipeline(t, dir,
 		"cp data/result.txt "+filepath.Join(dir, "published.txt"))
-	mustRun(t, path)
+	mustRun(t, path, "--workspace-root", filepath.Join(dir, "ws-root"))
 
 	if fake.puts != 0 || fake.gets != 0 {
 		t.Fatalf("a run without --artifact-store reached the store (%d puts, %d gets)", fake.puts, fake.gets)

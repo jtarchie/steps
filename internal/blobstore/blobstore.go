@@ -15,7 +15,7 @@
 // One caveat to the safety claim above, recorded rather than hidden: a blob
 // is never OVERWRITTEN (publishing HEAD-skips an existing key), so if a wrong
 // tree ever lands under a digest — reachable only by racing two processes
-// over one workspace.root, which the one-process-per-state-file doctrine
+// over one --workspace-root, which the one-process-per-state-file doctrine
 // already forbids — the verify-on-fetch turns it into a permanent miss for
 // that digest rather than corruption, and only lifecycle expiry clears it.
 package blobstore

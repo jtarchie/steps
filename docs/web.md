@@ -59,7 +59,7 @@ steps pipeline set -p app -c app.yml -v repo_uri=https://github.com/acme/app
 **The refusal lands where you asked.** That is the whole reason this is HTTP
 rather than a row written into a database: `set` needs a synchronous answer
 from the machine that will run the pipeline — is `api_key_env:` (or a resource expression's `env("NAME")`) set *there*, is
-the stdio MCP binary on *its* `PATH`, does `workspace.root:` exist. A
+the stdio MCP binary on *its* `PATH`, can its `--workspace-root` be written. A
 configuration that fails those is refused, the daemon goes on serving what it
 had, and the terminal that asked prints why:
 
@@ -115,8 +115,8 @@ is [resumed](workspace.md#a-daemon-restart-resumes-the-build-it-interrupted),
 skipping the steps it finished. A daemon that holds nothing serves an index
 saying how to set one.
 
-A pipeline the restart **cannot** serve — its `workspace.root:` is gone or
-read-only, a variable it needs is unset in the daemon's environment — does not
+A pipeline the restart **cannot** serve — a variable it needs is unset in the
+daemon's environment, an MCP binary it names is gone — does not
 stop the others. Every pipeline that restores is served, and each one that did
 not is listed as **broken**, with the reason, on `/`, in `/api/pipelines` and
 in `steps pipeline list` (and printed as the daemon starts). Nothing about it
@@ -755,11 +755,13 @@ a set adds is preflighted and then polled, and one a set removes stops being
 checked. A pipeline with nothing to poll is a state the loop sits in, not a
 reason it was never started.
 
-**A changed `workspace:` is adopted.** The provider that materializes build
-directories is rebuilt when the block moves, and a run already in flight keeps
-the one it started with until it finishes — so a set never deletes the tree a
-build is working in. One this machine cannot provide is refused like any other
-part of the configuration.
+**Where build trees live is the daemon's, not the pipeline's.** Every pipeline
+a daemon serves builds under its `--workspace-root`, which defaults to
+`workspace/` beside its sqlite state file (`.steps/workspace` for the default
+database, and for a postgres one, in the working directory), so a daemon always
+keeps the step cache, task caches and resource cache across builds. A set
+never moves it, so a set never deletes the tree a build is working in. A root
+the daemon cannot write refuses every set, naming the root.
 
 ## One database, several pipelines
 
@@ -998,6 +1000,8 @@ web:
   external-url: https://ci.example.com
   allowed-host: [ci.example.com]
   interval: 1m
+  workspace-root: /var/lib/steps/workspace
+  resource-cache-max: 200
   worker:
     gpu: ssh://ci@gpu-box
   role:
@@ -1058,6 +1062,12 @@ before.
 --max-runs       maximum runs at once across every pipeline (default 0, no limit)
 --pin / --force  pin a version field; ignore the step cache (not the every-cursor)
 --no-preflight   skip the pre-poll health check of models and MCP servers
+--workspace-root where build trees, the step cache, task caches and the resource
+                 cache live ($STEPS_WORKSPACE_ROOT; default workspace/ beside the
+                 sqlite state file, .steps/workspace for a postgres --db)
+--resource-cache-max
+                 how many fetched resource versions the root keeps, least
+                 recently used evicted first (default 50)
 --read-only      serve without trigger, retry, approve/reject, answer, release,
                  pause, abort, connect or test controls, and serve no mcp_exports
                  (steps pipeline set is NOT withheld — see Security)

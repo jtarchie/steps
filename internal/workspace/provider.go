@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/jtarchie/steps/internal/config"
 )
 
 // --- isolatingProvider: common lifecycle over a treeBackend ---
@@ -37,7 +35,7 @@ type isolatingProvider struct {
 	// — see newInvocationToken.
 	token string
 	// cache is the cross-build resource cache, nil when the pipeline did not
-	// opt in (see config.CacheConfig).
+	// has a durable root (see enableCache).
 	cache *resourceCache
 	// stepCache reuses task/agent outputs across runs, nil when the root is
 	// this provider's own temp directory — see enableCache.
@@ -47,21 +45,19 @@ type isolatingProvider struct {
 	builds     atomic.Int64
 }
 
-// enableCache attaches the two cross-build caches.
+// enableCache attaches the caches a durable root keeps across builds.
 //
-// The resource cache is opt-in (cache.resources), because reusing a fetched
-// version changes an observable thing: what a get: puts on disk for a version
-// whose content moved underneath it.
-//
-// The step cache asks for no separate opt-in — a durable workspace.root: is
-// the whole requirement, and configuring one is already the deliberate act.
-// Both live under that root because a cache discarded at the end of the run
-// that filled it is only a slower way to run, and a provider-owned temp root
-// is removed at Close. Per-step control is volatile:, on the step whose result
-// must never be reused.
-func (p *isolatingProvider) enableCache(ws *config.WorkspaceConfig) error {
-	if ws.CacheEnabled() {
-		cache, err := newResourceCache(p.backend, p.root, ws.CacheMaxEntries())
+// The step cache and the resource cache ask for no opt-in: a durable root is
+// the whole requirement, and naming one (or running steps web, which always
+// has one) is already the deliberate act. The resource cache follows
+// Concourse, whose resource caches are always on: a version's in: does not run
+// again for a fetch with the same type, source, params and version, which the
+// resource contract makes safe. Under a provider-owned temp root neither is
+// kept, since the root is removed at Close. Per-step control is volatile:, on
+// the step whose result must never be reused.
+func (p *isolatingProvider) enableCache(ws *Settings) error {
+	if !p.ownsRoot {
+		cache, err := newResourceCache(p.backend, p.root, ws.resourceCacheMax())
 		if err != nil {
 			return err
 		}
@@ -173,7 +169,7 @@ func (p *isolatingProvider) Spare(dirs []string) {
 	}
 }
 
-// absDir is how a spared tree and a swept one are compared: a relative workspace.root: and the absolute path a run recorded name one directory.
+// absDir is how a spared tree and a swept one are compared: a relative --workspace-root and the absolute path a run recorded name one directory.
 func absDir(dir string) string {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
