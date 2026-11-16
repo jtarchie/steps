@@ -1268,6 +1268,9 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
     min-width: 0;
   }
   .headmeta .dur { margin-left: auto; white-space: normal; text-align: right; }
+  /* Beside an agent's spend, the digest moves to the next line whole: cut short it no longer tells two images apart, and squeezed beside it the spend broke one word per line. */
+  .headmeta { flex-wrap: wrap; }
+  .headmeta .note.worker { flex: none; max-width: 100%; }
 
   .turn { flex-wrap: wrap; gap: 2px 10px; }
   .turn .who { width: auto; }

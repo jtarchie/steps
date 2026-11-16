@@ -97,3 +97,55 @@ func TestARowCutsTheWorkerBeforeTheDigest(t *testing.T) {
 		t.Errorf("the digest chip beside a long worker name is cut by %spx", cut)
 	}
 }
+
+// On a phone an agent's row puts its spend and its image on one line; the spend wraps, and the digest keeps every character.
+func TestAPhoneKeepsAnAgentsDigestWhole(t *testing.T) {
+	ctx := browser(t)
+	server, pipeline := testPipeline(t)
+	hash := strings.Repeat("e", 64)
+	cost := 10.39
+
+	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "run-agent", JobName: "build", Workspace: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-agent", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1, Status: "succeeded", Hash: hash},
+	})
+	mustRecordResult(t, pipeline, hash, map[string]any{"response": "fine"})
+
+	err = pipeline.Store.RecordAgentUsage(t.Context(), store.AgentUsage{
+		RunID: "run-agent", StepIndex: 0, StepName: "reviewer", JobName: "build",
+		NodeHash: hash, ModelReq: "opus", Total: 1_481_145, Cached: 1_461_436, CostUSD: &cost, FinishReason: "end_turn",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = pipeline.Store.RecordPlacement(t.Context(), store.Placement{
+		RunID: "run-agent", StepIndex: 0, StepName: "reviewer", JobName: "build",
+		NodeHash: hash, Slot: hash, Address: "local:", GOOS: "linux", GOARCH: "arm64", Image: "localhost:5050/backerkit@sha256:" + strings.Repeat("af8016ce", 8),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = pipeline.Store.FinishRun(t.Context(), "run-agent", "succeeded")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listener := httptest.NewServer(server.Handler())
+	t.Cleanup(listener.Close)
+
+	cut := must(ctx, t, chromedp.Evaluate[string](`(() => {
+  const img = document.querySelector('#transcript .stephead .note.worker .img');
+  return img ? String(img.scrollWidth - img.clientWidth) : 'no image chip';
+})()`), chromedp.EmulateViewport(375, 812), media("dark", false), chromedp.Navigate(listener.URL+"/p/demo/runs/run-agent"))
+
+	if cut != "0" {
+		t.Errorf("on a phone the agent row's digest chip is cut by %spx", cut)
+	}
+}
