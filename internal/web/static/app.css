@@ -348,8 +348,10 @@ main { width: 100%; max-width: 1000px; margin: 0 auto; padding: 26px 20px 48px; 
 .foot a { color: var(--dim); }
 .foot a:hover { color: var(--fg); }
 .foot a[aria-current="page"] { color: var(--green); }
-.foot .copy { margin-left: auto; }
-@media (max-width: 640px) { .foot { padding-left: 16px; padding-right: 16px; } .foot .copy { margin-left: 0; flex-basis: 100%; } }
+.foot .langs { margin-left: auto; display: flex; gap: 14px; }
+.foot .langs a[aria-current="true"] { color: var(--green); }
+.foot .copy { margin-left: 0; }
+@media (max-width: 640px) { .foot { padding-left: 16px; padding-right: 16px; } .foot .copy { margin-left: 0; flex-basis: 100%; } .foot .langs { margin-left: 0; flex-basis: 100%; } }
 
 /* What a hidden action says instead of vanishing on a read-only server. */
 .rohint { font-family: var(--sans); font-size: 12px; color: var(--dim); max-width: 340px; text-align: right; }

@@ -497,6 +497,12 @@ nothing sweeps them separately. They are real database rows: a runaway step
 costs up to 64MiB of state until its run is reaped, and a lower `run_history:`
 bounds that.
 
+## Language
+
+The browser UI speaks English and Simplified Chinese (`zh-CN`). The page uses the `steps-lang` cookie if the reader set one, then the browser's `Accept-Language`, then English; Traditional Chinese browsers (`zh-TW`, `zh-HK`) get Simplified Chinese. The footer's picker (`auto`, `English`, `简体中文`) sets or clears that cookie, and `auto` goes back to asking the browser.
+
+Only the browser UI is translated. The command line, logs, these docs, pipeline YAML, and the messages the `/api` routes return stay in English, and where one of them shows on a translated page it is marked `lang="en"`. The words `pipeline`, `job`, `step`, `resource`, `agent`, `task`, `get` and `put` stay English everywhere, because they are what people type in YAML. Durations, timestamps and counts such as `4m 05s` and `34,500` are spelled the same in every language.
+
 ## Following a run you started
 
 Triggering does not drop you back on a list to refresh. A trigger lands on a

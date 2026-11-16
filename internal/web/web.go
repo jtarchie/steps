@@ -294,6 +294,7 @@ func (s *Server) routes() error {
 	}
 
 	renderer.resolve = s.localeFor
+	renderer.picked = s.languagePicked
 	s.renderer = renderer
 	e.Renderer = renderer
 	e.HTTPErrorHandler = s.handleError
@@ -348,6 +349,7 @@ func (s *Server) routes() error {
 	e.GET("/activity", s.handleActivity)
 	e.POST(pauseAllPath, s.handlePauseAll)
 	e.POST(unpauseAllPath, s.handleUnpauseAll)
+	e.GET(langPath, s.handleSetLanguage)
 
 	if s.sessions != nil {
 		e.GET(loginPath, s.handleLoginPage)

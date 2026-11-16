@@ -284,7 +284,7 @@ func (s *Server) skipsAuth(c *echo.Context) bool {
 	}
 
 	switch c.Path() {
-	case loginPath, signInStartPath, signInCallbackPath,
+	case langPath, loginPath, signInStartPath, signInCallbackPath,
 		// What an agent asks before anybody has signed in, and the endpoints it authenticates to with its own credentials: a registration, a code, a token.
 		authServerMetadataPath, resourceMetadataPath, registerPath, tokenPath, exportPath:
 		return true

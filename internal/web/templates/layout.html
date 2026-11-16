@@ -134,6 +134,7 @@
 <footer class="foot">
   <span class="ver"><b>steps</b> {{.Version}}</span>
   <nav aria-label="{{t "foot.about"}}"><a {{if eq .Section "docs"}}aria-current="page" {{end}}href="/docs">{{t "foot.docs"}}</a><a href="https://github.com/jtarchie/steps" rel="noopener">{{t "foot.source"}}</a></nav>
+  <nav class="langs" aria-label="{{t "lang.label"}}"><a {{if not .LangPicked}}aria-current="true" {{end}}href="{{printf "/lang?lang=&return=%s" (urlquery .Nav.URL)}}">{{t "lang.auto"}}</a>{{range languages}}<a lang="{{.Tag}}" {{if and $.LangPicked (eq .Tag $.Lang)}}aria-current="true" {{end}}href="{{printf "/lang?lang=%s&return=%s" .Tag (urlquery $.Nav.URL)}}">{{.Name}}</a>{{end}}</nav>
   <span class="copy">© {{year}} JT Archie</span>
 </footer>
 

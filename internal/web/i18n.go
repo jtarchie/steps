@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/jtarchie/steps/internal/actor"
+	"github.com/labstack/echo/v5"
 	cldr "golang.org/x/text/feature/plural"
 	"golang.org/x/text/language"
 )
@@ -23,12 +24,13 @@ const (
 	// Test-only: English mangled so a word drawn outside a catalog stays plain ASCII.
 	pseudoTag  = "en-XA"
 	langCookie = "steps-lang"
+	langPath   = "/lang"
 
 	localeKey = "steps.locale"
 )
 
-// supported lists the production locales, in the order the matcher indexes them. Part 2 of #266 appends zh-CN, ja, es and pt-BR.
-var supported = []language.Tag{language.English}
+// supported lists the production locales, in the order the matcher indexes them. #266 adds ja, es and pt-BR after zh-CN.
+var supported = []language.Tag{language.English, language.MustParse("zh-CN")}
 
 var matcher = language.NewMatcher(supported)
 
@@ -176,13 +178,14 @@ func (s *Server) pickTag(r *http.Request) string {
 
 	cookie, err := r.Cookie(langCookie)
 	if err == nil && cookie.Value != "" {
-		if s.pseudo && cookie.Value == pseudoTag {
+		chosen := s.cookieTag(cookie.Value)
+		if chosen == pseudoTag {
 			return pseudoTag
 		}
 
-		tag, parseErr := language.Parse(cookie.Value)
-		if parseErr == nil {
-			asked = append(asked, tag)
+		tag, parseErr := language.Parse(chosen)
+		if chosen != "" && parseErr == nil {
+			return tag.String()
 		}
 	}
 
@@ -280,3 +283,54 @@ var english = sync.OnceValue(func() *locale {
 
 // englishLocale is what the helpers that predate locales (and the tests that pin them) speak.
 func englishLocale() *locale { return english() }
+
+// langChoice is one row of the footer's picker; names are in their own language, so a reader who cannot read the current one can still find theirs.
+type langChoice struct{ Tag, Name string }
+
+var languageNames = map[string]string{"en": "English", "zh-CN": "简体中文"}
+
+func languageChoices() []langChoice {
+	choices := make([]langChoice, 0, len(supported))
+
+	for _, tag := range supported {
+		choices = append(choices, langChoice{Tag: tag.String(), Name: languageNames[tag.String()]})
+	}
+
+	return choices
+}
+
+// languagePicked reports whether the visitor chose a language, as opposed to getting the browser's.
+func (s *Server) languagePicked(r *http.Request) bool {
+	cookie, err := r.Cookie(langCookie)
+	if err != nil || cookie == nil {
+		return false
+	}
+
+	return s.cookieTag(cookie.Value) != ""
+}
+
+// cookieTag is the cookie's value when it names a language this server speaks, "" otherwise.
+func (s *Server) cookieTag(value string) string {
+	if s.pseudo && value == pseudoTag {
+		return pseudoTag
+	}
+
+	for _, tag := range supported {
+		if tag.String() == value {
+			return value
+		}
+	}
+
+	return ""
+}
+
+// handleSetLanguage remembers a visitor's choice, or forgets it for an empty one so the browser's answer applies again. A GET, so the picker is plain links with no form for a read-only page to withhold; it sets only the reader's own cookie and holds nothing server-side.
+func (s *Server) handleSetLanguage(c *echo.Context) error {
+	if tag := s.cookieTag(c.FormValue("lang")); tag != "" {
+		setCookie(c, langCookie, tag, "/", 365*24*60*60)
+	} else {
+		setCookie(c, langCookie, "", "/", -1)
+	}
+
+	return c.Redirect(http.StatusSeeOther, returnTo(c, "/")) //nolint:wrapcheck // echo's write error is returned verbatim by every handler here
+}

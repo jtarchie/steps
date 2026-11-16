@@ -1,6 +1,8 @@
 package web
 
 import (
+	cldr "golang.org/x/text/feature/plural"
+	"golang.org/x/text/language"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -138,6 +140,10 @@ func TestEveryTranslationKeepsItsValues(t *testing.T) {
 		for key, want := range english.msgs {
 			text, ok := loc.msgs[key]
 			if !ok {
+				if !hasForm(tag, key) {
+					continue
+				}
+
 				t.Errorf("%s: missing %q", tag, key)
 
 				continue
@@ -170,4 +176,20 @@ func TestEveryPluralFormSaysItsCount(t *testing.T) {
 			t.Errorf("plural form %q never says its count", key)
 		}
 	}
+}
+
+// hasForm is false for a plural form the language does not have (Chinese has only "other"), which its catalog rightly leaves out; every other key is required.
+func hasForm(tag language.Tag, key string) bool {
+	match := pluralRe.FindStringSubmatch(key)
+	if match == nil {
+		return true
+	}
+
+	for n := range 200 {
+		if pluralSuffix[cldr.Cardinal.MatchPlural(tag, n, 0, 0, 0, 0)] == match[1] {
+			return true
+		}
+	}
+
+	return false
 }

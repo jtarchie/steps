@@ -304,6 +304,8 @@
  "json.object": "object · %[1]s · %[2]s",
  "json.open": "open",
  "json.text": "text · %[1]s · %[2]s",
+ "lang.auto": "auto",
+ "lang.label": "Language",
  "layout.skip": "skip to content",
  "list.and": "%[1]s and %[2]s",
  "list.sep": ", ",

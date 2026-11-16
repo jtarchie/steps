@@ -46,6 +46,7 @@ type renderer struct {
 
 	// resolve answers a request's locale; the server sets it, and a bare renderer is English.
 	resolve func(*http.Request) *locale
+	picked  func(*http.Request) bool
 
 	mu     sync.Mutex
 	others map[string]map[string]*template.Template
@@ -172,6 +173,7 @@ func (r *renderer) Render(c *echo.Context, w io.Writer, name string, data any) e
 	values["Section"] = sectionOf(name)
 	values["Version"] = r.version
 	values["Lang"] = loc.tag
+	values["LangPicked"] = c != nil && r.resolve != nil && r.picked(c.Request())
 
 	if _, ok := values["Title"]; !ok {
 		values["Title"] = ""
@@ -259,6 +261,7 @@ func templateFuncs(loc *locale) template.FuncMap {
 		"mcpStatus":   loc.mcpStatus,
 		"followWords": loc.followWords,
 
+		"languages":  languageChoices,
 		"word":       loc.word,
 		"join":       strings.Join,
 		"redWords":   func(p overviewPipeline) string { return p.RedWordsIn(loc) },
