@@ -249,13 +249,13 @@ func TestCacheKeyedByResourceName(t *testing.T) {
 	}
 }
 
-// TestPinnedGetIgnoresSuppliedVersions: a pin is an instruction, not a
+// TestPinnedGetChecksWhenSuppliedVersionsLackIt: a pin is an instruction, not a
 // question. `steps watch --pin ref=abc123` has to find abc123 even after the
 // resource has moved on, and matching it against the handful of versions the
 // last poll observed would fail with "no version matches pin" — for a version
 // that plainly exists. The consumed filter exempts pinned runs for the same
 // reason.
-func TestPinnedGetIgnoresSuppliedVersions(t *testing.T) {
+func TestPinnedGetChecksWhenSuppliedVersionsLackIt(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{
@@ -305,5 +305,34 @@ func TestPinnedGetIgnoresSuppliedVersions(t *testing.T) {
 
 	if len(versions) != 1 || versions[0]["ref"] != "new" {
 		t.Errorf("versions = %+v, want the supplied version", versions)
+	}
+}
+
+// TestPinnedGetSelectsASuppliedVersionTheCheckCannotReport: a webhook's check
+// reports nothing, so a delivery exists only as recorded — a pin has to be
+// answered from there, without asking the check (#274).
+func TestPinnedGetSelectsASuppliedVersionTheCheckCannotReport(t *testing.T) {
+	t.Parallel()
+
+	counter := filepath.Join(t.TempDir(), "counter.txt")
+	cfg := countingConfig(t, counter)
+	cfg.ResourceTypes[0].Config.Check = "echo ran >> " + counter + "; echo '[]'"
+
+	cache := NewCache(WithResolvedVersions(func(string) []map[string]any {
+		return []map[string]any{{"id": "first"}, {"id": "second"}}
+	}))
+
+	_, _, versions, err := cache.ResolveVersionsCached(context.Background(), cfg,
+		config.Step{Get: "thing"}, map[string]string{"id": "first"})
+	if err != nil {
+		t.Fatalf("--pin against a recorded version: %v", err)
+	}
+
+	if len(versions) != 1 || versions[0]["id"] != "first" {
+		t.Errorf("versions = %+v, want the pinned recorded one", versions)
+	}
+
+	if got := countLines(t, counter); got != 0 {
+		t.Errorf("check ran %d times, want 0 — the pin was already recorded", got)
 	}
 }

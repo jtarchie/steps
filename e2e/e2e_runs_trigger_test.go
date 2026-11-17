@@ -3,10 +3,14 @@ package e2e
 // steps#235: a run is queued on the daemon from the terminal — by job, pinned to a version, or as a retry of a recorded run — and builds there like any other queued run.
 
 import (
+	"fmt"
+	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 func TestRunsTriggerQueuesAPinnedRunOnTheDaemon(t *testing.T) {
@@ -77,6 +81,68 @@ jobs:
 	}
 
 	served.stop(t)
+}
+
+// steps#274: a webhook has no check, so a pin can only be answered from the deliveries already recorded — and must be, or a past delivery could never be rebuilt.
+func TestRunsTriggerPinsARecordedWebhookDelivery(t *testing.T) {
+	t.Setenv("STEPS_TEST_GITHUB_SECRET", githubSecret)
+
+	dir := t.TempDir()
+
+	path := writePipeline(t, dir, `
+resources:
+- name: push
+  type: webhook
+  source:
+    provider: github
+    secret_env: STEPS_TEST_GITHUB_SECRET
+jobs:
+- name: triage
+  plan:
+  - get: push
+    trigger: true
+  - task: note
+    inputs: [push]
+    run: cat push/body
+`)
+
+	served := startWebFor(t, path, "--interval", "1h")
+	defer served.stopIfRunning(t)
+
+	name := cli.PipelineName(path)
+	url := fmt.Sprintf("http://%s/p/%s/hooks/push", served.addr, name)
+
+	for i, id := range []string{"first-delivery", "second-delivery"} {
+		body := []byte(`{"n":"` + id + `"}`)
+
+		status := postDelivery(t, url, githubDelivery(githubSecret, "push", id, body), body)
+		if status != http.StatusOK {
+			t.Fatalf("delivery %s answered %d, want 200", id, status)
+		}
+
+		waitForQueueSuccess(t, served.state, name, i+1)
+	}
+
+	err := stepsRun(t, []string{"runs", "trigger", "triage", "-p", name, "--pin", "id=first-delivery", "--target", served.target()})
+	if err != nil {
+		t.Fatalf("steps runs trigger --pin: %v", err)
+	}
+
+	waitForQueueSuccess(t, served.state, name, 3)
+	served.stop(t)
+
+	st, err := sqlite.OpenStore(served.state, name)
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	defer func() { _ = st.Close() }()
+
+	// The pinned run's task is a step-cache hit on the first delivery's build, so what it was created with is the evidence, not a second line of output.
+	got := runVersions(t, st, "triage", "push")
+	if len(got) != 3 || len(got[0]) != 1 || !strings.Contains(got[0][0], `"first-delivery"`) {
+		t.Fatalf("runs were created with %q, newest first; want the pinned run on the first delivery", got)
+	}
 }
 
 func TestRunsTriggerRefusesWhatTheDaemonCannotQueue(t *testing.T) {

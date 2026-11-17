@@ -190,22 +190,30 @@ func VersionMode(step config.Step) (mode Mode, pinned map[string]string) {
 // versionsFor returns the versions a get step is choosing among: the ones the
 // caller supplied, or the ones a fresh check reports.
 //
-// A pin is answered by a check even when versions were supplied. It is an
-// instruction, not a question — `--pin ref=abc123` on a resource that has
-// since moved on must still find abc123, and would not if it were matched
-// against the slice a poll happened to observe. Cache.unconsumed exempts
-// pinned runs for the same reason.
+// A pin is answered from the supplied versions only when one of them matches
+// it, and by a check otherwise — Concourse's pinned resolver reads version
+// history, and its check runs from the pin to put a missing one there. The
+// history comes first because some resources cannot be asked again: a
+// webhook's check reports nothing, so its deliveries exist only as recorded
+// (#274). The check comes second because a pin is an instruction, not a
+// question — `--pin ref=abc123` on a resource that has since moved on must
+// still find abc123, which the slice a poll happened to observe may not hold.
+// Cache.unconsumed exempts pinned runs for the same reason.
 func versionsFor(
 	ctx context.Context, cfg *config.Config, step config.Step,
 	res *config.Resource, resourceType *config.ResourceType,
 	cliPinned map[string]string, supplied func(resourceName string) []map[string]any,
 ) ([]map[string]any, error) {
-	mode, _ := VersionMode(step)
+	_, pin := VersionMode(step)
+	if len(cliPinned) > 0 {
+		pin = cliPinned
+	}
 
-	if supplied != nil && len(cliPinned) == 0 && mode != ModePinned {
+	if supplied != nil {
 		// nil means nobody supplied any; a non-nil empty slice means the
 		// caller resolved none, and is honored rather than re-derived.
-		if versions := supplied(res.Name); versions != nil {
+		versions := supplied(res.Name)
+		if versions != nil && (len(pin) == 0 || slices.ContainsFunc(versions, func(v map[string]any) bool { return matchesPin(v, pin) })) {
 			slog.DebugContext(ctx, "resource.versions_supplied", "resource", res.Name, "versions", len(versions))
 
 			return versions, nil

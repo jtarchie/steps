@@ -218,6 +218,8 @@ Tailscale Funnel and any reverse proxy work the same way: route `^/p/[^/]+/hooks
 
 **A delivery that never arrives is never built.** There is no polling fallback, deliberately: a fallback needs a check, and a check is exactly what this type does not have — a second source of versions that could disagree with the first. When the daemon was down or the tunnel dropped a request, the recovery is the sender's own redelivery (GitHub, Stripe and Svix each have a button for it), and a redelivery of something already recorded builds nothing.
 
+**To rebuild a delivery that was recorded**, pin its id: `steps runs trigger -p app build --pin id=<delivery id>`. A pin is answered from the versions already recorded, so it reaches any delivery still inside [`version_history:`](resources.md) — and only those, since there is no check to ask for one that was pruned.
+
 ## Stored payloads
 
 Payloads are kept in the state database, in cleartext, next to the version they belong to — because a job that runs later, or a rerun, has to read them. **They can contain personal data**: Stripe customers, Sentry stack traces, email addresses in a Linear ticket. They are bounded only by [`defaults.version_history:`](resources.md): a version pruned from history takes its payload with it. A pipeline receiving sensitive deliveries should set that low.
