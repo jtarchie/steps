@@ -180,6 +180,44 @@ jobs:
 	}
 }
 
+// A daemon's default --workspace-root is relative (.steps/workspace beside its database), and seatbelt matches only absolute paths: a relative workspace once left the step unable to write its own outputs.
+func TestSandboxedTaskWritesItsOutputsUnderARelativeWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+
+	requireSandbox(t)
+
+	dir := t.TempDir()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := filepath.Rel(cwd, filepath.Join(dir, "workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := writePipeline(t, dir, `
+tasks:
+- name: probe
+  sandbox: true
+  outputs: [out]
+  run: touch out/inside
+
+jobs:
+- name: build
+  plan:
+  - task: probe
+    inputs: []
+`)
+
+	err = stepsRun(t, []string{"run", path, "--job", "build", "--workspace-root", root})
+	if err != nil {
+		t.Fatalf("sandboxed task under relative --workspace-root %q could not write its output: %v", root, err)
+	}
+}
+
 func TestSandboxRefusesWhatItCannotFence(t *testing.T) {
 	t.Parallel()
 

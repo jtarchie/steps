@@ -60,7 +60,13 @@ func (f *hostFence) build(cwd string) error {
 			continue // a resource check runs with no tree
 		}
 
-		resolved, err := filepath.EvalSymlinks(dir)
+		// Abs first: seatbelt matches absolute paths only, so a relative cwd (a daemon's default .steps/workspace) is a rule that never matches.
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return fmt.Errorf("sandbox: resolve %q: %w", dir, err)
+		}
+
+		resolved, err := filepath.EvalSymlinks(abs)
 		if err != nil {
 			return fmt.Errorf("sandbox: resolve %q: %w", dir, err)
 		}
