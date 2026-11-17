@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -121,6 +122,46 @@ jobs:
 				t.Errorf("get %s%s: its version note is recorded against step %d, want its own row %d", name, mode, noted[name], gets[name])
 			}
 		}
+	}
+}
+
+// TestAFetchedVersionIsColoredOnTheRunPage: the version on a get's row is JSON, and the page colors it the way every other payload is colored.
+func TestAFetchedVersionIsColoredOnTheRunPage(t *testing.T) {
+	t.Parallel()
+
+	path := writePipeline(t, t.TempDir(), `
+resource_types:
+- name: listing
+  config:
+    check: "echo '[{\"ref\":\"abc\"}]'"
+    in: "true"
+resources:
+- name: repo
+  type: listing
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: repo
+`)
+
+	served := startWebFor(t, path, "--interval", "1h")
+	defer served.stopIfRunning(t)
+
+	name := cli.PipelineName(path)
+
+	served.trigger(t, name, "build")
+
+	runID := newestRun(t, served.state, name, "build").ID
+	waitForRunStatus(t, served.state, name, runID, "succeeded")
+
+	_, page := served.get(t, "/p/"+name+"/runs/"+runID)
+
+	_, notice, _ := strings.Cut(page, `<div class="log notice">get: repo (version: `)
+	notice, _, _ = strings.Cut(notice, "</div>")
+
+	if !strings.Contains(notice, `<span class="j-key">&#34;ref&#34;</span>`) || !strings.Contains(notice, `<span class="j-str">&#34;abc&#34;</span>`) {
+		t.Errorf("the get's version is not colored as JSON:\n%s", page)
 	}
 }
 

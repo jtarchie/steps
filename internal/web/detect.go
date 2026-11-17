@@ -18,7 +18,10 @@ package web
 // the call's path onto its result turn.
 
 import (
+	"encoding/json"
+	"errors"
 	"html/template"
+	"io"
 	"regexp"
 	"strings"
 )
@@ -121,12 +124,123 @@ func highlightMessage(text string) template.HTML {
 		return template.HTML(template.HTMLEscapeString(text))
 	}
 
-	lang := detectLanguage(text)
-	if lang == "" {
-		lang = "markdown"
+	if lang := detectLanguage(text); lang != "" && lang != "markdown" {
+		return highlightCode(text, lang)
 	}
 
-	return highlightCode(text, lang)
+	return highlightMarkdownWithJSON(text)
+}
+
+// truncationMarker is the line internal/agent appends where it cut a recorded entry.
+var truncationMarker = regexp.MustCompile(`\n\.\.\. \[truncated \d+ bytes\]\s*\z`)
+
+// highlightMarkdownWithJSON is a prompt as prompts are actually written: prose with a JSON document dropped into it (a get's facts under their file name, a payload between tags). Detection reads the start of the text, so a document inside it went uncolored; here each document that starts a line is colored as JSON and the prose around it as markdown. A document the recorder cut off runs to the end and is colored the way the lexer reads a partial one.
+func highlightMarkdownWithJSON(text string) template.HTML {
+	body, marker := text, ""
+	if at := truncationMarker.FindStringIndex(text); at != nil {
+		body, marker = text[:at[0]], text[at[0]:]
+	}
+
+	var out strings.Builder
+
+	prose := func(segment string) {
+		if segment != "" {
+			out.WriteString(string(highlightCode(segment, "markdown")))
+		}
+	}
+
+	from := 0
+
+	for lineStart := 0; lineStart < len(body); {
+		start := len(body) - len(strings.TrimLeft(body[lineStart:], " \t"))
+
+		if start < len(body) && (body[start] == '{' || body[start] == '[') {
+			end, cut := embeddedJSONEnd(body[start:])
+			if cut {
+				end = len(body) - start
+			}
+
+			if end > 0 {
+				prose(body[from:start])
+				out.WriteString(string(highlightCode(body[start:start+end], "json")))
+
+				from = start + end
+				lineStart = from
+
+				continue
+			}
+		}
+
+		next := strings.IndexByte(body[lineStart:], '\n')
+		if next < 0 {
+			break
+		}
+
+		lineStart += next + 1
+	}
+
+	prose(body[from:])
+	prose(marker)
+
+	//nolint:gosec // G203: assembled from highlightCode's escaped output
+	return template.HTML(out.String())
+}
+
+// jsonKey marks a JSON object: a bracket alone proves nothing, since `[x] done`, `[1]` and `{placeholder}` are prose.
+var jsonKey = regexp.MustCompile(`"\s*:`)
+
+// embeddedJSONEnd is where the JSON object or array text starts with ends, or cut when it runs off the end of text unfinished; zero and false when text does not start with one.
+func embeddedJSONEnd(text string) (end int, cut bool) {
+	decoder := json.NewDecoder(strings.NewReader(text))
+
+	var raw json.RawMessage
+
+	err := decoder.Decode(&raw)
+
+	switch {
+	case err == nil && jsonKey.Match(raw):
+		return int(decoder.InputOffset()), false
+	case errors.Is(err, io.ErrUnexpectedEOF) && jsonKey.MatchString(text):
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+// highlightNote colors the JSON a note carries (the version on a get's or put's row) and leaves the words around it alone.
+func highlightNote(text string) template.HTML {
+	if len(text) > detectBudget {
+		//nolint:gosec // G203: escaped, no markup added
+		return template.HTML(template.HTMLEscapeString(text))
+	}
+
+	var out strings.Builder
+
+	rest := text
+
+	for {
+		at := strings.IndexByte(rest, '{')
+		if at < 0 {
+			break
+		}
+
+		end, _ := embeddedJSONEnd(rest[at:])
+		if end == 0 {
+			out.WriteString(template.HTMLEscapeString(rest[:at+1]))
+			rest = rest[at+1:]
+
+			continue
+		}
+
+		out.WriteString(template.HTMLEscapeString(rest[:at]))
+		out.WriteString(string(jsonLine(rest[at : at+end])))
+		rest = rest[at+end:]
+	}
+
+	out.WriteString(template.HTMLEscapeString(rest))
+
+	//nolint:gosec // G203: escaped text around jsonLine's escaped spans
+	return template.HTML(out.String())
 }
 
 // renderModelText is the hybrid this issue asks for: a model turn (or the

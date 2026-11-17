@@ -317,6 +317,7 @@ func templateFuncs(loc *locale) template.FuncMap {
 		// pages — must pick up highlighting with no template edit.
 		"prose":     renderModelText,
 		"message":   highlightMessage,
+		"note":      highlightNote,
 		"thousands": thousands,
 		"lower":     strings.ToLower,
 		"trimMD":    func(name string) string { return strings.TrimSuffix(name, ".md") },

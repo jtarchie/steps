@@ -269,3 +269,60 @@ func TestEveryDetectedLanguageResolvesToALexer(t *testing.T) {
 		}
 	}
 }
+
+// TestAJSONDocumentInsideAMessageIsColored: a prompt names a file and drops its JSON under it, and detection reads only the start, so the document went uncolored.
+func TestAJSONDocumentInsideAMessageIsColored(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name, message, prose, colored string
+	}{
+		{"whole", "facts/fault.json:\n<untrusted-x>\n{\n  \"event\": \"occurred\"\n}\n</untrusted-x>\n\nTriage it.", "Triage it.", `<span class="j-key">&#34;event&#34;</span>`},
+		{"indented", "Here it is:\n  {\"event\": \"occurred\"}\nTriage it.", "Triage it.", `<span class="j-key">&#34;event&#34;</span>`},
+		{"array", "rows:\n[{\"event\": \"occurred\"}]\n", "rows:", `<span class="j-key">&#34;event&#34;</span>`},
+		// Cut mid-document, the parser refuses it and chroma's lexer colors what is there.
+		{"cut short", "facts/fault.json:\n{\n  \"event\": \"occ\n... [truncated 10271 bytes]", "[truncated 10271 bytes]", `<span class="hl-nt">&#34;event&#34;</span>`},
+	}
+
+	for _, c := range cases {
+		got := string(highlightMessage(c.message))
+
+		if !strings.Contains(got, c.colored) {
+			t.Errorf("%s: the document was not colored, want %s in:\n%s", c.name, c.colored, got)
+		}
+
+		if !strings.Contains(got, c.prose) {
+			t.Errorf("%s: the prose around the document was lost, want %q in:\n%s", c.name, c.prose, got)
+		}
+	}
+}
+
+// TestBracketsInProseAreNotJSON: a checkbox, a footnote, a placeholder and a bare list start a line with a bracket and are not documents worth coloring.
+func TestBracketsInProseAreNotJSON(t *testing.T) {
+	t.Parallel()
+
+	for _, message := range []string{"- tasks\n[x] done\n[1] see above\n{placeholder} here", "numbers:\n[1, 2, 3]"} {
+		if got := string(highlightMessage(message)); strings.Contains(got, `class="j-`) {
+			t.Errorf("prose %q was colored as JSON:\n%s", message, got)
+		}
+	}
+}
+
+// TestANoteColorsTheJSONItCarries: the words stay as written, the version is drawn the way every other version is, and a brace that opens no document is just a brace.
+func TestANoteColorsTheJSONItCarries(t *testing.T) {
+	t.Parallel()
+
+	got := string(highlightNote(`get: repo (version: {"ref":"abc"}, attempt 2/3)`))
+
+	if !strings.HasPrefix(got, "get: repo (version: ") || !strings.HasSuffix(got, ", attempt 2/3)") {
+		t.Errorf("the words around the version changed:\n%s", got)
+	}
+
+	if !strings.Contains(got, `<span class="j-key">&#34;ref&#34;</span>`) {
+		t.Errorf("the version was not colored:\n%s", got)
+	}
+
+	if got := string(highlightNote(`map{a} <b>{"unclosed`)); got != `map{a} &lt;b&gt;{&#34;unclosed` {
+		t.Errorf("a note with no document = %s, want it escaped and nothing more", got)
+	}
+}
