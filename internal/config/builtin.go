@@ -179,6 +179,7 @@ func (c *Config) registerBuiltinResourceTypes() {
 		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: WebhookType, Config: ResourceTypeConfig{Webhook: true}})
 	}
 
+	// A declared cron or github-* replaces the built-in, as a declared git does; only webhook is refused (validateWebhookResources), since deliveries are routed to it by name.
 	if c.findResourceTypeIndex(CronType) < 0 {
 		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: CronType, Config: ResourceTypeConfig{Cron: true}})
 	}

@@ -64,8 +64,48 @@
       "$ref": "#/$defs/access"
     }
   },
-  "$comment": "A built-in git, slack-* or registry-image type's source: is closed only while the pipeline declares no type of the same name, which replaces the built-in.",
+  "$comment": "A built-in type's source: is closed only while the pipeline declares no type of the same name, which replaces the built-in. webhook is the exception: it cannot be replaced, so its shape is always closed.",
   "allOf": [
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "cron"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "cron"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/cronSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-prs"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-prs"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubPrsSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-comments"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-comments"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubCommentsSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-issues"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-issues"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubIssuesSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-pr-comment"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-pr-comment"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubPostSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-pr-review"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-pr-review"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubPostSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-reaction"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-reaction"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubPostSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-label"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-label"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubPostSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-issue"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-issue"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubPostSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-pr"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-pr"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubPostSource"}}}}}}}
+    },
     {
       "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "registry-image"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
       "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "registry-image"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/registryImageSource"}}}}}}}
@@ -925,26 +965,6 @@
         {
           "if": { "properties": { "type": { "const": "webhook" } }, "required": ["type"] },
           "then": { "properties": { "source": { "$ref": "#/$defs/webhookSource" } } }
-        },
-        {
-          "if": { "properties": { "type": { "const": "cron" } }, "required": ["type"] },
-          "then": { "properties": { "source": { "$ref": "#/$defs/cronSource" } } }
-        },
-        {
-          "if": { "properties": { "type": { "const": "github-prs" } }, "required": ["type"] },
-          "then": { "properties": { "source": { "$ref": "#/$defs/githubPrsSource" } } }
-        },
-        {
-          "if": { "properties": { "type": { "const": "github-comments" } }, "required": ["type"] },
-          "then": { "properties": { "source": { "$ref": "#/$defs/githubCommentsSource" } } }
-        },
-        {
-          "if": { "properties": { "type": { "const": "github-issues" } }, "required": ["type"] },
-          "then": { "properties": { "source": { "$ref": "#/$defs/githubIssuesSource" } } }
-        },
-        {
-          "if": { "properties": { "type": { "enum": ["github-pr-comment", "github-pr-review", "github-reaction", "github-label", "github-issue", "github-pr"] } }, "required": ["type"] },
-          "then": { "properties": { "source": { "$ref": "#/$defs/githubPostSource" } } }
         }
       ]
     },

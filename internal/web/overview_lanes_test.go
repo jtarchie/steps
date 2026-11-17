@@ -663,3 +663,31 @@ func TestTheRootStacksOnATablet(t *testing.T) {
 		t.Errorf("the root's rows stack only at %q, want up to at least 960px", query[:min(len(query), 40)])
 	}
 }
+
+// TestAPipelinesOwnCronTypeIsNotReadAsASchedule: a type the pipeline declares under the name cron replaces the built-in, so its source: is no crontab and the reader is never asked about it.
+func TestAPipelinesOwnCronTypeIsNotReadAsASchedule(t *testing.T) {
+	t.Parallel()
+
+	var asked []string
+
+	server, _ := lanePipelines(t, []Option{WithCronNext(askedAbout(&asked, time.Now().Add(time.Hour)))}, "cron", `
+resource_types:
+  - name: cron
+    config: {check: "echo '[]'"}
+resources:
+  - name: weekly
+    type: cron
+    source: {whenever: tuesday}
+jobs:
+  - name: a
+    plan:
+      - get: weekly
+        trigger: true
+`, "other", oneManualJob)
+
+	get(t, server, "/")
+
+	if len(asked) != 0 {
+		t.Errorf("the cron reader was asked about the pipeline's own cron type: %v", asked)
+	}
+}

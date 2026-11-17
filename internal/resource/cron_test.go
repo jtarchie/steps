@@ -153,7 +153,7 @@ func TestCronRefusesABadExpressionOrLocationBeforeAnythingPolls(t *testing.T) {
 		"location":   {map[string]any{"expression": "@hourly", "location": "Mars/Olympus"}, "source.location"},
 		"shape":      {map[string]any{"expresion": "@hourly"}, "expresion"},
 	} {
-		cfg := &config.Config{Resources: []config.Resource{{Name: "tick", Type: config.CronType, Source: tc.source}}}
+		cfg := &config.Config{ResourceTypes: []config.ResourceType{cronType()}, Resources: []config.Resource{{Name: "tick", Type: config.CronType, Source: tc.source}}}
 
 		err := CompileCrons(cfg)
 		if err == nil || !strings.Contains(err.Error(), `resource "tick"`) || !strings.Contains(err.Error(), tc.want) {
@@ -161,7 +161,7 @@ func TestCronRefusesABadExpressionOrLocationBeforeAnythingPolls(t *testing.T) {
 		}
 	}
 
-	good := &config.Config{Resources: []config.Resource{{Name: "tick", Type: config.CronType, Source: map[string]any{"expression": "30 6 * * 1-5", "location": "Europe/London"}}}}
+	good := &config.Config{ResourceTypes: []config.ResourceType{cronType()}, Resources: []config.Resource{{Name: "tick", Type: config.CronType, Source: map[string]any{"expression": "30 6 * * 1-5", "location": "Europe/London"}}}}
 	err := CompileCrons(good)
 	if err != nil {
 		t.Errorf("a well-formed resource was refused: %v", err)

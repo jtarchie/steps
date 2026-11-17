@@ -63,18 +63,27 @@ func TestCronIsBuiltIn(t *testing.T) {
 	}
 }
 
-// TestCronCannotBeRedeclaredOrPutTo: the name is reserved, and a put has nothing to publish to.
-func TestCronCannotBeRedeclaredOrPutTo(t *testing.T) {
+// TestCronIsReplacedByAPipelinesOwnTypeAndCannotBePutTo: declaring a type named cron is the pipeline's choice, and its source: is then that type's business; the built-in has nothing to publish to.
+func TestCronIsReplacedByAPipelinesOwnTypeAndCannotBePutTo(t *testing.T) {
 	t.Parallel()
 
-	_, err := LoadConfig(writeConfig(t, `
+	cfg, err := LoadConfig(writeConfig(t, `
 resource_types:
 - name: cron
   config:
     check: printf '[]'
-`+cronPipeline("    expression: '@hourly'")))
-	if err == nil || !strings.Contains(err.Error(), "the name is built in") {
-		t.Errorf("redeclaring cron: err = %v, want it refused", err)
+`+cronPipeline("    schedule: whenever")))
+	if err != nil {
+		t.Fatalf("redeclaring cron: %v, want the pipeline's own type loaded", err)
+	}
+
+	resource, err := cfg.FindResource("tick")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.IsCron(*resource) {
+		t.Error("IsCron = true for a resource of the pipeline's own cron type, want false")
 	}
 
 	_, err = LoadConfig(writeConfig(t, `

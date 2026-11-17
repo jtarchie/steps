@@ -697,16 +697,10 @@ func validateGitHubLogin(field, login string) error {
 	return fmt.Errorf("source.%s: %q is not a GitHub login (or @me)", field, login)
 }
 
-// validateGitHubResources refuses a resource_types: entry that takes a
-// built-in's name, a github-* resource whose source: is wrong, and a put
-// whose params: are.
+// validateGitHubResources refuses a github-* resource whose source: is wrong
+// and a put whose params: are. A pipeline's own type under a github-* name
+// replaces the built-in, and githubKind then answers "" for its resources.
 func (c *Config) validateGitHubResources() error {
-	for _, rt := range c.ResourceTypes {
-		if slices.Contains(GitHubTypes(), rt.Name) && rt.Config.GitHub == "" {
-			return fmt.Errorf("resource_type %q: the name is built in — a GitHub resource needs no resource_types: entry, so name this type something else", rt.Name)
-		}
-	}
-
 	for _, resource := range c.Resources {
 		err := c.validateGitHubResource(resource)
 		if err != nil {

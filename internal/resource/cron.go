@@ -134,7 +134,7 @@ func cronPrevious(version map[string]any) (time.Time, bool, error) {
 // CompileCrons is Cron over every cron resource, for a caller that wants only the refusal.
 func CompileCrons(cfg *config.Config) error {
 	for _, res := range cfg.Resources {
-		if res.Type != config.CronType {
+		if !cfg.IsCron(res) {
 			continue
 		}
 

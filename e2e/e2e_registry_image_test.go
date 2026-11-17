@@ -522,3 +522,52 @@ jobs:
 		t.Errorf("run printed %q, want the pipeline's own in: to have run", out)
 	}
 }
+
+// TestPipelineOwnCronAndGitHubTypesReplaceTheBuiltIns: the schema and the loader both leave a replaced built-in's source: open, and the pipeline's own commands run.
+func TestPipelineOwnCronAndGitHubTypesReplaceTheBuiltIns(t *testing.T) {
+	t.Parallel()
+
+	schema := loadSchema(t)
+
+	path := writePipeline(t, t.TempDir(), `
+resource_types:
+- name: cron
+  config:
+    check: echo '[{"at":"now"}]'
+    in: echo "own cron" > said
+- name: github-prs
+  config:
+    check: echo '[{"n":"1"}]'
+    in: echo "own prs" > said
+resources:
+- name: tick
+  type: cron
+  source: {every: tuesday}
+- name: pr
+  type: github-prs
+  source: {project: elsewhere}
+jobs:
+- name: j
+  plan:
+  - get: tick
+  - get: pr
+  - task: show
+    inputs: [tick, pr]
+    run: cat tick/said pr/said
+`)
+
+	err := schema.Validate(yamlAsJSONValue(t, path))
+	if err != nil {
+		t.Errorf("schema refused a source: for a pipeline's own cron or github-prs type: %v", err)
+	}
+
+	err = stepsRun(t, []string{"validate", path})
+	if err != nil {
+		t.Errorf("validate: %v, want the pipeline's own cron type's source: left to it", err)
+	}
+
+	out := captureStdout(t, func() { mustRun(t, "run", path, "--job", "j") })
+	if !strings.Contains(out, "own cron") || !strings.Contains(out, "own prs") {
+		t.Errorf("run printed %q, want both of the pipeline's own in: commands to have run", out)
+	}
+}

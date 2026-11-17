@@ -258,18 +258,6 @@ jobs:
 - name: build
   plan: [{get: pr}]
 `, "env: has no effect"},
-		"a type taking the name": {`
-resource_types:
-- name: github-prs
-  config: {check: "echo []"}
-resources:
-- name: pr
-  type: github-prs
-  source: {repo: acme/app}
-jobs:
-- name: build
-  plan: [{get: pr}]
-`, "the name is built in"},
 		"placed with tags": {`
 resources:
 - name: pr
@@ -374,5 +362,35 @@ func TestGitHubTokenFromSecretsIsNoPreflightProblem(t *testing.T) {
 		if strings.Contains(problem.Detail, "ACME_TOKEN") {
 			t.Errorf("preflight reported a token the resource's secrets: provides: %s %s", problem.Target, problem.Detail)
 		}
+	}
+}
+
+// TestGitHubTypeIsReplacedByAPipelinesOwn: declaring a type under a github-* name is the pipeline's choice; the built-in's source: rules no longer apply to its resources.
+func TestGitHubTypeIsReplacedByAPipelinesOwn(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadConfig(writeConfig(t, `
+resource_types:
+- name: github-prs
+  config: {check: "echo []"}
+resources:
+- name: pr
+  type: github-prs
+  source: {anything: goes}
+jobs:
+- name: build
+  plan: [{get: pr}]
+`))
+	if err != nil {
+		t.Fatalf("redeclaring github-prs: %v, want the pipeline's own type loaded", err)
+	}
+
+	resourceType, err := cfg.FindResourceType(GitHubPRsType)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resourceType.Config.Backend() != BackendShell {
+		t.Errorf("backend = %s, want the pipeline's shell type", resourceType.Config.Backend())
 	}
 }

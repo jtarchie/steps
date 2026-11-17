@@ -64,15 +64,16 @@ func (s CronSource) TimeLocation() (*time.Location, error) {
 	return location, nil
 }
 
-func (c *Config) validateCronResources() error {
-	for _, rt := range c.ResourceTypes {
-		if rt.Name == CronType && !rt.Config.Cron {
-			return fmt.Errorf("resource_type %q: the name is built in — a cron resource needs no resource_types: entry, so name this type something else", rt.Name)
-		}
-	}
+// IsCron reports whether res is the built-in cron type's: a pipeline that declares its own type named cron replaces the built-in, so the name alone does not say.
+func (c *Config) IsCron(res Resource) bool {
+	resourceType, err := c.FindResourceType(res.Type)
 
+	return err == nil && resourceType != nil && resourceType.Config.Cron
+}
+
+func (c *Config) validateCronResources() error {
 	for _, resource := range c.Resources {
-		if resource.Type != CronType {
+		if !c.IsCron(resource) {
 			continue
 		}
 

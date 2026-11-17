@@ -365,7 +365,7 @@ func nextFor(cfg *config.Config, held map[string]bool, cronNext CronNext, now ti
 
 func cronAt(cfg *config.Config, name string, cronNext CronNext, now time.Time) (time.Time, bool) {
 	res, err := cfg.FindResource(name)
-	if err != nil || res.Type != config.CronType || cronNext == nil {
+	if err != nil || !cfg.IsCron(*res) || cronNext == nil {
 		return time.Time{}, false
 	}
 
