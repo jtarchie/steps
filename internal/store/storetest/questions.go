@@ -5,6 +5,7 @@ package storetest
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -356,6 +357,83 @@ func (s suite) TestPendingQuestionsAreNotCapped(t *testing.T) {
 	for i := 1; i < len(pending); i++ {
 		if pending[i-1].ID > pending[i].ID {
 			t.Errorf("pending questions are not oldest-first: %d before %d", pending[i-1].ID, pending[i].ID)
+		}
+	}
+}
+
+// TestFindQuestionsNarrowsAndPages is FindApprovals' test for the questions page.
+func (s suite) TestFindQuestionsNarrowsAndPages(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.startQuestionRun(t)
+
+	err := st.StartRun(ctx, store.NewRun{ID: "run-2", JobName: "triage", Workspace: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	ask := func(runID, job, agent, text string) int64 {
+		t.Helper()
+
+		question, _, err := st.AskQuestion(ctx, store.Question{RunID: runID, JobName: job, AgentName: agent, Question: text})
+		if err != nil {
+			t.Fatalf("AskQuestion: %v", err)
+		}
+
+		return question.ID
+	}
+
+	answered := ask("run-1", "release-note", "writer", "Major or minor?")
+	expired := ask("run-1", "release-note", "writer", "Who reviews?")
+	waiting := ask("run-1", "release-note", "editor", "Ship today?")
+	other := ask("run-2", "triage", "triager", "Which fault?")
+
+	err = st.AnswerQuestion(ctx, answered, "Minor bump", "alice")
+	if err != nil {
+		t.Fatalf("AnswerQuestion: %v", err)
+	}
+
+	err = st.CloseQuestion(ctx, expired, store.QuestionExpired, "", "deadline")
+	if err != nil {
+		t.Fatalf("CloseQuestion: %v", err)
+	}
+
+	ids := func(query store.QuestionQuery) []int64 {
+		t.Helper()
+
+		rows, err := st.FindQuestions(ctx, query)
+		if err != nil {
+			t.Fatalf("FindQuestions(%+v): %v", query, err)
+		}
+
+		out := make([]int64, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, row.ID)
+		}
+
+		return out
+	}
+
+	for _, tc := range []struct {
+		name  string
+		query store.QuestionQuery
+		want  []int64
+	}{
+		{"everything, newest first", store.QuestionQuery{}, []int64{other, waiting, expired, answered}},
+		{"one job", store.QuestionQuery{Job: "triage"}, []int64{other}},
+		{"one status", store.QuestionQuery{Statuses: []store.QuestionStatus{store.QuestionExpired}}, []int64{expired}},
+		{"several statuses", store.QuestionQuery{Statuses: []store.QuestionStatus{store.QuestionAnswered, store.QuestionExpired}}, []int64{expired, answered}},
+		{"an answer, any case", store.QuestionQuery{Text: "minor BUMP"}, []int64{answered}},
+		{"who answered", store.QuestionQuery{Text: "alice"}, []int64{answered}},
+		{"the agent", store.QuestionQuery{Text: "editor"}, []int64{waiting}},
+		{"the run", store.QuestionQuery{Text: "run-2"}, []int64{other}},
+		{"a percent is a character, not a wildcard", store.QuestionQuery{Text: "%"}, []int64{}},
+		{"a page", store.QuestionQuery{Job: "release-note", Limit: 2}, []int64{waiting, expired}},
+		{"the next page", store.QuestionQuery{Job: "release-note", Limit: 2, Before: expired}, []int64{answered}},
+	} {
+		if got := ids(tc.query); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: FindQuestions = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

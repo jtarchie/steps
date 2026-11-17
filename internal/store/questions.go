@@ -31,6 +31,18 @@ type Questions interface {
 	// only what is waiting, OLDEST first, and its callers pass zero — for the
 	// same reason Approvals' do.
 	Questions(ctx context.Context, pendingOnly bool, limit int) ([]Question, error)
+	// FindQuestions is the trail narrowed and paged, newest first: the questions page's one query.
+	FindQuestions(ctx context.Context, query QuestionQuery) ([]Question, error)
+}
+
+// QuestionQuery narrows FindQuestions as ApprovalQuery narrows FindApprovals.
+type QuestionQuery struct {
+	Job string
+	// Text keeps questions whose question, answer, answerer, agent, run id, job or status holds it, ignoring case.
+	Text     string
+	Statuses []QuestionStatus
+	Before   int64
+	Limit    int
 }
 
 // QuestionStatus is where a question is: pending until a person answers it

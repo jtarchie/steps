@@ -29,6 +29,20 @@ type Approvals interface {
 	// the order to work through them in — and its callers pass zero, because
 	// a waiting build that scrolled off the list waits forever.
 	Approvals(ctx context.Context, pendingOnly bool, limit int) ([]Approval, error)
+	// FindApprovals is the trail narrowed and paged, newest first: the approvals page's one query.
+	FindApprovals(ctx context.Context, query ApprovalQuery) ([]Approval, error)
+}
+
+// ApprovalQuery narrows FindApprovals. Every field is optional; the zero value is the whole trail with no limit.
+type ApprovalQuery struct {
+	Job string
+	// Text keeps approvals whose message, reason, decider, run id, job or status holds it, ignoring case.
+	Text string
+	// Statuses keeps approvals in any of these; empty keeps every status.
+	Statuses []ApprovalStatus
+	// Before keeps approvals older than this id. A keyset, so a request arriving while someone reads page two shifts nothing.
+	Before int64
+	Limit  int
 }
 
 // ApprovalStatus is where an approval is: pending until somebody, or the

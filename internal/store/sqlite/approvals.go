@@ -130,3 +130,35 @@ func scanApproval(row rowScanner) (store.Approval, error) {
 
 	return approval, err //nolint:wrapcheck // every caller names what it was reading
 }
+
+// FindApprovals is the trail narrowed and paged, newest first.
+func (s *Store) FindApprovals(ctx context.Context, query store.ApprovalQuery) ([]store.Approval, error) {
+	filter, args := byJob(query.Job, []any{s.pipelineID})
+
+	if len(query.Statuses) > 0 {
+		filter += ` AND status IN (SELECT value FROM json_each(?))`
+		args = append(args, jsonList(query.Statuses))
+	}
+
+	if query.Text != "" {
+		filter += `
+		  AND (instr(lower(message), lower(?)) > 0 OR instr(lower(COALESCE(reason, '')), lower(?)) > 0
+		    OR instr(lower(COALESCE(decided_by, '')), lower(?)) > 0 OR instr(lower(COALESCE(run_id, '')), lower(?)) > 0
+		    OR instr(lower(job_name), lower(?)) > 0 OR instr(lower(status), lower(?)) > 0)`
+		args = append(args, query.Text, query.Text, query.Text, query.Text, query.Text, query.Text)
+	}
+
+	if query.Before > 0 {
+		filter += ` AND id < ?`
+		args = append(args, query.Before)
+	}
+
+	return collect(ctx, s.reads, "approvals", `
+		SELECT id, COALESCE(run_id, ''), job_name, message, status, requested_at,
+		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
+		FROM approvals WHERE pipeline_id = ?`+filter+`
+		ORDER BY id DESC LIMIT ?
+	`, append(args, rowLimit(query.Limit)), func(rows *sql.Rows) (store.Approval, error) {
+		return scanApproval(rows)
+	})
+}
