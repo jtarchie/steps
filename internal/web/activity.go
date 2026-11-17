@@ -354,6 +354,11 @@ var targetPages = map[string]func(target string) string{
 
 // withQuery is the page's own URL with one parameter set, or removed when empty; paging always restarts, since an older-than cursor belongs to the filter it was read under.
 func withQuery(query url.Values, key, value string) string {
+	return pathQuery("/activity", query, key, value)
+}
+
+// pathQuery is path with query, key set to value (dropped when empty) and the page cursor dropped: a narrowing changes which rows exist, so a cursor into the old set would start the new one mid-way.
+func pathQuery(path string, query url.Values, key, value string) string {
 	next := url.Values{}
 
 	for k, v := range query {
@@ -367,8 +372,8 @@ func withQuery(query url.Values, key, value string) string {
 	}
 
 	if len(next) == 0 {
-		return "/activity"
+		return path
 	}
 
-	return "/activity?" + next.Encode()
+	return path + "?" + next.Encode()
 }
