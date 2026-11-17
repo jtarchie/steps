@@ -227,6 +227,9 @@ func TestAGetsFactsFlowLikeACapture(t *testing.T) {
 		"the old spelling names the new one": {`
   - task: after
     run: echo ((pr.url))`, "((.:pr.url))"},
+		"a get's params are not filled in, so a capture there is refused": {`
+  - get: pr
+    params: {depth: ((.:pr.url))}`, `get "pr" params has "((.:pr.url))"`},
 		"a load_var cannot take a get's name": {`
   - task: write
     outputs: [meta]

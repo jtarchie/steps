@@ -194,7 +194,8 @@ func runUnguardedHookStep(ctx context.Context, scope hookScope, step config.Step
 		// plan. Without the toleration a `ensure: {try: {put: notify}}` — the
 		// use docs/control-flow.md advertises — still turned a green build red
 		// via runHooks' promotion of a failed on_success/ensure hook.
-		return tolerateTryFailure(ctx, scope.jobName, step, 0, runHookStep(ctx, scope, *step.Try))
+		// Resolved and rendered here: the wrapper carries no fields, the step it wraps does.
+		return tolerateTryFailure(ctx, scope.jobName, step, 0, runResolvedHookStep(ctx, scope, *step.Try))
 	case config.StepKindDo, config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble:
 		return runHookBlock(ctx, scope, step, kind)
 	case config.StepKindGet, config.StepKindLoadVar, config.StepKindApproval:

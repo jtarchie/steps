@@ -282,7 +282,7 @@ func planCells(ctx context.Context, r stepRunner, cells []config.Step, cellParen
 		}
 	}
 
-	if !cellsReusable(ctx) || len(hashes) == 0 {
+	if forced(ctx) || len(hashes) == 0 {
 		return plans
 	}
 
@@ -318,18 +318,13 @@ func hashCells(r stepRunner, cells []config.Step, cellParent string) ([]cellPlan
 	return plans, seen
 }
 
-// cellsReusable is whether an earlier run's cell may stand in for one of this matrix's: not under --force, nor for a matrix reading a get's facts.
-func cellsReusable(ctx context.Context) bool {
-	return !forced(ctx) && reusable(ctx)
-}
-
 // runAcrossCell runs one cell unless its exact content already succeeded.
 func runAcrossCell(ctx context.Context, r stepRunner, i int, cell config.Step, plan cellPlan, cellParent string) (bool, error) {
 	if plan.err != nil {
 		return false, plan.err
 	}
 
-	if plan.cacheable && cellsReusable(ctx) {
+	if plan.cacheable && !forced(ctx) {
 		done := plan.done
 
 		if !plan.known {

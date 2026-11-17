@@ -5,12 +5,14 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -120,14 +122,67 @@ func (r stepResult) published() string {
 // nodeRecord converts a plan merkle.Node into the shape store.RecordNode
 // persists, keeping the store package free of a dependency on merkle's Node
 // type.
-func nodeRecord(n merkle.Node) store.NodeRecord {
+//
+// The content is masked against the run's secrets, as everything the run
+// prints is: a hidden load_var: value rendered into a command is in the
+// content its hash was computed from, and the store is read by every page.
+func nodeRecord(ctx context.Context, n merkle.Node) store.NodeRecord {
 	return store.NodeRecord{
 		Hash:       n.Hash,
 		ParentHash: n.ParentHash,
 		Kind:       string(n.Kind),
 		StepIndex:  n.StepIndex,
 		Resource:   n.Resource,
-		Content:    n.Content,
+		Content:    maskedContent(redact.SecretsFrom(ctx), n.Content),
+	}
+}
+
+// maskedContent is content with every string in it masked. Through JSON, the
+// form the store keeps it in, so a string inside any type a builder used is
+// reached; content that does not encode is the store's to refuse, as before.
+func maskedContent(secrets *redact.Secrets, content map[string]any) map[string]any {
+	if secrets.Empty() {
+		return content
+	}
+
+	raw, err := json.Marshal(content)
+	if err != nil {
+		return content
+	}
+
+	var generic any
+
+	err = json.Unmarshal(raw, &generic)
+	if err != nil {
+		return content
+	}
+
+	masked, _ := maskValue(secrets, generic).(map[string]any)
+
+	return masked
+}
+
+// maskValue is value with every string in it masked, copied rather than masked in place.
+func maskValue(secrets *redact.Secrets, value any) any {
+	switch typed := value.(type) {
+	case string:
+		return secrets.String(typed)
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, nested := range typed {
+			out[key] = maskValue(secrets, nested)
+		}
+
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, nested := range typed {
+			out[i] = maskValue(secrets, nested)
+		}
+
+		return out
+	default:
+		return value
 	}
 }
 
@@ -148,7 +203,7 @@ func recordStepFailure(ctx context.Context, r stepRunner, node merkle.Node, err 
 func recordStepFailureWith(ctx context.Context, r stepRunner, node merkle.Node, result map[string]any, err error) {
 	status := store.NodeStatus(outcome.Classify(ctx, err))
 	recCtx := context.WithoutCancel(ctx)
-	bestEffort(ctx, "RecordNode", r.st.RecordNode(recCtx, nodeRecord(node), r.jobName, status, result, err))
+	bestEffort(ctx, "RecordNode", r.st.RecordNode(recCtx, nodeRecord(ctx, node), r.jobName, status, result, err))
 	bestEffort(ctx, "ForgetChain", r.st.ForgetChain(recCtx, r.jobName, node.Hash))
 }
 
@@ -161,7 +216,7 @@ func recordBlock(ctx context.Context, r stepRunner, node merkle.Node, result map
 }
 
 func recordBlockAs(ctx context.Context, r stepRunner, node merkle.Node, class outcome.Class, result map[string]any, err error) {
-	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, store.NodeStatus(class), result, err))
+	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(ctx, node), r.jobName, store.NodeStatus(class), result, err))
 }
 
 // runPlaced owns a leaf step's recording order: the node, then where it ran — run_placements references the node, and a step that FAILED on a worker is the one whose machine somebody wants named.
@@ -178,7 +233,7 @@ func runPlaced(
 		return failedAt(node.Hash), err
 	}
 
-	err = r.st.RecordNode(ctx, nodeRecord(node), r.jobName, store.NodeSucceeded, result, nil)
+	err = r.st.RecordNode(ctx, nodeRecord(ctx, node), r.jobName, store.NodeSucceeded, result, nil)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (%s %q): could not record node %q: %w", node.StepIndex, node.Kind, placedAs, node.Hash, err)
 	}

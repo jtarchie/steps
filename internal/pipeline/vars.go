@@ -5,8 +5,6 @@ package pipeline
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -114,7 +112,8 @@ func reusable(ctx context.Context) bool {
 // not share a cache entry. The alternative — hashing the unsubstituted text —
 // would let a step that ran against v1.2.3 satisfy a run that meant v2.0.0.
 func renderStepVars(ctx context.Context, step config.Step) (config.Step, bool, error) {
-	if len(step.LocalRefs()) == 0 {
+	// A matrix's cells render their own, after its {{ .vars }} pass: filled in here, a captured value would be read as a template.
+	if len(step.Across) > 0 || len(step.LocalRefs()) == 0 {
 		return step, false, nil
 	}
 
@@ -128,12 +127,6 @@ func renderStepVars(ctx context.Context, step config.Step) (config.Step, bool, e
 		}
 
 		readsFacts = readsFacts || c.facts
-
-		if c.facts && len(ref.Fields) == 1 {
-			if _, said := c.value.(map[string]any)[ref.Fields[0]]; !said {
-				return "", fmt.Errorf("%s: get %q reported no fact %q", ref, ref.Root, ref.Fields[0])
-			}
-		}
 
 		return config.LocalValue(c.value, ref)
 	})
@@ -167,12 +160,8 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 		return stepResult{}, fmt.Errorf("step %d (load_var %q) file %q: %w", i, step.LoadVar, step.VarFile, err)
 	}
 
-	content := map[string]any{"load_var": step.LoadVar, "file": step.VarFile, "format": format}
-
-	// Hidden from what the run prints, and so from the node the store keeps: its digest still tells two values apart.
-	if step.Reveal {
-		content["value"] = value
-	} else {
+	// Hidden from what the run prints and from every node the store keeps (nodeRecord masks them).
+	if !step.Reveal {
 		for _, text := range config.LocalStrings(value) {
 			// A short value still masks, and masks unrelated output too; said so a mangled log has an explanation.
 			if len(text) < shortSecret {
@@ -181,12 +170,11 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 
 			redact.SecretsFrom(ctx).Add(text)
 		}
-
-		digest := sha256.Sum256(body)
-		content["sha256"] = hex.EncodeToString(digest[:])
 	}
 
 	runVarsFrom(ctx).set(step.LoadVar, capture{value: value})
+
+	content := map[string]any{"load_var": step.LoadVar, "file": step.VarFile, "format": format, "value": value}
 
 	slog.InfoContext(ctx, "job.load_var", "job", r.jobName, "var", step.LoadVar, "format", format, "bytes", len(body))
 
@@ -199,7 +187,7 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindLoadVar,
 		StepIndex: i, Resource: step.LoadVar, Content: content,
 	}
-	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, store.NodeSucceeded, nil, nil))
+	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(ctx, node), r.jobName, store.NodeSucceeded, nil, nil))
 
 	return ran(hash), nil
 }

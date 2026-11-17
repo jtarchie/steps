@@ -94,7 +94,7 @@ func reuseStep(
 		return cached, nil
 	}
 
-	err := r.st.RecordNode(ctx, nodeRecord(node), r.jobName, store.NodeSucceeded, cached.NodeResult(), nil)
+	err := r.st.RecordNode(ctx, nodeRecord(ctx, node), r.jobName, store.NodeSucceeded, cached.NodeResult(), nil)
 	if err != nil {
 		return cached, fmt.Errorf("%w", err)
 	}

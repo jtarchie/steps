@@ -241,6 +241,61 @@ func TestEndToEndACapturedValueIsHiddenUnlessRevealed(t *testing.T) {
 	}
 }
 
+// TestEndToEndAHiddenValueIsNotKeptInTheDatabase: the value is computed by the run, so the pipeline's own text never holds it, and nothing the run records may.
+func TestEndToEndAHiddenValueIsNotKeptInTheDatabase(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state.db")
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: write
+    outputs: [meta]
+    run: echo "hidden-$((6*7))-token" > meta/token.txt
+  - load_var: token
+    inputs: [meta]
+    file: meta/token.txt
+  - task: use
+    run: echo "using ((.:token))"
+`)
+
+	err := stepsRun(t, []string{"run", "--db", state, path, "--job", "build"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	assertNotInDatabase(t, state, "hidden-42-token")
+}
+
+// TestEndToEndAMatrixDoesNotReadACapturedValueAsATemplate: a cell's {{ .vars }} pass runs before the capture is filled in, so a fact holding template text stays text.
+func TestEndToEndAMatrixDoesNotReadACapturedValueAsATemplate(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	log := filepath.Join(dir, "cells.log")
+	pipeline := strings.Replace(factsReaderPipeline(log), `"Add the widget cache"`, `"{{ "{{ .vars.dim }}" }}"`, 1)
+	pipeline = strings.Replace(pipeline, `  - task: write
+    outputs: [answer]
+    run: |
+      echo "Reviewed ((.:pr.url)) (((.:pr.title)))" > answer/comment.md
+      cat answer/comment.md
+      cat answer/comment.md >> `+log+`
+`, `  - task: cell
+    run: echo '{{ .vars.dim }} ((.:pr.title))' >> `+log+`
+    across:
+    - var: dim
+      values: [api]
+`, 1)
+
+	runCaptured(t, "run", writePipeline(t, dir, pipeline), "--job", "answer", "--progress", "plain")
+
+	if got := readFileString(t, log); got != "api {{ .vars.dim }}\n" {
+		t.Errorf("the cell wrote %q, want the fact as its text", got)
+	}
+}
+
 func TestEndToEndTheOldSpellingOfACaptureIsRefused(t *testing.T) {
 	t.Parallel()
 
@@ -336,5 +391,21 @@ func TestEndToEndAnUnproducedCaptureIsALoadError(t *testing.T) {
 	err := stepsRun(t, []string{"validate", path})
 	if err == nil || !strings.Contains(err.Error(), "((.:nobody))") {
 		t.Fatalf("an unproduced ((.:nobody)) validated: %v", err)
+	}
+}
+
+// TestEndToEndAHooksTryBodyReadsACapture: a try: in a hook wraps the step that carries the fields, so rendering the hook's own fields reached nothing and the literal ((.:pr.title)) reached the shell.
+func TestEndToEndAHooksTryBodyReadsACapture(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	log := filepath.Join(dir, "hook.log")
+	path := writePipeline(t, dir, strings.Replace(factsReaderPipeline(filepath.Join(dir, "comments.log")), "      cat answer/comment.md >> "+filepath.Join(dir, "comments.log")+"\n",
+		"      cat answer/comment.md >> "+filepath.Join(dir, "comments.log")+"\n    ensure:\n      try:\n        task: note\n        run: echo \"hook ((.:pr.title))\" >> "+log+"\n", 1))
+
+	runCaptured(t, "run", path, "--job", "answer", "--progress", "plain", "--workspace-root", filepath.Join(dir, "root"))
+
+	if got := readFileString(t, log); got != "hook Add the widget cache\n" {
+		t.Errorf("the hook's try body wrote %q, want the get's fact substituted", got)
 	}
 }

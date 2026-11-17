@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"path"
 	"regexp"
@@ -542,6 +543,11 @@ func (f *varFlow) checkStep(label string, step *Step, produced varSet) error {
 		if err != nil {
 			return err
 		}
+
+		// A get's params are part of which fetch it is, settled before the plan runs; only a step that runs in place is rendered.
+		if step.Get != "" && strings.Contains(text, localVarOpen) {
+			return fmt.Errorf("%s: get %q params has %q; a get's params are not filled in at run time, so a ((.:name)) there would reach the resource as that text", label, step.Get, text)
+		}
 	}
 
 	return nil
@@ -752,7 +758,9 @@ func ParseLoadVar(format string, body []byte) (any, error) {
 			return nil, fmt.Errorf("read as json: %w", err)
 		}
 
-		if decoder.More() {
+		// More() answers false before a stray } or ], so only EOF proves the file held one value.
+		_, err = decoder.Token()
+		if !errors.Is(err, io.EOF) {
 			return nil, errors.New("read as json: more than one value")
 		}
 
@@ -765,7 +773,7 @@ func ParseLoadVar(format string, body []byte) (any, error) {
 			return nil, fmt.Errorf("read as yaml: %w", err)
 		}
 
-		return value, nil
+		return stringKeys(value), nil
 	case LoadVarRaw:
 		return string(body), nil
 	default:
@@ -793,12 +801,47 @@ func LocalValue(value any, ref LocalRef) (string, error) {
 		return text, nil
 	}
 
-	encoded, err := json.Marshal(value)
+	// Not json.Marshal: it writes & < > as \u0026 \u003c \u003e, which is not the text captured, and a masked string would no longer match it.
+	var encoded strings.Builder
+
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+
+	err := encoder.Encode(value)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", ref, err)
 	}
 
-	return string(encoded), nil
+	return strings.TrimSuffix(encoded.String(), "\n"), nil
+}
+
+// stringKeys spells every mapping key of a decoded YAML value as a string, as
+// Concourse's YAML-to-JSON reading does: yaml.v3 decodes a mapping with any
+// other key as map[any]any, which no field path, mask or encoder reaches.
+func stringKeys(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			typed[key] = stringKeys(nested)
+		}
+
+		return typed
+	case map[any]any:
+		out := make(map[string]any, len(typed))
+		for key, nested := range typed {
+			out[fmt.Sprint(key)] = stringKeys(nested)
+		}
+
+		return out
+	case []any:
+		for i, nested := range typed {
+			typed[i] = stringKeys(nested)
+		}
+
+		return typed
+	default:
+		return value
+	}
 }
 
 func describeLocal(value any) string {
