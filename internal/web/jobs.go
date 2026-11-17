@@ -248,51 +248,33 @@ func (s *Server) handleRunHistory(c *echo.Context) error {
 	query := c.Request().URL.Query()
 	base := "/p/" + pipeline.Slug + "/runs"
 
+	list := newList(base, query, loc.text("runs.search.hint"), loc.text("runs.search.label"))
 	find := store.RunQuery{
-		Job:    query.Get("job"),
-		Text:   strings.TrimSpace(query.Get("q")),
+		Job:    list.facet(loc, "job", pipeline.Config().JobNames(), identity),
+		Text:   list.Text,
 		Before: query.Get("before"),
 		Limit:  runsPage + 1,
 	}
 	find.Statuses = statusesNamed(loc, find.Text)
+	list.searched()
 
 	runs, err := pipeline.Store.FindRuns(c.Request().Context(), find)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	older := ""
-	if len(runs) > runsPage {
-		runs = runs[:runsPage]
-		older = pathQuery(base, query, "before", runs[len(runs)-1].ID)
-	}
-
-	var filters []activityFilter
-
-	for _, f := range []struct{ key, label, value string }{
-		{"job", "job", find.Job},
-		{"q", "text", find.Text},
-	} {
-		if f.value != "" {
-			filters = append(filters, activityFilter{Label: f.label, Value: f.value, Remove: pathQuery(base, query, f.key, "")})
-		}
-	}
+	runs = page(list, runs, runsPage, func(run store.RunRow) string { return run.ID })
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "runs", map[string]any{
-		"Nav":     s.nav(c),
-		"Title":   loc.text("tab.runs"),
-		"Runs":    runs,
-		"Jobs":    pipeline.Config().JobNames(),
-		"Job":     find.Job,
-		"Text":    find.Text,
-		"Filters": filters,
-		"Older":   older,
-		"Paged":   find.Before != "",
-		"Base":    base,
-		"Query":   query,
+		"Nav":   s.nav(c),
+		"Title": loc.text("tab.runs"),
+		"Runs":  runs,
+		"List":  list,
 	})
 }
+
+func identity(value string) string { return value }
 
 // statusesNamed is every run status whose word, as this reader sees it or in English, holds text: the page says "passed" where the store says "succeeded", and a reader types what they read.
 func statusesNamed(loc *locale, text string) []store.RunStatus {

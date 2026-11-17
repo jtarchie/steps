@@ -602,7 +602,7 @@ func TestPollAndLogSaysWhatItEnqueued(t *testing.T) {
 
 	out := captureLog(t)
 
-	pollAndLog(context.Background(), cfg, st)
+	pollAndLog(context.Background(), cfg, st, Resources(cfg))
 
 	if line := logLine(out.String(), "trigger.enqueued"); !strings.Contains(line, "job=build") {
 		t.Errorf("logged %q, want the job the poll enqueued named", out)
@@ -629,7 +629,7 @@ func TestWatchRejectsNonPositiveInterval(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	err = Poll(context.Background(), staticConfig(cfg), st, 0)
+	err = Poll(context.Background(), staticConfig(cfg), st, 0, nil)
 	if err == nil {
 		t.Fatal("Poll: expected an error for a non-positive interval, not a ticker panic")
 	}

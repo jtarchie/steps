@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -40,7 +41,7 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 	// drainer started in between.
 	since := time.Now().UTC()
 
-	err = s.queueTrigger(c.Request().Context(), pipeline, name, "web", c.FormValue("force") == forceAll, nil, s.roleOf(c))
+	err = s.queueTrigger(c.Request().Context(), pipeline, name, "web", c.FormValue("force") == forceAll, pinFrom(c), s.roleOf(c))
 	if err != nil {
 		return err
 	}
@@ -51,6 +52,34 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 	//nolint:wrapcheck // echo's redirect error is returned verbatim
 	return c.Redirect(http.StatusSeeOther, fmt.Sprintf("/p/%s/jobs/%s/follow?since=%d",
 		pipeline.Slug, name, since.UnixMilli()))
+}
+
+// pinFromPrefix marks a form field naming one field of the version a trigger is pinned to: the resource page's per-version button sends one per field.
+const pinFromPrefix = "pin."
+
+// pinFrom is the version a page's trigger names, or nil for the job's ordinary trigger.
+func pinFrom(c *echo.Context) map[string]string {
+	form, err := c.FormValues()
+	if err != nil {
+		return nil
+	}
+
+	var pin map[string]string
+
+	for key, values := range form {
+		field, found := strings.CutPrefix(key, pinFromPrefix)
+		if !found || len(values) == 0 {
+			continue
+		}
+
+		if pin == nil {
+			pin = map[string]string{}
+		}
+
+		pin[field] = values[0]
+	}
+
+	return pin
 }
 
 // queueTrigger is a person's trigger of a job, from the page or from `steps runs trigger`; from says which. A pin makes it a row of its own, built against the version it names.

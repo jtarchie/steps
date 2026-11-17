@@ -94,6 +94,7 @@ var activityRoutes = map[string]activityRoute{
 	}, target: numbered("approval", "id"), detail: reasonDetail},
 	"POST /p/:pipeline/questions/:id":                      {role: RoleOperator, action: verb("answer"), target: numbered("question", "id")},
 	"POST /p/:pipeline/jobs/:job/release":                  {role: RoleOperator, action: verb("release"), target: param("job")},
+	"POST /p/:pipeline/resources/:resource/check":          {role: RoleOperator, action: verb("check"), target: param("resource")},
 	"POST /p/:pipeline/pause":                              {role: RoleOperator, action: verb("pause"), target: nothing},
 	"POST /p/:pipeline/unpause":                            {role: RoleOperator, action: verb("unpause"), target: nothing},
 	"POST /p/:pipeline/runs/:run/abort":                    {role: RoleOperator, action: verb("abort"), target: param("run")},
@@ -339,6 +340,7 @@ func (s *Server) activityRowFor(entry store.ActivityEntry) activityRow {
 var targetPages = map[string]func(target string) string{
 	"trigger":        func(job string) string { return "/jobs/" + job },
 	"release":        func(job string) string { return "/jobs/" + job },
+	"check":          func(resource string) string { return "/resources/" + resource },
 	"abort queued":   func(job string) string { return "/jobs/" + job },
 	"rerun":          func(run string) string { return "/runs/" + run },
 	"abort":          func(run string) string { return "/runs/" + run },

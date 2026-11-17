@@ -76,7 +76,7 @@ func TestApprovalsUseSharedTimeAndStatusVocabulary(t *testing.T) {
 		t.Error("approvals page shows raw timestamps, not relative time")
 	}
 
-	if !strings.Contains(body, `class="stamp st st-passed"`) {
+	if !strings.Contains(body, `class="st st-passed"`) {
 		t.Error("approval outcome stamp is missing the shared .st badge class")
 	}
 }
@@ -111,7 +111,7 @@ func TestQuestionsUseSharedTimeAndStatusVocabulary(t *testing.T) {
 		t.Error("questions page shows raw timestamps, not relative time")
 	}
 
-	if !strings.Contains(body, `class="stamp st st-passed"`) {
+	if !strings.Contains(body, `class="st st-passed"`) {
 		t.Error("question outcome stamp is missing the shared .st badge class")
 	}
 }

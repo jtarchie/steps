@@ -12,7 +12,7 @@ import (
 )
 
 // dynamicFamilies are keys built at runtime ("status." + a stored value), which no literal names; each prefix is a family whose members are chosen by data.
-var dynamicFamilies = []string{"status.", "cell.", "verb.", "filter.", "mcp.status.", "follow.check.", "connect.", "change.", "time.ago.", "time.in.", "actor.", "graph.edge."}
+var dynamicFamilies = []string{"status.", "cell.", "verb.", "filter.", "mcp.status.", "follow.check.", "connect.", "change.", "time.ago.", "time.in.", "actor.", "graph.edge.", "resstate.", "mcpstate."}
 
 var (
 	verbRe     = regexp.MustCompile(`%\[(\d+)\][a-zA-Z]`)

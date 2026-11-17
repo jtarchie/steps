@@ -86,14 +86,37 @@ type PollStore interface {
 //     started with would go on checking resources the operator deleted and
 //     never check the ones they added. Each cycle reads the current one, and
 //     admission re-validates and re-preflights whenever it changes.
-func Poll(ctx context.Context, current ConfigSource, st PollStore, interval time.Duration) error {
+//
+// requests, when not nil, is how a person asks for a check between ticks.
+func Poll(ctx context.Context, current ConfigSource, st PollStore, interval time.Duration, requests *Requests) error {
 	if interval <= 0 {
 		return fmt.Errorf("trigger: interval must be positive, got %s", interval)
 	}
 
-	runPoller(ctx, current, st, interval)
+	runPoller(ctx, current, st, interval, requests)
 
 	return nil
+}
+
+// requestBacklog bounds the checks a pipeline holds asked for and not yet taken.
+const requestBacklog = 16
+
+// Requests carries a person's "check this now" to a pipeline's running poller, which takes it between ticks. Through the loop rather than beside it because the loop is the pipeline's one checker: a requested check run alongside a scheduled one would race it over the same resource's recorded version and history.
+type Requests struct {
+	names chan string
+}
+
+// NewRequests is a pipeline's empty backlog.
+func NewRequests() *Requests { return &Requests{names: make(chan string, requestBacklog)} }
+
+// Check asks for resource to be checked and reports false when the backlog is full — a request is a nudge, and those already waiting will do.
+func (r *Requests) Check(resource string) bool {
+	select {
+	case r.names <- resource:
+		return true
+	default:
+		return false
+	}
 }
 
 // ConfigSource hands out the configuration to poll against, which the daemon
@@ -160,13 +183,19 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 
 // runPoller calls pollOnce immediately and then once per interval tick,
 // until ctx is canceled.
-func runPoller(ctx context.Context, current ConfigSource, st PollStore, interval time.Duration) {
+func runPoller(ctx context.Context, current ConfigSource, st PollStore, interval time.Duration, requests *Requests) {
 	admitted := &admission{}
 
 	admitted.poll(ctx, current(), st)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	// A nil channel is never ready, so a loop nobody can ask is the plain ticker.
+	var asked <-chan string
+	if requests != nil {
+		asked = requests.names
+	}
 
 	for {
 		select {
@@ -175,8 +204,36 @@ func runPoller(ctx context.Context, current ConfigSource, st PollStore, interval
 		case <-ticker.C:
 			// Read per cycle, not captured: see Poll.
 			admitted.poll(ctx, current(), st)
+		case name := <-asked:
+			checkRequested(ctx, current(), st, name)
 		}
 	}
+}
+
+// checkRequested is one resource's turn in a poll, taken because a person asked. Any resource, not only a trigger: true one — Concourse's check button checks whatever it is pressed on — and without admission's preflight, whose job is to stop a loop repeating a failure every tick: a person asked once, and a failure is recorded for them to read. A paused pipeline checks nothing, asked or not.
+func checkRequested(ctx context.Context, cfg *config.Config, st PollStore, name string) {
+	ctx = events.WithLogAttrs(ctx, "revision", cfg.Revision.SHA)
+
+	stopped, err := st.Paused(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "trigger.paused", "pipeline", cfg.Name, "error", err)
+
+		return
+	}
+
+	if stopped {
+		return
+	}
+
+	_, err = cfg.FindResource(name)
+	if err != nil {
+		// Removed by a set between the request and now.
+		slog.WarnContext(ctx, "trigger.check_requested", "pipeline", cfg.Name, "resource", name, "error", err)
+
+		return
+	}
+
+	pollAndLog(ctx, cfg, st, []string{name})
 }
 
 // admission decides, once per configuration rather than once per cycle,
@@ -227,7 +284,7 @@ func (a *admission) poll(ctx context.Context, cfg *config.Config, st PollStore) 
 		return
 	}
 
-	pollAndLog(ctx, cfg, st)
+	pollAndLog(ctx, cfg, st, Resources(cfg))
 }
 
 // decide reports whether this configuration can be polled, and says out loud
@@ -268,11 +325,11 @@ func (a *admission) decide(ctx context.Context, cfg *config.Config) bool {
 	return true
 }
 
-func pollAndLog(ctx context.Context, cfg *config.Config, st PollStore) {
+func pollAndLog(ctx context.Context, cfg *config.Config, st PollStore, names []string) {
 	ctx, release := pipeline.CheckScope(ctx)
 	defer release()
 
-	enqueued, err := pollOnce(ctx, cfg, st)
+	enqueued, err := pollResources(ctx, cfg, st, names)
 
 	for _, name := range enqueued {
 		slog.InfoContext(ctx, "trigger.enqueued", "job", name)
@@ -345,11 +402,16 @@ type observedResource struct {
 // that first check — this keeps a fresh (or freshly lost) state db from
 // mass-triggering every job on daemon startup.
 func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, error) {
+	return pollResources(ctx, cfg, st, Resources(cfg))
+}
+
+// pollResources is pollOnce over the resources named.
+func pollResources(ctx context.Context, cfg *config.Config, st PollStore, names []string) ([]string, error) {
 	observed := map[string]observedResource{}
 
 	var failures []error
 
-	for _, name := range Resources(cfg) {
+	for _, name := range names {
 		// Shutdown fails every check left; stopping keeps one cancellation from becoming a failure per resource.
 		if ctx.Err() != nil {
 			return nil, errors.Join(append(failures, ctx.Err())...)

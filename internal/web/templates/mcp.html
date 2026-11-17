@@ -1,13 +1,15 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps mcp</b></h1>
+{{if .Total}}{{template "findbar" .List}}{{end}}
 <div id="mcp-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#mcp-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
 {{/* Inside the region: a login finishing and a probe landing both move these
      counts, and a metaline left outside would go on describing the table the
      poll had already replaced. */}}
-<p class="metaline">{{t "mcp.servers" .Total}}{{if .Attention}}<span class="sep">·</span>{{t "mcp.needattention" (len .Attention)}}{{end}}{{with .Exports}}<span class="sep">·</span>{{t "mcp.exports" (len .)}}{{end}}</p>
+<p class="metaline">{{if .List.Filters}}{{template "filterline" .List}}{{else}}{{t "mcp.servers" .Total}}{{end}}{{if .Attention}}<span class="sep">·</span>{{t "mcp.needattention" (len .Attention)}}{{end}}{{with .Exports}}<span class="sep">·</span>{{t "mcp.exports" (len .)}}{{end}}</p>
 
 {{if .Total}}
 {{if .Exports}}<h2 class="eyebrow">{{t "mcp.h.servers"}} <span class="unbold">{{t "mcp.h.servers.note"}}</span></h2>{{end}}
+{{if not (or .Attention .Rest)}}<p class="faint">{{t "list.nomatch"}}</p>{{else}}
 <div class="tablewrap">
   <table class="mcp">
     <thead><tr><th>{{t "th.status"}}</th><th>{{t "mcp.th.server"}}</th><th>{{t "mcp.th.usedby"}}</th><th class="acts">{{t "th.action"}}</th></tr></thead>
@@ -28,8 +30,9 @@
     {{end}}
   </table>
 </div>
+{{end}}
 
-<p class="faint mcp-note">{{t "mcp.note"}}</p>
+<p class="faint list-note">{{t "mcp.note"}}</p>
 {{end}}
 
 {{with .Exports}}
@@ -49,7 +52,7 @@
     </tbody>
   </table>
 </div>
-{{if not $.Serving}}<p class="faint mcp-note">{{t "export.notserved"}}</p>{{end}}
+{{if not $.Serving}}<p class="faint list-note">{{t "export.notserved"}}</p>{{end}}
 {{end}}
 </div>
 {{end}}
@@ -82,7 +85,7 @@
       {{end}}
     {{end}}
   </td>
-  <td class="dim uses">{{if eq .UsedBy "(unused)"}}{{t "mcp.unused"}}{{else}}{{foreign .UsedBy}}{{end}}</td>
+  <td class="dim uses">{{range $i, $u := .Users}}{{if $i}}, {{end}}{{if .URL}}<a href="{{.URL}}">{{foreign .Label}}</a>{{else}}{{foreign .Label}}{{end}}{{range $j, $job := .Jobs}}{{if $j}},{{end}} <a href="/p/{{$nav.Current}}/jobs/{{pathseg $job}}">{{$job}}</a>{{end}}{{else}}{{t "mcp.unused"}}{{end}}</td>
   <td class="acts">
     {{if $nav.ReadOnly}}
       {{if .OAuth}}<span class="meta">{{th "mcp.readonly" (code (printf "steps mcp login %v -p %v --target <url>" .Name $nav.Current))}}</span>{{end}}

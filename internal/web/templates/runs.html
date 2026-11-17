@@ -1,25 +1,7 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps runs</b></h1>
 
-{{/* Outside the polled region: a morph under somebody typing would fight
-     them for the box. A GET form, so a narrowed history is a URL somebody
-     can be sent, as the activity page's is. Its own search, not the jump
-     palette: the palette finds a page to go to across every pipeline, this
-     finds runs of this one, by what they ran against (a fault id, a PR, a
-     sha) as well as by id, job, status and who started them. */}}
-<form class="runsfind" role="search" method="get" action="{{.Base}}">
-  {{with .Job}}<input type="hidden" name="job" value="{{.}}">{{end}}
-  <label class="visually-hidden" for="runs-q">{{t "runs.search.label"}}</label>
-  <input type="search" id="runs-q" name="q" value="{{.Text}}" placeholder="{{t "runs.search.hint"}}" autocomplete="off" spellcheck="false">
-  <button class="btn" type="submit">{{t "runs.search"}}</button>
-</form>
-{{if gt (len .Jobs) 1}}
-<nav class="runsjobs" aria-label="{{t "runs.jobs.label"}}">
-  <span class="dim">{{t "runs.jobs"}}</span>
-  <a href="{{pathQuery .Base .Query "job" ""}}"{{if not .Job}} aria-current="page"{{end}}>{{t "runs.jobs.all"}}</a>
-  {{range .Jobs}}<a href="{{pathQuery $.Base $.Query "job" .}}"{{if eq . $.Job}} aria-current="page"{{end}}>{{.}}</a>{{end}}
-</nav>
-{{end}}
+{{template "findbar" .List}}
 
 {{/* The count sits inside the refreshed region, or it reads whatever it said
      at load while the refresh fills the table under it. Polled on every page,
@@ -27,9 +9,7 @@
      can still finish. */}}
 <div id="runs-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#runs-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
 <p class="metaline">
-  {{- if .Filters}}{{range $i, $f := .Filters}}{{if $i}}<span class="sep">·</span>{{end}}{{word "filter" $f.Label}}: <b>{{$f.Value}}</b> <a href="{{$f.Remove}}" aria-label="{{t "activity.stop" (word "filter" $f.Label)}}">×</a>{{end}}<span class="sep">·</span><a href="{{.Base}}">{{t "activity.clear"}}</a>
-  {{- else}}{{t "runs.count" (len .Runs)}}<span class="sep">·</span>{{.Nav.CurrentPath}}{{end}}
-  {{- if .Paged}}<span class="sep">·</span><a href="{{pathQuery .Base .Query "before" ""}}">{{t "activity.newest"}}</a>{{end -}}
+  {{- if .List.Filters}}{{template "filterline" .List}}{{else}}{{t "runs.count" (len .Runs)}}<span class="sep">·</span>{{.Nav.CurrentPath}}{{end}}{{template "newest" .List -}}
 </p>
 
 {{if .Runs}}
@@ -43,7 +23,7 @@
       <tr>
         <td><a class="st st-{{statusWord .Status}}" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{statusText .Status}}</a></td>
         {{/* A job's name narrows the history to it, as every name on the activity page does; its runs are what a reader clicking it is after. */}}
-        <td><a href="{{pathQuery $.Base $.Query "job" .JobName}}">{{.JobName}}</a></td>
+        <td><a href="{{pathQuery $.List.Base $.List.Query "job" .JobName}}">{{.JobName}}</a></td>
         <td class="dim"><a class="hash" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{short .ID}}</a></td>
         <td class="dim">{{agoTag .StartedAt}}</td>
         <td class="num dim">{{elapsedTag .}}</td>
@@ -54,8 +34,8 @@
     </tbody>
   </table>
 </div>
-{{with .Older}}<p class="metaline"><a href="{{.}}">{{t "activity.older"}}</a></p>{{end}}
-{{else if .Filters}}
+{{template "older" .List}}
+{{else if .List.Filters}}
 <p class="faint">{{t "runs.nomatch"}}</p>
 {{else}}
 <p class="faint">{{t "runs.none"}}</p>

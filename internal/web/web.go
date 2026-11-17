@@ -76,6 +76,8 @@ type Pipeline struct {
 	unfenced atomic.Pointer[[]string]
 	// Hooks answers POST /p/<slug>/hooks/<resource>, a delivery to a webhook resource. Built by the caller (trigger.HookHandler): this package serves the surface and does not own the queue — internal/scheduler drains it, reached only through Runner. Nil only in a test.
 	Hooks func(w http.ResponseWriter, r *http.Request, resource string)
+	// CheckNow asks the pipeline's poller to check a resource between ticks, reporting false when it holds as many requests as it will. Built by the caller (trigger.Requests), for the reason Hooks is; nil where nothing polls, which offers no check.
+	CheckNow func(resource string) bool
 }
 
 // NewPipeline builds a served pipeline around the configuration it starts
@@ -441,6 +443,7 @@ func (s *Server) routes() error {
 	group.POST("/approvals/:id", s.handleDecideApproval)
 	group.POST("/questions/:id", s.handleAnswerQuestion)
 	group.POST("/jobs/:job/release", s.handleRelease)
+	group.POST("/resources/:resource/check", s.handleCheck)
 	// The pipeline-level breaker, reachable from a browser at last: /api holds the same two verbs and refuses a page by design, so the UI could say a pipeline was paused and not offer to release it. See docs/web.md.
 	group.POST("/pause", s.handlePause)
 	group.POST("/unpause", s.handleUnpause)

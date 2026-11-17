@@ -4,6 +4,8 @@ package web
 
 import (
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -68,6 +70,46 @@ type mcpRow struct {
 	CanTest bool
 	// NeedsAttention is a server that cannot be used right now, or has a login in flight. It is what the page leads with, because the reader is triaging.
 	NeedsAttention bool
+	// Transport and Auth are what the transport and auth chips narrow by.
+	Transport, Auth string
+	// Users is UsedBy, each linked to the page it lives on where it has one.
+	Users []mcpUser
+}
+
+// mcpUser is one thing that uses a server, as the page links it.
+type mcpUser struct {
+	Label string
+	URL   string
+	// Jobs are the jobs an agent runs in, which are the pages an agent has.
+	Jobs []string
+}
+
+// mcpUsersOf turns the configuration's "agent checker" words into links: an export to its page, a resource type to the resources it backs, an agent to the jobs that run it.
+func mcpUsersOf(cfg *config.Config, slug, server string) []mcpUser {
+	users := cfg.MCPServerUsers(server)
+	out := make([]mcpUser, 0, len(users))
+
+	for _, user := range users {
+		kind, name, _ := strings.Cut(user, " ")
+		entry := mcpUser{Label: user}
+
+		switch kind {
+		case "export":
+			entry.URL = "/p/" + slug + "/mcp/exports/" + name
+		case "resource_type":
+			entry.URL = "/p/" + slug + "/resources?type=" + url.QueryEscape(name)
+		case "agent":
+			for _, job := range cfg.Jobs {
+				if slices.Contains(job.AgentNames(), name) {
+					entry.Jobs = append(entry.Jobs, job.Name)
+				}
+			}
+		}
+
+		out = append(out, entry)
+	}
+
+	return out
 }
 
 // markFor is the stamp one static readiness reads as. MCPUnknown is st-skipped — faint, and not a tick — because the whole of that state is that nothing on this machine answered the question.
@@ -127,6 +169,26 @@ func (s *Server) handleMCP(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "this pipeline declares no mcp_servers: and no mcp_exports:")
 	}
 
+	loc := s.renderer.localeOf(c)
+	list := newList("/p/"+pipeline.Slug+"/mcp", c.Request().URL.Query(), loc.text("mcp.search.hint"), loc.text("mcp.search.label"))
+
+	var transports, auths []string
+
+	for _, server := range servers {
+		if !slices.Contains(transports, server.Transport()) {
+			transports = append(transports, server.Transport())
+		}
+
+		if !slices.Contains(auths, mcpAuthOf(server)) {
+			auths = append(auths, mcpAuthOf(server))
+		}
+	}
+
+	state := list.facet(loc, "status", mcpStates, func(v string) string { return loc.word("mcpstate", v) })
+	transport := list.configFacet(loc, "transport", transports)
+	auth := list.configFacet(loc, "auth", auths)
+	list.searched()
+
 	// Two groups, each keeping the file's own order inside it: what cannot be used leads, because that is the question somebody opened this page with, and a server declared tenth is no less broken for it.
 	var attention, rest []mcpRow
 
@@ -134,6 +196,10 @@ func (s *Server) handleMCP(c *echo.Context) error {
 		row := s.mcpRowFor(pipeline, server)
 		if !s.mayFinishLogin(c) {
 			row.AuthorizeURL = ""
+		}
+
+		if !row.listed(state, transport, auth, list.Text) {
+			continue
 		}
 
 		if row.NeedsAttention {
@@ -151,6 +217,7 @@ func (s *Server) handleMCP(c *echo.Context) error {
 		"Attention": attention,
 		"Rest":      rest,
 		"Total":     len(servers),
+		"List":      list,
 		"Exports":   exports,
 		"Serving":   s.exporter != nil,
 		"Title":     s.renderer.localeOf(c).text("tab.mcp"),
@@ -169,6 +236,10 @@ func (s *Server) mcpRowFor(pipeline *Pipeline, server config.MCPServer) mcpRow {
 		Mark:   markFor(status.Readiness),
 		Meta:   mcpMetaLine(server),
 		Target: server.Target(),
+
+		Transport: server.Transport(),
+		Auth:      mcpAuthOf(server),
+		Users:     mcpUsersOf(pipeline.Config(), pipeline.Slug, server.Name),
 	}
 
 	authorizer := s.authorizer()
@@ -322,4 +393,28 @@ func browserOrigin(c *echo.Context) (string, error) {
 	}
 
 	return strings.TrimSuffix(origin, "/"), nil
+}
+
+// mcpStates are the status chips' values: what needs a person, and what does not.
+var mcpStates = []string{"attention", "ready"}
+
+// mcpAuthOf is the auth chip's value: the auth type alone, without the variable a label names.
+func mcpAuthOf(server config.MCPServer) string {
+	if server.Auth.None() {
+		return config.MCPAuthNone
+	}
+
+	return server.Auth.Type
+}
+
+// listed is whether the chips and the box keep this row.
+func (r *mcpRow) listed(state, transport, auth, text string) bool {
+	switch {
+	case state == "attention" && !r.NeedsAttention, state == "ready" && r.NeedsAttention:
+		return false
+	case transport != "" && r.Transport != transport, auth != "" && r.Auth != auth:
+		return false
+	}
+
+	return matches(text, r.Name, r.Target, r.UsedBy)
 }
