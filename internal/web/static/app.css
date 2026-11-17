@@ -1553,6 +1553,8 @@ table.activity td:first-child { white-space: nowrap; }
   table.stack td { padding: 0; border: 0; white-space: normal; overflow-wrap: anywhere; min-width: 0; max-width: none; }
   table.stack td.wide, table.stack tr.checkfail td, table.stack tr.grouprow td { flex-basis: 100%; }
   table.stack td.rowextra { margin-left: auto; }
+  /* A cell that holds only a dash says nothing on a card. */
+  table.stack td.empty { display: none; }
   table.stack .vline { max-width: 100%; }
   .tablewrap:has(> table.stack) { overflow-x: visible; }
   /* The version grid keeps its table — a version against each job is a grid — but its cells may wrap. */

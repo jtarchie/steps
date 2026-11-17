@@ -18,14 +18,14 @@
         <td><span class="st st-{{if eq .State "failing"}}failed{{else if eq .State "ok"}}passed{{else}}skipped{{end}}">{{word "resstate" .State}}</span></td>
         {{/* The type is what the resource IS, so it sits under the name as mcp's meta line does; the type chips are how to narrow by it. */}}
         <td class="who"><a href="/p/{{$.Nav.Current}}/resources/{{.Name}}">{{.Name}}</a><div class="meta-sub">{{.Type}}</div></td>
-        <td class="dim wide">{{if .Checked.Name}}<span class="vline" title="{{.Checked.Version}}">{{jsonLine .Checked.Version}}</span>{{else}}<span class="faint">—</span>{{end}}</td>
-        <td class="dim uses wide">{{range $i, $job := .UsedBy}}{{if $i}} {{end}}<a href="/p/{{$.Nav.Current}}/jobs/{{pathseg $job}}">{{$job}}</a>{{else}}<span class="faint">—</span>{{end}}</td>
+        <td class="dim wide{{if not .Checked.Name}} empty{{end}}">{{if .Checked.Name}}<span class="vline" title="{{.Checked.Version}}">{{jsonLine .Checked.Version}}</span>{{else}}<span class="faint">—</span>{{end}}</td>
+        <td class="dim uses wide{{if not .UsedBy}} empty{{end}}">{{range $i, $job := .UsedBy}}{{if $i}} {{end}}<a href="/p/{{$.Nav.Current}}/jobs/{{pathseg $job}}">{{$job}}</a>{{else}}<span class="faint">—</span>{{end}}</td>
         {{/* The recorded version is what the last SUCCESSFUL check saw, and a
              failing check leaves it exactly where it was — so this cell says
              when it last worked, and the row below says it has stopped. Not
              the failure time: every failing poll rewrites that, so a resource
              down since Tuesday would read "4s ago" forever. */}}
-        <td class="dim">{{if .Checked.Name}}{{agoTag .Checked.CheckedAt}}{{else if .Failing.Name}}<span class="faint">{{t "resource.neverworked"}}</span>{{else}}—{{end}}</td>
+        <td class="dim{{if not (or .Checked.Name .Failing.Name)}} empty{{end}}">{{if .Checked.Name}}{{agoTag .Checked.CheckedAt}}{{else if .Failing.Name}}<span class="faint">{{t "resource.neverworked"}}</span>{{else}}—{{end}}</td>
         {{if $controls}}<td class="rowextra"><form class="inline" method="post" action="/p/{{$.Nav.Current}}/resources/{{.Name}}/check"><input type="hidden" name="return" value="{{$.Nav.URL}}"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "resource.check.title"}}"{{end}}>↻ {{t "resource.check"}}</button></form></td>{{end}}
       </tr>
       {{if .Failing.Name}}<tr class="checkfail"><td colspan="{{if $controls}}6{{else}}5{{end}}"><pre>{{.Failing.Message}}</pre></td></tr>{{end}}

@@ -114,3 +114,34 @@ func TestListTablesFitEveryScreenWithTheirButtons(t *testing.T) {
 		}
 	}
 }
+
+// A card on a phone has no room for a lone dash: a never-checked resource's empty version and checked cells vanish there, and stay on a desktop, where the dash keeps a column honest.
+func TestAPhoneDropsEmptyCellsAndADesktopKeepsThem(t *testing.T) {
+	ctx := browser(t)
+
+	// Unseeded: the pipeline's one resource has never been checked, so its version and checked cells are empty.
+	_, pipeline := testPipeline(t)
+
+	server, err := New([]*Pipeline{pipeline}, stubRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listener := httptest.NewServer(server.Handler())
+	t.Cleanup(listener.Close)
+
+	page := listener.URL + "/p/demo/resources"
+
+	const visibleEmpty = `[...document.querySelectorAll('td.empty')].filter(td => td.offsetParent !== null).length`
+
+	phone := must(ctx, t, chromedp.Evaluate[int](visibleEmpty), onPhone(), media("dark", false), chromedp.Navigate(page))
+	desktop := must(ctx, t, chromedp.Evaluate[int](visibleEmpty), chromedp.EmulateViewport(1280, 800), media("dark", false), chromedp.Navigate(page))
+
+	if phone != 0 {
+		t.Errorf("a phone shows %d empty cells, want none", phone)
+	}
+
+	if desktop == 0 {
+		t.Error("a desktop shows no empty cells; the dash that keeps a never-checked row's columns aligned is gone")
+	}
+}
