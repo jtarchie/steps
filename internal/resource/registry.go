@@ -139,7 +139,7 @@ func (r *RegistryImageResource) password(secrets map[string]string) (string, err
 	return password, nil
 }
 
-// WithTypePullLogin attaches a type: registry-image entry's login to every pull of its image under ctx, so the type's check, in and out, wherever they run, pull with it; a type with none is left anonymous.
+// WithTypePullLogin attaches a type's image login (a type: registry-image entry's source:, or image_login:) to every pull of its image under ctx, so the type's check, in and out, wherever they run, pull with it; a type with none is left anonymous.
 func WithTypePullLogin(ctx context.Context, rt config.ResourceType) (context.Context, error) {
 	username, variable := rt.PullLogin()
 	if username == "" || rt.Image == "" {
@@ -148,7 +148,7 @@ func WithTypePullLogin(ctx context.Context, rt config.ResourceType) (context.Con
 
 	password := os.Getenv(variable)
 	if password == "" {
-		return ctx, fmt.Errorf("resource_type %q: $%s is not set (source.password_env)", rt.Name, variable)
+		return ctx, fmt.Errorf("resource_type %q: $%s is not set (%s)", rt.Name, variable, rt.PasswordEnvField())
 	}
 
 	return shell.WithPullLogin(ctx, rt.Image, username, password), nil

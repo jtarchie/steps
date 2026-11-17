@@ -140,7 +140,7 @@ func loginHint(err error, login bool) string {
 		return " — the registry refused the image's registry-image resource login (source.username, source.password_env)"
 	}
 
-	return " — steps does not read docker's config.json or credential helpers: pull a private image through a registry-image get that names a login (source.username, source.password_env), and name that get as the step's image:"
+	return " — steps does not read docker's config.json or credential helpers: pull a private image through a registry-image get that names a login (source.username, source.password_env), and name that get as the step's image:; a resource type's image: takes image_login:"
 }
 
 // pullMessage is one line of the daemon's pull stream.

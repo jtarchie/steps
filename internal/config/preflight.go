@@ -221,7 +221,7 @@ func githubCredentialProblems(name string, source map[string]any, secrets map[st
 	}}
 }
 
-// checkTypePullLogins reports a type: registry-image entry whose password_env names an unset variable: the pull of its image would go anonymous and be refused.
+// checkTypePullLogins reports a type whose image login's password_env names an unset variable: the pull of its image would go anonymous and be refused.
 func (c *Config) checkTypePullLogins() []Problem {
 	var problems []Problem
 
@@ -234,7 +234,7 @@ func (c *Config) checkTypePullLogins() []Problem {
 		if value, ok := os.LookupEnv(variable); !ok || value == "" {
 			problems = append(problems, Problem{
 				Target: fmt.Sprintf("resource_type %q", rt.Name),
-				Detail: fmt.Sprintf("$%s is not set (source.password_env)", variable),
+				Detail: fmt.Sprintf("$%s is not set (%s)", variable, rt.PasswordEnvField()),
 			})
 		}
 	}

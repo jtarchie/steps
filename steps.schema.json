@@ -380,6 +380,20 @@
           "type": "string",
           "description": "Run check/in/out in this container image instead of on the host."
         },
+        "image_login": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password_env"],
+          "properties": {
+            "username": {"type": "string"},
+            "password_env": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "description": "The NAME of the daemon's environment variable holding the password or token for username."
+            }
+          },
+          "description": "The registry login image: is pulled with, for a private image. Requires image:; a type: registry-image entry takes its login in source:."
+        },
         "env": {
           "type": "array",
           "items": {

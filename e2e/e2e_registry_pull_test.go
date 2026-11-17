@@ -243,3 +243,76 @@ jobs:
 	name := cli.PipelineName(path)
 	waitForRunStatus(t, served.state, name, newestRun(t, served.state, name, "build").ID, "succeeded")
 }
+
+// TestEndToEndAWrittenResourceTypeInAPrivateImagePullsWithImageLogin: a type written as check/in/out runs in a private image: and names the pull's login in image_login:, as a type: registry-image entry does in source:.
+func TestEndToEndAWrittenResourceTypeInAPrivateImagePullsWithImageLogin(t *testing.T) {
+	requireDockerE2E(t)
+	t.Setenv("PRIVATE_TYPE_PASSWORD", testdocker.RegistryPassword)
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+
+	repository, _ := privateImage(t)
+
+	path := writePipeline(t, t.TempDir(), `
+resource_types:
+- name: private-type
+  image: `+repository+`:latest
+  image_login:
+    username: `+testdocker.RegistryUsername+`
+    password_env: PRIVATE_TYPE_PASSWORD
+  config:
+    check: echo '[{"n":"1"}]'
+    in: echo "in $(uname -s)" > said
+resources:
+- name: thing
+  type: private-type
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: thing
+  - task: show
+    inputs: [thing]
+    run: cat thing/said
+`)
+
+	out := captureStdout(t, func() { mustRun(t, "run", path, "--job", "build") })
+	if !strings.Contains(out, "in Linux") {
+		t.Errorf("run printed %q, want the type's in: to have run in the private image", out)
+	}
+}
+
+// TestValidateImageLoginBelongsBesideImage: image_login: with no image: has nothing to pull, beside type: registry-image it says what source: already does, and a login is both its fields.
+func TestValidateImageLoginBelongsBesideImage(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct{ entry, want string }{
+		"no image":    {"  image_login: {username: robot, password_env: TOKEN}\n", "needs an image:"},
+		"beside type": {"  type: registry-image\n  source: {repository: example.com/t}\n  image_login: {username: robot, password_env: TOKEN}\n", "source.username"},
+		"half":        {"  image: example.com/t:1\n  image_login: {username: robot, password_env: \"\"}\n", "go together"},
+		"literal":     {"  image: example.com/t:1\n  image_login: {username: robot, password_env: \"hunter2!\"}\n", "NAME of an environment variable"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			config := ""
+			if !strings.Contains(tc.entry, "type:") {
+				config = "  config:\n    check: echo '[]'\n"
+			}
+
+			path := writePipeline(t, t.TempDir(), "resource_types:\n- name: t\n"+tc.entry+config+`resources:
+- name: r
+  type: t
+  source: {}
+jobs:
+- name: j
+  plan:
+  - get: r
+`)
+
+			err := stepsRun(t, []string{"validate", "--syntax-only", path})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("validate: err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}

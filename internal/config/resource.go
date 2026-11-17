@@ -42,11 +42,19 @@ type ResourceType struct {
 	Limits *ContainerLimits `yaml:"container_limits,omitempty"`
 	// Sandbox fences this entity's host commands with the OS sandbox: writes only under the step's workspace and a private TMPDIR, credential directories unreadable, and network: none becomes legal on the host. See internal/config/sandbox.go for the rules and docs/infra.md for the policy.
 	Sandbox bool `yaml:"sandbox,omitempty"`
+	// ImageLogin is the registry login image: is pulled with, for a private image. A type: registry-image entry says the same in its source:.
+	ImageLogin *ImageLogin `yaml:"image_login,omitempty"`
 	// Type, Source and Defaults are Concourse's spelling of a resource type that is a resource image: `type: registry-image` with `source: {repository, tag}` (steps#237). Rewritten at load into Image and Config (see desugarConcourseTypes), which is what is hashed; Defaults is laid under each of this type's resources' source:, which is hashed there.
 	Type     string             `yaml:"type,omitempty"`
 	Source   map[string]any     `yaml:"source,omitempty"`
 	Defaults map[string]any     `yaml:"defaults,omitempty"`
 	Config   ResourceTypeConfig `yaml:"config"`
+}
+
+// ImageLogin is a registry login for one image pull: the user and the NAME of the variable holding the password or token, read from the daemon's environment, since a resource type has no secrets: of its own.
+type ImageLogin struct {
+	Username    string `yaml:"username"`
+	PasswordEnv string `yaml:"password_env"`
 }
 
 // ResourceTypeConfig holds the check/in/out shell command templates.

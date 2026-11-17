@@ -1372,6 +1372,34 @@ jobs:
     outcome: succeeded
 ```
 
+**An `image:` in a private registry** takes its login in `image_login:`: `username`, and `password_env`, the **name** of a variable in the daemon's environment holding the password or token (a type has no `secrets:` of its own). steps pulls the image with that login and no other, for check, in and out alike; it reads none of docker's own. A [stock Concourse image](#running-a-stock-concourse-resource-image) says the same in its `source:`.
+
+```yaml noexec=credentials
+resource_types:
+- name: release-notes
+  image: ghcr.io/acme/tools:latest
+  image_login:
+    username: robot                 # any name, for a registry that takes a token alone (ghcr.io)
+    password_env: GHCR_TOKEN        # the NAME of the variable, never the token
+  config:
+    check: echo '[]'
+    out: publish-notes --version "$(cat build/version)"
+
+resources:
+- name: notes
+  type: release-notes
+  source: {}
+
+jobs:
+- name: publish
+  plan:
+  - task: build
+    outputs: [build]
+    run: echo 1.0.0 > build/version
+  - put: notes
+    inputs: [build]
+```
+
 ### `check` — what versions exist?
 
 Runs when a plan is built, and on every `steps web` poll.
