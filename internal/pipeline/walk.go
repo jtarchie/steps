@@ -432,11 +432,7 @@ func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.St
 		return stepResult{hash: parentHash, disposition: stepGuardSkipped}, nil
 	}
 
-	// A captured load_var: value changes what a step runs, so substitute
-	// before anything hashes or executes it.
-	step = renderStepVars(ctx, step)
-
-	err = refuseRenderedArtifactImage(r.cfg, r.jobName, step)
+	ctx, step, err = renderForRun(ctx, r, step)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d: %w", i, err)
 	}
@@ -466,6 +462,24 @@ func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.St
 	}
 
 	return dispatchByKind(ctx, r, kind, i, step, skippable, parentHash)
+}
+
+// renderForRun substitutes what the run captured into a step before anything
+// hashes or executes it, since a captured value changes what the step runs. A
+// get's facts are only known once the run is under way, so no earlier run's
+// result may stand in for a step reading them. An image a value named is
+// checked once it is known.
+func renderForRun(ctx context.Context, r stepRunner, step config.Step) (context.Context, config.Step, error) {
+	step, readsFacts, err := renderStepVars(ctx, step)
+	if err != nil {
+		return ctx, step, err
+	}
+
+	if readsFacts {
+		ctx = withoutReuse(ctx)
+	}
+
+	return ctx, step, refuseRenderedArtifactImage(r.cfg, r.jobName, step)
 }
 
 // dispatchByKind routes a resolved non-get step to its runner. Split from the

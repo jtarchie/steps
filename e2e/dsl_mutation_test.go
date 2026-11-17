@@ -86,6 +86,10 @@ var stepOperators = []stepOperator{
 	{tag: "dir", apply: setString("dir", mutantMarker)},
 	{tag: "run_file", apply: setString("run_file", mutantMarker)},
 	{tag: "file", apply: setString("file", mutantMarker)},
+	// Read the file another way: trimmed text kept raw keeps its newline.
+	{tag: "format", apply: swapLoadVarFormat},
+	// Hide what was revealed, and the value the assertion reads is masked.
+	{tag: "reveal", apply: deleteKey("reveal")},
 
 	// A command that runs fine and says something else: the assertion on
 	// what it printed is the only thing between this and a green build.
@@ -445,6 +449,16 @@ func setString(key, value string) func(map[string]any) bool {
 
 		return true
 	}
+}
+
+func swapLoadVarFormat(step map[string]any) bool {
+	if step["format"] == "trim" {
+		step["format"] = "raw"
+	} else {
+		step["format"] = "trim"
+	}
+
+	return true
 }
 
 // capToOne is the operator every counting dial shares: one fewer than the

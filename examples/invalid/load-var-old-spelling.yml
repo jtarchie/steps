@@ -1,0 +1,16 @@
+# A load_var: capture is read as ((.:tag)), Concourse's spelling; ((tag)) is
+# only ever a --var. The old spelling is refused rather than accepted beside
+# the new one, naming the new one.
+# expect: a value the run captured is read as ((.:tag))
+
+jobs:
+- name: build
+  plan:
+  - task: pick
+    outputs: [meta]
+    run: printf 'v1\n' > meta/version.txt
+  - load_var: tag
+    inputs: [meta]
+    file: meta/version.txt
+  - task: announce
+    run: echo ((tag))

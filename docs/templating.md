@@ -44,7 +44,7 @@ Don't add surrounding `"..."` — `shellquote` already quotes only when needed. 
 
 `steps validate` warns — and still exits 0 — on every `{{ }}` that reaches the shell without ending in `shellquote`: in a resource `check`/`in`/`out`, one reading `.source`, `.version` or `.params`; in a custom tool's `run:`, one reading `.args`.
 
-## Pipeline vars: `((var))` and `load_var:`
+## Pipeline vars: `((var))`, `load_var:` and `((.:name))`
 
 Separate a pipeline's **shape** from its **parameters**, so one file serves staging and production instead of being copy-pasted per environment and drifting:
 
@@ -85,7 +85,9 @@ steps run pipeline.yml --job build --vars-file prod.yml
 
 Both compose: the file is the shared, checked-in set and a `--var` flag overrides it, which is the only ordering that makes a one-off override possible.
 
-Capturing a value the run itself produces:
+### Values the run captures: `load_var:` and `((.:name))`
+
+Some values do not exist until the run produces them: a tag a step just picked, a version a build wrote. `load_var:` reads one from a file into a value later steps read as `((.:name))` — Concourse's spelling, the `.:` marking a value of this run rather than a `--var`:
 
 ```yaml
 jobs:
@@ -93,30 +95,57 @@ jobs:
   plan:
   - task: pick-tag
     outputs: [meta]
-    run: printf 'v1.2.3\n' > meta/version.txt
+    run: |
+      printf 'v1.2.3\n' > meta/version.txt
+      printf '{"channel": "beta", "build": 7}\n' > meta/info.json
+      printf '  {"kept": "as text"}\n' > meta/note.json
   - load_var: tag
     inputs: [meta]           # the load_var step reads from its own declared input
     file: meta/version.txt
+    reveal: true             # a version is no secret: show it in step output
+  - load_var: info           # .json: read as data, so its fields can be named
+    inputs: [meta]
+    file: meta/info.json
+  - load_var: note
+    inputs: [meta]
+    file: meta/note.json
+    format: trim             # the file's text, whatever its extension says
+    reveal: true
   - task: announce
-    run: echo "releasing ((tag)) ok"
+    run: echo "releasing ((.:tag)) ok"
     assert:
       # the captured value, trimmed, substituted — untrimmed, version.txt's
       # trailing newline would land before "ok" and break this line
       stdout: releasing v1.2.3 ok
+  - task: channel
+    run: echo "channel ((.:info.channel)), build ((.:info.build))"
+    assert:
+      # hidden by default: each string of a capture is masked in step output;
+      # a number is not
+      stdout: channel ***, build 7
+  - task: show-note
+    run: echo '[((.:note))]'
+    assert:
+      # trimmed of the surrounding spaces and newline, and kept as text
+      stdout: '[{"kept": "as text"}]'
   assert:
-    execution: [pick-tag, tag, announce]
+    execution: [pick-tag, tag, info, note, announce, channel, show-note]
     outcome: succeeded
 ```
 
+- **`format:` says how the file is read**, with Concourse's names: `json`, `yaml` (or `yml`), `trim` and `raw`. Unset, a `.json`, `.yml` or `.yaml` file is read as structured data and anything else is `trim` — the text with its surrounding whitespace dropped, since the common way to produce a value is `git describe > version.txt`, whose trailing newline would otherwise land in the middle of a command. `raw` keeps the text exactly as written. A structured value's fields are named with dots, `((.:info.channel))`; a field that is not there fails the step, naming it, and a whole mapping or a non-string value is substituted as JSON.
+- **A captured value is hidden in step output**, the way a [secret](secrets.md) is: each string in it is masked as `***` wherever the run prints it, from the moment it is captured. `reveal: true` shows it. Hiding a short value hides every occurrence of it — capture an issue number `7` hidden, and every `7` the run prints is masked, which the run warns about — so a value that is not secret is better revealed.
+- **The old spelling is refused.** A `((tag))` after a `load_var: tag` is a load error naming `((.:tag))`; `((name))` is only ever a `--var`.
+
 The `inputs:` on the `load_var` step is not optional bookkeeping: a step's directory holds only the artifacts it declares, so a bare `file: version.txt` names nothing that exists. Both halves are checked at plan time — the file must sit inside a declared input, and that input must be something an earlier step produced.
 
-The file is read on the machine running the pipeline, so it may not leave the step's directory: an absolute `file:`, or one whose `..` climbs out, is a load error. A `file:` built from a `((var))` is checked again once rendered, a symlink pointing outside the directory is refused, and a file above 1 MiB fails the step — a var is a value, not a data transfer.
+The file is read on the machine running the pipeline, so it may not leave the step's directory: an absolute `file:`, or one whose `..` climbs out, is a load error. A `file:` built from a `((.:name))` is checked again once rendered, a symlink pointing outside the directory is refused, and a file above 1 MiB fails the step — a captured value is a value, not a data transfer.
 
-`load_var:` names share the one `((var))` namespace, so a name both passed with `--var` and captured by a `load_var:` goes to `--var`: supplied vars substitute textually before the file is parsed, leaving no `((name))` for the captured value to fill — the `load_var:` step still runs, but substitutes nothing. (Concourse keeps run-captured vars in a separate `((.:name))` namespace instead; see [conformance.md](conformance.md).)
+A [get's facts](resources.md#facts-what-a-get-or-put-says-about-its-version) are read the same way, `((.:pr.url))`, and follow every rule below.
 
 ### A guarded capture
 
-A `when:`-guarded `load_var:` may be skipped green, so nothing after it can count on its value — a later `((tag))` is a load error. Put the capture and everything that uses it in one guarded `do:`: the guard skips all of them or none. The `do:`'s `inputs:` stage the file its guard reads; they reach the guard only, so the `load_var:` still declares its own.
+A `when:`-guarded `load_var:` may be skipped green, so nothing after it can count on its value — a later `((.:tag))` is a load error. Put the capture and everything that uses it in one guarded `do:`: the guard skips all of them or none. The `do:`'s `inputs:` stage the file its guard reads; they reach the guard only, so the `load_var:` still declares its own.
 
 ```yaml
 jobs:
@@ -129,8 +158,9 @@ jobs:
     - load_var: tag
       inputs: [meta]
       file: meta/version.txt
+      reveal: true
     - task: announce
-      run: echo "releasing ((tag))"
+      run: echo "releasing ((.:tag))"
       assert:
         stdout: releasing v1.2.3
     inputs: [meta]                 # for the guard; the steps inside see only their own
@@ -143,7 +173,7 @@ jobs:
       inputs: [empty]
       file: empty/version.txt
     - task: never
-      run: echo "releasing ((other))"
+      run: echo "releasing ((.:other))"
     inputs: [empty]
     when: test -s empty/version.txt # empty file: the whole block is skipped
   assert:
@@ -153,12 +183,15 @@ jobs:
 
 ### ⚠️ Vars are config, not secrets
 
-A substituted value is parsed, **hashed, and stored in `state.db`** like anything else written in the file. Vars separate shape from parameters; they are not a secret store. Keep credentials in a `secrets:` map ([secrets.md](secrets.md)), resolved by the daemon at run time and hashed only as the reference, or in the env-var references that exist for them (`api_key_env:`). A `secrets:` value is masked in what a step prints; an `api_key_env:` value is not, so a step that prints one has it stored and shown as printed (see [conformance.md](conformance.md)).
+A `--var` value is parsed, **hashed, and stored in `state.db`** like anything else written in the file, and so is a captured value once it is substituted into a step: hiding it masks what the run prints, not what it keeps. Vars separate shape from parameters; they are not a secret store. Keep credentials in a `secrets:` map ([secrets.md](secrets.md)), resolved by the daemon at run time and hashed only as the reference, or in the env-var references that exist for them (`api_key_env:`). A `secrets:` value is masked in what a step prints; an `api_key_env:` value is not, so a step that prints one has it stored and shown as printed (see [conformance.md](conformance.md)).
 
 ### The rest
 
-- **Substitution is textual and happens before the parse**, so a var can appear anywhere a value does — inside a URI, mid-command, as a whole mapping value — without steps maintaining a list of fields that might contain one.
-- **An unresolved `((name))` is a load error**, naming the var. Left alone it would reach a shell as that literal text and fail somewhere far from the mistake. A name a later `load_var:` produces is fine; one nothing supplies is not. Every step is checked, hooks and blocks included, and a captured name counts only where the run guarantees the capture happened: after it in plan order (`do:` children included), but not in a sibling branch of the same `in_parallel:` or `race:` — whether one branch sees another's value would be a race. After an `in_parallel:` every branch's captures are available; after a `race:` only the ones every branch makes. A `try:` body's captures stay inside it, and so do a `when:`-guarded step's — a false guard skips the step green, so wrap the `load_var:` and its consumers in one guarded `do:` instead ([above](#a-guarded-capture)). A hook sees what preceded its step, plus the step's own captures in `on_success:` only — a guarded step's included, since a skipped step fires no hooks.
-- **A `load_var:` value is substituted before the step is hashed**, so two runs that captured different values never share a cache entry. Hashing the unsubstituted text would let a step that ran against `v1.2.3` satisfy a run that meant `v2.0.0`.
-- **The captured value is trimmed.** The common way to produce one is `git describe > version.txt`, whose trailing newline would otherwise land in the middle of a command.
-- **`load_var:` values are scoped to one job run.** A var captured in one run says nothing about the next.
+- **`--var` substitution is textual and happens before the parse**, so a var can appear anywhere a value does — inside a URI, mid-command, as a whole mapping value — without steps maintaining a list of fields that might contain one. A `((.:name))` is substituted when its step runs, into `run:`, `image:`, `dir:`, `file:`, `messages:`, an approval's `message:` and every string in `params:`.
+- **An unresolved `((name))` is a load error**, naming the var. Left alone it would reach a shell as that literal text and fail somewhere far from the mistake.
+- **A `((.:name))` must be produced earlier in the plan**, by a `load_var:` or a `get`, or the pipeline is refused. A `put`'s facts are not available to later steps (as in Concourse, which reaches them only through the fetch that follows a put). Every step is checked, hooks and blocks included, and a captured name counts only where the run guarantees the capture happened: after it in plan order (`do:` children included), but not in a sibling branch of the same `in_parallel:` or `race:` — whether one branch sees another's value would be a race. After an `in_parallel:` every branch's captures are available; after a `race:` none are, since any branch may be the one that won. A `try:` body's captures stay inside it, and so do a `when:`-guarded step's — a false guard skips the step green, so wrap the `load_var:` and its consumers in one guarded `do:` instead ([above](#a-guarded-capture)). A hook sees what preceded its step, plus the step's own captures in `on_success:` only — a guarded step's included, since a skipped step fires no hooks.
+- **Each `across:` cell's captures are its own.** A cell reads what the plan captured before the matrix, and what it captures ends with it: nothing after the matrix can read it.
+- **Two captures of one name in one place are refused** — two `load_var:` steps, or a `load_var:` named like a `get` — since a `((.:name))` must name one value. Branches of an `in_parallel:` or a `race:` count as one place: a race's losing branch may still write its value after the winner's. An `across:` step's body is a place of its own.
+- **A missing value at run time fails the step**: a field the file did not have, or a fact the get did not report. (Concourse falls back to looking the name up as a secret.)
+- **A captured value is substituted before the step is hashed**, so two runs that captured different values never share a cache entry. Hashing the unsubstituted text would let a step that ran against `v1.2.3` satisfy a run that meant `v2.0.0`. A step reading a get's facts is never reused at all — see [resources.md](resources.md#facts-what-a-get-or-put-says-about-its-version).
+- **Captured values are scoped to one job run.** A value captured in one run says nothing about the next.

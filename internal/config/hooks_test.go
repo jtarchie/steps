@@ -293,7 +293,7 @@ jobs:
           run: "true"
   on_success:
     task: matrix
-    run: echo ((.:v))
+    run: echo {{ .vars.v }}
     across:
     - var: v
       values: [a, b]

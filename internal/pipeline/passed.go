@@ -132,8 +132,12 @@ func recordBuildVersion(ctx context.Context, resource string, version map[string
 
 // recordFetched notes the version a get fetched, and its resource's source,
 // under the get's name, for a later put's version() or image: in the same
-// build.
-func recordFetched(ctx context.Context, get string, source, version map[string]any) {
+// build, and makes its facts readable as ((.:get.name)). Every get path calls
+// it — a fresh fetch, one the resource cache answered, and a resumed run's
+// already-fetched get — so each hands over the facts it said.
+func recordFetched(ctx context.Context, get string, source, version map[string]any, facts []events.Fact) {
+	setFacts(ctx, get, facts)
+
 	versions, ok := ctx.Value(buildVersionsKey{}).(*buildVersions)
 	if !ok {
 		return

@@ -150,7 +150,7 @@ jobs:
     inputs: [app]
     params:
       repository: app
-      force_with_lease: ((lease))
+      force_with_lease: ((.:lease))
   - put: mirror
     inputs: [app]
     params:
@@ -1426,16 +1426,23 @@ jobs:
   - get: ticket          # shows url and title under the step
   - task: read
     inputs: [ticket]
-    run: cat ticket/id
+    run: echo "$(cat ticket/id) ((.:ticket.url))"
     assert:
-      stdout: "412"      # the in: wrote its tree as usual
+      # the in: wrote its tree as usual, and a later step reads its facts
+      stdout: 412 https://tickets.example/412
   - put: comment         # shows the comment's url, and lists it as published
   assert:
     execution: [ticket, read, comment]
     outcome: succeeded
 ```
 
-A name or value is shown as text: control characters are dropped, each is cut at a few kilobytes, and a resource reports at most 64. A value that is not an `http` or `https` address is never a link. Facts pass through the run's secret masking before they are shown or kept, but they are shown to everyone who can read the run, so a resource should report links and titles, not tokens. A put's facts are shown and kept; a later step cannot read them, as in Concourse.
+A name or value is shown as text: control characters are dropped, each is cut at a few kilobytes, and a resource reports at most 64. A value that is not an `http` or `https` address is never a link. Facts pass through the run's secret masking before they are shown or kept, but they are shown to everyone who can read the run, so a resource should report links and titles, not tokens.
+
+**A later step reads a get's facts as `((.:get.name))`** — `((.:ticket.url))` above — as Concourse (v8.1.0 on) does. The name is the get's own, `get: pr` giving `((.:pr.url))` whatever resource it fetches. It follows the rules of a [captured value](templating.md#values-the-run-captures-load_var-and-name): refused at load unless a get earlier in the plan produces it, never hidden in step output (a fact is what the resource chose to show), and a fact the get did not report fails the step that reads it. A name reported twice keeps its last value. A get whose fetch the resource cache reused, or that a resumed run had already fetched, hands over the facts kept with the version.
+
+**A step reading a get's facts always runs**: neither a chain skip nor the step cache stands in for it, because the facts are only known once the run is under way — the same version can be fetched with a new title. Steps before it are skipped as usual.
+
+**A put's facts are shown and kept, but a later step cannot read them.** In Concourse a later step reaches them through the fetch that automatically follows a put; steps has no such fetch ([below](#a-put-publishes-it-does-not-fetch)), so `((.:comment.url))` after `put: comment` is a load error saying so.
 
 ### A put publishes; it does not fetch
 

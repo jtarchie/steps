@@ -30,7 +30,7 @@ func TestResolveStepImageNeverWritesTheLoadedConfig(t *testing.T) {
 
 	for _, digest := range []string{"sha256:" + strings.Repeat("1", 64), "sha256:" + strings.Repeat("2", 64)} {
 		ctx, _ := withBuildVersions(context.Background())
-		recordFetched(ctx, "toolchain", cfg.Resources[0].Source, map[string]any{"digest": digest})
+		recordFetched(ctx, "toolchain", cfg.Resources[0].Source, map[string]any{"digest": digest}, nil)
 
 		got, err := resolveStepImage(ctx, cfg, "build", cfg.Jobs[0].Plan[1])
 		if err != nil {
@@ -54,13 +54,13 @@ func TestResolveStepImageWhileGetsRecord(t *testing.T) {
 
 	cfg := imageTestConfig()
 	ctx, _ := withBuildVersions(context.Background())
-	recordFetched(ctx, "toolchain", cfg.Resources[0].Source, map[string]any{"digest": "sha256:" + strings.Repeat("1", 64)})
+	recordFetched(ctx, "toolchain", cfg.Resources[0].Source, map[string]any{"digest": "sha256:" + strings.Repeat("1", 64)}, nil)
 
 	var wg sync.WaitGroup
 
 	for range 8 {
 		wg.Go(func() {
-			recordFetched(ctx, "other", map[string]any{}, map[string]any{"ref": "v"})
+			recordFetched(ctx, "other", map[string]any{}, map[string]any{"ref": "v"}, nil)
 		})
 		wg.Go(func() {
 			_, err := resolveStepImage(ctx, cfg, "build", cfg.Jobs[0].Plan[1])

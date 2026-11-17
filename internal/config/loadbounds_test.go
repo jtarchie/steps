@@ -364,7 +364,7 @@ jobs:
     file: meta/dir
     inputs: [meta]
   - load_var: tag
-    file: ((dir))/../../x
+    file: ((.:dir))/../../x
     inputs: [meta]
 `)
 }

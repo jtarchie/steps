@@ -45,11 +45,13 @@ func CheckSecretSources(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
-// withRunSecrets starts the run's memo, so every step of the run shares one lookup per reference.
+// withRunSecrets starts the run's memo, so every step of the run shares one lookup per reference. With no source configured the run still masks, since a load_var: hides what it captures.
 func withRunSecrets(ctx context.Context) context.Context {
 	resolver, _ := ctx.Value(secretsKey{}).(*secret.Resolver)
 	if resolver == nil {
-		return ctx
+		secrets := &redact.Secrets{}
+
+		return events.WithScrub(redact.WithSecrets(ctx, secrets), secrets.String)
 	}
 
 	return withSecretMemo(ctx, resolver.ForRun(), "")

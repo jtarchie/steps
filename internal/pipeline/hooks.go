@@ -142,8 +142,13 @@ func runResolvedHookStep(ctx context.Context, scope hookScope, step config.Step)
 		return err
 	}
 
-	// validateVars lets a hook reference a load_var: capture; without this it got the literal ((name)).
-	return runHookStep(ctx, scope, renderStepVars(ctx, step))
+	// validateVars lets a hook reference a capture; without this it got the literal ((.:name)). A hook is never reused, so whether it read a get's facts does not matter.
+	step, _, err = renderStepVars(ctx, step)
+	if err != nil {
+		return err
+	}
+
+	return runHookStep(ctx, scope, step)
 }
 
 // runHookStep executes one hook step body with NO merkle hashing and NO store

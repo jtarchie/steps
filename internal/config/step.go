@@ -174,11 +174,18 @@ type Step struct {
 	// Approval.
 	Approval *Approval `kind:"approval" yaml:"approval,omitempty"`
 	// LoadVar captures a value produced DURING the run — the contents of
-	// VarFile, trimmed — into a pipeline var that later steps reference as
-	// ((name)). See validateVars.
+	// VarFile, read as Format says — into a build-local var that later steps
+	// reference as ((.:name)), Concourse's spelling. See validateVars.
 	LoadVar string `kind:"load_var" yaml:"load_var,omitempty"`
 	// VarFile is the workspace-relative file a load_var: step reads.
 	VarFile string `yaml:"file,omitempty"`
+	// Format is how a load_var: reads VarFile: json, yaml (or yml), trim or
+	// raw. Unset, it is guessed from the file's extension, as Concourse does,
+	// and anything unrecognised is trim. See LoadVarFormat.
+	Format string `yaml:"format,omitempty"`
+	// Reveal shows a load_var:'s value in step output, which otherwise masks
+	// it as it masks a secret.
+	Reveal bool `yaml:"reveal,omitempty"`
 	// Passed, on a get step, names upstream jobs this version must ALREADY
 	// have succeeded in before this job will run against it. See
 	// validatePassed.

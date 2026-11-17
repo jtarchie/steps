@@ -164,8 +164,9 @@ jobs:
   - load_var: tag
     inputs: [meta]
     file: meta/tag
+    reveal: true
   - approval:
-      message: "Publish ((tag)) of steps to github.com/jtarchie/steps (release + homebrew cask on main)?"
+      message: "Publish ((.:tag)) of steps to github.com/jtarchie/steps (release + homebrew cask on main)?"
       timeout: 24h
   - put: release
     inputs: [repo]

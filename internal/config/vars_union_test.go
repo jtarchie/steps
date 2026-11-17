@@ -15,7 +15,7 @@ func TestInParallelYieldsEveryBranchCapture(t *testing.T) {
         file: meta/v
         inputs: [meta]
   - task: after
-    run: echo ((a)) ((b))
+    run: echo ((.:a)) ((.:b))
 `
 	path := writeConfig(t, varsPick+plan)
 

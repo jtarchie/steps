@@ -60,12 +60,15 @@ func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step,
 func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st fetchStore, step config.Step, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
 	// The venue retry wraps the attempts: loop, as a task's does — see
 	// runPlacedStage.
+	var facts []events.Fact
+
 	err := runPlacedStage(ctx, step, func(ctx context.Context) error {
 		return retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
 			notef(ctx, "get: %s (version: %s, attempt %d/%d)", artifact, versionText(version), attempt, total)
 			slog.InfoContext(ctx, "job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
-			err := fetchGetStep(attemptCtx, cfg, st, artifact, resource, resourceType, version, step.Params, bw)
+			said, err := fetchGetStep(attemptCtx, cfg, st, artifact, resource, resourceType, version, step.Params, bw)
+			facts = said
 
 			// An eviction ends the attempts loop rather than spending it —
 			// the machine is gone, and the venue retry is what re-places.
@@ -81,7 +84,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st fetchStore
 	}
 
 	// Before the get's hooks run, so on_success can read what it fetched.
-	recordFetched(ctx, artifact, resource.Source, version)
+	recordFetched(ctx, artifact, resource.Source, version, facts)
 
 	return nil
 }
@@ -92,8 +95,8 @@ type fetchStore interface {
 	store.Versions
 }
 
-// fetchGetStep fetches one version and says its facts: what the in: answered, or — when the resource cache reused an earlier fetch — what that fetch answered.
-func fetchGetStep(ctx context.Context, cfg *config.Config, st fetchStore, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) error {
+// fetchGetStep fetches one version and says, and returns, its facts: what the in: answered, or — when the resource cache reused an earlier fetch — what that fetch answered.
+func fetchGetStep(ctx context.Context, cfg *config.Config, st fetchStore, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) ([]events.Fact, error) {
 	notef(ctx, "get: %s (version: %s)", artifact, versionText(version))
 
 	var (
@@ -133,7 +136,7 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, st fetchStore, artifa
 
 	err := resourceDir(ctx, cfg, artifact, resourceType, resource.HashedEnv(), resource.Source, version, params, bw, fetch)
 	if err != nil {
-		return fmt.Errorf("could not fetch resource %q: %w", resource.Name, classifyRunError(ctx, err))
+		return nil, fmt.Errorf("could not fetch resource %q: %w", resource.Name, classifyRunError(ctx, err))
 	}
 
 	if fetched {
@@ -144,7 +147,7 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, st fetchStore, artifa
 
 	sayFacts(ctx, facts, false)
 
-	return nil
+	return facts, nil
 }
 
 // resourceDir materializes artifact's directory and populates it with the

@@ -40,7 +40,7 @@ func ParseGitHubPRParams(raw map[string]any) (GitHubPRParams, error) {
 	switch {
 	case params.Head == "":
 		return params, errors.New("params.head is required: the branch, already pushed to source.repo, the pull request is from")
-	case strings.Contains(params.Head, ":"):
+	case strings.Contains(withoutLocalRefs(params.Head), ":"):
 		return params, errors.New("params.head: a fork's owner:branch is not supported; name a branch pushed to source.repo")
 	case params.Draft && params.Ready:
 		return params, errors.New("params.draft and params.ready contradict: one opens the pull request as a draft, the other takes a draft out of draft")

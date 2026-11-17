@@ -1791,11 +1791,20 @@
         },
         "load_var": {
           "type": "string",
-          "description": "Capture the contents of file: into a pipeline var later steps reference as ((name))."
+          "description": "Capture the contents of file: into a value later steps reference as ((.:name)), or ((.:name.field)) for a json or yaml file."
         },
         "file": {
           "type": "string",
           "description": "load_var steps only: the workspace-relative file to read the value from."
+        },
+        "format": {
+          "type": "string",
+          "enum": ["json", "yaml", "yml", "trim", "raw"],
+          "description": "load_var steps only: how to read file:. Unset, a .json, .yml or .yaml file is read as structured data and anything else is trimmed of surrounding whitespace."
+        },
+        "reveal": {
+          "type": "boolean",
+          "description": "load_var steps only: show the captured value in step output. By default it is masked like a secret."
         },
         "passed": {
           "type": "array",

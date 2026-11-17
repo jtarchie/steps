@@ -18,7 +18,7 @@ Read the page for what you're doing. Nothing here needs to be read in order. New
 | [attempts-timeout.md](attempts-timeout.md) | `attempts:` and `timeout:`, and how they interact | short |
 | [workspace.md](workspace.md) | `inputs:`/`outputs:`, per-step isolation (always on), read-modify-write artifacts, the resource and step caches (`volatile:`), task caches (`caches:`), `--resume` | short |
 | [infra.md](infra.md) | Containers (`image:`, `network:`, `user:`, `env:`, limits), remote workers (`tags:`), the artifact store, build metadata, and job scheduling: `trigger:`, `passed:`, `serial:`, `max_in_flight:`, `interruptible:`, the circuit breaker, `run_history:` | long |
-| [templating.md](templating.md) | `{{ }}` in resource commands and custom tools, `shellquote`, `((var))`, `load_var:` | short |
+| [templating.md](templating.md) | `{{ }}` in resource commands and custom tools, `shellquote`, `((var))`, `load_var:` and `((.:name))` | short |
 | [mcp.md](mcp.md) | MCP servers as tool sources and as resource-type backends | medium |
 | [complete.md](complete.md) | A full pipeline putting the pieces together | short |
 

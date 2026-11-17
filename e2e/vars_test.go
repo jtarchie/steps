@@ -114,7 +114,7 @@ jobs:
     inputs: [meta]
   - task: announce
     inputs: []
-    run: echo "shipping ((tag))" >> %s
+    run: echo "shipping ((.:tag))" >> %s
 `, log))
 
 	err := stepsRun(t, []string{"run", path, "--job", "build"})
@@ -150,7 +150,7 @@ jobs:
     on_success:
       task: announce
       inputs: []
-      run: echo "shipping ((tag))" >> %s
+      run: echo "shipping ((.:tag))" >> %s
 `, log))
 
 	err := stepsRun(t, []string{"run", path, "--job", "build"})
@@ -190,7 +190,7 @@ jobs:
       inputs: [meta]
       file: meta/v
     - task: announce
-      run: echo "shipping ((tag))" >> %s
+      run: echo "shipping ((.:tag))" >> %s
     inputs: [meta]
     when: test -s meta/v
 `, tc.write, log))
@@ -301,7 +301,7 @@ jobs:
       file: meta/version.txt
       inputs: [meta]
     - task: inside
-      run: echo "inside ((tag))" >> %[1]s
+      run: echo "inside ((.:tag))" >> %[1]s
   - in_parallel:
       steps:
       - load_var: color
@@ -310,7 +310,7 @@ jobs:
       - task: sibling
         run: "true"
   - task: after
-    run: echo "after ((tag)) ((color))" >> %[1]s
+    run: echo "after ((.:tag)) ((.:color))" >> %[1]s
 `, log))
 
 	err := stepsRun(t, []string{"run", path, "--job", "build"})
@@ -343,7 +343,7 @@ jobs:
         file: meta/version.txt
         inputs: [meta]
       - task: racer
-        run: echo ((tag))
+        run: echo ((.:tag))
 `)
 
 	err := stepsRun(t, []string{"validate", path})
@@ -351,7 +351,7 @@ jobs:
 		t.Fatal("a branch using a sibling branch's load_var validated")
 	}
 
-	if !strings.Contains(err.Error(), "((tag))") || !strings.Contains(err.Error(), "in_parallel branch 1") {
+	if !strings.Contains(err.Error(), "((.:tag))") || !strings.Contains(err.Error(), "in_parallel branch 1") {
 		t.Errorf("error does not name the var and the branch: %v", err)
 	}
 }
@@ -446,11 +446,11 @@ jobs:
     file: meta/up
     inputs: [meta]
   - load_var: stolen
-    file: meta/((up))
+    file: meta/((.:up))
     inputs: [meta]
   - task: leak
     inputs: []
-    run: echo "((stolen))" >> %s
+    run: echo "((.:stolen))" >> %s
 `, climb, log))
 
 	err := stepsRun(t, []string{"run", path, "--job", "build"})
@@ -520,7 +520,7 @@ jobs:
     inputs: [meta]
   - task: leak
     inputs: []
-    run: echo "((stolen))" >> %s
+    run: echo "((.:stolen))" >> %s
 `, secret, log))
 
 	err := stepsRun(t, []string{"run", path, "--job", "build"})

@@ -135,7 +135,7 @@ jobs:
     inputs: [meta]
     file: meta/version.txt
   - task: announce
-    run: echo "releasing ((tag)) ok" > `+filepath.Join(dir, "announced.txt")+`
+    run: echo "releasing ((.:tag)) ok" > `+filepath.Join(dir, "announced.txt")+`
 `)
 
 	mustRun(t, append([]string{path}, workers...)...)

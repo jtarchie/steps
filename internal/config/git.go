@@ -171,7 +171,8 @@ func checkGitPut(step *Step, resource *Resource) error {
 	switch {
 	case branch == "":
 		return errors.New("params.branch is required when the resource has no source.branch: the branch to push to")
-	case !isPlainBranchName(branch) || strings.HasPrefix(branch, "refs/"):
+	// A ((.:name)) is filled in at run time; the text around it is still checked, and its ':' is not the author's.
+	case !isPlainBranchName(withoutLocalRefs(branch)) || strings.HasPrefix(branch, "refs/"):
 		return fmt.Errorf("branch %q is not a plain branch name", branch)
 	}
 

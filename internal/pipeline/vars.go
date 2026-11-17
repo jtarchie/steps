@@ -1,35 +1,53 @@
 package pipeline
 
-// The run-time half of pipeline vars: capturing a load_var: value and
-// substituting it into the steps that follow.
+// The run-time half of ((.:name)): capturing a load_var: value or a get's
+// facts, and substituting them into the steps that follow.
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// runVars holds the values load_var: steps captured during one job run.
+// runVars holds what one job run captured: load_var: values and gets' facts.
+// An across: cell gets a child scope, which reads its parent's values and
+// keeps its own captures to itself — Concourse's scope for a cell.
 type runVars struct {
-	mu sync.Mutex
-	by map[string]string
+	mu     sync.Mutex
+	parent *runVars
+	by     map[string]capture
+}
+
+// capture is one ((.:name))'s value; facts marks a get's, which nothing
+// before the run can know, so a step reading one is never reused.
+type capture struct {
+	value any
+	facts bool
 }
 
 type runVarsKey struct{}
 
 func withRunVars(ctx context.Context) context.Context {
-	return context.WithValue(ctx, runVarsKey{}, &runVars{by: map[string]string{}})
+	return context.WithValue(ctx, runVarsKey{}, &runVars{by: map[string]capture{}})
+}
+
+// withCellVars gives an across: cell its own scope under the run's.
+func withCellVars(ctx context.Context) context.Context {
+	return context.WithValue(ctx, runVarsKey{}, &runVars{parent: runVarsFrom(ctx), by: map[string]capture{}})
 }
 
 func runVarsFrom(ctx context.Context) *runVars {
@@ -38,47 +56,97 @@ func runVarsFrom(ctx context.Context) *runVars {
 	return vars
 }
 
-func (v *runVars) set(name, value string) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	v.by[name] = value
-}
-
-func (v *runVars) snapshot() map[string]string {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	out := make(map[string]string, len(v.by))
-	for name, value := range v.by {
-		out[name] = value
+func (v *runVars) set(name string, c capture) {
+	if v == nil {
+		return
 	}
 
-	return out
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	v.by[name] = c
 }
 
-// renderStepVars substitutes any ((name)) a step still carries from the values
-// load_var: steps have captured so far.
+func (v *runVars) lookup(name string) (capture, bool) {
+	for scope := v; scope != nil; scope = scope.parent {
+		scope.mu.Lock()
+		c, ok := scope.by[name]
+		scope.mu.Unlock()
+
+		if ok {
+			return c, true
+		}
+	}
+
+	return capture{}, false
+}
+
+// setFacts makes a get's facts readable as ((.:get.name)); a name said twice keeps its last value.
+func setFacts(ctx context.Context, get string, facts []events.Fact) {
+	values := make(map[string]any, len(facts))
+	for _, fact := range facts {
+		values[fact.Name] = fact.Value
+	}
+
+	runVarsFrom(ctx).set(get, capture{value: values, facts: true})
+}
+
+type reusableKey struct{}
+
+// withoutReuse marks a step whose result no cache may stand in for.
+func withoutReuse(ctx context.Context) context.Context {
+	return context.WithValue(ctx, reusableKey{}, false)
+}
+
+// reusable reports whether an earlier run's result may stand in for this
+// step's: not for a step reading a get's facts.
+func reusable(ctx context.Context) bool {
+	reuse, set := ctx.Value(reusableKey{}).(bool)
+
+	return !set || reuse
+}
+
+// renderStepVars substitutes every ((.:name)) a step's own fields carry from
+// what the run has captured so far, and reports whether one was a get's facts.
 //
 // Applied BEFORE the step is hashed, deliberately: a captured value changes
 // what the step actually runs, so two runs that captured different values must
 // not share a cache entry. The alternative — hashing the unsubstituted text —
 // would let a step that ran against v1.2.3 satisfy a run that meant v2.0.0.
-func renderStepVars(ctx context.Context, step config.Step) config.Step {
-	vars := runVarsFrom(ctx)
-	if vars == nil {
-		return step
+func renderStepVars(ctx context.Context, step config.Step) (config.Step, bool, error) {
+	if len(step.LocalRefs()) == 0 {
+		return step, false, nil
 	}
 
-	return step.RenderVars(vars.snapshot())
+	vars := runVarsFrom(ctx)
+	readsFacts := false
+
+	rendered, err := step.RenderLocalVars(func(ref config.LocalRef) (string, error) {
+		c, ok := vars.lookup(ref.Root)
+		if !ok {
+			return "", fmt.Errorf("%s has no value in this run", ref)
+		}
+
+		readsFacts = readsFacts || c.facts
+
+		if c.facts && len(ref.Fields) == 1 {
+			if _, said := c.value.(map[string]any)[ref.Fields[0]]; !said {
+				return "", fmt.Errorf("%s: get %q reported no fact %q", ref, ref.Root, ref.Fields[0])
+			}
+		}
+
+		return config.LocalValue(c.value, ref)
+	})
+	if err != nil {
+		return step, false, fmt.Errorf("%s: %w", executedStepName(step), err)
+	}
+
+	return rendered, readsFacts, nil
 }
 
-// runLoadVarStep captures a file's contents into a pipeline var.
-//
-// The value is trimmed of surrounding whitespace, because the overwhelmingly
-// common way to produce one is `git describe > version.txt`, which leaves a
-// trailing newline that would otherwise be substituted into the middle of a
-// command.
+// runLoadVarStep captures a file's contents, read in the step's format, as
+// ((.:name)), and hides each string of it in what the run prints unless the
+// step says reveal: true.
 func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
 	space, err := r.bw.TaskSpace(ctx, step.LoadVar, step.InputNames(), nil, nil, nil)
 	if err != nil {
@@ -92,15 +160,35 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 		return stepResult{}, fmt.Errorf("step %d (load_var %q) file %q: %w", i, step.LoadVar, step.VarFile, err)
 	}
 
-	value := strings.TrimSpace(string(body))
+	format := step.LoadVarFormat()
 
-	if vars := runVarsFrom(ctx); vars != nil {
-		vars.set(step.LoadVar, value)
+	value, err := config.ParseLoadVar(format, body)
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %d (load_var %q) file %q: %w", i, step.LoadVar, step.VarFile, err)
 	}
 
-	slog.InfoContext(ctx, "job.load_var", "job", r.jobName, "var", step.LoadVar, "bytes", len(value))
+	content := map[string]any{"load_var": step.LoadVar, "file": step.VarFile, "format": format}
 
-	content := map[string]any{"load_var": step.LoadVar, "file": step.VarFile, "value": value}
+	// Hidden from what the run prints, and so from the node the store keeps: its digest still tells two values apart.
+	if step.Reveal {
+		content["value"] = value
+	} else {
+		for _, text := range config.LocalStrings(value) {
+			// A short value still masks, and masks unrelated output too; said so a mangled log has an explanation.
+			if len(text) < shortSecret {
+				slog.WarnContext(ctx, "load_var.short", "var", step.LoadVar, "bytes", len(text), "note", "masking it may also mask unrelated output; reveal: true shows a value that is not secret")
+			}
+
+			redact.SecretsFrom(ctx).Add(text)
+		}
+
+		digest := sha256.Sum256(body)
+		content["sha256"] = hex.EncodeToString(digest[:])
+	}
+
+	runVarsFrom(ctx).set(step.LoadVar, capture{value: value})
+
+	slog.InfoContext(ctx, "job.load_var", "job", r.jobName, "var", step.LoadVar, "format", format, "bytes", len(body))
 
 	hash, err := merkle.HashNode(merkle.NodeKindLoadVar, content, parentHash)
 	if err != nil {

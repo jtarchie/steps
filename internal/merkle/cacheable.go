@@ -130,7 +130,8 @@ func taskCellProducesOutputs(cfg *config.Config, cell config.Step) bool {
 //   - put: and agent: are side effects and non-determinism; a try: tolerates
 //     a failure, which is not a success to replay.
 //   - when:, to: and context: from: are outcomes only the run knows.
-//   - load_var:, approval: and across: produce what they mean at run time.
+//   - load_var:, approval: and across: produce what they mean at run time, and
+//     a step reading ((.:name)) runs what they produced.
 //   - A task's fix: — including one inherited from its tasks: entry — makes
 //     its success depend on what a model did.
 //   - A block is as cacheable as its branches: its hash folds in every
@@ -214,6 +215,11 @@ func runTimeReason(step config.Step) string {
 
 	if len(step.Across) > 0 {
 		return "across block"
+	}
+
+	// The planner hashes the reference, the run the value: a get's facts are only known once the run is under way.
+	if refs := step.LocalRefs(); len(refs) > 0 {
+		return "reads " + refs[0].String()
 	}
 
 	return ""

@@ -1,18 +1,33 @@
 package config
 
-// ((var)) interpolation and the load_var: step.
+// ((var)) interpolation, ((.:name)) references to what a run captured, and the
+// load_var: step.
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // varPattern matches a ((name)) reference. Concourse's spelling, kept because
 // a pipeline moving between the two should not have to be rewritten.
 var varPattern = regexp.MustCompile(`\(\(([a-zA-Z0-9_.\-]+)\)\)`) //nolint:gochecknoglobals // compiled once, read-only
+
+// localVarPattern matches a ((.:name)) or ((.:name.field...)) reference:
+// Concourse's spelling for a build-local var, which here is a load_var:'s
+// value or a get's facts. varPattern never matches one, since ':' is not in
+// its alphabet, so --var substitution leaves these for the run.
+var localVarPattern = regexp.MustCompile(`\(\(\.:([a-zA-Z0-9_\-]+(?:\.[a-zA-Z0-9_\-]+)*)\)\)`) //nolint:gochecknoglobals // compiled once, read-only
+
+const localVarOpen = "((.:"
 
 // InterpolateVars substitutes ((name)) throughout a pipeline's YAML source,
 // before it is parsed.
@@ -23,9 +38,9 @@ var varPattern = regexp.MustCompile(`\(\(([a-zA-Z0-9_.\-]+)\)\)`) //nolint:goche
 // contain one, which is the same list that goes stale every time a field is
 // added.
 //
-// Unknown references are LEFT IN PLACE rather than blanked. They are either a
-// load_var: value that does not exist yet or a mistake, and blanking them
-// would turn both into a silently empty string in a command.
+// Unknown references are LEFT IN PLACE rather than blanked: blanking would
+// turn a mistake into a silently empty string in a command, where leaving it
+// lets validateVars name it.
 func InterpolateVars(source []byte, vars map[string]string) []byte {
 	if len(vars) == 0 {
 		return source
@@ -62,8 +77,8 @@ func UnresolvedVars(value string) []string {
 	return names
 }
 
-// RenderVars substitutes ((name)) in a single value from a run-time var map,
-// leaving unknown references in place.
+// RenderVars substitutes ((name)) in a single value from a var map, leaving
+// unknown references in place.
 func RenderVars(value string, vars map[string]string) string {
 	if value == "" || !strings.Contains(value, "((") {
 		return value
@@ -72,15 +87,103 @@ func RenderVars(value string, vars map[string]string) string {
 	return string(InterpolateVars([]byte(value), vars))
 }
 
-// validateVars rejects a ((name)) that nothing will ever supply, and a
-// malformed load_var: step.
+// LocalRef is one ((.:root.field...)) reference.
+type LocalRef struct {
+	Root   string
+	Fields []string
+}
+
+func (r LocalRef) String() string {
+	return localVarOpen + strings.Join(append([]string{r.Root}, r.Fields...), ".") + "))"
+}
+
+func parseLocalRef(path string) LocalRef {
+	parts := strings.Split(path, ".")
+
+	return LocalRef{Root: parts[0], Fields: parts[1:]}
+}
+
+// LocalRefs lists every well-formed ((.:name)) reference in a value, in order.
+func LocalRefs(value string) []LocalRef {
+	if !strings.Contains(value, localVarOpen) {
+		return nil
+	}
+
+	matches := localVarPattern.FindAllStringSubmatch(value, -1)
+	refs := make([]LocalRef, 0, len(matches))
+
+	for _, match := range matches {
+		refs = append(refs, parseLocalRef(match[1]))
+	}
+
+	return refs
+}
+
+// malformedLocalRef is the first ((.: that does not open a well-formed
+// reference, or "". Without it a typo reaches a shell as literal text.
+func malformedLocalRef(value string) string {
+	for rest := value; ; {
+		at := strings.Index(rest, localVarOpen)
+		if at < 0 {
+			return ""
+		}
+
+		rest = rest[at:]
+
+		loc := localVarPattern.FindStringIndex(rest)
+		if loc == nil || loc[0] != 0 {
+			end, _, _ := strings.Cut(rest, "))")
+
+			return end + "))"
+		}
+
+		rest = rest[loc[1]:]
+	}
+}
+
+// withoutLocalRefs stands a plain word in for each ((.:name)), for a load-time
+// check of the text around a value only the run will know: the reference's own
+// ':' is not the author's.
+func withoutLocalRefs(text string) string {
+	return localVarPattern.ReplaceAllString(text, "v")
+}
+
+// RenderLocalVars substitutes every ((.:name)) in text with what lookup
+// answers. A rendered value is never scanned again, so a captured value that
+// itself spells a reference stays text.
+func RenderLocalVars(text string, lookup func(LocalRef) (string, error)) (string, error) {
+	if !strings.Contains(text, localVarOpen) {
+		return text, nil
+	}
+
+	var firstErr error
+
+	out := localVarPattern.ReplaceAllStringFunc(text, func(match string) string {
+		value, err := lookup(parseLocalRef(localVarPattern.FindStringSubmatch(match)[1]))
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+
+			return match
+		}
+
+		return value
+	})
+
+	return out, firstErr
+}
+
+// validateVars rejects a ((name)) that nothing will ever supply, a ((.:name))
+// no earlier step captured, and a malformed load_var: step.
 //
 // Catching it at load is the whole point: an unresolved var otherwise reaches
 // a shell command as the literal text `((repo_uri))`, which fails somewhere
 // far from the mistake.
 //
-// A var counts as produced only where the run GUARANTEES it was captured,
-// because anywhere else the literal text is exactly what arrives:
+// A ((.:name)) is a load_var:'s value or a get's facts, and counts as produced
+// only where the run GUARANTEES it was captured, because anywhere else the
+// literal text is exactly what arrives:
 //   - sequential steps (the plan, a do: block) see what ran before them;
 //   - concurrent branches see only what preceded the block, since whether one
 //     branch sees another's capture is a race; after the block, an
@@ -94,6 +197,8 @@ func RenderVars(value string, vars map[string]string) string {
 //     Its own on_success still sees them, since a skipped step fires no hooks.
 //     Guard a do: around the load_var: and its consumers instead, so the
 //     consumers are skipped with it;
+//   - an across: step's captures stay in the cell that made them, Concourse's
+//     scope for a cell;
 //   - hooks see what preceded the step, and on_success also what the step
 //     captured; nothing a hook captures escapes it.
 func (c *Config) validateVars() error {
@@ -103,16 +208,21 @@ func (c *Config) validateVars() error {
 			return err
 		}
 
+		flow, err := newVarFlow(job)
+		if err != nil {
+			return err
+		}
+
 		produced := varSet{}
 
 		for i := range job.Plan {
-			produced, err = checkVarFlow(job.stepLabel(i), &job.Plan[i], produced)
+			produced, err = flow.check(job.stepLabel(i), &job.Plan[i], produced)
 			if err != nil {
 				return err
 			}
 		}
 
-		err = checkHookFlow(job.Hooks, varSet{}, produced, func(name string) string {
+		err = flow.hooks(job.Hooks, varSet{}, produced, func(name string) string {
 			return fmt.Sprintf("%s %s hook", job.label(), name)
 		})
 		if err != nil {
@@ -146,65 +256,140 @@ func (s varSet) with(names ...string) varSet {
 	return out
 }
 
-// checkVarFlow checks one step and everything nested in it against the vars
+// varFlow is what a job's checks need to word an error: the names a
+// load_var:, a get or a put anywhere in the job goes by.
+type varFlow struct {
+	loadVars, gets, puts varSet
+}
+
+// newVarFlow names a job's captures and refuses two of one name in one scope:
+// the job's plan is one scope, and each across: step's body another, as each
+// cell's values are its own.
+func newVarFlow(job Job) (*varFlow, error) {
+	flow := &varFlow{loadVars: varSet{}, gets: varSet{}, puts: varSet{}}
+
+	scopes := func(_ string, step *Step, scope map[string]string) (map[string]string, map[string]string) {
+		if len(step.Across) > 0 {
+			return map[string]string{}, scope
+		}
+
+		return scope, scope
+	}
+
+	err := walkJob(job, map[string]string{}, scopes, flow.name)
+
+	return flow, err
+}
+
+// name files what a step names in its scope, refusing a capture whose name
+// the scope already has.
+func (f *varFlow) name(label string, step *Step, scope map[string]string) error {
+	switch kind, _ := step.Kind(); kind {
+	case StepKindLoadVar:
+		f.loadVars[step.LoadVar] = true
+
+		if earlier, taken := scope[step.LoadVar]; taken {
+			return fmt.Errorf("%s: load_var %q is already the name of %s in this plan; a ((.:%s)) names one value, so give each capture its own name",
+				label, step.LoadVar, earlier, step.LoadVar)
+		}
+
+		scope[step.LoadVar] = "an earlier load_var:"
+	case StepKindGet:
+		f.gets[step.Get] = true
+
+		if earlier, taken := scope[step.Get]; taken && earlier != "a get" {
+			return fmt.Errorf("%s: get %q is already the name of %s in this plan; ((.:%s)) would name both, so rename one", label, step.Get, earlier, step.Get)
+		}
+
+		scope[step.Get] = "a get"
+	case StepKindPut:
+		f.puts[step.Put] = true
+	case StepKindTask, StepKindAgent, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindApproval, StepKindDo:
+		// Captures nothing and names nothing a ((.:name)) could mean.
+	}
+
+	return nil
+}
+
+// check checks one step and everything nested in it against the captures
 // available when it starts, and returns those available once it has
 // succeeded. Labels follow walkStepTree's, so an error names the same place
 // every other validator would.
-func checkVarFlow(label string, step *Step, before varSet) (varSet, error) {
-	err := checkStepVars(label, step, before)
+func (f *varFlow) check(label string, step *Step, before varSet) (varSet, error) {
+	err := f.checkStep(label, step, before)
 	if err != nil {
 		return nil, err
 	}
 
-	after := before
-	if step.LoadVar != "" {
-		after = after.with(step.LoadVar)
-	}
-
-	if step.Try != nil {
-		_, err = checkVarFlow(label+" (try)", step.Try, before)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	after, err = checkBranchFlow(label, step, before, after)
+	after, err := f.nested(label, step, before, before.with(ownCaptures(step)...))
 	if err != nil {
 		return nil, err
-	}
-
-	for i := range step.Do {
-		after, err = checkVarFlow(fmt.Sprintf("%s (do step %d)", label, i), &step.Do[i], after)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	// Unguarded captures: a guard-skipped step fires no hooks, so a running on_success ran after them.
-	err = checkHookFlow(step.Hooks, before, after, func(name string) string {
+	err = f.hooks(step.Hooks, before, after, func(name string) string {
 		return fmt.Sprintf("%s (%s hook)", label, name)
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// A false when: skips the step green, so its captures are not guaranteed past it (#262).
-	if step.Guarded() {
+	// A false when: skips the step green, so its captures are not guaranteed past it (#262); a cell's are its own.
+	if step.Guarded() || len(step.Across) > 0 {
 		return before, nil
 	}
 
 	return after, nil
 }
 
-// checkBranchFlow checks a concurrent block's branches, each from what preceded
-// the block, and adds what the block yields once it has succeeded to after.
-func checkBranchFlow(label string, step *Step, before, after varSet) (varSet, error) {
+// ownCaptures is the ((.:name)) roots a step itself produces.
+func ownCaptures(step *Step) []string {
+	switch kind, _ := step.Kind(); kind {
+	case StepKindLoadVar:
+		return []string{step.LoadVar}
+	case StepKindGet:
+		return []string{step.Get}
+	case StepKindTask, StepKindPut, StepKindAgent, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindApproval, StepKindDo:
+		// A put's facts are not a later step's to read, as in Concourse.
+	}
+
+	return nil
+}
+
+// nested checks what a step holds — a try: body, a block's branches, a do:'s
+// steps — and returns what is available once they have succeeded.
+func (f *varFlow) nested(label string, step *Step, before, after varSet) (varSet, error) {
+	if step.Try != nil {
+		_, err := f.check(label+" (try)", step.Try, before)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	after, err := f.branches(label, step, before, after)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range step.Do {
+		after, err = f.check(fmt.Sprintf("%s (do step %d)", label, i), &step.Do[i], after)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return after, nil
+}
+
+// branches checks a concurrent block's branches, each from what preceded the
+// block, and adds what the block yields once it has succeeded to after.
+func (f *varFlow) branches(label string, step *Step, before, after varSet) (varSet, error) {
 	kind, branches := branchesOf(step)
 
 	var joined varSet
 
 	for i, branch := range branches {
-		out, err := checkVarFlow(fmt.Sprintf("%s (%s branch %d)", label, kind, i), branch, before)
+		out, err := f.check(fmt.Sprintf("%s (%s branch %d)", label, kind, i), branch, before)
 		if err != nil {
 			return nil, err
 		}
@@ -215,16 +400,16 @@ func checkBranchFlow(label string, step *Step, before, after varSet) (varSet, er
 	return after.union(joined), nil
 }
 
-// checkHookFlow checks hooks against what preceded their step, giving
-// on_success alone what the step captured.
-func checkHookFlow(hooks Hooks, before, after varSet, label func(name string) string) error {
+// hooks checks hooks against what preceded their step, giving on_success
+// alone what the step captured.
+func (f *varFlow) hooks(hooks Hooks, before, after varSet, label func(name string) string) error {
 	return hooks.Each(func(name string, hook *Step) error {
 		seen := before
 		if name == "on_success" {
 			seen = after
 		}
 
-		_, err := checkVarFlow(label(name), hook, seen)
+		_, err := f.check(label(name), hook, seen)
 
 		return err
 	})
@@ -253,24 +438,64 @@ func joinBranch(kind StepKind, joined, branch varSet, first bool) varSet {
 	return common
 }
 
-// validateLoadVarStep checks a load_var: step names a var and a file.
+// The formats a load_var: reads its file in. Concourse also spells yaml as
+// yml, which LoadVarFormat folds into LoadVarYAML.
+const (
+	LoadVarJSON = "json"
+	LoadVarYAML = "yaml"
+	LoadVarTrim = "trim"
+	LoadVarRaw  = "raw"
+)
+
+func loadVarFormat(spelling string) (string, bool) {
+	switch spelling {
+	case "json":
+		return LoadVarJSON, true
+	case "yaml", "yml":
+		return LoadVarYAML, true
+	case "trim":
+		return LoadVarTrim, true
+	case "raw":
+		return LoadVarRaw, true
+	}
+
+	return "", false
+}
+
+// LoadVarFormat is how a load_var: step reads its file: format: when set,
+// otherwise the file's extension when it names a format (Concourse's
+// fileFormat, so .trim and .raw count too), otherwise trim.
+func (s Step) LoadVarFormat() string {
+	if format, ok := loadVarFormat(s.Format); ok {
+		return format
+	}
+
+	if format, ok := loadVarFormat(strings.TrimPrefix(path.Ext(s.VarFile), ".")); ok {
+		return format
+	}
+
+	return LoadVarTrim
+}
+
+// validateLoadVarStep checks a load_var: step names a var and a file, and that
+// its format:, if any, is one Concourse reads.
 func validateLoadVarStep(label string, step *Step) error {
 	if step.LoadVar == "" {
-		if step.VarFile != "" {
-			return fmt.Errorf("%s: file: without load_var: has no meaning here", label)
-		}
-
-		return nil
+		return refuseLoadVarFields(label, step)
 	}
 
 	if step.VarFile == "" {
 		return fmt.Errorf("%s: load_var %q needs a file: to read the value from", label, step.LoadVar)
 	}
 
+	if _, ok := loadVarFormat(step.Format); step.Format != "" && !ok {
+		return fmt.Errorf("%s: load_var %q format %q is not one of json, yaml, yml, trim or raw", label, step.LoadVar, step.Format)
+	}
+
 	// The read happens on the orchestrator host, so a path leaving the step's
 	// workspace names a file the pipeline does not own. One still carrying a
-	// ((var)) is checked by the run once rendered.
-	if len(UnresolvedVars(step.VarFile)) > 0 {
+	// var is checked by the run once rendered.
+	if len(UnresolvedVars(step.VarFile)) > 0 || strings.Contains(step.VarFile, localVarOpen) {
 		return nil
 	}
 
@@ -281,29 +506,78 @@ func validateLoadVarStep(label string, step *Step) error {
 	return nil
 }
 
-// checkStepVars rejects references a step makes to vars nothing supplies.
+// refuseLoadVarFields refuses a load_var: field on a step that is not one.
+func refuseLoadVarFields(label string, step *Step) error {
+	switch {
+	case step.VarFile != "":
+		return fmt.Errorf("%s: file: without load_var: has no meaning here", label)
+	case step.Format != "":
+		return fmt.Errorf("%s: format: without load_var: has no meaning here", label)
+	case step.Reveal:
+		return fmt.Errorf("%s: reveal: without load_var: has no meaning here", label)
+	}
+
+	return nil
+}
+
+// checkStep rejects references a step makes to vars nothing supplies.
 //
-// The field list must match what Step.RenderVars actually substitutes, or a
-// reference passes validation and then reaches the outside world verbatim: a
-// `((version))` in a put's params: was neither rejected here nor rendered
-// there, so the resource's out: published a release literally named
+// The field list must match what Step.RenderLocalVars actually substitutes,
+// or a reference passes validation and then reaches the outside world
+// verbatim: a `((version))` in a put's params: was neither rejected here nor
+// rendered there, so the resource's out: published a release literally named
 // "((version))".
-func checkStepVars(label string, step *Step, produced varSet) error {
+func (f *varFlow) checkStep(label string, step *Step, produced varSet) error {
 	for _, field := range varFields(step) {
-		for _, name := range UnresolvedVars(*field.value) {
-			if !produced[name] {
-				return fmt.Errorf("%s: %s references ((%s)), which is neither passed with --var/--vars-file nor produced by an earlier load_var: step",
-					label, field.name, name)
-			}
+		err := f.checkText(label, field.name, *field.value, produced)
+		if err != nil {
+			return err
 		}
 	}
 
 	// params: is a free-form mapping rather than a field, so it is walked
 	// rather than listed.
-	for _, name := range unresolvedInValue(step.Params) {
-		if !produced[name] {
-			return fmt.Errorf("%s: params references ((%s)), which is neither passed with --var/--vars-file nor produced by an earlier load_var: step",
-				label, name)
+	for _, text := range stringsInValue(step.Params) {
+		err := f.checkText(label, "params", text, produced)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkText checks one value's ((name)) and ((.:name)) references.
+func (f *varFlow) checkText(label, field, text string, produced varSet) error {
+	if names := UnresolvedVars(text); len(names) > 0 {
+		name := names[0]
+		root, _, _ := strings.Cut(name, ".")
+
+		// A --var may share a get's name, so this says both rather than guessing which was meant.
+		if f.loadVars[root] || f.gets[root] {
+			return fmt.Errorf("%s: %s references ((%s)), which is not passed with --var/--vars-file; a value the run captured is read as ((.:%s)), Concourse's spelling for it", label, field, name, name)
+		}
+
+		return fmt.Errorf("%s: %s references ((%s)), which is not passed with --var/--vars-file", label, field, name)
+	}
+
+	return f.checkLocalRefs(label, field, text, produced)
+}
+
+// checkLocalRefs checks one value's ((.:name)) references against what is produced.
+func (f *varFlow) checkLocalRefs(label, field, text string, produced varSet) error {
+	if bad := malformedLocalRef(text); bad != "" {
+		return fmt.Errorf("%s: %s has %q, which is not a ((.:name)) or ((.:name.field)) reference", label, field, bad)
+	}
+
+	for _, ref := range LocalRefs(text) {
+		switch {
+		case produced[ref.Root]:
+			continue
+		case f.puts[ref.Root] && !f.gets[ref.Root] && !f.loadVars[ref.Root]:
+			return fmt.Errorf("%s: %s references %s, but a put's facts are not available to later steps (as in Concourse, only a get's are)", label, field, ref)
+		default:
+			return fmt.Errorf("%s: %s references %s, which no load_var: or get: earlier in this plan produces", label, field, ref)
 		}
 	}
 
@@ -311,15 +585,15 @@ func checkStepVars(label string, step *Step, produced varSet) error {
 }
 
 // varField is one string field a var may appear in, addressed in place so
-// RenderVars can substitute through it.
+// RenderLocalVars can substitute through it.
 type varField struct {
 	name  string
 	value *string
 }
 
 // varFields lists a step's substitutable string fields, so validation
-// (checkStepVars) and run-time rendering (Step.RenderVars) cannot drift apart.
-// Adding a field here is what makes it both checked and rendered.
+// (checkStep) and run-time rendering (Step.RenderLocalVars) cannot drift
+// apart. Adding a field here is what makes it both checked and rendered.
 func varFields(step *Step) []varField {
 	fields := make([]varField, 0, 4+len(step.Messages))
 	fields = append(fields,
@@ -333,11 +607,34 @@ func varFields(step *Step) []varField {
 		fields = append(fields, varField{fmt.Sprintf("messages[%d]", i), &step.Messages[i]})
 	}
 
+	// A release's approval names the version it would publish.
+	if step.Approval != nil {
+		fields = append(fields, varField{"approval.message", &step.Approval.Message})
+	}
+
 	return fields
 }
 
-// RenderVars returns s with every ((name)) in its var fields and params:
-// substituted from values, unknown references left in place.
+// LocalRefs lists the ((.:name)) references a step's own fields make — not
+// those of the steps nested in it.
+func (s Step) LocalRefs() []LocalRef {
+	fields := varFields(&s)
+	refs := make([]LocalRef, 0, len(fields))
+
+	for _, field := range fields {
+		refs = append(refs, LocalRefs(*field.value)...)
+	}
+
+	for _, text := range stringsInValue(s.Params) {
+		refs = append(refs, LocalRefs(text)...)
+	}
+
+	return refs
+}
+
+// RenderLocalVars returns s with every ((.:name)) in its var fields and
+// params: substituted from lookup, failing on the first reference lookup
+// cannot answer.
 //
 // Slices are cloned before rendering, never written through: s is a copy of
 // the config's step, but a slice field still points at the config's own
@@ -346,71 +643,178 @@ func varFields(step *Step) []varField {
 // The second run would then find no placeholder left, send the first run's
 // values, and — because the substituted text is what gets hashed — hash
 // identically to it: a false cache hit.
-func (s Step) RenderVars(values map[string]string) Step {
-	if len(values) == 0 {
-		return s
-	}
-
+func (s Step) RenderLocalVars(lookup func(LocalRef) (string, error)) (Step, error) {
 	if len(s.Messages) > 0 {
 		s.Messages = slices.Clone(s.Messages)
 	}
 
+	if s.Approval != nil {
+		approval := *s.Approval
+		s.Approval = &approval
+	}
+
 	for _, field := range varFields(&s) {
-		*field.value = RenderVars(*field.value, values)
+		rendered, err := RenderLocalVars(*field.value, lookup)
+		if err != nil {
+			return s, fmt.Errorf("%s: %w", field.name, err)
+		}
+
+		*field.value = rendered
 	}
 
 	// params: is where a captured version most often belongs — it is what a
 	// put hands the resource. The literal text `((version))` used to reach the
 	// out: command and publish a release by that name.
-	if rendered, ok := RenderValue(s.Params, values).(map[string]any); ok {
-		s.Params = rendered
+	rendered, err := renderValue(s.Params, func(text string) (string, error) { return RenderLocalVars(text, lookup) })
+	if err != nil {
+		return s, fmt.Errorf("params: %w", err)
 	}
 
-	return s
+	if params, ok := rendered.(map[string]any); ok {
+		s.Params = params
+	}
+
+	return s, nil
 }
 
-// unresolvedInValue walks a decoded YAML value — a params: mapping, a nested
-// list, a scalar — and returns every ((name)) still in it.
-func unresolvedInValue(value any) []string {
-	var names []string
+// stringsInValue walks a decoded YAML value — a params: mapping, a nested
+// list, a scalar — and returns every string in it.
+func stringsInValue(value any) []string {
+	var texts []string
 
 	switch typed := value.(type) {
 	case string:
-		names = append(names, UnresolvedVars(typed)...)
+		texts = append(texts, typed)
 	case map[string]any:
 		for _, nested := range typed {
-			names = append(names, unresolvedInValue(nested)...)
+			texts = append(texts, stringsInValue(nested)...)
 		}
 	case []any:
 		for _, nested := range typed {
-			names = append(names, unresolvedInValue(nested)...)
+			texts = append(texts, stringsInValue(nested)...)
 		}
 	}
 
-	return names
+	return texts
 }
 
-// RenderValue substitutes ((name)) throughout a decoded YAML value, returning
+// renderValue renders every string throughout a decoded YAML value, returning
 // a copy. Used for params:, which is a free-form mapping rather than a field.
-func RenderValue(value any, vars map[string]string) any {
+func renderValue(value any, render func(string) (string, error)) (any, error) {
 	switch typed := value.(type) {
 	case string:
-		return RenderVars(typed, vars)
+		return render(typed)
 	case map[string]any:
 		out := make(map[string]any, len(typed))
+
 		for key, nested := range typed {
-			out[key] = RenderValue(nested, vars)
+			rendered, err := renderValue(nested, render)
+			if err != nil {
+				return nil, err
+			}
+
+			out[key] = rendered
 		}
 
-		return out
+		return out, nil
 	case []any:
 		out := make([]any, len(typed))
+
 		for i, nested := range typed {
-			out[i] = RenderValue(nested, vars)
+			rendered, err := renderValue(nested, render)
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = rendered
 		}
 
-		return out
+		return out, nil
 	default:
-		return value
+		return value, nil
 	}
+}
+
+// ParseLoadVar reads a load_var: file's bytes in format: json and yaml as
+// structured values whose fields ((.:name.field)) reaches, trim with its
+// surrounding whitespace dropped — `git describe > version.txt` leaves a
+// newline that would otherwise land mid-command — and raw exactly as written.
+func ParseLoadVar(format string, body []byte) (any, error) {
+	switch format {
+	case LoadVarJSON:
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.UseNumber()
+
+		var value any
+
+		err := decoder.Decode(&value)
+		if err != nil {
+			return nil, fmt.Errorf("read as json: %w", err)
+		}
+
+		if decoder.More() {
+			return nil, errors.New("read as json: more than one value")
+		}
+
+		return value, nil
+	case LoadVarYAML:
+		var value any
+
+		err := yaml.Unmarshal(body, &value)
+		if err != nil {
+			return nil, fmt.Errorf("read as yaml: %w", err)
+		}
+
+		return value, nil
+	case LoadVarRaw:
+		return string(body), nil
+	default:
+		return strings.TrimSpace(string(body)), nil
+	}
+}
+
+// LocalValue is the text ref names inside value: its fields followed through
+// mappings, a string as itself and anything else as JSON — a number, true,
+// null, or a whole mapping or list.
+func LocalValue(value any, ref LocalRef) (string, error) {
+	for i, field := range ref.Fields {
+		fields, ok := value.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("%s: %s has no field %q; it is %s", ref, LocalRef{Root: ref.Root, Fields: ref.Fields[:i]}, field, describeLocal(value))
+		}
+
+		value, ok = fields[field]
+		if !ok {
+			return "", fmt.Errorf("%s: %s has no field %q", ref, LocalRef{Root: ref.Root, Fields: ref.Fields[:i]}, field)
+		}
+	}
+
+	if text, ok := value.(string); ok {
+		return text, nil
+	}
+
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", ref, err)
+	}
+
+	return string(encoded), nil
+}
+
+func describeLocal(value any) string {
+	switch value.(type) {
+	case string:
+		return "plain text"
+	case []any:
+		return "a list"
+	default:
+		return "not a mapping"
+	}
+}
+
+// LocalStrings is every string in a captured value: what masking hides of it.
+// A number or a boolean is not hidden, as Concourse's tracker hides only
+// strings — masking every 1 a run prints would hide nothing and garble all.
+func LocalStrings(value any) []string {
+	return stringsInValue(value)
 }

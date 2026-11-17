@@ -240,6 +240,7 @@ jobs:
   - load_var: number
     inputs: [issue]
     file: issue/issue.number
+    reveal: true            # an issue number is not a secret; hidden, every 7 the run prints would be masked
   - get: repo
   - task: prep
     inputs: [repo, issue]
@@ -247,24 +248,24 @@ jobs:
     env: [GIT_CONFIG_GLOBAL]
     run: |
       set -eu
-      printf 'The factory could not finish this issue. Run `%s` has the reason. To try again, delete branch `issue-((number))` if the run pushed it (closing its pull request), then relabel the issue.\n' "$STEPS_RUN_ID" > said/failed.md
+      printf 'The factory could not finish this issue. Run `%s` has the reason. To try again, delete branch `issue-((.:number))` if the run pushed it (closing its pull request), then relabel the issue.\n' "$STEPS_RUN_ID" > said/failed.md
       cd repo
       # Three outcomes, not two: ls-remote exits 2 for "no such branch", and anything else is a failure to ask, which must not read as a free branch.
       set +e
-      git ls-remote --exit-code origin "refs/heads/issue-((number))" >/dev/null 2>&1
+      git ls-remote --exit-code origin "refs/heads/issue-((.:number))" >/dev/null 2>&1
       probe=$?
       set -e
       case "$probe" in
-        0) echo "branch issue-((number)) already exists: this issue was already built. Steer its pull request with a /factory comment instead." >&2; exit 1 ;;
+        0) echo "branch issue-((.:number)) already exists: this issue was already built. Steer its pull request with a /factory comment instead." >&2; exit 1 ;;
         2) : ;;
-        *) echo "could not reach the remote to check for issue-((number)) (git exit $probe)" >&2; exit 1 ;;
+        *) echo "could not reach the remote to check for issue-((.:number)) (git exit $probe)" >&2; exit 1 ;;
       esac
       mkdir -p steps-work
       printf 'steps-work/\n.steps-agent-out/\n' >> .git/info/exclude
       cp ../issue/issue.md steps-work/issue.md
       git rev-parse HEAD > steps-work/base
-      git checkout -q -B "issue-((number))"
-      echo "on issue-((number))"
+      git checkout -q -B "issue-((.:number))"
+      echo "on issue-((.:number))"
   - agent: planner
     inputs: [repo]
     outputs: [repo]
@@ -322,20 +323,20 @@ jobs:
         test "$(git rev-list --count "$(cat steps-work/base)..HEAD")" != 0 || { echo "the implementer changed nothing" >&2; exit 1; }
         echo "nothing new to commit"
       else
-        git commit -q -m "$(cat ../issue/issue.title)" -m "Closes #((number))"
-        echo "committed $(git rev-parse --short HEAD) for #((number))"
+        git commit -q -m "$(cat ../issue/issue.title)" -m "Closes #((.:number))"
+        echo "committed $(git rev-parse --short HEAD) for #((.:number))"
       fi
       cat ../issue/issue.title > ../said/title
-      printf 'Draft: implemented, review in progress.\n\nCloses #%s\n\nBuilt by run `%s`. To change it, comment on this pull request starting with `/factory`.\n' "((number))" "$STEPS_RUN_ID" > ../said/draft.md
+      printf 'Draft: implemented, review in progress.\n\nCloses #%s\n\nBuilt by run `%s`. To change it, comment on this pull request starting with `/factory`.\n' "((.:number))" "$STEPS_RUN_ID" > ../said/draft.md
   - put: branch
     inputs: [repo]
     params:
       repository: repo
-      branch: issue-((number))
+      branch: issue-((.:number))
   - put: pr
     inputs: [said]
     params:
-      head: issue-((number))
+      head: issue-((.:number))
       title_file: said/title
       body_file: said/draft.md
       draft: true
@@ -378,19 +379,19 @@ jobs:
       git config user.name >/dev/null || git config user.name "steps factory"
       git config user.email >/dev/null || git config user.email "factory@steps.invalid"
       git add -A
-      git diff --cached --quiet || git commit -q -m "$(cat ../issue/issue.title): review fixes" -m "Closes #((number))"
-      { cat steps-work/pr-body.md; printf '\nCloses #%s\n\nBuilt by run `%s`. To change it, comment on this pull request starting with `/factory`.\n' "((number))" "$STEPS_RUN_ID"; } > ../said/final.md
+      git diff --cached --quiet || git commit -q -m "$(cat ../issue/issue.title): review fixes" -m "Closes #((.:number))"
+      { cat steps-work/pr-body.md; printf '\nCloses #%s\n\nBuilt by run `%s`. To change it, comment on this pull request starting with `/factory`.\n' "((.:number))" "$STEPS_RUN_ID"; } > ../said/final.md
   - put: reviewed
     resource: branch
     inputs: [repo]
     params:
       repository: repo
-      branch: issue-((number))
+      branch: issue-((.:number))
   - put: ready
     resource: pr
     inputs: [said]
     params:
-      head: issue-((number))
+      head: issue-((.:number))
       body_file: said/final.md
       ready: true
 
@@ -447,9 +448,11 @@ jobs:
   - load_var: head
     inputs: [said]
     file: said/head
+    reveal: true
   - load_var: before
     inputs: [said]
     file: said/before
+    reveal: true
   - agent: implementer
     inputs: [repo]
     outputs: [repo]
@@ -499,8 +502,8 @@ jobs:
     inputs: [repo]
     params:
       repository: repo
-      branch: ((head))
-      force_with_lease: ((before))
+      branch: ((.:head))
+      force_with_lease: ((.:before))
   - put: answered
     resource: note
     inputs: [steer, said]
