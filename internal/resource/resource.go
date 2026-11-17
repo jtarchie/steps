@@ -60,6 +60,11 @@ func CheckVersions(ctx context.Context, c Call) ([]map[string]any, error) {
 		return nil, err
 	}
 
+	ctx, err = WithTypePullLogin(ctx, c.Type)
+	if err != nil {
+		return nil, err
+	}
+
 	// The one place every check path (poll, refresh, a get's own check) reaches, so the limit holds for all of them.
 	limit := c.Resource.CheckLimit()
 	parent := ctx
@@ -304,6 +309,11 @@ func RunIn(ctx context.Context, c Call) error {
 		return err
 	}
 
+	ctx, err = WithTypePullLogin(ctx, c.Type)
+	if err != nil {
+		return err
+	}
+
 	// Masked where it is born: a failed stage's error climbs into the step's and the run's record and the scheduler's log, none of which carries the run's secrets.
 	return redact.SecretsFrom(ctx).Error(backendFor(c.Type).in(ctx, c)) //nolint:wrapcheck // masking keeps the chain (Unwrap); the backend already named the stage
 }
@@ -367,6 +377,11 @@ type PutInputs struct {
 // type with no out: at load time), so this is only ever reached with it set.
 func RunOut(ctx context.Context, c Call) (map[string]any, error) {
 	ctx, err := withResourceSecrets(ctx, c.Resource)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, err = WithTypePullLogin(ctx, c.Type)
 	if err != nil {
 		return nil, err
 	}

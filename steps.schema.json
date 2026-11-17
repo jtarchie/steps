@@ -355,9 +355,18 @@
             "tag": {
               "type": "string",
               "description": "Quote a tag that looks like a number: unquoted, 1.10 is the number 1.1."
+            },
+            "username": {
+              "type": "string",
+              "description": "A private image's registry login, with password_env."
+            },
+            "password_env": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "description": "The NAME of the daemon's environment variable holding the password or token for username."
             }
           },
-          "description": "With type: registry-image, the image: repository and tag (default latest)."
+          "description": "With type: registry-image, the image: repository and tag (default latest), and a login for a private one."
         },
         "defaults": {
           "type": "object",

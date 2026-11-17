@@ -1601,6 +1601,7 @@ resource_types:
   source:
     repository: concourse/git-resource
     tag: "1.18"                       # pin it: latest is pulled once and never refreshed
+    # username: robot                 # a private image's login, with password_env: REGISTRY_TOKEN
   defaults:                           # source: keys every git resource gets; its own keys win
     branch: main
 
@@ -1633,7 +1634,7 @@ What steps does, and where it differs from Concourse:
 - **`in` and `out` see Concourse's build variables**, spelled from steps' own: `BUILD_ID` and `BUILD_NAME` are the run id, `BUILD_JOB_NAME` and `BUILD_PIPELINE_NAME` the job and pipeline, `ATC_EXTERNAL_URL` is `STEPS_URL`, and `BUILD_TEAM_NAME` is always `main`, since steps has no teams. `check` sees none of them, as in Concourse.
 - **A `put` gets only the inputs it lists.** Concourse guesses them from `params:` when none are listed; steps does not guess, so list the ones `out` reads.
 - **Each check starts a fresh container**, so a resource that keeps a clone between checks (git does) clones again every poll.
-- **No `type:` other than `registry-image`**, and the type takes no `image:` or `config:`: the image's scripts are the config. `source:` on a type takes `repository` and `tag` only.
+- **No `type:` other than `registry-image`**, and the type takes no `image:` or `config:`: the image's scripts are the config. `source:` on a type takes `repository`, `tag`, and a login for a private image: `username` with `password_env`, the **name** of a variable in the daemon's environment (a type has no `secrets:` of its own). The image is pulled with that login and no other; steps reads none of docker's own.
 - **`tag` must be a string.** Unquoted, YAML reads `tag: 1.10` as the number 1.1 and would pull the wrong image, so a tag that is not a string is refused at load: write `tag: "1.10"`. Concourse reads the same YAML the same way; steps refuses rather than guess.
 
 ## Shell safety

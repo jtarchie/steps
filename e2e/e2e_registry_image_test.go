@@ -390,6 +390,14 @@ func TestValidateRefusesRegistryImageMistakes(t *testing.T) {
 			pipeline: "resources:\n- name: app\n  type: registry-image\n  source: {repository: 'ghcr.io/o/app:v1'}\n",
 			want:     "a tag goes in source.tag",
 		},
+		"type login half given": {
+			pipeline: "resource_types:\n- name: t\n  type: registry-image\n  source: {repository: ghcr.io/o/t, username: me}\nresources:\n- name: app\n  type: t\n  source: {}\n",
+			want:     "source.username and source.password_env go together",
+		},
+		"type login literal": {
+			pipeline: "resource_types:\n- name: t\n  type: registry-image\n  source: {repository: ghcr.io/o/t, username: me, password_env: 'not a name'}\nresources:\n- name: app\n  type: t\n  source: {}\n",
+			want:     "source.password_env must be the NAME",
+		},
 		"unknown key": {
 			pipeline: "resources:\n- name: app\n  type: registry-image\n  source: {repository: ghcr.io/o/app, password: hunter2}\n",
 			want:     `unknown key "password"`,
@@ -616,4 +624,29 @@ jobs:
 	served.stop(t)
 
 	assertNotInDatabase(t, served.state, e2eSecretValue)
+}
+
+// TestValidateNamesAnUnsetTypePullPassword: a resource type's login whose variable is not set is reported before a run, not as a refused pull.
+func TestValidateNamesAnUnsetTypePullPassword(t *testing.T) {
+	t.Parallel()
+
+	path := writePipeline(t, t.TempDir(), `
+resource_types:
+- name: t
+  type: registry-image
+  source: {repository: ghcr.io/o/t, username: me, password_env: STEPS_TEST_TYPE_PASSWORD_UNSET}
+resources:
+- name: app
+  type: t
+  source: {}
+jobs:
+- name: j
+  plan:
+  - get: app
+`)
+
+	err := stepsRun(t, []string{"validate", path})
+	if err == nil || !strings.Contains(err.Error(), `resource_type "t"`) || !strings.Contains(err.Error(), "$STEPS_TEST_TYPE_PASSWORD_UNSET is not set") {
+		t.Errorf("validate: err = %v, want the type and its unset variable named", err)
+	}
 }

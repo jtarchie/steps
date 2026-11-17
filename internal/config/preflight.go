@@ -57,6 +57,7 @@ func (p Problem) Error() string { return p.Target + ": " + p.Detail }
 func (c *Config) CheckEnvironment() []Problem {
 	problems := c.checkAgentCredentials()
 	problems = append(problems, c.checkResourceCredentials()...)
+	problems = append(problems, c.checkTypePullLogins()...)
 	problems = append(problems, c.checkMCPServers()...)
 
 	return append(problems, c.checkCLIBinaries()...)
@@ -218,6 +219,27 @@ func githubCredentialProblems(name string, source map[string]any, secrets map[st
 		Target: fmt.Sprintf("resource %q", name),
 		Detail: fmt.Sprintf("$%s is not set (source.token_env) — export GH_TOKEN=$(gh auth token) is one way to set it", variable),
 	}}
+}
+
+// checkTypePullLogins reports a type: registry-image entry whose password_env names an unset variable: the pull of its image would go anonymous and be refused.
+func (c *Config) checkTypePullLogins() []Problem {
+	var problems []Problem
+
+	for _, rt := range c.ResourceTypes {
+		_, variable := rt.PullLogin()
+		if variable == "" {
+			continue
+		}
+
+		if value, ok := os.LookupEnv(variable); !ok || value == "" {
+			problems = append(problems, Problem{
+				Target: fmt.Sprintf("resource_type %q", rt.Name),
+				Detail: fmt.Sprintf("$%s is not set (source.password_env)", variable),
+			})
+		}
+	}
+
+	return problems
 }
 
 // registryCredentialProblems is the one variable a registry-image resource with a login reads; without one it is anonymous and reads none.

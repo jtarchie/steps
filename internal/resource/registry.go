@@ -85,6 +85,35 @@ func (r *RegistryImageResource) password(secrets map[string]string) (string, err
 	return password, nil
 }
 
+// WithTypePullLogin attaches a type: registry-image entry's login to every pull of its image under ctx, so the type's check, in and out, wherever they run, pull with it; a type with none is left anonymous.
+func WithTypePullLogin(ctx context.Context, rt config.ResourceType) (context.Context, error) {
+	username, variable := rt.PullLogin()
+	if username == "" || rt.Image == "" {
+		return ctx, nil
+	}
+
+	password := os.Getenv(variable)
+	if password == "" {
+		return ctx, fmt.Errorf("resource_type %q: $%s is not set (source.password_env)", rt.Name, variable)
+	}
+
+	return shell.WithPullLogin(ctx, rt.Image, username, password), nil
+}
+
+// WithTypePullLogins is WithTypePullLogin for every type in cfg, for the pull of every image a run names before its first step.
+func WithTypePullLogins(ctx context.Context, cfg *config.Config) (context.Context, error) {
+	for _, rt := range cfg.ResourceTypes {
+		var err error
+
+		ctx, err = WithTypePullLogin(ctx, rt)
+		if err != nil {
+			return ctx, err
+		}
+	}
+
+	return ctx, nil
+}
+
 // RegistryLogin is the login a step's docker daemon pulls res's image with: its username and password_env, or none (an anonymous pull) for a resource that names none or is not the built-in registry-image's. The same login the resource's check and get used, so what the check could see the step can run.
 func RegistryLogin(ctx context.Context, cfg *config.Config, res config.Resource) (username, password string, err error) {
 	resourceType, err := cfg.FindResourceType(res.Type)

@@ -103,12 +103,40 @@ func refuseConfigBesideRegistryImage(rt ResourceType) error {
 	}
 
 	for key := range rt.Source {
-		if key != "repository" && key != "tag" {
-			return fmt.Errorf("source.%s is not supported on a resource type; only repository and tag are", key)
+		switch key {
+		case "repository", "tag", "username", "password_env":
+		default:
+			return fmt.Errorf("source.%s is not supported on a resource type; only repository, tag, username and password_env are", key)
 		}
 	}
 
+	return checkTypePullLogin(rt.Source)
+}
+
+func checkTypePullLogin(source map[string]any) error {
+	username, _ := source["username"].(string)
+	passwordEnv, _ := source["password_env"].(string)
+
+	switch {
+	case (username == "") != (passwordEnv == ""):
+		return errors.New("source.username and source.password_env go together: a registry login is both, and one alone would be sent as an anonymous pull")
+	case passwordEnv != "" && !envVarPattern.MatchString(passwordEnv):
+		return fmt.Errorf("source.password_env must be the NAME of an environment variable holding the password, not %q — a literal would be hashed into state.db in cleartext", passwordEnv)
+	}
+
 	return nil
+}
+
+// PullLogin is the registry login a type: registry-image entry pulls its image with: the user and the NAME of the variable holding the password, both empty for an anonymous pull. Read from the daemon's environment, since a resource type has no secrets: of its own.
+func (rt ResourceType) PullLogin() (username, passwordEnv string) {
+	if !rt.Config.Concourse {
+		return "", ""
+	}
+
+	username, _ = rt.Source["username"].(string)
+	passwordEnv, _ = rt.Source["password_env"].(string)
+
+	return username, passwordEnv
 }
 
 // withDefaults is Concourse's defaults: — a type's source keys under the resource's own, which win.

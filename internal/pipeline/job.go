@@ -306,7 +306,12 @@ func prepareImages(ctx context.Context, cfg *config.Config, jobName string) erro
 	// Best-effort and silent when there is nothing to do.
 	shell.SweepOrphanedContainers(ctx, "")
 
-	err = shell.PrepareImages(ctx, imagesToPrepare(cfg))
+	pullCtx, err := rsrc.WithTypePullLogins(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("job %q: %w", jobName, err)
+	}
+
+	err = shell.PrepareImages(pullCtx, imagesToPrepare(cfg))
 	if err != nil {
 		return fmt.Errorf("job %q: %w", jobName, err)
 	}
