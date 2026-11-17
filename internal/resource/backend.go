@@ -53,6 +53,8 @@ func backendFor(rt config.ResourceType) backend {
 		return concourseBackend{}
 	case config.BackendRegistry:
 		return registryBackend{}
+	case config.BackendService:
+		return serviceBackend{}
 	case config.BackendShell:
 	}
 

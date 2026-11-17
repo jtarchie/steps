@@ -196,6 +196,7 @@ func (c *Config) validate() error {
 		c.validateCronResources,
 		c.validateGitHubResources,
 		c.validateRegistryImageResources,
+		c.validateDockerServiceResources,
 		c.validateSlackResources,
 		c.validateNativeGets,
 		c.validateGitResources,

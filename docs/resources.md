@@ -21,7 +21,7 @@ jobs:
     run: cd repo && go build ./...
 ```
 
-`git` ships with steps, so that pipeline needs no `resource_types:` block; neither do [the GitHub types](#the-built-in-github-types), Slack's, `cron`, [`registry-image`](#the-built-in-registry-image-type) and [`webhook`](webhooks.md). For anything else, you write the type yourself.
+`git` ships with steps, so that pipeline needs no `resource_types:` block; neither do [the GitHub types](#the-built-in-github-types), Slack's, `cron`, [`registry-image`](#the-built-in-registry-image-type), [`docker-service`](#the-built-in-docker-service-type) and [`webhook`](webhooks.md). For anything else, you write the type yourself.
 
 **A built-in type's `source:` and `params:` are closed.** steps owns every built-in's code, so it knows each key the type reads, and `steps validate` refuses the rest: a misspelled `chanels:` or a Concourse habit like `params: {depth: 1}` on a get is a load error naming the key and the ones the type does read, not a setting nobody applies. No built-in's get takes `params:`; what it fetches is set on `source:`. Values are typed as well, so `limit: "200"` is refused where `limit: 200` loads. A type you write keeps Concourse's rule, where `source:` and `params:` are the type's own business and steps passes them through unread — and so does a pipeline that declares its own type under a built-in's name, which replaces the built-in: that is the pipeline's choice to make. `webhook` is the one name that cannot be taken, since deliveries are routed to a resource by it.
 
@@ -1219,6 +1219,51 @@ The put's version is the pushed digest; the next build's get of `app-image` find
 Both paths are refused at load when they name an artifact the put does not list in its `inputs:`, and at run when one leads out of the build's tree.
 
 `tags:` is refused, as for every type that runs inside this process: check, get and put are steps' own requests, made from this machine.
+
+## The built-in `docker-service` type
+
+`type: docker-service` keeps one long-lived container up on this machine's docker daemon, on a named network, for the steps that say `network: <that network>`: a test database a spec step reaches by name, a cache, a fake of an API. A put starts it, or leaves it alone when nothing about it changed, and returns once it answers.
+
+```yaml noexec=docker
+resources:
+- name: test-db
+  type: docker-service
+  source:
+    container: ci-redis                      # its name, and how a step on the network reaches it
+    image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+    network: ci                              # made if it is not there
+    env: {REDIS_ARGS: --save 60 1}           # hashed into the version: never a credential
+    volumes: {ci-redis-data: /data}          # a named volume, kept when the container is replaced
+    ready: [redis-cli, ping]                 # the put returns once this exits 0
+    ready_timeout: 90s                       # optional; 60s when unset
+
+jobs:
+- name: specs
+  plan:
+  - put: test-db
+  - task: ping
+    image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+    network: ci
+    run: redis-cli -h ci-redis ping
+```
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `container` | yes | the container's name; a step on the network reaches the service by it |
+| `image` | yes | the image, pinned by digest: the put replaces the container only when `source:` changes, and a moving tag is not a change it can see |
+| `network` | yes | the bridge network it joins, made if absent |
+| `env` | no | its environment. Hashed into the version like the rest of `source:`, so never a credential |
+| `volumes` | no | a named docker volume to the absolute path it is mounted at: what keeps a database's data when the container is replaced |
+| `ready` | no | a command run in the container, once a second, until it exits 0; with none, the put returns once the container runs |
+| `ready_timeout` | no | how long the put waits for `ready`, a Go duration; 60s when unset |
+
+- **Replaced only when `source:` changes.** The container carries a hash of its `source:`; a put that finds the same hash running does nothing, finds it stopped starts it, and finds another replaces it, keeping its named volumes. The version is that hash, `{spec}`.
+- **It outlives the run.** The daemon restarts it with itself (`--restart=always`), and no sweep takes it: steps never removes one. Changing `container:` leaves the old one running.
+- **A `ready` that never succeeds fails the put**, naming the command; a container that exits while it waits fails it with its last lines of output.
+- **A check reports whether it runs**: the running `{spec}`, or no versions when the container is down or runs another configuration. A get writes `container` and `network` files. A cached get does not ask again, so a put, not a get, is what proves the service is up.
+- **This machine's daemon only.** A network belongs to one daemon, so a step placed on a worker (`tags:`) that names a service's `network:` is refused at load, and `tags:` on the resource is refused, as for every type that runs inside this process. A put takes no `params:`.
+
+Not executed by the docs suite: a service outlives the run by design, so running it would leave a container behind on every test run. `e2e/e2e_docker_service_test.go` runs the same shape and removes what it made.
 
 ## Writing a resource type
 

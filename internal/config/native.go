@@ -7,6 +7,14 @@ import (
 	"reflect"
 )
 
+// goBackedTypes is the one built-in type each single-type Go backend is.
+var goBackedTypes = map[ResourceBackend]string{ //nolint:gochecknoglobals // read-only table
+	BackendWebhook:  WebhookType,
+	BackendCron:     CronType,
+	BackendRegistry: RegistryImageType,
+	BackendService:  DockerServiceType,
+}
+
 // nativeType is the native type typeName resolves to, "" for a type the pipeline wrote. A pipeline that declares its own git or slack-* type replaces the built-in (registerBuiltinResourceTypes), so a YAML-backed type is native only while it is still the embedded one.
 func (c *Config) nativeType(typeName string) string {
 	resourceType, err := c.FindResourceType(typeName)
@@ -14,15 +22,15 @@ func (c *Config) nativeType(typeName string) string {
 		return ""
 	}
 
+	if name, ok := goBackedTypes[resourceType.Config.Backend()]; ok {
+		return name
+	}
+
 	switch resourceType.Config.Backend() {
-	case BackendWebhook:
-		return WebhookType
-	case BackendCron:
-		return CronType
 	case BackendGitHub:
 		return resourceType.Config.GitHub
-	case BackendRegistry:
-		return RegistryImageType
+	case BackendWebhook, BackendCron, BackendRegistry, BackendService:
+		// goBackedTypes, above.
 	case BackendConcourse:
 		return ""
 	case BackendShell, BackendExpr, BackendMCP:

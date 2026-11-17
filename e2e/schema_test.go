@@ -210,6 +210,7 @@ func schemaDefsByType() map[string]reflect.Type {
 		"webhookSignature":     reflect.TypeOf(config.WebhookSignature{}),
 		"cronSource":           reflect.TypeOf(config.CronSource{}),
 		"registryImageSource":  reflect.TypeOf(config.RegistryImageSource{}),
+		"dockerServiceSource":  reflect.TypeOf(config.DockerServiceSource{}),
 		"githubPrsSource":      reflect.TypeOf(config.GitHubPRsSource{}),
 		"githubCommentsSource": reflect.TypeOf(config.GitHubCommentsSource{}),
 		"githubIssuesSource":   reflect.TypeOf(config.GitHubIssuesSource{}),

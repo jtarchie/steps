@@ -69,6 +69,8 @@ type ResourceTypeConfig struct {
 	Concourse bool `yaml:"-"`
 	// GitHub names which built-in github-* type this is (see github.go), which no YAML can declare: steps calls the API itself. Keyed, unlike Cron and Webhook, because several share a source: shape and do different things with it.
 	GitHub string `yaml:"-"`
+	// Service marks the built-in docker-service type, which no YAML can declare: steps drives the daemon itself (dockerservice.go).
+	Service bool `yaml:"-"`
 	// Registry marks the built-in registry-image type, which no YAML can declare: steps speaks the registry protocol itself (registryimage.go).
 	Registry bool `yaml:"-"`
 }
@@ -99,6 +101,8 @@ const (
 	BackendGitHub ResourceBackend = "github"
 	// BackendRegistry calls an OCI registry from this process: check finds a tag's digest, in names it, out pushes an image tarball.
 	BackendRegistry ResourceBackend = "registry"
+	// BackendService keeps a container up on this machine's daemon: out ensures it, check reports whether it runs.
+	BackendService ResourceBackend = "service"
 )
 
 // Backend reports how this resource type is implemented.
@@ -118,6 +122,8 @@ func (c ResourceTypeConfig) Backend() ResourceBackend {
 		return BackendGitHub
 	case c.Registry:
 		return BackendRegistry
+	case c.Service:
+		return BackendService
 	case c.Concourse:
 		return BackendConcourse
 	case c.MCP != nil:
@@ -211,7 +217,7 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 		return receiveOnlyPutRefusal(label, put, resourceType.Config.Backend())
 	case BackendGitHub:
 		return githubPutRefusal(label, put, resourceType.Config.GitHub)
-	case BackendRegistry:
+	case BackendRegistry, BackendService:
 	}
 
 	return nil
@@ -259,7 +265,7 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 			return fmt.Errorf("%s: get %q targets a %s resource, which only publishes; find the work with a %s, %s or %s resource instead",
 				label, get, resourceType.Config.GitHub, GitHubPRsType, GitHubIssuesType, GitHubCommentsType)
 		}
-	case BackendWebhook, BackendCron, BackendRegistry:
+	case BackendWebhook, BackendCron, BackendRegistry, BackendService:
 	}
 
 	return nil

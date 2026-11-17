@@ -158,7 +158,7 @@ func preflightResource(
 		}
 
 		return nil
-	case config.BackendWebhook, config.BackendCron, config.BackendGitHub, config.BackendRegistry:
+	case config.BackendWebhook, config.BackendCron, config.BackendGitHub, config.BackendRegistry, config.BackendService:
 		err := compileBuiltin(resourceType.Config.Backend(), *resource)
 		if err != nil {
 			return []config.Problem{{Target: fmt.Sprintf("resource %q", name), Detail: err.Error()}}
@@ -211,6 +211,10 @@ func compileBuiltin(backend config.ResourceBackend, resource config.Resource) er
 		_, err := RegistryImage(resource)
 
 		return err
+	case config.BackendService:
+		_, err := config.ParseDockerServiceSource(resource.Source)
+
+		return err //nolint:wrapcheck // names the field
 	case config.BackendGitHub:
 		// The load rules already parsed the source:; what is left to know —
 		// that the token works, that the repository exists — takes a request,

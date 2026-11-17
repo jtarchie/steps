@@ -153,3 +153,39 @@ func RootFS(t testing.TB, image string) ([]byte, string, string) {
 
 	return content, os, arch
 }
+
+// ContainerID is the id of the container named name, "" when there is none.
+func ContainerID(t testing.TB, name string) string {
+	t.Helper()
+
+	client := dial(t)
+
+	containers, err := client.ListContainers(t.Context(), map[string]string{ServiceLabel: name})
+	if err != nil {
+		t.Fatalf("listing containers: %v", err)
+	}
+
+	if len(containers) == 0 {
+		return ""
+	}
+
+	return containers[0].ID
+}
+
+// ServiceLabel is the label a docker-service container carries its resource's container name under; dockerapi's, repeated so a test needs no import of it.
+const ServiceLabel = dockerapi.ServiceLabel
+
+// RemoveService removes a docker-service's container and network when the test ends: a service is long-lived by design, so nothing else would.
+func RemoveService(t testing.TB, container, network string) {
+	t.Helper()
+
+	client := dial(t)
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		_ = client.RemoveContainer(ctx, container)
+		_ = client.RemoveNetwork(ctx, network)
+	})
+}

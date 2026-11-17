@@ -174,24 +174,22 @@ func ReadBuiltinResourceType(name string) (ResourceType, error) {
 // set of command templates, and half of one command paired with half of
 // another is not a resource type anyone meant to write.
 func (c *Config) registerBuiltinResourceTypes() {
-	// A declared webhook stays, to be refused by validateOneResourceTypeConfig: replacing it silently would make the name mean two things.
-	if c.findResourceTypeIndex(WebhookType) < 0 {
-		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: WebhookType, Config: ResourceTypeConfig{Webhook: true}})
-	}
-
-	// A declared cron or github-* replaces the built-in, as a declared git does; only webhook is refused (validateWebhookResources), since deliveries are routed to it by name.
-	if c.findResourceTypeIndex(CronType) < 0 {
-		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: CronType, Config: ResourceTypeConfig{Cron: true}})
-	}
-
-	// A declared registry-image replaces this one, as a declared git does: the pipeline's choice.
-	if c.findResourceTypeIndex(RegistryImageType) < 0 {
-		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: RegistryImageType, Config: ResourceTypeConfig{Registry: true}})
-	}
+	// A declared type of a Go-backed name replaces the built-in, as a declared git does: the pipeline's choice. A declared webhook stays too, but to be refused (validateWebhookResources): deliveries are routed to it by name, so replacing it would make the name mean two things.
+	goBacked := make([]ResourceType, 0, 4+len(GitHubTypes()))
+	goBacked = append(goBacked,
+		ResourceType{Name: WebhookType, Config: ResourceTypeConfig{Webhook: true}},
+		ResourceType{Name: CronType, Config: ResourceTypeConfig{Cron: true}},
+		ResourceType{Name: RegistryImageType, Config: ResourceTypeConfig{Registry: true}},
+		ResourceType{Name: DockerServiceType, Config: ResourceTypeConfig{Service: true}},
+	)
 
 	for _, name := range GitHubTypes() {
-		if c.findResourceTypeIndex(name) < 0 {
-			c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: name, Config: ResourceTypeConfig{GitHub: name}})
+		goBacked = append(goBacked, ResourceType{Name: name, Config: ResourceTypeConfig{GitHub: name}})
+	}
+
+	for _, resourceType := range goBacked {
+		if c.findResourceTypeIndex(resourceType.Name) < 0 {
+			c.ResourceTypes = append(c.ResourceTypes, resourceType)
 		}
 	}
 

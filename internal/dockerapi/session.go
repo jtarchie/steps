@@ -67,6 +67,8 @@ type ContainerSpec struct {
 	// OpenStdin keeps the container's stdin open for a caller that attaches
 	// to it, which a foreground run does and a session container does not.
 	OpenStdin bool
+	// RestartAlways has the daemon start the container again whenever it stops or the daemon comes back, for a service meant to outlive the run that made it.
+	RestartAlways bool
 	// Publish are container ports ("5432/tcp") bound to an ephemeral port on
 	// 127.0.0.1 only; PublishedPort says which. Loopback because nothing
 	// that asks for one wants it reachable from another host.
@@ -112,6 +114,10 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 	if spec.Init {
 		enabled := true
 		hostConfig.Init = &enabled
+	}
+
+	if spec.RestartAlways {
+		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyAlways}
 	}
 
 	err = spec.publish(config, hostConfig)
