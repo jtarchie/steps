@@ -607,6 +607,15 @@
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
           "description": "The NAME of the variable holding the password or token, read from the resource's secrets: first and the daemon's environment otherwise."
+        },
+        "insecure": {
+          "type": "boolean",
+          "description": "Skip TLS verification and allow plain http, login included. steps' own requests only: the docker daemon's pull of image: <get> follows the daemon's insecure-registries."
+        },
+        "ca_certs": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "PEM certificates trusted beside the system's, for a registry signed by a private CA. steps' own requests only: the daemon trusts what its certs.d says."
         }
       }
     },

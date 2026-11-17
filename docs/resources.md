@@ -1176,8 +1176,46 @@ jobs:
 | `tag` | no | the one tag the check follows; `latest` when unset |
 | `username` | with `password_env` | the login's user name. A registry that takes a token alone (ghcr.io) still wants one: any name will do |
 | `password_env` | with `username` | the **name** of the variable holding the password or token, read from the resource's [`secrets:`](secrets.md) first and the daemon's environment otherwise, as a GitHub type's `token_env` is |
+| `ca_certs` | no | PEM certificates trusted beside the system's, for a registry signed by a private CA |
+| `insecure` | no | `true` skips TLS verification and allows plain http, login included |
 
 **The login is the resource's and nothing else's.** It goes with the check, the get, the put, and the docker daemon's pull of a step whose `image:` names this get. steps never reads docker's `config.json`, a credential helper or a keychain, so what a pipeline can reach is what its `source:` says, on any machine. With no `username` and `password_env`, every request is anonymous: a private image needs them, and pushing almost always does. A login is never sent over plain http except to a registry on this machine (`localhost`, `127.0.0.1`, `::1`), which is also the only place a registry without TLS is reached.
+
+**A registry with its own CA, or none.** `ca_certs:` adds certificates to the system's for this resource's requests; `insecure: true` verifies nothing and allows plain http, and is the only way a login is sent over http to a registry that is not on this machine. Both are Concourse's names. Both cover steps' own requests (check, get, put) and not the docker daemon's pull of a step's `image:`, which trusts what the daemon is configured to: its `insecure-registries`, or a certificate in its `certs.d`.
+
+```yaml noexec=network
+resources:
+- name: app-image
+  type: registry-image
+  source:
+    repository: registry.internal.example:5000/team/app
+    username: robot
+    password_env: REGISTRY_TOKEN
+    ca_certs:
+    - |
+      -----BEGIN CERTIFICATE-----
+      MIIBfDCCASKgAwIBAgIULT9Pz2NfEOZsWe+onzuqU9g82A8wCgYIKoZIzj0EAwIw
+      JDEiMCAGA1UEAwwZcmVnaXN0cnkuaW50ZXJuYWwuZXhhbXBsZTAeFw0yNjExMTcx
+      NDI1NDdaFw0zNjExMTQxNDI1NDdaMCQxIjAgBgNVBAMMGXJlZ2lzdHJ5LmludGVy
+      bmFsLmV4YW1wbGUwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATqBGwE3UEOpvv7
+      pzqZZp2rNoDidtGcwIV5wQSxue/7RWOC2Olkx1HHir/coPFKZJ7WHyowg5IOG6GH
+      DMqDEHBQozIwMDAdBgNVHQ4EFgQUV3ljUSR109o8iwtb4tqHdU04M+IwDwYDVR0T
+      AQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiEA+aWh/SabRB8U+tqhZCCaQHZ0
+      dQOOQrj+RRAjf7kat7UCIGa/qVYKEMv7n6jzk38S5QiC7ncvc/2x9mYl8Iu+r+uS
+      -----END CERTIFICATE-----
+
+- name: scratch-image
+  type: registry-image
+  source:
+    repository: 10.0.0.5:5000/scratch   # a lab registry on plain http
+    insecure: true
+
+jobs:
+- name: show
+  plan:
+  - get: app-image
+  - get: scratch-image
+```
 
 **The version is `{digest}`**, the content the tag pointed at when the check ran. A new push to the tag is a new version; a push of the same content is not. A tag the registry does not have fails the check, naming it, rather than reading as "no versions yet", so a misspelled tag cannot hold a pipeline back in silence. A multi-platform image is one version: the digest of its index, which each machine's docker resolves to its own platform.
 

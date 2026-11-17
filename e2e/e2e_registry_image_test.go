@@ -398,6 +398,10 @@ func TestValidateRefusesRegistryImageMistakes(t *testing.T) {
 			pipeline: "resource_types:\n- name: t\n  type: registry-image\n  source: {repository: ghcr.io/o/t, username: me, password_env: 'not a name'}\nresources:\n- name: app\n  type: t\n  source: {}\n",
 			want:     "source.password_env must be the NAME",
 		},
+		"ca_certs not a certificate": {
+			pipeline: "resources:\n- name: app\n  type: registry-image\n  source: {repository: ghcr.io/o/app, ca_certs: ['-----BEGIN CERTIFICATE-----\nnope\n-----END CERTIFICATE-----']}\n",
+			want:     "source.ca_certs[0]",
+		},
 		"unknown key": {
 			pipeline: "resources:\n- name: app\n  type: registry-image\n  source: {repository: ghcr.io/o/app, password: hunter2}\n",
 			want:     `unknown key "password"`,

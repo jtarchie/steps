@@ -7,6 +7,8 @@ package resource
 import (
 	"archive/tar"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -44,7 +46,12 @@ func RegistryImage(res config.Resource) (*RegistryImageResource, error) {
 		return nil, fmt.Errorf("resource %q: %w", res.Name, err)
 	}
 
-	repository, err := name.NewRepository(source.Repository)
+	var nameOptions []name.Option
+	if source.Insecure {
+		nameOptions = append(nameOptions, name.Insecure)
+	}
+
+	repository, err := name.NewRepository(source.Repository, nameOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("resource %q: source.repository %q: %w", res.Name, source.Repository, err)
 	}
@@ -54,10 +61,15 @@ func RegistryImage(res config.Resource) (*RegistryImageResource, error) {
 
 // options is how every request of this resource authenticates: the resource's login, or none.
 func (r *RegistryImageResource) options(ctx context.Context) ([]remote.Option, error) {
+	transport, err := r.transport()
+	if err != nil {
+		return nil, err
+	}
+
 	options := []remote.Option{remote.WithContext(ctx)}
 
 	if r.source.PasswordEnv == "" {
-		return append(options, remote.WithAuth(authn.Anonymous)), nil
+		return append(options, remote.WithAuth(authn.Anonymous), remote.WithTransport(transport)), nil
 	}
 
 	password, err := r.password(shell.SecretEnv(ctx))
@@ -65,10 +77,52 @@ func (r *RegistryImageResource) options(ctx context.Context) ([]remote.Option, e
 		return nil, err
 	}
 
+	// insecure: is the author saying plain http is fine for this registry, login and all.
+	var guarded http.RoundTripper = cleartextGuard{next: transport}
+	if r.source.Insecure {
+		guarded = transport
+	}
+
 	return append(options,
 		remote.WithAuth(authn.FromConfig(authn.AuthConfig{Username: r.source.Username, Password: password})),
-		remote.WithTransport(cleartextGuard{next: remote.DefaultTransport}),
+		remote.WithTransport(guarded),
 	), nil
+}
+
+// transport is go-containerregistry's own, trusting source.ca_certs beside the system's roots, or nothing at all under insecure:.
+func (r *RegistryImageResource) transport() (http.RoundTripper, error) {
+	if !r.source.Insecure && len(r.source.CACerts) == 0 {
+		return remote.DefaultTransport, nil
+	}
+
+	base, ok := remote.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, errors.New("go-containerregistry's default transport is not an *http.Transport")
+	}
+
+	transport := base.Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+
+	if r.source.Insecure {
+		transport.TLSClientConfig.InsecureSkipVerify = true
+
+		return transport, nil
+	}
+
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+
+	for i, cert := range r.source.CACerts {
+		if !pool.AppendCertsFromPEM([]byte(cert)) {
+			return nil, fmt.Errorf("source.ca_certs[%d] holds no certificate", i)
+		}
+	}
+
+	transport.TLSClientConfig.RootCAs = pool
+
+	return transport, nil
 }
 
 // password reads password_env from the resource's resolved secrets first, so it may name a secrets: key, then the daemon's environment: github-*'s token_env rule.

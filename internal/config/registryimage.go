@@ -3,6 +3,8 @@ package config
 // type: registry-image: an image in an OCI registry, found by digest, fetched as the reference a step's image: runs, and published from an OCI tarball. Go rather than YAML because the registry protocol (token handshakes, blob uploads) is a client library's job, not a shell's.
 
 import (
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"path"
@@ -22,6 +24,10 @@ type RegistryImageSource struct {
 	Username string `yaml:"username,omitempty"`
 	// PasswordEnv NAMES the variable holding the password or token, never the value: a literal would be hashed into state.db.
 	PasswordEnv string `yaml:"password_env,omitempty"`
+	// Insecure skips TLS verification and allows plain http, as Concourse's insecure: the only way a login reaches a registry over http that is not on this machine.
+	Insecure bool `yaml:"insecure,omitempty"`
+	// CACerts are PEM certificates trusted beside the system's, for a registry signed by a private CA.
+	CACerts []string `yaml:"ca_certs,omitempty"`
 }
 
 // DefaultRegistryImageTag is the tag a source with none follows, as docker's own default.
@@ -67,7 +73,24 @@ func ParseRegistryImageSource(raw map[string]any) (RegistryImageSource, error) {
 		return source, errors.New("source.username and source.password_env go together: a registry login is both, and one alone would be sent as an anonymous request")
 	}
 
-	return source, nil
+	return source, checkCACerts(source.CACerts)
+}
+
+// checkCACerts refuses at load a certificate the first check would fail to trust.
+func checkCACerts(certs []string) error {
+	for i, cert := range certs {
+		block, _ := pem.Decode([]byte(cert))
+		if block == nil || block.Type != "CERTIFICATE" {
+			return fmt.Errorf("source.ca_certs[%d] is not a PEM certificate", i)
+		}
+
+		_, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return fmt.Errorf("source.ca_certs[%d]: %w", i, err)
+		}
+	}
+
+	return nil
 }
 
 // isBareRepository is a name with no tag or digest in it: the one ':' it may hold is a registry host's port (localhost:5050/tools).
