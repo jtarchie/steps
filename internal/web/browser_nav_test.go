@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"math"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -240,5 +242,36 @@ func TestAPhonesMenuReachesTheAccount(t *testing.T) {
 
 	if !shown {
 		t.Error("open, the phone menu does not reach the account's links")
+	}
+}
+
+// The root's paused bar sets "everything is paused" beside Resume all, and the words sat at the top of a box stretched to the button's height, a few pixels above the button's own label.
+func TestThePausedBarCentersItsWordsOnItsButton(t *testing.T) {
+	ctx := browser(t)
+
+	_, pipelines := testPipelines(t, "alpha", "beta")
+
+	server, err := New(pipelines, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	listener := httptest.NewServer(server.Handler())
+	t.Cleanup(listener.Close)
+
+	if code, _ := postForm(t, server, "/pause-all", nil); code != http.StatusSeeOther {
+		t.Fatalf("pause all answered %d, want 303", code)
+	}
+
+	const offset = `(() => {
+  const mid = e => { const range = document.createRange(); range.selectNodeContents(e); const r = range.getBoundingClientRect(); return r.top + r.height / 2; };
+  const bar = document.querySelector('.actionbar.paused');
+  return mid(bar.querySelector('.st-paused')) - mid(bar.querySelector('button'));
+})()`
+
+	off := must(ctx, t, chromedp.Evaluate[float64](offset), chromedp.EmulateViewport(1280, 800), media("dark", false), chromedp.Navigate(listener.URL+"/"))
+
+	if math.Abs(off) > 1 {
+		t.Errorf("\"everything is paused\" sits %.1fpx off Resume all's middle, want them centered on one line", off)
 	}
 }

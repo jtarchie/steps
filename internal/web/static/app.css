@@ -194,7 +194,7 @@ tr.checkfail pre { margin: 0 0 4px; }
    job or run at the right. Paused turns the whole bar blue, as Concourse's
    top bar does, rather than adding a banner. */
 .actionbar { flex-basis: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 14px; border-top: 1px solid var(--line-soft); }
-.actionbar .group { display: flex; flex-wrap: wrap; gap: 6px; }
+.actionbar .group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .actionbar form { margin: 0; }
 .actionbar .btn { padding: 3px 10px; font-size: 12px; white-space: nowrap; }
 .actionbar.paused { background: color-mix(in srgb, var(--blue) 8%, var(--bg)); border-top-color: var(--blue); }
