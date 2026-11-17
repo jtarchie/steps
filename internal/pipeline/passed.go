@@ -181,6 +181,14 @@ func sortedNames(names []string) []string {
 	return sorted
 }
 
+// recordPutVersion files a put's version under the resource it publishes to —
+// never its step name, which nothing reads (#273). A plan put and a hook put
+// share it so the two cannot pick different names again.
+func recordPutVersion(ctx context.Context, st store.Versions, step config.Step, version map[string]any) {
+	recordPutOrder(ctx, st, step.PutResourceName(), version)
+	recordBuildVersion(ctx, step.PutResourceName(), version)
+}
+
 // recordPutOrder fixes a put's version in the resource's history when the put
 // runs, so its order follows publish time rather than the random order the
 // build-end recording would give. It is not a green claim.

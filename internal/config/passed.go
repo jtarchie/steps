@@ -36,10 +36,7 @@ func (c *Config) validatePassedStep(label, jobName string, step *Step) error {
 		return fmt.Errorf("%s: passed is only valid on get steps; it constrains which VERSION is fetched", label)
 	}
 
-	resource := step.Get
-	if step.Resource != "" {
-		resource = step.Resource
-	}
+	resource := step.GetResourceName()
 
 	seen := map[string]bool{}
 
@@ -116,11 +113,7 @@ func (j Job) PassedConstraints() map[string][]string {
 			return nil
 		}
 
-		resource := step.Get
-		if step.Resource != "" {
-			resource = step.Resource
-		}
-
+		resource := step.GetResourceName()
 		constraints[resource] = append(constraints[resource], step.Passed...)
 
 		return nil

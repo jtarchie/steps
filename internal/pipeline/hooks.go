@@ -188,8 +188,7 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 		recordPlacement(ctx, scope.stepRunner, placed, 0, placedStep{name: step.Put, slot: scope.label, node: ""})
 
 		if err == nil {
-			recordPutOrder(ctx, scope.st, step.PutResourceName(), result)
-			recordBuildVersion(ctx, step.PutResourceName(), result)
+			recordPutVersion(ctx, scope.st, step, result)
 		}
 
 		return err

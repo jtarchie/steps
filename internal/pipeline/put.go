@@ -84,8 +84,7 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 		return res, err
 	}
 
-	recordPutOrder(ctx, r.st, resource.Name, result)
-	recordBuildVersion(ctx, resource.Name, result)
+	recordPutVersion(ctx, r.st, step, result)
 
 	return res, nil
 }

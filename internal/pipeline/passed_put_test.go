@@ -151,6 +151,8 @@ jobs:
 // A hook put aliased with resource: files its version under that resource, not
 // under its step name, which no resource and no reader answers to (#273).
 func TestPassedRecordsAnAliasedHookPutUnderItsResource(t *testing.T) {
+	t.Parallel()
+
 	f := newPutFixture(t, strings.Replace(putTypes, "OUT", `echo '{"n":"hooked"}'`, 1)+`
 jobs:
 - name: build
