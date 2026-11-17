@@ -130,6 +130,13 @@ func TryNodeContent(cfg *config.Config, step config.Step) (map[string]any, error
 //
 //nolint:cyclop // the switch over step kinds is inherently branching
 func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error) {
+	// A matrix nested in a block or try: names its axes nowhere else, so
+	// hashing only its template let an axis edit leave the enclosing hash
+	// unchanged.
+	if len(step.Across) > 0 {
+		return AcrossPlanContent(cfg, step, -1)
+	}
+
 	kind, ok := step.Kind()
 	if !ok {
 		return nil, errors.New("unrecognized step")

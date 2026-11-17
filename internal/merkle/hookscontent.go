@@ -149,9 +149,5 @@ func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindDo:
 	}
 
-	if len(step.Across) > 0 {
-		return AcrossPlanContent(cfg, step, -1)
-	}
-
 	return stepContentMap(cfg, step)
 }

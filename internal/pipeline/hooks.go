@@ -151,6 +151,21 @@ func runResolvedHookStep(ctx context.Context, scope hookScope, step config.Step)
 // enclosing step or job records the aggregate outcome. A leaf runs here; a
 // block, or a matrix, runs through runHookBlock.
 func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
+	shouldRun, err := evaluateStepGuard(ctx, scope.cfg, step, scope.bw)
+	if err != nil {
+		return fmt.Errorf("when: %w", err)
+	}
+
+	if !shouldRun {
+		slog.InfoContext(ctx, "job.skip", "reason", "when", "step", executedStepName(step))
+
+		return nil
+	}
+
+	return runUnguardedHookStep(ctx, scope, step)
+}
+
+func runUnguardedHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 	if len(step.Across) > 0 {
 		return runHookBlock(ctx, scope, step, "")
 	}

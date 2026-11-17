@@ -52,6 +52,39 @@ jobs:
 	}
 }
 
+// A hook body's when: guards it as it guards a plan step, block or leaf: a
+// false guard skips the body and leaves the build green.
+func TestAGuardedHookBodyIsSkipped(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	ran := filepath.Join(dir, "ran.txt")
+
+	writePipelineFile(t, path, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: echo work >> %[1]s
+    on_success:
+      task: leaf
+      when: "false"
+      run: echo leaf >> %[1]s
+    ensure:
+      when: "false"
+      do:
+      - task: inner
+        run: echo inner >> %[1]s
+`, ran))
+
+	mustRun(t, path)
+
+	if got := readTrimmed(t, ran); got != "work" {
+		t.Errorf("ran %q, want only work: a false guard skips a hook body", got)
+	}
+}
+
 // A hook stays off the merkle chain when its body is a block: its children
 // record no node and fill no step cache, so a second run runs every one again.
 // The child with outputs is the one the step cache would otherwise reuse: the
@@ -292,6 +325,43 @@ jobs:
       - var: shard
         values: [%s]
       run: echo {{ .vars.shard }}
+`, work, values))
+	}
+
+	write("a")
+	mustRun(t, path)
+
+	write("a, b")
+	mustRun(t, path)
+
+	assertLineCount(t, work, 2)
+}
+
+// The same holds for a matrix nested in a block hook body, where the body's
+// own top-level step names no axis.
+func TestEditingANestedAcrossHookRerunsItsStep(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	work := filepath.Join(dir, "work.txt")
+
+	write := func(values string) {
+		t.Helper()
+
+		writePipelineFile(t, path, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: echo work >> %s
+    ensure:
+      do:
+      - task: shard
+        across:
+        - var: shard
+          values: [%s]
+        run: echo {{ .vars.shard }}
 `, work, values))
 	}
 
