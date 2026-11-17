@@ -84,13 +84,8 @@ func isBareRepository(repository string) bool {
 	return !strings.Contains(rest, ":") && strings.Count(host, ":") <= 1
 }
 
+// validateRegistryImageResources holds the built-in's resources and puts to its closed shape. A pipeline that declares its own registry-image type replaces the built-in, as one declaring git does, and nativeType then answers "" for its resources: their source: and params: are that type's business.
 func (c *Config) validateRegistryImageResources() error {
-	for _, rt := range c.ResourceTypes {
-		if rt.Name == RegistryImageType && !rt.Config.Registry {
-			return fmt.Errorf("resource_type %q: the name is built in — a registry-image resource needs no resource_types: entry, so name this type something else", rt.Name)
-		}
-	}
-
 	for _, resource := range c.Resources {
 		if c.nativeType(resource.Type) != RegistryImageType {
 			continue

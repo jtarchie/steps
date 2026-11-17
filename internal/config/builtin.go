@@ -183,7 +183,7 @@ func (c *Config) registerBuiltinResourceTypes() {
 		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: CronType, Config: ResourceTypeConfig{Cron: true}})
 	}
 
-	// A declared registry-image stays, to be refused by validateRegistryImageResources, as a declared webhook does.
+	// A declared registry-image replaces this one, as a declared git does: the pipeline's choice.
 	if c.findResourceTypeIndex(RegistryImageType) < 0 {
 		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: RegistryImageType, Config: ResourceTypeConfig{Registry: true}})
 	}

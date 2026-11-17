@@ -64,8 +64,12 @@
       "$ref": "#/$defs/access"
     }
   },
-  "$comment": "A built-in git or slack-* type's source: is closed only while the pipeline declares no type of the same name, which replaces the built-in.",
+  "$comment": "A built-in git, slack-* or registry-image type's source: is closed only while the pipeline declares no type of the same name, which replaces the built-in.",
   "allOf": [
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "registry-image"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "registry-image"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/registryImageSource"}}}}}}}
+    },
     {
       "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "git"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
       "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "git"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/gitSource"}}}}}}}
@@ -925,10 +929,6 @@
         {
           "if": { "properties": { "type": { "const": "cron" } }, "required": ["type"] },
           "then": { "properties": { "source": { "$ref": "#/$defs/cronSource" } } }
-        },
-        {
-          "if": { "properties": { "type": { "const": "registry-image" } }, "required": ["type"] },
-          "then": { "properties": { "source": { "$ref": "#/$defs/registryImageSource" } } }
         },
         {
           "if": { "properties": { "type": { "const": "github-prs" } }, "required": ["type"] },

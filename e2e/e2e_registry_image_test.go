@@ -376,10 +376,6 @@ func TestValidateRefusesRegistryImageMistakes(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]struct{ pipeline, want string }{
-		"declared": {
-			pipeline: "resource_types:\n- name: registry-image\n  config:\n    check: echo '[]'\nresources:\n- name: app\n  type: registry-image\n  source: {}\n",
-			want:     `resource_type "registry-image": the name is built in`,
-		},
 		"literal password": {
 			pipeline: "resources:\n- name: app\n  type: registry-image\n  source: {repository: ghcr.io/o/app, username: me, password_env: 'ghp_not a name'}\n",
 			want:     "source.password_env must be the NAME",
@@ -488,5 +484,41 @@ jobs:
 	err := stepsRun(t, []string{"validate", path})
 	if err == nil || !strings.Contains(err.Error(), "$STEPS_TEST_REGISTRY_PASSWORD_UNSET is not set (source.password_env)") {
 		t.Errorf("validate: err = %v, want the unset variable named", err)
+	}
+}
+
+// TestPipelineOwnRegistryImageTypeReplacesTheBuiltIn: declaring a type under the built-in's name is the pipeline's choice, as for git; its source: is that type's business and its own commands run.
+func TestPipelineOwnRegistryImageTypeReplacesTheBuiltIn(t *testing.T) {
+	t.Parallel()
+
+	schema := loadSchema(t)
+
+	path := writePipeline(t, t.TempDir(), `
+resource_types:
+- name: registry-image
+  config:
+    check: echo '[{"digest":"sha256:`+strings.Repeat("a", 64)+`"}]'
+    in: echo "own type" > said
+resources:
+- name: app
+  type: registry-image
+  source: {repository: ghcr.io/o/app, anything: goes}
+jobs:
+- name: j
+  plan:
+  - get: app
+  - task: show
+    inputs: [app]
+    run: cat app/said
+`)
+
+	err := schema.Validate(yamlAsJSONValue(t, path))
+	if err != nil {
+		t.Errorf("schema refused a source: for a pipeline's own registry-image type: %v", err)
+	}
+
+	out := captureStdout(t, func() { mustRun(t, "run", path, "--job", "j") })
+	if !strings.Contains(out, "own type") {
+		t.Errorf("run printed %q, want the pipeline's own in: to have run", out)
 	}
 }
