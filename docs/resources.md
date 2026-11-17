@@ -35,6 +35,8 @@ jobs:
 | `tag_pattern` | no | a glob such as `v*`: track tags instead of a branch; see [Tags](#tags) |
 | `token_env` | no | the variable holding an https token; see [Credentials](#credentials) |
 | `private_key_env` | no | the variable holding an ssh private key; see [Credentials](#credentials) |
+| `paths` | no | git pathspecs: only a commit that changes one of them is a new version; see [Paths](#paths) |
+| `ignore_paths` | no | git pathspecs taken back out: a commit that changes only these is no new version |
 
 A local-path `uri` costs no network clone — the right call for a large repository — but the check reads that clone's refs as they are, so the version is whatever the clone last fetched, however long ago that was. `fetch: true` fixes that: each check first fetches `branch` from the clone's remote (`branch.<name>.remote`, else `origin`) into `refs/remotes/<remote>/<branch>` and reports that ref, so the version is the remote's head. It moves exactly that one ref — never the working tree, a local branch, tags or `FETCH_HEAD` — so a developer's own `main` sitting behind changes nothing. It needs an absolute path and a `branch:` (both checked at load; a remote `uri` is refused, being fresh already), git 2.32 or newer (what `GIT_CONFIG_GLOBAL` needs; every command of this type sets it), a clone owned by the user running steps, and a remote the resource can reach with what its `source:` names (see [Credentials](#credentials)): an ssh remote with neither `token_env` nor `private_key_env` fails the check by name, and a poll has no terminal, so a prompt fails the fetch instead of waiting. A failed fetch fails the check, so `steps web` reports no version rather than a stale one; like any failing check, it holds back only this resource until a later check succeeds, and the pipeline's other resources keep triggering. Turning `fetch:` on changes which commit is reported, and `source:` is part of the cache key, so expect one fresh build. The built-in type refuses any other `source:` key, so a misspelled `fecth:` is a load error rather than a flag nobody reads.
 
@@ -58,6 +60,40 @@ jobs:
 ```
 
 It fetches the exact commit the plan pinned, shallowly, so a branch that moves mid-run still gives you the version that was planned.
+
+### Paths
+
+`paths:` narrows a branch to the commits that change something under them, as Concourse's git resource does: the version is the newest such commit, so a commit elsewhere in the repository is no new version and triggers nothing. `ignore_paths:` takes paths back out, and works alone too (every commit but those that touch only, say, `docs/`).
+
+```yaml noexec=network
+resources:
+- name: tools-image-src
+  type: git
+  source:
+    uri: https://github.com/jtarchie/steps.git
+    branch: main
+    paths: [Dockerfile, go.mod]              # only a commit that changes one of these is a new version
+    ignore_paths: ["*.md"]                   # and not one that changes only markdown
+
+jobs:
+- name: build
+  plan:
+  - get: tools-image-src
+  - task: show
+    inputs: [tools-image-src]
+    run: git -C tools-image-src log -1 --format=%s -- Dockerfile go.mod | grep -c .
+    assert:
+      stdout: "1"
+  assert:
+    execution: [tools-image-src, show]
+    outcome: succeeded
+```
+
+- **Entries are git pathspecs**: a directory (`images/tools`) covers what is under it, and `*`, `?` and `[...]` match as git's do, across `/`.
+- **The checked-out commit is the one that touched them**, not the branch's head: a get gives you the tree as of that commit, which for a build triggered by those paths is the tree that changed.
+- **No commit touching them yet is no versions**, not an error.
+- **How it is read.** A remote `uri` is cloned for each check, bare and without file contents (a pathspec reads trees, not blobs); with `fetch: true` the local clone's fetched branch is read in place, with no clone at all. `ls-remote`, the plain check, cannot say which files a commit changed.
+- **Not with `tag_pattern`**: a tag is a version whatever its commit touched, so the load refuses the pair.
 
 ### Tags
 

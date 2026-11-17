@@ -24,6 +24,10 @@ type GitSource struct {
 	TokenEnv string `yaml:"token_env,omitempty"`
 	// PrivateKeyEnv names the variable holding an ssh private key; see TokenEnv.
 	PrivateKeyEnv string `yaml:"private_key_env,omitempty"`
+	// Paths narrows the branch to the commits that change one of these git pathspecs: the version is the newest such commit, so a commit elsewhere is no new version. Concourse's git resource's paths.
+	Paths []string `yaml:"paths,omitempty"`
+	// IgnorePaths takes pathspecs back out: a commit that changes only these is no new version. Concourse's ignore_paths.
+	IgnorePaths []string `yaml:"ignore_paths,omitempty"`
 }
 
 // GitPutParams is a put's params: on the built-in git type. The names are Concourse's git resource's, except force_with_lease, which is steps': a push made on behalf of a comment must fail if someone else moved the branch since.
@@ -225,6 +229,11 @@ func validateGitSource(name string, source map[string]any) error {
 		return err
 	}
 
+	err = validateGitPaths(name, source)
+	if err != nil {
+		return err
+	}
+
 	raw, present := source["fetch"]
 	if !present {
 		return nil
@@ -264,6 +273,44 @@ func validateGitTagPattern(name string, source map[string]any) error {
 		return fmt.Errorf("resource %q: source.tag_pattern and source.branch are both set; a resource tracks tags or one branch, so name one", name)
 	case fetch:
 		return fmt.Errorf("resource %q: source.fetch refreshes a clone's branch, and tag_pattern lists the tags of the uri itself, so the two cannot combine", name)
+	}
+
+	return nil
+}
+
+// validateGitPaths holds paths: and ignore_paths: to lists of pathspecs, and off a tag-tracking resource, where a tag is a version whatever its commit touched.
+func validateGitPaths(name string, source map[string]any) error {
+	for _, field := range []string{"paths", "ignore_paths"} {
+		raw, present := source[field]
+		if !present {
+			continue
+		}
+
+		err := checkPathspecs(raw)
+		if err != nil {
+			return fmt.Errorf("resource %q: source.%s %w", name, field, err)
+		}
+
+		if _, tags := source["tag_pattern"]; tags {
+			return fmt.Errorf("resource %q: source.%s and source.tag_pattern are both set; a tag is a version whatever its commit touched, so paths would filter nothing", name, field)
+		}
+	}
+
+	return nil
+}
+
+// checkPathspecs is a non-empty list of strings, none blank or holding a control character.
+func checkPathspecs(raw any) error {
+	list, isList := raw.([]any)
+	if !isList || len(list) == 0 {
+		return fmt.Errorf("must be a non-empty list of git pathspecs such as [images/tools], not %v", raw)
+	}
+
+	for _, entry := range list {
+		spec, isString := entry.(string)
+		if !isString || strings.TrimSpace(spec) == "" || strings.ContainsFunc(spec, func(r rune) bool { return r < ' ' || r == 0x7f }) {
+			return fmt.Errorf("entry %v is not a pathspec", entry)
+		}
 	}
 
 	return nil

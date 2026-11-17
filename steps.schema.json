@@ -809,6 +809,18 @@
         "private_key_env": {
           "type": "string",
           "description": "The variable (listed in the resource's env: or secrets:) holding an ssh private key. Every git command then uses it alone: no ssh config, no agent, no global or system git config."
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "description": "Git pathspecs: only a commit that changes one of them is a new version, the newest such commit. Not with tag_pattern."
+        },
+        "ignore_paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "description": "Git pathspecs taken back out: a commit that changes only these is no new version."
         }
       }
     },

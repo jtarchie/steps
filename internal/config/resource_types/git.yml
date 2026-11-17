@@ -69,6 +69,11 @@ config:
     # ponytail: no host key is checked (Concourse's git resource does the same); add source.known_hosts when one must be.
     export GIT_SSH_COMMAND="ssh -F /dev/null -i '$key' -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no -o UserKnownHostsFile='$known' -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
     {{- end }}
+    {{- if or (index .source "paths") (index .source "ignore_paths") }}
+    # paths:/ignore_paths: as git pathspecs, each quoted: the version is the newest commit that changes
+    # one of these and not only an ignored one. Concourse's git resource's paths and ignore_paths.
+    set -- {{ if index .source "paths" }}{{ range index .source "paths" }}{{ . | shellquote }} {{ end }}{{ else }}. {{ end }}{{ if index .source "ignore_paths" }}{{ range index .source "ignore_paths" }}{{ printf ":(exclude)%s" . | shellquote }} {{ end }}{{ end }}
+    {{- end }}
     {{- if index .source "fetch" }}
     uri={{ .source.uri | shellquote }}
     branch={{ index .source "branch" | shellquote }}
@@ -109,6 +114,12 @@ config:
     want="refs/remotes/$remote/$branch"
     refs=$(git ls-remote "$uri" "$want")
     ref=$(printf '%s\n' "$refs" | awk -v want="$want" '$2 == want { print $1; exit }')
+    {{- if or (index .source "paths") (index .source "ignore_paths") }}
+    if [ -n "$ref" ]; then
+      ref=$(git -C "$uri" log -1 --format=%H "$want" -- "$@")
+      [ -n "$ref" ] || { printf '[]\n'; exit 0; }
+    fi
+    {{- end }}
     {{- else }}
     {{- if index .source "tag_pattern" }}
     # ls-remote WITHOUT --refs: an annotated tag prints its own object and, on a
@@ -129,6 +140,18 @@ config:
       | sort -V \
       | awk -F'\t' 'BEGIN { printf "[" } { printf "%s{\"tag\":\"%s\",\"ref\":\"%s\"}", (NR > 1 ? "," : ""), $1, $2 } END { print "]" }'
     exit 0
+    {{- else if or (index .source "paths") (index .source "ignore_paths") }}
+    # Which files a commit changed is not something ls-remote can say, so the branch is cloned, bare and
+    # without blobs (trees are what a pathspec reads), into a directory removed with the check.
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp" ${key:+"$key"} ${known:+"$known"}' EXIT
+    git clone -q --bare --single-branch --no-tags --filter=blob:none {{ if index .source "branch" }}--branch {{ index .source "branch" | shellquote }} {{ end }}-- {{ .source.uri | shellquote }} "$tmp/repo" 2>/dev/null || {
+      printf 'git: could not clone %s to read which commits change source.paths\n' {{ .source.uri | shellquote }} >&2
+      exit 1
+    }
+    ref=$(git -C "$tmp/repo" log -1 --format=%H HEAD -- "$@")
+    # No commit touches them yet: no versions, not an error, as for a tag_pattern with no tag yet.
+    [ -n "$ref" ] || { printf '[]\n'; exit 0; }
     {{- else }}
     refs=$(git ls-remote {{ .source.uri | shellquote }} {{ index .source "branch" | default "HEAD" | shellquote }})
     # ls-remote takes a PATTERN, not a name, and prints one line per match.
