@@ -63,10 +63,10 @@ func (f *putFixture) run(ctx context.Context) error {
 	return RunJob(ctx, f.cfg, j, f.st, Run{Provider: f.provider})
 }
 
-func (f *putFixture) passed(t *testing.T, job string) map[string]bool {
+func (f *putFixture) passed(t *testing.T) map[string]bool {
 	t.Helper()
 
-	rows, err := f.st.PassedVersions(context.Background(), job, 0)
+	rows, err := f.st.PassedVersions(context.Background(), "build", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	got := f.passed(t, "build")
+	got := f.passed(t)
 	for _, want := range []string{"old", "img-1", "img-2", "img-3", "img-4", "img-5"} {
 		if !got[`image={"n":"`+want+`"}`] {
 			t.Errorf("version %q of image did not pass build; got %v", want, got)
@@ -148,6 +148,39 @@ jobs:
 	}
 }
 
+// A hook put aliased with resource: files its version under that resource, not
+// under its step name, which no resource and no reader answers to (#273).
+func TestPassedRecordsAnAliasedHookPutUnderItsResource(t *testing.T) {
+	f := newPutFixture(t, strings.Replace(putTypes, "OUT", `echo '{"n":"hooked"}'`, 1)+`
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "true"
+  on_success:
+    put: publish
+    resource: image
+`)
+
+	err := f.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := f.passed(t); !got[`image={"n":"hooked"}`] {
+		t.Errorf("the hook put's version did not pass build under image; got %v", got)
+	}
+
+	orders, err := f.st.VersionOrders(context.Background(), "publish")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(orders) != 0 {
+		t.Errorf("a history was recorded under the step name publish: %v", orders)
+	}
+}
+
 func TestPassedDropsAnOversizedPutVersion(t *testing.T) {
 	f := newPutFixture(t, strings.Replace(putTypes, "OUT", `printf '{"n":"%s"}' "$(head -c 5000 /dev/zero | tr '\0' x)"`, 1)+`
 jobs:
@@ -163,7 +196,7 @@ jobs:
 		t.Fatalf("an oversized version must not fail the build: %v", err)
 	}
 
-	if got := f.passed(t, "build"); len(got) != 0 {
+	if got := f.passed(t); len(got) != 0 {
 		t.Errorf("an oversized version was recorded: %d entries", len(got))
 	}
 
@@ -217,7 +250,7 @@ jobs:
 		t.Errorf("no resume warning; got %q", out)
 	}
 
-	if got := f.passed(t, "build"); len(got) != 0 {
+	if got := f.passed(t); len(got) != 0 {
 		t.Errorf("a skipped put's version was recorded: %v", got)
 	}
 }

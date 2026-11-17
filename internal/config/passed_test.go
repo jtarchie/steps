@@ -16,16 +16,18 @@ func TestPassedUpstreamMustGetOrPutTheResource(t *testing.T) {
 		upstream string
 		refused  bool
 	}{
-		"get":                {"plan: [{get: repo}]", false},
-		"put":                {"plan: [{put: repo}]", false},
-		"put in try":         {"plan: [{try: {put: repo}}]", false},
-		"put in on_success":  {"plan: [{task: t, run: 'true'}]\n  on_success: {put: repo}", false},
-		"put in ensure":      {"plan: [{task: t, run: 'true'}]\n  ensure: {put: repo}", false},
-		"put in on_failure":  {"plan: [{task: t, run: 'true'}]\n  on_failure: {put: repo}", true},
-		"put in on_error":    {"plan: [{task: t, run: 'true'}]\n  on_error: {put: repo}", true},
-		"put in on_abort":    {"plan: [{task: t, run: 'true'}]\n  on_abort: {put: repo}", true},
-		"neither":            {"plan: [{task: t, run: 'true'}]", true},
-		"put of another one": {"plan: [{put: other}]", true},
+		"get":                      {"plan: [{get: repo}]", false},
+		"put":                      {"plan: [{put: repo}]", false},
+		"put in try":               {"plan: [{try: {put: repo}}]", false},
+		"put in on_success":        {"plan: [{task: t, run: 'true'}]\n  on_success: {put: repo}", false},
+		"put in ensure":            {"plan: [{task: t, run: 'true'}]\n  ensure: {put: repo}", false},
+		"put in on_failure":        {"plan: [{task: t, run: 'true'}]\n  on_failure: {put: repo}", true},
+		"put in on_error":          {"plan: [{task: t, run: 'true'}]\n  on_error: {put: repo}", true},
+		"put in on_abort":          {"plan: [{task: t, run: 'true'}]\n  on_abort: {put: repo}", true},
+		"neither":                  {"plan: [{task: t, run: 'true'}]", true},
+		"put of another one":       {"plan: [{put: other}]", true},
+		"aliased put":              {"plan: [{put: publish, resource: repo}]", false},
+		"aliased put named for it": {"plan: [{put: repo, resource: other}]", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

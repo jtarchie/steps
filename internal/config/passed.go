@@ -72,8 +72,8 @@ func (c *Config) validatePassedStep(label, jobName string, step *Step) error {
 }
 
 // jobUses reports whether a job's plan gets the named resource (under its own
-// name or as an alias) or puts it: both record a version against a green
-// build. A put has no alias. Job-level on_failure/on_error/on_abort hooks run
+// name or as an alias) or puts it (likewise): both record a version against a
+// green build. Job-level on_failure/on_error/on_abort hooks run
 // only when the build is not green, so a put there can never pass and is not
 // counted; step-level failure hooks are, since under try: their build can be
 // green.
@@ -81,16 +81,12 @@ func jobUses(job Job, resource string) bool {
 	found := false
 
 	check := func(_ string, step *Step) error {
-		name := step.Put
-		if step.Get != "" {
-			name = step.Get
-			if step.Resource != "" {
-				name = step.Resource
-			}
-		}
-
-		if name == resource {
-			found = true
+		switch kind, _ := step.Kind(); kind { //nolint:exhaustive // only gets and puts name a resource
+		case StepKindGet:
+			found = found || step.GetResourceName() == resource
+		case StepKindPut:
+			found = found || step.PutResourceName() == resource
+		default:
 		}
 
 		return nil
