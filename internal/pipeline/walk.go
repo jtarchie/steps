@@ -377,10 +377,18 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	// A skip and a run are different events, not one event with a flag: the
 	// whole point of the transcript is that a replayed step is visibly
 	// distinct from a step that paid to execute.
+	published := res.published()
+
+	// A hook body's child names no node, because none was recorded: a hash
+	// here would link its row to a node page that does not exist.
+	if r.offChain() {
+		published = ""
+	}
+
 	if res.disposition == stepRan {
-		publishStepFinished(ctx, r.jobName, i, step, mark, res.published(), started, err)
+		publishStepFinished(ctx, r.jobName, i, step, mark, published, started, err)
 	} else {
-		publishStepSkipped(ctx, r.jobName, i, step, mark, res.published(), skipReason(res.disposition))
+		publishStepSkipped(ctx, r.jobName, i, step, mark, published, skipReason(res.disposition))
 	}
 
 	res.stepID = mark.id

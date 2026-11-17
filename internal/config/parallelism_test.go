@@ -148,24 +148,6 @@ jobs:
 			want: "above the limit of 1000",
 		},
 		{
-			// runHookStep never expands a matrix, so a hook shard count
-			// would load clean, run ONCE with literal {{ .vars.* }} text,
-			// and stay green.
-			name: "on a hook",
-			yaml: `
-jobs:
-- name: j
-  plan:
-  - task: main
-    run: echo hi
-  on_success:
-    task: cleanup
-    parallelism: 2
-    run: echo {{ .vars.index }}
-`,
-			want: "parallelism: is not valid on hook steps",
-		},
-		{
 			// across: on a try: wrapper renders through to the task inside,
 			// so the near-miss points there instead of asserting a visible
 			// task step is not one.

@@ -9,8 +9,8 @@ import (
 )
 
 // Hooks is the Concourse-style hook set a Step or a Job can carry. Each hook
-// is itself a full Step restricted to task/put/agent kinds (get is rejected at
-// LoadConfig time); a hook may recursively carry its own Hooks. on_success
+// is itself a full Step, blocks included, short of the kinds hookBodyRefusal
+// names; a hook may recursively carry its own Hooks. on_success
 // runs after a green outcome, on_failure/on_error/on_abort after the matching
 // failure classification, and ensure always runs last regardless of outcome.
 type Hooks struct {
@@ -54,14 +54,13 @@ func (h Hooks) Each(fn func(name string, step *Step) error) error {
 	return nil
 }
 
-// validateHooks enforces the hook-body restrictions: a hook must be a
-// task/put/agent step (get is rejected — a get step fans the remainder of the
-// plan out per version, which has no meaning inside a hook), and a job-level
-// hook — and everything nested under it, recursively — may not declare
-// inputs:/outputs: (a job-level hook runs in the job's own build workspace,
-// which for a get-leading plan holds no artifacts; a nested hook runs in that
-// exact same workspace, not a fresh one, so it has no more claim to a
-// coherent artifact scope than its parent). Nested hooks recurse throughout.
+// validateHooks enforces the hook-body restrictions. A hook body is any step,
+// blocks included, as in Concourse — except the kinds hookBodyRefusal names,
+// anywhere in the body. A job-level hook — and every hook nested under it —
+// may not declare inputs:/outputs: (a job-level hook runs in the job's own
+// build workspace, which for a get-leading plan holds no artifacts; a nested
+// hook runs in that same workspace, so it has no more claim to a coherent
+// artifact scope than its parent).
 func (c *Config) validateHooks() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
@@ -80,54 +79,55 @@ func (c *Config) validateHooks() error {
 	return nil
 }
 
-// noArtifacts is true for a job-level hook and everything nested under it —
-// see validateHooks.
+// validateHookTree checks each hook's body for a refused kind at any depth,
+// and noArtifacts — true for a job-level hook — on the body itself and the
+// hooks it carries, recursively. What a block or try: in the body contains
+// declares its own artifacts, as the step a job-level try: wraps always has.
 func validateHookTree(parentLabel string, hooks Hooks, noArtifacts bool) error {
-	return hooks.Each(func(name string, step *Step) error {
+	return hooks.Each(func(name string, body *Step) error {
 		label := fmt.Sprintf("%s (%s hook)", parentLabel, name)
 
-		if noArtifacts && (step.InputsDeclared() || step.Outputs != nil) {
+		if noArtifacts && (body.InputsDeclared() || body.Outputs != nil) {
 			return fmt.Errorf("%s: inputs/outputs are not valid on job-level hooks", label)
 		}
 
-		err := validateHookStep(label, step)
+		err := visitStepTree(label, body, func(label string, step *Step) error {
+			err := hookBodyRefusal(step)
+			if err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
+
+			return nil
+		})
 		if err != nil {
 			return err
 		}
 
-		return validateHookTree(label, step.Hooks, noArtifacts)
+		return validateHookTree(label, body.Hooks, noArtifacts)
 	})
 }
 
-func validateHookStep(label string, step *Step) error {
-	err := hookBodyRefusal(step)
-	if err != nil {
-		return fmt.Errorf("%s: %w", label, err)
-	}
-
-	return nil
-}
-
-// hookBodyRefusal admits exactly what the hook runner (internal/pipeline runHookStep) executes, so a hook that loads is a hook that runs.
+// hookBodyRefusal refuses the kinds a hook body may not hold at any depth.
+// Everything else runs (internal/pipeline runHookStep), so a hook that loads
+// is a hook that runs.
 func hookBodyRefusal(step *Step) error {
 	kind, ok := step.Kind()
 	if !ok {
-		return errors.New("unrecognized hook step (must be task, put, agent, or try)")
+		return errors.New("unrecognized hook step (must name a step kind such as task, put, agent or do)")
 	}
 
-	switch kind { //nolint:exhaustive // default refuses every kind the runner does
-	case StepKindTask, StepKindPut, StepKindAgent:
-		return nil
-	case StepKindTry:
-		err := hookBodyRefusal(step.Try)
-		if err != nil {
-			return fmt.Errorf("try: wraps %w", err)
-		}
-
-		return nil
+	switch kind { //nolint:exhaustive // default admits every kind the runner executes
 	case StepKindGet:
-		return errors.New("get is not valid in a hook; hooks must be task, put, agent, or try steps")
+		// Deliberate divergence (docs/conformance.md): a Concourse get in a
+		// hook is a job input the scheduler picks a version for before the
+		// build starts. Here a get fans the rest of the plan out per version,
+		// which has nowhere to go inside a hook.
+		return errors.New("get is not valid in a hook; a hook can run any other step, but a get picks the versions a build runs against, which a hook reacting to that build cannot")
+	case StepKindLoadVar:
+		return errors.New("load_var: is not valid in a hook; a hook runs after the step it guards, so a value it loaded would reach the plan steps after it and let a hook's outcome steer the plan")
+	case StepKindApproval:
+		return errors.New("approval: is not valid in a hook; a hook reacts to an outcome, and an on_abort or ensure waiting on a person would hold a stopping job open")
 	default:
-		return fmt.Errorf("%s: is not valid in a hook; a hook runs one step, so it must be task, put, agent, or try", kind)
+		return nil
 	}
 }

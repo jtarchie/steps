@@ -285,10 +285,9 @@ func TestAcrossContextPathTemplateErrors(t *testing.T) {
 	}
 }
 
-// TestAcrossOnHookRejected: the hook runner dispatches task/put/agent/try and
-// never expands a matrix, so before this rejection an across: hook loaded
-// clean, ran ONCE with its {{ .vars.* }} text unrendered, and stayed green.
-func TestAcrossOnHookRejected(t *testing.T) {
+// TestAcrossOnHookLoads: a hook body is any step, as in Concourse (#260), and
+// the hook runner expands a matrix like the plan does.
+func TestAcrossOnHookLoads(t *testing.T) {
 	t.Parallel()
 
 	path := writeConfig(t, `
@@ -305,7 +304,10 @@ jobs:
     run: echo {{ .vars.shard }}
 `)
 
-	wantLoadError(t, path, "across: is not valid on hook steps")
+	_, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
 }
 
 // TestTemplateReferencesAxisUnparseable pins the safe answer for a name no

@@ -12,7 +12,7 @@ On a failing step with both a hook and a route: the hook fires first (react), th
 
 ## Hooks (`on_success`/`on_failure`/`on_error`/`on_abort`/`ensure`)
 
-Any plan step, or the whole job, can carry hooks. A hook is itself a full step (task/put/agent, or a `try:` around one — never `get`, and never a block like `do:`, which is refused at load), so it can `run:` a command, `put:` a resource, or invoke an `agent:`, and may recursively carry its own hooks.
+Any plan step, or the whole job, can carry hooks. A hook is itself a full step — any kind but `get`, `load_var:` or `approval:`, blocks and `across:` included — so it can `run:` a command, `put:` a resource, invoke an `agent:`, or do several of those in a `do:` or `in_parallel:`, and may recursively carry its own hooks.
 
 ```yaml
 jobs:
@@ -53,6 +53,36 @@ jobs:
 - **A row, but no cache identity**: a hook step records no cache node and no `job_run` — the enclosing step/job records the aggregate outcome. It is a row in the run's transcript, though, labelled like `hook  on_failure · task page`: a step hook sits under the step it guards, a job hook after the plan, and the row carries the hook's output, notes and agent turns.
 - **Step hooks fold into the step's content hash**: editing a hook — or the top-level `tasks:`/`agents:` entry it references — busts the parent step's cache. A skipped (cached) step fires no hooks, since it didn't run.
 - **Job hooks are never hashed** and fire on every `RunJob` invocation, even a fully-cached one, since they don't alter what any step executes. A job-level hook may not declare `inputs:`/`outputs:` (it runs in an empty per-build workspace); step-level hooks keep full support.
+
+A hook that has more than one thing to do says so with a block, exactly as a plan does:
+
+```yaml
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "false"
+    on_failure:                # two reactions, in order
+      do:
+      - task: say-why
+        run: echo the build broke
+      - task: page
+        run: echo paging the on-call
+  ensure:                      # best-effort, both at once
+    try:
+      in_parallel:
+      - task: tidy
+        run: echo tidying
+      - task: notify
+        run: "false"           # tolerated by the try:, so ensure stays green
+  assert:
+    execution: [work, say-why, page, tidy, notify]
+    outcome: failed            # work's failure, which no hook clears
+```
+
+- **A block hook means what the block means in a plan**: a `do:` stops at its first failing step, an `in_parallel:` runs every branch and fails if any did, a `race:` keeps its first success, an `across:` runs every cell. The steps inside keep their own hooks.
+- **Nothing inside a hook is cached either.** Its steps record no node and fill no step cache, so a second run runs every one again — including a task with `outputs:` that would be reused in a plan.
+- **Its steps are rows under the hook's row**, so the transcript reads `hook  on_failure` with `say-why` and `page` beneath it.
 
 ## Conditional steps (`when:`)
 
@@ -814,7 +844,7 @@ jobs:
 
 - **It IS an `across:` matrix** — desugared at load, so per-cell caching, coordinate naming, collected `outputs:`, `budget:` and the failure rule (every shard runs, every failure is reported) all apply exactly as written above. Some diagnostics accordingly name `across`. One honest caveat to the caching rule: `count` renders into every shard, so changing N rewrites every cell that interpolates it and re-runs them all — which is what a sharded suite needs, since shard assignments depend on the total.
 - **Shards run concurrently by default**: `parallelism: N` implies `max_in_flight: N`, and an authored value wins (`parallelism: 6` with `max_in_flight: 2` runs two at a time). One edge: `max_in_flight: 0` is indistinguishable from unset here, so under `parallelism:` it means N, never serial — write `max_in_flight: 1` to serialize shards. The matrix default is serial because hand-written cells often mean to run in order; N copies of one command have no order to mean.
-- **Task steps only, not beside `across:`, and never on a hook** — a matrix that also needs real axes declares the shard axis itself, a hook runs a single step, and `{{ .vars.count }}` exists only under `parallelism:`. At most 1000 shards, the same ceiling every matrix width has.
+- **Task steps only, and not beside `across:`** — a matrix that also needs real axes declares the shard axis itself, and `{{ .vars.count }}` exists only under `parallelism:`. At most 1000 shards, the same ceiling every matrix width has.
 - **The command learns its slot by interpolation, never injected env** — `env:` passes operator variables through by name and cannot carry values, so a tool that wants environment is spelled `run: sh -c 'SHARD_INDEX={{ .vars.index }} SHARD_COUNT={{ .vars.count }} ./run-tests'`.
 - **With `tags:`, every shard lands on the one worker the tag names**, concurrently. On an `aws://launch/…` worker the machine is still acquired once per job — the first shard to arrive pays for it, the rest share it. There is no Concourse counterpart to `parallelism:`; Concourse's nearest primitive is its `across:` step.
 

@@ -1,0 +1,13 @@
+# A load_var: inside a hook would hand a value to the plan steps after it, so a hook's outcome could steer the plan it only reacts to.
+# expect: load_var: is not valid in a hook
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: echo ok
+  ensure:
+    try:
+      in_parallel:
+      - load_var: answer
+        file: answer.txt

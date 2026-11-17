@@ -63,13 +63,14 @@ func agentCacheRequest(content map[string]any, step config.Step) (workspace.Step
 // lookupStepCache reports the cache entry a step's work is filed under, and
 // whether its outputs were already there and have been restored.
 //
-// A step the cache must never reuse (see merkle.StepCacheable) is not looked
+// A step the cache must never reuse (see merkle.StepCacheable), or one in a
+// hook body, which must never be skipped for having run before, is not looked
 // up at all, and gets the zero result — no key, no hit — which reads at the
 // call site as "run it, and file nothing".
 func lookupStepCache(
 	ctx context.Context, r stepRunner, step config.Step, req workspace.StepCacheRequest, name string,
 ) workspace.StepCacheResult {
-	if !merkle.StepCacheable(r.cfg, step) {
+	if r.offChain() || !merkle.StepCacheable(r.cfg, step) {
 		return workspace.StepCacheResult{}
 	}
 

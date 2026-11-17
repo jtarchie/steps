@@ -171,6 +171,69 @@ jobs:
 			want: "inputs/outputs are not valid on job-level hooks",
 		},
 		{
+			name: "get inside a do: hook",
+			pipeline: `
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "true"
+    on_failure:
+      do:
+      - task: notify
+        run: "true"
+      - get: thing
+`,
+			want: "(do step 1): get is not valid in a hook",
+		},
+		{
+			name: "load_var inside a try: in_parallel: hook",
+			pipeline: `
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "true"
+  ensure:
+    try:
+      in_parallel:
+      - load_var: answer
+        file: answer.txt
+`,
+			want: "load_var: is not valid in a hook",
+		},
+		{
+			name: "approval as a hook",
+			pipeline: `
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "true"
+    on_abort:
+      approval:
+        message: really?
+`,
+			want: "approval: is not valid in a hook",
+		},
+		{
+			name: "get in the hook of a child of a hook body",
+			pipeline: `
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "true"
+    on_failure:
+      in_parallel:
+      - task: notify
+        run: "true"
+        ensure:
+          get: thing
+`,
+			want: "get is not valid in a hook",
+		},
+		{
 			name: "image on a put-kind hook",
 			pipeline: `
 jobs:
@@ -194,6 +257,62 @@ jobs:
 			path := writeConfig(t, tt.pipeline)
 			wantLoadError(t, path, tt.want)
 		})
+	}
+}
+
+// A hook body may be any step, blocks included, as in Concourse (#260).
+func TestHookBodiesMayBeBlocks(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: reviewer
+  source: { model: openai/test }
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "true"
+    on_failure:
+      do:
+      - task: say-why
+        run: echo why
+      - try:
+          in_parallel:
+          - task: page
+            run: echo page
+          - task: log
+            run: echo log
+    ensure:
+      race:
+        steps:
+        - task: fast
+          run: "true"
+        - task: slow
+          run: "true"
+  on_success:
+    task: matrix
+    run: echo ((.:v))
+    across:
+    - var: v
+      values: [a, b]
+  on_error:
+    ensemble:
+      agents:
+      - agent: reviewer
+        messages: [p]
+      - agent: reviewer
+        messages: [q]
+      verdicts:
+      - ok: done
+      - bad: done
+      decide: majority
+`)
+
+	_, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
 	}
 }
 

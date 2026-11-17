@@ -20,16 +20,7 @@ import (
 // apply, so the shape mistakes a load can catch are still caught at load.
 func (c *Config) validateAcross() error {
 	for _, job := range c.Jobs {
-		// Hooks first: runHookStep dispatches task/put/agent/try and never
-		// expands a matrix, so an across: there would load clean, run ONCE
-		// with its {{ .vars.* }} text unrendered, and stay green — the silent
-		// no-op shape rejectVolatileOnHook and friends exist to prevent.
-		err := job.visitHookSteps(rejectAcrossOnHook)
-		if err != nil {
-			return err
-		}
-
-		err = job.visitSteps(c.validateAcrossStep)
+		err := job.visitSteps(c.validateAcrossStep)
 		if err != nil {
 			return err
 		}
@@ -86,21 +77,6 @@ func (c *Config) validateAcrossStep(label string, step *Step) error {
 	_, expandErr := ExpandAcross(label, *step)
 
 	return expandErr
-}
-
-// rejectAcrossOnHook refuses a matrix on a hook step, worded for the spelling
-// the author wrote: a desugared parallelism: still carries its marker, and
-// speaking "across:" back at it would name a key that is not in the file.
-func rejectAcrossOnHook(label string, step *Step) error {
-	if len(step.Across) == 0 {
-		return nil
-	}
-
-	if step.Sharded() {
-		return fmt.Errorf("%s: parallelism: is not valid on hook steps; a hook runs a single step", label)
-	}
-
-	return fmt.Errorf("%s: across: is not valid on hook steps; a hook runs a single step", label)
 }
 
 // validateAcrossConcurrency checks max_in_flight: — that it describes a matrix

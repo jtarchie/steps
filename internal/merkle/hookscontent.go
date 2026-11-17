@@ -131,16 +131,27 @@ func hooksContent(cfg *config.Config, hooks config.Hooks) (map[string]any, error
 }
 
 // hookContentMap builds the hashed content for one hook step through the same
-// builders a plan step uses (which recurse into the hook's own hooks). Only
-// task/put/agent/try are hook bodies; LoadConfig rejects the rest, and this
-// refuses them rather than hashing something no run executes.
+// builders a plan step uses (which recurse into the hook's own hooks). A hook
+// body is any step but get, load_var and approval; LoadConfig rejects those,
+// and this refuses them rather than hashing something no run executes. A
+// matrix hashes as the plan hashes one, so editing an axis re-runs the step
+// the hook guards.
 func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error) {
-	kind, _ := step.Kind()
-
-	switch kind { //nolint:exhaustive // default covers every kind that is not a hook body
-	case config.StepKindTask, config.StepKindPut, config.StepKindAgent, config.StepKindTry:
-		return stepContentMap(cfg, step)
-	default:
-		return nil, errors.New("unrecognized hook step (must be task, put, agent, or try)")
+	kind, ok := step.Kind()
+	if !ok {
+		return nil, errors.New("unrecognized hook step")
 	}
+
+	switch kind {
+	case config.StepKindGet, config.StepKindLoadVar, config.StepKindApproval:
+		return nil, fmt.Errorf("%s: is not valid in a hook", kind)
+	case config.StepKindTask, config.StepKindPut, config.StepKindAgent, config.StepKindTry,
+		config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindDo:
+	}
+
+	if len(step.Across) > 0 {
+		return AcrossPlanContent(cfg, step, -1)
+	}
+
+	return stepContentMap(cfg, step)
 }

@@ -1,0 +1,24 @@
+# A hook body may be any step, blocks included, but never a get, at any depth: a get picks the versions a build runs against, and a hook only reacts to that build.
+# expect: (do step 1): get is not valid in a hook
+
+resource_types:
+- name: dummy
+  config:
+    check: echo '[]'
+    in: "true"
+
+resources:
+- name: repo
+  type: dummy
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "false"
+    on_failure:
+      do:
+      - task: say-why
+        run: echo it failed
+      - get: repo

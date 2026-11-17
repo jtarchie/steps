@@ -146,73 +146,119 @@ func runResolvedHookStep(ctx context.Context, scope hookScope, step config.Step)
 	return runHookStep(ctx, scope, renderStepVars(ctx, step))
 }
 
-// runHookStep executes one hook step body — a task, put, or agent — with NO
-// merkle hashing and NO store recording (the same no-record contract as a
-// task's fix: agent): the enclosing step or job records the aggregate outcome.
-// get is never a valid hook (rejected at LoadConfig), so it is not handled.
+// runHookStep executes one hook step body with NO merkle hashing and NO store
+// recording (the same no-record contract as a task's fix: agent): the
+// enclosing step or job records the aggregate outcome. A leaf runs here; a
+// block, or a matrix, runs through runHookBlock.
 func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
+	if len(step.Across) > 0 {
+		return runHookBlock(ctx, scope, step, "")
+	}
+
 	recordStepExecution(ctx, step)
 
 	kind, ok := step.Kind()
 	if !ok {
-		return errors.New("unrecognized hook step (must be task, put, or agent)")
+		return errors.New("unrecognized hook step")
 	}
 
-	switch kind { //nolint:exhaustive // default covers config.StepKindGet, not a valid hook body
+	switch kind {
 	case config.StepKindTask:
-		rt, err := scope.cfg.ResolveTask(step)
-		if err != nil {
-			return fmt.Errorf("task %q: %w", step.Task, err)
-		}
-
-		// A hook carrying tags: acquires a machine like any other placed step
-		// — on an aws://launch/ worker it launches and bills an instance — and
-		// this is the one place an operator would least expect one to be
-		// running. Keyed on the scope's label rather than a node hash, because
-		// a hook has no node: it must never be skipped for having succeeded
-		// before, so it is deliberately outside the merkle chain.
-		ctx, placed := withPlacementSink(ctx)
-
-		err = executeTask(ctx, scope.cfg, step, rt, scope.bw, scope.st)
-
-		recordPlacement(ctx, scope.stepRunner, placed, 0, placedStep{name: executedStepName(step), slot: scope.label, node: ""})
-
-		return err
+		return runHookTask(ctx, scope, step)
 	case config.StepKindPut:
-		// Recorded on the same terms as a task hook, keyed on the scope's
-		// label because a hook has no node.
-		ctx, placed := withPlacementSink(ctx)
-
-		result, err := executePut(ctx, scope.cfg, step, scope.bw)
-
-		recordPlacement(ctx, scope.stepRunner, placed, 0, placedStep{name: step.Put, slot: scope.label, node: ""})
-
-		if err == nil {
-			recordPutVersion(ctx, scope.st, step, result)
-		}
-
-		return err
+		return runHookPut(ctx, scope, step)
 	case config.StepKindAgent:
-		ctx, placed := withPlacementSink(ctx)
-
-		err := agent.RunHook(ctx, scope.cfg, scope.jobName, step, scope.bw, scope.st, placedAgentRunner(step))
-
-		recordPlacement(ctx, scope.stepRunner, placed, 0, placedStep{name: executedStepName(step), slot: scope.label, node: ""})
-
-		if err != nil {
-			return fmt.Errorf("agent hook: %w", err)
-		}
-
-		return nil
+		return runHookAgent(ctx, scope, step)
 	case config.StepKindTry:
 		// A try: hook body tolerates its own failure, exactly as it does in a
 		// plan. Without the toleration a `ensure: {try: {put: notify}}` — the
 		// use docs/control-flow.md advertises — still turned a green build red
 		// via runHooks' promotion of a failed on_success/ensure hook.
 		return tolerateTryFailure(ctx, scope.jobName, step, 0, runHookStep(ctx, scope, *step.Try))
-	default: // config.StepKindGet — not a valid hook body
-		return errors.New("unrecognized hook step (must be task, put, or agent)")
+	case config.StepKindDo, config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble:
+		return runHookBlock(ctx, scope, step, kind)
+	case config.StepKindGet, config.StepKindLoadVar, config.StepKindApproval:
+		// Refused at LoadConfig (config's hookBodyRefusal).
+		return fmt.Errorf("%s: is not valid in a hook", kind)
 	}
+
+	return nil
+}
+
+func runHookTask(ctx context.Context, scope hookScope, step config.Step) error {
+	rt, err := scope.cfg.ResolveTask(step)
+	if err != nil {
+		return fmt.Errorf("task %q: %w", step.Task, err)
+	}
+
+	// A hook carrying tags: acquires a machine like any other placed step
+	// — on an aws://launch/ worker it launches and bills an instance — and
+	// this is the one place an operator would least expect one to be
+	// running. Keyed on the scope's label rather than a node hash, because
+	// a hook has no node: it must never be skipped for having succeeded
+	// before, so it is deliberately outside the merkle chain.
+	ctx, placed := withPlacementSink(ctx)
+
+	err = executeTask(ctx, scope.cfg, step, rt, scope.bw, scope.st)
+
+	recordPlacement(ctx, scope.stepRunner, placed, 0, placedStep{name: executedStepName(step), slot: scope.label, node: ""})
+
+	return err
+}
+
+func runHookPut(ctx context.Context, scope hookScope, step config.Step) error {
+	// Recorded on the same terms as a task hook, keyed on the scope's
+	// label because a hook has no node.
+	ctx, placed := withPlacementSink(ctx)
+
+	result, err := executePut(ctx, scope.cfg, step, scope.bw)
+
+	recordPlacement(ctx, scope.stepRunner, placed, 0, placedStep{name: step.Put, slot: scope.label, node: ""})
+
+	if err == nil {
+		recordPutVersion(ctx, scope.st, step, result)
+	}
+
+	return err
+}
+
+func runHookAgent(ctx context.Context, scope hookScope, step config.Step) error {
+	ctx, placed := withPlacementSink(ctx)
+
+	err := agent.RunHook(ctx, scope.cfg, scope.jobName, step, scope.bw, scope.st, placedAgentRunner(step))
+
+	recordPlacement(ctx, scope.stepRunner, placed, 0, placedStep{name: executedStepName(step), slot: scope.label, node: ""})
+
+	if err != nil {
+		return fmt.Errorf("agent hook: %w", err)
+	}
+
+	return nil
+}
+
+// hookStepIndex is the plan position a hook body's children publish under:
+// none, the -1 the hook's own row carries.
+const hookStepIndex = -1
+
+// runHookBlock runs a block (or matrix) hook body through the plan's own
+// runners, so order, fail_fast, a race's winner, an ensemble's vote and a
+// matrix's cells all mean what they mean in a plan. The runner's store is
+// swapped for one that keeps the body off the merkle chain (offChainStore).
+// The children publish rows of their own under the hook's row, and keep
+// their own hooks.
+func runHookBlock(ctx context.Context, scope hookScope, step config.Step, kind config.StepKind) error {
+	r := scope.stepRunner
+	r.st = offChainStore{Store: r.st, slot: scope.label}
+
+	if len(step.Across) > 0 {
+		_, err := runAcrossStep(ctx, r, hookStepIndex, step, "")
+
+		return err
+	}
+
+	_, err := dispatchContainerKind(ctx, r, kind, hookStepIndex, step, nil, "")
+
+	return err
 }
 
 func logIfHookFailed(ctx context.Context, scope hookScope, name string, err error) {

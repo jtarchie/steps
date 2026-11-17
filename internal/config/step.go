@@ -228,7 +228,7 @@ type Step struct {
 	// writing the axis: MaxInFlight defaults to N rather than serial (an
 	// authored value wins), and cells render {{ .vars.count }}, the width no
 	// hand-written axis can carry. Task steps only; invalid beside across:,
-	// which declares its own axes, and on hooks, which never expand one. A
+	// which declares its own axes. A
 	// pointer like Attempts, so an explicit 0 is a load error rather than a
 	// silent single copy. Still set after desugar — the marker (Sharded) the
 	// count injection and the parallelism-worded diagnostics key on.
