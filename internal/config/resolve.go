@@ -46,7 +46,7 @@ type ResolvedTask struct {
 	// Limits caps this task's container CPU/memory. See
 	// Task.Limits/Step.Limits.
 	Limits *ContainerLimits
-	// Sandbox fences this task's host commands. Always the tasks: entry's: a step has no spelling for it, and an inline run: has no entry. See Task.Sandbox.
+	// Sandbox fences this task's host commands: the tasks: entry's, or the step's own (true-only; an inline run:'s only spelling). See Task.Sandbox.
 	Sandbox bool
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// means no timeout. Step.Timeout overrides Task.Timeout when set.
@@ -97,6 +97,11 @@ func resolveTaskRuntime(task *Task, step Step) containerSettings {
 		settings.Limits = step.Limits
 	}
 
+	// True-only, like Privileged: a step can fence an entry that did not ask, never unfence one that did.
+	if step.Sandboxed() {
+		settings.Sandbox = true
+	}
+
 	return settings
 }
 
@@ -111,7 +116,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		return ResolvedTask{
 			Name: step.Task, Run: step.Run, Fix: step.Fix,
 			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, Secrets: step.Secrets, User: step.User, Network: step.Network,
-			Privileged: step.Privileged, Limits: step.Limits, Timeout: step.Timeout,
+			Privileged: step.Privileged, Limits: step.Limits, Sandbox: step.Sandboxed(), Timeout: step.Timeout,
 			InputMapping: step.InputMapping, OutputMapping: step.OutputMapping,
 			Assert: step.Assert, Caches: step.Caches,
 		}, nil
@@ -258,7 +263,7 @@ type ResolvedInvocation struct {
 	// Limits caps this step's container CPU/memory. See
 	// Agent.Limits/Step.Limits.
 	Limits *ContainerLimits
-	// Sandbox fences this agent's run_shell/custom tools on the host. From the agents: entry only; see Agent.Sandbox.
+	// Sandbox fences this agent's run_shell/custom tools on the host: the agents: entry's, or the step's own (true-only); see Agent.Sandbox.
 	Sandbox bool
 	// Image, when non-empty, runs this step's run_shell/custom-tool commands
 	// in a container from this image instead of on the host. See
@@ -304,6 +309,11 @@ func resolveAgentRuntime(agent *Agent, step Step) (settings containerSettings) {
 
 	if step.Limits != nil {
 		settings.Limits = step.Limits
+	}
+
+	// True-only, like Privileged: a step can fence an entry that did not ask, never unfence one that did.
+	if step.Sandboxed() {
+		settings.Sandbox = true
 	}
 
 	return settings

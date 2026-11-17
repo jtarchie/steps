@@ -1993,6 +1993,10 @@
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
         },
+        "sandbox": {
+          "const": true,
+          "description": "Fence this task's or agent's host commands with the OS sandbox (darwin only), as the entry-level sandbox: does; the only spelling an inline run: has. True only: it adds the fence over an entry that did not ask and cannot remove one. Refused beside image:, on a placed step, and on get/put/blocks."
+        },
         "container_limits": {
           "$ref": "#/$defs/containerLimits"
         },

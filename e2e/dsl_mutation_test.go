@@ -110,6 +110,8 @@ var stepOperators = []stepOperator{
 	// Remove the decision the reader was handed and its consumer has
 	// nothing to read.
 	{tag: "context", apply: deleteKey("context")},
+	// Remove the fence and the write it was refusing lands.
+	{tag: "sandbox", apply: deleteKey("sandbox")},
 	// Remove a step's memory and either its remember has nowhere to file
 	// (a load error) or the reader is handed nothing to answer from.
 	{tag: "memory", apply: deleteKey("memory")},

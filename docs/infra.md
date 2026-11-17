@@ -648,11 +648,43 @@ Rules and edges:
 - **Darwin only for now**, built on `sandbox-exec`. Apple has marked it deprecated since macOS 10.12 and still ships it; Claude Code and Codex rely on it too. On any other OS a sandboxed step fails before its first command rather than running unfenced. The pipeline still validates there, so a pipeline is portable to the machine that can run it.
 - **`mktemp` with no template ignores `TMPDIR` on macOS** and writes to the shared per-user temp directory, which the fence refuses. Write `mktemp "$TMPDIR/name.XXXXXX"`, as above. Go, Python and Node honor `TMPDIR` on their own.
 - **A sandbox that cannot apply is an error, not a failed command.** The fence is tried once when the step starts. If `steps` itself runs inside a sandbox that forbids nesting, the step errors there rather than every command exiting nonzero and reading as the step saying no.
-- Settable on `resource_types:`, `tasks:` and `agents:` entries. There is no step-level spelling, and an inline `run:` step has no entry, so it is never sandboxed. A `when:` guard runs under its step's sandbox.
+- Settable on `resource_types:`, `tasks:` and `agents:` entries, and on a task or agent **step** (below). A `when:` guard runs under its step's sandbox.
 - **Refused beside `image:`**, including a step's own `image:` over a sandboxed task: a container is already its own fence, and one `sandbox-exec` cannot reach into. **Refused on a placed step** (`tags:`, inherited or not): the fence is on this machine, and the step would run on another.
 - **A `fix:` agent runs under the failing task's sandbox**, as it does under the task's image, so a fix agent's own `sandbox: true` is a load error. A delegated sub-agent runs under its own entry's.
 - **Not fenced**, exactly as under `image:`: an agent's stdio MCP servers and a CLI agent's own process. They are host subprocesses either way.
 - **Caching**: `sandbox: true` folds into the node's hash; unset leaves every existing key as it was.
+
+### On a step
+
+An inline `run:` has no entry to ask for the fence, and neither does a job hook, so a task or agent step can say `sandbox: true` itself. It also fences a step whose `tasks:` or `agents:` entry did not ask:
+
+```yaml
+tasks:
+- name: tidy
+  run: |
+    if touch ../escaped 2>/dev/null; then echo escaped; else echo refused; fi
+
+jobs:
+- name: build
+  plan:
+  - task: scratch
+    sandbox: true                # an inline run: has no other spelling
+    run: |
+      if touch ../escaped 2>/dev/null; then echo escaped; else echo refused; fi
+    assert:
+      stdout: refused
+  - task: tidy
+    sandbox: true                # the entry did not ask; this step does
+    assert:
+      stdout: refused
+  assert:
+    execution: [scratch, tidy]
+    outcome: succeeded
+```
+
+- **True only.** A step can add the fence, never take away an entry's, so `sandbox: false` on a step is a load error rather than a setting that silently does nothing.
+- **Only on task and agent steps**, hooks included. A `get` or `put` runs its resource type's commands, which the type fences, and a block (`do:`, `in_parallel:`, `try:`, ...) has no command of its own; each is a load error.
+- The entry-level rules hold: refused beside `image:` and on a placed step, and `network: none` becomes legal without `image:`.
 
 ## Passing environment through (`env:`)
 
