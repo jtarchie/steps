@@ -9,6 +9,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -22,35 +23,59 @@ import (
 // same reason Images() is pulled up front for a fixed image. A placed step's
 // worker pulls on create. A pull failure is an infrastructure error, never
 // the step saying no.
-func resolveStepImage(ctx context.Context, cfg *config.Config, jobName string, step config.Step) (config.Step, error) {
+//
+// The returned context carries the login the image's resource names
+// (resource.RegistryLogin) for exactly that reference, so the pull here and a
+// placed step's pull on create both send it, and no other pull does.
+func resolveStepImage(ctx context.Context, cfg *config.Config, jobName string, step config.Step) (context.Context, config.Step, error) {
 	// Every non-get dispatch lands here — across: cells, block children,
 	// hooks — so the build's fetched map is only snapshotted for a step that
 	// names an artifact.
 	artifacts := cfg.ImageArtifacts(jobName)
 	if !artifacts[step.Unwrap().Image] {
-		return step, nil
+		return ctx, step, nil
 	}
 
 	resolved, ok, err := config.ResolveArtifactImage(step, artifacts, fetchedImages(ctx))
 	if err != nil {
-		return step, fmt.Errorf("job %q: %w", jobName, err)
+		return ctx, step, fmt.Errorf("job %q: %w", jobName, err)
 	}
 
 	if !ok {
-		return step, nil
+		return ctx, step, nil
 	}
 
 	reference := resolved.Unwrap().Image
 	events.ImageNote(ctx, step.Unwrap().Image, reference)
 
+	ctx, err = withImageLogin(ctx, cfg, jobName, step.Unwrap().Image, reference)
+	if err != nil {
+		return ctx, step, fmt.Errorf("job %q: image %q: %w", jobName, step.Unwrap().Image, err)
+	}
+
 	if placementTag(resolved) == "" {
 		err = shell.PrepareImages(ctx, []string{reference})
 		if err != nil {
-			return step, fmt.Errorf("job %q: image %q: %w", jobName, step.Unwrap().Image, err)
+			return ctx, step, fmt.Errorf("job %q: image %q: %w", jobName, step.Unwrap().Image, err)
 		}
 	}
 
-	return resolved, nil
+	return ctx, resolved, nil
+}
+
+// withImageLogin attaches the artifact's resource login, if it names one, to every pull of reference under ctx.
+func withImageLogin(ctx context.Context, cfg *config.Config, jobName, artifact, reference string) (context.Context, error) {
+	res, err := cfg.ImageResource(jobName, artifact)
+	if err != nil || res == nil {
+		return ctx, nil //nolint:nilerr // ResolveArtifactImage already answered for the artifact; a resource it cannot name has no login
+	}
+
+	username, password, err := rsrc.RegistryLogin(ctx, cfg, *res)
+	if err != nil || username == "" {
+		return ctx, err //nolint:wrapcheck // the caller names the image
+	}
+
+	return shell.WithPullLogin(ctx, reference, username, password), nil
 }
 
 // fetchedImages snapshots what this build's gets fetched. A snapshot, because

@@ -2,80 +2,77 @@ package dockerapi
 
 // Which credentials, for a registry the daemon is about to be sent to.
 //
-// `docker pull` reads this out of config.json and the credential helpers; the
-// engine API does not, because the DAEMON has no access to the user's
-// keychain — the client resolves the credential and sends it on the request.
-// Skipping that step does not degrade to "public images still work": it turns
-// every pull from a private registry into a 401 on a machine where `docker
-// pull` succeeds, which is the least debuggable shape a regression can take.
+// The daemon has no access to anybody's keychain: a pull's login travels on
+// the request. steps sends only a login its caller attached for that exact
+// image (WithPullLogin), which is a registry-image resource's own: never one
+// read from docker's config.json, a credential helper or a keychain. What a
+// pipeline can pull is then what it says, on any machine, and a pull with no
+// login attached is anonymous.
 
 import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"log/slog"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"maps"
 	"strings"
-	"time"
 
 	"github.com/distribution/reference"
 )
 
-// dockerHubAuthKey is where a Docker Hub login is filed. Not a hostname:
-// `docker login` writes this legacy v1 URL, and a lookup by "docker.io" finds
-// nothing on a machine that is logged in.
+// dockerHubAuthKey is the server address a Docker Hub login is sent for. Not a
+// hostname: the engine files Hub under this legacy v1 URL.
 const dockerHubAuthKey = "https://index.docker.io/v1/"
 
-// credentialHelperTimeout bounds one helper. They are small programs that
-// usually answer instantly, but one of them talks to a system keychain that
-// can prompt — and a prompt nobody can see is indistinguishable from a hang.
-const credentialHelperTimeout = 10 * time.Second
+// Login is a registry login one pull carries.
+type Login struct {
+	Username string
+	Password string
+}
 
 // authConfig is the credential the engine API expects, base64'd onto the
 // request. Only the fields a pull needs are named.
 type authConfig struct {
 	Username      string `json:"username,omitempty"`
 	Password      string `json:"password,omitempty"`
-	IdentityToken string `json:"identitytoken,omitempty"`
 	ServerAddress string `json:"serveraddress,omitempty"`
 }
 
-// dockerConfig is the part of config.json that decides credentials.
-type dockerConfig struct {
-	Auths map[string]struct {
-		Auth     string `json:"auth"`
-		Username string `json:"username"`
-		Password string `json:"password"`
-	} `json:"auths"`
-	CredsStore  string            `json:"credsStore"`
-	CredHelpers map[string]string `json:"credHelpers"`
+type pullLoginsKey struct{}
+
+// WithPullLogin attaches login to every pull of exactly image under ctx. Keyed
+// on the whole reference, digest included, so a login reaches the one image it
+// was named for and no other image a step happens to pull.
+func WithPullLogin(ctx context.Context, image string, login Login) context.Context {
+	logins := maps.Clone(pullLogins(ctx))
+	if logins == nil {
+		logins = map[string]Login{}
+	}
+
+	logins[image] = login
+
+	return context.WithValue(ctx, pullLoginsKey{}, logins)
 }
 
-// RegistryAuth returns the value to send with a pull of ref, or "" for
-// an anonymous one.
+func pullLogins(ctx context.Context) map[string]Login {
+	logins, _ := ctx.Value(pullLoginsKey{}).(map[string]Login)
+
+	return logins
+}
+
+// registryAuth is the value to send with a pull of image, "" for an anonymous
+// one.
 //
-// Empty is a real answer, not a failure: most pulls are anonymous, and sending
-// a blank credential is NOT the same as sending none — a registry that serves
+// Empty is a real answer: most pulls are anonymous, and sending a blank
+// credential is NOT the same as sending none — a registry that serves
 // anonymous reads can reject an empty login outright.
-func RegistryAuth(ctx context.Context, ref string) string {
-	registry := registryFor(ref)
-
-	config, ok := readDockerConfig()
-	if !ok {
+func registryAuth(ctx context.Context, image string) string {
+	login, ok := pullLogins(ctx)[image]
+	if !ok || login.Username == "" {
 		return ""
 	}
-
-	credential, ok := lookupCredential(ctx, config, registry)
-	if !ok {
-		return ""
-	}
-
-	credential.ServerAddress = registry
 
 	//nolint:gosec // a credential IS the payload here; it travels to the daemon on the request, which is the whole mechanism
-	encoded, err := json.Marshal(credential)
+	encoded, err := json.Marshal(authConfig{Username: login.Username, Password: login.Password, ServerAddress: registryFor(image)})
 	if err != nil {
 		return ""
 	}
@@ -84,118 +81,15 @@ func RegistryAuth(ctx context.Context, ref string) string {
 	return base64.URLEncoding.EncodeToString(encoded)
 }
 
-// lookupCredential asks the three places docker asks, in docker's order: a
-// helper named for this registry, the global credential store, then a login
-// written straight into config.json.
-func lookupCredential(ctx context.Context, config dockerConfig, registry string) (authConfig, bool) {
-	if helper, ok := config.CredHelpers[registry]; ok {
-		return runCredentialHelper(ctx, helper, registry)
-	}
-
-	if config.CredsStore != "" {
-		return runCredentialHelper(ctx, config.CredsStore, registry)
-	}
-
-	entry, ok := config.Auths[registry]
-	if !ok {
-		return authConfig{}, false
-	}
-
-	if entry.Auth == "" {
-		return authConfig{Username: entry.Username, Password: entry.Password}, entry.Username != ""
-	}
-
-	decoded, err := base64.StdEncoding.DecodeString(entry.Auth)
-	if err != nil {
-		return authConfig{}, false
-	}
-
-	username, password, ok := strings.Cut(string(decoded), ":")
-	if !ok {
-		return authConfig{}, false
-	}
-
-	return authConfig{Username: username, Password: password}, true
-}
-
-// runCredentialHelper asks `docker-credential-<name> get` about a registry,
-// which is the whole protocol: the registry on stdin, a JSON credential on
-// stdout.
-//
-// The caller's context bounds it on top of the timeout, so a run that is being
-// cancelled is not held up by a helper waiting on a keychain.
-//
-// A helper that is missing or answers nonzero leaves the pull anonymous rather
-// than failing the run. That is the NORMAL answer for a registry the operator
-// never logged into — docker-credential-osxkeychain exits nonzero for a URL it
-// has nothing for — so treating it as fatal would break every anonymous pull
-// on a machine that has a credential store configured, which on macOS is most
-// of them.
-func runCredentialHelper(ctx context.Context, name, registry string) (authConfig, bool) {
-	ctx, cancel := context.WithTimeout(ctx, credentialHelperTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "docker-credential-"+name, "get") //nolint:gosec // the helper name comes from the operator's own docker configuration, exactly as the docker CLI reads it
-	cmd.Stdin = strings.NewReader(registry)
-
-	out, err := cmd.Output()
-	if err != nil {
-		slog.DebugContext(ctx, "dockerapi.credential_helper_declined", "helper", name, "registry", registry, "error", err)
-
-		return authConfig{}, false
-	}
-
-	var answer struct {
-		Username string `json:"Username"`
-		Secret   string `json:"Secret"`
-	}
-
-	err = json.Unmarshal(out, &answer)
-	if err != nil {
-		slog.DebugContext(ctx, "dockerapi.credential_helper_unreadable", "helper", name, "registry", registry, "error", err)
-
-		return authConfig{}, false
-	}
-
-	// A helper answers an identity-token login by naming this sentinel user,
-	// which the API expects in IdentityToken rather than as a password.
-	if answer.Username == "<token>" {
-		return authConfig{IdentityToken: answer.Secret}, true
-	}
-
-	if answer.Username == "" {
-		return authConfig{}, false
-	}
-
-	return authConfig{Username: answer.Username, Password: answer.Secret}, true
-}
-
-// readDockerConfig loads config.json, reporting whether there was one.
-func readDockerConfig() (dockerConfig, bool) {
-	raw, err := os.ReadFile(filepath.Join(configDir(), "config.json"))
-	if err != nil {
-		return dockerConfig{}, false
-	}
-
-	var config dockerConfig
-
-	err = json.Unmarshal(raw, &config)
-	if err != nil {
-		return dockerConfig{}, false
-	}
-
-	return config, true
-}
-
 // registryFor names the registry an image reference is served by, in the
-// spelling credentials are filed under. The host rule is docker's own, through
-// reference.Domain: "myteam/myimage" is Docker Hub, "localhost:5000/myimage"
-// is not.
+// spelling the engine expects a login's server address in. The host rule is
+// docker's own, through reference.Domain: "myteam/myimage" is Docker Hub,
+// "localhost:5000/myimage" is not.
 //
 // Only the name is parsed: the digest cannot move an image to another
-// registry, and a malformed one should reach the daemon, which says so, rather
-// than cost the pull its login. A name that does not parse is not one docker
-// would pull either, so Hub's key is as good an answer as any.
+// registry, and a malformed one should reach the daemon, which says so. A
+// name that does not parse is not one docker would pull either, so Hub's key
+// is as good an answer as any.
 func registryFor(ref string) string {
 	name, _, _ := strings.Cut(ref, "@")
 

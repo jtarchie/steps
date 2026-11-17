@@ -363,6 +363,28 @@ func (c *Config) ImageArtifacts(jobName string) map[string]bool {
 	return c.jobImageArtifacts(Job{})
 }
 
+// ImageResource is the resource an image: artifact in jobName fetches: a get of that name in the job (whose resource: may rename it), else the resource of that name. Its source: says how the image is pulled.
+func (c *Config) ImageResource(jobName, artifact string) (*Resource, error) {
+	job, err := c.FindJob(jobName)
+	if err == nil {
+		resourceName := ""
+
+		_ = job.visitSteps(func(_ string, step *Step) error {
+			if step.Get == artifact && resourceName == "" {
+				resourceName = step.GetResourceName()
+			}
+
+			return nil
+		})
+
+		if resourceName != "" {
+			return c.FindResource(resourceName)
+		}
+	}
+
+	return c.FindResource(artifact)
+}
+
 func (c *Config) jobImageArtifacts(job Job) map[string]bool {
 	names := map[string]bool{}
 

@@ -106,7 +106,7 @@ jobs:
 - **The name is an artifact if it is a resource's name or a get's name in the job.** Artifact names cannot contain `:`, `/` or `@`, so only a bare image name such as `alpine` can collide; the error for a resource no earlier get fetches says to rename the resource if the image was meant.
 - **Pulled at step start**, for a step running on this machine: after its get, before its `when:` guard (which runs in the same image), and outside its `timeout:` and `attempts:`. A warm daemon costs a local inspect. A placed step's worker pulls it as it would any image. The transcript notes which reference the step resolved to.
 - **Cache**: the resolved reference is what the step hashes, so a new digest runs the step again rather than skipping or reusing it.
-- **The pull's credentials are still the operator's docker credentials**, not the resource's `source:` (Concourse would use the resource's). A `registry-image` resource's own check and get use only its `source:` login; moving the pull onto it too is [#276](https://github.com/jtarchie/steps/issues/276).
+- **The pull's login is the resource's**, as in Concourse: a `registry-image` resource's `source.username` and `password_env` go with the pull of exactly the reference its get named, and with no other pull. steps never reads docker's `config.json`, a credential helper or a keychain, so an `image:` written as a string (`image: alpine:3`) is pulled anonymously; a private image comes through a [`registry-image`](resources.md#the-built-in-registry-image-type) get that names a login. A registry's refusal says so.
 - **Only a step's own `image:`** (including an agent step's override of its `agents:` entry, and a step hook's). A `tasks:`, `agents:` or `resource_types:` entry naming a resource or any job's get, and an artifact image in a job-level hook, are load errors: none of them can see a build's gets. A task's `outputs:` cannot be an image — only an earlier get of the name satisfies `steps validate` — and an artifact name arriving through a `load_var:` fails the step.
 
 ### Podman
@@ -123,7 +123,7 @@ export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock"   # Linux, after
 Skip it if `podman-mac-helper` or the `podman-docker` package already put a socket at `/var/run/docker.sock`. A podman connection that is an `ssh://` URI is refused, as an `ssh://` `DOCKER_HOST` is: steps does not dial ssh itself. Map a tag to a [`docker+ssh://` worker](#two-kinds-of-worker) instead, which forwards the remote socket and works through it.
 
 - **Short image names resolve to Docker Hub**, as under docker: `image: alpine:3` works. (The `podman` command line may prompt for a registry; its docker-compatible API does not.)
-- **Private registries: log in where steps looks.** steps reads credentials from docker's `~/.docker/config.json`; `podman login` writes them somewhere else. Use `podman login --compat-auth-file ~/.docker/config.json <registry>` — and not `--authfile`, which rewrites that file in podman's own format and drops everything else in it, the selected `docker context` and any `credsStore` included. If the file names a `credsStore` (Docker Desktop sets one), steps asks that helper and nothing else, as docker does, so a login written beside it is never read: log in through the helper (`docker login`) instead.
+- **Private registries: no login to make.** steps sends a pull the login its `registry-image` resource names and reads none of docker's or podman's own, so `podman login` changes nothing here.
 
 Not verified, and expected to need care:
 

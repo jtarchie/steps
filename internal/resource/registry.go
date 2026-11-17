@@ -60,20 +60,58 @@ func (r *RegistryImageResource) options(ctx context.Context) ([]remote.Option, e
 		return append(options, remote.WithAuth(authn.Anonymous)), nil
 	}
 
-	// A secrets: key first, so password_env may name one, then the daemon's environment: github-*'s token_env rule.
-	password, ok := shell.SecretEnv(ctx)[r.source.PasswordEnv]
-	if !ok {
-		password = os.Getenv(r.source.PasswordEnv)
-	}
-
-	if password == "" {
-		return nil, fmt.Errorf("$%s is not set (source.password_env)", r.source.PasswordEnv)
+	password, err := r.password(shell.SecretEnv(ctx))
+	if err != nil {
+		return nil, err
 	}
 
 	return append(options,
 		remote.WithAuth(authn.FromConfig(authn.AuthConfig{Username: r.source.Username, Password: password})),
 		remote.WithTransport(cleartextGuard{next: remote.DefaultTransport}),
 	), nil
+}
+
+// password reads password_env from the resource's resolved secrets first, so it may name a secrets: key, then the daemon's environment: github-*'s token_env rule.
+func (r *RegistryImageResource) password(secrets map[string]string) (string, error) {
+	password, ok := secrets[r.source.PasswordEnv]
+	if !ok {
+		password = os.Getenv(r.source.PasswordEnv)
+	}
+
+	if password == "" {
+		return "", fmt.Errorf("$%s is not set (source.password_env)", r.source.PasswordEnv)
+	}
+
+	return password, nil
+}
+
+// RegistryLogin is the login a step's docker daemon pulls res's image with: its username and password_env, or none (an anonymous pull) for a resource that names none or is not the built-in registry-image's. The same login the resource's check and get used, so what the check could see the step can run.
+func RegistryLogin(ctx context.Context, cfg *config.Config, res config.Resource) (username, password string, err error) {
+	resourceType, err := cfg.FindResourceType(res.Type)
+	if err != nil || resourceType == nil || !resourceType.Config.Registry {
+		return "", "", nil //nolint:nilerr // an unresolvable type is a load error reported elsewhere; it has no login to give
+	}
+
+	image, err := RegistryImage(res)
+	if err != nil || image.source.PasswordEnv == "" {
+		return "", "", err
+	}
+
+	var secrets map[string]string
+
+	if _, named := res.Secrets[image.source.PasswordEnv]; named {
+		secrets, err = LookupSecrets(ctx, res.Name, res.Secrets)
+		if err != nil {
+			return "", "", err
+		}
+	}
+
+	password, err = image.password(secrets)
+	if err != nil {
+		return "", "", fmt.Errorf("resource %q: %w", res.Name, err)
+	}
+
+	return image.source.Username, password, nil
 }
 
 // cleartextGuard refuses plain http to anything but this machine once a login is in play. go-containerregistry falls back to http on its own for a private-network address, which would send the password in the clear.

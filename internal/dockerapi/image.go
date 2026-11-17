@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/containerd/errdefs"
 	"github.com/distribution/reference"
@@ -109,21 +110,37 @@ func IsNotFound(err error) bool { return errdefs.IsNotFound(err) }
 // returned would read "repository does not exist" as a successful pull and
 // fail later, in a step, on an image that was never fetched.
 func (c *Client) Pull(ctx context.Context, image string, progress io.Writer) error {
+	_, login := pullLogins(ctx)[image]
+
 	response, err := c.api.ImagePull(ctx, image, client.ImagePullOptions{
-		RegistryAuth: RegistryAuth(ctx, image),
+		RegistryAuth: registryAuth(ctx, image),
 	})
 	if err != nil {
-		return fmt.Errorf("pulling image %q: %w", image, err)
+		return fmt.Errorf("pulling image %q: %w%s", image, err, loginHint(err, login))
 	}
 
 	defer func() { _ = response.Close() }()
 
 	err = reportPullProgress(response, progress)
 	if err != nil {
-		return fmt.Errorf("pulling image %q: %w", image, err)
+		return fmt.Errorf("pulling image %q: %w%s", image, err, loginHint(err, login))
 	}
 
 	return nil
+}
+
+// loginHint says where the login goes when a registry refused one, because the habit it replaces (docker login) no longer reaches steps, and nothing else in the daemon's words says so.
+func loginHint(err error, login bool) string {
+	text := strings.ToLower(err.Error())
+	if !strings.Contains(text, "auth") && !strings.Contains(text, "denied") {
+		return ""
+	}
+
+	if login {
+		return " — the registry refused the image's registry-image resource login (source.username, source.password_env)"
+	}
+
+	return " — steps does not read docker's config.json or credential helpers: pull a private image through a registry-image get that names a login (source.username, source.password_env), and name that get as the step's image:"
 }
 
 // pullMessage is one line of the daemon's pull stream.

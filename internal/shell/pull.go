@@ -80,3 +80,8 @@ func pullImage(ctx context.Context, client *dockerapi.Client, image string) erro
 
 	return nil
 }
+
+// WithPullLogin attaches a registry login to every pull of exactly image under ctx: the one way a pull carries a credential, since steps reads none of docker's own (dockerapi.WithPullLogin).
+func WithPullLogin(ctx context.Context, image, username, password string) context.Context {
+	return dockerapi.WithPullLogin(ctx, image, dockerapi.Login{Username: username, Password: password})
+}

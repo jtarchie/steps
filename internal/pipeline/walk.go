@@ -416,7 +416,7 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 // only ever returned for a cache-matched task or block; which steps can never
 // be chain-skipped is merkle.UncacheableReason's call.
 func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, skippable map[string]bool, parentHash string) (stepResult, error) {
-	step, err := resolveStepImage(ctx, r.cfg, r.jobName, step)
+	ctx, step, err := resolveStepImage(ctx, r.cfg, r.jobName, step)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d: %w", i, err)
 	}

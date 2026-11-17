@@ -137,7 +137,7 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 // runResolvedHookStep is runHookStep under the image resolveStepImage gives
 // it: a step's hook runs inside the build, so it may run in a fetched image.
 func runResolvedHookStep(ctx context.Context, scope hookScope, step config.Step) error {
-	step, err := resolveStepImage(ctx, scope.cfg, scope.jobName, step)
+	ctx, step, err := resolveStepImage(ctx, scope.cfg, scope.jobName, step)
 	if err != nil {
 		return err
 	}

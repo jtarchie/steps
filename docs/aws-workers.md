@@ -46,7 +46,7 @@ aws iam attach-role-policy --role-name "$NAME" \
   --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 ```
 
-The only policy the worker gets. It lets the SSM agent register the instance and carry a session — nothing else. **No S3 access, no ECR access**: steps' trees reach the instance through the session, and a public image needs no credentials. A private image is pulled by the instance's daemon with *your* docker credentials, read from your `~/.docker/config.json` and sent with the pull request, so the instance needs none of its own for that either.
+The only policy the worker gets. It lets the SSM agent register the instance and carry a session — nothing else. **No S3 access, no ECR access**: steps' trees reach the instance through the session, and a public image needs no credentials. A private image is pulled by the instance's daemon with the login its `registry-image` resource names, sent with the pull request, so the instance needs none of its own for that either.
 
 ```bash
 aws iam create-instance-profile --instance-profile-name "$NAME"

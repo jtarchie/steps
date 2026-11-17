@@ -32,7 +32,7 @@ func TestResolveStepImageNeverWritesTheLoadedConfig(t *testing.T) {
 		ctx, _ := withBuildVersions(context.Background())
 		recordFetched(ctx, "toolchain", cfg.Resources[0].Source, map[string]any{"digest": digest}, nil)
 
-		got, err := resolveStepImage(ctx, cfg, "build", cfg.Jobs[0].Plan[1])
+		_, got, err := resolveStepImage(ctx, cfg, "build", cfg.Jobs[0].Plan[1])
 		if err != nil {
 			t.Fatalf("resolveStepImage: %v", err)
 		}
@@ -63,7 +63,7 @@ func TestResolveStepImageWhileGetsRecord(t *testing.T) {
 			recordFetched(ctx, "other", map[string]any{}, map[string]any{"ref": "v"}, nil)
 		})
 		wg.Go(func() {
-			_, err := resolveStepImage(ctx, cfg, "build", cfg.Jobs[0].Plan[1])
+			_, _, err := resolveStepImage(ctx, cfg, "build", cfg.Jobs[0].Plan[1])
 			if err != nil {
 				t.Errorf("resolveStepImage: %v", err)
 			}
