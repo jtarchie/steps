@@ -23,6 +23,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+
+	"github.com/jtarchie/steps/internal/cli"
 )
 
 // fakeRegistry is an in-process OCI registry on loopback, optionally behind basic auth; host is what a repository names it by.
@@ -570,4 +572,48 @@ jobs:
 	if !strings.Contains(out, "own cron") || !strings.Contains(out, "own prs") {
 		t.Errorf("run printed %q, want both of the pipeline's own in: commands to have run", out)
 	}
+}
+
+// TestRegistryImagePasswordFromASecret: password_env may name a secrets: key, which the daemon resolves for the poll and the get alike; the value never reaches the database.
+func TestRegistryImagePasswordFromASecret(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeRegistry(t, "robot", e2eSecretValue)
+	fake.seed(t, fake.repo("private/app")+":latest", &authn.Basic{Username: "robot", Password: e2eSecretValue})
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	writePipelineFile(t, path, `
+resources:
+- name: app
+  type: registry-image
+  source:
+    repository: `+fake.repo("private/app")+`
+    username: robot
+    password_env: REGISTRY_PASSWORD
+  secrets:
+    REGISTRY_PASSWORD: ((ci:registry))
+
+jobs:
+- name: consume
+  plan:
+  - get: app
+    trigger: true
+`)
+
+	served := secretDaemon(t, dir, map[string]string{name + "/registry": e2eSecretValue}, "--interval", "200ms")
+	defer served.stopIfRunning(t)
+
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	if err != nil {
+		t.Fatalf("pipeline set: %v", err)
+	}
+
+	waitForRunStatus(t, served.state, name, newestRun(t, served.state, name, "consume").ID, "succeeded")
+
+	served.stop(t)
+
+	assertNotInDatabase(t, served.state, e2eSecretValue)
 }
