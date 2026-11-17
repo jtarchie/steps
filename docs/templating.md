@@ -42,7 +42,7 @@ run: gh pr comment --body {{ .args.body | shellquote }}
 
 Don't add surrounding `"..."` — `shellquote` already quotes only when needed. This matters most for LLM- or PR-authored values (e.g. a review body): without it, a body containing `` `replace` `` gets command-substituted by the shell and posted with those words silently missing.
 
-`steps validate` warns — and still exits 0 — on every `{{ }}` that reaches the shell without ending in `shellquote`: in a resource `check`/`in`/`out`, one reading `.source`, `.version` or `.params`; in a custom tool's `run:`, one reading `.args`.
+`steps validate` warns — and still exits 0 — on every `{{ }}` that reaches the shell without ending in `shellquote`: in a resource `check`/`in`/`out`, one reading `.source`, `.version` or `.params`; in a custom tool's `run:`, one reading `.args`. It warns, too, on a get's fact (`((.:pr.title))`) in a step's `run:` — see [resources.md](resources.md#facts-what-a-get-or-put-says-about-its-version).
 
 ## Pipeline vars: `((var))`, `load_var:` and `((.:name))`
 

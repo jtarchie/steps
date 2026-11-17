@@ -99,6 +99,33 @@ func TestEndToEndAMatrixReadingAGetsFactsAlwaysRuns(t *testing.T) {
 	}
 }
 
+// TestValidateWarnsWhenAGetsFactReachesTheShell: a pull request's title is its author's text, and run: is sh -c, so a fact pasted there is shell syntax somebody outside the pipeline wrote. A warning, as for an unquoted {{ }}.
+func TestValidateWarnsWhenAGetsFactReachesTheShell(t *testing.T) {
+	t.Parallel()
+
+	stderr := captureStderr(t)
+	path := writePipeline(t, t.TempDir(), factsReaderPipeline("/dev/null")+`  - load_var: tag
+    inputs: [answer]
+    file: answer/comment.md
+  - task: tell
+    run: echo ((.:tag))
+`)
+
+	err := stepsRun(t, []string{"validate", path, "--syntax-only"})
+	if err != nil {
+		t.Fatalf("a warning failed validate: %v", err)
+	}
+
+	got := stderr()
+	if !strings.Contains(got, `warning: job "answer" step 1`) || !strings.Contains(got, `run: ((.:pr.title)) is a fact get "pr" reported`) {
+		t.Errorf("no warning for a fact in run:\n%s", got)
+	}
+
+	if strings.Contains(got, "((.:tag))") {
+		t.Errorf("a load_var: value is the pipeline's own, not warned on:\n%s", got)
+	}
+}
+
 func TestEndToEndAMissingFactFailsTheStep(t *testing.T) {
 	t.Parallel()
 
@@ -293,6 +320,33 @@ func TestEndToEndAMatrixDoesNotReadACapturedValueAsATemplate(t *testing.T) {
 
 	if got := readFileString(t, log); got != "api {{ .vars.dim }}\n" {
 		t.Errorf("the cell wrote %q, want the fact as its text", got)
+	}
+}
+
+// TestEndToEndAHiddenStringIsMaskedInsideAWholeValue: ((.:creds)) is substituted as JSON, which spells a tab as \t, so the mask of the raw string alone missed it.
+func TestEndToEndAHiddenStringIsMaskedInsideAWholeValue(t *testing.T) {
+	t.Parallel()
+
+	out, err := runOut(t, writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: write
+    outputs: [meta]
+    run: |
+      printf '%s' '{"pw": "a\tb-secret-value"}' > meta/creds.json
+  - load_var: creds
+    inputs: [meta]
+    file: meta/creds.json
+  - task: use
+    run: printf '%s\n' '((.:creds))'
+`))
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+
+	if strings.Contains(out, "b-secret-value") || !strings.Contains(out, `{"pw":"***"}`) {
+		t.Errorf("a hidden string was shown inside the whole value:\n%s", out)
 	}
 }
 

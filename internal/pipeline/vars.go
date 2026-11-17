@@ -5,12 +5,14 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -169,6 +171,7 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 			}
 
 			redact.SecretsFrom(ctx).Add(text)
+			redact.SecretsFrom(ctx).Add(jsonSpelling(text))
 		}
 	}
 
@@ -190,6 +193,22 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(ctx, node), r.jobName, store.NodeSucceeded, nil, nil))
 
 	return ran(hash), nil
+}
+
+// jsonSpelling is text as a whole value substituted as JSON spells it (a tab
+// as \t, a quote as \"), which a mask of the raw text does not match.
+func jsonSpelling(text string) string {
+	var spelled strings.Builder
+
+	encoder := json.NewEncoder(&spelled)
+	encoder.SetEscapeHTML(false)
+
+	err := encoder.Encode(text)
+	if err != nil {
+		return text
+	}
+
+	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimSuffix(spelled.String(), "\n"), `"`), `"`)
 }
 
 // maxVarFileBytes caps what a load_var: reads, for the reason from_file:'s cap
