@@ -85,7 +85,7 @@ Three roles, Concourse's, each including the one below it:
 | Role | May |
 |---|---|
 | `viewer` | read every page |
-| `operator` | trigger (pinned only to versions that passed the job's `passed:`), retry, approve, reject, answer, abort, release, pause and unpause |
+| `operator` | trigger (pinned only to versions that passed the job's `passed:`), retry, check a resource, approve, reject, answer, abort, release, pause and unpause |
 | `admin` | set, rename and destroy pipelines, connect and test MCP servers, read the [activity log](web.md#activity), and [pin a trigger past `passed:`](web.md#starting-a-run-from-the-terminal) |
 
 Each `--role` is a rule about the signed-in person, an [expr](https://expr-lang.org) expression over `Provider` (`local`, `github`, `google`), `UserID` (the account name, GitHub login or Google address), `ID` (the provider's own id for the account — GitHub's numeric user id, Google's subject, a local account's name), `Email`, `Organizations` and `Groups`.

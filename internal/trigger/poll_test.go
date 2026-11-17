@@ -86,7 +86,7 @@ func TestPollEnqueuesAndLeavesTheRowAlone(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	go func() { done <- Poll(ctx, staticConfig(cfg), st, 20*time.Millisecond) }()
+	go func() { done <- Poll(ctx, staticConfig(cfg), st, 20*time.Millisecond, nil) }()
 
 	id, jobName := waitForQueuedJob(ctx, t, st)
 
@@ -131,7 +131,7 @@ func TestPollWaitsOutAConfigWithNothingToPoll(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	go func() { done <- Poll(ctx, staticConfig(cfg), st, 20*time.Millisecond) }()
+	go func() { done <- Poll(ctx, staticConfig(cfg), st, 20*time.Millisecond, nil) }()
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -244,7 +244,7 @@ func TestPollFollowsAConfigSwap(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	go func() { done <- Poll(ctx, current.Load, st, 20*time.Millisecond) }()
+	go func() { done <- Poll(ctx, current.Load, st, 20*time.Millisecond, nil) }()
 
 	// build can only come from a poll cycle, and the swap below can only
 	// happen after one — so publish, which exists in no configuration the
@@ -312,7 +312,7 @@ func TestPollStartsPollingAConfigThatGainsATrigger(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	go func() { done <- Poll(ctx, source.get, st, 20*time.Millisecond) }()
+	go func() { done <- Poll(ctx, source.get, st, 20*time.Millisecond, nil) }()
 
 	// Two reads: the loop has been round at least once with nothing to poll,
 	// so the enqueue below cannot be the work of a first cycle that happened
@@ -355,7 +355,7 @@ func TestPollStopsPollingAConfigThatLosesItsTriggers(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	go func() { done <- Poll(ctx, source.get, st, 20*time.Millisecond) }()
+	go func() { done <- Poll(ctx, source.get, st, 20*time.Millisecond, nil) }()
 
 	source.waitForReads(t, 2)
 	source.value.Store(after)

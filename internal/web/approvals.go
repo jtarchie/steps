@@ -1,10 +1,12 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -13,39 +15,110 @@ import (
 	"github.com/labstack/echo/v5"
 )
 
-// handleApprovals lists decisions, pending first.
-func (s *Server) handleApprovals(c *echo.Context) error {
-	pipeline := pipelineOf(c)
+// decisionsPage is how many decided rows one page of the approvals or questions history shows.
+const decisionsPage = 50
 
-	approvals, err := pipeline.Store.Approvals(c.Request().Context(), false, historyLimit)
-	if err != nil {
-		return fmt.Errorf("web: %w", err)
+// decisionKind is all that differs between the approvals page and the questions page: the words, the statuses, and the one query each store answers. Everything else — the chips, the box, what waits above what was decided, the cursor — is decisionPage, written once.
+type decisionKind[T any] struct {
+	section, hint, label string
+	// pending is the status of a row still waiting on a person; closed are the others.
+	pending string
+	closed  []string
+	find    func(ctx context.Context, job, text string, statuses []string, before int64, limit int) ([]T, error)
+	id      func(T) int64
+}
+
+// typed is a list of status words as the store's own status type.
+func typed[S ~string](words []string) []S {
+	out := make([]S, len(words))
+	for i, word := range words {
+		out[i] = S(word)
 	}
 
+	return out
+}
+
+// decisionPage draws what still waits, oldest first and never capped — a build parked behind one that scrolled off would wait forever — above a paged history of what was decided.
+func decisionPage[T any](s *Server, c *echo.Context, kind decisionKind[T]) error {
+	pipeline := pipelineOf(c)
+	ctx := c.Request().Context()
+	loc := s.renderer.localeOf(c)
+	query := c.Request().URL.Query()
+
+	list := newList("/p/"+pipeline.Slug+"/"+kind.section, query, loc.text(kind.hint), loc.text(kind.label))
+	job := list.facet(loc, "job", pipeline.Config().JobNames(), identity)
+	status := list.facet(loc, "status", append([]string{kind.pending}, kind.closed...), func(v string) string { return loc.word("status", v) })
+	list.searched()
+
+	before, _ := strconv.ParseInt(query.Get("before"), 10, 64)
+
+	var pending, history []T
+
+	// Only on the first page: a reader paging back through the history has already been shown what waits.
+	if before == 0 && (status == "" || status == kind.pending) {
+		var err error
+
+		pending, err = kind.find(ctx, job, list.Text, []string{kind.pending}, 0, 0)
+		if err != nil {
+			return fmt.Errorf("web: %w", err)
+		}
+
+		slices.Reverse(pending)
+	}
+
+	if status != kind.pending {
+		decided := kind.closed
+		if status != "" {
+			decided = []string{status}
+		}
+
+		var err error
+
+		history, err = kind.find(ctx, job, list.Text, decided, before, decisionsPage+1)
+		if err != nil {
+			return fmt.Errorf("web: %w", err)
+		}
+
+		history = page(list, history, decisionsPage, func(row T) string { return strconv.FormatInt(kind.id(row), 10) })
+	}
+
+	list.Shown = len(pending) + len(history)
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
-	return c.Render(http.StatusOK, "approvals", map[string]any{
-		"Nav":       s.nav(c),
-		"Title":     "approvals",
-		"Approvals": approvals,
+	return c.Render(http.StatusOK, kind.section, map[string]any{
+		"Nav":     s.nav(c),
+		"Title":   kind.section,
+		"Pending": pending,
+		"History": history,
+		"List":    list,
 	})
 }
 
-// handleQuestions lists what agents have asked: everything still waiting
-// first, then the rest newest-first (see Store.Questions for why the order is not
-// simply recency).
+func (s *Server) handleApprovals(c *echo.Context) error {
+	pipeline := pipelineOf(c)
+
+	return decisionPage(s, c, decisionKind[store.Approval]{
+		section: "approvals", hint: "approvals.search.hint", label: "approvals.search.label",
+		pending: string(store.ApprovalPending),
+		closed:  []string{string(store.ApprovalApproved), string(store.ApprovalRejected), string(store.ApprovalExpired)},
+		find: func(ctx context.Context, job, text string, statuses []string, before int64, limit int) ([]store.Approval, error) {
+			return pipeline.Store.FindApprovals(ctx, store.ApprovalQuery{Job: job, Text: text, Statuses: typed[store.ApprovalStatus](statuses), Before: before, Limit: limit})
+		},
+		id: func(a store.Approval) int64 { return a.ID },
+	})
+}
+
 func (s *Server) handleQuestions(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 
-	questions, err := pipeline.Store.Questions(c.Request().Context(), false, historyLimit)
-	if err != nil {
-		return fmt.Errorf("web: %w", err)
-	}
-
-	//nolint:wrapcheck // render errors surface through the shared error handler
-	return c.Render(http.StatusOK, "questions", map[string]any{
-		"Nav":       s.nav(c),
-		"Title":     "questions",
-		"Questions": questions,
+	return decisionPage(s, c, decisionKind[store.Question]{
+		section: "questions", hint: "questions.search.hint", label: "questions.search.label",
+		pending: string(store.QuestionPending),
+		closed:  []string{string(store.QuestionAnswered), string(store.QuestionExpired), string(store.QuestionAborted)},
+		find: func(ctx context.Context, job, text string, statuses []string, before int64, limit int) ([]store.Question, error) {
+			return pipeline.Store.FindQuestions(ctx, store.QuestionQuery{Job: job, Text: text, Statuses: typed[store.QuestionStatus](statuses), Before: before, Limit: limit})
+		},
+		id: func(q store.Question) int64 { return q.ID },
 	})
 }
 

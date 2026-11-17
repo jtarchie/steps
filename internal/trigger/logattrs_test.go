@@ -94,7 +94,7 @@ func TestAnUnrecordedVersionNamesItsResource(t *testing.T) {
 
 	out := captureLog(t)
 
-	pollAndLog(t.Context(), cfg, refusingVersions{st})
+	pollAndLog(t.Context(), cfg, refusingVersions{st}, Resources(cfg))
 
 	line := logLine(out.String(), "trigger.poll")
 	if !strings.Contains(line, "record version") || !strings.Contains(line, "resource=items") {
@@ -148,7 +148,7 @@ func TestEveryFailingCheckGetsItsOwnLine(t *testing.T) {
 	st := mustOpenStore(t, dir)
 	out := captureLog(t)
 
-	pollAndLog(t.Context(), cfg, st)
+	pollAndLog(t.Context(), cfg, st, Resources(cfg))
 
 	var named []string
 
@@ -174,7 +174,7 @@ func TestAShutdownIsOneLineNotOnePerResource(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	pollAndLog(ctx, cfg, st)
+	pollAndLog(ctx, cfg, st, Resources(cfg))
 
 	if got := strings.Count(out.String(), "msg=trigger.poll "); got != 1 {
 		t.Errorf("a cancelled poll logged %d trigger.poll lines, want 1:\n%s", got, out)

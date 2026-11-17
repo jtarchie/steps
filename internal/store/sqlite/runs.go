@@ -303,6 +303,11 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]stor
 func (s *Store) FindRuns(ctx context.Context, query store.RunQuery) ([]store.RunRow, error) {
 	filter, args := byJob(query.Job, []any{s.pipelineID})
 
+	if query.Status != "" {
+		filter += ` AND status = ?`
+		args = append(args, string(query.Status))
+	}
+
 	if query.Text != "" {
 		filter += `
 		  AND (instr(lower(id), lower(?)) > 0 OR instr(lower(job_name), lower(?)) > 0

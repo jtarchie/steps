@@ -5,6 +5,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -393,5 +394,88 @@ func (s suite) TestARequestSurvivesBeingDecidedAtOnce(t *testing.T) {
 		if err != nil {
 			t.Fatalf("request %d: %v", i, err)
 		}
+	}
+}
+
+// TestFindApprovalsNarrowsAndPages is the approvals page's one query: a job, a status, a typed word, and a keyset cursor that combine rather than override each other.
+func (s suite) TestFindApprovalsNarrowsAndPages(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	request := func(job, message string) int64 {
+		t.Helper()
+
+		id, err := st.RequestApproval(ctx, job, message)
+		if err != nil {
+			t.Fatalf("RequestApproval: %v", err)
+		}
+
+		return id
+	}
+
+	shipped := request("deploy", "ship v1?")
+	refused := request("deploy", "ship v2?")
+	waiting := request("deploy", "ship v3?")
+	other := request("migrate", "drop the table?")
+
+	err := st.DecideApproval(ctx, shipped, store.ApprovalApproved, "alice", "looks fine")
+	if err != nil {
+		t.Fatalf("DecideApproval: %v", err)
+	}
+
+	err = st.DecideApproval(ctx, refused, store.ApprovalRejected, "bob", "Friday freeze")
+	if err != nil {
+		t.Fatalf("DecideApproval: %v", err)
+	}
+
+	ids := func(query store.ApprovalQuery) []int64 {
+		t.Helper()
+
+		rows, err := st.FindApprovals(ctx, query)
+		if err != nil {
+			t.Fatalf("FindApprovals(%+v): %v", query, err)
+		}
+
+		out := make([]int64, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, row.ID)
+		}
+
+		return out
+	}
+
+	for _, tc := range []struct {
+		name  string
+		query store.ApprovalQuery
+		want  []int64
+	}{
+		{"everything, newest first", store.ApprovalQuery{}, []int64{other, waiting, refused, shipped}},
+		{"one job", store.ApprovalQuery{Job: "migrate"}, []int64{other}},
+		{"one status", store.ApprovalQuery{Statuses: []store.ApprovalStatus{store.ApprovalPending}}, []int64{other, waiting}},
+		{"several statuses", store.ApprovalQuery{Statuses: []store.ApprovalStatus{store.ApprovalApproved, store.ApprovalRejected}}, []int64{refused, shipped}},
+		{"a reason, any case", store.ApprovalQuery{Text: "friday"}, []int64{refused}},
+		{"who decided", store.ApprovalQuery{Text: "ALICE"}, []int64{shipped}},
+		{"the message", store.ApprovalQuery{Text: "v3"}, []int64{waiting}},
+		{"a percent is a character, not a wildcard", store.ApprovalQuery{Text: "%"}, []int64{}},
+		{"text within a status", store.ApprovalQuery{Text: "ship", Statuses: []store.ApprovalStatus{store.ApprovalPending}}, []int64{waiting}},
+		{"a page", store.ApprovalQuery{Job: "deploy", Limit: 2}, []int64{waiting, refused}},
+		{"the next page", store.ApprovalQuery{Job: "deploy", Limit: 2, Before: refused}, []int64{shipped}},
+	} {
+		if got := ids(tc.query); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: FindApprovals = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	neighbour := s.open(t, "other")
+
+	_, err = neighbour.RequestApproval(ctx, "deploy", "ship v1?")
+	if err != nil {
+		t.Fatalf("RequestApproval: %v", err)
+	}
+
+	if got := ids(store.ApprovalQuery{Text: "v1"}); !slices.Equal(got, []int64{shipped}) {
+		t.Errorf("FindApprovals reached a neighbour's approval: %v", got)
 	}
 }

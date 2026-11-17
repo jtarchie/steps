@@ -166,3 +166,39 @@ func scanQuestion(row rowScanner) (store.Question, error) {
 
 	return question, err //nolint:wrapcheck // DecodeOptions says what it was reading
 }
+
+// FindQuestions is the trail narrowed and paged, newest first.
+func (s *Store) FindQuestions(ctx context.Context, query store.QuestionQuery) ([]store.Question, error) {
+	filter, args := "", []any{s.pipelineID}
+
+	if query.Job != "" {
+		filter += ` AND q.job_name = ` + next(args)
+		args = append(args, query.Job)
+	}
+
+	if len(query.Statuses) > 0 {
+		filter += ` AND q.status = ANY(` + next(args) + `)`
+		args = append(args, textArray(query.Statuses))
+	}
+
+	if query.Text != "" {
+		text := "lower(" + next(args) + ")"
+		args = append(args, query.Text)
+		filter += `
+		  AND (strpos(lower(q.question), ` + text + `) > 0 OR strpos(lower(COALESCE(q.answer, '')), ` + text + `) > 0
+		    OR strpos(lower(COALESCE(q.answered_by, '')), ` + text + `) > 0 OR strpos(lower(q.agent_name), ` + text + `) > 0
+		    OR strpos(lower(q.run_id), ` + text + `) > 0 OR strpos(lower(q.job_name), ` + text + `) > 0
+		    OR strpos(lower(q.status), ` + text + `) > 0)`
+	}
+
+	if query.Before > 0 {
+		filter += ` AND q.id < ` + next(args)
+		args = append(args, query.Before)
+	}
+
+	return collect(ctx, s.db, "questions", questionColumns+`
+		WHERE r.pipeline_id = $1`+filter+`
+		ORDER BY q.id DESC LIMIT `+next(args), append(args, rowLimit(query.Limit)), func(rows *sql.Rows) (store.Question, error) {
+		return scanQuestion(rows)
+	})
+}

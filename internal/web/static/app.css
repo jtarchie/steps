@@ -1182,13 +1182,16 @@ pre.log { margin: 8px 0 0; font-family: var(--mono); }
   color: var(--faint);
   font-size: 12px;
   margin-top: 3px;
-  max-width: 62ch;
+  max-width: 40ch;
   overflow-wrap: anywhere;
 }
 .mcp .mcp-meta.err { color: var(--red); }
 .mcp .mcp-meta a { color: var(--blue); }
-.mcp td.stat { white-space: nowrap; }
-.mcp td.uses { font-size: 12px; max-width: 26ch; overflow-wrap: anywhere; }
+/* The status wraps rather than setting the table's width: "connected, renews automatically" held on one line beside a 48ch target pushed the buttons past the edge, behind a scrollbar nobody saw. */
+.mcp td.stat { min-width: 14ch; max-width: 22ch; }
+.mcp td.stat .st { white-space: normal; overflow-wrap: anywhere; }
+.mcp td.uses { font-size: 12px; max-width: 26ch; white-space: normal; overflow-wrap: anywhere; }
+.mcp td.who { white-space: normal; }
 /* Right-aligned so the buttons form one column down the page rather than
    landing wherever the row above them happened to end. */
 .mcp td.acts, .mcp th.acts { text-align: right; white-space: nowrap; }
@@ -1200,7 +1203,17 @@ pre.log { margin: 8px 0 0; font-family: var(--mono); }
    between two tbodies. */
 .mcp tr.grouprow td { border-bottom: 1px solid var(--line); padding-top: 14px; padding-bottom: 4px; }
 .mcp tbody:first-of-type tr.grouprow td { padding-top: 8px; }
-.mcp-note { font-size: 12px; margin-top: 14px; max-width: 78ch; }
+.list-note { font-size: 12px; margin-top: 14px; max-width: 78ch; }
+/* A decided approval's or question's words wrap within their cell: the sentence is what a reader came for, and nowrap would set the table's width by the longest one. */
+table.decisions td { vertical-align: top; white-space: normal; }
+table.decisions td:first-child, table.decisions td:last-child { white-space: nowrap; }
+table.decisions td.said { overflow-wrap: anywhere; min-width: 18ch; max-width: 48ch; }
+/* A version is one line, ellipsised, with the whole of it on hover and in search: a sha that will not wrap sets a table's width, and the Check button lived past it. */
+.vline { display: inline-block; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+table.resources td.uses { white-space: normal; min-width: 10ch; }
+table.resources td.uses a, .mcp td.uses a { display: inline-block; line-height: 24px; }
+td.who .meta-sub { color: var(--faint); font-size: 12px; }
+td.who > a { display: inline-block; line-height: 24px; }
 
 
 .diffnote { color: var(--dim); font-size: 12px; margin: -8px 0 18px; }
@@ -1254,10 +1267,11 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
 }
 .decide input[type="text"]::placeholder { color: var(--faint); }
 
-/* ---- runs history ---- */
-/* The search box and the job row sit above the polled region, so they read as the page's own controls rather than as rows of it. The job row borrows the run strip's current-run underline: one way of saying "this is where you are". */
-.runsfind { display: flex; gap: 8px; align-items: center; max-width: 640px; margin: 14px 0 10px; }
-.runsfind input[type="search"] {
+/* ---- list pages ---- */
+/* The search box and the chip rows sit above the polled region, so they read as the page's own controls rather than as rows of it. A chip borrows the run strip's current-run underline: one way of saying "this is where you are". */
+.listfind { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; max-width: 640px; margin: 14px 0 10px; }
+.listhint { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--faint); }
+.listfind input[type="search"] {
   flex: 1;
   min-width: 0;
   font: inherit;
@@ -1268,11 +1282,12 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
   border-radius: 3px;
   padding: 4px 10px;
 }
-.runsfind input[type="search"]::placeholder { color: var(--faint); }
-.runsjobs { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; line-height: 24px; margin-bottom: 14px; }
-.runsjobs a[aria-current] { color: var(--fg); border-bottom: 1px solid var(--fg); }
+.listfind input[type="search"]::placeholder { color: var(--faint); }
+.facets { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; line-height: 24px; margin-bottom: 4px; }
+.facets:not(:has(+ .facets)) { margin-bottom: 14px; }
+.facets a[aria-current] { color: var(--fg); border-bottom: 1px solid var(--fg); }
 @media (max-width: 640px), (max-height: 500px) {
-  .runsfind input[type="search"] { font-size: 16px; }
+  .listfind input[type="search"] { font-size: 16px; }
 }
 
 /* ---- jump palette ---- */
@@ -1470,6 +1485,10 @@ table.versions tbody th {
 table.versions tbody tr:last-child th { border-bottom: 0; }
 table.versions thead th a { color: inherit; }
 table.versions td .when { color: var(--dim); font-family: var(--sans); font-size: 12px; }
+/* The per-version run button trails its cell, small, so the state word stays what the column reads as. */
+table.versions td .cellrun { margin-left: 6px; }
+table.versions td .cellrun .btn { min-width: 24px; min-height: 24px; padding: 0 6px; font-size: 11px; line-height: 22px; }
+@media (pointer: coarse) { table.versions td .cellrun .btn { min-width: 44px; min-height: 44px; } }
 /* On a phone the version wraps rather than pushing the job columns — the
    reason anyone opened the page — off the right edge. */
 @media (max-width: 640px) {
@@ -1524,6 +1543,23 @@ table.activity td:first-child { white-space: nowrap; }
   table.activity td:nth-child(2) { grid-column: 2 / -1; }
   table.activity td:nth-child(4) { min-width: 0; overflow-wrap: anywhere; }
   .tablewrap:has(> table.activity) { overflow-x: visible; }
+}
+/* A phone reads a row of a list as a card — its status, name and numbers on a line that wraps, the sentences and versions each on a line of their own, its button at the end — rather than a table that scrolls sideways past the thing to press. td.wide takes a whole line. */
+@media (max-width: 640px) {
+  table.stack, table.stack tbody { display: block; }
+  table.stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  table.stack tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 10px 12px; border-top: 1px solid var(--line-soft); }
+  table.stack tbody tr:first-child { border-top: 0; }
+  table.stack td { padding: 0; border: 0; white-space: normal; overflow-wrap: anywhere; min-width: 0; max-width: none; }
+  table.stack td.wide, table.stack tr.checkfail td, table.stack tr.grouprow td { flex-basis: 100%; }
+  table.stack td.rowextra { margin-left: auto; }
+  /* A cell that holds only a dash says nothing on a card. */
+  table.stack td.empty { display: none; }
+  table.stack .vline { max-width: 100%; }
+  .tablewrap:has(> table.stack) { overflow-x: visible; }
+  /* The version grid keeps its table — a version against each job is a grid — but its cells may wrap. */
+  table.versions td { white-space: normal; }
+  table.versions tbody th { min-width: 8em; }
 }
 .signin-providers { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
 .signin-providers .btn { text-align: center; padding: 8px 12px; }

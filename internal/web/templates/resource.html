@@ -1,9 +1,12 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps resource {{.Resource.Name}}</b></h1>
-<p class="metaline" id="resource-meta">
+{{/* A div, not a p: the Check form inside it would close a paragraph early. */}}
+<div class="metaline" id="resource-meta">
   {{.Resource.Type}}<span class="sep">·</span>
   {{if .Checked.Name}}{{t "resource.lastchecked" (ago .Checked.CheckedAt)}}{{else}}<span class="faint">{{t "resource.neverchecked"}}</span>{{end}}
-</p>
+  {{- if and .CanCheck (not .Nav.ReadOnly)}}<form class="inline" method="post" action="/p/{{.Nav.Current}}/resources/{{.Resource.Name}}/check"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit"{{if .Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "resource.check.title"}}"{{end}}>↻ {{t "resource.check"}}</button></form>{{end}}
+</div>
+{{template "findbar" .List}}
 
 <div id="resource-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#resource-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#resource-meta:outerMorph,#statusline:outerMorph">
 {{/* Above the versions, because the list below it is what the check used to
@@ -11,12 +14,15 @@
      it as current. */}}
 {{if .Failing.Name}}<div class="checkfail"><b>{{t "resource.failingcheck"}}</b> <span class="meta">{{th "resource.lasttried" (agoTag .Failing.FailedAt)}}</span><pre>{{.Failing.Message}}</pre></div>{{end}}
 <h2 class="eyebrow">{{t "resource.versions"}} <span class="unbold">{{th "resource.versions.note" (code "version_history:")}}</span></h2>
+{{if .List.Filters}}<p class="metaline">{{template "filterline" .List}}</p>{{end}}
 {{if not .Consumers}}<p class="metaline faint">{{t "resource.nojob"}}</p>{{end}}
+{{$controls := not .Nav.ReadOnly}}
 <div class="tablewrap">
   <table class="versions">
     <thead><tr><th scope="col">{{t "th.version"}}</th>{{range .Consumers}}<th scope="col"><a href="/p/{{$.Nav.Current}}/jobs/{{pathseg .Job}}">{{.Job}}</a></th>{{end}}</tr></thead>
     <tbody>
       {{range .Rows}}
+      {{$pin := .Pin}}
       <tr><th scope="row">{{jsonLine .Version}}{{with .Facts}}{{template "facts" .}}{{end}}</th>{{range .Cells}}
         {{- $run := .Latest}}
         <td{{if $run.ID}} title="{{cellTitle .}}"{{end}}>{{if $run.ID -}}
@@ -25,9 +31,10 @@
           <span class="when">{{agoTag $run.StartedAt}}{{if gt (len .Runs) 1}} · {{t "resource.runs" (len .Runs)}}{{end}}</span>
         {{- else -}}
           <span class="st st-{{.Class}}">{{word "cell" .State}}</span>
-        {{- end}}</td>{{end}}</tr>
+        {{- end}}
+        {{- if and $controls $pin}}<form class="inline cellrun" method="post" action="/p/{{$.Nav.Current}}/jobs/{{pathseg .Job}}/trigger">{{range $k, $v := $pin}}<input type="hidden" name="pin.{{$k}}" value="{{$v}}">{{end}}<button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "resource.runversion.title" .Job}}"{{end}} aria-label="{{t "resource.runversion.title" .Job}}">▶</button></form>{{end}}</td>{{end}}</tr>
       {{else}}
-      <tr><td class="faint" colspan="{{$.Span}}">{{t "resource.neverchecked"}}</td></tr>
+      <tr><td class="faint" colspan="{{$.Span}}">{{if .List.Filters}}{{t "list.nomatch"}}{{else}}{{t "resource.neverchecked"}}{{end}}</td></tr>
       {{end}}
     </tbody>
   </table>

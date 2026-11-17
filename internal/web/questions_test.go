@@ -163,7 +163,7 @@ func TestQuestionsPageWithholdsTheControlWhenReadOnly(t *testing.T) {
 	_, body := get(t, server, "/p/demo/questions")
 	_, inMain, _ := strings.Cut(body, "<main")
 
-	if main, _, _ := strings.Cut(inMain, "</main>"); strings.Contains(main, "<form") {
+	if main, _, _ := strings.Cut(inMain, "</main>"); strings.Contains(main, `method="post"`) {
 		t.Error("a read-only server offered an answer form")
 	}
 
@@ -303,7 +303,7 @@ func TestQuestionsFormPutsFreeTextFirst(t *testing.T) {
 
 	_, main, _ := strings.Cut(body, "<main")
 
-	_, form, found := strings.Cut(main, "<form")
+	_, form, found := strings.Cut(main, `<form class="decide"`)
 	if !found {
 		t.Fatalf("no answer form on the page: %s", body)
 	}

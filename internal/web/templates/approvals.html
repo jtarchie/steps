@@ -1,12 +1,39 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps approvals</b></h1>
-<p class="metaline">{{t "approvals.note"}}</p>
+{{template "findbar" .List}}
 <div id="approvals-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#approvals-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
+<p class="metaline">
+  {{- if .List.Filters}}{{template "filterline" .List}}{{else}}{{tn "list.waiting" (len .Pending)}}<span class="sep">·</span>{{tn "list.decided" (len .History)}}{{end}}{{template "newest" .List -}}
+</p>
 
-{{range .Approvals}}
-{{template "approvalcard" (waitctx $.Nav .)}}
-{{else}}
-<p class="faint">{{t "approvals.none"}}</p>
+{{with .Pending}}
+<h2 class="eyebrow">{{t "list.h.waiting"}} <span class="unbold">{{len .}}</span></h2>
+{{range .}}{{template "approvalcard" (listctx $.Nav .)}}{{end}}
 {{end}}
+
+{{with .History}}
+<h2 class="eyebrow">{{t "list.h.decided"}}</h2>
+<div class="tablewrap">
+  <table class="decisions stack">
+    <thead><tr><th>{{t "th.status"}}</th><th>{{t "th.job"}}</th><th>{{t "th.run"}}</th><th>{{t "th.message"}}</th><th>{{t "th.decision"}}</th><th>{{t "th.when"}}</th></tr></thead>
+    <tbody>
+      {{range .}}
+      <tr>
+        <td><span class="st st-{{if eq .Status "approved"}}passed{{else}}failed{{end}}">{{word "status" .Status}}</span></td>
+        <td><a href="{{pathQuery $.List.Base $.List.Query "job" .JobName}}">{{.JobName}}</a></td>
+        <td class="dim">{{with .RunID}}<a class="hash" href="/p/{{$.Nav.Current}}/runs/{{.}}">{{short .}}</a>{{else}}<span class="faint">—</span>{{end}}</td>
+        <td class="said wide">{{.Message}}</td>
+        <td class="said wide">{{with .Reason}}“{{.}}”{{end}}{{with .DecidedBy}} <span class="dim">{{th "card.by" (actorTag .)}}</span>{{end}}</td>
+        <td class="dim">{{agoTag .DecidedAt}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
 </div>
+{{template "older" $.List}}
+{{end}}
+
+{{if not (or .Pending .History)}}<p class="faint">{{if .List.Filters}}{{t "list.nomatch"}}{{else}}{{t "approvals.none"}}{{end}}</p>{{end}}
+</div>
+<p class="faint list-note">{{t "approvals.note"}}</p>
 {{end}}

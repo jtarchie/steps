@@ -507,6 +507,9 @@ func (d *daemon) start(
 
 	target.Hooks = trigger.HookHandler(outsideRuns, d.interval, target.Config, st)
 
+	checks := trigger.NewRequests()
+	target.CheckNow = checks.Check
+
 	err := d.server.Add(target)
 	// Only reachable if two sets of one name interleaved, which the lock above prevents, so this is the assertion rather than a path.
 	if err != nil {
@@ -540,7 +543,7 @@ func (d *daemon) start(
 		// The METHOD, not its result: a later set swaps the configuration under this loop, and a value would pin it to whatever was set first.
 		pollCtx := d.checks.Context(outsideRuns)
 
-		pollErr := trigger.Poll(pollCtx, target.Config, st, d.interval)
+		pollErr := trigger.Poll(pollCtx, target.Config, st, d.interval, checks)
 		if pollErr != nil {
 			slog.ErrorContext(loopCtx, "web.poll_stopped", "pipeline", name, "error", pollErr)
 		}

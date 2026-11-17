@@ -156,8 +156,8 @@
      nothing verified says so in words, never in color alone. The stored form
      rides in the title for a reader who needs the exact id. */}}
 {{/* An approval and a question are drawn here, once, because the tab lists them and the run parked on one offers it too; return sends the person back to whichever page they decided from. */}}
-{{define "approvalcard"}}{{$nav := .Nav}}{{with .Item}}<div class="approval {{if ne .Status "pending"}}decided{{end}}">
-  <div class="meta"><a href="/p/{{$nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · {{th "card.requested" (agoTag .RequestedAt)}}{{if not .DecidedAt.IsZero}} · {{th "card.decided" (agoTag .DecidedAt)}}{{with .DecidedBy}} {{th "card.by" (actorTag .)}}{{end}}{{end}}</div>
+{{define "approvalcard"}}{{$nav := .Nav}}{{$listed := .Listed}}{{with .Item}}<div class="approval {{if ne .Status "pending"}}decided{{end}}">
+  <div class="meta"><a href="/p/{{$nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a>{{if and $listed .RunID}} <a class="hash" href="/p/{{$nav.Current}}/runs/{{.RunID}}">{{short .RunID}}</a>{{end}} · {{th "card.requested" (agoTag .RequestedAt)}}{{if not .DecidedAt.IsZero}} · {{th "card.decided" (agoTag .DecidedAt)}}{{with .DecidedBy}} {{th "card.by" (actorTag .)}}{{end}}{{end}}</div>
   <div class="msg">{{.Message}}</div>
   {{if eq .Status "pending"}}
     {{if $nav.ViewOnly}}
@@ -176,8 +176,8 @@
   <div class="meta"><span class="stamp st st-{{if eq .Status "approved"}}passed{{else}}failed{{end}}">{{word "status" .Status}}</span>{{if .Reason}} — "{{.Reason}}"{{end}}</div>
   {{end}}
 </div>{{end}}{{end}}
-{{define "questioncard"}}{{$nav := .Nav}}{{with .Item}}<div class="approval {{if ne .Status "pending"}}decided{{end}}">
-  <div class="meta"><a href="/p/{{$nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · {{.AgentName}} · {{th "card.asked" (agoTag .AskedAt)}}{{if not .AnsweredAt.IsZero}} · {{th "card.answered" (agoTag .AnsweredAt)}}{{with .AnsweredBy}} {{th "card.by" (actorTag .)}}{{end}}{{end}}</div>
+{{define "questioncard"}}{{$nav := .Nav}}{{$listed := .Listed}}{{with .Item}}<div class="approval {{if ne .Status "pending"}}decided{{end}}">
+  <div class="meta"><a href="/p/{{$nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a>{{if $listed}} <a class="hash" href="/p/{{$nav.Current}}/runs/{{.RunID}}">{{short .RunID}}</a>{{end}} · {{.AgentName}} · {{th "card.asked" (agoTag .AskedAt)}}{{if not .AnsweredAt.IsZero}} · {{th "card.answered" (agoTag .AnsweredAt)}}{{with .AnsweredBy}} {{th "card.by" (actorTag .)}}{{end}}{{end}}</div>
   <div class="msg">{{.Question}}</div>
   {{if eq .Status "pending"}}
     {{if $nav.ViewOnly}}
@@ -205,6 +205,20 @@
   {{end}}
 </div>{{end}}{{end}}
 {{define "actor"}}{{actorTag .}}{{end}}
+{{/* A list page's controls, drawn once so every list is narrowed the same way (list.go). The box and the chips sit outside the polled region — a morph under somebody typing would fight them for it — and the filter line inside it, beside the rows it describes. A GET form, so a narrowed list is a URL somebody can be sent. */}}
+{{define "findbar"}}<form class="listfind" role="search" method="get" action="{{.Base}}">
+  {{range $k, $vs := .Query}}{{if and (ne $k "q") (ne $k "before")}}{{range $vs}}<input type="hidden" name="{{$k}}" value="{{.}}">{{end}}{{end}}{{end}}
+  <label class="visually-hidden" for="list-q">{{.Label}}</label>
+  <input type="search" id="list-q" name="q" value="{{.Text}}" placeholder="{{t "list.search"}}" aria-describedby="list-hint" autocomplete="off" spellcheck="false">
+  <button class="btn" type="submit">{{t "list.search"}}</button>
+  {{/* What the box searches, under it rather than as its placeholder: on a phone a placeholder is cut off at "who dec", and the sentence is what tells a reader a sha or a PR will do. */}}
+  <p class="listhint" id="list-hint">{{.Hint}}</p>
+</form>
+{{range .Facets}}<nav class="facets" aria-label="{{.Name}}"><span class="dim">{{.Label}}</span>{{range .Options}}<a href="{{.URL}}"{{if .Current}} aria-current="page"{{end}}>{{if .Foreign}}{{foreign .Label}}{{else}}{{.Label}}{{end}}</a>{{end}}</nav>
+{{end}}{{end}}
+{{define "filterline"}}{{range $i, $f := .Filters}}{{if $i}}<span class="sep">·</span>{{end}}{{word "filter" $f.Label}}: <b>{{$f.Value}}</b> <a href="{{$f.Remove}}" aria-label="{{t "activity.stop" (word "filter" $f.Label)}}">×</a>{{end}}<span class="sep">·</span>{{if .Total}}{{t "list.ofn" .Shown .Total}}{{else}}{{tn "list.shown" .Shown}}{{end}}<span class="sep">·</span><a href="{{.Base}}">{{t "activity.clear"}}</a>{{end}}
+{{define "newest"}}{{if .Paged}}<span class="sep">·</span><a href="{{pathQuery .Base .Query "before" ""}}">{{t "activity.newest"}}</a>{{end}}{{end}}
+{{define "older"}}{{with .Older}}<p class="metaline"><a href="{{.}}">{{t "activity.older"}}</a></p>{{end}}{{end}}
 
 {{/* The way back up from a detail page. A crumb with a URL links; the last
      one — the page the reader is on — is plain text. Collection pages pass

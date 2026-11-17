@@ -127,3 +127,34 @@ func (s *Store) Approvals(ctx context.Context, pendingOnly bool, limit int) ([]s
 		return scanApproval(rows)
 	})
 }
+
+// FindApprovals is the trail narrowed and paged, newest first.
+func (s *Store) FindApprovals(ctx context.Context, query store.ApprovalQuery) ([]store.Approval, error) {
+	filter, args := byJob(query.Job, []any{s.pipelineID})
+
+	if len(query.Statuses) > 0 {
+		filter += ` AND status = ANY(` + next(args) + `)`
+		args = append(args, textArray(query.Statuses))
+	}
+
+	if query.Text != "" {
+		text := "lower(" + next(args) + ")"
+		args = append(args, query.Text)
+		filter += `
+		  AND (strpos(lower(message), ` + text + `) > 0 OR strpos(lower(COALESCE(reason, '')), ` + text + `) > 0
+		    OR strpos(lower(COALESCE(decided_by, '')), ` + text + `) > 0 OR strpos(lower(COALESCE(run_id, '')), ` + text + `) > 0
+		    OR strpos(lower(job_name), ` + text + `) > 0 OR strpos(lower(status), ` + text + `) > 0)`
+	}
+
+	if query.Before > 0 {
+		filter += ` AND id < ` + next(args)
+		args = append(args, query.Before)
+	}
+
+	return collect(ctx, s.db, "approvals", `
+		SELECT `+approvalColumns+`
+		FROM approvals WHERE pipeline_id = $1`+filter+`
+		ORDER BY id DESC LIMIT `+next(args), append(args, rowLimit(query.Limit)), func(rows *sql.Rows) (store.Approval, error) {
+		return scanApproval(rows)
+	})
+}

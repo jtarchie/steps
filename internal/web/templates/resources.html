@@ -1,33 +1,40 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps resources</b></h1>
+{{template "findbar" .List}}
 <div id="resources-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#resources-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
 {{/* Inside the region, not above it: the count changes with the config a
      reload swaps in, and left outside it would keep reporting the old number
      over a table the poll had already refreshed. */}}
-<p class="metaline">{{t "resources.count" (len .Resources)}}<span class="sep">·</span>{{t "resources.note"}}</p>
+<p class="metaline">{{if .List.Filters}}{{template "filterline" .List}}{{else}}{{t "resources.count" .Total}}<span class="sep">·</span>{{t "resources.note"}}{{end}}</p>
 
+{{if .Rows}}
+{{$controls := and .CanCheck (not .Nav.ReadOnly)}}
 <div class="tablewrap">
-  <table>
-    <thead><tr><th>{{t "th.resource"}}</th><th>{{t "th.type"}}</th><th>{{t "th.latest"}}</th><th>{{t "th.checked"}}</th></tr></thead>
+  <table class="resources stack">
+    <thead><tr><th>{{t "th.status"}}</th><th>{{t "th.resource"}}</th><th>{{t "th.latest"}}</th><th>{{t "th.usedby"}}</th><th>{{t "th.checked"}}</th>{{if $controls}}<th class="rowextra"><span class="visually-hidden">{{t "th.action"}}</span></th>{{end}}</tr></thead>
     <tbody>
-      {{range .Resources}}
-      {{$seen := index $.Checked .Name}}
-      {{$broken := index $.Failing .Name}}
+      {{range .Rows}}
       <tr>
-        <td><a href="/p/{{$.Nav.Current}}/resources/{{.Name}}">{{.Name}}</a></td>
-        <td class="dim">{{.Type}}</td>
-        <td class="dim">{{if $seen.Name}}{{jsonLine $seen.Version}}{{else}}<span class="faint">{{t "resource.neverchecked"}}</span>{{end}}</td>
+        <td><span class="st st-{{if eq .State "failing"}}failed{{else if eq .State "ok"}}passed{{else}}skipped{{end}}">{{word "resstate" .State}}</span></td>
+        {{/* The type is what the resource IS, so it sits under the name as mcp's meta line does; the type chips are how to narrow by it. */}}
+        <td class="who"><a href="/p/{{$.Nav.Current}}/resources/{{.Name}}">{{.Name}}</a><div class="meta-sub">{{.Type}}</div></td>
+        <td class="dim wide{{if not .Checked.Name}} empty{{end}}">{{if .Checked.Name}}<span class="vline" title="{{.Checked.Version}}">{{jsonLine .Checked.Version}}</span>{{else}}<span class="faint">—</span>{{end}}</td>
+        <td class="dim uses wide{{if not .UsedBy}} empty{{end}}">{{range $i, $job := .UsedBy}}{{if $i}} {{end}}<a href="/p/{{$.Nav.Current}}/jobs/{{pathseg $job}}">{{$job}}</a>{{else}}<span class="faint">—</span>{{end}}</td>
         {{/* The recorded version is what the last SUCCESSFUL check saw, and a
              failing check leaves it exactly where it was — so this cell says
              when it last worked, and the row below says it has stopped. Not
              the failure time: every failing poll rewrites that, so a resource
              down since Tuesday would read "4s ago" forever. */}}
-        <td class="dim">{{if $broken.Name}}<span class="st st-failed">{{t "resource.failing"}}</span> {{if $seen.Name}}{{ago $seen.CheckedAt}}{{else}}<span class="faint">{{t "resource.neverworked"}}</span>{{end}}{{else if $seen.Name}}{{ago $seen.CheckedAt}}{{else}}—{{end}}</td>
+        <td class="dim{{if not (or .Checked.Name .Failing.Name)}} empty{{end}}">{{if .Checked.Name}}{{agoTag .Checked.CheckedAt}}{{else if .Failing.Name}}<span class="faint">{{t "resource.neverworked"}}</span>{{else}}—{{end}}</td>
+        {{if $controls}}<td class="rowextra"><form class="inline" method="post" action="/p/{{$.Nav.Current}}/resources/{{.Name}}/check"><input type="hidden" name="return" value="{{$.Nav.URL}}"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "resource.check.title"}}"{{end}}>↻ {{t "resource.check"}}</button></form></td>{{end}}
       </tr>
-      {{if $broken.Name}}<tr class="checkfail"><td colspan="4"><pre>{{$broken.Message}}</pre></td></tr>{{end}}
+      {{if .Failing.Name}}<tr class="checkfail"><td colspan="{{if $controls}}6{{else}}5{{end}}"><pre>{{.Failing.Message}}</pre></td></tr>{{end}}
       {{end}}
     </tbody>
   </table>
 </div>
+{{else}}
+<p class="faint">{{if .List.Filters}}{{t "list.nomatch"}}{{else}}{{t "resources.none"}}{{end}}</p>
+{{end}}
 </div>
 {{end}}

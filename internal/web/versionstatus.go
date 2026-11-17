@@ -29,6 +29,21 @@ type versionCell struct {
 	State string
 }
 
+// Pin is the version as the fields a pinned trigger names, the form `steps runs trigger --pin` sends; empty for a version that will not decode.
+func (r versionRow) Pin() map[string]string {
+	version, err := store.DecodeVersion(r.Version)
+	if err != nil {
+		return nil
+	}
+
+	pin := make(map[string]string, len(version))
+	for k, v := range version {
+		pin[k] = fmt.Sprint(v)
+	}
+
+	return pin
+}
+
 // Latest is the run a cell leads with; the zero row when there is none.
 func (c versionCell) Latest() store.RunRow {
 	if len(c.Runs) == 0 {

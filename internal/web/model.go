@@ -35,6 +35,8 @@ func newTurnCtx(page map[string]any, step *stepView, turn runview.Turn) turnCtx 
 type waitCtx struct {
 	Nav  navData
 	Item any
+	// Listed is a card on its tab rather than on the run it holds, so it names that run.
+	Listed bool
 }
 
 // stepCtx is what the recursive step template is invoked with: the page it is being drawn on, and the step to draw.

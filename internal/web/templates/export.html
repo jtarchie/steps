@@ -14,7 +14,7 @@
   <dt>{{t "th.connected"}}</dt>
   <dd>{{if $e.People}}{{tn "people" $e.People}} · {{tn "agents" $e.Agents}}{{else}}<span class="faint">{{t "export.nobodyyet"}}</span>{{end}}{{with $.Nav.Who}} · <a href="/connections">{{t "export.yourconnections"}}</a>{{end}}</dd>
 </dl>
-{{if not .Serving}}<p class="faint mcp-note">{{t "export.notserved"}}</p>{{end}}
+{{if not .Serving}}<p class="faint list-note">{{t "export.notserved"}}</p>{{end}}
 
 </div>
 
@@ -47,7 +47,7 @@
   {{with $group.Fix}}<div class="connect-blocked">{{range $group.Clients}}{{if .Blocked}}<p id="blocked-{{.Slug}}">{{.Blocked}}</p>{{end}}{{end}}<p>{{.}}</p></div>{{end}}
   {{end}}
 </fieldset>
-<p class="faint mcp-note">{{t "export.appsends"}}</p>
+<p class="faint list-note">{{t "export.appsends"}}</p>
 </section>
 
 <div id="export-activity">
@@ -89,7 +89,7 @@
 {{else}}
 <p class="faint">{{t "export.nothing"}}</p>
 {{end}}
-<p class="faint mcp-note">{{th "export.defined" (code "steps pipeline set")}}</p>
+<p class="faint list-note">{{th "export.defined" (code "steps pipeline set")}}</p>
 </div>
 {{end}}
 

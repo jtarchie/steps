@@ -294,7 +294,7 @@ func assertNothingPolled(t *testing.T, cfg *config.Config, st store.Store) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	err := Poll(ctx, staticConfig(cfg), st, 20*time.Millisecond)
+	err := Poll(ctx, staticConfig(cfg), st, 20*time.Millisecond, nil)
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
