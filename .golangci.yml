@@ -408,6 +408,20 @@ linters:
             - "$gostd"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/store"
+        # mcpread is the daemon's read-only MCP server: the tools, their
+        # paging and caps, and nothing about who may read what — that is a
+        # Source internal/web implements, so the access rules stay in one
+        # place. It scrubs free text with runview's Scrub and serves over the
+        # go-sdk; it must never reach a store, the scheduler or web itself.
+        MCPRead:
+          files:
+            - "**/internal/mcpread/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/runview"
+            - "github.com/modelcontextprotocol/go-sdk/mcp"
+            # goleak is test-only: goleak_test.go's TestMain.
+            - "go.uber.org/goleak"
         # webhook turns a delivery into a version: signature schemes,
         # handshakes, and the fields a pipeline projects. A stdlib-only leaf,
         # and deliberately not an expr importer — expressions reach it
@@ -1025,6 +1039,10 @@ linters:
             - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/runview"
+            # mcpread is the read-only MCP server web mounts at /mcp, answering its tools through a Source web implements as the person the request is from.
+            - "github.com/jtarchie/steps/internal/mcpread"
+            # the go-sdk is test-only here: a page test connects a real MCP client to /mcp.
+            - "github.com/modelcontextprotocol/go-sdk/mcp"
             # scheduler for its Pipeline handle, which web.Pipeline embeds and
             # web.Runner's methods take; the drain itself is reached only
             # through that interface.

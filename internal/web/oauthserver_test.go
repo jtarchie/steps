@@ -170,7 +170,7 @@ func TestAnAgentConnectsOnlyAfterConsent(t *testing.T) {
 	}
 
 	pair := exchange(t, server, url.Values{"grant_type": {"authorization_code"}, "code": {to.Query().Get("code")}, "client_id": {client}, "redirect_uri": {redirect}, "code_verifier": {verifier}})
-	assertGrant(t, accounts, pair["access_token"], store.Grant{ClientID: client, Actor: "local:alex", Pipeline: "ops", Export: "support"})
+	assertGrant(t, accounts, pair["access_token"], store.Grant{Kind: store.GrantExport, ClientID: client, Actor: "local:alex", Pipeline: "ops", Export: "support"})
 
 	refreshRotates(t, server, client, pair["refresh_token"])
 }

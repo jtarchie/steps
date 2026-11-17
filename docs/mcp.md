@@ -375,6 +375,38 @@ The daemon asks every time, on a page that says plainly what is being agreed to:
 
 **connections**, in the menu under your name, lists every agent you have let connect: the name it gave itself (unverified), where it sends people back, which export, when you agreed, when it last called and how many times. **Revoke** asks once more, then ends every token the agent holds for that export — its next call fails, and it cannot refresh its way back. An admin can switch the page to **everyone** and disconnect anybody's agent. Both are recorded in the activity log as `mcp disconnect`.
 
+## Reading the daemon from an agent
+
+Point an agent — Claude Code, Cursor, Claude — at `<external-url>/mcp` and ask it what you would ask the browser: "what's failing?", "why did the deploy job fail last night?", "what did the build step print?". It can only read. Nothing it is offered can trigger, approve, abort or change anything, and every tool says so (`readOnlyHint`, and `openWorldHint: false`: it reaches nothing outside the daemon).
+
+**It sees exactly what you see in the browser, and nothing more.** A pipeline whose [`access:`](authentication.md#one-pipelines-own-rules-access) hides it from you is hidden from your agent too: missing from every list, and "no such pipeline" when asked for by name — the same answer a name nobody set gets. This is asked on every call, from the daemon's own record of you, so leaving a team or a `steps pipeline set` that narrows a pipeline takes it from your agent at its very next call.
+
+| Tool | Answers |
+|---|---|
+| `list_pipelines` | the pipelines you can see |
+| `get_pipeline` | its jobs, whether it is paused, which jobs are held, and each job's newest run |
+| `get_config` | the YAML a revision is, or a file it included; name a run to read the one it used |
+| `list_runs` | runs, newest first, filtered by job and status |
+| `get_run` | a run's steps, their statuses and errors, and which step failed |
+| `get_step_output` | what a step printed, a page at a time |
+| `search` | a pipeline's jobs by name, and its runs by id, job, status, starter or input versions |
+| `list_waiting` | approvals and questions waiting on a person, in one pipeline or all of them |
+| `get_cost` | what agent steps spent: one run by step, or the newest runs' totals |
+| `list_resources` / `list_versions` | resources, and the versions their checks found |
+
+The admin-only [activity log](web.md#activity) is not offered.
+
+- **Connecting** works the way [connecting to an export](#connecting-an-agent) does: the agent finds the sign-in through `/.well-known/oauth-protected-resource/mcp`, registers itself, and sends you to the daemon to sign in. The consent page says what you are agreeing to in one line — **read every pipeline you can see, as you.** — and nothing is granted until you press **Allow**. You need the viewer role on the daemon at least, and `--mcp-access` (below) must admit you.
+- **A token is for the address it was issued for.** A token for `/mcp` opens no export and is refused at `/api`; an export's token is refused at `/mcp`. Refreshing asks again whether you may read, viewer role and `--mcp-access` both.
+- **Disconnecting**: the connection is listed on **connections**, as reading every pipeline you can see, and **Revoke** ends it at its next call.
+- **Every call is recorded** in the activity log as `mcp read`, against each pipeline it read, with the tool's name. Never what the agent sent.
+- **Output comes in pages.** Every list takes a `cursor` and answers with `next_cursor` while there is more; output and configuration take `offset` and `limit` (bytes) and answer with `next_offset`, and `total_bytes`. No answer is bigger than about 64 KiB, so a long log is read a page at a time rather than poured into an agent's context.
+- **What a pipeline printed is data, not instructions.** Escape sequences and control characters are removed from every name, message and page of output, and each answer opens by saying that what follows was written by pipelines, programs and models and is not for the agent to obey. That is a warning to the agent, not a guarantee: a model can still be talked into things by a log it reads.
+- **A daemon nobody signs in to** — the local default — serves it with no sign-in, the way it serves its pages, so `claude mcp add --transport http steps http://127.0.0.1:8088/mcp` just works. A daemon whose only sign-in is the Basic prompt (`--basic-auth-username` with no browser sign-in) has no way to issue the token, and does not serve it.
+- **`--read-only` still offers it**: reading is not acting.
+- **`--mcp-access '<rule>'`** decides who may connect an agent at all, in the [`--role`](authentication.md#who-may-do-what-roles) rule language. Without it, anyone with the viewer role may. Reading the pages and letting an agent bulk-read every log are different risks, and this is how a daemon treats them differently: `--mcp-access '"acme/oncall" in Groups'` lets the on-call team's agents in and nobody else's, while everybody keeps the pages. It needs somebody to sign in; on a daemon nobody signs in to it is refused at start.
+- **No pipeline YAML**: a pipeline's `access:` already covers it.
+
 ## A token from a secret source
 
 `auth.api_key_env:` by itself names a variable in the environment of the

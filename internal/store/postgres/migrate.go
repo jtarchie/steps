@@ -47,6 +47,7 @@ CREATE UNIQUE INDEX idx_trigger_queue_pending_job
 CREATE UNIQUE INDEX idx_trigger_queue_pending_pin
     ON trigger_queue(pipeline_id, job_name, pin) WHERE status = 'pending' AND pin IS NOT NULL AND run_id IS NULL`,
 	`ALTER TABLE run_placements ADD COLUMN image_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE oauth_tokens ADD COLUMN grant_kind TEXT NOT NULL DEFAULT 'export' CHECK (grant_kind IN ('export', 'read'))`,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

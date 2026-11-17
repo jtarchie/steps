@@ -1147,6 +1147,9 @@ lists).
                  names), and needs --external-url and --role
 --role           who may do what: viewer, operator or admin, each a rule about
                  the signed-in person (repeatable; see authentication.md)
+--mcp-access     who may connect an agent to read the daemon at /mcp, a rule
+                 in --role's language (default: anyone with the viewer role;
+                 needs somebody to sign in; see mcp.md)
 --activity-history
                  how many entries the activity log keeps across every pipeline
                  (default 10000, 0 is no limit; see Activity)

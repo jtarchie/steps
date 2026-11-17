@@ -17,11 +17,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/expr-lang/expr/vm"
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/mcpread"
 	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -153,6 +155,9 @@ type Server struct {
 	// exporter builds exports and exports holds the built ones: see exports.go.
 	exporter Exporter
 	exports  exportCache
+	// reader serves the read-only MCP tools at /mcp, and mcpAccess is --mcp-access, nil for anyone with the viewer role: see readmcp.go.
+	reader    http.Handler
+	mcpAccess *vm.Program
 	// nil answers any Host: see hosts.go. hostsImplied is a list nobody named, which a webhook delivery is exempt from.
 	allowedHosts map[string]bool
 	hostsImplied bool
@@ -261,6 +266,11 @@ func New(pipelines []*Pipeline, runner Runner, opts ...Option) (*Server, error) 
 	// Before routes(), which is where the middleware table is fixed.
 	for _, opt := range opts {
 		opt(srv)
+	}
+
+	// With nobody signing in there is nobody for --mcp-access to decide about, and a rule admitting nobody would read as protection on a daemon that has none.
+	if srv.mcpAccess != nil && srv.auth == nil {
+		return nil, errors.New("web: --mcp-access decides who may connect an agent, and nobody can sign in: add --local-user or a sign-in provider")
 	}
 
 	if len(srv.providers) > 0 {
@@ -388,6 +398,15 @@ func (s *Server) routes() error {
 		e.POST(exportPath, s.handleExport)
 		e.GET(exportPath, s.handleExport)
 		e.DELETE(exportPath, s.handleExport)
+		e.GET(readResourceMetaPath, s.handleReadResourceMetadata)
+	}
+
+	// Wherever the pages are readable: with no sign-in as the pages are, with sessions behind a read token. A daemon with only the Basic prompt has no way to issue that token, so it offers none rather than one guarded by a password an agent would have to hold.
+	if s.auth == nil || s.sessions != nil {
+		s.reader = mcpread.Handler(s.version)
+		e.POST(readPath, s.handleRead)
+		e.GET(readPath, s.handleRead)
+		e.DELETE(readPath, s.handleRead)
 	}
 
 	group := e.Group("/p/:pipeline", s.resolvePipeline)

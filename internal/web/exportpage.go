@@ -44,7 +44,7 @@ func (s *Server) exportRowFor(ctx context.Context, pipeline *Pipeline, export co
 	row := exportRow{MCPExport: export}
 
 	if s.sessions != nil {
-		connections, err := s.sessions.Grants(ctx, store.Grant{Pipeline: pipeline.Slug, Export: export.Name})
+		connections, err := s.sessions.Grants(ctx, store.Grant{Kind: store.GrantExport, Pipeline: pipeline.Slug, Export: export.Name})
 		if err == nil {
 			row.Agents = len(connections)
 			row.People = distinctActors(connections)

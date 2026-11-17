@@ -89,7 +89,7 @@
  "conn.cancel": "Cancel",
  "conn.confirm": "Revoke “%[1]s”'s access to %[2]s / %[3]s? Its next call fails.",
  "conn.lastcall": "last call %[1]s",
- "conn.mine": "agents you have let connect to an export",
+ "conn.mine": "agents you have let connect",
  "conn.never": "never called",
  "conn.none": "No agents connected. Add an export's address to your agent — the export's page says how — and it will send you here to agree.",
  "conn.revoke": "Revoke",
@@ -633,5 +633,11 @@
  "who.result": "result",
  "who.system": "system",
  "who.tool": "tool",
- "who.user": "user"
+ "who.user": "user",
+ "consent.read.ask": "“%[1]s” to read this daemon",
+ "consent.read.wants": "read every pipeline you can see, as you.",
+ "consent.read.note": "It can only read: it can never trigger, approve, abort or change anything, and a pipeline hidden from you is hidden from it. Every call is recorded under your name: %[1]s. Disconnect it any time from the menu under your name.",
+ "consent.read.refused": "You may not connect an agent to read this daemon: its rules do not include %[1]s.",
+ "conn.read": "reads every pipeline you can see",
+ "conn.confirm.read": "Revoke “%[1]s”'s access to read this daemon? Its next call fails."
 }

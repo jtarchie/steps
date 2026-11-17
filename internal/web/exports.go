@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -92,15 +91,10 @@ func (s *Server) handleExport(c *echo.Context) error {
 	return nil
 }
 
-// bearerGrant is the grant the request's access token was issued under, when that is a live access token for the export this path names. A token for one export is no use at another.
+// bearerGrant is the grant the request's access token was issued under, when that is a live access token for the export this path names. A token for one export is no use at another, and a read token is no use at any.
 func (s *Server) bearerGrant(c *echo.Context) (store.Grant, bool) {
-	raw, found := strings.CutPrefix(c.Request().Header.Get(echo.HeaderAuthorization), "Bearer ")
-	if !found || raw == "" || s.sessions == nil {
-		return store.Grant{}, false
-	}
-
-	token, live, err := s.sessions.FindToken(c.Request().Context(), tokenDigest(raw))
-	if err != nil || !live || token.Kind != store.TokenAccess {
+	token, ok := s.bearerToken(c)
+	if !ok || token.Grant.Kind != store.GrantExport {
 		return store.Grant{}, false
 	}
 

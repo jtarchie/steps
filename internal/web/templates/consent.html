@@ -4,6 +4,23 @@
 {{if $p.Problem}}
 <h1 class="prompt"><b>steps authorize</b></h1>
 <p class="metaline signin-problem" role="alert">{{$p.Problem}}</p>
+{{else if $p.Read}}
+<h1 class="prompt"><b>steps authorize</b> <span class="consent-ask">{{t "consent.read.ask" $p.Client.Name}}</span></h1>
+<dl class="consent-facts">
+  <dt>{{t "consent.client"}}</dt><dd>“{{$p.Client.Name}}” <span class="dim">{{t "consent.unverified"}}</span></dd>
+  <dt>{{t "consent.sentto"}}</dt><dd class="consent-host">{{$p.Host}}</dd>
+  <dt>{{t "consent.wants"}}</dt><dd>{{t "consent.read.wants"}}</dd>
+</dl>
+{{if $p.Refused}}
+<p class="metaline signin-problem" role="alert">{{th "consent.read.refused" (actorTag $p.Who)}}</p>
+{{else}}
+<p class="consent-note">{{th "consent.read.note" (actorTag $p.Who)}}</p>
+<form class="consent-decide" method="post" action="/oauth/authorize">
+  <input type="hidden" name="consent" value="{{$p.Consent}}">
+  <button class="btn" type="submit" name="decision" value="deny" autofocus>{{t "consent.deny"}}</button>
+  <button class="btn primary" type="submit" name="decision" value="allow">{{t "consent.allow"}}</button>
+</form>
+{{end}}
 {{else}}
 {{/* The heading is the request in one sentence, so a screen reader hears what is being asked before anything else. */}}
 <h1 class="prompt"><b>steps authorize</b> <span class="consent-ask">{{t "consent.ask" $p.Client.Name $p.Pipeline $p.Export.Name}}</span></h1>

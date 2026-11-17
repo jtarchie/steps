@@ -89,7 +89,7 @@
  "conn.cancel": "Cancelar",
  "conn.confirm": "Revogar o acesso de “%[1]s” a %[2]s / %[3]s? A próxima chamada dele falhará.",
  "conn.lastcall": "última chamada %[1]s",
- "conn.mine": "agentes que você deixou conectar a um export",
+ "conn.mine": "agentes que você deixou conectar",
  "conn.never": "nunca chamou",
  "conn.none": "Nenhum agente conectado. Adicione o endereço de um export ao seu agente — a página do export explica como — e ele enviará você até aqui para concordar.",
  "conn.revoke": "Revogar",
@@ -633,5 +633,11 @@
  "who.result": "resultado",
  "who.system": "sistema",
  "who.tool": "ferramenta",
- "who.user": "usuário"
+ "who.user": "usuário",
+ "consent.read.ask": "“%[1]s” para ler este daemon",
+ "consent.read.wants": "ler todo pipeline que você pode ver, como você.",
+ "consent.read.note": "Ele só pode ler: nunca pode disparar, aprovar, abortar ou mudar nada, e um pipeline oculto para você também fica oculto para ele. Cada chamada é registrada em seu nome: %[1]s. Desconecte-o quando quiser pelo menu sob o seu nome.",
+ "consent.read.refused": "Você não pode conectar um agente para ler este daemon: as regras dele não incluem %[1]s.",
+ "conn.read": "lê todo pipeline que você pode ver",
+ "conn.confirm.read": "Revogar o acesso de “%[1]s” para ler este daemon? A próxima chamada dele falhará."
 }

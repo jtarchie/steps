@@ -58,6 +58,7 @@ type WebCmd struct {
 	LocalUser         []string `help:"a local account as name:bcrypt-hash, the line htpasswd -nbB writes (repeatable)"                                                                                                  name:"local-user"                                                                              placeholder:"NAME:HASH"`
 	ActivityHistory   int      `default:"10000"                                                                                                                                                                         help:"how many entries the activity log keeps, across every pipeline (0 is no limit)"          name:"activity-history"`
 	Role              []string `help:"who may do what, as role=rule: viewer, operator or admin, and an expression over Provider, UserID, ID, Email, Organizations and Groups (repeatable; with any, admin is required)" name:"role"                                                                                    placeholder:"ROLE=RULE"`
+	MCPAccess         string   `help:"who may connect an agent to read this daemon at /mcp, as a rule in --role's language (default: anyone with the viewer role)"                                                      name:"mcp-access"                                                                              placeholder:"RULE"`
 	GitHubClientID    string   `help:"sign people in with GitHub: the OAuth app's client id"                                                                                                                            name:"github-client-id"                                                                        placeholder:"ID"`
 	GitHubSecretEnv   string   `default:"STEPS_GITHUB_CLIENT_SECRET"                                                                                                                                                    help:"the environment variable holding that app's client secret"                               name:"github-client-secret-env" placeholder:"NAME"`
 	GoogleClientID    string   `help:"sign people in with Google: the OAuth client id"                                                                                                                                  name:"google-client-id"                                                                        placeholder:"ID"`
@@ -184,6 +185,11 @@ func (w *WebCmd) accessOptions(opts []web.Option, published string) ([]web.Optio
 		return nil, errors.New("web: a secret source is configured and nobody can sign in, so any step could set a pipeline that reads another's secrets: add --local-user, --basic-auth-username or a sign-in provider")
 	}
 
+	opts, err = w.mcpAccessOption(opts)
+	if err != nil {
+		return nil, err
+	}
+
 	if len(w.Role) == 0 {
 		return opts, nil
 	}
@@ -193,6 +199,24 @@ func (w *WebCmd) accessOptions(opts []web.Option, published string) ([]web.Optio
 	}
 
 	return append(opts, web.WithRoles(roles)), nil
+}
+
+// mcpAccessOption compiles --mcp-access, refusing it where nobody signs in: there it would decide nothing, and read as protection.
+func (w *WebCmd) mcpAccessOption(opts []web.Option) ([]web.Option, error) {
+	program, err := web.CompileMCPAccess(w.MCPAccess)
+	if err != nil {
+		return nil, fmt.Errorf("web: %w", err)
+	}
+
+	if program == nil {
+		return opts, nil
+	}
+
+	if len(opts) == 0 {
+		return nil, errors.New("web: --mcp-access decides who may connect an agent, and nobody can sign in: add --local-user or a sign-in provider")
+	}
+
+	return append(opts, web.WithMCPAccess(program)), nil
 }
 
 // signInProviders is the GitHub and Google sign-in a client id asks for. Each needs its secret, read from the environment so it is never on a command line, and the URL a provider sends the browser back to.

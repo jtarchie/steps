@@ -284,6 +284,19 @@ func withParams(raw string, params url.Values) string {
 	return parsed.String()
 }
 
+// malformedAuthorize is the OAuth error a request's shape earns before anything is asked about who sent it: only the code flow, and only with PKCE S256.
+func malformedAuthorize(query url.Values) string {
+	if query.Get("response_type") != "code" {
+		return "unsupported_response_type"
+	}
+
+	if query.Get("code_challenge") == "" || query.Get("code_challenge_method") != "S256" {
+		return "invalid_request"
+	}
+
+	return ""
+}
+
 // handleAuthorize shows the consent page. It answers only to a signed-in person — authenticate sent anybody else to sign in and back here — and issues nothing: a code exists only after they press Allow.
 func (s *Server) handleAuthorize(c *echo.Context) error {
 	query := c.Request().URL.Query()
@@ -302,12 +315,14 @@ func (s *Server) handleAuthorize(c *echo.Context) error {
 		return c.Redirect(http.StatusFound, withParams(query.Get("redirect_uri"), url.Values{"error": {code}, "state": {query.Get("state")}}))
 	}
 
-	if query.Get("response_type") != "code" {
-		return refuse("unsupported_response_type")
+	if code := malformedAuthorize(query); code != "" {
+		return refuse(code)
 	}
 
-	if query.Get("code_challenge") == "" || query.Get("code_challenge_method") != "S256" {
-		return refuse("invalid_request")
+	who := actor.From(c.Request().Context())
+
+	if s.external != "" && query.Get("resource") == s.readResource() {
+		return s.authorizeRead(c, client, who)
 	}
 
 	target, export, found := s.exportOfResource(query.Get("resource"))
@@ -315,7 +330,6 @@ func (s *Server) handleAuthorize(c *echo.Context) error {
 		return refuse("invalid_target")
 	}
 
-	who := actor.From(c.Request().Context())
 	page := consentPage{Client: client, Host: redirectHost(query.Get("redirect_uri")), Pipeline: target.Slug, Export: export, Who: who.String()}
 
 	if !s.mayUse(c.Request().Context(), who, target, export) {
@@ -330,7 +344,32 @@ func (s *Server) handleAuthorize(c *echo.Context) error {
 		redirectURI: query.Get("redirect_uri"),
 		state:       query.Get("state"),
 		challenge:   query.Get("code_challenge"),
-		grant:       store.Grant{ClientID: client.ID, Actor: who.String(), Pipeline: target.Slug, Export: export.Name},
+		grant:       store.Grant{Kind: store.GrantExport, ClientID: client.ID, Actor: who.String(), Pipeline: target.Slug, Export: export.Name},
+	}, time.Now().Add(consentWait))
+
+	page.Consent = consent
+
+	return s.renderConsent(c, http.StatusOK, page)
+}
+
+// authorizeRead is the consent page for the read server: one grant for everything the person can see, as them, which is what the page says in those words.
+func (s *Server) authorizeRead(c *echo.Context, client store.OAuthClient, who actor.Actor) error {
+	query := c.Request().URL.Query()
+	page := consentPage{Client: client, Host: redirectHost(query.Get("redirect_uri")), Who: who.String(), Read: true}
+
+	if _, allowed := s.mayRead(c.Request().Context(), who); !allowed {
+		page.Refused = true
+
+		return s.renderConsent(c, http.StatusForbidden, page)
+	}
+
+	consent := randomToken()
+	s.auths.consents.put(consent, authRequest{
+		client:      client,
+		redirectURI: query.Get("redirect_uri"),
+		state:       query.Get("state"),
+		challenge:   query.Get("code_challenge"),
+		grant:       store.Grant{Kind: store.GrantRead, ClientID: client.ID, Actor: who.String()},
 	}, time.Now().Add(consentWait))
 
 	page.Consent = consent
@@ -376,7 +415,10 @@ func (s *Server) handleConsent(c *echo.Context) error {
 	code := randomToken()
 	s.auths.codes.put(code, req, time.Now().Add(authCodeTTL))
 
-	if target := s.Lookup(req.grant.Pipeline); target != nil {
+	// A read grant names no pipeline to record it through, so it is the daemon's log that says it was given, as a sign-in is; every call it makes is recorded against the pipelines it reads.
+	if req.grant.Kind == store.GrantRead {
+		slog.InfoContext(c.Request().Context(), "web.mcp_read_authorized", "actor", req.grant.Actor, "client", req.client.Name, "to", redirectHost(req.redirectURI))
+	} else if target := s.Lookup(req.grant.Pipeline); target != nil {
 		detail, err := json.Marshal(map[string]string{"client": req.client.Name, "to": redirectHost(req.redirectURI)})
 		if err == nil {
 			s.recordGrantActivity(c.Request().Context(), target, req.grant, "mcp authorize", string(detail))
@@ -403,6 +445,8 @@ type consentPage struct {
 	Consent  string
 	Refused  bool
 	Problem  string
+	// Read is a consent to the read server rather than to an export: no pipeline, no tools to list, everything the person can see.
+	Read bool
 }
 
 func (s *Server) renderConsent(c *echo.Context, status int, page consentPage) error {
@@ -462,14 +506,34 @@ func (s *Server) refresh(c *echo.Context) error {
 		return oauthError(c, http.StatusBadRequest, "invalid_grant", "unknown, used or expired refresh token")
 	}
 
-	target, export, exists := s.exportNamed(token.Grant.Pipeline, token.Grant.Export)
-	if !exists || !s.mayUse(ctx, actor.Parse(token.Grant.Actor), target, export) {
-		_ = s.sessions.RevokeGrant(ctx, token.Grant)
+	if !s.stillAllowed(ctx, token.Grant) {
+		_ = s.sessions.RevokeGrant(context.WithoutCancel(ctx), token.Grant)
 
-		return oauthError(c, http.StatusBadRequest, "invalid_grant", "access to this export has ended")
+		return oauthError(c, http.StatusBadRequest, "invalid_grant", "access under this grant has ended")
 	}
 
 	return s.issuePair(c, token.Grant)
+}
+
+// stillAllowed asks again, from the daemon's record of the person, whether a grant's person may still do what it let their client do.
+func (s *Server) stillAllowed(ctx context.Context, grant store.Grant) bool {
+	who := actor.Parse(grant.Actor)
+
+	switch grant.Kind {
+	case store.GrantRead:
+		_, allowed := s.mayRead(ctx, who)
+
+		return allowed
+	case store.GrantExport:
+		target, export, exists := s.exportNamed(grant.Pipeline, grant.Export)
+		if !exists || target == nil {
+			return false
+		}
+
+		return s.mayUse(ctx, who, target, export)
+	default:
+		return false
+	}
 }
 
 func (s *Server) issuePair(c *echo.Context, grant store.Grant) error {

@@ -108,7 +108,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 38
+const schemaVersion = 39
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -1016,6 +1016,7 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 CREATE TABLE IF NOT EXISTS oauth_tokens (
     token_hash TEXT PRIMARY KEY,
     kind       TEXT NOT NULL,
+    grant_kind TEXT NOT NULL DEFAULT 'export' CHECK (grant_kind IN ('export', 'read')),
     client_id  TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
     actor      TEXT NOT NULL,
     pipeline   TEXT NOT NULL,

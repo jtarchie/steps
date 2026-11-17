@@ -40,7 +40,7 @@ type Accounts interface {
 	// to the old one. revoked is false for a token already ended: of two
 	// refreshes racing with one token, only the one that ended it may mint.
 	RevokeToken(ctx context.Context, tokenHash string) (revoked bool, err error)
-	// RevokeGrant ends every token a person gave one client for one export: disconnecting it.
+	// RevokeGrant ends every token a person gave one client under one grant, kind included: disconnecting it.
 	RevokeGrant(ctx context.Context, grant Grant) error
 	// Grants are the live connections — a grant with a token still good —
 	// newest first, narrowed by filter's non-empty fields.
@@ -87,13 +87,32 @@ type OAuthClient struct {
 	CreatedAt    time.Time
 }
 
-// Grant is one person letting one client use one export.
+// Grant is one person letting one client in: to one export, or to read what they can see.
 type Grant struct {
+	// Kind says which, explicitly: a read grant names no pipeline and no export, and an empty export must never come to mean "everything".
+	Kind     GrantKind
 	ClientID string
 	Actor    string
 	Pipeline string
 	Export   string
 }
+
+// GrantKind is what a grant lets its client do, and so the one address its tokens are good at.
+type GrantKind string
+
+// The kinds a grant is stored with.
+const (
+	// GrantExport calls one pipeline's export, at /mcp/x/<pipeline>/<export>.
+	GrantExport GrantKind = "export"
+	// GrantRead reads every pipeline its person can see, at /mcp.
+	GrantRead GrantKind = "read"
+)
+
+// ErrUnknownGrantKind is a token issued under a grant that says neither kind.
+var ErrUnknownGrantKind = errors.New("a grant is for an export or for reading, and this one says neither")
+
+// Valid is whether k is one of the kinds a token may be issued under.
+func (k GrantKind) Valid() bool { return k == GrantExport || k == GrantRead }
 
 // TokenKind says what an OAuth token may do: an access token calls tools, a refresh token only mints the next access token.
 type TokenKind string

@@ -8,6 +8,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -34,6 +35,9 @@ type connectionRow struct {
 	Calls    string
 	Live     bool
 }
+
+// Reads is a connection to the read server rather than to one export.
+func (r connectionRow) Reads() bool { return r.Kind == store.GrantRead }
 
 func (s *Server) handleConnections(c *echo.Context) error {
 	ctx := c.Request().Context()
@@ -74,14 +78,29 @@ func (s *Server) connectionRowFor(ctx context.Context, conn store.Connection) co
 		row.Hosts = append(row.Hosts, redirectHost(uri))
 	}
 
-	target := s.Lookup(conn.Pipeline)
-	row.Live = target != nil
+	filter := store.ActivityFilter{Pipeline: conn.Pipeline, Actor: conn.Actor, Action: "mcp call", Target: conn.Export, Limit: callCountCap + 1}
 
-	if target == nil {
+	var reader store.Reader
+
+	if conn.Kind == store.GrantRead {
+		// Its calls are recorded against every pipeline they read, and the log is one per database, so any reader of it counts them.
+		row.Live = true
+		filter = store.ActivityFilter{Actor: conn.Actor, Action: readAction, Limit: callCountCap + 1}
+
+		var release func()
+
+		reader, release = s.activityReader()
+		defer release()
+	} else if target := s.Lookup(conn.Pipeline); target != nil {
+		row.Live = true
+		reader = target.Store.Reader()
+	}
+
+	if reader == nil {
 		return row
 	}
 
-	calls, err := target.Store.Reader().Activity(ctx, store.ActivityFilter{Pipeline: conn.Pipeline, Actor: conn.Actor, Action: "mcp call", Target: conn.Export, Limit: callCountCap + 1})
+	calls, err := reader.Activity(ctx, filter)
 	if err != nil || len(calls) == 0 {
 		return row
 	}
@@ -101,7 +120,11 @@ func (s *Server) handleRevoke(c *echo.Context) error {
 	ctx := c.Request().Context()
 	me := actor.From(ctx).String()
 
-	grant := store.Grant{ClientID: c.FormValue("client"), Actor: c.FormValue("actor"), Pipeline: c.FormValue("pipeline"), Export: c.FormValue("export")}
+	grant := store.Grant{Kind: store.GrantExport, ClientID: c.FormValue("client"), Actor: c.FormValue("actor"), Pipeline: c.FormValue("pipeline"), Export: c.FormValue("export")}
+	if c.FormValue("kind") == string(store.GrantRead) {
+		grant = store.Grant{Kind: store.GrantRead, ClientID: grant.ClientID, Actor: grant.Actor}
+	}
+
 	if grant.Actor == "" {
 		grant.Actor = me
 	}
@@ -115,10 +138,12 @@ func (s *Server) handleRevoke(c *echo.Context) error {
 		return echoError(err)
 	}
 
-	if target := s.Lookup(grant.Pipeline); target != nil {
+	if grant.Kind == store.GrantRead {
+		slog.InfoContext(ctx, "web.mcp_read_disconnected", "actor", grant.Actor, "by", me, "client", grant.ClientID)
+	} else if target := s.Lookup(grant.Pipeline); target != nil {
 		detail, err := json.Marshal(map[string]string{"by": me, "client": grant.ClientID})
 		if err == nil {
-			s.recordGrantActivity(ctx, target, store.Grant{ClientID: grant.ClientID, Actor: me, Pipeline: grant.Pipeline, Export: grant.Export}, "mcp disconnect", string(detail))
+			s.recordGrantActivity(ctx, target, store.Grant{Kind: store.GrantExport, ClientID: grant.ClientID, Actor: me, Pipeline: grant.Pipeline, Export: grant.Export}, "mcp disconnect", string(detail))
 		}
 	}
 

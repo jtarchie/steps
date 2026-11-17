@@ -11,7 +11,7 @@
       {{if $.Everyone}}<span class="sep">·</span>{{template "actor" .Actor}}{{end}}
     </div>
     <div class="conn-meta metaline">
-      {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}<span class="sep">·</span>{{if .Live}}<a href="/p/{{.Pipeline}}/mcp/exports/{{.Export}}">{{.Pipeline}} / {{.Export}}</a>{{else}}{{.Pipeline}} / {{.Export}} <span class="faint">{{t "gone"}}</span>{{end}}<span class="sep">·</span>{{th "conn.authorized" (agoTag .AuthorizedAt)}}<span class="sep">·</span>{{if .LastCall.ID}}{{th "conn.lastcall" (agoTag .LastCall.At)}}{{else}}{{t "conn.never"}}{{end}}<span class="sep">·</span>{{t "conn.calls" .Calls}}
+      {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}<span class="sep">·</span>{{if .Reads}}{{t "conn.read"}}{{else if .Live}}<a href="/p/{{.Pipeline}}/mcp/exports/{{.Export}}">{{.Pipeline}} / {{.Export}}</a>{{else}}{{.Pipeline}} / {{.Export}} <span class="faint">{{t "gone"}}</span>{{end}}<span class="sep">·</span>{{th "conn.authorized" (agoTag .AuthorizedAt)}}<span class="sep">·</span>{{if .LastCall.ID}}{{th "conn.lastcall" (agoTag .LastCall.At)}}{{else}}{{t "conn.never"}}{{end}}<span class="sep">·</span>{{t "conn.calls" .Calls}}
     </div>
     {{/* A fold rather than a dialog, so it works with nothing but HTML: Revoke opens the question, the button inside answers it, and the summary — now reading Cancel — closes it. */}}
     <details class="conn-revoke">
@@ -19,10 +19,11 @@
       <form method="post" action="/connections/revoke">
         <input type="hidden" name="client" value="{{.ClientID}}">
         <input type="hidden" name="actor" value="{{.Actor}}">
+        <input type="hidden" name="kind" value="{{.Kind}}">
         <input type="hidden" name="pipeline" value="{{.Pipeline}}">
         <input type="hidden" name="export" value="{{.Export}}">
         {{if $.Everyone}}<input type="hidden" name="everyone" value="1">{{end}}
-        <span>{{t "conn.confirm" .Client .Pipeline .Export}}</span>
+        <span>{{if .Reads}}{{t "conn.confirm.read" .Client}}{{else}}{{t "conn.confirm" .Client .Pipeline .Export}}{{end}}</span>
         <button class="btn danger" type="submit">{{t "conn.revoke"}}</button>
       </form>
     </details>

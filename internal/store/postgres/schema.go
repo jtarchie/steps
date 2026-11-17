@@ -34,7 +34,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 24
+const schemaVersion = 25
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -462,6 +462,7 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 CREATE TABLE IF NOT EXISTS oauth_tokens (
     token_hash TEXT PRIMARY KEY,
     kind       TEXT NOT NULL,
+    grant_kind TEXT NOT NULL DEFAULT 'export' CHECK (grant_kind IN ('export', 'read')),
     client_id  TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
     actor      TEXT NOT NULL,
     pipeline   TEXT NOT NULL,

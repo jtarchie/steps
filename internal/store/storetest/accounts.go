@@ -170,7 +170,7 @@ func (s accountsSuite) TestAFullTableOfUnusedClientsStillRegisters(t *testing.T)
 		}
 	}
 
-	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "t", Kind: store.TokenAccess, Grant: store.Grant{ClientID: "used", Actor: "a", Pipeline: "p", Export: "e"}, CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "t", Kind: store.TokenAccess, Grant: store.Grant{Kind: store.GrantExport, ClientID: "used", Actor: "a", Pipeline: "p", Export: "e"}, CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -196,8 +196,8 @@ func (s accountsSuite) TestAGrantCanBeRevokedWhole(t *testing.T) {
 	accounts := s.open(t)
 	registerClient(t, accounts, "c")
 
-	grant := store.Grant{ClientID: "c", Actor: "github:alex", Pipeline: "ops", Export: "support"}
-	other := store.Grant{ClientID: "c", Actor: "github:alex", Pipeline: "ops", Export: "support-write"}
+	grant := store.Grant{Kind: store.GrantExport, ClientID: "c", Actor: "github:alex", Pipeline: "ops", Export: "support"}
+	other := store.Grant{Kind: store.GrantExport, ClientID: "c", Actor: "github:alex", Pipeline: "ops", Export: "support-write"}
 	later := time.Now().Add(time.Hour)
 
 	for hash, g := range map[string]store.Grant{"access": grant, "refresh": grant, "elsewhere": other} {
@@ -220,6 +220,60 @@ func (s accountsSuite) TestAGrantCanBeRevokedWhole(t *testing.T) {
 	assertTokensLive(t, accounts, map[string]bool{"access": false, "refresh": false, "elsewhere": true})
 
 	revokesOnce(t, accounts, "elsewhere")
+}
+
+// TestAGrantSaysItsKind: a read grant and an export grant from one person to one client are two grants — found, listed and revoked apart — and a token under a grant that names neither kind is refused, so no empty field can come to mean "everything".
+func (s accountsSuite) TestAGrantSaysItsKind(t *testing.T) {
+	t.Parallel()
+
+	accounts := s.open(t)
+	registerClient(t, accounts, "claude")
+
+	read := store.Grant{Kind: store.GrantRead, ClientID: "claude", Actor: "github:alex"}
+	export := store.Grant{Kind: store.GrantExport, ClientID: "claude", Actor: "github:alex"}
+	later := time.Now().Add(time.Hour)
+
+	for hash, g := range map[string]store.Grant{"read": read, "export": export} {
+		err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: hash, Kind: store.TokenAccess, Grant: g, CreatedAt: time.Now(), ExpiresAt: later})
+		if err != nil {
+			t.Fatalf("IssueToken(%s): %v", hash, err)
+		}
+	}
+
+	token, found, err := accounts.FindToken(ctxFor(t), "read")
+	if err != nil || !found || token.Grant != read {
+		t.Fatalf("FindToken(read) = %+v, %v, %v; want the read grant back", token, found, err)
+	}
+
+	assertConnectionKinds(t, accounts, store.Grant{Kind: store.GrantRead}, read)
+	assertConnectionKinds(t, accounts, store.Grant{}, read, export)
+
+	err = accounts.RevokeGrant(ctxFor(t), read)
+	if err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+
+	assertTokensLive(t, accounts, map[string]bool{"read": false, "export": true})
+
+	err = accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "kindless", Kind: store.TokenAccess, Grant: store.Grant{ClientID: "claude", Actor: "github:alex"}, CreatedAt: time.Now(), ExpiresAt: later})
+	if !errors.Is(err, store.ErrUnknownGrantKind) {
+		t.Errorf("a token under a grant with no kind = %v, want ErrUnknownGrantKind", err)
+	}
+}
+
+func assertConnectionKinds(t *testing.T, accounts store.Accounts, filter store.Grant, want ...store.Grant) {
+	t.Helper()
+
+	got, err := accounts.Grants(ctxFor(t), filter)
+	if err != nil || len(got) != len(want) {
+		t.Fatalf("Grants(%+v) = %+v, %v; want %+v", filter, got, err, want)
+	}
+
+	for _, conn := range got {
+		if !slices.Contains(want, conn.Grant) {
+			t.Errorf("Grants(%+v) returned %+v, which is not one of %+v", filter, conn.Grant, want)
+		}
+	}
 }
 
 // revokesOnce: a token ends once, and the second revoke says it ended nothing, so a second refresh racing the first cannot mint.
@@ -257,7 +311,7 @@ func (s accountsSuite) TestAnExpiredTokenIsNotFound(t *testing.T) {
 	accounts := s.open(t)
 	registerClient(t, accounts, "c")
 
-	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "old", Kind: store.TokenAccess, Grant: store.Grant{ClientID: "c", Actor: "a", Pipeline: "p", Export: "e"}, CreatedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-time.Hour)})
+	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "old", Kind: store.TokenAccess, Grant: store.Grant{Kind: store.GrantExport, ClientID: "c", Actor: "a", Pipeline: "p", Export: "e"}, CreatedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-time.Hour)})
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -295,8 +349,8 @@ func (s accountsSuite) TestConnectionsAreTheLiveGrants(t *testing.T) {
 	accounts := s.open(t)
 	registerClient(t, accounts, "claude")
 
-	alex := store.Grant{ClientID: "claude", Actor: "github:alex", Pipeline: "ops", Export: "support"}
-	sam := store.Grant{ClientID: "claude", Actor: "github:sam", Pipeline: "ops", Export: "support"}
+	alex := store.Grant{Kind: store.GrantExport, ClientID: "claude", Actor: "github:alex", Pipeline: "ops", Export: "support"}
+	sam := store.Grant{Kind: store.GrantExport, ClientID: "claude", Actor: "github:sam", Pipeline: "ops", Export: "support"}
 	later := time.Now().Add(time.Hour)
 
 	for hash, g := range map[string]store.Grant{"a1": alex, "a2": alex, "s1": sam} {
@@ -340,7 +394,7 @@ func (s accountsSuite) TestACorruptRedirectColumnIsAnErrorNotAnEmptyList(t *test
 	accounts := s.open(t)
 	registerClient(t, accounts, "claude")
 
-	grant := store.Grant{ClientID: "claude", Actor: "github:alex", Pipeline: "ops", Export: "support"}
+	grant := store.Grant{Kind: store.GrantExport, ClientID: "claude", Actor: "github:alex", Pipeline: "ops", Export: "support"}
 
 	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "a1", Kind: store.TokenAccess, Grant: grant, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)})
 	if err != nil {

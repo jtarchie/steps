@@ -244,15 +244,19 @@ func (a *Accounts) FindClient(ctx context.Context, id string) (store.OAuthClient
 
 // IssueToken records a token by its digest, sweeping ones that ended.
 func (a *Accounts) IssueToken(ctx context.Context, token store.OAuthToken) error {
+	if !token.Grant.Kind.Valid() {
+		return fmt.Errorf("could not issue a token: %w", store.ErrUnknownGrantKind)
+	}
+
 	_, err := a.held.db.ExecContext(ctx, `DELETE FROM oauth_tokens WHERE expires_at <= ? OR revoked_at IS NOT NULL`, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not sweep ended tokens: %w", err)
 	}
 
 	_, err = a.held.db.ExecContext(ctx, `
-		INSERT INTO oauth_tokens (token_hash, kind, client_id, actor, pipeline, export, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, token.TokenHash, token.Kind, token.Grant.ClientID, token.Grant.Actor, token.Grant.Pipeline, token.Grant.Export,
+		INSERT INTO oauth_tokens (token_hash, kind, grant_kind, client_id, actor, pipeline, export, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, token.TokenHash, token.Kind, token.Grant.Kind, token.Grant.ClientID, token.Grant.Actor, token.Grant.Pipeline, token.Grant.Export,
 		token.CreatedAt.UTC().Format(sortableNano), token.ExpiresAt.UTC().Format(sortableNano))
 	if err != nil {
 		return fmt.Errorf("could not issue a token: %w", err)
@@ -269,9 +273,9 @@ func (a *Accounts) FindToken(ctx context.Context, tokenHash string) (store.OAuth
 	)
 
 	err := a.held.reads.QueryRowContext(ctx, `
-		SELECT token_hash, kind, client_id, actor, pipeline, export, created_at, expires_at FROM oauth_tokens
+		SELECT token_hash, kind, grant_kind, client_id, actor, pipeline, export, created_at, expires_at FROM oauth_tokens
 		WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?
-	`, tokenHash, nowNano()).Scan(&token.TokenHash, &token.Kind, &token.Grant.ClientID, &token.Grant.Actor,
+	`, tokenHash, nowNano()).Scan(&token.TokenHash, &token.Kind, &token.Grant.Kind, &token.Grant.ClientID, &token.Grant.Actor,
 		&token.Grant.Pipeline, &token.Grant.Export, &created, &expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.OAuthToken{}, false, nil
@@ -305,8 +309,8 @@ func (a *Accounts) RevokeToken(ctx context.Context, tokenHash string) (bool, err
 func (a *Accounts) RevokeGrant(ctx context.Context, grant store.Grant) error {
 	_, err := a.held.db.ExecContext(ctx, `
 		UPDATE oauth_tokens SET revoked_at = ?
-		WHERE client_id = ? AND actor = ? AND pipeline = ? AND export = ? AND revoked_at IS NULL
-	`, nowNano(), grant.ClientID, grant.Actor, grant.Pipeline, grant.Export)
+		WHERE grant_kind = ? AND client_id = ? AND actor = ? AND pipeline = ? AND export = ? AND revoked_at IS NULL
+	`, nowNano(), grant.Kind, grant.ClientID, grant.Actor, grant.Pipeline, grant.Export)
 	if err != nil {
 		return fmt.Errorf("could not revoke a grant: %w", err)
 	}
@@ -317,21 +321,22 @@ func (a *Accounts) RevokeGrant(ctx context.Context, grant store.Grant) error {
 // Grants are the live connections, newest first.
 func (a *Accounts) Grants(ctx context.Context, filter store.Grant) ([]store.Connection, error) {
 	return collect(ctx, a.held.reads, "connections", `
-		SELECT t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export, MIN(t.created_at)
+		SELECT t.grant_kind, t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export, MIN(t.created_at)
 		FROM oauth_tokens t JOIN oauth_clients c ON c.id = t.client_id
 		WHERE t.revoked_at IS NULL AND t.expires_at > ?
+		  AND (? = '' OR t.grant_kind = ?)
 		  AND (? = '' OR t.client_id = ?) AND (? = '' OR t.actor = ?)
 		  AND (? = '' OR t.pipeline = ?) AND (? = '' OR t.export = ?)
-		GROUP BY t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export
+		GROUP BY t.grant_kind, t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export
 		ORDER BY MIN(t.created_at) DESC
-	`, []any{nowNano(), filter.ClientID, filter.ClientID, filter.Actor, filter.Actor, filter.Pipeline, filter.Pipeline, filter.Export, filter.Export},
+	`, []any{nowNano(), filter.Kind, filter.Kind, filter.ClientID, filter.ClientID, filter.Actor, filter.Actor, filter.Pipeline, filter.Pipeline, filter.Export, filter.Export},
 		func(rows *sql.Rows) (store.Connection, error) {
 			var (
 				conn               store.Connection
 				redirects, created string
 			)
 
-			err := rows.Scan(&conn.ClientID, &conn.Client, &redirects, &conn.Actor, &conn.Pipeline, &conn.Export, &created)
+			err := rows.Scan(&conn.Kind, &conn.ClientID, &conn.Client, &redirects, &conn.Actor, &conn.Pipeline, &conn.Export, &created)
 			if err != nil {
 				return store.Connection{}, fmt.Errorf("scan: %w", err)
 			}
