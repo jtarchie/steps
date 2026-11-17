@@ -1049,12 +1049,56 @@ included: a daemon nobody signs in to treats every request as admin, and every
 step is handed `STEPS_URL`, so any step could set a pipeline that reads another
 pipeline's secrets.
 
-`steps web` reads all of it. `steps run`, `steps test` and `steps validate
---live` take `--config` too (and never `STEPS_CONFIG`) but read only `secret:`,
+`steps web` reads all of it. `steps validate` reads only `fence:` (below) and,
+with `--live`, `secret:`. `steps run` and `steps test` take `--config` too (and
+never `STEPS_CONFIG`) but read only `secret:`,
 so a pipeline with secrets can be run without a daemon; see
 [secrets.md](secrets.md#running-from-the-cli).
 `steps pipeline set` and the rest take their flags on the command line as
 before.
+
+## Fencing commands (`fence:`)
+
+Whether a command runs fenced is up to whoever wrote the pipeline, and a
+pipeline somebody else sets runs as the daemon's own user. `fence:` is the
+operator's say in it:
+
+```yaml config
+web:
+  fence: warn
+```
+
+- **`off`** (the default) changes nothing.
+- **`warn`** accepts every pipeline, and lists each command that would run
+  **unfenced**: in `steps pipeline set`'s answer, under a `warning:` line, and
+  in a notice at the top of the pipeline's page. A pipeline restored at
+  startup is judged the same way, so the notice is there after a restart too.
+- `enforce`, which would refuse such a pipeline, is not available yet, and the
+  daemon refuses to start with it rather than read it as `warn`.
+
+A command is **fenced** when it runs in an `image:` without `privileged: true`,
+or under [`sandbox: true`](infra.md#host-sandbox-sandbox) on a darwin daemon
+(the only OS the sandbox exists on, so elsewhere a sandboxed command is listed).
+A step placed on a `docker+ssh://`, `aws://`, `gcp://`, `do://` or `local:`
+worker runs in its image, so it counts as fenced; one on a bare `ssh://` worker
+does not. Anything that runs no command has nothing to fence: an `expr:`
+resource, steps' other built-ins, `approval:`, `load_var:`, an agent whose
+tools touch no files and run no shell.
+
+Everything else is listed, each place named with what runs there: a task or
+agent step with no `image:` or `sandbox:` (job hooks included), a container
+with `privileged: true`, a resource whose type runs `check`/`in`/`out` on the
+host (the built-in `git` type does), a `github-prs`/`github-comments`
+resource with `checkout: git`, every stdio `mcp_servers:` entry, an
+`mcp_exports:` entry whose custom `run:` tools have no `image:`, and a CLI
+agent with `settings: project`, whose repository hooks run on this machine
+whatever fences its tools.
+
+Because the policy lives in the daemon's config file, a pipeline cannot loosen
+the rule that judges it. To see the list before a set, give `steps validate`
+the same file: `steps validate --config /etc/steps/steps.yml pipeline.yml`
+prints it as warnings and still passes. It reads only `fence:` and, with
+`--live`, `secret:`.
 
 ## Flags
 
@@ -1078,6 +1122,8 @@ before.
 --resource-cache-max
                  how many fetched resource versions the root keeps, least
                  recently used evicted first (default 50)
+--fence          off (default) or warn: list every command a pipeline would
+                 run unfenced, on set and on its page (see Fencing commands)
 --read-only      serve without trigger, retry, approve/reject, answer, release,
                  pause, abort, connect or test controls, and serve no mcp_exports
                  (steps pipeline set is NOT withheld — see Security)

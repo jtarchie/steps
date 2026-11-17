@@ -38,7 +38,7 @@ type ValidateCmd struct {
 	Live bool   `help:"also probe the models and MCP servers, live"                                    name:"live"`
 	Job  string `help:"with --live, probe only this job's models and MCP servers (default: every job)"`
 	// Config is the daemon's file, never read from STEPS_CONFIG (see WebCmd.BeforeResolve): resolving a reference runs the source commands it names, which only an explicit flag should start.
-	Config string `help:"with --live, the daemon's config file (steps web --config): every secret reference is resolved as the daemon would, and the path that answered is shown, never the value" name:"config" placeholder:"FILE" type:"path"`
+	Config string `help:"the daemon's config file (steps web --config): the pipeline is reported against its fence: policy, and with --live every secret reference is resolved as the daemon would, and the path that answered is shown, never the value" name:"config" placeholder:"FILE" type:"path"`
 	// Name is here because --live dials oauth servers with the pipeline's own login, which is filed under this name, and --config renders it as {{ .pipeline }} in every lookup path.
 	Name map[string]string `help:"name the pipeline is set as: what its mcp logins are filed under and what {{ .pipeline }} renders as in a secret lookup path, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
 	// RequireImage is a policy gate rather than a depth: whether the file runs anything outside a container is knowable from the file alone, so it holds under --syntax-only too.
@@ -73,7 +73,7 @@ func (v *ValidateCmd) Run(streams Streams) error {
 		say(streams.Err, "warning: "+warning)
 	}
 
-	err = errors.Join(fileProblems(cfg), v.hostProblems(cfg))
+	err = errors.Join(fileProblems(cfg), v.hostProblems(cfg), v.fenceReport(streams.Err, cfg))
 	if err != nil {
 		return err
 	}
@@ -164,6 +164,22 @@ func (v *ValidateCmd) hostProblems(cfg *config.Config) error {
 	return nil
 }
 
+// fenceReport lists what the daemon's fence: policy would on set, as warnings: under warn a set accepts, so validate does too.
+func (v *ValidateCmd) fenceReport(out io.Writer, cfg *config.Config) error {
+	if v.Config == "" {
+		return nil
+	}
+
+	policy, err := fenceFromConfigFile(v.Config)
+	if err != nil {
+		return err
+	}
+
+	sayUnfenced(out, unfencedLines(policy, cfg))
+
+	return nil
+}
+
 // machineProblems is the other two depths: what this machine cannot supply,
 // and — under --live — what the services themselves say when asked.
 //
@@ -209,10 +225,6 @@ func (v *ValidateCmd) checkDepth() error {
 
 	if len(v.AllowHost) > 0 && !v.RequireImage {
 		return errors.New("--allow-host names exceptions to --require-image: pass --require-image with it, or drop it")
-	}
-
-	if v.Config != "" && !v.Live {
-		return errors.New("--config gives the live probe the daemon's secret sources: pass --live with it, or drop it to check the file alone")
 	}
 
 	return nil
@@ -293,6 +305,10 @@ func (v *ValidateCmd) secretProblems(ctx context.Context, out io.Writer, cfg *co
 	}
 
 	// Refused rather than skipped, for the reason the preflight refusal gives: an ok line that vouched for the pipeline having resolved none of its secrets would be vouching for nothing.
+	if resolver == nil && v.Config != "" {
+		return nil, nil, 0, fmt.Errorf("--live cannot vouch for %d secret reference(s): --config %s has no secret: section under web:, so there are no sources to resolve them with", len(uses), v.Config)
+	}
+
 	if resolver == nil {
 		return nil, nil, 0, fmt.Errorf("--live cannot vouch for %d secret reference(s) without the daemon's sources: pass --config with the file steps web --config reads", len(uses))
 	}

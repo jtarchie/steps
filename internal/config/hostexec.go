@@ -26,6 +26,8 @@ type HostCommand struct {
 	Where string
 	// Why is what runs there, and what would move it into a container.
 	Why string
+	// Sandboxed is a host command under sandbox: true, which a fence policy counts where the OS sandbox exists.
+	Sandboxed bool
 }
 
 // HostCommands lists every place this pipeline runs a command on a host: resources, then mcp servers, then each job's steps, hooks included, in plan order.
@@ -68,7 +70,8 @@ func (c *Config) hostResources() []HostCommand {
 			if resourceType.Image == "" {
 				found = append(found, HostCommand{
 					Name: resource.Name, Where: where,
-					Why: fmt.Sprintf("type %q runs check/in/out on the host; give the type an image: (a built-in one, by copying it into resource_types: under another name)", resource.Type) + sandboxed(resourceType.Sandbox),
+					Why:       fmt.Sprintf("type %q runs check/in/out on the host; give the type an image: (a built-in one, by copying it into resource_types: under another name)", resource.Type) + sandboxed(resourceType.Sandbox),
+					Sandboxed: resourceType.Sandbox,
 				})
 			}
 		case BackendGitHub:
@@ -111,7 +114,7 @@ func (c *Config) hostStep(label string, step *Step) []HostCommand {
 			why = "run: and its fix: agent's commands run on the host; set image:"
 		}
 
-		return []HostCommand{{Name: step.Task, Where: fmt.Sprintf("task %q in %s", step.Task, label), Why: why + sandboxed(task.Sandbox)}}
+		return []HostCommand{{Name: step.Task, Where: fmt.Sprintf("task %q in %s", step.Task, label), Why: why + sandboxed(task.Sandbox), Sandboxed: task.Sandbox}}
 	case StepKindAgent:
 		invocation, err := c.ResolveAgentInvocation(*step)
 		if err != nil || invocation.Image != "" {
@@ -123,7 +126,7 @@ func (c *Config) hostStep(label string, step *Step) []HostCommand {
 			return nil
 		}
 
-		return []HostCommand{{Name: step.Agent, Where: fmt.Sprintf("agent %q in %s", step.Agent, label), Why: fmt.Sprintf("its tools run on the host (%s); set image: on the agent", strings.Join(tools, ", ")) + sandboxed(invocation.Sandbox)}}
+		return []HostCommand{{Name: step.Agent, Where: fmt.Sprintf("agent %q in %s", step.Agent, label), Why: fmt.Sprintf("its tools run on the host (%s); set image: on the agent", strings.Join(tools, ", ")) + sandboxed(invocation.Sandbox), Sandboxed: invocation.Sandbox}}
 	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
 	}
 

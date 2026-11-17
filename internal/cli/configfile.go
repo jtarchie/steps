@@ -165,7 +165,34 @@ func (r fileResolver) Resolve(_ *kong.Context, _ *kong.Path, flag *kong.Flag) (a
 
 func (r fileResolver) Validate(*kong.Application) error { return nil }
 
-// secretsFromConfigFile reads only the secret: section, for `steps validate --live` to resolve references as the daemon would. The file is held to the same ownership and mode rules, since it names commands this user then runs.
+// fenceFromConfigFile reads only web.fence, for `steps validate --config` to judge a pipeline by the policy the daemon would.
+func fenceFromConfigFile(path string) (string, error) {
+	top, err := readConfigFile(path)
+	if err != nil {
+		return "", err
+	}
+
+	web, _ := top["web"].(map[string]any)
+
+	raw, ok := web["fence"]
+	if !ok {
+		return fenceOff, nil
+	}
+
+	policy, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("--config %s: web.fence must be a word, off or warn", path)
+	}
+
+	err = checkFence(policy)
+	if err != nil {
+		return "", fmt.Errorf("--config %s: %w", path, err)
+	}
+
+	return policy, nil
+}
+
+// secretsFromConfigFile reads only the secret: section, for `steps validate --live` to resolve references as the daemon would; nil when the file has none, since --config also carries the fence: policy alone. The file is held to the same ownership and mode rules, since it names commands this user then runs.
 func secretsFromConfigFile(path string) (*secret.Resolver, error) {
 	top, err := readConfigFile(path)
 	if err != nil {
@@ -176,7 +203,7 @@ func secretsFromConfigFile(path string) (*secret.Resolver, error) {
 
 	raw, ok := web["secret"]
 	if !ok {
-		return nil, fmt.Errorf("--config %s has no secret: section under web:, so there are no sources to resolve references with", path)
+		return nil, nil //nolint:nilnil // no section is no sources, which the caller refuses only when a reference needs one
 	}
 
 	return parseSecrets(path, raw)

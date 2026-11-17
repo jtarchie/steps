@@ -286,6 +286,8 @@
  "jobs.queue": "触发队列",
  "jobs.queued": "排队中",
  "jobs.rail": "实线边表示触发 · 虚线边表示只读 · 悬停或聚焦某个方框可追踪它",
+ "jobs.unfenced": "以未隔离方式运行命令。",
+ "jobs.unfenced.body": "此守护进程的 fence: warn 策略列出了下面每个没有 image:、没有 sandbox: 或带有 privileged: true 运行的命令。",
  "json.array": "数组 · %[1]s · %[2]s",
  "json.items.other": "%[1]d 项",
  "json.keys.other": "%[1]d 个键",

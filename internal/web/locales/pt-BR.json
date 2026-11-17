@@ -295,6 +295,8 @@
  "jobs.queue": "Fila de disparos",
  "jobs.queued": "na fila",
  "jobs.rail": "arestas contínuas disparam · tracejadas são só leitura · passe o mouse ou foque uma caixa para rastreá-la",
+ "jobs.unfenced": "Executa comandos sem isolamento.",
+ "jobs.unfenced.body": "A política fence: warn deste daemon lista abaixo cada comando que roda sem image:, sem sandbox: ou com privileged: true.",
  "json.array": "array · %[1]s · %[2]s",
  "json.items.one": "%[1]d item",
  "json.items.other": "%[1]d itens",

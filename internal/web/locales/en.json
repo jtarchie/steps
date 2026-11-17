@@ -295,6 +295,8 @@
  "jobs.queue": "Trigger queue",
  "jobs.queued": "queued",
  "jobs.rail": "solid edges trigger · dashed are read only · hover or focus a box to trace it",
+ "jobs.unfenced": "Runs commands unfenced.",
+ "jobs.unfenced.body": "This daemon's fence: warn policy lists each command below that runs with no image:, no sandbox:, or with privileged: true.",
  "json.array": "array · %[1]s · %[2]s",
  "json.items.one": "%[1]d item",
  "json.items.other": "%[1]d items",

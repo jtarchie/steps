@@ -70,6 +70,8 @@ type Pipeline struct {
 	path atomic.Pointer[string]
 	// access is the configuration's access: rules, compiled for the configuration they came from: see roles.go.
 	access atomic.Pointer[compiledAccess]
+	// unfenced is what the daemon's fence: policy listed for the configuration being served; empty under fence: off.
+	unfenced atomic.Pointer[[]string]
 	// Hooks answers POST /p/<slug>/hooks/<resource>, a delivery to a webhook resource. Built by the caller (trigger.HookHandler): this package serves the surface and does not own the queue — internal/scheduler drains it, reached only through Runner. Nil only in a test.
 	Hooks func(w http.ResponseWriter, r *http.Request, resource string)
 }
@@ -95,6 +97,19 @@ func (p *Pipeline) Path() string {
 
 // SetPath records where a set that just landed was sent from.
 func (p *Pipeline) SetPath(path string) { p.path.Store(&path) }
+
+// SetUnfenced records what the fence policy listed for the configuration just applied.
+func (p *Pipeline) SetUnfenced(lines []string) { p.unfenced.Store(&lines) }
+
+// Unfenced is each command the fence policy listed, for the pipeline's page.
+func (p *Pipeline) Unfenced() []string {
+	lines := p.unfenced.Load()
+	if lines == nil {
+		return nil
+	}
+
+	return *lines
+}
 
 // Server serves whatever has been set into it. The registry is behind a lock rather than fixed at construction because a handler, the drain and the poll loop all read it while another request writes it.
 type Server struct {
@@ -212,6 +227,8 @@ type SetResult struct {
 	Unchanged bool `json:"unchanged"`
 	// Repaired is a set that served a pipeline a restart had left broken.
 	Repaired bool `json:"repaired,omitempty"`
+	// Unfenced lists each command the daemon's fence: warn policy found running unfenced, one line per place.
+	Unfenced []string `json:"unfenced,omitempty"`
 }
 
 // ErrRevisionMoved is a compare-and-set the daemon refused: the configuration moved between the sender's diff and its set.

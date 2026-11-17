@@ -140,6 +140,7 @@ func (p *PipelineSetCmd) upload(out io.Writer, name, source string, includes map
 	}
 
 	sayf(out, "%s: %s is now serving %s\n", setVerb(result), name, shortConfig(result.SHA))
+	sayUnfenced(out, result.Unfenced)
 
 	return nil
 }

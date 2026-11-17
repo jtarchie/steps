@@ -775,15 +775,30 @@ func TestValidateLiveResolvesEverySecretAndNamesItsPath(t *testing.T) {
 	}
 }
 
-// A name no path has is a problem naming where it looked, not a half-vouched ok; and --config is the live depth's input: alone it binds nothing, and --live with references and no sources cannot vouch for them.
+// A --config that carries only the fence: policy has no sources, which --live says rather than vouching for references it never resolved.
+func TestValidateLiveRefusesAConfigWithNoSecretSection(t *testing.T) {
+	t.Parallel()
+
+	path, _, _ := validateSecretsFixture(t)
+
+	fenceOnly := filepath.Join(t.TempDir(), "steps.yml")
+	writeConfigFile(t, fenceOnly, "web:\n  fence: warn\n")
+
+	err := stepsRun(t, []string{"validate", "--live", "--config", fenceOnly, path})
+	if err == nil || !strings.Contains(err.Error(), "no secret: section") {
+		t.Fatalf("validate --live --config <file with no secret: section> = %v, want a refusal saying the file has no sources", err)
+	}
+}
+
+// A name no path has is a problem naming where it looked, not a half-vouched ok; --config alone resolves nothing (it is the fence: policy's input too); and --live with references and no sources cannot vouch for them.
 func TestValidateLiveRefusesWhatItCannotVouchFor(t *testing.T) {
 	t.Parallel()
 
 	path, config, vault := validateSecretsFixture(t)
 
 	err := stepsRun(t, []string{"validate", "--config", config, path})
-	if err == nil || !strings.Contains(err.Error(), "--live") {
-		t.Fatalf("validate --config without --live = %v, want a refusal naming --live", err)
+	if err != nil {
+		t.Fatalf("validate --config without --live = %v, want the file checked and nothing resolved", err)
 	}
 
 	err = stepsRun(t, []string{"validate", "--live", path})

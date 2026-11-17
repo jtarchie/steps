@@ -286,6 +286,8 @@
  "jobs.queue": "トリガーキュー",
  "jobs.queued": "待機中",
  "jobs.rail": "実線はトリガー · 破線は読み取り専用 · ボックスにホバーまたはフォーカスすると経路を追跡できます",
+ "jobs.unfenced": "隔離なしでコマンドを実行します。",
+ "jobs.unfenced.body": "このデーモンの fence: warn ポリシーは、image: も sandbox: もなく、または privileged: true で実行される各コマンドを以下に列挙します。",
  "json.array": "配列 · %[1]s · %[2]s",
  "json.items.other": "%[1]d 件",
  "json.keys.other": "%[1]d キー",

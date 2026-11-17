@@ -295,6 +295,8 @@
  "jobs.queue": "Cola de activación",
  "jobs.queued": "en cola",
  "jobs.rail": "las líneas continuas activan · las discontinuas son solo lectura · pasa el cursor o enfoca un recuadro para seguirlo",
+ "jobs.unfenced": "Ejecuta comandos sin aislamiento.",
+ "jobs.unfenced.body": "La política fence: warn de este daemon enumera abajo cada comando que se ejecuta sin image:, sin sandbox: o con privileged: true.",
  "json.array": "array · %[1]s · %[2]s",
  "json.items.one": "%[1]d elemento",
  "json.items.other": "%[1]d elementos",

@@ -32,6 +32,8 @@ type daemon struct {
 	exec     ExecFlags
 	history  HistoryFlags
 	interval time.Duration
+	// fence is the --fence policy every pipeline this daemon accepts is judged by; see fence.go.
+	fence string
 
 	// wrapStore is a test seam: it wraps each store the daemon opens, so a fault is in place before the drain goroutine reads the store.
 	wrapStore func(store.Store) store.Store
@@ -322,6 +324,7 @@ func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.
 	slog.InfoContext(ctx, "web.pipeline.set", "pipeline", name, "config", shortConfig(cfg.Revision.SHA))
 
 	result.Repaired = repairing
+	result.Unfenced = unfencedLines(d.fence, cfg)
 
 	return result, nil
 }
@@ -475,6 +478,7 @@ func (d *daemon) replace(existing *servedPipeline, cfg *config.Config, provider 
 
 	existing.target.SetConfig(cfg)
 	existing.target.SetPath(from)
+	existing.target.SetUnfenced(unfencedLines(d.fence, cfg))
 
 	// The daemon's context, never the request's: these are what make the queue obey the configuration just applied, and a sender that hung up must not leave serial: unwritten while the drain starts anyway.
 	scheduler.SyncQueueLimits(d.base, existing.target.Pipeline)
@@ -495,6 +499,7 @@ func (d *daemon) start(
 	bus.Observe(runview.Log(loopCtx, nil))
 
 	target := web.NewPipeline(name, from, cfg, st, bus)
+	target.SetUnfenced(unfencedLines(d.fence, cfg))
 
 	// One memo for everything this pipeline resolves outside a run, built once: a poll and a delivery asking for the same reference share an answer for an interval, where a memo made per call would cache nothing.
 	// A poll is no run: its secrets are cached for an interval rather than per run, or a trigger: true resource would prompt every poll.

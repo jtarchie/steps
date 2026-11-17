@@ -1,6 +1,8 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps jobs</b></h1>
 <p class="metaline" id="jobs-meta">{{t "jobs.count" (len .Jobs)}}<span class="sep">·</span>{{.Nav.CurrentPath}}{{if .SHA}}<span class="sep">·</span>{{t "jobs.config"}} <a class="hash" href="/p/{{.Nav.Current}}/config/{{.SHA}}">{{short .SHA}}</a>{{end}}</p>
+{{/* Changes only when a set lands, which reloads nothing here; a reader sees a new list on their next visit. */}}
+{{with .Unfenced}}<div class="callout unfenced"><b>{{t "jobs.unfenced"}}</b> {{t "jobs.unfenced.body"}}<ul>{{range .}}<li><code>{{.}}</code></li>{{end}}</ul></div>{{end}}
 
 <div class="dagwrap" id="jobs-graph" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#jobs-graph" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#jobs-meta:outerMorph,#queue-region:outerMorph,#statusline:outerMorph">
   {{/* role=group, not img: an image's children are presentational, which

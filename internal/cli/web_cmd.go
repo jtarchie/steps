@@ -67,6 +67,8 @@ type WebCmd struct {
 	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed, and on a loopback --listen so is --external-url's)" name:"allowed-host" placeholder:"NAME"`
 	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
 	ExternalURL string `help:"the URL steps publish to every step as STEPS_URL (default http://<listen>)" name:"external-url"`
+	// Not an enum tag: kong's refusal of enforce could not say why it is missing.
+	Fence string `default:"off" help:"what to do about a pipeline that runs a command unfenced (no image:, sandbox: on darwin, or privileged: true): off, or warn to accept it and list each one on set and on its page" name:"fence" placeholder:"POLICY"`
 	// Web's alone, not global: `pipeline set` and `mcp login` already own --config, and only the daemon has settings that cannot be flags (configfile.go).
 	Config string `env:"STEPS_CONFIG" help:"a YAML file of these flags, under a web: key (a flag on the command line wins; see docs/web.md)" name:"config" placeholder:"PATH"`
 
@@ -307,6 +309,11 @@ func (w *WebCmd) Run(streams Streams) error {
 		return fmt.Errorf("web: --interval must be positive, got %s", w.Interval)
 	}
 
+	err := checkFence(w.Fence)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
 	// Before anything is opened or bound, so a half-configured credential pair costs nothing.
 	opts, err := w.authOptions()
 	if err != nil {
@@ -394,6 +401,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 	defer cancel()
 
 	held := newDaemon(ctx, server, local, state, w.ExecFlags, w.HistoryFlags, w.Interval)
+	held.fence = w.Fence
 	defer held.Close()
 
 	// Deferred after Close, so it stops first: a collection must never read a store Close has shut.

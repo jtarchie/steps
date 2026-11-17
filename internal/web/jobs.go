@@ -47,12 +47,13 @@ func (s *Server) handleJobs(c *echo.Context) error {
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "jobs", map[string]any{
-		"Nav":   s.nav(c),
-		"Title": c.Param("pipeline"),
-		"Jobs":  views,
-		"Graph": buildGraphIn(s.renderer.localeOf(c), views, failingByName(failing)),
-		"Queue": rows,
-		"SHA":   pipeline.Config().Revision.SHA,
+		"Nav":      s.nav(c),
+		"Title":    c.Param("pipeline"),
+		"Jobs":     views,
+		"Graph":    buildGraphIn(s.renderer.localeOf(c), views, failingByName(failing)),
+		"Queue":    rows,
+		"SHA":      pipeline.Config().Revision.SHA,
+		"Unfenced": pipeline.Unfenced(),
 	})
 }
 
