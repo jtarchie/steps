@@ -1008,7 +1008,7 @@ func (f *fakeGitHub) postComment(w http.ResponseWriter, r *http.Request, number 
 	f.nextID++
 	f.posted = append(f.posted, postedComment{Number: number, Body: body.Body})
 
-	respondJSON(w, http.StatusCreated, map[string]any{"id": f.nextID, "html_url": f.html("pull", number)})
+	respondJSON(w, http.StatusCreated, map[string]any{"id": f.nextID, "html_url": f.html("pull", number) + "#issuecomment-" + strconv.FormatInt(f.nextID, 10)})
 }
 
 // lastNumber is the highest number any pull request, issue or comment holds: GitHub numbers them from one sequence.

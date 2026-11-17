@@ -85,7 +85,7 @@
     <thead><tr><th>{{t "th.resource"}}</th><th>{{t "th.version"}}</th><th>{{t "th.recorded"}}</th></tr></thead>
     <tbody>
       {{range .Versions}}
-      <tr><td>{{.Resource}}</td><td>{{jsonLine .Version}}</td><td class="dim">{{ago .RecordedAt}}</td></tr>
+      <tr><td>{{.Resource}}</td><td>{{jsonLine .Version}}{{with facts .Metadata}}{{template "facts" .}}{{end}}</td><td class="dim">{{ago .RecordedAt}}</td></tr>
       {{end}}
     </tbody>
   </table>

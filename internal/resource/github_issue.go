@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // githubIssueOut opens one issue. Nothing dedupes: a retried put opens a second one, as a retried github-pr-comment posts twice, so a pipeline that must not guards it before the put.
@@ -45,14 +46,18 @@ func githubIssueOut(ctx context.Context, raw, rawParams map[string]any, _ PutInp
 	}
 
 	var created struct {
-		ID     int64 `json:"id"`
-		Number int64 `json:"number"`
+		ID      int64  `json:"id"`
+		Number  int64  `json:"number"`
+		HTMLURL string `json:"html_url"`
+		Title   string `json:"title"`
 	}
 
 	err = json.Unmarshal(reply.body, &created)
 	if err != nil {
 		return nil, fmt.Errorf("github: POST %s: %w", path, err)
 	}
+
+	reportFacts(ctx, []events.Fact{{Name: "url", Value: created.HTMLURL}, {Name: "title", Value: created.Title}})
 
 	return map[string]any{"id": strconv.FormatInt(created.ID, 10), "number": strconv.FormatInt(created.Number, 10)}, nil
 }

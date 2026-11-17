@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -37,6 +38,8 @@ type buildVersions struct {
 	// sources is each get's resource source, beside fetched, for an image:
 	// naming that get (see resolveStepImage).
 	sources map[string]map[string]any
+	// facts is what each get's resource said about the version it fetched, by get name: a later step's ((.:get.name)) reads it.
+	facts map[string][]events.Fact
 }
 
 type buildVersionsKey struct{}
@@ -75,7 +78,7 @@ func (b *buildVersions) runBuildID(runID string) string {
 const maxRecordedVersionBytes = 4 << 10
 
 func withBuildVersions(ctx context.Context) (context.Context, *buildVersions) {
-	versions := &buildVersions{by: map[string]map[store.VersionKey]bool{}, fetched: map[string]map[string]any{}, sources: map[string]map[string]any{}}
+	versions := &buildVersions{by: map[string]map[store.VersionKey]bool{}, fetched: map[string]map[string]any{}, sources: map[string]map[string]any{}, facts: map[string][]events.Fact{}}
 
 	return context.WithValue(ctx, buildVersionsKey{}, versions), versions
 }
@@ -132,7 +135,7 @@ func recordBuildVersion(ctx context.Context, resource string, version map[string
 // recordFetched notes the version a get fetched, and its resource's source,
 // under the get's name, for a later put's version() or image: in the same
 // build.
-func recordFetched(ctx context.Context, get string, source, version map[string]any) {
+func recordFetched(ctx context.Context, get string, source, version map[string]any, facts []events.Fact) {
 	versions, ok := ctx.Value(buildVersionsKey{}).(*buildVersions)
 	if !ok {
 		return
@@ -143,6 +146,7 @@ func recordFetched(ctx context.Context, get string, source, version map[string]a
 
 	versions.fetched[get] = version
 	versions.sources[get] = source
+	versions.facts[get] = facts
 }
 
 // putInputs snapshots what a put's version() may read: its declared inputs
@@ -184,9 +188,10 @@ func sortedNames(names []string) []string {
 // recordPutVersion files a put's version under the resource it publishes to —
 // never its step name, which nothing reads (#273). A plan put and a hook put
 // share it so the two cannot pick different names again.
-func recordPutVersion(ctx context.Context, st store.Versions, step config.Step, version map[string]any) {
+func recordPutVersion(ctx context.Context, st store.Versions, step config.Step, version map[string]any, facts []events.Fact) {
 	recordPutOrder(ctx, st, step.PutResourceName(), version)
 	recordBuildVersion(ctx, step.PutResourceName(), version)
+	keepFacts(ctx, st, step.PutResourceName(), version, facts)
 }
 
 // recordPutOrder fixes a put's version in the resource's history when the put

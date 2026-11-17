@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 func githubCommentOut(ctx context.Context, raw, rawParams map[string]any, inputs PutInputs, srcDir string) (map[string]any, error) {
@@ -457,13 +458,16 @@ func postExpecting(ctx context.Context, client *githubClient, path string, paylo
 	}
 
 	var created struct {
-		ID int64 `json:"id"`
+		ID      int64  `json:"id"`
+		HTMLURL string `json:"html_url"`
 	}
 
 	err = json.Unmarshal(reply.body, &created)
 	if err != nil {
 		return nil, fmt.Errorf("github: POST %s: %w", path, err)
 	}
+
+	reportFacts(ctx, []events.Fact{{Name: "url", Value: created.HTMLURL}})
 
 	return map[string]any{"id": strconv.FormatInt(created.ID, 10), "number": number}, nil
 }

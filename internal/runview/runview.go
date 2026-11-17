@@ -139,6 +139,8 @@ type Step struct {
 	Streaming []string
 	// Notes is what the step's machinery said about it, in order.
 	Notes []Note
+	// Facts is what a get's or put's resource said about the version it fetched or published, in order.
+	Facts []Fact
 	// ImageSource is the artifact the step's image: named, when it named one, and ImageNote the note that said so. Held apart from Notes because the page says it on the step's placement line, which already carries the reference the note would repeat; a step that failed before it was placed has no such line, and shows the note.
 	ImageSource string
 	ImageNote   Note
@@ -298,6 +300,42 @@ type Note struct {
 
 // Warn reports a note worth a reader's attention, not only their record.
 func (n Note) Warn() bool { return n.Level == events.NoteWarn }
+
+// Fact is one name/value pair a resource reported, as a reader sees it.
+type Fact struct {
+	Name  string
+	Value string
+	// Published is a put's: what the run published, rather than what it fetched.
+	Published bool
+}
+
+// Link is the value as a link a reader may follow, or "" for one that is not an http or https address.
+func (f Fact) Link() string {
+	link, _ := events.FactLink(f.Value)
+
+	return link
+}
+
+// Published is one link a run published, and the step that published it.
+type Published struct {
+	Step string
+	Fact Fact
+}
+
+// Published is every link the run's puts reported, in the order the steps ran.
+func (r Transcript) Published() []Published {
+	var published []Published
+
+	for _, step := range r.Steps {
+		for _, fact := range step.Facts {
+			if fact.Published && fact.Link() != "" {
+				published = append(published, Published{Step: step.Name, Fact: fact})
+			}
+		}
+	}
+
+	return published
+}
 
 // Running reports a step that started and has not reported an end, on a run
 // that has not ended either.
@@ -571,7 +609,7 @@ func (s Step) HasBody() bool {
 		len(s.Trajectory()) > 0 ||
 		len(s.Outputs) > 0 ||
 		len(s.Streaming) > 0 ||
-		len(s.Notes) > 0 ||
+		len(s.Notes)+len(s.Facts) > 0 ||
 		s.ImageNote.Text != "" ||
 		s.Error != "" ||
 		s.Response() != "" ||
@@ -1018,9 +1056,19 @@ func attachNote(view *Transcript, index map[string]int, row store.RunEventRow) (
 			return position, Change{Other: true}
 		}
 
+		if row.Name == events.NoteFact || row.Name == events.NotePublished {
+			view.Steps[position].Facts = append(view.Steps[position].Facts, Fact{Name: row.Detail, Value: row.Text, Published: row.Name == events.NotePublished})
+
+			return position, Change{Other: true}
+		}
+
 		view.Steps[position].Notes = append(view.Steps[position].Notes, note)
 
 		return position, Change{Other: true}
+	}
+
+	if row.Name == events.NoteFact || row.Name == events.NotePublished {
+		note.Text = row.Detail + ": " + row.Text
 	}
 
 	view.Notes = append(view.Notes, note)

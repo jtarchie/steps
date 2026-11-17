@@ -195,16 +195,19 @@ func (s *Store) RecordPassedVersions(ctx context.Context, passes []store.Pass) e
 // PassedVersions lists the resource versions a job has recorded as green.
 func (s *Store) PassedVersions(ctx context.Context, jobName string, limit int) ([]store.PassedVersion, error) {
 	return collect(ctx, s.db, "job versions", `
-		SELECT resource_name, version_json, recorded_at
-		FROM job_versions WHERE pipeline_id = $1 AND job_name = $2
-		ORDER BY recorded_at DESC, seq DESC LIMIT $3
+		SELECT jv.resource_name, jv.version_json, jv.recorded_at, rv.metadata
+		FROM job_versions jv
+		JOIN resource_versions rv ON rv.pipeline_id = jv.pipeline_id
+		    AND rv.resource_name = jv.resource_name AND rv.version_json = jv.version_json
+		WHERE jv.pipeline_id = $1 AND jv.job_name = $2
+		ORDER BY jv.recorded_at DESC, jv.seq DESC LIMIT $3
 	`, []any{s.pipelineID, jobName, rowLimit(limit)}, func(rows *sql.Rows) (store.PassedVersion, error) {
 		var (
 			row        store.PassedVersion
 			recordedAt time.Time
 		)
 
-		err := rows.Scan(&row.Resource, &row.Version, &recordedAt)
+		err := rows.Scan(&row.Resource, &row.Version, &recordedAt, &row.Metadata)
 		row.RecordedAt = recordedAt.UTC()
 
 		return row, err //nolint:wrapcheck // collect wraps with the thing being read

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // githubComment is the part of a comment every kind shares.
@@ -451,6 +452,9 @@ func githubCommentsIn(ctx context.Context, raw, version map[string]any, destDir 
 	if err != nil {
 		return err
 	}
+
+	// Deferred past the pull request's fetch, which reports its own: the version is the comment.
+	defer reportFacts(ctx, []events.Fact{{Name: "url", Value: string(files["comment.url"])}, {Name: "author", Value: string(files["comment.author"])}})
 
 	if kind == config.GitHubCommentIssue {
 		err = fetchCommentedIssue(ctx, client, source, number, files)

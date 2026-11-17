@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/retry"
@@ -56,7 +57,9 @@ func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step,
 // the artifact downstream steps name as an input — is always the get step's
 // artifact name (its get: value), which differs from the resource when the get
 // aliases it via resource:; only the fetched content comes from the resource.
-func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st store.Deliveries, step config.Step, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
+func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st fetchStore, step config.Step, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
+	var facts []events.Fact
+
 	// The venue retry wraps the attempts: loop, as a task's does — see
 	// runPlacedStage.
 	err := runPlacedStage(ctx, step, func(ctx context.Context) error {
@@ -64,7 +67,8 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st store.Deli
 			notef(ctx, "get: %s (version: %s, attempt %d/%d)", artifact, versionText(version), attempt, total)
 			slog.InfoContext(ctx, "job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
-			err := fetchGetStep(attemptCtx, cfg, st, artifact, resource, resourceType, version, step.Params, bw)
+			said, err := fetchGetStep(attemptCtx, cfg, st, artifact, resource, resourceType, version, step.Params, bw)
+			facts = said
 
 			// An eviction ends the attempts loop rather than spending it —
 			// the machine is gone, and the venue retry is what re-places.
@@ -80,22 +84,39 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st store.Deli
 	}
 
 	// Before the get's hooks run, so on_success can read what it fetched.
-	recordFetched(ctx, artifact, resource.Source, version)
+	recordFetched(ctx, artifact, resource.Source, version, facts)
 
 	return nil
 }
 
-func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) error {
+// fetchStore is what a get's fetch reads and keeps: a webhook's deliveries, and the facts beside a version.
+type fetchStore interface {
+	store.Deliveries
+	store.Versions
+}
+
+// fetchGetStep fetches one version and says its facts: what the in: answered, or — when the resource cache reused an earlier fetch — what that fetch answered.
+func fetchGetStep(ctx context.Context, cfg *config.Config, st fetchStore, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) ([]events.Fact, error) {
 	notef(ctx, "get: %s (version: %s)", artifact, versionText(version))
 
+	var (
+		fetched bool
+		facts   []events.Fact
+	)
+
 	fetch := func(dir string) error {
+		fetched = true
+
 		runCtx, recorder := recordResourceOutput(ctx, resourceType.Name+" in")
+		runCtx, collected := rsrc.CollectFacts(runCtx)
 		err := rsrc.RunIn(runCtx, rsrc.Call{Config: cfg, Type: resourceType, Resource: resource, Version: version, Params: params, Dir: dir})
 		recorder.finish(ctx)
 
 		if err != nil {
 			return err //nolint:wrapcheck // the caller classifies and names the resource
 		}
+
+		facts = collected()
 
 		// The stage closed its own runner, so what the worker kept comes out
 		// through the sink runPlacedStage installed; recorded inside the
@@ -106,15 +127,27 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, 
 	}
 
 	if resourceType.Config.Backend() == config.BackendWebhook {
-		fetch = func(dir string) error { return writeDelivery(ctx, st, resource.Name, version, dir) }
+		fetch = func(dir string) error {
+			fetched = true
+
+			return writeDelivery(ctx, st, resource.Name, version, dir)
+		}
 	}
 
 	err := resourceDir(ctx, cfg, artifact, resourceType, resource.HashedEnv(), resource.Source, version, params, bw, fetch)
 	if err != nil {
-		return fmt.Errorf("could not fetch resource %q: %w", resource.Name, classifyRunError(ctx, err))
+		return nil, fmt.Errorf("could not fetch resource %q: %w", resource.Name, classifyRunError(ctx, err))
 	}
 
-	return nil
+	if fetched {
+		keepFacts(ctx, st, resource.Name, version, facts)
+	} else {
+		facts = keptFacts(ctx, st, resource.Name, version)
+	}
+
+	sayFacts(ctx, facts, false)
+
+	return facts, nil
 }
 
 // resourceDir materializes artifact's directory and populates it with the

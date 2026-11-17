@@ -401,6 +401,10 @@ func note(ctx context.Context, event Event) {
 		return
 	}
 
+	if event.Name == NoteFact || event.Name == NotePublished {
+		text = event.Detail + ": " + text
+	}
+
 	// A headless process's stdout is discarded, and the note is often the only record of what it says.
 	if Headless(ctx) {
 		logLevel := slog.LevelInfo

@@ -284,6 +284,74 @@ func (s *Store) RecordVersionOrder(ctx context.Context, resourceName string, ver
 	return order, nil
 }
 
+// RecordVersionMetadata keeps what a resource said about a version, filing
+// the version first: a get of a resource nothing polls fetches versions no
+// check filed.
+func (s *Store) RecordVersionMetadata(ctx context.Context, resourceName string, versionJSON store.VersionKey, metadata string) error {
+	if metadata == "" {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("could not record metadata for %q: %w", resourceName, err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	err = ensureVersion(ctx, tx, s.pipelineID, resourceName, versionJSON)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`UPDATE resource_versions SET metadata = ?
+		 WHERE pipeline_id = ? AND resource_name = ? AND version_json = ?`,
+		metadata, s.pipelineID, resourceName, versionJSON)
+	if err != nil {
+		return fmt.Errorf("could not record metadata for %q: %w", resourceName, err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("could not record metadata for %q: %w", resourceName, err)
+	}
+
+	return nil
+}
+
+// VersionMetadata reads the metadata kept for the named versions.
+func (s *Store) VersionMetadata(ctx context.Context, resourceName string, versions []store.VersionKey) (map[store.VersionKey]string, error) {
+	if len(versions) == 0 {
+		return map[store.VersionKey]string{}, nil
+	}
+
+	type kept struct {
+		version  store.VersionKey
+		metadata string
+	}
+
+	rows, err := collect(ctx, s.reads, "the metadata of "+resourceName,
+		`SELECT version_json, metadata FROM resource_versions
+		 WHERE pipeline_id = ? AND resource_name = ? AND metadata != ''
+		   AND version_json IN (SELECT value FROM json_each(?))`,
+		[]any{s.pipelineID, resourceName, jsonList(versions)}, func(rows *sql.Rows) (kept, error) {
+			var row kept
+
+			return row, rows.Scan(&row.version, &row.metadata)
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	metadata := make(map[store.VersionKey]string, len(rows))
+	for _, row := range rows {
+		metadata[row.version] = row.metadata
+	}
+
+	return metadata, nil
+}
+
 // ensureVersion records a version as seen, so a row that references it has a
 // parent to point at.
 //

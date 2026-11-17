@@ -226,6 +226,9 @@
 
 {{/* An agent's recorded response, rendered as the markdown models actually
      write. See prose.go for what the renderer refuses to do with it. */}}
+{{/* What a get's or put's resource said about its version. Untrusted resource output: escaped as text, and only an http or https address (Fact.Link) becomes a link. */}}
+{{define "facts"}}<dl class="facts">{{range .}}<div><dt>{{.Name}}</dt><dd>{{with .Link}}<a href="{{.}}" rel="nofollow noopener noreferrer">{{.}}</a>{{else}}{{.Value}}{{end}}</dd></div>{{end}}</dl>{{end}}
+
 {{define "prosebody"}}<div class="md">{{prose .}}</div>{{end}}
 
 {{/* Every action a page offers, in one place under the nav: the pipeline's

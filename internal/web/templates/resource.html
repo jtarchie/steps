@@ -17,7 +17,7 @@
     <thead><tr><th scope="col">{{t "th.version"}}</th>{{range .Consumers}}<th scope="col"><a href="/p/{{$.Nav.Current}}/jobs/{{pathseg .Job}}">{{.Job}}</a></th>{{end}}</tr></thead>
     <tbody>
       {{range .Rows}}
-      <tr><th scope="row">{{jsonLine .Version}}</th>{{range .Cells}}
+      <tr><th scope="row">{{jsonLine .Version}}{{with .Facts}}{{template "facts" .}}{{end}}</th>{{range .Cells}}
         {{- $run := .Latest}}
         <td{{if $run.ID}} title="{{cellTitle .}}"{{end}}>{{if $run.ID -}}
           <span class="st st-{{statusWord $run.Status}}">{{statusText $run.Status}}</span>

@@ -87,7 +87,7 @@ func TestGitHubIssuesCheckSkipsAPullRequest(t *testing.T) {
 func issueWithComments(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/repos/acme/app/issues/4":
-		_, _ = w.Write([]byte(`{"number":4,"title":"Plan it","body":null,"html_url":"https://github.example/acme/app/issues/4"}`))
+		_, _ = w.Write([]byte(`{"number":4,"title":"Plan it","body":null,"html_url":"https://github.example/acme/app/issues/4","user":{"login":"carol"}}`))
 	case "/repos/acme/app/issues/4/comments":
 		count := map[string]int{"1": 100, "2": 1}[r.URL.Query().Get("page")]
 
@@ -109,11 +109,14 @@ func issueWithComments(w http.ResponseWriter, r *http.Request) {
 func TestGitHubIssuesInReadsEveryComment(t *testing.T) {
 	connection := githubServer(t, issueWithComments)
 	dir := t.TempDir()
+	ctx, facts := CollectFacts(context.Background())
 
-	err := githubIssuesIn(context.Background(), map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint}, map[string]any{"number": "4"}, dir)
+	err := githubIssuesIn(ctx, map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint}, map[string]any{"number": "4"}, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	assertFacts(t, facts(), "[{url https://github.example/acme/app/issues/4} {title Plan it} {author carol}]")
 
 	root, err := os.OpenRoot(dir)
 	if err != nil {

@@ -926,6 +926,16 @@ html[data-keys="off"] .keystoggle .when-off { display: inline; }
 .log .err { color: var(--red); }
 .log.notice.warn { color: var(--yellow); }
 .runnotes { margin: 8px 0; }
+/* A get's or put's facts: name beside value, the value wrapping anywhere because a URL has no spaces to break at. */
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 12px; margin: 8px 0 0; font-size: 12px; line-height: 1.6; }
+.facts div { display: contents; }
+.facts dt { color: var(--dim); }
+.facts dd { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
+th .facts, td .facts { font-weight: normal; }
+.published { margin: 12px 0; }
+.published ul { list-style: none; margin: 4px 0 0; padding: 0; }
+.published li { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.published .pubstep { color: var(--dim); margin-right: 8px; }
 /* What the run is parked on, ahead of the transcript: yellow is the hue the attention list already gives "waiting on a person". */
 .parked:not(:empty) { margin: 12px 0; }
 .parked .approval { border-left: 3px solid var(--yellow); margin-bottom: 8px; }

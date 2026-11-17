@@ -224,16 +224,19 @@ func (s *Store) RecordPassedVersions(ctx context.Context, passes []store.Pass) e
 // what a downstream passed: constraint is satisfied by.
 func (s *Store) PassedVersions(ctx context.Context, jobName string, limit int) ([]store.PassedVersion, error) {
 	return collect(ctx, s.reads, "job versions", `
-		SELECT resource_name, version_json, recorded_at
-		FROM job_versions WHERE pipeline_id = ? AND job_name = ?
-		ORDER BY recorded_at DESC, rowid DESC LIMIT ?
+		SELECT jv.resource_name, jv.version_json, jv.recorded_at, rv.metadata
+		FROM job_versions jv
+		JOIN resource_versions rv ON rv.pipeline_id = jv.pipeline_id
+		    AND rv.resource_name = jv.resource_name AND rv.version_json = jv.version_json
+		WHERE jv.pipeline_id = ? AND jv.job_name = ?
+		ORDER BY jv.recorded_at DESC, jv.rowid DESC LIMIT ?
 	`, []any{s.pipelineID, jobName, rowLimit(limit)}, func(rows *sql.Rows) (store.PassedVersion, error) {
 		var (
 			row        store.PassedVersion
 			recordedAt string
 		)
 
-		err := rows.Scan(&row.Resource, &row.Version, &recordedAt)
+		err := rows.Scan(&row.Resource, &row.Version, &recordedAt, &row.Metadata)
 		row.RecordedAt = parseTimestamp(recordedAt)
 
 		return row, err //nolint:wrapcheck // collect wraps with the thing being read

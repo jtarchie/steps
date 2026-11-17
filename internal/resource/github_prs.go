@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // The one query github-prs sends. A search rather than the pulls listing,
@@ -232,7 +233,11 @@ func fetchPullRequest(ctx context.Context, client *githubClient, repo, number, s
 
 	var pull struct {
 		HTMLURL string `json:"html_url"`
-		Base    struct {
+		Title   string `json:"title"`
+		User    struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Base struct {
 			Ref  string `json:"ref"`
 			Repo struct {
 				CloneURL string `json:"clone_url"`
@@ -282,6 +287,8 @@ func fetchPullRequest(ctx context.Context, client *githubClient, repo, number, s
 			return err
 		}
 	}
+
+	reportFacts(ctx, []events.Fact{{Name: "url", Value: pull.HTMLURL}, {Name: "title", Value: pull.Title}, {Name: "author", Value: pull.User.Login}})
 
 	return writeGetFiles(destDir, map[string][]byte{
 		prJSONFile:      pullJSON,

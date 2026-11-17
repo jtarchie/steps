@@ -62,6 +62,7 @@
 {{/* Always drawn, empty or not: the strip's poll swaps it by id, and an approval asked after the page opened has nowhere to land otherwise. Named only when it holds something, or every run page lists an empty landmark. */}}
 <section class="parked" id="run-waiting"{{if or .Approvals .Questions}} aria-label="{{t "run.waiting"}}"{{end}}>{{range .Approvals}}{{template "approvalcard" (waitctx $.Nav .)}}{{end}}{{range .Questions}}{{template "questioncard" (waitctx $.Nav .)}}{{end}}</section>
 {{if $run.Notes}}<div class="runnotes">{{range $run.Notes}}{{template "notice" .}}{{end}}</div>{{end}}
+{{with $run.Published}}<section class="published" aria-labelledby="run-published"><h2 class="eyebrow" id="run-published">{{t "run.published"}}</h2><ul role="list">{{range .}}<li><span class="pubstep">{{.Step}}</span> <a href="{{.Fact.Link}}" rel="nofollow noopener noreferrer">{{.Fact.Link}}</a></li>{{end}}</ul></section>{{end}}
 
 {{if $run.Run.Replayed}}
 <p class="diffnote">{{th "run.replayed" (runhash (printf "/p/%s/runs/%s" .Nav.Current $run.Run.ParentRunID) (short $run.Run.ParentRunID))}}</p>
@@ -213,6 +214,7 @@
     {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · {{t "step.contenthash" (short $step.Hash)}}{{end}}</div>{{end}}
     {{if and $step.ImageNote.Text (not ($run.StepPlacements $step))}}{{template "notice" $step.ImageNote}}{{end}}
     {{range $run.StepNotes $step}}{{template "notice" .}}{{end}}
+    {{with $step.Facts}}{{template "facts" .}}{{end}}
     {{range $i, $out := $step.Outputs}}<pre class="log output">{{outputPre $out}}</pre>{{with keptOutputURL $page.Nav.Current $run.Run.ID $step $i}}<div class="log">{{th "step.fulloutput" (runlink . (t "step.fulloutput.link"))}}</div>{{end}}{{end}}
     {{if $step.Streaming}}<pre class="log output" id="{{$anchor}}_live">{{range $step.Streaming}}{{template "chunk" .}}{{end}}</pre>{{end}}
 

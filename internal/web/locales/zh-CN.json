@@ -434,6 +434,7 @@
  "run.mcp.connected": "它已连接吗？",
  "run.mcp.missing": "mcp 服务器 %[1]s 有响应，但没有名为 %[2]s 的工具——智能体授权了一个它并未提供的工具；%[3]s 会列出它实际提供的工具",
  "run.nomove": "，并且没有任何步骤的内容随之变化",
+ "run.published": "已发布",
  "run.replayed": "从 %[1]s 重放——重放点之前的步骤是从该次运行恢复的，没有重新执行",
  "run.rerunof": "%[1]s 的重新运行",
  "run.spend": "花费 %[1]s tokens · %[2]d%% 命中缓存 · %[3]s",

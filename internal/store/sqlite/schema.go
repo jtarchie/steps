@@ -108,7 +108,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 39
+const schemaVersion = 40
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -390,6 +390,7 @@ CREATE TABLE IF NOT EXISTS resource_versions (
     version_json  TEXT NOT NULL,
     check_order   INTEGER NOT NULL,
     from_check    INTEGER NOT NULL DEFAULT 0,
+    metadata      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (pipeline_id, resource_name, version_json)
 );
 CREATE INDEX IF NOT EXISTS idx_resource_versions_order

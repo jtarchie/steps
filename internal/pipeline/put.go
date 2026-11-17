@@ -9,6 +9,7 @@ import (
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/retry"
@@ -68,12 +69,15 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindPut, StepIndex: i, Resource: step.DisplayName(), Content: content}
 
-	var result map[string]any
+	var (
+		result map[string]any
+		facts  []events.Fact
+	)
 
 	res, err := runPlaced(ctx, r, node, step.Put, func(ctx context.Context) (map[string]any, error) {
 		var putErr error
 
-		result, putErr = executePut(ctx, r.cfg, step, r.bw)
+		result, facts, putErr = executePut(ctx, r.cfg, step, r.bw)
 		if putErr != nil {
 			return nil, fmt.Errorf("step %d (put %q): %w", i, step.Put, putErr)
 		}
@@ -84,7 +88,7 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 		return res, err
 	}
 
-	recordPutVersion(ctx, r.st, step, result)
+	recordPutVersion(ctx, r.st, step, result, facts)
 
 	return res, nil
 }
@@ -96,18 +100,18 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 // nonzero out: exit is marked as a task-level failure so hook dispatch
 // classifies it as failed; a resource lookup or workspace error stays
 // unmarked → errored.
-func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (map[string]any, error) {
+func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (map[string]any, []events.Fact, error) {
 	// Named here, not left to the caller: runHookStep's put branch adds no
 	// context of its own, so an unwrapped lookup failure reaches a reader as a
 	// bare "no resource type named x" with nothing saying it came from a put.
 	resource, resourceType, err := findPutTarget(cfg, step.PutResourceName())
 	if err != nil {
-		return nil, fmt.Errorf("put %q: %w", step.Put, err)
+		return nil, nil, fmt.Errorf("put %q: %w", step.Put, err)
 	}
 
 	space, remote, err := placedPutSpace(ctx, bw, step, *resourceType)
 	if err != nil {
-		return nil, fmt.Errorf("put %q: %w", step.Put, err)
+		return nil, nil, fmt.Errorf("put %q: %w", step.Put, err)
 	}
 	defer workspace.CloseSpace(space, step.Put)
 
@@ -117,7 +121,10 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 	// same versions, and none of them needs anything on disk to do it.
 	inputs := putInputs(ctx, step)
 
-	var result map[string]any
+	var (
+		result map[string]any
+		facts  []events.Fact
+	)
 
 	// The venue retry wraps the attempts: loop, as a task's does — see
 	// runPlacedStage.
@@ -127,6 +134,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 			slog.InfoContext(ctx, "job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			runCtx, recorder := recordResourceOutput(attemptCtx, resourceType.Name+" out")
+			runCtx, collected := rsrc.CollectFacts(runCtx)
 			runResult, runErr := rsrc.RunOut(runCtx, rsrc.Call{Config: cfg, Type: *resourceType, Resource: *resource, Params: step.Params, Inputs: inputs, Dir: space.Dir()})
 			recorder.finish(attemptCtx)
 
@@ -142,13 +150,13 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 				return classifyRunError(attemptCtx, runErr)
 			}
 
-			result = runResult
+			result, facts = runResult, collected()
 
 			return nil
 		})
 	})
 	if retryErr != nil {
-		return nil, fmt.Errorf("put %q: %w", step.Put, retryErr)
+		return nil, nil, fmt.Errorf("put %q: %w", step.Put, retryErr)
 	}
 
 	if result == nil {
@@ -157,5 +165,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 		notef(ctx, "put: %s (version: %s)", putLabel(step), versionText(result))
 	}
 
-	return result, nil
+	sayFacts(ctx, facts, true)
+
+	return result, facts, nil
 }

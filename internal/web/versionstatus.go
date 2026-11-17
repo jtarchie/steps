@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -15,7 +16,9 @@ import (
 // gets the resource, in the order the jobs are configured.
 type versionRow struct {
 	Version store.VersionKey
-	Cells   []versionCell
+	// Facts is what the version's resource said about it when a get fetched it or a put published it.
+	Facts []runview.Fact
+	Cells []versionCell
 }
 
 // versionCell is where one version stands in one job: the runs that took it,
@@ -136,13 +139,9 @@ type versionReader interface {
 // versionRows builds the matrix: versions newest first, one cell per
 // consumer.
 func versionRows(ctx context.Context, st versionReader, resource string, versions []store.VersionKey, consumers []consumer) ([]versionRow, error) {
-	rows := make([]versionRow, len(versions))
-	for i, version := range versions {
-		rows[i] = versionRow{Version: version, Cells: make([]versionCell, len(consumers))}
-	}
-
-	if len(consumers) == 0 {
-		return rows, nil
+	rows, err := factRows(ctx, st, resource, versions, len(consumers))
+	if err != nil || len(consumers) == 0 {
+		return rows, err
 	}
 
 	runs, err := st.VersionRuns(ctx, resource, versions)
@@ -179,6 +178,21 @@ func versionRows(ctx context.Context, st versionReader, resource string, version
 
 		state, _, _ := queuedState(queue, c.Job, time.Time{})
 		fillColumn(rows, col, c, byJob[c.Job], orders, mark, newest, state != followWaiting)
+	}
+
+	return rows, nil
+}
+
+// factRows is a row per version, each with its kept metadata and a cell per consumer still to fill.
+func factRows(ctx context.Context, st store.Versions, resource string, versions []store.VersionKey, consumers int) ([]versionRow, error) {
+	metadata, err := st.VersionMetadata(ctx, resource, versions)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // VersionMetadata names the resource
+	}
+
+	rows := make([]versionRow, len(versions))
+	for i, version := range versions {
+		rows[i] = versionRow{Version: version, Facts: keptFacts(metadata[version]), Cells: make([]versionCell, consumers)}
 	}
 
 	return rows, nil

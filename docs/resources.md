@@ -362,6 +362,8 @@ steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machi
 
 All nine read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
 
+Each reports [facts](#facts-what-a-get-or-put-says-about-its-version) from the answers GitHub already sends, at no extra request: a `github-prs` get the pull request's `url`, `title` and `author`; a `github-comments` get the comment's `url` and `author`; a `github-issues` get the issue's `url`, `title` and `author`; a `github-pr-comment` or `github-pr-review` put the new comment's or review's `url`; a `github-issue` put the new issue's `url` and `title`; a `github-pr` put the pull request's `url` and `title`. `github-reaction` and `github-label` create nothing with a page of its own and report none.
+
 ### `github-prs`: open pull requests
 
 ```yaml github=review
@@ -1328,6 +1330,7 @@ Runs when a `get` step executes.
 - **Sees**: `{{ .source }}`, `{{ .version }}` (one object from `check`'s array), and `{{ .params }}` (the get step's `params:`).
 - **Working directory** is the artifact directory itself, already created and empty. Write the contents there — `.`, not a subdirectory named after the resource.
 - **Exit non-zero** to fail the step.
+- **May print facts** about the version — a link, a title, an author — as Concourse resources do: when the whole of stdout is `{"version": {...}, "metadata": [{"name": "url", "value": "https://..."}]}`, each `metadata` entry is shown under the step. Log to stderr; stdout that is anything else is the script's own output and reports nothing. See [Facts](#facts-what-a-get-or-put-says-about-its-version).
 
 `params:` on a get is how a resource is told *how* to fetch, as opposed to `source:`, which says *what* to fetch. The distinction matters because `source:` belongs to the resource and `params:` belongs to the step, so one resource can be fetched differently by different jobs without being declared twice:
 
@@ -1390,6 +1393,49 @@ Runs when a `put` step executes. Optional: a type with no `out:` is read-only, a
 - **Sees**: `{{ .source }}` and `{{ .params }}` (the put step's `params:`).
 - **Working directory** is the put step's read view, composed from its `inputs:`.
 - **May print** a single JSON **object** — the version it produced. Printing nothing is fine and not an error. The object is stored as a version, shown on the job page, and rendered into downstream `in:` commands, so print identifiers, not credentials or whole API responses, and quote it with `shellquote`. Over 4 KiB it is not recorded.
+- **May print Concourse's answer instead**, `{"version": {...}, "metadata": [...]}`: the inner object is the version, and the metadata is the put's [facts](#facts-what-a-get-or-put-says-about-its-version). An object whose only key is `version` holding an object is read this way too.
+
+### Facts: what a get or put says about its version
+
+A resource can hand back facts about what it touched — Concourse calls them metadata: a short list of names and values, usually a link to the thing a put published or a get fetched. steps shows them under the step, on the terminal and on the run page, where any `http` or `https` address is a link. The live terminal view ends a run with a **Published** list of the links its puts reported, and the run page lists them at the top; plain output (`--progress plain`, or not a terminal) prints each fact as it arrives and has no end-of-run list. Facts are kept beside the version in the state database, so the job page and the resource page show them next to each version, and a get the [resource cache](workspace.md#cross-build-resource-cache) answers without fetching again still shows what the first fetch said. [The built-in GitHub types](#the-built-in-github-types) report theirs with no pipeline change.
+
+```yaml
+resource_types:
+- name: ticket
+  config:
+    check: |
+      printf '[{"id": "412"}]'
+    in: |
+      echo fetching ticket {{ .version.id | shellquote }} >&2   # logs go to stderr
+      echo {{ .version.id | shellquote }} > id
+      printf '{"version": {"id": "412"}, "metadata": [{"name": "url", "value": "https://tickets.example/412"}, {"name": "title", "value": "Add the widget cache"}]}'
+    out: |
+      printf '{"version": {"id": "2291"}, "metadata": [{"name": "url", "value": "https://tickets.example/412#comment-2291"}]}'
+
+resources:
+- name: ticket
+  type: ticket
+  source: {}
+- name: comment
+  type: ticket
+  source: {}
+
+jobs:
+- name: answer
+  plan:
+  - get: ticket          # shows url and title under the step
+  - task: read
+    inputs: [ticket]
+    run: cat ticket/id
+    assert:
+      stdout: "412"      # the in: wrote its tree as usual
+  - put: comment         # shows the comment's url, and lists it as published
+  assert:
+    execution: [ticket, read, comment]
+    outcome: succeeded
+```
+
+A name or value is shown as text: control characters are dropped, each is cut at a few kilobytes, and a resource reports at most 64. A value that is not an `http` or `https` address is never a link. Facts pass through the run's secret masking before they are shown or kept, but they are shown to everyone who can read the run, so a resource should report links and titles, not tokens. A put's facts are shown and kept; a later step cannot read them, as in Concourse.
 
 ### A put publishes; it does not fetch
 

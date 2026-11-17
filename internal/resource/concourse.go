@@ -160,7 +160,7 @@ type concourseAnswer struct {
 // errNullVersion is Concourse's own refusal: a script that answered with no version produced nothing a later step could name.
 var errNullVersion = errors.New("the script answered with no version")
 
-// unwrapConcourseAnswer takes the version out of {version, metadata} and shows the metadata as the step's notes, which is where steps shows what Concourse shows beside a build.
+// unwrapConcourseAnswer takes the version out of {version, metadata} and reports the metadata as the stage's facts.
 func unwrapConcourseAnswer(ctx context.Context, out []byte) (map[string]any, error) {
 	var answer concourseAnswer
 
@@ -176,9 +176,12 @@ func unwrapConcourseAnswer(ctx context.Context, out []byte) (map[string]any, err
 		return nil, errNullVersion
 	}
 
+	facts := make([]events.Fact, 0, len(answer.Metadata))
 	for _, field := range answer.Metadata {
-		events.Note(ctx, events.NoteInfo, field.Name+": "+field.Value)
+		facts = append(facts, events.Fact{Name: field.Name, Value: field.Value})
 	}
+
+	reportFacts(ctx, facts)
 
 	return answer.Version, nil
 }

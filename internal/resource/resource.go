@@ -13,6 +13,7 @@ import (
 	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/template"
@@ -329,10 +330,13 @@ func (shellBackend) in(ctx context.Context, c Call) error {
 	// Unlabeled: the caller prefixes what it streams, so a recorder between them keeps the script's own bytes.
 	defer shell.CloseRunner(runner, rt.Name+" in")
 
-	err = shell.Run(ctx, runner, command)
+	// Captured as well as streamed, bounded, for an answer printed in Concourse's shape; anything longer is no answer.
+	res, err := runner.Exec(ctx, shell.Command{Script: command, Stdin: !events.Headless(ctx), Stream: shell.StreamBoth, Capture: true, Limit: maxInAnswerBytes})
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
+
+	reportInAnswer(ctx, res.Stdout)
 
 	slog.InfoContext(ctx, "resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
 
@@ -368,6 +372,13 @@ func RunOut(ctx context.Context, c Call) (map[string]any, error) {
 	}
 
 	version, err := backendFor(c.Type).out(ctx, c)
+	if err == nil && answersWrapped(c.Type.Config.Backend()) {
+		if inner, facts, wrapped := unwrapAnswer(version); wrapped {
+			version = inner
+
+			reportFacts(ctx, facts)
+		}
+	}
 
 	return version, redact.SecretsFrom(ctx).Error(err) //nolint:wrapcheck // masking keeps the chain (Unwrap); the backend already named the stage
 }

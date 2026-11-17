@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // The one query github-issues sends: open issues by search, as github-prs finds pull requests, and with each its label events, so the version can say when a filter label last went on without a request per issue.
@@ -118,6 +119,9 @@ func githubIssuesIn(ctx context.Context, raw, version map[string]any, destDir st
 		Title   string `json:"title"`
 		Body    string `json:"body"`
 		HTMLURL string `json:"html_url"`
+		User    struct {
+			Login string `json:"login"`
+		} `json:"user"`
 	}
 
 	issueJSON, err := client.getJSON(ctx, "/repos/"+source.Repo+"/issues/"+number, &issue)
@@ -129,6 +133,8 @@ func githubIssuesIn(ctx context.Context, raw, version map[string]any, destDir st
 	if err != nil {
 		return err
 	}
+
+	reportFacts(ctx, []events.Fact{{Name: "url", Value: issue.HTMLURL}, {Name: "title", Value: issue.Title}, {Name: "author", Value: issue.User.Login}})
 
 	return writeMetadata(destDir, map[string][]byte{
 		issueJSONFile:     issueJSON,

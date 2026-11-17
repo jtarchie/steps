@@ -32,6 +32,10 @@ func plainLine(event events.Event) string {
 
 		return "skip: " + name + " (" + event.Text + ")"
 	case events.TypeStepNote:
+		if events.IsFactNote(event) {
+			return "  " + event.Detail + ": " + event.Text
+		}
+
 		if event.Status == events.NoteWarn {
 			return "warning: " + event.Text
 		}

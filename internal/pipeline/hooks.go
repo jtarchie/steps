@@ -226,12 +226,12 @@ func runHookPut(ctx context.Context, scope hookScope, step config.Step) error {
 	// label because a hook has no node.
 	ctx, placed := withPlacementSink(ctx)
 
-	result, err := executePut(ctx, scope.cfg, step, scope.bw)
+	result, facts, err := executePut(ctx, scope.cfg, step, scope.bw)
 
 	recordPlacement(ctx, scope.stepRunner, placed, 0, placedStep{name: step.Put, slot: scope.label, node: ""})
 
 	if err == nil {
-		recordPutVersion(ctx, scope.st, step, result)
+		recordPutVersion(ctx, scope.st, step, result, facts)
 	}
 
 	return err

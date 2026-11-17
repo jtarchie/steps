@@ -116,6 +116,13 @@ func (l *Live) Event(event events.Event) {
 	defer l.mu.Unlock()
 
 	// A note is a line, not part of the tree, and one can arrive after its run finished (the resume hint, the usage report): folding it would bring the run back as a region nobody takes down.
+	// A fact is the exception, drawn under its step's finished line, so it is folded while its run is drawn.
+	if run := l.runs[event.RunID]; run != nil && events.IsFactNote(event) {
+		run.folder.Add([]store.RunEventRow{rowOf(event)}, nil)
+
+		return
+	}
+
 	if event.Type == events.TypeStepNote {
 		l.scroll(l.noteLine(event))
 
@@ -143,6 +150,7 @@ func (l *Live) apply(event events.Event) []string {
 
 		if step := run.step(event.StepID); step != nil {
 			lines = append(lines, l.finishedLine(step))
+			lines = append(lines, factLines(step.Facts, "    ")...)
 		}
 
 		if event.StepKind == "agent" && l.Spend != nil {
@@ -359,6 +367,40 @@ func (l *Live) finishedLine(step *Step) string {
 	}
 }
 
+// publishedLines is the summary's list of what the run's puts published, each link beside the step that published it.
+func (l *Live) publishedLines(published []Published) []string {
+	if len(published) == 0 {
+		return nil
+	}
+
+	width := 0
+	for _, one := range published {
+		width = max(width, len(one.Step))
+	}
+
+	lines := []string{l.style("1", "Published")}
+	for _, one := range published {
+		lines = append(lines, "  "+one.Step+strings.Repeat(" ", width-len(one.Step)+2)+one.Fact.Link())
+	}
+
+	return lines
+}
+
+// factLines draws a step's facts one to a line, their values aligned.
+func factLines(facts []Fact, indent string) []string {
+	width := 0
+	for _, fact := range facts {
+		width = max(width, len(fact.Name))
+	}
+
+	lines := make([]string, 0, len(facts))
+	for _, fact := range facts {
+		lines = append(lines, indent+fact.Name+":"+strings.Repeat(" ", width-len(fact.Name)+1)+fact.Value)
+	}
+
+	return lines
+}
+
 // noteLine is plain's wording, so a note reads the same whichever renderer drew it.
 func (l *Live) noteLine(event events.Event) string {
 	if event.Status == events.NoteWarn {
@@ -386,6 +428,8 @@ func (l *Live) summary(run *liveRun, event events.Event) []string {
 	if run.spend != "" {
 		lines[len(lines)-1] += " · " + run.spend
 	}
+
+	lines = append(lines, l.publishedLines(view.Published())...)
 
 	for _, step := range view.Steps {
 		explains := step.Failed() || (step.Hook() && event.Status != events.StatusSucceeded)

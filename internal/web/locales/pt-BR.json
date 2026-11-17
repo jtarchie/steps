@@ -447,6 +447,7 @@
  "run.mcp.connected": "está conectado?",
  "run.mcp.missing": "o servidor mcp %[1]s responde, mas não tem uma ferramenta chamada %[2]s — um agente concede uma ferramenta que ele não expõe; %[3]s lista o que ele expõe",
  "run.nomove": ", e o conteúdo de nenhum passo mudou com ela",
+ "run.published": "Publicado",
  "run.replayed": "reproduzida a partir de %[1]s — os steps antes do ponto de reprodução foram restaurados daquela execução, não executados de novo",
  "run.rerunof": "nova execução de %[1]s",
  "run.spend": "gasto %[1]s tokens · %[2]d%% em cache · %[3]s",

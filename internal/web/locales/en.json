@@ -447,6 +447,7 @@
  "run.mcp.connected": "is it connected?",
  "run.mcp.missing": "mcp server %[1]s answers, but has no tool named %[2]s — an agent grants a tool it does not expose; %[3]s lists what it does",
  "run.nomove": ", and no step's content moved with it",
+ "run.published": "Published",
  "run.replayed": "replayed from %[1]s — the steps before the replay point were restored from that run, not re-executed",
  "run.rerunof": "rerun of %[1]s",
  "run.spend": "spend %[1]s tokens · %[2]d%% cached · %[3]s",

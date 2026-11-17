@@ -11,14 +11,17 @@ import (
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // githubPR is the part of a pull request the put reads back, from the list that finds it and from the create or edit that answers.
 type githubPR struct {
-	Number int64  `json:"number"`
-	NodeID string `json:"node_id"`
-	Draft  bool   `json:"draft"`
-	Head   struct {
+	Number  int64  `json:"number"`
+	HTMLURL string `json:"html_url"`
+	Title   string `json:"title"`
+	NodeID  string `json:"node_id"`
+	Draft   bool   `json:"draft"`
+	Head    struct {
 		Ref string `json:"ref"`
 		SHA string `json:"sha"`
 	} `json:"head"`
@@ -61,6 +64,8 @@ func githubPROut(ctx context.Context, raw, rawParams map[string]any, _ PutInputs
 			return nil, err
 		}
 	}
+
+	reportFacts(ctx, []events.Fact{{Name: "url", Value: pr.HTMLURL}, {Name: "title", Value: pr.Title}})
 
 	return map[string]any{"number": strconv.FormatInt(pr.Number, 10), "sha": pr.Head.SHA}, nil
 }

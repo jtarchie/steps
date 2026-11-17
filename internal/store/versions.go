@@ -46,6 +46,13 @@ type Versions interface {
 	RecordConsumedMark(ctx context.Context, jobName, resourceName string, order int64) error
 	RecordRunInput(ctx context.Context, runID string, input RunInput) error
 	RunInputs(ctx context.Context, runID string) ([]RunInput, error)
+	// RecordVersionMetadata keeps a version's metadata — what its resource
+	// said about it when it was fetched or published, events.EncodeFacts'
+	// JSON — filing the version first if nothing has. The newest answer
+	// replaces the last; "" is never written over what is kept.
+	RecordVersionMetadata(ctx context.Context, resourceName string, version VersionKey, metadata string) error
+	// VersionMetadata is the metadata kept for each of versions that has any.
+	VersionMetadata(ctx context.Context, resourceName string, versions []VersionKey) (map[VersionKey]string, error)
 	// VersionRuns is every run that took one of versions of the resource as
 	// an input, newest first. Naming the versions bounds the read by what a
 	// caller shows rather than by run history, which zero leaves unbounded;
@@ -109,4 +116,6 @@ type PassedVersion struct {
 	Resource   string
 	Version    VersionKey
 	RecordedAt time.Time
+	// Metadata is the version's own, as RecordVersionMetadata kept it.
+	Metadata string
 }
