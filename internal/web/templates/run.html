@@ -349,4 +349,4 @@
 
 {{/* One note a step's machinery left. A warning says so in words, not only in colour. */}}
 {{define "chunk"}}<span>{{outputChunk .}}</span>{{end}}
-{{define "notice"}}<div class="log notice{{if .Warn}} warn{{end}}">{{if .Warn}}{{t "step.warning"}} {{end}}{{.Text}}</div>{{end}}
+{{define "notice"}}<div class="log notice{{if .Warn}} warn{{end}}">{{if .Warn}}{{t "step.warning"}} {{end}}{{note .Text}}</div>{{end}}
