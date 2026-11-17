@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"sort"
@@ -76,11 +77,13 @@ func notFound(what string) error {
 	return fmt.Errorf("no such %s: %w", what, ErrNotFound)
 }
 
-// answer turns a Source failure into what the agent is told: not-found says only that, and anything else says the daemon could not read it — never the SQL or the path behind it.
-func answer(err error, what string) error {
+// answer turns a Source failure into what the agent is told: not-found says only that, and anything else says the daemon could not read it — never the SQL or the path behind it, which go to the daemon's log, where an operator can see /mcp failing and why.
+func answer(ctx context.Context, err error, what string) error {
 	if errors.Is(err, ErrNotFound) {
 		return notFound(what)
 	}
+
+	slog.ErrorContext(ctx, "mcpread.read_failed", "what", what, "error", err)
 
 	return fmt.Errorf("the daemon could not read the %s", what)
 }
@@ -234,7 +237,7 @@ func addTools(server *sdkmcp.Server) {
 func listPipelines(ctx context.Context, source Source, in listPipelinesIn) (listPipelinesOut, []string, error) {
 	pipelines, err := source.Pipelines(ctx)
 	if err != nil {
-		return listPipelinesOut{}, nil, answer(err, "pipelines")
+		return listPipelinesOut{}, nil, answer(ctx, err, "pipelines")
 	}
 
 	sort.Slice(pipelines, func(i, j int) bool { return pipelines[i].Name < pipelines[j].Name })
@@ -270,7 +273,7 @@ func nonNil[T any](items []T) []T {
 func getPipeline(ctx context.Context, source Source, in pipelineIn) (getPipelineOut, []string, error) {
 	detail, err := source.Pipeline(ctx, in.Pipeline)
 	if err != nil {
-		return getPipelineOut{}, nil, answer(err, "pipeline")
+		return getPipelineOut{}, nil, answer(ctx, err, "pipeline")
 	}
 
 	detail.Name = clean(detail.Name)
@@ -302,7 +305,7 @@ func cleanRun(run Run) Run {
 func getConfig(ctx context.Context, source Source, in configIn) (configOut, []string, error) {
 	cfg, err := source.Config(ctx, in.Pipeline, in.SHA, in.Run)
 	if err != nil {
-		return configOut{}, nil, answer(err, "configuration")
+		return configOut{}, nil, answer(ctx, err, "configuration")
 	}
 
 	text := cfg.Source
@@ -325,8 +328,8 @@ func getConfig(ctx context.Context, source Source, in configIn) (configOut, []st
 
 	slices.Sort(includes)
 
-	out := textPage(text, in.Offset, in.Limit, func(chunk string, next int) configOut {
-		return configOut{SHA: cfg.SHA, Include: clean(in.Include), Includes: includes, Text: chunk, Offset: min(max(in.Offset, 0), len(text)), NextOffset: next, Total: len(text)}
+	out := textPage(text, in.Offset, in.Limit, func(chunk string, start, next int) configOut {
+		return configOut{SHA: cfg.SHA, Include: clean(in.Include), Includes: includes, Text: chunk, Offset: start, NextOffset: next, Total: len(text)}
 	})
 
 	return out, []string{in.Pipeline}, nil
@@ -340,7 +343,7 @@ func listRuns(ctx context.Context, source Source, in listRunsIn) (listRunsOut, [
 
 	kept, cursor, more, err := scanRuns(ctx, source, in, cursor, listLimit(in.Limit))
 	if err != nil {
-		return listRunsOut{}, nil, answer(err, "pipeline")
+		return listRunsOut{}, nil, answer(ctx, err, "pipeline")
 	}
 
 	out := listRunsOut{Runs: nonNil(kept)}
@@ -396,7 +399,7 @@ func scanRuns(ctx context.Context, source Source, in listRunsIn, cursor string, 
 func getRun(ctx context.Context, source Source, in runIn) (getRunOut, []string, error) {
 	detail, err := source.Run(ctx, in.Pipeline, in.Run)
 	if err != nil {
-		return getRunOut{}, nil, answer(err, "run")
+		return getRunOut{}, nil, answer(ctx, err, "run")
 	}
 
 	detail.Run = cleanRun(detail.Run)
@@ -429,13 +432,13 @@ func cleanStep(step Step) Step {
 func getStepOutput(ctx context.Context, source Source, in outputIn) (outputOut, []string, error) {
 	text, err := source.StepOutput(ctx, in.Pipeline, in.Run, in.Step)
 	if err != nil {
-		return outputOut{}, nil, answer(err, "step")
+		return outputOut{}, nil, answer(ctx, err, "step")
 	}
 
 	text = runview.Scrub(text)
 
-	out := textPage(text, in.Offset, in.Limit, func(chunk string, next int) outputOut {
-		return outputOut{Run: clean(in.Run), Step: in.Step, Text: chunk, Offset: min(max(in.Offset, 0), len(text)), NextOffset: next, Total: len(text)}
+	out := textPage(text, in.Offset, in.Limit, func(chunk string, start, next int) outputOut {
+		return outputOut{Run: clean(in.Run), Step: in.Step, Text: chunk, Offset: start, NextOffset: next, Total: len(text)}
 	})
 
 	return out, []string{in.Pipeline}, nil
@@ -448,7 +451,7 @@ func search(ctx context.Context, source Source, in searchIn) (searchOut, []strin
 
 	hits, err := source.Search(ctx, in.Pipeline, in.Query)
 	if err != nil {
-		return searchOut{}, nil, answer(err, "pipeline")
+		return searchOut{}, nil, answer(ctx, err, "pipeline")
 	}
 
 	for i := range hits {
@@ -468,7 +471,7 @@ func listWaiting(ctx context.Context, source Source, in waitingIn) (waitingOut, 
 	if in.Pipeline == "" {
 		pipelines, err := source.Pipelines(ctx)
 		if err != nil {
-			return waitingOut{}, nil, answer(err, "pipelines")
+			return waitingOut{}, nil, answer(ctx, err, "pipelines")
 		}
 
 		names = namesOf(pipelines)
@@ -480,7 +483,7 @@ func listWaiting(ctx context.Context, source Source, in waitingIn) (waitingOut, 
 	for _, name := range names {
 		waiting, err := source.Waiting(ctx, name)
 		if err != nil {
-			return waitingOut{}, nil, answer(err, "pipeline")
+			return waitingOut{}, nil, answer(ctx, err, "pipeline")
 		}
 
 		for _, w := range waiting {
@@ -504,7 +507,7 @@ func getCost(ctx context.Context, source Source, in costIn) (costOut, []string, 
 			what = "run"
 		}
 
-		return costOut{}, nil, answer(err, what)
+		return costOut{}, nil, answer(ctx, err, what)
 	}
 
 	if in.Run != "" {
@@ -529,7 +532,7 @@ func getCost(ctx context.Context, source Source, in costIn) (costOut, []string, 
 func listResources(ctx context.Context, source Source, in pipelineIn) (resourcesOut, []string, error) {
 	resources, err := source.Resources(ctx, in.Pipeline)
 	if err != nil {
-		return resourcesOut{}, nil, answer(err, "pipeline")
+		return resourcesOut{}, nil, answer(ctx, err, "pipeline")
 	}
 
 	for i := range resources {
@@ -547,7 +550,7 @@ func listResources(ctx context.Context, source Source, in pipelineIn) (resources
 func listVersions(ctx context.Context, source Source, in versionsIn) (versionsOut, []string, error) {
 	versions, err := source.Versions(ctx, in.Pipeline, in.Resource)
 	if err != nil {
-		return versionsOut{}, nil, answer(err, "resource")
+		return versionsOut{}, nil, answer(ctx, err, "resource")
 	}
 
 	out, err := window(cleanAll(versions), in.Cursor, maxListLimit, func(page []string, next string) versionsOut {

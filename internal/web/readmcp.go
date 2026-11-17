@@ -9,8 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/expr-lang/expr/vm"
@@ -28,7 +28,7 @@ const (
 	readResourceMetaPath = "/.well-known/oauth-protected-resource/mcp"
 	// readAction is what every call is recorded as.
 	readAction = "mcp read"
-	// maxReadOutput bounds how much of one step's output a call reads to page through. A step's stored output is already bounded; this is the backstop that keeps one call from holding more than that in memory.
+	// maxReadOutput bounds how much of one step's output a call reads to page through, every attempt's output together: past it the text ends in readCutNote rather than pretending to be whole.
 	maxReadOutput = 32 << 20
 	// readRunDepth is how many runs search and get_cost read back.
 	readRunDepth = 50
@@ -298,12 +298,25 @@ func transcript(ctx context.Context, p *Pipeline, id string) (runview.Transcript
 		return runview.Transcript{}, mcpread.ErrNotFound
 	}
 
-	rows, err := p.Store.RunEvents(ctx, run.ID, 0, runEventLimit)
-	if err != nil {
-		return runview.Transcript{}, fmt.Errorf("web: %w", err)
+	// Paged, as the live stream pages: one read of runEventLimit would end a long agent run at its 5,000th event, and a step past it — often the one that failed — would not be there to ask about.
+	folder := runview.NewFolder()
+
+	for after := int64(0); ; {
+		rows, err := p.Store.RunEvents(ctx, run.ID, after, runEventLimit)
+		if err != nil {
+			return runview.Transcript{}, fmt.Errorf("web: %w", err)
+		}
+
+		folder.Add(rows, nil)
+
+		if len(rows) < runEventLimit {
+			break
+		}
+
+		after = rows[len(rows)-1].Seq
 	}
 
-	return runview.Build(run, rows, nil), nil
+	return folder.View(run), nil
 }
 
 func (r readSource) Run(ctx context.Context, pipeline, id string) (mcpread.RunDetail, error) {
@@ -356,58 +369,74 @@ func (r readSource) StepOutput(ctx context.Context, pipeline, run string, stepID
 	}
 
 	step := view.Steps[index]
-
-	var out strings.Builder
+	out := &boundedText{limit: r.server.readOutputLimit()}
 
 	for i, printed := range step.Outputs {
-		if i > 0 {
-			out.WriteString("\n")
+		if (i > 0 && !out.add("\n")) || !out.addOutput(ctx, p, view.Run.ID, step, i, printed) {
+			break
 		}
-
-		whole, kept := keptWhole(ctx, p, view.Run.ID, step, i)
-		if kept {
-			printed = whole
-		}
-
-		out.WriteString(printed)
 	}
 
 	for _, chunk := range step.Streaming {
-		out.WriteString(chunk)
+		if !out.add(chunk) {
+			break
+		}
 	}
 
-	return out.String(), nil
+	return string(out.buf), nil
 }
 
-// keptWhole is output i of step whole, when the event recorded only part of it and kept the rest.
-func keptWhole(ctx context.Context, p *Pipeline, runID string, step *runview.Step, i int) (string, bool) {
-	if i >= len(step.KeptOutputs) || step.KeptOutputs[i] == "" {
-		return "", false
+// errReadFull is a step's output past what one call reads.
+var errReadFull = errors.New("the output is longer than one read holds")
+
+// boundedText is one call's read of a step's output, which stops at limit and says so in the text, so a cut log is never mistaken for a whole one.
+type boundedText struct {
+	buf   []byte
+	limit int
+	full  bool
+}
+
+// readCutNote ends an output cut at the read limit.
+const readCutNote = "\n[steps: the output continues past what one read holds; the rest is stored, and the run's page links it whole]\n"
+
+// add appends text, or as much of it as fits followed by readCutNote; false once nothing more fits.
+func (b *boundedText) add(text string) bool {
+	if b.full {
+		return false
 	}
 
-	n, err := strconv.Atoi(step.KeptOutputs[i])
-	if err != nil || n < 0 {
-		return "", false
+	if len(b.buf)+len(text) > b.limit {
+		b.buf = append(append(b.buf, text[:max(b.limit-len(b.buf), 0)]...), readCutNote...)
+		b.full = true
+
+		return false
 	}
 
-	var whole strings.Builder
+	b.buf = append(b.buf, text...)
 
-	errFull := errors.New("full")
+	return true
+}
 
-	found, err := p.Store.StepOutput(ctx, runID, step.ID, n, func(chunk []byte) error {
-		if whole.Len()+len(chunk) > maxReadOutput {
-			return errFull
+// addOutput appends output i of step: its stored whole when the event kept only part, else what the event recorded.
+func (b *boundedText) addOutput(ctx context.Context, p *Pipeline, runID string, step *runview.Step, i int, printed string) bool {
+	if n, kept := keptOutputN(step, i); kept {
+		found, err := p.Store.StepOutput(ctx, runID, step.ID, n, func(chunk []byte) error {
+			if !b.add(string(chunk)) {
+				return errReadFull
+			}
+
+			return nil
+		})
+		if errors.Is(err, errReadFull) {
+			return false
 		}
 
-		whole.Write(chunk)
-
-		return nil
-	})
-	if (err != nil && !errors.Is(err, errFull)) || !found {
-		return "", false
+		if err == nil && found {
+			return true
+		}
 	}
 
-	return whole.String(), true
+	return b.add(printed)
 }
 
 func (r readSource) Search(ctx context.Context, pipeline, text string) ([]mcpread.Hit, error) {
@@ -563,11 +592,11 @@ func (r readSource) Versions(ctx context.Context, pipeline, resource string) ([]
 	return versions, nil
 }
 
-// Record writes one activity entry per pipeline the call read, naming the tool and nothing the agent sent.
+// Record writes an activity entry per pipeline the call read, naming the tool and nothing the agent sent — at most one per person, tool and pipeline in readCoalesce. The log is bounded by count across the whole daemon, and an agent polling list_pipelines over fifty pipelines would otherwise push every person's trigger and approval out of it within the hour; a repeat of a read already on record says nothing new.
 func (r readSource) Record(ctx context.Context, tool string, pipelines []string) {
 	for _, name := range pipelines {
 		p := r.server.Lookup(name)
-		if p == nil {
+		if p == nil || !r.server.readsSeen.first(r.who.String()+"\x00"+tool+"\x00"+name, time.Now()) {
 			continue
 		}
 
@@ -576,4 +605,55 @@ func (r readSource) Record(ctx context.Context, tool string, pipelines []string)
 			slog.ErrorContext(ctx, "web.activity_unrecorded", "pipeline", p.Slug, "action", readAction, "error", err)
 		}
 	}
+}
+
+// readCoalesce is how long one recorded read stands for its repeats in the activity log.
+const readCoalesce = 10 * time.Minute
+
+// maxReadsSeen bounds the coalescing memory; past it the oldest are forgotten, which costs only an extra entry.
+const maxReadsSeen = 10000
+
+// recentReads remembers when each read was last recorded.
+type recentReads struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+// first is whether key has not been recorded within readCoalesce of now, marking it recorded if so.
+func (r *recentReads) first(key string, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if at, ok := r.seen[key]; ok && now.Sub(at) < readCoalesce {
+		return false
+	}
+
+	if r.seen == nil || len(r.seen) >= maxReadsSeen {
+		r.sweep(now)
+	}
+
+	r.seen[key] = now
+
+	return true
+}
+
+func (r *recentReads) sweep(now time.Time) {
+	kept := make(map[string]time.Time, len(r.seen))
+
+	for key, at := range r.seen {
+		if now.Sub(at) < readCoalesce && len(kept) < maxReadsSeen/2 {
+			kept[key] = at
+		}
+	}
+
+	r.seen = kept
+}
+
+// readOutputLimit is how much of one step's output a call reads.
+func (s *Server) readOutputLimit() int {
+	if s.readCap > 0 {
+		return s.readCap
+	}
+
+	return maxReadOutput
 }

@@ -158,6 +158,10 @@ type Server struct {
 	// reader serves the read-only MCP tools at /mcp, and mcpAccess is --mcp-access, nil for anyone with the viewer role: see readmcp.go.
 	reader    http.Handler
 	mcpAccess *vm.Program
+	// readCap is how much of one step's output a read takes, zero for maxReadOutput; a field so a test can lower it without touching every other test's.
+	readCap int
+	// readsSeen coalesces repeated reads in the activity log: see Record.
+	readsSeen recentReads
 	// nil answers any Host: see hosts.go. hostsImplied is a list nobody named, which a webhook delivery is exempt from.
 	allowedHosts map[string]bool
 	hostsImplied bool
@@ -401,7 +405,7 @@ func (s *Server) routes() error {
 		e.GET(readResourceMetaPath, s.handleReadResourceMetadata)
 	}
 
-	// Wherever the pages are readable: with no sign-in as the pages are, with sessions behind a read token. A daemon with only the Basic prompt has no way to issue that token, so it offers none rather than one guarded by a password an agent would have to hold.
+	// Wherever the pages are readable: with no sign-in as the pages are, with sessions behind a read token. A server with accounts and no sessions — which only a test builds — has no way to issue that token, so it offers none rather than one guarded by a password an agent would have to hold.
 	if s.auth == nil || s.sessions != nil {
 		s.reader = mcpread.Handler(s.version)
 		e.POST(readPath, s.handleRead)

@@ -8,8 +8,108 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
+
+// A run past runEventLimit is read whole, as the live stream reads it: the step that failed after the 5,000th event is the one an agent most needs, and one bounded read would leave it out. Serial, because shrinkRunEventLimit lowers a package global.
+func TestReadingARunGoesPastTheRunEventLimit(t *testing.T) {
+	shrinkRunEventLimit(t, 40, 10)
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-long", JobName: "build", Workspace: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows := make([]store.RunEventRow, 0, runEventLimit+14)
+	rows = append(rows, store.RunEventRow{Type: events.TypeStepStarted, StepIndex: 0, StepName: "chatty", StepKind: "agent", StepID: 1})
+
+	for range runEventLimit + 10 {
+		rows = append(rows, store.RunEventRow{Type: events.TypeAgentText, StepIndex: 0, StepName: "chatty", StepID: 1, Text: "turn"})
+	}
+
+	rows = append(rows,
+		store.RunEventRow{Type: events.TypeStepFinished, StepIndex: 0, StepName: "chatty", StepKind: "agent", StepID: 1, Status: "succeeded"},
+		store.RunEventRow{Type: events.TypeStepStarted, StepIndex: 1, StepName: "late", StepKind: "task", StepID: 2},
+		store.RunEventRow{Type: events.TypeStepFinished, StepIndex: 1, StepName: "late", StepKind: "task", StepID: 2, Status: "failed", Text: "exit 3"},
+	)
+
+	appendEvents(t, pipeline.Store, "run-long", rows)
+
+	err = pipeline.Store.FinishRun(ctx, "run-long", store.RunFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := readSource{server: server}.Run(ctx, pipeline.Slug, "run-long")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if detail.FailedStep == nil || detail.FailedStep.Name != "late" {
+		t.Errorf("the failed step past the event limit = %+v, want late", detail.FailedStep)
+	}
+}
+
+// A step's output longer than one read holds is cut, and the cut says so: a log that silently ends reads as a log that ended.
+func TestAnOutputPastTheReadLimitSaysItWasCut(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	server.readCap = 100
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-big", JobName: "build", Workspace: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-big", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepOutput, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Text: "the head of it", Detail: "0"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: "failed"},
+	})
+
+	err = pipeline.Store.AppendStepOutput(ctx, "run-big", 1, 0, 0, []byte(strings.Repeat("x", 1000)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text, err := readSource{server: server}.StepOutput(ctx, pipeline.Slug, "run-big", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if text != strings.Repeat("x", 100)+readCutNote {
+		t.Errorf("a 1000-byte output under a 100-byte read = %d bytes, ending %q", len(text), text[max(len(text)-60, 0):])
+	}
+}
+
+// Repeated reads of one pipeline with one tool are one activity entry, so an agent that polls cannot push people's actions out of a log bounded by count.
+func TestRepeatedReadsAreOneEntry(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	source := readSource{server: server}
+
+	for range 5 {
+		source.Record(t.Context(), "list_pipelines", []string{pipeline.Slug})
+	}
+
+	source.Record(t.Context(), "get_run", []string{pipeline.Slug})
+
+	entries, err := pipeline.Store.Reader().Activity(t.Context(), store.ActivityFilter{Action: readAction})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(entries) != 2 {
+		t.Errorf("five list_pipelines and a get_run recorded %d entries, want 2", len(entries))
+	}
+}
 
 // readTokenFor issues an access and a refresh token under a read grant, as a consent would have.
 func readTokenFor(t *testing.T, accounts store.Accounts, who string) (string, string) {

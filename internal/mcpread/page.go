@@ -110,8 +110,8 @@ func window[T, O any](items []T, cursor string, limit int, wrap func(page []T, n
 	}
 }
 
-// textPage is text[offset:offset+limit] cut on rune boundaries, shrunk until wrap of it fits, and where the next page starts (0 when this one reaches the end).
-func textPage[O any](text string, offset, limit int, wrap func(chunk string, next int) O) O {
+// textPage is text[offset:offset+limit] cut on rune boundaries, shrunk until wrap of it fits, with where it really starts and where the next page starts (0 when this one reaches the end).
+func textPage[O any](text string, offset, limit int, wrap func(chunk string, start, next int) O) O {
 	if limit <= 0 {
 		limit = defaultTextLimit
 	}
@@ -131,7 +131,7 @@ func textPage[O any](text string, offset, limit int, wrap func(chunk string, nex
 			next = end
 		}
 
-		out := wrap(text[offset:end], next)
+		out := wrap(text[offset:end], offset, next)
 		if fits(out) || limit <= 1 {
 			return out
 		}

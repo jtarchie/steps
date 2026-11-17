@@ -1,9 +1,11 @@
 package mcpread
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -218,6 +220,24 @@ func TestOutputPagesAreWholeAndBounded(t *testing.T) {
 	}
 }
 
+// An offset inside a character is moved back to its start, and the page says where it really starts, so offset+len(text) is where the next page begins.
+func TestAnOffsetInsideACharacterSaysWhereThePageStarts(t *testing.T) {
+	t.Parallel()
+
+	session := connect(t, &fakeSource{output: "ビルド"})
+
+	var page outputOut
+
+	result := call(t, session, "get_step_output", map[string]any{"pipeline": "api", "run": "r1", "step": 1, "offset": 4}, &page)
+	if result.IsError {
+		t.Fatal(toolText(result))
+	}
+
+	if page.Offset != 3 || page.Text != "ルド" {
+		t.Errorf("page = offset %d, text %q; want offset 3, text %q", page.Offset, page.Text, "ルド")
+	}
+}
+
 // Free text loses its escape sequences before an agent reads it: a terminal's OSC in a step's output is not the agent's to pass on.
 func TestOutputIsScrubbed(t *testing.T) {
 	t.Parallel()
@@ -331,6 +351,22 @@ func TestABigListIsCutToTheCap(t *testing.T) {
 
 	if !strings.Contains(page.Steps[0].Error, "more bytes]") {
 		t.Errorf("a long error was not capped: %d bytes", len(page.Steps[0].Error))
+	}
+}
+
+// What the agent is not told goes to the daemon's log, or an operator could not see /mcp failing at all. Serial: it swaps the process's default logger.
+func TestAFailedReadIsLogged(t *testing.T) {
+	var logged bytes.Buffer
+
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	session := connect(t, &fakeSource{})
+	call(t, session, "list_versions", map[string]any{"pipeline": "api", "resource": "repo"}, nil)
+
+	if !strings.Contains(logged.String(), "mcpread.read_failed") || !strings.Contains(logged.String(), "/secret/path") {
+		t.Errorf("the failure was not logged with its cause:\n%s", logged.String())
 	}
 }
 

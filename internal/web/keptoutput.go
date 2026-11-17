@@ -12,14 +12,21 @@ import (
 // keptOutputRoute names a run, a step and its n-th kept output; handleError answers its failures in plain text.
 const keptOutputRoute = "/p/:pipeline/runs/:run/steps/:step/output/:n"
 
-// keptOutputURL links output i of step to its stored whole, or is "" when that output was not elided.
-func keptOutputURL(slug, runID string, step *runview.Step, i int) string {
+// keptOutputN is which stored output holds output i of step whole, false when that output was not elided.
+func keptOutputN(step *runview.Step, i int) (int, bool) {
 	if i >= len(step.KeptOutputs) {
-		return ""
+		return 0, false
 	}
 
 	n, err := strconv.Atoi(step.KeptOutputs[i])
-	if err != nil || n < 0 {
+
+	return n, err == nil && n >= 0
+}
+
+// keptOutputURL links output i of step to its stored whole, or is "" when that output was not elided.
+func keptOutputURL(slug, runID string, step *runview.Step, i int) string {
+	n, kept := keptOutputN(step, i)
+	if !kept {
 		return ""
 	}
 
