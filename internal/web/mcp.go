@@ -211,6 +211,8 @@ func (s *Server) handleMCP(c *echo.Context) error {
 		rest = append(rest, row)
 	}
 
+	list.Shown, list.Total = len(attention)+len(rest), len(servers)
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "mcp", map[string]any{
 		"Nav":       s.nav(c),

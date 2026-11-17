@@ -52,6 +52,7 @@ func (s *Server) handleResources(c *echo.Context) error {
 		return (state != "" && row.State != state) || (kind != "" && row.Type != kind) ||
 			!matches(list.Text, row.Name, row.Type, string(row.Checked.Version))
 	})
+	list.Shown, list.Total = len(rows), total
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "resources", map[string]any{
@@ -141,6 +142,7 @@ func (s *Server) handleResource(c *echo.Context) error {
 	// Before the rows are built, which costs a query per version: a narrowed page reads only what it shows.
 	total := len(lines)
 	lines = slices.DeleteFunc(lines, func(line store.VersionKey) bool { return !matches(list.Text, string(line)) })
+	list.Shown, list.Total = len(lines), total
 
 	checked, _, err := pipeline.Store.LastChecked(ctx, res.Name)
 	if err != nil {

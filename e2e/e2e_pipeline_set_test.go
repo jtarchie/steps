@@ -714,7 +714,8 @@ func TestPipelineDestroyForgetsEverything(t *testing.T) {
 	// Destroyed rather than stopped: a re-set starts with no history.
 	served.set(t, name, path)
 
-	if code, page := served.get(t, "/p/"+name+"/runs"); code != http.StatusOK || strings.Contains(page, "passed") {
+	// A run's row carries the st-passed class; the word alone is also the status chip's, which a page with no runs still draws.
+	if code, page := served.get(t, "/p/"+name+"/runs"); code != http.StatusOK || strings.Contains(page, "st-passed") {
 		t.Errorf("a re-set pipeline still shows the destroyed one's runs (%d):\n%s", code, page)
 	}
 }

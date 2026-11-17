@@ -11,8 +11,8 @@
 {{if .Exports}}<h2 class="eyebrow">{{t "mcp.h.servers"}} <span class="unbold">{{t "mcp.h.servers.note"}}</span></h2>{{end}}
 {{if not (or .Attention .Rest)}}<p class="faint">{{t "list.nomatch"}}</p>{{else}}
 <div class="tablewrap">
-  <table class="mcp">
-    <thead><tr><th>{{t "th.status"}}</th><th>{{t "mcp.th.server"}}</th><th>{{t "mcp.th.usedby"}}</th><th class="acts">{{t "th.action"}}</th></tr></thead>
+  <table class="mcp stack">
+    <thead><tr><th>{{t "th.status"}}</th><th>{{t "mcp.th.server"}}</th><th>{{t "mcp.th.usedby"}}</th><th class="acts"><span class="visually-hidden">{{t "th.action"}}</span></th></tr></thead>
     {{/* Two bodies rather than two tables: the columns have to line up across
          the groups, or the split costs the reader the comparison it was meant
          to make easier. */}}
@@ -66,7 +66,7 @@
     {{if .Pending}}<span class="stamp st st-running">{{t "mcp.loginprogress"}}</span>
     {{else}}<span class="stamp st st-{{.Mark}}">{{mcpStatus .Status}}</span>{{end}}
   </td>
-  <td class="who">
+  <td class="who wide">
     <div class="name">{{.Name}}</div>
     {{/* What the server IS, on one dimmed line: transport, target and auth were
          three columns holding facts a reader checks once, and between them they

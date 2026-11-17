@@ -48,6 +48,8 @@ type RunQuery struct {
 	Text string
 	// Statuses also keeps a run in one of these, whatever Text says: the caller's way to let the word a reader SEES ("passed") find what is stored ("succeeded"), which this package cannot translate.
 	Statuses []RunStatus
+	// Status keeps only runs in this status, whatever Text says: the status chip, which narrows rather than widens.
+	Status RunStatus
 	// Before keeps runs older than this one, in ListRuns' order (started_at, then insertion). A keyset, not an offset, so a run arriving while someone reads page two does not shift every row they have not reached. A run that no longer exists (reaped) keeps nothing, rather than silently restarting at the newest.
 	Before string
 	Limit  int

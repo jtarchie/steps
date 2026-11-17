@@ -14,7 +14,7 @@
 {{with .History}}
 <h2 class="eyebrow">{{t "list.h.answered"}}</h2>
 <div class="tablewrap">
-  <table class="decisions">
+  <table class="decisions stack">
     <thead><tr><th>{{t "th.status"}}</th><th>{{t "th.job"}}</th><th>{{t "th.run"}}</th><th>{{t "th.question"}}</th><th>{{t "th.answer"}}</th><th>{{t "th.when"}}</th></tr></thead>
     <tbody>
       {{range .}}
@@ -22,8 +22,8 @@
         <td><span class="st st-{{if eq .Status "answered"}}passed{{else}}failed{{end}}">{{word "status" .Status}}</span></td>
         <td><a href="{{pathQuery $.List.Base $.List.Query "job" .JobName}}">{{.JobName}}</a> <span class="dim">{{.AgentName}}</span></td>
         <td class="dim"><a class="hash" href="/p/{{$.Nav.Current}}/runs/{{.RunID}}">{{short .RunID}}</a></td>
-        <td class="said">{{.Question}}</td>
-        <td class="said">{{with .Answer}}“{{.}}”{{end}}{{with .AnsweredBy}} <span class="dim">{{th "card.by" (actorTag .)}}</span>{{end}}</td>
+        <td class="said wide">{{.Question}}</td>
+        <td class="said wide">{{with .Answer}}“{{.}}”{{end}}{{with .AnsweredBy}} <span class="dim">{{th "card.by" (actorTag .)}}</span>{{end}}</td>
         <td class="dim">{{agoTag .AnsweredAt}}</td>
       </tr>
       {{end}}

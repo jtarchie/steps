@@ -14,7 +14,7 @@
 {{with .History}}
 <h2 class="eyebrow">{{t "list.h.decided"}}</h2>
 <div class="tablewrap">
-  <table class="decisions">
+  <table class="decisions stack">
     <thead><tr><th>{{t "th.status"}}</th><th>{{t "th.job"}}</th><th>{{t "th.run"}}</th><th>{{t "th.message"}}</th><th>{{t "th.decision"}}</th><th>{{t "th.when"}}</th></tr></thead>
     <tbody>
       {{range .}}
@@ -22,8 +22,8 @@
         <td><span class="st st-{{if eq .Status "approved"}}passed{{else}}failed{{end}}">{{word "status" .Status}}</span></td>
         <td><a href="{{pathQuery $.List.Base $.List.Query "job" .JobName}}">{{.JobName}}</a></td>
         <td class="dim">{{with .RunID}}<a class="hash" href="/p/{{$.Nav.Current}}/runs/{{.}}">{{short .}}</a>{{else}}<span class="faint">—</span>{{end}}</td>
-        <td class="said">{{.Message}}</td>
-        <td class="said">{{with .Reason}}“{{.}}”{{end}}{{with .DecidedBy}} <span class="dim">{{th "card.by" (actorTag .)}}</span>{{end}}</td>
+        <td class="said wide">{{.Message}}</td>
+        <td class="said wide">{{with .Reason}}“{{.}}”{{end}}{{with .DecidedBy}} <span class="dim">{{th "card.by" (actorTag .)}}</span>{{end}}</td>
         <td class="dim">{{agoTag .DecidedAt}}</td>
       </tr>
       {{end}}

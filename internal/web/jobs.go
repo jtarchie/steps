@@ -251,10 +251,11 @@ func (s *Server) handleRunHistory(c *echo.Context) error {
 	list := newList(base, query, loc.text("runs.search.hint"), loc.text("runs.search.label"))
 	find := store.RunQuery{
 		Job:    list.facet(loc, "job", pipeline.Config().JobNames(), identity),
-		Text:   list.Text,
 		Before: query.Get("before"),
 		Limit:  runsPage + 1,
 	}
+	find.Status = runStatusOf(list.facet(loc, "status", runChips, func(v string) string { return loc.word("status", v) }))
+	find.Text = list.Text
 	find.Statuses = statusesNamed(loc, find.Text)
 	list.searched()
 
@@ -264,6 +265,7 @@ func (s *Server) handleRunHistory(c *echo.Context) error {
 	}
 
 	runs = page(list, runs, runsPage, func(run store.RunRow) string { return run.ID })
+	list.Shown = len(runs)
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "runs", map[string]any{
@@ -275,6 +277,18 @@ func (s *Server) handleRunHistory(c *echo.Context) error {
 }
 
 func identity(value string) string { return value }
+
+// runChips are the status chips' values, spelled as the page spells a run's status.
+var runChips = []string{"running", "passed", "failed", "aborted"}
+
+// runStatusOf is the stored status a chip names; empty for none.
+func runStatusOf(chip string) store.RunStatus {
+	if chip == "passed" {
+		return store.RunSucceeded
+	}
+
+	return store.RunStatus(chip)
+}
 
 // statusesNamed is every run status whose word, as this reader sees it or in English, holds text: the page says "passed" where the store says "succeeded", and a reader types what they read.
 func statusesNamed(loc *locale, text string) []store.RunStatus {

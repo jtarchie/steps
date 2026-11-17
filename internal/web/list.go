@@ -18,6 +18,8 @@ type listView struct {
 	Filters []activityFilter
 	Older   string
 	Paged   bool
+	// Shown is how many rows the page draws; Total, when the list knows it, is how many there are before narrowing, so a filter reads "2 of 7" and a paged list, which cannot know, reads "50 shown".
+	Shown, Total int
 }
 
 // facetGroup is one field's chips. All is first and current while the field is unset.

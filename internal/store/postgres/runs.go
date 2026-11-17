@@ -225,6 +225,11 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]stor
 func (s *Store) FindRuns(ctx context.Context, query store.RunQuery) ([]store.RunRow, error) {
 	filter, args := byJob(query.Job, []any{s.pipelineID})
 
+	if query.Status != "" {
+		filter += ` AND status = ` + next(args)
+		args = append(args, string(query.Status))
+	}
+
 	if query.Text != "" {
 		args = append(args, query.Text)
 		text := "lower($" + strconv.Itoa(len(args)) + ")"

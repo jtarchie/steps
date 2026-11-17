@@ -150,7 +150,7 @@ Only a state file the daemon cannot read at all stops it from starting.
 | `…/mcp/exports/:export` | One `mcp_exports:` entry: its address, its tools, its recent calls — see [mcp.md](mcp.md#where-an-export-is-seen) |
 | `/activity` | [What people did](#activity), across every pipeline. Admins only |
 
-Every list among them — runs, resources, mcp, approvals, questions — narrows the same way: a search box, a row of chips per field (job, status, type, transport, auth, as the page has them), and above the table the narrowings in force, each with **×** to drop it. A narrowed list is its URL, so it can be sent to somebody. Runs, approvals and questions page back with **older**.
+Every list among them — runs, resources, mcp, approvals, questions — narrows the same way: a search box, a row of chips per field (job, status, type, transport, auth, as the page has them), and above the table the narrowings in force, each with **×** to drop it. A narrowed list is its URL, so it can be sent to somebody, and says how many rows it kept — "2 of 7" where it knows the whole list, "50 shown" where it is paged. Runs, approvals and questions page back with **older**. On a phone a row of a list becomes a small card — its status, name and numbers on a wrapping line, long sentences and versions on a line of their own, its button at the end — so nothing to press is behind a sideways scroll.
 | `/connections` | The agents you have let connect to an export, with **Revoke**; on a daemon people sign in to — see [mcp.md](mcp.md) |
 | `/login` | The sign-in form, on a daemon with accounts — see [authentication.md](authentication.md#signing-in-from-a-browser) |
 | `/healthz` | `ok` and nothing else, for a platform's health check; needs no credentials |

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,37 +18,47 @@ import (
 // decisionsPage is how many decided rows one page of the approvals or questions history shows.
 const decisionsPage = 50
 
-// decisionList is the list an approvals or questions page draws over: the job and status chips, the box, and the cursor. status is the chip chosen, empty for all.
-func (s *Server) decisionList(c *echo.Context, section, hintKey, labelKey string, statuses []string) (list *listView, job, status string, before int64) {
+// decisionKind is all that differs between the approvals page and the questions page: the words, the statuses, and the one query each store answers. Everything else — the chips, the box, what waits above what was decided, the cursor — is decisionPage, written once.
+type decisionKind[T any] struct {
+	section, hint, label string
+	// pending is the status of a row still waiting on a person; closed are the others.
+	pending string
+	closed  []string
+	find    func(ctx context.Context, job, text string, statuses []string, before int64, limit int) ([]T, error)
+	id      func(T) int64
+}
+
+// typed is a list of status words as the store's own status type.
+func typed[S ~string](words []string) []S {
+	out := make([]S, len(words))
+	for i, word := range words {
+		out[i] = S(word)
+	}
+
+	return out
+}
+
+// decisionPage draws what still waits, oldest first and never capped — a build parked behind one that scrolled off would wait forever — above a paged history of what was decided.
+func decisionPage[T any](s *Server, c *echo.Context, kind decisionKind[T]) error {
 	pipeline := pipelineOf(c)
+	ctx := c.Request().Context()
 	loc := s.renderer.localeOf(c)
 	query := c.Request().URL.Query()
 
-	list = newList("/p/"+pipeline.Slug+"/"+section, query, loc.text(hintKey), loc.text(labelKey))
-	job = list.facet(loc, "job", pipeline.Config().JobNames(), identity)
-	status = list.facet(loc, "status", statuses, func(v string) string { return loc.word("status", v) })
+	list := newList("/p/"+pipeline.Slug+"/"+kind.section, query, loc.text(kind.hint), loc.text(kind.label))
+	job := list.facet(loc, "job", pipeline.Config().JobNames(), identity)
+	status := list.facet(loc, "status", append([]string{kind.pending}, kind.closed...), func(v string) string { return loc.word("status", v) })
 	list.searched()
 
-	before, _ = strconv.ParseInt(query.Get("before"), 10, 64)
+	before, _ := strconv.ParseInt(query.Get("before"), 10, 64)
 
-	return list, job, status, before
-}
-
-// handleApprovals draws what still waits, oldest first and never capped — a build parked behind one that scrolled off would wait forever — above a paged history of what was decided.
-func (s *Server) handleApprovals(c *echo.Context) error {
-	pipeline := pipelineOf(c)
-	ctx := c.Request().Context()
-
-	decided := []store.ApprovalStatus{store.ApprovalApproved, store.ApprovalRejected, store.ApprovalExpired}
-	list, job, status, before := s.decisionList(c, "approvals", "approvals.search.hint", "approvals.search.label", []string{string(store.ApprovalPending), string(store.ApprovalApproved), string(store.ApprovalRejected), string(store.ApprovalExpired)})
-
-	var pending, history []store.Approval
+	var pending, history []T
 
 	// Only on the first page: a reader paging back through the history has already been shown what waits.
-	if before == 0 && (status == "" || status == string(store.ApprovalPending)) {
+	if before == 0 && (status == "" || status == kind.pending) {
 		var err error
 
-		pending, err = pipeline.Store.FindApprovals(ctx, store.ApprovalQuery{Job: job, Text: list.Text, Statuses: []store.ApprovalStatus{store.ApprovalPending}})
+		pending, err = kind.find(ctx, job, list.Text, []string{kind.pending}, 0, 0)
 		if err != nil {
 			return fmt.Errorf("web: %w", err)
 		}
@@ -55,74 +66,59 @@ func (s *Server) handleApprovals(c *echo.Context) error {
 		slices.Reverse(pending)
 	}
 
-	if status != string(store.ApprovalPending) {
+	if status != kind.pending {
+		decided := kind.closed
 		if status != "" {
-			decided = []store.ApprovalStatus{store.ApprovalStatus(status)}
+			decided = []string{status}
 		}
 
 		var err error
 
-		history, err = pipeline.Store.FindApprovals(ctx, store.ApprovalQuery{Job: job, Text: list.Text, Statuses: decided, Before: before, Limit: decisionsPage + 1})
+		history, err = kind.find(ctx, job, list.Text, decided, before, decisionsPage+1)
 		if err != nil {
 			return fmt.Errorf("web: %w", err)
 		}
 
-		history = page(list, history, decisionsPage, func(row store.Approval) string { return strconv.FormatInt(row.ID, 10) })
+		history = page(list, history, decisionsPage, func(row T) string { return strconv.FormatInt(kind.id(row), 10) })
 	}
 
+	list.Shown = len(pending) + len(history)
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
-	return c.Render(http.StatusOK, "approvals", map[string]any{
+	return c.Render(http.StatusOK, kind.section, map[string]any{
 		"Nav":     s.nav(c),
-		"Title":   "approvals",
+		"Title":   kind.section,
 		"Pending": pending,
 		"History": history,
 		"List":    list,
 	})
 }
 
-// handleQuestions is handleApprovals for what agents asked.
+func (s *Server) handleApprovals(c *echo.Context) error {
+	pipeline := pipelineOf(c)
+
+	return decisionPage(s, c, decisionKind[store.Approval]{
+		section: "approvals", hint: "approvals.search.hint", label: "approvals.search.label",
+		pending: string(store.ApprovalPending),
+		closed:  []string{string(store.ApprovalApproved), string(store.ApprovalRejected), string(store.ApprovalExpired)},
+		find: func(ctx context.Context, job, text string, statuses []string, before int64, limit int) ([]store.Approval, error) {
+			return pipeline.Store.FindApprovals(ctx, store.ApprovalQuery{Job: job, Text: text, Statuses: typed[store.ApprovalStatus](statuses), Before: before, Limit: limit})
+		},
+		id: func(a store.Approval) int64 { return a.ID },
+	})
+}
+
 func (s *Server) handleQuestions(c *echo.Context) error {
 	pipeline := pipelineOf(c)
-	ctx := c.Request().Context()
 
-	closed := []store.QuestionStatus{store.QuestionAnswered, store.QuestionExpired, store.QuestionAborted}
-	list, job, status, before := s.decisionList(c, "questions", "questions.search.hint", "questions.search.label", []string{string(store.QuestionPending), string(store.QuestionAnswered), string(store.QuestionExpired), string(store.QuestionAborted)})
-
-	var pending, history []store.Question
-
-	if before == 0 && (status == "" || status == string(store.QuestionPending)) {
-		var err error
-
-		pending, err = pipeline.Store.FindQuestions(ctx, store.QuestionQuery{Job: job, Text: list.Text, Statuses: []store.QuestionStatus{store.QuestionPending}})
-		if err != nil {
-			return fmt.Errorf("web: %w", err)
-		}
-
-		slices.Reverse(pending)
-	}
-
-	if status != string(store.QuestionPending) {
-		if status != "" {
-			closed = []store.QuestionStatus{store.QuestionStatus(status)}
-		}
-
-		var err error
-
-		history, err = pipeline.Store.FindQuestions(ctx, store.QuestionQuery{Job: job, Text: list.Text, Statuses: closed, Before: before, Limit: decisionsPage + 1})
-		if err != nil {
-			return fmt.Errorf("web: %w", err)
-		}
-
-		history = page(list, history, decisionsPage, func(row store.Question) string { return strconv.FormatInt(row.ID, 10) })
-	}
-
-	//nolint:wrapcheck // render errors surface through the shared error handler
-	return c.Render(http.StatusOK, "questions", map[string]any{
-		"Nav":     s.nav(c),
-		"Title":   "questions",
-		"Pending": pending,
-		"History": history,
-		"List":    list,
+	return decisionPage(s, c, decisionKind[store.Question]{
+		section: "questions", hint: "questions.search.hint", label: "questions.search.label",
+		pending: string(store.QuestionPending),
+		closed:  []string{string(store.QuestionAnswered), string(store.QuestionExpired), string(store.QuestionAborted)},
+		find: func(ctx context.Context, job, text string, statuses []string, before int64, limit int) ([]store.Question, error) {
+			return pipeline.Store.FindQuestions(ctx, store.QuestionQuery{Job: job, Text: text, Statuses: typed[store.QuestionStatus](statuses), Before: before, Limit: limit})
+		},
+		id: func(q store.Question) int64 { return q.ID },
 	})
 }
 

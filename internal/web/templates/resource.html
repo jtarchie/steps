@@ -4,7 +4,7 @@
 <div class="metaline" id="resource-meta">
   {{.Resource.Type}}<span class="sep">·</span>
   {{if .Checked.Name}}{{t "resource.lastchecked" (ago .Checked.CheckedAt)}}{{else}}<span class="faint">{{t "resource.neverchecked"}}</span>{{end}}
-  {{- if and .CanCheck (not .Nav.ReadOnly)}}<span class="sep">·</span><form class="inline" method="post" action="/p/{{.Nav.Current}}/resources/{{.Resource.Name}}/check"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit"{{if .Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "resource.check.title"}}"{{end}}>↻ {{t "resource.check"}}</button></form>{{end}}
+  {{- if and .CanCheck (not .Nav.ReadOnly)}}<form class="inline" method="post" action="/p/{{.Nav.Current}}/resources/{{.Resource.Name}}/check"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit"{{if .Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "resource.check.title"}}"{{end}}>↻ {{t "resource.check"}}</button></form>{{end}}
 </div>
 {{template "findbar" .List}}
 
@@ -14,7 +14,7 @@
      it as current. */}}
 {{if .Failing.Name}}<div class="checkfail"><b>{{t "resource.failingcheck"}}</b> <span class="meta">{{th "resource.lasttried" (agoTag .Failing.FailedAt)}}</span><pre>{{.Failing.Message}}</pre></div>{{end}}
 <h2 class="eyebrow">{{t "resource.versions"}} <span class="unbold">{{th "resource.versions.note" (code "version_history:")}}</span></h2>
-{{if .List.Filters}}<p class="metaline">{{template "filterline" .List}}<span class="sep">·</span>{{t "resource.shown" (len .Rows) .Total}}</p>{{end}}
+{{if .List.Filters}}<p class="metaline">{{template "filterline" .List}}</p>{{end}}
 {{if not .Consumers}}<p class="metaline faint">{{t "resource.nojob"}}</p>{{end}}
 {{$controls := not .Nav.ReadOnly}}
 <div class="tablewrap">
