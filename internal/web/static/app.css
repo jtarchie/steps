@@ -1189,6 +1189,7 @@ pre.log { margin: 8px 0 0; font-family: var(--mono); }
 .mcp .mcp-meta a { color: var(--blue); }
 /* The status wraps rather than setting the table's width: "connected, renews automatically" held on one line beside a 48ch target pushed the buttons past the edge, behind a scrollbar nobody saw. */
 .mcp td.stat { min-width: 14ch; max-width: 22ch; }
+.mcp td.stat .st { white-space: normal; }
 .mcp td.uses { font-size: 12px; max-width: 26ch; overflow-wrap: anywhere; }
 /* Right-aligned so the buttons form one column down the page rather than
    landing wherever the row above them happened to end. */
@@ -1204,6 +1205,10 @@ pre.log { margin: 8px 0 0; font-family: var(--mono); }
 .list-note { font-size: 12px; margin-top: 14px; max-width: 78ch; }
 /* A decided approval's or question's words wrap within their cell: the sentence is what a reader came for, and nowrap would set the table's width by the longest one. */
 table.decisions td { vertical-align: top; }
+/* The version and the jobs wrap within their cells: a 40-character sha held on one line pushed Checked and the Check button off the right edge, behind a scrollbar. */
+table.resources td.ver { white-space: normal; overflow-wrap: anywhere; min-width: 16ch; }
+table.resources td.uses { white-space: normal; min-width: 10ch; }
+table.resources td.uses a, .mcp td.uses a { display: inline-block; line-height: 24px; }
 table.decisions td.said { white-space: normal; overflow-wrap: anywhere; min-width: 18ch; max-width: 48ch; }
 
 
