@@ -25,6 +25,13 @@ mcp_exports:
   image: alpine:3
   privileged: true
   tools: [{name: hello, description: say hi, run: echo hi}]
+- name: helpers
+  access: "true"
+  tools:
+  - {agent: reader, description: d}
+  - {agent: boxed-reader, description: d}
+  - {agent: rooted-reader, description: d}
+  - {agent: fenced-reader, description: d}
 
 resource_types:
 - name: boxed
@@ -70,6 +77,9 @@ agents:
   source: {model: openai/gpt-4o-mini}
   image: alpine:3
   privileged: true
+- name: fenced-reader
+  source: {model: openai/gpt-4o-mini}
+  sandbox: true
 - name: hooked
   source: {model: "@claude/sonnet"}
   image: alpine:3
@@ -132,9 +142,13 @@ func TestUnfencedNamesEveryCommandNothingFences(t *testing.T) {
 		`resource "repo"`, `resource "rooted-thing"`,
 		`task "loose"`, `task "rooted"`, `task "notify"`,
 		`agent "reader"`, `agent "rooted-reader"`, `agent "hooked"`,
+		`mcp_exports "helpers" agent "reader"`, `mcp_exports "helpers" agent "rooted-reader"`,
 	}
-	never := []string{`mcp_exports "boxed"`, `resource "boxed-thing"`, `resource "tick"`, `task "boxed"`, `agent "boxed-reader"`, `agent "chat"`}
-	sandboxed := []string{`resource "fenced-thing"`, `task "fenced"`}
+	never := []string{
+		`mcp_exports "boxed"`, `resource "boxed-thing"`, `resource "tick"`, `task "boxed"`, `agent "boxed-reader"`, `agent "chat"`,
+		`mcp_exports "helpers" agent "boxed-reader"`,
+	}
+	sandboxed := []string{`resource "fenced-thing"`, `task "fenced"`, `mcp_exports "helpers" agent "fenced-reader"`}
 
 	for _, tc := range []struct {
 		name        string
@@ -188,5 +202,113 @@ jobs:
 		if got := cfg.Unfenced(sandboxHere); len(got) != 1 {
 			t.Errorf("sandboxHere=%v: %d entries, want the one agent: %+v", sandboxHere, len(got), got)
 		}
+	}
+}
+
+// A when: guard runs where its step would, so one on a step with no command of its own, or on an agent whose tools touch nothing, is a host command nothing else names.
+func TestUnfencedNamesAGuardNothingElseDoes(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]byte(`
+resource_types:
+- name: counters
+  config:
+    expr:
+      check: '[{"n": "1"}]'
+      in: '{"n.txt": version.n}'
+
+resources:
+- name: tick
+  type: counters
+  source: {}
+
+agents:
+- name: chat
+  source: {model: openai/gpt-4o-mini}
+  tools: [web_fetch]
+- name: boxed
+  source: {model: openai/gpt-4o-mini}
+  image: alpine:3
+
+jobs:
+- name: build
+  plan:
+  - get: tick
+  - do:
+    - load_var: n
+      file: tick/n.txt
+    when: "true"
+  - agent: chat
+    when: "true"
+  - agent: boxed
+    when: "true"
+  - task: boxed
+    image: alpine:3
+    run: make
+    when: "true"
+`), "fence", nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	found := cfg.Unfenced(true)
+	got := make([]string, 0, len(found))
+
+	for _, host := range found {
+		got = append(got, host.Where)
+	}
+
+	for _, want := range []string{`when: guard of job "build" step 1`, `when: guard of job "build" step 2`} {
+		if !slices.ContainsFunc(got, func(w string) bool { return strings.HasPrefix(w, want) }) {
+			t.Errorf("%s is not listed as unfenced: %q", want, got)
+		}
+	}
+
+	if len(got) != 2 {
+		t.Errorf("want only the two host guards listed, got %q", got)
+	}
+}
+
+// A host sub-agent builds its own runner from its own entry, so a sandboxed parent step does not fence it: the step stays listed until the helper asks too.
+func TestUnfencedFollowsAHostSubAgentOutOfTheParentsFence(t *testing.T) {
+	t.Parallel()
+
+	pipeline := func(helperSandbox string) string {
+		return `
+agents:
+- name: writer
+  source: {model: openai/gpt-4o-mini}
+  tools: [run_shell, { agent: helper, description: d }]
+- name: helper
+  source: {model: openai/gpt-4o-mini}
+  tools: [run_shell]
+` + helperSandbox + `
+jobs:
+- name: build
+  plan:
+  - agent: writer
+    sandbox: true
+`
+	}
+
+	for _, tc := range []struct {
+		name, helper string
+		listed       bool
+	}{
+		{"helper unfenced", "", true},
+		{"helper fenced", "  sandbox: true\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := Parse([]byte(pipeline(tc.helper)), "fence", nil)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+
+			if got := len(cfg.Unfenced(true)) == 1; got != tc.listed {
+				t.Errorf("writer listed = %v, want %v: %+v", got, tc.listed, cfg.Unfenced(true))
+			}
+		})
 	}
 }

@@ -8,7 +8,7 @@ package config
 //   - sandbox: true is a fence, but only where the OS sandbox exists, which is
 //     the caller's machine fact to supply.
 //   - image: with privileged: true is a container with the host's privileges.
-//   - an mcp_exports: entry's custom commands, and a CLI agent with
+//   - an mcp_exports: entry's custom commands and exported agents, and a CLI agent with
 //     settings: project, whose repo hooks run on this machine whatever image:
 //     its tools run in.
 //
@@ -25,7 +25,11 @@ import (
 func (c *Config) Unfenced(sandboxHere bool) []HostCommand {
 	var found []HostCommand
 
-	for _, host := range c.HostCommands() {
+	hosts := c.HostCommands()
+	hosts = append(hosts, c.hostExports()...)
+	hosts = append(hosts, c.hostGuards()...)
+
+	for _, host := range hosts {
 		if host.Sandboxed {
 			if sandboxHere {
 				continue
@@ -38,7 +42,6 @@ func (c *Config) Unfenced(sandboxHere bool) []HostCommand {
 	}
 
 	found = append(found, c.privilegedContainers()...)
-	found = append(found, c.hostExports()...)
 
 	for _, agent := range c.projectSettingsAgents() {
 		if !slices.ContainsFunc(found, func(h HostCommand) bool { return h.Where == agent.Where }) {
@@ -47,6 +50,62 @@ func (c *Config) Unfenced(sandboxHere bool) []HostCommand {
 	}
 
 	return found
+}
+
+const guardWhy = "its when: command runs on the host"
+
+// hostGuards is every when: guard that runs on the host where nothing else names the place: one runs where its step would (pipeline.resolveStepRuntime), so a host task is already listed, and a step with no command of its own runs its guard on the host with no fence at all.
+func (c *Config) hostGuards() []HostCommand {
+	var found []HostCommand
+
+	for _, job := range c.Jobs {
+		_ = job.visitSteps(func(label string, step *Step) error {
+			if step.Guarded() {
+				found = append(found, c.hostGuard(label, step.Unwrap())...)
+			}
+
+			return nil
+		})
+	}
+
+	return found
+}
+
+func (c *Config) hostGuard(label string, step Step) []HostCommand {
+	where := "when: guard of " + label
+
+	switch kind, _ := step.Kind(); kind {
+	case StepKindTask:
+		// A host task is listed itself, and its guard shares its fence.
+		return nil
+	case StepKindAgent:
+		invocation, err := c.ResolveAgentInvocation(step)
+		if err != nil || invocation.Image != "" || len(c.hostStep(label, &step)) > 0 {
+			return nil
+		}
+
+		return []HostCommand{{Name: step.Agent, Where: where, Why: guardWhy + "; set image: on the agent" + sandboxed(invocation.Sandbox), Sandboxed: invocation.Sandbox}}
+	case StepKindPut:
+		return c.hostPutGuard(where, step)
+	case StepKindGet, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+	}
+
+	return []HostCommand{{Where: where, Why: guardWhy + ", and this step has no image: or sandbox: to run it under; move the check into a task"}}
+}
+
+// hostPutGuard: a put's guard runs under its resource type, as its out would.
+func (c *Config) hostPutGuard(where string, step Step) []HostCommand {
+	resource, err := c.FindResource(step.PutResourceName())
+	if err != nil {
+		return nil
+	}
+
+	rt, err := c.FindResourceType(resource.Type)
+	if err != nil || rt.Image != "" {
+		return nil
+	}
+
+	return []HostCommand{{Name: resource.Name, Where: where, Why: fmt.Sprintf("%s, under type %q; give the type an image:", guardWhy, resource.Type) + sandboxed(rt.Sandbox), Sandboxed: rt.Sandbox}}
 }
 
 const privilegedWhy = "image: with privileged: true gives the container the host's privileges; drop privileged:"
@@ -91,26 +150,49 @@ func (c *Config) privilegedStep(label string, step *Step) []HostCommand {
 	return nil
 }
 
-// hostExports is every mcp_exports: entry whose custom run: tools run on the daemon's machine, or in a privileged container.
+// hostExports is every mcp_exports: entry whose custom run: tools, or whose exported agents' tools, run on the daemon's machine or in a privileged container.
 func (c *Config) hostExports() []HostCommand {
 	var found []HostCommand
 
 	for _, export := range c.MCPExports {
-		if !export.hasCommands() {
-			continue
-		}
-
 		where := fmt.Sprintf("mcp_exports %q", export.Name)
 
-		switch {
-		case export.Image == "":
-			found = append(found, HostCommand{Name: export.Name, Where: where, Why: "its custom run: tools run on the host; set image:"})
-		case export.Privileged:
-			found = append(found, HostCommand{Name: export.Name, Where: where, Why: privilegedWhy})
+		if export.hasCommands() {
+			switch {
+			case export.Image == "":
+				found = append(found, HostCommand{Name: export.Name, Where: where, Why: "its custom run: tools run on the host; set image:"})
+			case export.Privileged:
+				found = append(found, HostCommand{Name: export.Name, Where: where, Why: privilegedWhy})
+			}
+		}
+
+		for _, spec := range export.Tools {
+			found = append(found, c.exportedAgent(where, spec)...)
 		}
 	}
 
 	return found
+}
+
+// exportedAgent is an exported agent tool that runs commands unfenced: a host agent builds its runner from its own entry, as a sub-agent does.
+func (c *Config) exportedAgent(export string, spec ToolSpec) []HostCommand {
+	if spec.Agent == "" {
+		return nil
+	}
+
+	// As agent.newCallSpace resolves it: no step, so the entry alone.
+	invocation, err := c.ResolveAgentInvocation(Step{Agent: spec.Agent})
+	if err != nil {
+		return nil
+	}
+
+	where := fmt.Sprintf("%s agent %q", export, spec.Agent)
+
+	if invocation.Image != "" && invocation.Privileged {
+		return []HostCommand{{Name: spec.Agent, Where: where, Why: privilegedWhy}}
+	}
+
+	return c.hostAgent(where, invocation)
 }
 
 // projectSettingsAgents is every CLI agent step that loads the repo's .claude/ hooks, which run on this machine whatever fences its tools.

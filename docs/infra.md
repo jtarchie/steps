@@ -684,7 +684,7 @@ jobs:
 
 - **True only.** A step can add the fence, never take away an entry's, so `sandbox: false` on a step is a load error rather than a setting that silently does nothing.
 - **Only on task and agent steps**, hooks included. A `get` or `put` runs its resource type's commands, which the type fences, and a block (`do:`, `in_parallel:`, `try:`, ...) has no command of its own; each is a load error.
-- The entry-level rules hold: refused beside `image:` and on a placed step, and `network: none` becomes legal without `image:`.
+- The entry-level rules hold: refused beside `image:` and on a placed step, and `network: none` becomes legal without `image:`. A delegated sub-agent still runs under its own entry's sandbox, not the step's.
 
 ## Passing environment through (`env:`)
 

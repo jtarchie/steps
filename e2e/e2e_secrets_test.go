@@ -788,6 +788,11 @@ func TestValidateLiveRefusesAConfigWithNoSecretSection(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no secret: section") {
 		t.Fatalf("validate --live --config <file with no secret: section> = %v, want a refusal saying the file has no sources", err)
 	}
+
+	err = stepsRun(t, []string{"run", "--config", fenceOnly, path})
+	if err == nil || !strings.Contains(err.Error(), "no secret: section") {
+		t.Fatalf("run --config <file with no secret: section> = %v, want a refusal saying the file has no sources", err)
+	}
 }
 
 // A name no path has is a problem naming where it looked, not a half-vouched ok; --config alone resolves nothing (it is the fence: policy's input too); and --live with references and no sources cannot vouch for them.

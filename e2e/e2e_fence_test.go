@@ -115,6 +115,28 @@ func TestFenceRefusesWhatItCannotDo(t *testing.T) {
 	}
 }
 
+// validate reads the daemon's file, and holds its fence: to the same words the daemon does.
+func TestValidateRefusesAFenceTheDaemonWould(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	config := filepath.Join(dir, "steps.yml")
+	path := filepath.Join(dir, "app.yml")
+	writePipelineFile(t, path, "jobs:\n- name: build\n  plan:\n  - task: loose\n    run: \"true\"\n")
+
+	for _, tc := range []struct{ fence, want string }{
+		{"enforce", "not available yet"},
+		{"[warn]", "web.fence"},
+	} {
+		writeConfigFile(t, config, "web:\n  fence: "+tc.fence+"\n")
+
+		err := stepsRun(t, []string{"validate", "--syntax-only", "--config", config, path})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("validate --config <fence: %s> = %v, want a refusal naming %q", tc.fence, err, tc.want)
+		}
+	}
+}
+
 // validate --config judges the file by the policy the daemon would, so a pipeline can be checked before it is set; without the file there is no policy and nothing to report.
 func TestValidateReportsAgainstTheDaemonsFence(t *testing.T) {
 	t.Parallel()

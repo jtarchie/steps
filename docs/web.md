@@ -1070,8 +1070,9 @@ web:
 
 - **`off`** (the default) changes nothing.
 - **`warn`** accepts every pipeline, and lists each command that would run
-  **unfenced**: in `steps pipeline set`'s answer, under a `warning:` line, and
-  in a notice at the top of the pipeline's page. A pipeline restored at
+  **unfenced**: in the answer of a `steps pipeline set` that sends a change,
+  under a `warning:` line (a set of the file already served sends nothing and
+  says `unchanged`), and in a notice at the top of the pipeline's page. A pipeline restored at
   startup is judged the same way, so the notice is there after a restart too.
 - `enforce`, which would refuse such a pipeline, is not available yet, and the
   daemon refuses to start with it rather than read it as `warn`.
@@ -1083,22 +1084,28 @@ A step placed on a `docker+ssh://`, `aws://`, `gcp://`, `do://` or `local:`
 worker runs in its image, so it counts as fenced; one on a bare `ssh://` worker
 does not. Anything that runs no command has nothing to fence: an `expr:`
 resource, steps' other built-ins, `approval:`, `load_var:`, an agent whose
-tools touch no files and run no shell.
+tools touch no files and run no shell, until it carries a `when:` guard.
 
 Everything else is listed, each place named with what runs there: a task or
 agent step with no `image:` or `sandbox:` (job hooks included), a container
 with `privileged: true`, a resource whose type runs `check`/`in`/`out` on the
 host (the built-in `git` type does), a `github-prs`/`github-comments`
 resource with `checkout: git`, every stdio `mcp_servers:` entry, an
-`mcp_exports:` entry whose custom `run:` tools have no `image:`, and a CLI
-agent with `settings: project`, whose repository hooks run on this machine
-whatever fences its tools.
+`mcp_exports:` entry whose custom `run:` tools or exported agents have no
+`image:`, an agent whose sub-agent runs host tools under no `sandbox:` of its
+own (a step's `sandbox: true` does not reach it), a `when:` guard on a step
+with no host command of its own (a block, `approval:`, `load_var:`, an agent
+whose tools touch nothing, a `put:` of a built-in type), which runs on this
+machine, and a CLI agent with `settings: project`, whose repository hooks run
+on this machine whatever fences its tools.
 
 Because the policy lives in the daemon's config file, a pipeline cannot loosen
 the rule that judges it. To see the list before a set, give `steps validate`
 the same file: `steps validate --config /etc/steps/steps.yml pipeline.yml`
 prints it as warnings and still passes. It reads only `fence:` and, with
-`--live`, `secret:`.
+`--live`, `secret:`, and judges `sandbox: true` by the machine it runs on, so
+validate on the daemon's OS (a darwin laptop does not see what a linux daemon
+lists).
 
 ## Flags
 

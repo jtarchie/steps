@@ -117,20 +117,36 @@ func (c *Config) hostStep(label string, step *Step) []HostCommand {
 		return []HostCommand{{Name: step.Task, Where: fmt.Sprintf("task %q in %s", step.Task, label), Why: why + sandboxed(task.Sandbox), Sandboxed: task.Sandbox}}
 	case StepKindAgent:
 		invocation, err := c.ResolveAgentInvocation(*step)
-		if err != nil || invocation.Image != "" {
+		if err != nil {
 			return nil
 		}
 
-		tools := c.hostTools(invocation.ToolSpecs, map[string]bool{step.Agent: true})
-		if len(tools) == 0 {
-			return nil
-		}
-
-		return []HostCommand{{Name: step.Agent, Where: fmt.Sprintf("agent %q in %s", step.Agent, label), Why: fmt.Sprintf("its tools run on the host (%s); set image: on the agent", strings.Join(tools, ", ")) + sandboxed(invocation.Sandbox), Sandboxed: invocation.Sandbox}}
+		return c.hostAgent(fmt.Sprintf("agent %q in %s", step.Agent, label), invocation)
 	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
 	}
 
 	return nil
+}
+
+// hostAgent is an agent whose tools touch the host's files or run a command there, named at where.
+func (c *Config) hostAgent(where string, invocation ResolvedInvocation) []HostCommand {
+	if invocation.Image != "" {
+		return nil
+	}
+
+	tools := c.hostTools(invocation.ToolSpecs, map[string]bool{invocation.AgentName: true})
+	if len(tools) == 0 {
+		return nil
+	}
+
+	// A host sub-agent builds its own runner from its own entry, so this agent's fence does not reach it.
+	fenced := invocation.Sandbox && !c.unfencedSubAgent(invocation.ToolSpecs, map[string]bool{invocation.AgentName: true})
+
+	return []HostCommand{{
+		Name: invocation.AgentName, Where: where,
+		Why:       fmt.Sprintf("its tools run on the host (%s); set image: on the agent", strings.Join(tools, ", ")) + sandboxed(fenced),
+		Sandboxed: fenced,
+	}}
 }
 
 // hostTools names the tools in specs that touch the host's files or run a command there, following each sub-agent, which runs where its parent does. No grant is the default file tools.
@@ -159,6 +175,32 @@ func (c *Config) hostTools(specs []ToolSpec, seen map[string]bool) []string {
 	}
 
 	return slices.Compact(tools)
+}
+
+// unfencedSubAgent reports a sub-agent reachable from specs that runs host tools under no sandbox: of its own.
+func (c *Config) unfencedSubAgent(specs []ToolSpec, seen map[string]bool) bool {
+	for _, spec := range specs {
+		if spec.Agent == "" || seen[spec.Agent] {
+			continue
+		}
+
+		seen[spec.Agent] = true
+
+		sub, err := c.FindAgent(spec.Agent)
+		if err != nil || sub.Image != "" {
+			continue
+		}
+
+		if !sub.Sandbox && len(c.hostTools(sub.Tools, map[string]bool{spec.Agent: true})) > 0 {
+			return true
+		}
+
+		if c.unfencedSubAgent(sub.Tools, seen) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // sandboxed says so of a fenced host command, which is fenced and still on the host.

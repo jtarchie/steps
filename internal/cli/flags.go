@@ -490,6 +490,10 @@ func (s SecretFlags) resolveSecrets(cfg *config.Config) (*secret.Resolver, error
 		return nil, err
 	}
 
+	if resolver == nil && len(refs) > 0 {
+		return nil, fmt.Errorf("%s: --config %s has no secret: section under web:, so there are no sources to resolve it with", refs[0], s.Config)
+	}
+
 	err = pipeline.CheckSecretSources(pipeline.WithSecrets(context.Background(), resolver), cfg)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
