@@ -187,7 +187,7 @@
       "Auth.Scopes[0]"
     ]
   },
-  "ResourceType/cache key": "941f7d1bfe48d15a46395a1e09893b3af5151e1e621bcc7029f16cc177ea9c9a",
+  "ResourceType/cache key": "a2728bc14185ed5b8f0cc5c906a0cf46e538e8726723431cae5e83e4ae904d28",
   "ResourceType/get": {
     "cpu_shares": 77,
     "env": [
@@ -209,6 +209,7 @@
     "memory_bytes": 58,
     "network": "Network",
     "privileged": true,
+    "registry": true,
     "sandbox": true,
     "source": null,
     "user": "User",
@@ -237,6 +238,7 @@
     "out_template": "Config.Out",
     "params": null,
     "privileged": true,
+    "registry": true,
     "sandbox": true,
     "source": null,
     "user": "User"

@@ -1,0 +1,101 @@
+package e2e
+
+// The fake registry each registry= doc example runs against. The reader sees ghcr.io; the test points the repository's host at an in-process registry on loopback, the one place the type reaches without TLS.
+
+import (
+	"os"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/google/go-containerregistry/pkg/authn"
+	"gopkg.in/yaml.v3"
+
+	"github.com/jtarchie/steps/docs"
+)
+
+type docRegistryFixture struct {
+	username, password string
+	// seed are the tags pushed before the block runs, each a random image.
+	seed []string
+}
+
+var docRegistryFixtures = map[string]docRegistryFixture{ //nolint:gochecknoglobals // read-only fixture table, like docGitHubFixtures
+	"private": {username: "robot", password: "fake-registry-token", seed: []string{"latest"}},
+}
+
+var docRegistryToken sync.Once //nolint:gochecknoglobals // one process-wide dummy, as docSlackToken
+
+func injectDocRegistryFixture(t *testing.T, block docs.Block, body string) string {
+	t.Helper()
+
+	id := block.RegistryID()
+	if id == "" {
+		return body
+	}
+
+	fixture, ok := docRegistryFixtures[id]
+	if !ok {
+		t.Fatalf("fence names registry=%s but docs_registry_test.go has no such fixture", id)
+	}
+
+	fake := newFakeRegistry(t, fixture.username, fixture.password)
+
+	var doc map[string]any
+
+	err := yaml.Unmarshal([]byte(body), &doc)
+	if err != nil {
+		t.Fatalf("block is not valid YAML: %v", err)
+	}
+
+	pointed := 0
+
+	eachOf(doc, "resources", func(entry any) {
+		resource, _ := entry.(map[string]any)
+		if resource["type"] != "registry-image" {
+			return
+		}
+
+		source, _ := resource["source"].(map[string]any)
+		pointDocRegistryResource(t, fake, fixture, source)
+
+		pointed++
+	})
+
+	if pointed == 0 {
+		t.Fatalf("the fence names registry=%s, but the block declares no registry-image resource", id)
+	}
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(out)
+}
+
+// pointDocRegistryResource moves one resource's repository onto the fake, sets its password variable, and seeds the tags it follows.
+func pointDocRegistryResource(t *testing.T, fake *fakeRegistry, fixture docRegistryFixture, source map[string]any) {
+	t.Helper()
+
+	repository, _ := source["repository"].(string)
+	_, path, _ := strings.Cut(repository, "/")
+	source["repository"] = fake.repo(path)
+
+	// The block runs in a parallel subtest, where t.Setenv panics; the value is the fake's own dummy, so one process-wide setting is harmless.
+	if variable, _ := source["password_env"].(string); variable != "" {
+		docRegistryToken.Do(func() {
+			err := os.Setenv(variable, fixture.password)
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	tag, _ := source["tag"].(string)
+	for _, seeded := range fixture.seed {
+		if tag == "" || tag == seeded {
+			fake.seed(t, fake.repo(path)+":"+seeded, &authn.Basic{Username: fixture.username, Password: fixture.password})
+		}
+	}
+}

@@ -21,6 +21,8 @@ func (c *Config) nativeType(typeName string) string {
 		return CronType
 	case BackendGitHub:
 		return resourceType.Config.GitHub
+	case BackendRegistry:
+		return RegistryImageType
 	case BackendConcourse:
 		return ""
 	case BackendShell, BackendExpr, BackendMCP:

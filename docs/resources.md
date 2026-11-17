@@ -21,7 +21,7 @@ jobs:
     run: cd repo && go build ./...
 ```
 
-`git` ships with steps, so that pipeline needs no `resource_types:` block; neither do [the GitHub types](#the-built-in-github-types), Slack's, `cron` and [`webhook`](webhooks.md). For anything else, you write the type yourself.
+`git` ships with steps, so that pipeline needs no `resource_types:` block; neither do [the GitHub types](#the-built-in-github-types), Slack's, `cron`, [`registry-image`](#the-built-in-registry-image-type) and [`webhook`](webhooks.md). For anything else, you write the type yourself.
 
 **A built-in type's `source:` and `params:` are closed.** steps owns every built-in's code, so it knows each key the type reads, and `steps validate` refuses the rest: a misspelled `chanels:` or a Concourse habit like `params: {depth: 1}` on a get is a load error naming the key and the ones the type does read, not a setting nobody applies. No built-in's get takes `params:`; what it fetches is set on `source:`. Values are typed as well, so `limit: "200"` is refused where `limit: 200` loads. A type you write keeps Concourse's rule, where `source:` and `params:` are the type's own business and steps passes them through unread — and so does a pipeline that declares its own type under a built-in's name (`git`, `slack-*`), which replaces the built-in.
 
@@ -1105,6 +1105,104 @@ jobs:
 ```
 
 There is deliberately no `out:` — `put: tick` is a load error. A step that wants the current time has `date`; a version whose only meaning is "now" is not something to publish. `tags:` is refused too, as for every type that runs inside this process: there is nothing to place.
+
+## The built-in `registry-image` type
+
+`type: registry-image` is an image in an OCI registry: Docker Hub, ghcr.io, a cloud provider's, or one on this machine. Its check finds the digest a tag points at, its get names that digest so a later step can [run in exactly that image](infra.md#an-image-a-get-fetched), and its put pushes an image a build made. Modeled on Concourse's [registry-image resource](https://github.com/concourse/registry-image-resource), with its source and params names.
+
+```yaml registry=private
+resources:
+- name: app-image
+  type: registry-image
+  source:
+    repository: ghcr.io/acme/app    # the image name, registry host included
+    tag: latest                      # optional; latest when unset
+    username: robot                  # the registry login, used for check, get and put
+    password_env: REGISTRY_TOKEN     # the NAME of the variable holding its password or token
+
+jobs:
+- name: inspect
+  plan:
+  - get: app-image
+  - task: show
+    inputs: [app-image]
+    run: cat app-image/tag && grep -c '^sha256:' app-image/digest
+    assert:
+      stdout: "latest1"
+  assert:
+    execution: [app-image, show]
+    outcome: succeeded
+```
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `repository` | yes | the image name without a tag or digest, as a pull would name it: `ghcr.io/acme/app`, `alpine` for Docker Hub's, `localhost:5050/tools` |
+| `tag` | no | the one tag the check follows; `latest` when unset |
+| `username` | with `password_env` | the login's user name. A registry that takes a token alone (ghcr.io) still wants one: any name will do |
+| `password_env` | with `username` | the **name** of the variable holding the password or token, read from the resource's [`secrets:`](secrets.md) first and the daemon's environment otherwise, as a GitHub type's `token_env` is |
+
+**The login is the resource's and nothing else's.** steps never reads docker's `config.json`, a credential helper or a keychain for this type, so what a pipeline can reach is what its `source:` says, on any machine. With no `username` and `password_env`, every request is anonymous: a private image needs them, and pushing almost always does. A login is never sent over plain http except to a registry on this machine (`localhost`, `127.0.0.1`, `::1`), which is also the only place a registry without TLS is reached.
+
+**The version is `{digest}`**, the content the tag pointed at when the check ran. A new push to the tag is a new version; a push of the same content is not. A tag the registry does not have fails the check, naming it, rather than reading as "no versions yet", so a misspelled tag cannot hold a pipeline back in silence. A multi-platform image is one version: the digest of its index, which each machine's docker resolves to its own platform.
+
+**A get fetches no layers.** It asks the registry that the digest is still there, then writes three files, because the image is pulled by whatever runs it, by digest:
+
+| file | what it holds |
+|---|---|
+| `repository` | `source.repository` as written |
+| `tag` | the tag the check followed |
+| `digest` | the version's digest, `sha256:…` |
+
+A get takes no `params:`. Concourse's get downloads the image as a root filesystem by default; here the step that runs it does that.
+
+### Pushing: `put`
+
+A put pushes an image a build left in the put's inputs, to `source.tag` and any additional tags, and records the pushed digest as the resource's version: the same shape the check finds, so the next build that gets this resource sees what was pushed.
+
+```yaml noexec=docker
+resources:
+- name: src
+  type: git
+  source:
+    uri: https://github.com/acme/app.git
+    branch: main
+- name: app-image
+  type: registry-image
+  source:
+    repository: ghcr.io/acme/app
+    username: robot
+    password_env: REGISTRY_TOKEN
+
+jobs:
+- name: publish
+  plan:
+  - get: src
+  - task: build                      # writes image/image.tar with BuildKit's type=oci exporter
+    image: moby/buildkit:v0.17.3
+    privileged: true
+    inputs: [src]
+    outputs: [image]
+    run: |
+      buildctl-daemonless.sh build --frontend dockerfile.v0 \
+        --local context=src --local dockerfile=src \
+        --output type=oci,dest=image/image.tar
+      echo "$(date +%Y%m%d)" > image/tags
+  - put: app-image
+    inputs: [image]
+    params:
+      image: image/image.tar          # what to push
+      additional_tags: image/tags     # optional; a file of whitespace-separated tags it also gets
+
+```
+
+| `params:` field | required | meaning |
+|---|---|---|
+| `image` | yes | the image to push, as a path inside the put's inputs: an OCI layout directory, a tarball of one (BuildKit's `type=oci` output), or a `docker save` tarball. A layout must hold one image or one multi-platform index |
+| `additional_tags` | no | a file of whitespace-separated tags the image also gets, beside `source.tag` |
+
+Both paths are refused at load when they name an artifact the put does not list in its `inputs:`, and at run when one leads out of the build's tree.
+
+`tags:` is refused, as for every type that runs inside this process: check, get and put are steps' own requests, made from this machine.
 
 ## Writing a resource type
 

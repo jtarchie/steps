@@ -514,6 +514,31 @@
         }
       }
     },
+    "registryImageSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The image name without a tag or digest, registry host included unless it is Docker Hub: ghcr.io/owner/name, alpine, localhost:5050/tools."
+        },
+        "tag": {
+          "type": "string",
+          "description": "The one tag the check follows; latest when unset."
+        },
+        "username": {
+          "type": "string",
+          "description": "The registry login's user name, with password_env. Used for check, get and put; docker's own config is never read."
+        },
+        "password_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "The NAME of the variable holding the password or token, read from the resource's secrets: first and the daemon's environment otherwise."
+        }
+      }
+    },
     "githubPrsSource": {
       "type": "object",
       "additionalProperties": false,
@@ -900,6 +925,10 @@
         {
           "if": { "properties": { "type": { "const": "cron" } }, "required": ["type"] },
           "then": { "properties": { "source": { "$ref": "#/$defs/cronSource" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "registry-image" } }, "required": ["type"] },
+          "then": { "properties": { "source": { "$ref": "#/$defs/registryImageSource" } } }
         },
         {
           "if": { "properties": { "type": { "const": "github-prs" } }, "required": ["type"] },

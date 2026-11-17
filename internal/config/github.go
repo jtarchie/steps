@@ -668,7 +668,7 @@ func validateGitHubEndpoint(endpoint string) error {
 			return fmt.Errorf("source.endpoint must be an http(s) URL such as %s, not %q", DefaultGitHubEndpoint, endpoint)
 		}
 
-		if parsed.Scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
+		if parsed.Scheme == "http" && !IsLoopbackHost(parsed.Hostname()) {
 			return fmt.Errorf("source.endpoint: http is only accepted for a loopback host, and %q is not one — the token (token_env) would travel in cleartext; use an https URL", endpoint)
 		}
 	}
@@ -676,8 +676,8 @@ func validateGitHubEndpoint(endpoint string) error {
 	return nil
 }
 
-// isLoopbackHost is true for localhost and any 127.0.0.0/8 or ::1 literal; url.Hostname() has already stripped brackets, port and userinfo.
-func isLoopbackHost(host string) bool {
+// IsLoopbackHost is true for localhost and any 127.0.0.0/8 or ::1 literal; url.Hostname() has already stripped brackets, port and userinfo.
+func IsLoopbackHost(host string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true
 	}

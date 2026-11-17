@@ -45,6 +45,7 @@ func withResourceTypeEnv(cfg *config.Config, resourceType config.ResourceType, e
 
 	withExprResourceStage(resourceType, stage, content)
 	withGitHubKind(resourceType, content)
+	withRegistryKind(resourceType, content)
 
 	return withMCPResourceStage(cfg, resourceType, stage, content)
 }
@@ -134,5 +135,12 @@ func withExprResourceStage(resourceType config.ResourceType, stage string, conte
 func withGitHubKind(resourceType config.ResourceType, content map[string]any) {
 	if resourceType.Config.GitHub != "" {
 		content["github"] = resourceType.Config.GitHub
+	}
+}
+
+// withRegistryKind marks a registry-image node, whose type has no commands to hash: a shell type with none, a source: of the same keys and a matching version would otherwise share its entry. Value-gated, as above.
+func withRegistryKind(resourceType config.ResourceType, content map[string]any) {
+	if resourceType.Config.Registry {
+		content["registry"] = true
 	}
 }

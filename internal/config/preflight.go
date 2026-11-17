@@ -154,6 +154,10 @@ func (c *Config) resourceCredentialProblems(name string) []Problem {
 		return githubCredentialProblems(name, resource.Source, resource.Secrets)
 	}
 
+	if resourceType.Config.Backend() == BackendRegistry {
+		return registryCredentialProblems(name, resource.Source, resource.Secrets)
+	}
+
 	if resourceType.Config.Backend() != BackendExpr {
 		return nil
 	}
@@ -213,6 +217,27 @@ func githubCredentialProblems(name string, source map[string]any, secrets map[st
 	return []Problem{{
 		Target: fmt.Sprintf("resource %q", name),
 		Detail: fmt.Sprintf("$%s is not set (source.token_env) — export GH_TOKEN=$(gh auth token) is one way to set it", variable),
+	}}
+}
+
+// registryCredentialProblems is the one variable a registry-image resource with a login reads; without one it is anonymous and reads none.
+func registryCredentialProblems(name string, raw map[string]any, secrets map[string]string) []Problem {
+	source, err := ParseRegistryImageSource(raw)
+	if err != nil || source.PasswordEnv == "" {
+		return nil
+	}
+
+	if _, secret := secrets[source.PasswordEnv]; secret {
+		return nil
+	}
+
+	if value, ok := os.LookupEnv(source.PasswordEnv); ok && value != "" {
+		return nil
+	}
+
+	return []Problem{{
+		Target: fmt.Sprintf("resource %q", name),
+		Detail: fmt.Sprintf("$%s is not set (source.password_env)", source.PasswordEnv),
 	}}
 }
 

@@ -254,6 +254,7 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 	body, mcpServer := injectDocMCPFixture(t, block, block.Body)
 	body, githubServer := injectDocGitHubFixture(t, block, body)
 	body, slackWorkspace := injectDocSlackFixture(t, block, body)
+	body = injectDocRegistryFixture(t, block, body)
 
 	if usesAgents(t, body) {
 		if block.Mode() == "run" && scenario.fake == nil {
@@ -671,41 +672,43 @@ func TestDocsNoexecReasons(t *testing.T) {
 // to nested config types is worth doing; it is not a one-line map entry.
 func docsCoverageTypes() map[string]reflect.Type {
 	return map[string]reflect.Type{
-		"Config":           reflect.TypeOf(config.Config{}),
-		"Job":              reflect.TypeOf(config.Job{}),
-		"Step":             reflect.TypeOf(config.Step{}),
-		"Task":             reflect.TypeOf(config.Task{}),
-		"Agent":            reflect.TypeOf(config.Agent{}),
-		"Resource":         reflect.TypeOf(config.Resource{}),
-		"ResourceType":     reflect.TypeOf(config.ResourceType{}),
-		"MCPServer":        reflect.TypeOf(config.MCPServer{}),
-		"Assert":           reflect.TypeOf(config.Assert{}),
-		"Access":           reflect.TypeOf(config.Access{}),
-		"MCPExport":        reflect.TypeOf(config.MCPExport{}),
-		"Defaults":         reflect.TypeOf(config.Defaults{}),
-		"StepMemory":       reflect.TypeOf(config.StepMemory{}),
-		"WebhookSource":    reflect.TypeOf(config.WebhookSource{}),
-		"WebhookSignature": reflect.TypeOf(config.WebhookSignature{}),
-		"CronSource":       reflect.TypeOf(config.CronSource{}),
+		"Config":              reflect.TypeOf(config.Config{}),
+		"Job":                 reflect.TypeOf(config.Job{}),
+		"Step":                reflect.TypeOf(config.Step{}),
+		"Task":                reflect.TypeOf(config.Task{}),
+		"Agent":               reflect.TypeOf(config.Agent{}),
+		"Resource":            reflect.TypeOf(config.Resource{}),
+		"ResourceType":        reflect.TypeOf(config.ResourceType{}),
+		"MCPServer":           reflect.TypeOf(config.MCPServer{}),
+		"Assert":              reflect.TypeOf(config.Assert{}),
+		"Access":              reflect.TypeOf(config.Access{}),
+		"MCPExport":           reflect.TypeOf(config.MCPExport{}),
+		"Defaults":            reflect.TypeOf(config.Defaults{}),
+		"StepMemory":          reflect.TypeOf(config.StepMemory{}),
+		"WebhookSource":       reflect.TypeOf(config.WebhookSource{}),
+		"WebhookSignature":    reflect.TypeOf(config.WebhookSignature{}),
+		"CronSource":          reflect.TypeOf(config.CronSource{}),
+		"RegistryImageSource": reflect.TypeOf(config.RegistryImageSource{}),
 		// A put's params: to a github-* type, which no other walk sees: the
 		// shape depends on the TYPE of the resource the put names.
-		"GitHubPRsSource":      reflect.TypeOf(config.GitHubPRsSource{}),
-		"GitHubCommentsSource": reflect.TypeOf(config.GitHubCommentsSource{}),
-		"GitHubIssuesSource":   reflect.TypeOf(config.GitHubIssuesSource{}),
-		"GitHubPostSource":     reflect.TypeOf(config.GitHubPostSource{}),
-		"GitHubPostParams":     reflect.TypeOf(config.GitHubPostParams{}),
-		"GitHubReviewParams":   reflect.TypeOf(config.GitHubReviewParams{}),
-		"GitHubReactionParams": reflect.TypeOf(config.GitHubReactionParams{}),
-		"GitHubLabelParams":    reflect.TypeOf(config.GitHubLabelParams{}),
-		"GitHubIssueParams":    reflect.TypeOf(config.GitHubIssueParams{}),
-		"GitHubPRParams":       reflect.TypeOf(config.GitHubPRParams{}),
-		"GitSource":            reflect.TypeOf(config.GitSource{}),
-		"GitPutParams":         reflect.TypeOf(config.GitPutParams{}),
-		"SlackMentionsSource":  reflect.TypeOf(config.SlackMentionsSource{}),
-		"SlackReplySource":     reflect.TypeOf(config.SlackReplySource{}),
-		"SlackReactionSource":  reflect.TypeOf(config.SlackReactionSource{}),
-		"SlackReplyParams":     reflect.TypeOf(config.SlackReplyParams{}),
-		"SlackReactionParams":  reflect.TypeOf(config.SlackReactionParams{}),
+		"GitHubPRsSource":        reflect.TypeOf(config.GitHubPRsSource{}),
+		"GitHubCommentsSource":   reflect.TypeOf(config.GitHubCommentsSource{}),
+		"GitHubIssuesSource":     reflect.TypeOf(config.GitHubIssuesSource{}),
+		"GitHubPostSource":       reflect.TypeOf(config.GitHubPostSource{}),
+		"GitHubPostParams":       reflect.TypeOf(config.GitHubPostParams{}),
+		"GitHubReviewParams":     reflect.TypeOf(config.GitHubReviewParams{}),
+		"GitHubReactionParams":   reflect.TypeOf(config.GitHubReactionParams{}),
+		"GitHubLabelParams":      reflect.TypeOf(config.GitHubLabelParams{}),
+		"GitHubIssueParams":      reflect.TypeOf(config.GitHubIssueParams{}),
+		"GitHubPRParams":         reflect.TypeOf(config.GitHubPRParams{}),
+		"GitSource":              reflect.TypeOf(config.GitSource{}),
+		"GitPutParams":           reflect.TypeOf(config.GitPutParams{}),
+		"RegistryImagePutParams": reflect.TypeOf(config.RegistryImagePutParams{}),
+		"SlackMentionsSource":    reflect.TypeOf(config.SlackMentionsSource{}),
+		"SlackReplySource":       reflect.TypeOf(config.SlackReplySource{}),
+		"SlackReactionSource":    reflect.TypeOf(config.SlackReactionSource{}),
+		"SlackReplyParams":       reflect.TypeOf(config.SlackReplyParams{}),
+		"SlackReactionParams":    reflect.TypeOf(config.SlackReactionParams{}),
 	}
 }
 
@@ -837,6 +840,7 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 var sourceDefs = map[any]string{ //nolint:gochecknoglobals // read-only table
 	config.WebhookType:         "WebhookSource",
 	config.CronType:            "CronSource",
+	config.RegistryImageType:   "RegistryImageSource",
 	config.GitHubPRsType:       "GitHubPRsSource",
 	config.GitHubCommentsType:  "GitHubCommentsSource",
 	config.GitHubIssuesType:    "GitHubIssuesSource",
@@ -863,6 +867,7 @@ var githubParamDefs = map[any]string{ //nolint:gochecknoglobals // read-only tab
 	"git":                      "GitPutParams",
 	"slack-reply":              "SlackReplyParams",
 	"slack-reaction":           "SlackReactionParams",
+	config.RegistryImageType:   "RegistryImagePutParams",
 }
 
 // collectGitHubParamKeys records the params: of every put to a github-*

@@ -183,6 +183,11 @@ func (c *Config) registerBuiltinResourceTypes() {
 		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: CronType, Config: ResourceTypeConfig{Cron: true}})
 	}
 
+	// A declared registry-image stays, to be refused by validateRegistryImageResources, as a declared webhook does.
+	if c.findResourceTypeIndex(RegistryImageType) < 0 {
+		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: RegistryImageType, Config: ResourceTypeConfig{Registry: true}})
+	}
+
 	for _, name := range GitHubTypes() {
 		if c.findResourceTypeIndex(name) < 0 {
 			c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: name, Config: ResourceTypeConfig{GitHub: name}})

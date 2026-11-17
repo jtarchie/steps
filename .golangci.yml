@@ -238,6 +238,8 @@ linters:
             - "github.com/jtarchie/steps/internal/store/postgres"
             # testpostgres is test-only: e2e_postgres_test.go starts the server a --db postgres:// run is pointed at, the way the driver's own tests do.
             - "github.com/jtarchie/steps/internal/testpostgres"
+            # go-containerregistry is fixture machinery here: an in-process registry, and images to push to it.
+            - "github.com/google/go-containerregistry"
             # dockerapi is test-only: the docker+ssh:// worker test finds the daemon's socket.
             - "github.com/jtarchie/steps/internal/dockerapi"
             - "github.com/jtarchie/steps/internal/events"
@@ -577,6 +579,8 @@ linters:
             # The crontab parser behind the built-in cron type: parsing only,
             # no scheduler — a poll is what wakes a check here.
             - "github.com/robfig/cron/v3"
+            # The registry client behind the built-in registry-image type, the one Concourse's resource uses. Never its authn.DefaultKeychain: the login is the resource's.
+            - "github.com/google/go-containerregistry"
         # venue is the orchestrator half of remote execution, and the single
         # decision point one tier ABOVE shell: shell decides host vs container,
         # venue decides this machine vs a worker, and hands straight back to

@@ -158,7 +158,7 @@ func preflightResource(
 		}
 
 		return nil
-	case config.BackendWebhook, config.BackendCron, config.BackendGitHub:
+	case config.BackendWebhook, config.BackendCron, config.BackendGitHub, config.BackendRegistry:
 		err := compileBuiltin(resourceType.Config.Backend(), *resource)
 		if err != nil {
 			return []config.Problem{{Target: fmt.Sprintf("resource %q", name), Detail: err.Error()}}
@@ -205,6 +205,10 @@ func compileBuiltin(backend config.ResourceBackend, resource config.Resource) er
 		return err
 	case config.BackendCron:
 		_, err := Cron(resource)
+
+		return err
+	case config.BackendRegistry:
+		_, err := RegistryImage(resource)
 
 		return err
 	case config.BackendGitHub:

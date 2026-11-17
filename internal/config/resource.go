@@ -69,6 +69,8 @@ type ResourceTypeConfig struct {
 	Concourse bool `yaml:"-"`
 	// GitHub names which built-in github-* type this is (see github.go), which no YAML can declare: steps calls the API itself. Keyed, unlike Cron and Webhook, because several share a source: shape and do different things with it.
 	GitHub string `yaml:"-"`
+	// Registry marks the built-in registry-image type, which no YAML can declare: steps speaks the registry protocol itself (registryimage.go).
+	Registry bool `yaml:"-"`
 }
 
 // ResourceBackend is which way a resource type implements its three lifecycle
@@ -95,6 +97,8 @@ const (
 	BackendConcourse ResourceBackend = "concourse"
 	// BackendGitHub calls GitHub's API from this process: two of its types find work and have no out, three publish and have no check (see github.go).
 	BackendGitHub ResourceBackend = "github"
+	// BackendRegistry calls an OCI registry from this process: check finds a tag's digest, in names it, out pushes an image tarball.
+	BackendRegistry ResourceBackend = "registry"
 )
 
 // Backend reports how this resource type is implemented.
@@ -112,6 +116,8 @@ func (c ResourceTypeConfig) Backend() ResourceBackend {
 		return BackendCron
 	case c.GitHub != "":
 		return BackendGitHub
+	case c.Registry:
+		return BackendRegistry
 	case c.Concourse:
 		return BackendConcourse
 	case c.MCP != nil:
@@ -201,15 +207,23 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 		if strings.TrimSpace(resourceType.Config.Out) == "" {
 			return fmt.Errorf("%s: put %q targets resource type %q, which declares no out: command; add one to describe what publishing means for this type", label, put, resourceType.Name)
 		}
-	case BackendWebhook:
-		return fmt.Errorf("%s: put %q targets a webhook resource, which only receives: its versions are deliveries, and there is nothing to publish to", label, put)
-	case BackendCron:
-		return fmt.Errorf("%s: put %q targets a cron resource, which only tells time: there is nothing to publish to", label, put)
+	case BackendWebhook, BackendCron:
+		return receiveOnlyPutRefusal(label, put, resourceType.Config.Backend())
 	case BackendGitHub:
 		return githubPutRefusal(label, put, resourceType.Config.GitHub)
+	case BackendRegistry:
 	}
 
 	return nil
+}
+
+// receiveOnlyPutRefusal is the put error for a built-in that only ever has versions minted for it.
+func receiveOnlyPutRefusal(label, put string, backend ResourceBackend) error {
+	if backend == BackendWebhook {
+		return fmt.Errorf("%s: put %q targets a webhook resource, which only receives: its versions are deliveries, and there is nothing to publish to", label, put)
+	}
+
+	return fmt.Errorf("%s: put %q targets a cron resource, which only tells time: there is nothing to publish to", label, put)
 }
 
 // validateResourceGet rejects a get step against an mcp-backed resource type
@@ -245,7 +259,7 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 			return fmt.Errorf("%s: get %q targets a %s resource, which only publishes; find the work with a %s, %s or %s resource instead",
 				label, get, resourceType.Config.GitHub, GitHubPRsType, GitHubIssuesType, GitHubCommentsType)
 		}
-	case BackendWebhook, BackendCron:
+	case BackendWebhook, BackendCron, BackendRegistry:
 	}
 
 	return nil

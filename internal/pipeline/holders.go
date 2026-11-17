@@ -171,7 +171,7 @@ func runnerImage(rt config.ResourceType) string {
 	switch rt.Config.Backend() {
 	case config.BackendShell, config.BackendConcourse:
 		return rt.Image
-	case config.BackendMCP, config.BackendExpr, config.BackendWebhook, config.BackendCron, config.BackendGitHub:
+	case config.BackendMCP, config.BackendExpr, config.BackendWebhook, config.BackendCron, config.BackendGitHub, config.BackendRegistry:
 	}
 
 	return ""

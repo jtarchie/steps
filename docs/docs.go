@@ -60,7 +60,7 @@ func (b Block) Mode() string {
 			return field
 		case field == "noexec" || strings.HasPrefix(field, "noexec="):
 			return "noexec"
-		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="), strings.HasPrefix(field, "deliver="), strings.HasPrefix(field, "github="), strings.HasPrefix(field, "slack="):
+		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="), strings.HasPrefix(field, "deliver="), strings.HasPrefix(field, "github="), strings.HasPrefix(field, "slack="), strings.HasPrefix(field, "registry="):
 			return "run"
 		}
 	}
@@ -155,6 +155,18 @@ func (b Block) SlackID() string {
 	return ""
 }
 
+// RegistryID is the fake registry fixture this block's registry-image resources are
+// pointed at during execution (docs_registry_test.go), "" when none.
+func (b Block) RegistryID() string {
+	for _, field := range strings.Fields(b.Info) {
+		if id, ok := strings.CutPrefix(field, "registry="); ok {
+			return id
+		}
+	}
+
+	return ""
+}
+
 // Name identifies the block in test output: page, line, and scenario or MCP
 // fixture if any.
 func (b Block) Name() string {
@@ -171,6 +183,10 @@ func (b Block) Name() string {
 	}
 
 	if id := b.SlackID(); id != "" {
+		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
+	}
+
+	if id := b.RegistryID(); id != "" {
 		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
 	}
 
