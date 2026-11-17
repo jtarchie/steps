@@ -1159,13 +1159,24 @@ A get takes no `params:`. Concourse's get downloads the image as a root filesyst
 
 A put pushes an image a build left in the put's inputs, to `source.tag` and any additional tags, and records the pushed digest as the resource's version: the same shape the check finds, so the next build that gets this resource sees what was pushed.
 
-```yaml noexec=docker
+**Building is a task, not a resource**, as in Concourse (its oci-build-task, then a registry-image put). The task below runs BuildKit in a container of its own, so it needs no docker CLI on this machine and no daemon login, and its output is an OCI tarball the put pushes from steps itself:
+
+```yaml registry=publish
+tasks:
+- name: oci-build                      # reusable: any step named oci-build runs this
+  image: moby/buildkit:v0.17.3
+  privileged: true                     # BuildKit mounts its own snapshots
+  caches:
+  - path: buildkit                     # its layer cache, warm on the next build of this step
+  run: |
+    buildctl-daemonless.sh build \
+      --frontend dockerfile.v0 --local context=src --local dockerfile=src \
+      --export-cache type=local,dest=buildkit,mode=max --import-cache type=local,src=buildkit \
+      --opt build-arg:SOURCE_DATE_EPOCH=0 \
+      --output type=oci,dest=image/image.tar,rewrite-timestamp=true
+    echo v1 > image/tags
+
 resources:
-- name: src
-  type: git
-  source:
-    uri: https://github.com/acme/app.git
-    branch: main
 - name: app-image
   type: registry-image
   source:
@@ -1176,24 +1187,29 @@ resources:
 jobs:
 - name: publish
   plan:
-  - get: src
-  - task: build                      # writes image/image.tar with BuildKit's type=oci exporter
-    image: moby/buildkit:v0.17.3
-    privileged: true
+  - task: source                       # stands in for a get of the repository holding the Dockerfile
+    outputs: [src]
+    run: |
+      printf 'FROM scratch\nCOPY hello /hello\n' > src/Dockerfile
+      echo hello > src/hello
+  - task: oci-build
     inputs: [src]
     outputs: [image]
-    run: |
-      buildctl-daemonless.sh build --frontend dockerfile.v0 \
-        --local context=src --local dockerfile=src \
-        --output type=oci,dest=image/image.tar
-      echo "$(date +%Y%m%d)" > image/tags
   - put: app-image
     inputs: [image]
     params:
-      image: image/image.tar          # what to push
-      additional_tags: image/tags     # optional; a file of whitespace-separated tags it also gets
-
+      image: image/image.tar           # what to push
+      additional_tags: image/tags      # optional; a file of whitespace-separated tags it also gets
+  assert:
+    execution: [source, oci-build, app-image]
+    outcome: succeeded
 ```
+
+The put's version is the pushed digest; the next build's get of `app-image` finds it. A get later in the same plan does not: it was [pinned when the plan was built](#a-put-publishes-it-does-not-fetch), before the push.
+
+- **The same digest, from the cache.** An unchanged Dockerfile and context reuse every cached layer and push the digest they pushed last time: no new version, nothing downstream triggers. `SOURCE_DATE_EPOCH=0` and `rewrite-timestamp=true` pin timestamps, and BuildKit's own exporter writes no provenance or SBOM attestations, but a step whose output is not deterministic (an `apt-get install`) gives a new digest when it is rebuilt cold. The cache is exported to and imported from the `caches:` directory (`type=local`); pointing BuildKit's own `--root` there keeps no layers between builds.
+- **Multi-platform** is `--opt platform=linux/amd64,linux/arm64` on the build; the tarball then holds one index, pushed whole, and its digest is the version. A platform other than this machine's runs under emulation, slowly.
+- **`privileged: true` is the price.** BuildKit mounts and unshares, which an unprivileged container may not; a worker that cannot give that (an `ssh://` one, which runs no containers) cannot run this task.
 
 | `params:` field | required | meaning |
 |---|---|---|

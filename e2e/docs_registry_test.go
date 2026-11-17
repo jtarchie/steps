@@ -18,10 +18,14 @@ type docRegistryFixture struct {
 	username, password string
 	// seed are the tags pushed before the block runs, each a random image.
 	seed []string
+	// pushed are the tags the block must leave in the registry, all naming one digest.
+	pushed []string
 }
 
 var docRegistryFixtures = map[string]docRegistryFixture{ //nolint:gochecknoglobals // read-only fixture table, like docGitHubFixtures
 	"private": {username: "robot", password: "fake-registry-token", seed: []string{"latest"}},
+	// publish starts empty: the block pushes what its get then finds.
+	"publish": {username: "robot", password: "fake-registry-token", pushed: []string{"latest", "v1"}},
 }
 
 var docRegistryToken sync.Once //nolint:gochecknoglobals // one process-wide dummy, as docSlackToken
@@ -58,6 +62,7 @@ func injectDocRegistryFixture(t *testing.T, block docs.Block, body string) strin
 
 		source, _ := resource["source"].(map[string]any)
 		pointDocRegistryResource(t, fake, fixture, source)
+		checkDocRegistryPushes(t, fake, fixture, source)
 
 		pointed++
 	})
@@ -98,4 +103,29 @@ func pointDocRegistryResource(t *testing.T, fake *fakeRegistry, fixture docRegis
 			fake.seed(t, fake.repo(path)+":"+seeded, &authn.Basic{Username: fixture.username, Password: fixture.password})
 		}
 	}
+}
+
+// checkDocRegistryPushes asserts, once the block has run, that each tag the fixture expects was pushed and all name one image.
+func checkDocRegistryPushes(t *testing.T, fake *fakeRegistry, fixture docRegistryFixture, source map[string]any) {
+	t.Helper()
+
+	if len(fixture.pushed) == 0 {
+		return
+	}
+
+	repository, _ := source["repository"].(string)
+	login := &authn.Basic{Username: fixture.username, Password: fixture.password}
+
+	t.Cleanup(func() {
+		if t.Failed() {
+			return
+		}
+
+		first := fake.digestOf(t, repository+":"+fixture.pushed[0], login)
+		for _, tag := range fixture.pushed[1:] {
+			if got := fake.digestOf(t, repository+":"+tag, login); got != first {
+				t.Errorf("%s:%s = %s, want the same image as %s, %s", repository, tag, got, fixture.pushed[0], first)
+			}
+		}
+	})
 }
