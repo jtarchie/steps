@@ -30,7 +30,7 @@ func CollectFacts(ctx context.Context) (context.Context, func() []events.Fact) {
 	}
 }
 
-// reportFacts replaces what the stage under ctx reported: a retried attempt's answer is the one that counts. Masked here, under the resource's own secrets, because a fact is kept beside its version where no run's masking reaches it.
+// reportFacts replaces what the stage under ctx reported: a retried attempt's answer is the one that counts. Masked here, under the resource's own secrets, because a fact is kept beside its version where no run's masking reaches it — and only once cleaned, or a control character inside a token would hide it from the mask and the cleaning would then join it back whole.
 func reportFacts(ctx context.Context, facts []events.Fact) {
 	sink, ok := ctx.Value(factsKey{}).(*factSink)
 	if !ok {
@@ -40,7 +40,7 @@ func reportFacts(ctx context.Context, facts []events.Fact) {
 	secrets := redact.SecretsFrom(ctx)
 
 	masked := make([]events.Fact, 0, len(facts))
-	for _, fact := range facts {
+	for _, fact := range events.CleanFacts(facts) {
 		masked = append(masked, events.Fact{Name: secrets.String(fact.Name), Value: secrets.String(fact.Value)})
 	}
 

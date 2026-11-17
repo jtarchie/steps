@@ -94,7 +94,12 @@ func (t *runTracer) note(event events.Event) {
 		return
 	}
 
-	span.AddEvent(event.Text, trace.WithTimestamp(event.At), trace.WithAttributes(attribute.String("steps.note.level", event.Status)))
+	text := event.Text
+	if events.IsFactNote(event) {
+		text = event.Detail + ": " + text
+	}
+
+	span.AddEvent(text, trace.WithTimestamp(event.At), trace.WithAttributes(attribute.String("steps.note.level", event.Status)))
 }
 
 func (t *runTracer) StartRun(ctx context.Context, runID, job string) context.Context {

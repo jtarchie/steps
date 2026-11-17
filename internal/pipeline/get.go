@@ -355,10 +355,9 @@ func (w *planWalk) keepFetched(
 	notef(ctx, "skip: %s (already fetched)", step.Get)
 	slog.InfoContext(ctx, "job.skip", "get", step.Get, "reason", "resume")
 
-	facts := keptFacts(ctx, w.st, resource.Name, version)
-	sayFacts(ctx, facts, false)
+	sayFacts(ctx, keptFacts(ctx, w.st, resource.Name, version), false)
 
-	recordFetched(ctx, step.Get, resource.Source, version, facts)
+	recordFetched(ctx, step.Get, resource.Source, version)
 	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
 
 	return nil

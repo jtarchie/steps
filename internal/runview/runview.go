@@ -1056,7 +1056,7 @@ func attachNote(view *Transcript, index map[string]int, row store.RunEventRow) (
 			return position, Change{Other: true}
 		}
 
-		if row.Name == events.NoteFact || row.Name == events.NotePublished {
+		if events.IsFactName(row.Name) {
 			view.Steps[position].Facts = append(view.Steps[position].Facts, Fact{Name: row.Detail, Value: row.Text, Published: row.Name == events.NotePublished})
 
 			return position, Change{Other: true}
@@ -1067,7 +1067,7 @@ func attachNote(view *Transcript, index map[string]int, row store.RunEventRow) (
 		return position, Change{Other: true}
 	}
 
-	if row.Name == events.NoteFact || row.Name == events.NotePublished {
+	if events.IsFactName(row.Name) {
 		note.Text = row.Detail + ": " + row.Text
 	}
 

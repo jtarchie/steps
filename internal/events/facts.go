@@ -85,7 +85,12 @@ func FactNote(ctx context.Context, fact Fact, published bool) {
 
 // IsFactNote reports a note that carries a fact rather than a line.
 func IsFactNote(event Event) bool {
-	return event.Type == TypeStepNote && (event.Name == NoteFact || event.Name == NotePublished)
+	return event.Type == TypeStepNote && IsFactName(event.Name)
+}
+
+// IsFactName reports a note name that marks a fact, for a reader holding a stored row rather than an Event.
+func IsFactName(name string) bool {
+	return name == NoteFact || name == NotePublished
 }
 
 // FactLink is the fact's value as a link a reader may follow: only an absolute http or https URL, never javascript:, data: or a relative path.

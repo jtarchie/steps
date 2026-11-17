@@ -114,3 +114,18 @@ func TestReportedFactsAreMaskedUnderTheResourcesSecrets(t *testing.T) {
 		t.Errorf("facts = %s, want the token masked", got)
 	}
 }
+
+// TestAFactIsMaskedAfterItIsCleaned: cleaning drops control characters, so a token split by one would be joined back whole by the cleaning if masking ran first.
+func TestAFactIsMaskedAfterItIsCleaned(t *testing.T) {
+	t.Parallel()
+
+	secrets := &redact.Secrets{}
+	secrets.Add("hunter2-token")
+
+	ctx, facts := CollectFacts(redact.WithSecrets(context.Background(), secrets))
+	reportFacts(ctx, []events.Fact{{Name: "url", Value: "https://x/?t=hunter2\x00-token"}})
+
+	if got := fmt.Sprint(facts()); got != "[{url https://x/?t=***}]" {
+		t.Errorf("facts = %s, want the token masked", got)
+	}
+}

@@ -42,7 +42,7 @@ func TestCleanFactsBoundsWhatOneResourceHandsBack(t *testing.T) {
 
 	many := make([]Fact, 100)
 	for i := range many {
-		many[i] = Fact{Name: strings.Repeat("n", 500), Value: strings.Repeat("é", 5000)}
+		many[i] = Fact{Name: strings.Repeat("n", 500), Value: strings.Repeat("€", 5000)}
 	}
 
 	got := CleanFacts(many)
@@ -50,11 +50,11 @@ func TestCleanFactsBoundsWhatOneResourceHandsBack(t *testing.T) {
 		t.Errorf("kept %d facts, want 64", len(got))
 	}
 
-	if len(got[0].Name) != 128 || len(got[0].Value) != 4096 {
-		t.Errorf("a fact is %d/%d bytes, want its name cut to 128 and its value to 4096", len(got[0].Name), len(got[0].Value))
+	if len(got[0].Name) != 128 || len(got[0].Value) != 4095 {
+		t.Errorf("a fact is %d/%d bytes, want its name cut to 128 and its value to the last whole character within 4096", len(got[0].Name), len(got[0].Value))
 	}
 
-	if !strings.HasSuffix(got[0].Value, "é") {
+	if !strings.HasSuffix(got[0].Value, "€") {
 		t.Error("a value was cut through a character")
 	}
 }

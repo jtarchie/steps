@@ -401,7 +401,7 @@ func note(ctx context.Context, event Event) {
 		return
 	}
 
-	if event.Name == NoteFact || event.Name == NotePublished {
+	if IsFactName(event.Name) {
 		text = event.Detail + ": " + text
 	}
 

@@ -81,6 +81,22 @@ func TestAChainSkipIsASpanOfItsOwn(t *testing.T) {
 	}
 }
 
+// A fact's note carries its name apart from its value, so the span's event names both, as every other reader does.
+func TestAFactOnAStepSpanNamesItsName(t *testing.T) {
+	spans := recordRun(t,
+		events.Event{Type: events.TypeJobStarted, Job: "build"},
+		events.Event{Type: events.TypeStepStarted, StepID: 1, StepKind: "get", StepName: "ticket"},
+		events.Event{Type: events.TypeStepNote, StepID: 1, Name: events.NoteFact, Detail: "url", Text: "https://x/1"},
+		events.Event{Type: events.TypeStepFinished, StepID: 1, StepKind: "get", StepName: "ticket", Status: "succeeded"},
+		events.Event{Type: events.TypeJobFinished, Job: "build", Status: "succeeded"},
+	)
+
+	got := spans["get ticket"].Events()
+	if len(got) != 1 || got[0].Name != "url: https://x/1" {
+		t.Errorf("span events = %v, want the fact as url: https://x/1", got)
+	}
+}
+
 // A step its job cut off still ends, under the job's verdict, rather than leaking an open span.
 func TestAStepOpenWhenItsJobEndsIsEnded(t *testing.T) {
 	spans := recordRun(t,

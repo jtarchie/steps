@@ -32,7 +32,7 @@ func Log(ctx context.Context, logger *slog.Logger) func(events.Event) {
 
 			// A note is logged at its own level, not as debug detail: a parked approval's answer command is one an operator acts on.
 			if events.IsFactNote(event) {
-				logger.DebugContext(ctx, "step.fact", append(run, "step", event.StepName, "name", event.Detail, "value", event.Text)...)
+				logger.Log(ctx, level, "step.fact", append(run, "name", event.Detail, "value", event.Text)...)
 
 				return
 			}
