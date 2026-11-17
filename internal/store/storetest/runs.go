@@ -5,6 +5,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -412,5 +413,75 @@ func (s suite) TestResumeRunNeedsARunToResume(t *testing.T) {
 
 	if run.JobName != "build" {
 		t.Errorf("resuming rewrote job_name to %q", run.JobName)
+	}
+}
+
+// TestFindRunsNarrowsAndPages is the runs page's one query: a job, a typed word (matched against an input's version, not only the row), and a keyset cursor that combine rather than override each other.
+func (s suite) TestFindRunsNarrowsAndPages(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	seedRuns(t, st, "triage", "t1", "t2", "t3")
+	seedRuns(t, st, "answer", "a1")
+
+	err := st.RecordRunInput(ctx, "t2", store.RunInput{Input: "fault", Resource: "fault", Version: `{"id":"Fault-12345"}`})
+	if err != nil {
+		t.Fatalf("RecordRunInput: %v", err)
+	}
+
+	err = st.FinishRun(ctx, "t1", store.RunFailed)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	ids := func(query store.RunQuery) []string {
+		t.Helper()
+
+		rows, err := st.FindRuns(ctx, query)
+		if err != nil {
+			t.Fatalf("FindRuns(%+v): %v", query, err)
+		}
+
+		out := make([]string, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, row.ID)
+		}
+
+		return out
+	}
+
+	for _, tc := range []struct {
+		name  string
+		query store.RunQuery
+		want  []string
+	}{
+		{"everything, newest first", store.RunQuery{}, []string{"a1", "t3", "t2", "t1"}},
+		{"one job", store.RunQuery{Job: "triage"}, []string{"t3", "t2", "t1"}},
+		{"an input's version, any case", store.RunQuery{Text: "fault-12345"}, []string{"t2"}},
+		{"a stored status", store.RunQuery{Text: "FAILED"}, []string{"t1"}},
+		{"a status the caller translated", store.RunQuery{Text: "zzz", Statuses: []store.RunStatus{store.RunFailed}}, []string{"t1"}},
+		{"a percent is a character, not a wildcard", store.RunQuery{Text: "%"}, []string{}},
+		{"text within a job", store.RunQuery{Job: "answer", Text: "a"}, []string{"a1"}},
+		{"a page", store.RunQuery{Job: "triage", Limit: 2}, []string{"t3", "t2"}},
+		{"the next page", store.RunQuery{Job: "triage", Limit: 2, Before: "t2"}, []string{"t1"}},
+		{"a cursor no run holds keeps nothing", store.RunQuery{Before: "reaped"}, []string{}},
+	} {
+		if got := ids(tc.query); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: FindRuns = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	// A neighbour in the same state holding the same run id and job is never a hit, nor its id a cursor.
+	other := s.open(t, "other")
+	seedRuns(t, other, "triage", "n1")
+
+	if got := ids(store.RunQuery{Text: "n1"}); len(got) != 0 {
+		t.Errorf("FindRuns reached a neighbour pipeline's run: %v", got)
+	}
+
+	if got := ids(store.RunQuery{Before: "n1"}); len(got) != 0 {
+		t.Errorf("FindRuns paged from a neighbour pipeline's run: %v", got)
 	}
 }

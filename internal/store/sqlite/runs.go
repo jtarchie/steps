@@ -299,6 +299,35 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]stor
 	`, append(args, rowLimit(limit)), scanRunRowFrom)
 }
 
+// FindRuns is ListRuns narrowed by store.RunQuery. instr over lower() rather than LIKE, so a typed % or _ is a character and not a wildcard, with nothing to escape.
+func (s *Store) FindRuns(ctx context.Context, query store.RunQuery) ([]store.RunRow, error) {
+	filter, args := byJob(query.Job, []any{s.pipelineID})
+
+	if query.Text != "" {
+		filter += `
+		  AND (instr(lower(id), lower(?)) > 0 OR instr(lower(job_name), lower(?)) > 0
+		    OR instr(lower(status), lower(?)) > 0 OR instr(lower(created_by), lower(?)) > 0
+		    OR status IN (SELECT value FROM json_each(?))
+		    OR EXISTS (SELECT 1 FROM run_inputs i WHERE i.run_id = runs.id AND instr(lower(i.version_json), lower(?)) > 0))`
+		args = append(args, query.Text, query.Text, query.Text, query.Text, jsonList(query.Statuses), query.Text)
+	}
+
+	if query.Before != "" {
+		// A cursor that names no run of this pipeline compares against NULL and keeps nothing.
+		filter += `
+		  AND (started_at, rowid) < (SELECT started_at, rowid FROM runs WHERE pipeline_id = ? AND id = ?)`
+		args = append(args, s.pipelineID, query.Before)
+	}
+
+	return collect(ctx, s.reads, "runs", `
+		SELECT `+runColumns+`
+		FROM runs
+		WHERE pipeline_id = ?`+filter+`
+		ORDER BY started_at DESC, rowid DESC
+		LIMIT ?
+	`, append(args, rowLimit(query.Limit)), scanRunRowFrom)
+}
+
 // LatestRunByJob returns the most recent run for every job that has one,
 // keyed by job name — one query for a jobs board rather than one per job.
 //

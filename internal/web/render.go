@@ -335,6 +335,7 @@ func templateFuncs(loc *locale) template.FuncMap {
 		"sectionTab":    sectionTab,
 		// The activity page narrowed by one more field: every name in a row is a link that filters by it.
 		"filterURL": withQuery,
+		"pathQuery": pathQuery,
 		// The name a tool is offered under, the same one an agent's grant uses.
 		"toolName": config.ToolSpecName,
 		"rfc3339":  func(t time.Time) string { return t.UTC().Format(time.RFC3339) },

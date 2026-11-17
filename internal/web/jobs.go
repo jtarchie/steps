@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -236,20 +237,80 @@ func (s *Server) handleJobDetail(c *echo.Context) error {
 // handleRunHistory renders the pipeline-wide run list, newest first — the
 // cross-job history that otherwise only exists per job, or on the
 // multi-pipeline overview a single-pipeline deployment never sees.
+// runsPage is how many runs one page of the history shows. Smaller than historyLimit because there is now an "older" link: the page no longer has to hold everything it can reach.
+const runsPage = 50
+
+// handleRunHistory is every run of the pipeline, newest first, narrowed by ?job= and ?q= and paged by ?before=<run id>.
 func (s *Server) handleRunHistory(c *echo.Context) error {
 	pipeline := pipelineOf(c)
+	loc := s.renderer.localeOf(c)
+	query := c.Request().URL.Query()
+	base := "/p/" + pipeline.Slug + "/runs"
 
-	runs, err := pipeline.Store.ListRuns(c.Request().Context(), "", historyLimit)
+	find := store.RunQuery{
+		Job:    query.Get("job"),
+		Text:   strings.TrimSpace(query.Get("q")),
+		Before: query.Get("before"),
+		Limit:  runsPage + 1,
+	}
+	find.Statuses = statusesNamed(loc, find.Text)
+
+	runs, err := pipeline.Store.FindRuns(c.Request().Context(), find)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	older := ""
+	if len(runs) > runsPage {
+		runs = runs[:runsPage]
+		older = pathQuery(base, query, "before", runs[len(runs)-1].ID)
+	}
+
+	var filters []activityFilter
+
+	for _, f := range []struct{ key, label, value string }{
+		{"job", "job", find.Job},
+		{"q", "text", find.Text},
+	} {
+		if f.value != "" {
+			filters = append(filters, activityFilter{Label: f.label, Value: f.value, Remove: pathQuery(base, query, f.key, "")})
+		}
+	}
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "runs", map[string]any{
-		"Nav":   s.nav(c),
-		"Title": s.renderer.localeOf(c).text("tab.runs"),
-		"Runs":  runs,
+		"Nav":     s.nav(c),
+		"Title":   loc.text("tab.runs"),
+		"Runs":    runs,
+		"Jobs":    pipeline.Config().JobNames(),
+		"Job":     find.Job,
+		"Text":    find.Text,
+		"Filters": filters,
+		"Older":   older,
+		"Paged":   find.Before != "",
+		"Base":    base,
+		"Query":   query,
 	})
+}
+
+// statusesNamed is every run status whose word, as this reader sees it or in English, holds text: the page says "passed" where the store says "succeeded", and a reader types what they read.
+func statusesNamed(loc *locale, text string) []store.RunStatus {
+	if text == "" {
+		return nil
+	}
+
+	needle := strings.ToLower(text)
+
+	var named []store.RunStatus
+
+	for _, status := range []store.RunStatus{store.RunRunning, store.RunSucceeded, store.RunFailed, store.RunAborted} {
+		word := statusWord(status)
+		if strings.Contains(strings.ToLower(loc.word("status", word)), needle) || strings.Contains(word, needle) {
+			named = append(named, status)
+		}
+	}
+
+	return named
 }
 
 // stripLimit bounds the run strip. Enough to see a job's recent shape;

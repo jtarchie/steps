@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -218,6 +219,37 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]stor
 		WHERE pipeline_id = $1`+filter+`
 		ORDER BY started_at DESC, seq DESC
 		LIMIT `+next(args), append(args, rowLimit(limit)), scanRunRowFrom)
+}
+
+// FindRuns is ListRuns narrowed by store.RunQuery. strpos over lower() rather than ILIKE, so a typed % or _ is a character and not a wildcard, with nothing to escape.
+func (s *Store) FindRuns(ctx context.Context, query store.RunQuery) ([]store.RunRow, error) {
+	filter, args := byJob(query.Job, []any{s.pipelineID})
+
+	if query.Text != "" {
+		args = append(args, query.Text)
+		text := "lower($" + strconv.Itoa(len(args)) + ")"
+		args = append(args, textArray(query.Statuses))
+		statuses := "$" + strconv.Itoa(len(args))
+		filter += `
+		  AND (strpos(lower(id), ` + text + `) > 0 OR strpos(lower(job_name), ` + text + `) > 0
+		    OR strpos(lower(status), ` + text + `) > 0 OR strpos(lower(created_by), ` + text + `) > 0
+		    OR status = ANY(` + statuses + `)
+		    OR EXISTS (SELECT 1 FROM run_inputs i WHERE i.run_id = runs.id AND strpos(lower(i.version_json), ` + text + `) > 0))`
+	}
+
+	if query.Before != "" {
+		// A cursor that names no run of this pipeline compares against NULL and keeps nothing.
+		args = append(args, query.Before)
+		filter += `
+		  AND (started_at, seq) < (SELECT started_at, seq FROM runs WHERE pipeline_id = $1 AND id = $` + strconv.Itoa(len(args)) + `)`
+	}
+
+	return collect(ctx, s.db, "runs", `
+		SELECT `+runColumns+`
+		FROM runs
+		WHERE pipeline_id = $1`+filter+`
+		ORDER BY started_at DESC, seq DESC
+		LIMIT `+next(args), append(args, rowLimit(query.Limit)), scanRunRowFrom)
 }
 
 // LatestRunByJob returns the most recent run for every job that has one,

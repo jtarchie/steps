@@ -61,7 +61,7 @@ func TestRunPageStripListsTheJobsRuns(t *testing.T) {
 		`href="/p/demo/runs/run-b" aria-current="page"`: "the run on the page is not marked current",
 		`class="st st-failed"`:                          "a failed run's chip does not carry the status vocabulary",
 		`title="[run-c] · `:                             "a chip's title does not carry the id a hover needs",
-		`href="/p/demo/jobs/build/detail"`:              "strip does not lead to the job's detail page",
+		`href="/p/demo/runs?job=build"`:                 "strip does not lead to the job's runs in the history",
 		`hx-select="#run-strip"`:                        "strip is not a live region of its own",
 	} {
 		if !strings.Contains(strip, want) {

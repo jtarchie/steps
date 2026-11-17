@@ -29,6 +29,8 @@ type Runs interface {
 	// ListRuns returns a job's runs newest first. Zero means no limit, the
 	// convention everywhere here.
 	ListRuns(ctx context.Context, jobName string, limit int) ([]RunRow, error)
+	// FindRuns is ListRuns narrowed and paged, newest first: the runs page's one query.
+	FindRuns(ctx context.Context, query RunQuery) ([]RunRow, error)
 	LatestRunByJob(ctx context.Context) (map[string]RunRow, error)
 	// LatestFinishedRunByJob is each job's newest run that is no longer
 	// running, reruns included, as ListRuns includes them.
@@ -36,6 +38,19 @@ type Runs interface {
 	RunsUsingNode(ctx context.Context, hash string, limit int) ([]RunRow, error)
 	FindRunRow(ctx context.Context, id string) (RunRow, bool, error)
 	FirstRunSince(ctx context.Context, jobName string, since time.Time) (RunRow, bool, error)
+}
+
+// RunQuery narrows FindRuns. Every field is optional; the zero value is ListRuns over every job with no limit.
+type RunQuery struct {
+	// Job keeps one job's runs.
+	Job string
+	// Text keeps runs whose id, job, stored status, starter or any input version holds it, ignoring case. The input versions are the point: they are the only text that says WHICH fault, PR or message a run handled, and that is what a person types.
+	Text string
+	// Statuses also keeps a run in one of these, whatever Text says: the caller's way to let the word a reader SEES ("passed") find what is stored ("succeeded"), which this package cannot translate.
+	Statuses []RunStatus
+	// Before keeps runs older than this one, in ListRuns' order (started_at, then insertion). A keyset, not an offset, so a run arriving while someone reads page two does not shift every row they have not reached. A run that no longer exists (reaped) keeps nothing, rather than silently restarting at the newest.
+	Before string
+	Limit  int
 }
 
 // RunStatus is where a run is: running until FinishRun records how it ended.

@@ -43,7 +43,7 @@
   {{if .Strip.Queued}}<li><a class="st st-queued" id="strip-queued" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/follow?since={{.Strip.QueuedSince}}">{{t "status.queued"}}</a></li>{{end}}
   {{range .Strip.Runs}}<li><a class="st st-{{statusWord .Status}}" id="strip-{{short .ID}}" href="/p/{{$.Nav.Current}}/runs/{{.ID}}"{{if eq .ID $run.Run.ID}} aria-current="page"{{end}} title="[{{short .ID}}] · {{.Duration}}"><span class="visually-hidden">{{statusText .Status}}, </span>{{if eq .ID $run.Run.ID}}<span class="hash">{{short .ID}}</span> {{end}}{{agoCompact .StartedAt}}</a></li>
   {{end}}</ol>
-  <a class="stripmore" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/detail">{{t "run.strip.all"}}</a>
+  <a class="stripmore" href="{{pathQuery (printf "/p/%s/runs" .Nav.Current) nil "job" $run.Run.JobName}}">{{t "run.strip.all"}}</a>
 </nav>
 
 {{/* Only an error no step holds: a failing step's error is what the job error
