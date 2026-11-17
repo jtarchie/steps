@@ -218,7 +218,7 @@ Tailscale Funnel and any reverse proxy work the same way: route `^/p/[^/]+/hooks
 
 **A delivery that never arrives is never built.** There is no polling fallback, deliberately: a fallback needs a check, and a check is exactly what this type does not have — a second source of versions that could disagree with the first. When the daemon was down or the tunnel dropped a request, the recovery is the sender's own redelivery (GitHub, Stripe and Svix each have a button for it), and a redelivery of something already recorded builds nothing.
 
-**To rebuild a delivery that was recorded**, pin its id: `steps runs trigger -p app build --pin id=<delivery id>`. A pin is answered from the versions already recorded, so it reaches any delivery still inside [`version_history:`](resources.md) — and only those, since there is no check to ask for one that was pruned.
+**To rebuild a delivery that was recorded**, pin its id: `steps runs trigger -p app build --pin id=<delivery id>`. A pin is answered from the versions already recorded, so it reaches any delivery still inside [`version_history:`](resources.md) — and only those, since there is no check to ask for one that was pruned. On a get with `passed:`, "recorded" means passed by every upstream job: a delivery they never built cannot be pinned there, even by an admin.
 
 ## Stored payloads
 

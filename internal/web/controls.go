@@ -109,7 +109,7 @@ func (s *Server) queuePinnedTrigger(ctx context.Context, pipeline *Pipeline, job
 	return nil
 }
 
-// refuseUnpassedPin holds a non-admin's pin to the job's passed: gates. A pinned run takes its versions from the check rather than the green record, so it would build what upstream never passed — which Concourse does not let anyone do, and which here only an admin may.
+// refuseUnpassedPin holds a non-admin's pin to the job's passed: gates. A pin no green version matches is resolved from the check instead, so it would build what upstream never passed — which Concourse does not let anyone do, and which here only an admin may.
 // ponytail: each constrained resource is judged alone; a fan-in whose pinned versions passed upstream in different builds gets through. Judge the set per upstream job (HasPassedVersionSet) if that matters.
 func refuseUnpassedPin(ctx context.Context, pipeline *Pipeline, job *config.Job, pin map[string]string) error {
 	constraints := job.PassedConstraints()

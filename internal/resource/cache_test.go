@@ -332,7 +332,17 @@ func TestPinnedGetSelectsASuppliedVersionTheCheckCannotReport(t *testing.T) {
 		t.Errorf("versions = %+v, want the pinned recorded one", versions)
 	}
 
+	_, _, versions, err = cache.ResolveVersionsCached(context.Background(), cfg,
+		config.Step{Get: "thing", Version: map[string]any{"id": "second"}}, nil)
+	if err != nil {
+		t.Fatalf("step version: pin against a recorded version: %v", err)
+	}
+
+	if len(versions) != 1 || versions[0]["id"] != "second" {
+		t.Errorf("versions = %+v, want the step's pinned recorded one", versions)
+	}
+
 	if got := countLines(t, counter); got != 0 {
-		t.Errorf("check ran %d times, want 0 — the pin was already recorded", got)
+		t.Errorf("check ran %d times, want 0 — the pins were already recorded", got)
 	}
 }

@@ -213,7 +213,9 @@ func versionsFor(
 		// nil means nobody supplied any; a non-nil empty slice means the
 		// caller resolved none, and is honored rather than re-derived.
 		versions := supplied(res.Name)
-		if versions != nil && (len(pin) == 0 || slices.ContainsFunc(versions, func(v map[string]any) bool { return matchesPin(v, pin) })) {
+		holdsPin := len(pin) == 0 || slices.ContainsFunc(versions, func(v map[string]any) bool { return matchesPin(v, pin) })
+
+		if versions != nil && holdsPin {
 			slog.DebugContext(ctx, "resource.versions_supplied", "resource", res.Name, "versions", len(versions))
 
 			return versions, nil
@@ -437,7 +439,8 @@ func decodeOutVersion(out []byte) (map[string]any, error) {
 // plan-time hashing and run-time execution stay in lockstep.
 //
 // supplied lets a caller hand over versions it has already resolved, in which
-// case the check is not run at all. `steps web` does this: its poll asked
+// case the check is not run at all — unless a pin matches none of them (see
+// versionsFor). `steps web` does this: its poll asked
 // the resource what was new — precisely, using the cursor — and asking again
 // here would answer a different question (see WithResolvedVersions).
 //
