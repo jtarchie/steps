@@ -74,8 +74,8 @@ func (s *Server) handleAPIGet(c *echo.Context) error {
 
 	target := s.Lookup(name)
 	if target == nil {
-		// Its own body rather than notServed's, so a set can tell a pipeline it would repair from one it would create, and names the sha it would replace so the repair is compare-and-set like any other.
-		if broken, held := s.brokenOf(name); held {
+		// Its own body rather than notServed's, so a set can tell a pipeline it would repair from one it would create, and names the sha it would replace so the repair is compare-and-set like any other. Admin only, as brokenTo: set is, so the repair's GET loses nothing.
+		if broken, held := s.brokenOf(name); held && s.roleOfPerson(c) >= RoleAdmin {
 			//nolint:wrapcheck // as below
 			return c.JSON(http.StatusNotFound, map[string]string{"message": name + " is not being served: " + broken.Reason, "broken": broken.Reason, "sha": broken.SHA})
 		}
@@ -229,7 +229,7 @@ func (s *Server) setPaused(c *echo.Context, pause bool) error {
 
 	target := s.Lookup(c.Param("pipeline"))
 	if target == nil {
-		return s.notServed(c.Param("pipeline"))
+		return s.notServed(c, c.Param("pipeline"))
 	}
 
 	var err error

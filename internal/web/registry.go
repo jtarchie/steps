@@ -133,9 +133,9 @@ func (s *Server) brokenOf(name string) (BrokenPipeline, bool) {
 	return broken, ok
 }
 
-// notServed is the 404 for a name this daemon does not serve, which says why when the name is one it holds broken.
-func (s *Server) notServed(name string) error {
-	if reason, broken := s.BrokenReason(name); broken {
+// notServed is the 404 for a name this daemon does not serve, which says why when the name is one it holds broken and the reader could repair it: brokenTo's rule, since a pipeline that will not load has no access rules to say who else may see it.
+func (s *Server) notServed(c *echo.Context, name string) error {
+	if reason, broken := s.BrokenReason(name); broken && s.roleOfPerson(c) >= RoleAdmin {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("%s is not being served: %s", name, reason))
 	}
 

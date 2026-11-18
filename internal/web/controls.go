@@ -236,7 +236,7 @@ func (s *Server) handleAPITrigger(c *echo.Context) error {
 
 	target := s.Lookup(c.Param("pipeline"))
 	if target == nil {
-		return s.notServed(c.Param("pipeline"))
+		return s.notServed(c, c.Param("pipeline"))
 	}
 
 	var req TriggerRequest
@@ -266,7 +266,7 @@ func (s *Server) handleAPIRerun(c *echo.Context) error {
 
 	target := s.Lookup(c.Param("pipeline"))
 	if target == nil {
-		return s.notServed(c.Param("pipeline"))
+		return s.notServed(c, c.Param("pipeline"))
 	}
 
 	_, err = s.queueRerun(c.Request().Context(), target, c.Param("run"), "cli")

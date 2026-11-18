@@ -87,7 +87,7 @@ func (s *Server) handleAbortQueued(c *echo.Context) error {
 func (s *Server) handleAPIAbortRun(c *echo.Context) error {
 	target := s.Lookup(c.Param("pipeline"))
 	if target == nil {
-		return s.notServed(c.Param("pipeline"))
+		return s.notServed(c, c.Param("pipeline"))
 	}
 
 	err := s.abortRun(c.Request().Context(), target, c.Param("run"))
@@ -101,7 +101,7 @@ func (s *Server) handleAPIAbortRun(c *echo.Context) error {
 func (s *Server) handleAPIAbortQueued(c *echo.Context) error {
 	target := s.Lookup(c.Param("pipeline"))
 	if target == nil {
-		return s.notServed(c.Param("pipeline"))
+		return s.notServed(c, c.Param("pipeline"))
 	}
 
 	err := s.abortQueued(c.Request().Context(), target, c.Param("job"))

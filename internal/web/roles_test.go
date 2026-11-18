@@ -210,3 +210,47 @@ func TestAServerWithAProviderNeedsRules(t *testing.T) {
 		t.Errorf("local accounts alone need no rules, as before: %v", err)
 	}
 }
+
+// TestABrokenPipelineIsHiddenFromAViewer: one that will not load has no rules to say who may see it, so only somebody who could fix it learns it exists, its sha or why it broke. Every path answers as for a name nobody set.
+func TestABrokenPipelineIsHiddenFromAViewer(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+
+	accounts, err := sqlite.OpenAccounts(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("OpenAccounts: %v", err)
+	}
+
+	t.Cleanup(func() { _ = accounts.Close() })
+
+	server, err := New([]*Pipeline{pipeline}, nil, WithSessions(accounts), WithSignInProviders(GitHubSignIn("c", "s", "http://x", nil)), WithRoles(githubRoles(t)))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	server.MarkBroken(BrokenPipeline{Name: "gone", SHA: "sha-x", Reason: "secret-marker"})
+
+	err = accounts.SaveUser(t.Context(), store.User{Actor: "github:eve", RefreshedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = accounts.CreateSession(t.Context(), store.Session{TokenHash: tokenDigest("eve-token"), Actor: "github:eve", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{"/api/pipelines/gone", "/p/gone", "/p/gone/jobs/build"} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "eve-token", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		body := rec.Body.String()
+		if rec.Code != http.StatusNotFound || strings.Contains(body, "secret-marker") || strings.Contains(body, "sha-x") || !strings.Contains(body, ErrNoSuchPipeline.Error()) {
+			t.Errorf("viewer GET %s = %d %s, want the plain no-such-pipeline 404", path, rec.Code, body)
+		}
+	}
+}

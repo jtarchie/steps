@@ -17,7 +17,7 @@ func (s *Server) resolvePipeline(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		if pipeline == nil {
-			return s.notServed(c.Param("pipeline"))
+			return s.notServed(c, c.Param("pipeline"))
 		}
 
 		c.Set("pipeline", pipeline)

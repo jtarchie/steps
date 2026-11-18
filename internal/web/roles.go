@@ -214,7 +214,7 @@ func (s *Server) authorize(next echo.HandlerFunc) echo.HandlerFunc {
 			if target := s.Lookup(name); target != nil {
 				role = target.narrow(role, id)
 				if role == 0 {
-					return s.notServed(name)
+					return s.notServed(c, name)
 				}
 			}
 		}
