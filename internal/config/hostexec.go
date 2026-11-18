@@ -78,7 +78,7 @@ func (c *Config) hostResources() []HostCommand {
 			if githubClonesWithGit(resourceType.Config.GitHub, resource.Source) {
 				found = append(found, HostCommand{Name: resource.Name, Where: where, Why: "checkout: git runs the git binary on the host"})
 			}
-		case BackendMCP, BackendExpr, BackendWebhook, BackendCron, BackendConcourse, BackendRegistry, BackendService:
+		case BackendMCP, BackendExpr, BackendWebhook, BackendCron, BackendConcourse, BackendRegistry, BackendService, BackendLinear:
 		}
 	}
 

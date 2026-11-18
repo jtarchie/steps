@@ -155,6 +155,10 @@ func (c *Config) resourceCredentialProblems(name string) []Problem {
 		return githubCredentialProblems(name, resource.Source, resource.Secrets)
 	}
 
+	if resourceType.Config.Backend() == BackendLinear {
+		return linearCredentialProblems(name, resource.Source, resource.Secrets)
+	}
+
 	if resourceType.Config.Backend() == BackendRegistry {
 		return registryCredentialProblems(name, resource.Source, resource.Secrets)
 	}
@@ -204,8 +208,16 @@ func exprCredentialProblems(name string, resource *Resource, resourceType *Resou
 // unauthenticated poller with a limit it spends in minutes, and a put cannot
 // post as nobody.
 func githubCredentialProblems(name string, source map[string]any, secrets map[string]string) []Problem {
-	variable := GitHubConnectionOf(source).Token()
+	return tokenEnvProblems(name, GitHubConnectionOf(source).Token(), secrets, "export GH_TOKEN=$(gh auth token) is one way to set it")
+}
 
+// linearCredentialProblems is githubCredentialProblems for a linear-* resource: the one variable it reads is a requirement, since Linear answers an unauthenticated request with nothing.
+func linearCredentialProblems(name string, source map[string]any, secrets map[string]string) []Problem {
+	return tokenEnvProblems(name, LinearConnectionOf(source).Token(), secrets, "create a personal API key in Linear's settings and export it")
+}
+
+// tokenEnvProblems reports a built-in's source.token_env variable that is neither a secrets: key nor set; hint says how to set it.
+func tokenEnvProblems(name, variable string, secrets map[string]string, hint string) []Problem {
 	// A token_env naming a secrets: key is resolved by the daemon when the resource runs, never read from its environment.
 	if _, secret := secrets[variable]; secret {
 		return nil
@@ -217,7 +229,7 @@ func githubCredentialProblems(name string, source map[string]any, secrets map[st
 
 	return []Problem{{
 		Target: fmt.Sprintf("resource %q", name),
-		Detail: fmt.Sprintf("$%s is not set (source.token_env) — export GH_TOKEN=$(gh auth token) is one way to set it", variable),
+		Detail: fmt.Sprintf("$%s is not set (source.token_env) — %s", variable, hint),
 	}}
 }
 

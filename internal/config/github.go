@@ -662,10 +662,15 @@ func validateGitHubConnection(connection GitHubConnection) error {
 }
 
 func validateGitHubEndpoint(endpoint string) error {
+	return validateEndpoint(endpoint, DefaultGitHubEndpoint)
+}
+
+// validateEndpoint refuses a source.endpoint that is not an http(s) URL, and plain http to anything but a loopback host, so a credential never travels in cleartext. example is the default the message points at.
+func validateEndpoint(endpoint, example string) error {
 	if endpoint != "" {
 		parsed, err := url.Parse(endpoint)
 		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
-			return fmt.Errorf("source.endpoint must be an http(s) URL such as %s, not %q", DefaultGitHubEndpoint, endpoint)
+			return fmt.Errorf("source.endpoint must be an http(s) URL such as %s, not %q", example, endpoint)
 		}
 
 		if parsed.Scheme == "http" && !IsLoopbackHost(parsed.Hostname()) {

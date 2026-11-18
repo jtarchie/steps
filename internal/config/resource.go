@@ -77,6 +77,8 @@ type ResourceTypeConfig struct {
 	Concourse bool `yaml:"-"`
 	// GitHub names which built-in github-* type this is (see github.go), which no YAML can declare: steps calls the API itself. Keyed, unlike Cron and Webhook, because several share a source: shape and do different things with it.
 	GitHub string `yaml:"-"`
+	// Linear names which built-in linear-* type this is (see linear.go), which no YAML can declare: steps calls Linear's GraphQL API itself. Keyed as GitHub is, because the types share a client and do different things with it.
+	Linear string `yaml:"-"`
 	// Service marks the built-in docker-service type, which no YAML can declare: steps drives the daemon itself (dockerservice.go).
 	Service bool `yaml:"-"`
 	// Registry marks the built-in registry-image type, which no YAML can declare: steps speaks the registry protocol itself (registryimage.go).
@@ -107,6 +109,8 @@ const (
 	BackendConcourse ResourceBackend = "concourse"
 	// BackendGitHub calls GitHub's API from this process: two of its types find work and have no out, three publish and have no check (see github.go).
 	BackendGitHub ResourceBackend = "github"
+	// BackendLinear calls Linear's GraphQL API from this process: one type finds work and has no out, two publish and have no check (see linear.go).
+	BackendLinear ResourceBackend = "linear"
 	// BackendRegistry calls an OCI registry from this process: check finds a tag's digest, in names it, out pushes an image tarball.
 	BackendRegistry ResourceBackend = "registry"
 	// BackendService keeps a container up on this machine's daemon: out ensures it, check reports whether it runs.
@@ -120,6 +124,8 @@ const (
 // neither detect nor fetch nor publish, and the errors for that are stage
 // rules (validateResourceGet, validateResourcePut) rather than a fourth
 // backend meaning "none".
+//
+//nolint:cyclop // one arm per backend
 func (c ResourceTypeConfig) Backend() ResourceBackend {
 	switch {
 	case c.Webhook:
@@ -128,6 +134,8 @@ func (c ResourceTypeConfig) Backend() ResourceBackend {
 		return BackendCron
 	case c.GitHub != "":
 		return BackendGitHub
+	case c.Linear != "":
+		return BackendLinear
 	case c.Registry:
 		return BackendRegistry
 	case c.Service:
@@ -207,6 +215,8 @@ func (r Resource) CheckLimit() time.Duration {
 // carrying a placeholder `out: "true"` that silently succeeds having pushed
 // nothing. That placeholder is exactly the ritual this repo's own examples
 // used to copy around.
+//
+//nolint:cyclop // one arm per backend
 func validateResourcePut(label, put string, resourceType *ResourceType) error {
 	switch resourceType.Config.Backend() {
 	case BackendMCP:
@@ -225,6 +235,8 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 		return receiveOnlyPutRefusal(label, put, resourceType.Config.Backend())
 	case BackendGitHub:
 		return githubPutRefusal(label, put, resourceType.Config.GitHub)
+	case BackendLinear:
+		return linearPutRefusal(label, put, resourceType.Config.Linear)
 	case BackendRegistry, BackendService:
 	}
 
@@ -248,6 +260,8 @@ func receiveOnlyPutRefusal(label, put string, backend ResourceBackend) error {
 // discover, and naming a check tool it never calls would be a ritual, not a
 // declaration. So the rule moves to where a get actually appears: this type
 // cannot be fetched, and says so at load rather than at the first poll.
+//
+//nolint:cyclop // one arm per backend
 func validateResourceGet(label, get string, resourceType *ResourceType) error {
 	switch resourceType.Config.Backend() {
 	case BackendMCP:
@@ -272,6 +286,11 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 		if !GitHubFinds(resourceType.Config.GitHub) {
 			return fmt.Errorf("%s: get %q targets a %s resource, which only publishes; find the work with a %s, %s or %s resource instead",
 				label, get, resourceType.Config.GitHub, GitHubPRsType, GitHubIssuesType, GitHubCommentsType)
+		}
+	case BackendLinear:
+		if !LinearFinds(resourceType.Config.Linear) {
+			return fmt.Errorf("%s: get %q targets a %s resource, which only publishes; find the work with a %s resource instead",
+				label, get, resourceType.Config.Linear, LinearIssuesType)
 		}
 	case BackendWebhook, BackendCron, BackendRegistry, BackendService:
 	}
