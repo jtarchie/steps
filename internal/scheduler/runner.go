@@ -172,6 +172,46 @@ func (r *LocalRunner) EnqueueRerun(ctx context.Context, target *Pipeline, jobNam
 	return nil
 }
 
+// ErrNotResumable is a resume asked of a run that cannot continue: not failed, nothing finished to keep, or its tree gone.
+var ErrNotResumable = errors.New("this run cannot be resumed: only a failed run that finished a step, with its workspace still on disk, can; Retry runs it from the top")
+
+// ResumeAt is where a resume of a failed run would pick up: the step it runs first, and how many finished passes it keeps.
+type ResumeAt struct {
+	From string
+	Kept int
+}
+
+// ResumePoint reports where a resume of runID would pick up, ok false when there is nothing a resume would gain or it would be refused.
+func (r *LocalRunner) ResumePoint(ctx context.Context, target *Pipeline, runID string) (ResumeAt, bool) {
+	run, found, err := target.Store.FindRunRow(ctx, runID)
+	if err != nil || !found {
+		return ResumeAt{}, false
+	}
+
+	job, err := target.Config().FindJob(run.JobName)
+	if err != nil {
+		return ResumeAt{}, false
+	}
+
+	from, kept, ok := pipeline.ResumePoint(ctx, target.Store, runID, job)
+
+	return ResumeAt{From: from, Kept: kept}, ok
+}
+
+// EnqueueResume puts a person's resume of a failed run on the pipeline's queue, refusing one ResumePoint would not offer: queued anyway, the claim would find nothing to continue.
+func (r *LocalRunner) EnqueueResume(ctx context.Context, target *Pipeline, jobName, reason, runID string) error {
+	if _, ok := r.ResumePoint(ctx, target, runID); !ok {
+		return ErrNotResumable
+	}
+
+	err := target.Store.EnqueueResumeJob(ctx, jobName, reason, runID, actor.From(ctx).String())
+	if err != nil {
+		return fmt.Errorf("scheduler: %w", err)
+	}
+
+	return nil
+}
+
 // EnqueuePinned puts a person's trigger of a job, pinned to the version fields named, on the pipeline's queue. The pin rides the row rather than this process's memory, so a restart between the request and the claim still builds what was asked for and not whatever is newest.
 func (r *LocalRunner) EnqueuePinned(ctx context.Context, target *Pipeline, jobName, reason string, pin map[string]string) error {
 	encoded, err := json.Marshal(pin)
@@ -637,12 +677,9 @@ func (r *LocalRunner) runJob(
 	// Held for the life of the run, so a set that swaps the workspace under this pipeline cannot close the tree this build is materializing into.
 	defer release()
 
-	// Minted here rather than inside RunJob so the run is addressable before it exists: an abort can land during preflight.
-	runID := pipeline.NewRunID()
-
-	ctx, provider, resumed := resume(ctx, target, job, trigger.Resume, provider)
-	if resumed {
-		runID = trigger.Resume
+	ctx, provider, runID, err := resumeAsked(ctx, target, job, trigger.Resume, provider)
+	if err != nil {
+		return false, err
 	}
 
 	key := runKey{target.Slug, runID}
@@ -706,6 +743,29 @@ func (r *LocalRunner) runJob(
 		events.WithBus(runCtx, target.Bus), cfg, job, target.Store, opts)
 
 	return errors.Is(context.Cause(runCtx), errAborted), runErr
+}
+
+// resumeAsked is resume, naming the run the claim builds: the one it continues, or a new one minted here rather than inside RunJob so the run is addressable before it exists (an abort can land during preflight). It refuses where a person asked for the resume. A failed run is one a person asked to resume; only a restart's interrupted run reads aborted. The restart's fallback, a new build from the top, is exactly the cost a person pressing Resume chose to avoid.
+func resumeAsked(
+	ctx context.Context, target *Pipeline, job *config.Job, runID string, provider workspace.Provider,
+) (context.Context, workspace.Provider, string, error) {
+	asked := false
+
+	if runID != "" {
+		run, found, err := target.Store.FindRunRow(ctx, runID)
+		asked = err == nil && found && run.Status == store.RunFailed
+	}
+
+	ctx, provider, resumed := resume(ctx, target, job, runID, provider)
+
+	switch {
+	case resumed:
+		return ctx, provider, runID, nil
+	case asked:
+		return ctx, provider, "", fmt.Errorf("scheduler: run %s: %w", runID, ErrNotResumable)
+	default:
+		return ctx, provider, pipeline.NewRunID(), nil
+	}
 }
 
 // resume continues the run a restart interrupted (#208), reporting false when there is none to continue. One its record cannot vouch for, or whose tree is gone, is built from the top as a new run instead, which is what every restart did before there was a resume.

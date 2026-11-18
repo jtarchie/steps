@@ -55,6 +55,58 @@ jobs:
 	}
 }
 
+// A person's resume whose tree went between the press and the claim fails rather than falling back as a restart's does: building from the top is the cost they pressed Resume to avoid.
+func TestAPersonsResumeWhoseTreeIsGoneFailsRatherThanRebuilding(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tally := filepath.Join(dir, "tally")
+
+	runner, target, st := drainable(t, dir, `
+jobs:
+  - name: build
+    plan:
+      - task: first
+        inputs: []
+        run: echo first >> `+tally+`
+`)
+
+	ctx := context.Background()
+
+	interruptRun(t, st, "ASKED001", filepath.Join(dir, "gone"))
+
+	err := st.FinishRun(ctx, "ASKED001", store.RunFailed)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = st.CompleteJob(ctx, 1, store.QueueFailed, nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	err = st.EnqueueResumeJob(ctx, "build", "resume (web)", "ASKED001", "")
+	if err != nil {
+		t.Fatalf("EnqueueResumeJob: %v", err)
+	}
+
+	runner.DrainOne(ctx, target)
+
+	if got := queueStatuses(t, st); !strings.HasSuffix(got, "failed") {
+		t.Errorf("queue = %s, want the resume failed", got)
+	}
+
+	_, err = os.Stat(tally)
+	if !os.IsNotExist(err) {
+		t.Errorf("a step ran (%v): the refused resume built from the top", err)
+	}
+
+	runs, err := st.ListRuns(ctx, "build", 0)
+	if err != nil || len(runs) != 1 || runs[0].Status != store.RunFailed {
+		t.Errorf("runs = %+v (%v), want the one run, still failed", runs, err)
+	}
+}
+
 // interruptRun is what a killed daemon leaves: a claimed row, its run started in tree with the first step done.
 func interruptRun(t *testing.T, st store.Store, runID, tree string) {
 	t.Helper()

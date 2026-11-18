@@ -40,6 +40,8 @@
  "bar.paused.title": "o pipeline está pausado",
  "bar.release": "Liberar",
  "bar.release.title": "deixar novas versões dispararem %[1]s novamente",
+ "bar.resume": "Retomar de %[1]s",
+ "bar.resume.title": "continuar esta execução em %[1]s, mantendo os %[2]d passo(s) concluídos; Repetir executa tudo de novo",
  "bar.resumeall": "Retomar tudo",
  "bar.resumeall.title": "retomar todos os pipelines; cada um volta ao seu próprio estado de pausa",
  "bar.retry": "Repetir",

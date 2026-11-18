@@ -60,6 +60,26 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason, by string
 	return nil
 }
 
+// EnqueueResumeJob reads before it writes (no pending index covers a row carrying a run), so it takes the pipeline lock: two presses at once must not queue the run twice.
+func (s *Store) EnqueueResumeJob(ctx context.Context, jobName, reason, runID, by string) error {
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, run_id, status, enqueued_at)
+			SELECT $1, $2, $3, $6, TRUE, $4, 'pending', $5
+			WHERE NOT EXISTS (
+			    SELECT 1 FROM trigger_queue WHERE pipeline_id = $1 AND run_id = $4 AND status = 'pending'
+			)
+		`, s.pipelineID, jobName, clean(reason), runID, now(), clean(by))
+
+		return describe(err)
+	})
+	if err != nil {
+		return fmt.Errorf("could not queue a resume of %q: %w", runID, err)
+	}
+
+	return nil
+}
+
 // EnqueuePinnedJob queues a person's trigger pinned to the versions pin names.
 func (s *Store) EnqueuePinnedJob(ctx context.Context, jobName, reason, pin, by string) error {
 	_, err := s.db.ExecContext(ctx, `

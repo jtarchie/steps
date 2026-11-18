@@ -169,6 +169,13 @@ func remainderSteps(job *config.Job) []config.Step {
 
 // buildFinished reports whether the passes recorded for build walk off the end of steps when replayed the way the walk replays them: each pass routes on the outcome it recorded, so a to: jump that left a step unvisited does not read as unfinished work. A get records nothing and is stepped over.
 func buildFinished(done map[doneKey]doneStep, build string, steps []config.Step) bool {
+	_, unfinished := firstUnfinished(done, build, steps)
+
+	return !unfinished
+}
+
+// firstUnfinished is the step a resume of build would run first: the walk buildFinished describes, stopped at the first pass nothing recorded.
+func firstUnfinished(done map[doneKey]doneStep, build string, steps []config.Step) (int, bool) {
 	passes := map[int]int{}
 
 	for i := 0; i >= 0 && i < len(steps); {
@@ -183,13 +190,59 @@ func buildFinished(done map[doneKey]doneStep, build string, steps []config.Step)
 
 		finished, ok := done[doneKey{build, i, passes[i]}]
 		if !ok {
-			return false
+			return i, true
 		}
 
 		i = replayedNext(steps, i, step, finished.outcome)
 	}
 
-	return true
+	return 0, false
+}
+
+func keptIn(steps []store.RunStep, build string) int {
+	kept := 0
+
+	for _, step := range steps {
+		if step.BuildID == build {
+			kept++
+		}
+	}
+
+	return kept
+}
+
+// ResumePoint is what a resume of a failed run would do, for a person deciding whether to press it: the step it picks up at, and how many finished passes it keeps. ok is false when a resume would gain nothing (no finished step to keep, or nothing left unfinished in the build) or would be refused.
+func ResumePoint(ctx context.Context, st resumeFacets, runID string, job *config.Job) (string, int, bool) {
+	run, err := findRun(ctx, st, runID)
+	if err != nil || run.Status != store.RunFailed {
+		return "", 0, false
+	}
+
+	fresh, err := CheckResumable(ctx, st, runID, job)
+	if err != nil || fresh {
+		return "", 0, false
+	}
+
+	steps, err := st.CompletedRunSteps(ctx, runID)
+	if err != nil {
+		return "", 0, false
+	}
+
+	build := triggeredBuild(runID)
+
+	kept := keptIn(steps, build)
+	if kept == 0 || run.Workspace == "" {
+		return "", 0, false
+	}
+
+	plan := remainderSteps(job)
+
+	at, unfinished := firstUnfinished(foldRunSteps(steps), build, plan)
+	if !unfinished || at >= len(plan) {
+		return "", 0, false
+	}
+
+	return plan[at].DisplayName(), kept, true
 }
 
 // replayedNext is where the walk went after step i produced outcome, by the plan's routes: i+1 unless outcome names a target.

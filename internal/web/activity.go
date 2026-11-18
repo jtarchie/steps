@@ -84,7 +84,8 @@ var activityRoutes = map[string]activityRoute{
 
 		return nil
 	}},
-	"POST /p/:pipeline/runs/:run/rerun": {role: RoleOperator, action: verb("rerun"), target: param("run")},
+	"POST /p/:pipeline/runs/:run/rerun":  {role: RoleOperator, action: verb("rerun"), target: param("run")},
+	"POST /p/:pipeline/runs/:run/resume": {role: RoleOperator, action: verb("resume"), target: param("run")},
 	"POST /p/:pipeline/approvals/:id": {role: RoleOperator, action: func(c *echo.Context) string {
 		if c.FormValue("decision") == "reject" {
 			return "reject"
@@ -108,6 +109,7 @@ var activityRoutes = map[string]activityRoute{
 	"POST /api/pipelines/:pipeline/rename":                 {role: RoleAdmin, action: verb("rename"), target: param("pipeline")},
 	"POST /api/pipelines/:pipeline/jobs/:job/trigger":      {role: RoleOperator, action: verb("trigger"), target: param("job")},
 	"POST /api/pipelines/:pipeline/runs/:run/rerun":        {role: RoleOperator, action: verb("rerun"), target: param("run")},
+	"POST /api/pipelines/:pipeline/runs/:run/resume":       {role: RoleOperator, action: verb("resume"), target: param("run")},
 	"POST /api/pipelines/:pipeline/runs/:run/abort":        {role: RoleOperator, action: verb("abort"), target: param("run")},
 	"POST /api/pipelines/:pipeline/jobs/:job/queued/abort": {role: RoleOperator, action: verb("abort queued"), target: param("job")},
 	"POST /api/pipelines/:pipeline/mcp/:server/login":      {role: RoleAdmin, action: verb("mcp connect"), target: param("server")},
@@ -343,6 +345,7 @@ var targetPages = map[string]func(target string) string{
 	"check":          func(resource string) string { return "/resources/" + resource },
 	"abort queued":   func(job string) string { return "/jobs/" + job },
 	"rerun":          func(run string) string { return "/runs/" + run },
+	"resume":         func(run string) string { return "/runs/" + run },
 	"abort":          func(run string) string { return "/runs/" + run },
 	"set":            func(sha string) string { return "/config/" + sha },
 	"approve":        func(string) string { return "/approvals" },
