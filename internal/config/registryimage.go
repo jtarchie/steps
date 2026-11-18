@@ -42,6 +42,34 @@ func (s RegistryImageSource) TagOrDefault() string {
 	return s.Tag
 }
 
+// RegistryImageGetParams is a get's params: from a registry-image resource. Concourse's names; of its formats only oci-layout, the one that carries every platform, because a step runs an image by having its docker pull the digest, not from a root filesystem the get unpacked.
+type RegistryImageGetParams struct {
+	// Format oci-layout writes the whole image, every platform, as an OCI layout in oci/, for a build to take as its base. Unset, the get writes only the three files that name it.
+	Format string `yaml:"format,omitempty"`
+}
+
+// RegistryImageFormatOCILayout is the one format: a get takes.
+const RegistryImageFormatOCILayout = "oci-layout"
+
+// RegistryImageLayoutDir is where format: oci-layout writes, Concourse's oci/.
+const RegistryImageLayoutDir = "oci"
+
+// ParseRegistryImageGetParams decodes a get's params: from a registry-image resource strictly.
+func ParseRegistryImageGetParams(raw map[string]any) (RegistryImageGetParams, error) {
+	var params RegistryImageGetParams
+
+	err := decodeParams(raw, &params)
+	if err != nil {
+		return params, err
+	}
+
+	if params.Format != "" && params.Format != RegistryImageFormatOCILayout {
+		return params, fmt.Errorf("params.format %q: a registry-image get writes %s or nothing; a step runs the image from its digest, so rootfs and oci have no use here", params.Format, RegistryImageFormatOCILayout)
+	}
+
+	return params, nil
+}
+
 // RegistryImagePutParams is a put's params: to a registry-image resource.
 type RegistryImagePutParams struct {
 	// Image is the path, inside the put's inputs, of the OCI image to push: an OCI layout directory, or a tarball of one (BuildKit's type=oci output), or a docker save tarball.
@@ -124,7 +152,34 @@ func (c *Config) validateRegistryImageResources() error {
 		}
 	}
 
+	err := c.validateRegistryImageGets()
+	if err != nil {
+		return err
+	}
+
 	return c.validateRegistryImagePuts()
+}
+
+func (c *Config) validateRegistryImageGets() error {
+	for i := range c.Jobs {
+		err := c.Jobs[i].visitSteps(func(label string, step *Step) error {
+			if step.Get == "" || c.nativeResourceType(step.GetResourceName()) != RegistryImageType {
+				return nil
+			}
+
+			_, err := ParseRegistryImageGetParams(step.Params)
+			if err != nil {
+				return fmt.Errorf("%s: get %q: %w", label, step.Get, err)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (c *Config) validateRegistryImagePuts() error {

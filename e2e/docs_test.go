@@ -705,6 +705,7 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"GitSource":              reflect.TypeOf(config.GitSource{}),
 		"GitPutParams":           reflect.TypeOf(config.GitPutParams{}),
 		"RegistryImagePutParams": reflect.TypeOf(config.RegistryImagePutParams{}),
+		"RegistryImageGetParams": reflect.TypeOf(config.RegistryImageGetParams{}),
 		"SlackMentionsSource":    reflect.TypeOf(config.SlackMentionsSource{}),
 		"SlackReplySource":       reflect.TypeOf(config.SlackReplySource{}),
 		"SlackReactionSource":    reflect.TypeOf(config.SlackReactionSource{}),
@@ -872,6 +873,30 @@ var githubParamDefs = map[any]string{ //nolint:gochecknoglobals // read-only tab
 	config.RegistryImageType:   "RegistryImagePutParams",
 }
 
+// getParamDefs is the params: shape of a get from each native type that takes any.
+var getParamDefs = map[any]string{ //nolint:gochecknoglobals // read-only table
+	config.RegistryImageType: "RegistryImageGetParams",
+}
+
+// recordNativeParams records one step's params: under the shape its resource's type gives a put's, or a get's.
+func recordNativeParams(step map[string]any, types map[string]any, used map[string]map[string]bool) {
+	defs := getParamDefs
+	verb := "get"
+
+	if _, isPut := step["put"]; isPut {
+		defs, verb = githubParamDefs, "put"
+	}
+
+	name, _ := step["resource"].(string)
+	if name == "" {
+		name, _ = step[verb].(string)
+	}
+
+	if def, ok := defs[types[name]]; ok {
+		record(used, def, step["params"])
+	}
+}
+
 // collectGitHubParamKeys records the params: of every put to a github-*
 // publishing type, which only the resource's type gives a shape to.
 func collectGitHubParamKeys(doc map[string]any, used map[string]map[string]bool) {
@@ -893,18 +918,7 @@ func collectGitHubParamKeys(doc map[string]any, used map[string]map[string]bool)
 				continue
 			}
 
-			name, _ := step["resource"].(string)
-			if name == "" {
-				name, _ = step["put"].(string)
-			}
-
-			if _, isPut := step["put"]; !isPut {
-				name = ""
-			}
-
-			if def, publishes := githubParamDefs[types[name]]; publishes {
-				record(used, def, step["params"])
-			}
+			recordNativeParams(step, types, used)
 
 			for _, group := range nestedStepGroups(step) {
 				walk(group.steps)
