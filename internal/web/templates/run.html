@@ -283,6 +283,7 @@
     {{$usage := $run.StepUsage $step}}{{range $usage}}{{if .Truncated}}<span class="note spendwarn" title="{{t "step.cut.title"}}">{{t "step.cut"}}</span>{{end}}{{end}}
     <span class="headmeta">
       {{range $usage}}<span class="note usage"><span class="seg">{{or .ModelServed .ModelReq}}</span> · <span class="seg">{{t "step.tokens" (thousands .Total)}}</span> · <span class="seg">{{t "step.cachedpct" .CachePercent}}</span>{{with .Cost}} · <span class="seg">{{.}}</span>{{end}}</span>{{end}}
+      {{if $step.Container}}{{with $run.ContainerSpend $step}}{{if and .Tokens (ne .Tokens $run.Spend.Tokens)}}<span class="note usage"><span class="seg">{{t "step.tokens" (thousands .Tokens)}}</span> · <span class="seg">{{t "step.cachedpct" .CachePercent}}</span>{{if .Priced}} · <span class="seg">{{.Cost}}</span>{{end}}</span>{{end}}{{end}}{{end}}
       {{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
         <span>{{tn "step.cells" .Cells}}</span>
         {{if .Passed}}<span class="r-sep">·</span><b class="r-pass">{{t "step.r.passed" .Passed}}</b>{{end}}

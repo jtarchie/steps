@@ -110,10 +110,31 @@ func (s spendSummary) CachePercent() int {
 }
 
 // Spend summarises what this run's agent steps cost.
-func (r runView) Spend() spendSummary {
+func (r runView) Spend() spendSummary { return summarize(r.Usage) }
+
+// ContainerSpend is what every agent step under a container spent, drawn on the container's row: a matrix of sixteen agents otherwise says its cost only sixteen rows down, folded.
+func (r runView) ContainerSpend(step *stepView) spendSummary {
+	var spent []store.AgentUsage
+
+	var walk func(*stepView)
+	walk = func(parent *stepView) {
+		for _, child := range parent.Children {
+			for _, usage := range r.StepUsage(child) {
+				spent = append(spent, usage.AgentUsage)
+			}
+
+			walk(child)
+		}
+	}
+	walk(step)
+
+	return summarize(spent)
+}
+
+func summarize(usage []store.AgentUsage) spendSummary {
 	var summary spendSummary
 
-	for _, step := range r.Usage {
+	for _, step := range usage {
 		summary.Tokens += step.Total
 		summary.Cached += step.Cached
 

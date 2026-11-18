@@ -1046,6 +1046,10 @@ func attachStep(view *Transcript, index map[string]int, row store.RunEventRow) i
 
 // attachNote hangs a note on the step it names, or on the run when it names none the fold has seen, reporting the row it changed.
 func attachNote(view *Transcript, index map[string]int, row store.RunEventRow) (int, Change) {
+	if isUsageReport(row) {
+		return 0, Change{}
+	}
+
 	note := Note{Level: row.Status, Text: row.Text, At: row.At}
 
 	// Only by id: a note carries no name, so the (index, name) fallback would file every one under whatever step held index 0.
@@ -1074,6 +1078,15 @@ func attachNote(view *Transcript, index map[string]int, row store.RunEventRow) (
 	view.Notes = append(view.Notes, note)
 
 	return 0, Change{}
+}
+
+// isUsageReport is the job's usage note, by name — or, for a run recorded before the note had one, by the words reportJobUsage has always opened it with.
+func isUsageReport(row store.RunEventRow) bool {
+	if row.Name == events.NoteUsage {
+		return true
+	}
+
+	return row.Name == "" && row.StepID == 0 && strings.HasPrefix(row.Text, "usage: ") && strings.Contains(row.Text, " tokens across ")
 }
 
 // hangTurn folds agent conversation traffic in; anything unrecognized is ignored rather than rendered, so an event type added later cannot break an older reader.
