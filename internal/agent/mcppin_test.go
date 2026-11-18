@@ -199,7 +199,7 @@ func TestMCPToolImplMergesPins(t *testing.T) {
 	}
 
 	got := notes()
-	if len(got) != 1 || !strings.Contains(got[0], `hb__list_faults: model supplied pinned argument(s) "Project_Id", "project_id"`) {
+	if len(got) != 1 || !strings.Contains(got[0], `hb__list_faults: dropped model-supplied argument(s) "Project_Id", "project_id"`) {
 		t.Fatalf("notes = %q, want one override note naming both keys", got)
 	}
 
@@ -254,5 +254,57 @@ func TestBuildMCPToolsPinned(t *testing.T) {
 		[]config.ToolSpec{{MCP: "test", MCPTool: "search_issues", Args: map[string]string{"zzz": "x"}}}, "")
 	if err == nil || !strings.Contains(err.Error(), `pins "zzz", which the server does not declare (it declares: query)`) {
 		t.Fatalf("err = %v, want the undeclared pin refused at preparation", err)
+	}
+}
+
+// TestBuildMCPToolsUnpinnedDropsCaseVariants: with no pins the builder still
+// wires the case-variant guard, and a go-sdk server would otherwise take both.
+func TestBuildMCPToolsUnpinnedDropsCaseVariants(t *testing.T) {
+	t.Parallel()
+
+	srv := newCountingMCPServer(t)
+	cfg := &config.Config{MCPServers: []config.MCPServer{srv.server()}}
+
+	built, closer, err := buildAgentTools(context.Background(), cfg, []config.ToolSpec{{MCP: "test", MCPTool: "search_issues"}}, "")
+	if err != nil {
+		t.Fatalf("buildAgentTools: %v", err)
+	}
+	defer closeAll(closer)
+
+	built.registry["test__search_issues"](context.Background(), map[string]any{"query": "fenced", "Query": "variant"}, toolEnv{})
+
+	if calls := *srv.echoCalled; len(calls) != 1 || calls[0]["query"] != "fenced" || calls[0]["Query"] != nil {
+		t.Errorf("server received %v, want only query=fenced", calls)
+	}
+}
+
+// TestMCPToolImplDropsCaseVariantsUnpinned: a rules: or params: fence on an
+// unpinned `repo` reads that exact key, so an undeclared `Repo` riding beside
+// it never reaches a server that might bind it case-insensitively.
+func TestMCPToolImplDropsCaseVariantsUnpinned(t *testing.T) {
+	t.Parallel()
+
+	pins := declaredOnly("gh__get_repo", pinTool(map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"repo": map[string]any{"type": "string"}, "q": map[string]any{"type": "string"}},
+	}))
+
+	client := &fakeMCPClient{result: &sdkmcp.CallToolResult{}}
+
+	ctx, notes := noteRecorder(t)
+	mcpToolImpl(client, "get_repo", maxToolOutputBytes, pins)(ctx, map[string]any{
+		"repo": "org/allowed", "Repo": "org/other", "Q": "x", "extra": "kept",
+	}, toolEnv{})
+
+	if want := map[string]any{"repo": "org/allowed", "extra": "kept"}; !reflect.DeepEqual(client.gotArgs, want) {
+		t.Errorf("CallTool args = %#v, want %#v", client.gotArgs, want)
+	}
+
+	if got := notes(); len(got) != 1 || !strings.Contains(got[0], `"Q", "Repo"`) {
+		t.Errorf("notes = %q, want one naming both dropped keys", got)
+	}
+
+	if declaredOnly("x", pinTool(map[string]any{"type": "object"})) != nil {
+		t.Error("a tool declaring no properties needs no guard")
 	}
 }

@@ -137,7 +137,7 @@ func pinOverrideNote(t *testing.T, path string) string {
 	}
 
 	for _, row := range rows {
-		if row.Type == events.TypeStepNote && strings.Contains(row.Text, "pinned values used") {
+		if row.Type == events.TypeStepNote && strings.Contains(row.Text, "dropped model-supplied argument") {
 			return row.Text
 		}
 	}

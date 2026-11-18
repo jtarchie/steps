@@ -82,6 +82,13 @@ func buildMCPTools(ctx context.Context, cfg *config.Config, spec config.ToolSpec
 			return nil, nil, nil, err
 		}
 
+		// Unpinned, the case-variant guard still holds: a rules: when: or
+		// params: fence reads its key by exact case, and the server may bind
+		// an undeclared `Repo` to the `repo` it approved.
+		if pins == nil {
+			pins = declaredOnly(spec.MCP+config.MCPToolNameSep+tool.Name, tool)
+		}
+
 		decls = append(decls, &genai.FunctionDeclaration{
 			Name:                 name,
 			Description:          mcpToolDescription(spec, tool),
@@ -211,7 +218,7 @@ func mcpToolImpl(client stepsmcp.Client, name string, limit int, pins *mcpPins) 
 				// ponytail: custom tools override silently; share this note
 				// with execCustomTool when someone asks.
 				events.Note(ctx, events.NoteWarn, fmt.Sprintf(
-					"%s: model supplied pinned argument(s) %s; pinned values used", pins.tool, quoteJoin(overridden)))
+					"%s: dropped model-supplied argument(s) %s: pinned, or a case variant of a declared one", pins.tool, quoteJoin(overridden)))
 			}
 
 			args = merged
@@ -258,10 +265,12 @@ type mcpPins struct {
 // apply merges the pins over args and reports, sorted, every model-supplied
 // key it overrode or dropped.
 //
-// A key that case-folds to a pinned one and is NOT a property the tool
+// A key that case-folds to a declared one and is NOT a property the tool
 // declares under that exact spelling is dropped: Go's encoding/json matches
 // struct fields case-insensitively, so `Project_ID: 999` next to the pinned
-// `project_id: 307` would let key order decide what a Go server binds.
+// `project_id: 307` would let key order decide what a Go server binds, and
+// `Repo` next to a fenced `repo` would slip past a rules: or params: check
+// that read only the exact key.
 func (p *mcpPins) apply(args map[string]any) (map[string]any, []string) {
 	kept := make(map[string]any, len(args))
 
@@ -282,7 +291,8 @@ func (p *mcpPins) apply(args map[string]any) (map[string]any, []string) {
 	return mergePinnedArgs(kept, p.values), overridden
 }
 
-// shadows reports whether a model-supplied key would compete with a pin.
+// shadows reports whether a model-supplied key would compete with a pin or
+// with a declared property it differs from only by case.
 func (p *mcpPins) shadows(key string) bool {
 	if _, pinned := p.values[key]; pinned {
 		return true
@@ -292,13 +302,30 @@ func (p *mcpPins) shadows(key string) bool {
 		return false
 	}
 
-	for pinned := range p.values {
-		if strings.EqualFold(key, pinned) {
+	for declared := range p.declared {
+		if strings.EqualFold(key, declared) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// declaredOnly is the guard for a grant with no pins: no values, just the
+// tool's declared properties to fold against. Nil when it declares none, as
+// there is then nothing a variant could shadow.
+func declaredOnly(name string, tool *sdkmcp.Tool) *mcpPins {
+	_, props := copySchema(tool.InputSchema)
+	if len(props) == 0 {
+		return nil
+	}
+
+	pins := &mcpPins{tool: name, declared: make(map[string]bool, len(props))}
+	for key := range props {
+		pins.declared[key] = true
+	}
+
+	return pins
 }
 
 // pinMCPArgs checks spec's args: pins against tool's advertised input schema
