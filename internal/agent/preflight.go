@@ -546,5 +546,18 @@ func describeProbeError(ctx context.Context, err error, timeout time.Duration) e
 		return fmt.Errorf("no response within %s", timeout)
 	}
 
+	// Safe here and nowhere else: APIError.Error() leaves the message out because a real step's could echo its prompt, and the probe's prompt is "hi". Without it, an exhausted key and a refused model are the same bare 403.
+	var apiErr *llmclient.APIError
+	if errors.As(err, &apiErr) && apiErr.Message != "" {
+		const most = 300
+
+		reason := []rune(apiErr.Message)
+		if len(reason) > most {
+			reason = append(reason[:most], '…')
+		}
+
+		return fmt.Errorf("%w: %s", err, string(reason))
+	}
+
 	return err
 }

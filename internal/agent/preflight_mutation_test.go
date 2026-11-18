@@ -38,3 +38,20 @@ func TestAProbeSaysWhichWayItFailed(t *testing.T) {
 		t.Errorf("refusing provider: err = %v; want the provider's own answer", err)
 	}
 }
+
+// TestAProbeRefusalCarriesTheProvidersReason: OpenRouter answers an exhausted key with a bare 403, and the reason is only in the body; the probe sent nothing but "hi", so its message can echo nothing private.
+func TestAProbeRefusalCarriesTheProvidersReason(t *testing.T) {
+	t.Parallel()
+
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":403,"message":"Key limit exceeded (total limit)"}}`))
+	}))
+	t.Cleanup(refusing.Close)
+
+	err := probeModel(context.Background(), config.ResolvedInvocation{BaseURL: refusing.URL + "/v1/", ModelName: "m"}, 10*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "Key limit exceeded (total limit)") {
+		t.Errorf("err = %v; want the status and the provider's reason", err)
+	}
+}
