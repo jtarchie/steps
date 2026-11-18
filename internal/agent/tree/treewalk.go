@@ -137,6 +137,14 @@ func searchWalk(base string, opts SearchOpts) (SearchResult, error) {
 			return nil
 		}
 
+		// Regular files only, as the container's `find -type f`: base is
+		// confined, but a symlink beneath it is not re-checked the way
+		// read_file's argument is, and opening one would read its target
+		// wherever it points. A FIFO would block the open.
+		if !d.Type().IsRegular() {
+			return nil
+		}
+
 		return searchWalkFile(&result, base, path, opts)
 	}
 

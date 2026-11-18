@@ -209,7 +209,7 @@ Supply `pattern` (a regexp matched against each line), `glob` (a shell pattern m
 
 Unlike every other tool, `search_files` **never spills**: its bound is arithmetic — content matches accumulate against a 28KB budget, so a saturated result lands under the 32,000-byte inline cap by construction. `head_limit` caps results (default 50, ceiling 200); `total` and `truncated` report the true scale, so the answer to a flooded result is a narrower pattern, not a second page. `.git`, `node_modules`, `vendor`, binary files, and files over 2MB are skipped. `**` is supported only as a leading glob segment (`**/*.go`).
 
-`write_file` requires the file's immediate parent directory to already exist — use `run_shell` (`mkdir -p`) first if it doesn't. Like every file tool, its path is confined to the working directory and re-validated against symlink escapes.
+`write_file` requires the file's immediate parent directory to already exist — use `run_shell` (`mkdir -p`) first if it doesn't. Like every file tool, its path is confined to the working directory and re-validated against symlink escapes. `search_files` never opens a symlink at all: it reads regular files only, on the host as in a container, so a link an input carries in cannot point it out of the tree.
 
 ### `web_fetch`
 

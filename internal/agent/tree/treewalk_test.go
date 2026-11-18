@@ -1,6 +1,10 @@
 package tree
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -99,3 +103,45 @@ func TestTruncateSearchLineEdges(t *testing.T) {
 
 // generousHeadLimit is above any count the content byte budget allows, so only the budget can stop collection.
 const generousHeadLimit = 200
+
+// TestSearchSkipsSymlinks: search_files confines its base, not what it opens
+// beneath it, so a link in the tree pointing out of it must not be read, as
+// read_file refuses the same path.
+func TestSearchSkipsSymlinks(t *testing.T) {
+	t.Parallel()
+
+	base, outside := t.TempDir(), t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+
+	err := os.WriteFile(secret, []byte("DUMMYSECRET\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(base, "inside.txt"), []byte("DUMMYSECRET\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Symlink(secret, filepath.Join(base, "leak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, mode := range []string{"content", "files_with_matches"} {
+		result, err := searchWalk(base, SearchOpts{Re: regexp.MustCompile("DUMMYSECRET"), Mode: mode, HeadLimit: 50})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, m := range result.Matches {
+			if m.Path == "leak" {
+				t.Errorf("%s: matched through the symlink: %+v", mode, m)
+			}
+		}
+
+		if slices.Contains(result.Files, "leak") || result.Total != 1 {
+			t.Errorf("%s: files %v total %d, want only inside.txt", mode, result.Files, result.Total)
+		}
+	}
+}
