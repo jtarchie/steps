@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // Pause stamps paused_at; a second Pause keeps the first stamp, since when it was paused is the fact a reader wants.
@@ -93,6 +95,13 @@ func (s *Store) Rename(ctx context.Context, name string) error {
 
 	_, err := s.db.ExecContext(ctx, `UPDATE pipelines SET name = ? WHERE id = ?`, name, s.pipelineID)
 	if err != nil {
+		var taken bool
+
+		// The UNIQUE constraint decides; this read only names what it refused.
+		if s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pipelines WHERE name = ? AND id <> ?)`, name, s.pipelineID).Scan(&taken) == nil && taken {
+			return fmt.Errorf("could not rename pipeline %q to %q: %w", s.pipeline, name, store.ErrPipelineExists)
+		}
+
 		return fmt.Errorf("could not rename pipeline %q to %q: %w", s.pipeline, name, err)
 	}
 

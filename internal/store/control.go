@@ -2,7 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 )
+
+// ErrPipelineExists is a rename onto a name another pipeline in the database already holds.
+var ErrPipelineExists = errors.New("a pipeline with this name already exists")
 
 // Control is the pipeline-level switchboard a `steps pipeline` verb throws: whether it admits work, what it is called, where its YAML lives, and whether it exists at all.
 type Control interface {

@@ -125,7 +125,7 @@ func (s *Store) RecordRunStep(ctx context.Context, runID string, step store.RunS
 		INSERT INTO run_steps (run_id, build_id, step_index, visit, step_name, hash, outcome)
 		SELECT $1, $2, $3, $4, $5, $6, $7 WHERE EXISTS (SELECT 1 FROM runs WHERE id = $8 AND pipeline_id = $9)
 		ON CONFLICT (run_id, build_id, step_index, visit) DO UPDATE SET hash = excluded.hash, outcome = excluded.outcome
-	`, runID, step.BuildID, step.Index, step.Visit, step.Name, step.Hash, step.Outcome, runID, s.pipelineID)
+	`, runID, step.BuildID, step.Index, step.Visit, clean(step.Name), step.Hash, clean(step.Outcome), runID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not record step %d of build %q: %w", step.Index, step.BuildID, err)
 	}
