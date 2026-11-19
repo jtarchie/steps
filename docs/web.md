@@ -572,12 +572,13 @@ buttons that would start something are disabled, and say why when hovered.
 |---|---|
 | a job | **↻ Trigger**, and **Release** when the breaker holds it |
 | a run, finished | **↻ Trigger** (a new run of its job) and **⟲ Retry** (this run again) |
+| a run, failed | as finished, plus **⏵ Resume from *step*** when the run can continue where it stopped |
 | a run, live | **↻ Trigger** and **■ Abort** |
 | the follow page | **■ Abort** the queued run |
 
 ## Triggering, retrying, approving, releasing
 
-Nine controls, each doing what a CLI verb does:
+Eleven controls, each doing what a CLI verb does:
 
 - **Trigger** enqueues the job into the durable trigger
   queue `steps web` uses — the same queue this process's own polling fills.
@@ -586,6 +587,7 @@ Nine controls, each doing what a CLI verb does:
   hooks, serial groups, and recording as any other. A trigger builds the newest versions the job has not built, and honors the cache,
   which on an unchanged pipeline correctly does almost nothing; Retry, or `steps run --force` from a terminal, is how to run unchanged steps again. A job the breaker holds is still triggered, since the breaker stops only automatic triggers.
 - **Retry** is `fly rerun-build`: a new run, the whole plan from the top, against exactly the versions the run was created with — what `steps run --rerun <run>` does. A `version: every` job builds each version as a run of its own, so Retry rebuilds that one version. Nothing that arrived since joins it, `passed:` is not asked again, and it takes no version, so it disturbs no other build. It skips the step cache, since a retry of a run that passed would otherwise do nothing. A run preflight refused recorded no versions, so its retry resolves afresh and takes what it builds — the run it would have been. The new run links the run it retried, and a retry of an old run does not become its job's status — only a retry of the job's latest run does, as in Concourse — though the job is drawn running while any retry runs, as Concourse's is. See [conformance.md](conformance.md).
+- **Resume from *step*** continues a failed run from the step that failed, in the run's own tree, skipping every step it already finished — what `steps run --resume <run>` does. It is the same run, put back in flight, not a new one, so the button lands on the run's page. The button names the step the run picks up at, and its tooltip how many finished steps it keeps; it is offered only when there is something to keep and somewhere to keep it: the run failed, finished at least one step after its first `get`, its tree is still on disk, and no `pipeline set` since has moved a finished step from its place (a fix to the failed step keeps the button). A run whose tree retention has removed offers only Retry, and asking anyway (`steps runs resume`, or a tab left open) is refused 409 rather than quietly building from the top — the full run a person pressing Resume chose not to pay for. The same holds if the tree goes between the press and the claim: the queued resume fails, naming Retry. Concourse has no resume; it exists for the plan whose sixth agent fails after five paid for themselves — an exhausted provider key, a rate limit — where Retry would spend all five again. A job with no `get` is not offered one.
 - **Approve / Reject** on an `approval:` step, with the reason recorded — the
   same row `steps approvals approve` writes, under the name of whoever signed
   in (a decision on a server nobody signs in to reads `by web`).
@@ -613,7 +615,7 @@ Nine controls, each doing what a CLI verb does:
 - **Test** any declared `mcp_servers:` entry from the same tab — the only
   thing on that page that connects to anything.
 
-`--read-only` withholds all nine: the controls disappear from the pages and
+`--read-only` withholds all eleven: the controls disappear from the pages and
 the routes refuse. The mcp tab keeps its status column — that a server needs a
 login is a diagnostic a build box should still show, and the row names the CLI
 command instead. The queue is still drained, polling still runs, and
@@ -641,12 +643,14 @@ route is a 404. See [webhooks.md](webhooks.md#receiving-deliveries).
 steps runs trigger -p app build                      # queue build, as the Trigger button does
 steps runs trigger -p app review --pin number=87     # queue it against the version whose number is 87
 steps runs retry   -p app 46UMHVPYRA6YHB7M           # queue a retry of a recorded run, as its Retry button does
+steps runs resume  -p app 46UMHVPYRA6YHB7M           # continue a failed run from the step that failed, as its Resume button does
 ```
 
 - A plain trigger merges into a run of that job already waiting, exactly as a second click of the button does.
 - **`--pin`** takes the same `field=value` pairs `steps run --pin` takes, and is repeatable. A pinned trigger is a queue row of its own, because it builds something the job's ordinary trigger does not; asking for the same pin twice while it waits is still one run. The pin is stored with the row, so a daemon restarted before the run starts still builds what you asked for. A pin is matched against the versions already recorded first (on a `passed:` get, the ones upstream passed), and the check runs only when none matches — so a [webhook](webhooks.md) delivery, which no check can report, is rebuilt by pinning its `id`.
 - **A pin skips `passed:`**: the pinned run builds the version it names, whether or not the upstream jobs passed it. So on a job with a `passed:` get, an operator may only pin a version every job in that `passed:` has passed; pinning anything else needs the **admin** role and is refused 403 otherwise. Without `--role` rules everyone is an admin. Each constrained resource is judged on its own: a fan-in whose pinned versions passed upstream in different builds is not caught.
 - **`--force`** skips the step cache for that run. It cannot be combined with `--pin`.
+- **`resume`** continues a failed run in place, keeping what it finished; refused, naming Retry, when the button would not be offered.
 - **`retry`** rebuilds a past run against the versions it was built with, which is Concourse's `fly rerun-build`.
 - Each is refused where the button is: on a `--read-only` daemon, on a paused pipeline, for a job the configuration no longer names.
 

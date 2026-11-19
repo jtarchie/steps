@@ -215,6 +215,8 @@ func schemaDefsByType() map[string]reflect.Type {
 		"githubCommentsSource": reflect.TypeOf(config.GitHubCommentsSource{}),
 		"githubIssuesSource":   reflect.TypeOf(config.GitHubIssuesSource{}),
 		"githubPostSource":     reflect.TypeOf(config.GitHubPostSource{}),
+		"linearIssuesSource":   reflect.TypeOf(config.LinearIssuesSource{}),
+		"linearPostSource":     reflect.TypeOf(config.LinearPostSource{}),
 		"gitSource":            reflect.TypeOf(config.GitSource{}),
 		"slackMentionsSource":  reflect.TypeOf(config.SlackMentionsSource{}),
 		"slackReplySource":     reflect.TypeOf(config.SlackReplySource{}),

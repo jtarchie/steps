@@ -155,6 +155,28 @@ func TestBuildFinished(t *testing.T) {
 	}
 }
 
+// TestFirstUnfinishedIsWhereTheWalkStops: the step a page names for Resume is the one replaying the recorded passes reaches first without a record, so a route's target is named rather than the unvisited step it jumped past.
+func TestFirstUnfinishedIsWhereTheWalkStops(t *testing.T) {
+	t.Parallel()
+
+	task := func(name string) config.Step { return config.Step{Task: name} }
+	routed := config.Step{Task: "a", To: map[string]string{"success": "c"}}
+
+	for name, tc := range map[string]struct {
+		done  map[doneKey]doneStep
+		steps []config.Step
+		want  int
+	}{
+		"the step after the last kept":             {map[doneKey]doneStep{{"R#0", 0, 1}: {}}, []config.Step{task("a"), task("b"), task("c")}, 1},
+		"a route's target, not the step it jumped": {map[doneKey]doneStep{{"R#0", 0, 1}: {outcome: "success"}}, []config.Step{routed, task("b"), task("c")}, 2},
+	} {
+		got, ok := firstUnfinished(tc.done, "R#0", tc.steps)
+		if !ok || got != tc.want {
+			t.Errorf("%s: firstUnfinished = %d, %v, want %d", name, got, ok, tc.want)
+		}
+	}
+}
+
 // TestRefuseMissingWorkspaceOnlyWhenSomethingWasKept: a resume is refused for a gone tree only when this build kept a step from it and the run named one.
 func TestRefuseMissingWorkspaceOnlyWhenSomethingWasKept(t *testing.T) {
 	t.Parallel()

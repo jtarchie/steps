@@ -388,6 +388,14 @@ func ImageNote(ctx context.Context, source, ref string) {
 	note(ctx, Event{Status: NoteInfo, Text: "image: " + source + " → " + ref, Name: NoteImage, Detail: source})
 }
 
+// NoteUsage names the job's end-of-run usage report. A reader that already draws each step's spend on its row and the total in its head skips it, or it says every number a third time.
+const NoteUsage = "usage"
+
+// UsageNote is the job's usage report, said as Note would and named NoteUsage.
+func UsageNote(ctx context.Context, text string) {
+	note(ctx, Event{Status: NoteInfo, Text: text, Name: NoteUsage})
+}
+
 func note(ctx context.Context, event Event) {
 	scrub := scrubFrom(ctx)
 	level, text := event.Status, scrub(event.Text)

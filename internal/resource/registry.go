@@ -21,6 +21,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
@@ -252,7 +253,7 @@ func (registryBackend) check(ctx context.Context, c Call) ([]map[string]any, err
 	return []map[string]any{{registryDigestField: descriptor.Digest.String()}}, nil
 }
 
-// in writes what the version names and fetches no layers: a step's image: is pulled by its docker daemon, by digest. It asks the registry once that the digest is still there, so a deleted image fails here, by name, rather than as a step that cannot start.
+// in writes what the version names, and fetches layers only for format: oci-layout: a step's image: is pulled by its docker daemon, by digest, so only a build taking it as a base needs the bytes. Either way it asks the registry for the digest, so a deleted image fails here, by name, rather than as a step that cannot start.
 func (registryBackend) in(ctx context.Context, c Call) error {
 	image, err := RegistryImage(c.Resource)
 	if err != nil {
@@ -266,6 +267,11 @@ func (registryBackend) in(ctx context.Context, c Call) error {
 		return fmt.Errorf("in %q: version digest %q: %w", c.Resource.Name, raw, err)
 	}
 
+	params, err := config.ParseRegistryImageGetParams(c.Params)
+	if err != nil {
+		return fmt.Errorf("in %q: %w", c.Resource.Name, err)
+	}
+
 	options, err := image.options(ctx)
 	if err != nil {
 		return fmt.Errorf("in %q: %w", c.Resource.Name, err)
@@ -273,7 +279,12 @@ func (registryBackend) in(ctx context.Context, c Call) error {
 
 	ref := image.repository.Digest(digest.String())
 
-	_, err = remote.Head(ref, options...)
+	if params.Format == config.RegistryImageFormatOCILayout {
+		err = writeLayout(filepath.Join(c.Dir, config.RegistryImageLayoutDir), ref, options)
+	} else {
+		_, err = remote.Head(ref, options...)
+	}
+
 	if err != nil {
 		return fmt.Errorf("in %q: %w", c.Resource.Name, describe(ref, err))
 	}
@@ -292,6 +303,35 @@ func (registryBackend) in(ctx context.Context, c Call) error {
 	}
 
 	return nil
+}
+
+// writeLayout fetches ref, an index whole with every platform's image or a single image, into an OCI layout whose one entry is ref's digest: the shape loadImage pushes, so a get then put mirrors it unchanged.
+func writeLayout(dir string, ref name.Digest, options []remote.Option) error {
+	descriptor, err := remote.Get(ref, options...)
+	if err != nil {
+		return err //nolint:wrapcheck // the caller describes the ref
+	}
+
+	path, err := layout.Write(dir, empty.Index)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	if descriptor.MediaType.IsIndex() {
+		index, err := descriptor.ImageIndex()
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+
+		return path.AppendIndex(index) //nolint:wrapcheck // as above
+	}
+
+	image, err := descriptor.Image()
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return path.AppendImage(image) //nolint:wrapcheck // as above
 }
 
 // out pushes the image params.image names to source.tag and each additional tag; its version is the pushed digest, the same shape the check finds.

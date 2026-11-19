@@ -139,3 +139,45 @@ func TestTheHeadReadsOutcomeThenProvenance(t *testing.T) {
 		t.Errorf("the provenance line is not provenance only:\n%s", provenance)
 	}
 }
+
+// A container holding every agent the run had would repeat the head's spend to the token, so it says only its rollup; the step inside still says its own.
+func TestAContainerHoldingTheWholeSpendDoesNotRepeatTheHead(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-whole", JobName: "build", Workspace: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	hash := strings.Repeat("c", 64)
+
+	appendEvents(t, pipeline.Store, "run-whole", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "outer", StepKind: "do", StepID: 1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 2, ParentStepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 2, ParentStepID: 1, Status: "succeeded", Hash: hash},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "outer", StepKind: "do", StepID: 1, Status: "succeeded"},
+	})
+
+	mustRecordResult(t, pipeline, hash, map[string]any{"response": "fine"})
+
+	err = pipeline.Store.RecordAgentUsage(ctx, store.AgentUsage{
+		RunID: "run-whole", StepName: "review", JobName: "build", NodeHash: hash, ModelReq: "opus", Total: 777_000,
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentUsage: %v", err)
+	}
+
+	err = pipeline.Store.FinishRun(ctx, "run-whole", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-whole")
+
+	if got := strings.Count(body, "777,000 tokens"); got != 2 {
+		t.Errorf("777,000 tokens is said %d times, want twice (the head and the agent's row):\n%s", got, body)
+	}
+}

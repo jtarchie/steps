@@ -70,6 +70,26 @@ func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID, by 
 	return nil
 }
 
+// EnqueueResumeJob is NOT EXISTS rather than ON CONFLICT: no pending index covers a row carrying a run, since a restart's resume needs one beside the job's ordinary row. A row claimed after the run last finished is a resume in flight that has not reached ResumeRun, so the run still reads failed; the row that started the run was claimed before it finished.
+func (s *Store) EnqueueResumeJob(ctx context.Context, jobName, reason, runID, by string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, run_id, status, enqueued_at)
+		SELECT ?, ?, ?, ?, 1, ?, 'pending', ?
+		WHERE NOT EXISTS (
+		    SELECT 1 FROM trigger_queue AS q
+		    WHERE q.pipeline_id = ? AND q.run_id = ?
+		      AND (q.status = 'pending' OR (q.status = 'running' AND q.started_at > (
+		          SELECT r.finished_at FROM runs AS r WHERE r.id = q.run_id AND r.pipeline_id = q.pipeline_id
+		      )))
+		)
+	`, s.pipelineID, jobName, reason, by, runID, nowNano(), s.pipelineID, runID)
+	if err != nil {
+		return fmt.Errorf("could not queue a resume of %q: %w", runID, err)
+	}
+
+	return nil
+}
+
 // EnqueuePinnedJob keeps the row beside the job's ordinary one, as a retry's is kept.
 func (s *Store) EnqueuePinnedJob(ctx context.Context, jobName, reason, pin, by string) error {
 	_, err := s.db.ExecContext(ctx, `

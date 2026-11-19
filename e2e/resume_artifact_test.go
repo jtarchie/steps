@@ -342,3 +342,27 @@ jobs:
 
 	mustRun(t, path, "--job", "build")
 }
+
+// TestResumeRefusesWhenAnEditMovedTheKeptSteps: a resume skips finished steps by position, so a step inserted ahead of them would be credited as done without ever running; the resume refuses before anything runs.
+func TestResumeRefusesWhenAnEditMovedTheKeptSteps(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	versions := filepath.Join(dir, "versions.json")
+	writePipelineFile(t, versions, `[{"n":"two"}]`)
+
+	get := "  - get: repo\n    resource: ticks"
+	path := writePipeline(t, dir, artifactResumePipeline(dir, versions, get, ""))
+
+	runID, _ := failThenCapture(t, path)
+
+	writePipeline(t, dir, artifactResumePipeline(dir, versions, get+"\n  - task: inserted\n    run: \"true\"", ""))
+
+	err := stepsRun(t, []string{"run", path, "--resume", runID})
+	if err == nil || !strings.Contains(err.Error(), `was "change" and the pipeline now has "inserted" there`) {
+		t.Fatalf("want a refusal naming the moved step, got %v", err)
+	}
+
+	assertLineCount(t, filepath.Join(dir, "change.log"), 1)
+}

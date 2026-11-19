@@ -84,3 +84,43 @@ func TestAHashlessStepDoesNotClaimASiblingsSpend(t *testing.T) {
 		}
 	}
 }
+
+// TestAContainerTotalsEverySpendBeneathIt: a do: holding an across: holding agents counts the agents two levels down, and only its own subtree.
+func TestAContainerTotalsEverySpendBeneathIt(t *testing.T) {
+	t.Parallel()
+
+	view := buildRunView(store.RunRow{ID: "run"}, []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "outer", StepKind: "do", StepID: 1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "fan", StepKind: "across", StepID: 2, ParentStepID: 1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "cell", StepKind: "agent", StepID: 3, ParentStepID: 2},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "cell", StepKind: "agent", StepID: 3, Status: "succeeded", Hash: "a"},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "cell", StepKind: "agent", StepID: 4, ParentStepID: 2},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "cell", StepKind: "agent", StepID: 4, Status: "succeeded", Hash: "b"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "fan", StepKind: "across", StepID: 2, Status: "succeeded"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "outer", StepKind: "do", StepID: 1, Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "solo", StepKind: "agent", StepID: 5},
+		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "solo", StepKind: "agent", StepID: 5, Status: "succeeded", Hash: "c"},
+	}, nil)
+
+	price := 0.5
+	view.Usage = []store.AgentUsage{
+		{StepName: "cell", NodeHash: "a", Total: 100, Cached: 50, CostUSD: &price},
+		{StepName: "cell", NodeHash: "b", Total: 300, Cached: 250, CostUSD: &price},
+		{StepIndex: 1, StepName: "solo", NodeHash: "c", Total: 1000},
+	}
+
+	for _, root := range view.Roots {
+		if root.Name != "outer" {
+			continue
+		}
+
+		spent := view.ContainerSpend(root)
+		if spent.Tokens != 400 || spent.CachePercent() != 75 || spent.Cost() != FormatUSD(1) {
+			t.Errorf("outer totals %+v, want 400 tokens, 75%% cached, %s", spent, FormatUSD(1))
+		}
+
+		return
+	}
+
+	t.Fatal("no outer root")
+}

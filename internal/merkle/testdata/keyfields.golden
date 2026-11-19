@@ -190,7 +190,7 @@
       "Auth.Scopes[0]"
     ]
   },
-  "ResourceType/cache key": "906fd12073e95b4c35ae396c60cf8059521ee31ebb3ae6debabddfc57d31e821",
+  "ResourceType/cache key": "b29fdfbf43e205c7a6d2970808cccc4a9303b9064549ed452f51f17c28ff99c1",
   "ResourceType/get": {
     "cpu_shares": 77,
     "env": [
@@ -200,6 +200,7 @@
     "github": "Config.GitHub",
     "image": "Image",
     "in_template": "Config.In",
+    "linear": "Config.Linear",
     "mcp_in_args": {
       "Config.MCP.In.Args.key": "Config.MCP.In.Args.value"
     },
@@ -228,6 +229,7 @@
     "github": "Config.GitHub",
     "image": "Image",
     "inputs": [],
+    "linear": "Config.Linear",
     "mcp_out_args": {
       "Config.MCP.Out.Args.key": "Config.MCP.Out.Args.value"
     },

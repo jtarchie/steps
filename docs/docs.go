@@ -60,7 +60,7 @@ func (b Block) Mode() string {
 			return field
 		case field == "noexec" || strings.HasPrefix(field, "noexec="):
 			return "noexec"
-		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="), strings.HasPrefix(field, "deliver="), strings.HasPrefix(field, "github="), strings.HasPrefix(field, "slack="), strings.HasPrefix(field, "registry="):
+		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="), strings.HasPrefix(field, "deliver="), strings.HasPrefix(field, "github="), strings.HasPrefix(field, "linear="), strings.HasPrefix(field, "slack="), strings.HasPrefix(field, "registry="):
 			return "run"
 		}
 	}
@@ -143,6 +143,18 @@ func (b Block) GitHubID() string {
 	return ""
 }
 
+// LinearID is the fake Linear fixture this block's linear-* resources are
+// pointed at during execution (docs_linear_test.go), "" when none.
+func (b Block) LinearID() string {
+	for _, field := range strings.Fields(b.Info) {
+		if id, ok := strings.CutPrefix(field, "linear="); ok {
+			return id
+		}
+	}
+
+	return ""
+}
+
 // SlackID is the fake Slack fixture this block's slack-* resources are
 // pointed at during execution (docs_slack_test.go), "" when none.
 func (b Block) SlackID() string {
@@ -179,6 +191,10 @@ func (b Block) Name() string {
 	}
 
 	if id := b.GitHubID(); id != "" {
+		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
+	}
+
+	if id := b.LinearID(); id != "" {
 		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
 	}
 

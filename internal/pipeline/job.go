@@ -647,7 +647,7 @@ func reportJobUsage(ctx context.Context, run *usage.Run) {
 		fmt.Fprintf(&report, "\n  %-16s %s", step.Step, humanCount(step.Total))
 	}
 
-	notef(ctx, "%s", report.String())
+	events.UsageNote(ctx, report.String())
 
 	fields := []any{"total_tokens", total, "agent_steps", len(steps)}
 	if prior > 0 {

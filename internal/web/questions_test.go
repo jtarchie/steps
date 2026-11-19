@@ -26,6 +26,14 @@ func (stubRunner) EnqueueRerun(ctx context.Context, pipeline *scheduler.Pipeline
 	return pipeline.Store.EnqueueRerunJob(ctx, jobName, reason, runID, "") //nolint:wrapcheck // a double answering what the store answers
 }
 
+func (stubRunner) EnqueueResume(context.Context, *scheduler.Pipeline, string, string, string) error {
+	return nil
+}
+
+func (stubRunner) ResumePoint(context.Context, *scheduler.Pipeline, string) (scheduler.ResumeAt, bool) {
+	return scheduler.ResumeAt{}, false
+}
+
 func (stubRunner) EnqueuePinned(context.Context, *scheduler.Pipeline, string, string, map[string]string) error {
 	return nil
 }

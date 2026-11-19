@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/labstack/echo/v5"
 )
@@ -125,7 +126,7 @@ func (s *Server) handleRun(c *echo.Context) error {
 		"Job":       job,
 		"Approvals": approvals,
 		"Questions": questions,
-		"Bar":       runBar(pipeline, view.Run, jobErr == nil),
+		"Bar":       runBar(pipeline, view.Run, jobErr == nil, s.resumePoint(ctx, pipeline, view.Run, nav.ReadOnly)),
 		"Title":     runTitle(view.Run),
 		"Crumbs": []crumb{
 			{Label: s.renderer.localeOf(c).text("tab.jobs"), URL: "/p/" + pipeline.Slug},
@@ -133,6 +134,20 @@ func (s *Server) handleRun(c *echo.Context) error {
 			{Label: "#" + shortID(view.Run.ID)},
 		},
 	})
+}
+
+// resumePoint asks the runner only of a failed run, and only for a reader the bar is drawn for: a read-only server has no runner, a viewer gets no bar, and the page asks again on every poll.
+func (s *Server) resumePoint(ctx context.Context, pipeline *Pipeline, run store.RunRow, readOnly bool) scheduler.ResumeAt {
+	if s.runner == nil || readOnly || run.Status != store.RunFailed {
+		return scheduler.ResumeAt{}
+	}
+
+	at, ok := s.runner.ResumePoint(ctx, pipeline.Pipeline, run.ID)
+	if !ok {
+		return scheduler.ResumeAt{}
+	}
+
+	return at
 }
 
 // assembleRun reads a run's events and the nodes they reference, and folds

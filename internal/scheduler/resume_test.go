@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,168 @@ jobs:
 
 	if len(runs) != 2 || runs[0].ID == "GONETREE" || runs[1].Status != store.RunAborted {
 		t.Errorf("runs = %+v, want a new run beside the interrupted one, which stays aborted", runs)
+	}
+}
+
+// A person's resume whose tree went between the press and the claim fails rather than falling back as a restart's does: building from the top is the cost they pressed Resume to avoid. Nothing ran, so the breaker does not count it.
+func TestAPersonsResumeWhoseTreeIsGoneFailsRatherThanRebuilding(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tally := filepath.Join(dir, "tally")
+
+	runner, target, st := drainable(t, dir, `
+jobs:
+  - name: build
+    max_consecutive_failures: 1
+    plan:
+      - task: first
+        inputs: []
+        run: echo first >> `+tally+`
+`)
+
+	ctx := context.Background()
+
+	interruptRun(t, st, "ASKED001", filepath.Join(dir, "gone"))
+
+	err := st.FinishRun(ctx, "ASKED001", store.RunFailed)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = st.CompleteJob(ctx, 1, store.QueueFailed, nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	err = st.EnqueueResumeJob(ctx, "build", "resume (web)", "ASKED001", "")
+	if err != nil {
+		t.Fatalf("EnqueueResumeJob: %v", err)
+	}
+
+	runner.DrainOne(ctx, target)
+
+	if got := queueStatuses(t, st); !strings.HasSuffix(got, "failed") {
+		t.Errorf("queue = %s, want the resume failed", got)
+	}
+
+	_, err = os.Stat(tally)
+	if !os.IsNotExist(err) {
+		t.Errorf("a step ran (%v): the refused resume built from the top", err)
+	}
+
+	runs, err := st.ListRuns(ctx, "build", 0)
+	if err != nil || len(runs) != 1 || runs[0].Status != store.RunFailed {
+		t.Errorf("runs = %+v (%v), want the one run, still failed", runs, err)
+	}
+
+	requireNotHeld(t, st, "a refused resume ran nothing for the breaker to count")
+}
+
+type unreadableRuns struct{ store.Store }
+
+func (unreadableRuns) FindRunRow(context.Context, string) (store.RunRow, bool, error) {
+	return store.RunRow{}, false, errors.New("database is locked")
+}
+
+// A claim that cannot read the run it was asked to resume fails rather than build the job from the top as a new run.
+func TestAResumeWhoseRunCannotBeReadDoesNotRebuild(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tally := filepath.Join(dir, "tally")
+
+	runner, target, st := drainable(t, dir, `
+jobs:
+  - name: build
+    plan:
+      - task: first
+        inputs: []
+        run: echo first >> `+tally+`
+`)
+
+	ctx := context.Background()
+
+	interruptRun(t, st, "UNREAD01", dir)
+
+	err := st.FinishRun(ctx, "UNREAD01", store.RunFailed)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = st.CompleteJob(ctx, 1, store.QueueFailed, nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	err = st.EnqueueResumeJob(ctx, "build", "resume (web)", "UNREAD01", "")
+	if err != nil {
+		t.Fatalf("EnqueueResumeJob: %v", err)
+	}
+
+	target.Store = unreadableRuns{st}
+
+	runner.DrainOne(ctx, target)
+
+	_, err = os.Stat(tally)
+	if !os.IsNotExist(err) {
+		t.Errorf("a step ran (%v): an unreadable run was built from the top", err)
+	}
+}
+
+func requireNotHeld(t *testing.T, st store.Store, why string) {
+	t.Helper()
+
+	held, err := st.IsJobHeld(t.Context(), "build")
+	if err != nil || held {
+		t.Errorf("IsJobHeld = %v (%v), want false: %s", held, err, why)
+	}
+}
+
+// A resume claimed ahead of a "no cache" trigger of the same job must not spend the flag that trigger set: the resume is not the job's ordinary row.
+func TestAResumeClaimLeavesAnotherRequestsForceAlone(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tally := filepath.Join(dir, "tally")
+
+	runner, target, st := drainable(t, dir, `
+jobs:
+  - name: build
+    plan:
+      - task: append
+        inputs: []
+        run: echo ran >> `+tally+`
+`)
+	ctx := t.Context()
+
+	runner.DrainOne(ctx, target)
+
+	runs, err := st.ListRuns(ctx, "build", 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("ListRuns = %+v (%v), want the one run", runs, err)
+	}
+
+	err = st.FinishRun(ctx, runs[0].ID, store.RunFailed)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = st.EnqueueResumeJob(ctx, "build", "resume (web)", runs[0].ID, "")
+	if err != nil {
+		t.Fatalf("EnqueueResumeJob: %v", err)
+	}
+
+	_, err = runner.Enqueue(ctx, target, "build", "trigger, no cache (cli)", true)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runner.DrainOne(ctx, target)
+	runner.DrainOne(ctx, target)
+
+	if lines := countLines(t, tally); lines != 2 {
+		t.Errorf("tally = %d, want 2: the no-cache trigger lost its flag to the resume claimed before it", lines)
 	}
 }
 

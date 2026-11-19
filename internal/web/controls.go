@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/labstack/echo/v5"
 )
@@ -219,6 +220,71 @@ func (s *Server) queueRerun(ctx context.Context, pipeline *Pipeline, runID, from
 	}
 
 	return run.JobName, nil
+}
+
+// handleResume continues a failed run from the step that failed, in its own tree, and lands on that run's page: it is the same run, so the follow page, which waits for a NEW one, would wait forever.
+func (s *Server) handleResume(c *echo.Context) error {
+	err := s.requireControls()
+	if err != nil {
+		return err
+	}
+
+	pipeline := pipelineOf(c)
+
+	run, err := s.queueResume(c.Request().Context(), pipeline, c.Param("run"), "web")
+	if err != nil {
+		return err
+	}
+
+	//nolint:wrapcheck // echo's redirect error is returned verbatim
+	return c.Redirect(http.StatusSeeOther, "/p/"+pipeline.Slug+"/runs/"+run)
+}
+
+func (s *Server) handleAPIResume(c *echo.Context) error {
+	err := s.requireControls()
+	if err != nil {
+		return err
+	}
+
+	target := s.Lookup(c.Param("pipeline"))
+	if target == nil {
+		return s.notServed(c, c.Param("pipeline"))
+	}
+
+	_, err = s.queueResume(c.Request().Context(), target, c.Param("run"), "cli")
+	if err != nil {
+		return err
+	}
+
+	return c.NoContent(http.StatusAccepted) //nolint:wrapcheck // echo's own response error
+}
+
+// queueResume is queueRerun's refusals plus the runner's: a run that cannot be resumed is a 409 naming Retry, never a silent build from the top.
+func (s *Server) queueResume(ctx context.Context, pipeline *Pipeline, runID, from string) (string, error) {
+	run, ok, err := pipeline.Store.FindRunRow(ctx, runID)
+	if err != nil {
+		return "", fmt.Errorf("web: %w", err)
+	}
+
+	if !ok {
+		return "", echo.NewHTTPError(http.StatusNotFound, "no such run")
+	}
+
+	err = refuseRerun(ctx, pipeline, run)
+	if err != nil {
+		return "", err
+	}
+
+	err = s.runner.EnqueueResume(ctx, pipeline.Pipeline, run.JobName, "resume ("+from+")", run.ID)
+	if err != nil {
+		if errors.Is(err, scheduler.ErrNotResumable) {
+			return "", echo.NewHTTPError(http.StatusConflict, err.Error())
+		}
+
+		return "", fmt.Errorf("web: %w", err)
+	}
+
+	return run.ID, nil
 }
 
 // TriggerRequest is what `steps runs trigger` sends: nothing, for the job's ordinary trigger, or the version fields to pin it to.
