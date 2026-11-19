@@ -77,6 +77,14 @@ func (s *WebhookSignature) validate(resource, provider string) error {
 		return fmt.Errorf("resource %q: source.signature.algorithm must be sha256, sha1 or sha512, not %q", resource, s.Algorithm)
 	}
 
+	return s.validateTimestamp(resource)
+}
+
+func (s *WebhookSignature) validateTimestamp(resource string) error {
+	if s.Timestamp != "" && s.Signed == "" {
+		return fmt.Errorf("resource %q: source.signature.timestamp needs signed: to build a message that includes it — a timestamp outside the signature can be rewritten by whoever replays a delivery, so it would refuse nothing (write signed: 'body' if the body carries it)", resource)
+	}
+
 	return nil
 }
 

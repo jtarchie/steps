@@ -239,8 +239,8 @@ func (c *Config) resolvedStepImage(step Step) string {
 
 	switch kind, _ := step.Kind(); kind {
 	case StepKindTask:
-		task, err := c.FindTask(step.Task)
-		if err != nil {
+		task := c.taskEntry(step)
+		if task == nil {
 			return ""
 		}
 

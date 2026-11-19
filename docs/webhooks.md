@@ -185,7 +185,7 @@ jobs:
     outcome: succeeded
 ```
 
-`signed` and `timestamp` only **build strings**. The HMAC and the comparison happen in Go, the same code the built-in providers use, so an expression can never be the thing that decides a signature is valid. A `timestamp:` protects against replay only if `signed` includes it, as above.
+`signed` and `timestamp` only **build strings**. The HMAC and the comparison happen in Go, the same code the built-in providers use, so an expression can never be the thing that decides a signature is valid. A `timestamp:` protects against replay only if `signed` includes it, as above, so a `timestamp:` without a `signed:` is refused at load (write `signed: 'body'` when the body carries the timestamp).
 
 ## Receiving deliveries
 

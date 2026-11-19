@@ -69,11 +69,7 @@ func (c *Config) validateStepSandbox() error {
 
 // entrySandbox is whether a task step's tasks: entry asked for the fence; an inline run: has no entry.
 func (c *Config) entrySandbox(step Step) bool {
-	if step.Run != "" {
-		return false
-	}
-
-	task, _ := c.FindTask(step.Task)
+	task := c.taskEntry(step)
 
 	return task != nil && task.Sandbox
 }

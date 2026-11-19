@@ -295,7 +295,13 @@ func (c *Config) placedOnlyEntries() map[entryRef]bool {
 
 	for _, job := range c.Jobs {
 		_ = job.visitSteps(func(_ string, step *Step) error {
-			for _, entry := range []entryRef{{Kind: "task", Name: step.Task}, {Kind: "agent", Name: step.Agent}} {
+			taskName := step.Task
+			// An inline run: does not run its same-named tasks: entry, so it neither keeps that entry's image local nor counts as using it.
+			if step.Run != "" {
+				taskName = ""
+			}
+
+			for _, entry := range []entryRef{{Kind: "task", Name: taskName}, {Kind: "agent", Name: step.Agent}} {
 				if entry.Name == "" {
 					continue
 				}

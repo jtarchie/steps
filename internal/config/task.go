@@ -154,3 +154,17 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 func (c *Config) FindTask(name string) (*Task, error) {
 	return findNamed("task", name, c.Tasks, func(t Task) string { return t.Name })
 }
+
+// taskEntry is the tasks: entry step runs, or nil: an inline run: never consults one (see ResolveTask), and an unknown name is another validator's to report.
+func (c *Config) taskEntry(step Step) *Task {
+	if step.Task == "" || step.Run != "" {
+		return nil
+	}
+
+	task, err := c.FindTask(step.Task)
+	if err != nil {
+		return nil
+	}
+
+	return task
+}
