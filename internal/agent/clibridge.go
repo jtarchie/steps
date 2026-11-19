@@ -225,7 +225,7 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 			}, nil
 		}
 
-		result := impl(ctx, args, env)
+		result := scrubSecrets(ctx, impl(ctx, args, env))
 		if env.spillShown != "" {
 			result, _ = scrubValues(result, env.showSpill).(map[string]any)
 		}

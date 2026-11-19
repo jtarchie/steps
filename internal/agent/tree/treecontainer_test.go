@@ -3,6 +3,7 @@ package tree
 // The container half of the file tools, against real images: they run whenever a daemon is reachable and skip cleanly when one is not, because a test that only runs when somebody opts in is how a shipped feature stays broken without anybody noticing.
 
 import (
+	"crypto/rand"
 	"errors"
 	"os"
 	"path/filepath"
@@ -429,7 +430,9 @@ func TestContainerTreeResolveWriteRefusesLinkEscapes(t *testing.T) {
 	dir := t.TempDir()
 	writeFixture(t, dir)
 
-	for link, target := range map[string]string{"escape": "/etc/passwd", "outside": "/etc"} {
+	escapeTarget := "/tmp/steps-escape-" + rand.Text()
+
+	for link, target := range map[string]string{"escape": "/etc/passwd", "outside": "/etc", "dangling": escapeTarget} {
 		err := os.Symlink(target, filepath.Join(dir, link))
 		if err != nil {
 			t.Fatal(err)
@@ -437,6 +440,8 @@ func TestContainerTreeResolveWriteRefusesLinkEscapes(t *testing.T) {
 	}
 
 	contained := newContainerTree(t, "alpine:3", dir)
+
+	assertDanglingLinkRefused(t, contained, "dangling", escapeTarget)
 
 	for _, rel := range []string{"escape", "outside/steps-new.txt", "outside/deeper/steps-new.txt"} {
 		_, err := contained.ResolveWrite(t.Context(), rel)
@@ -450,5 +455,24 @@ func TestContainerTreeResolveWriteRefusesLinkEscapes(t *testing.T) {
 		if err != nil || resolved != contained.dir+"/"+rel {
 			t.Errorf("resolveWrite(%q) = %q, %v; want it allowed in place", rel, resolved, err)
 		}
+	}
+}
+
+// assertDanglingLinkRefused writes through link the way write_file would, so a refusal that never came shows up as the target existing.
+func assertDanglingLinkRefused(t *testing.T, contained Container, link, target string) {
+	t.Helper()
+
+	resolved, err := contained.ResolveWrite(t.Context(), link)
+	if err == nil || !strings.Contains(err.Error(), "symlink to a path that does not exist") {
+		t.Errorf("resolveWrite(%q) = %v, want it refused as a dangling link", link, err)
+	}
+
+	if err == nil {
+		_ = contained.WriteFile(t.Context(), resolved, []byte("escaped"), false)
+	}
+
+	out, _, err := contained.read(t.Context(), `[ -e `+shQuote(target)+` ] && printf created`)
+	if err != nil || out != "" {
+		t.Errorf("the dangling link's target %s = %q, %v; want it never created", target, out, err)
 	}
 }
