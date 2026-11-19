@@ -28,6 +28,9 @@ type Service struct {
 // errNeverReady is a service whose ready command did not succeed in time.
 var errNeverReady = errors.New("never became ready")
 
+// errNotOurs is a container holding the service's name that steps did not create: replacing it would remove the operator's container and its anonymous volumes.
+var errNotOurs = errors.New("steps did not create it")
+
 // EnsureService makes the service's network, replaces its container when the configuration changed (or starts it when it is merely stopped), and returns once its ready command succeeds.
 func EnsureService(ctx context.Context, service Service, progress io.Writer) error {
 	client, err := dockerapi.New("")
@@ -55,6 +58,10 @@ func runService(ctx context.Context, client *dockerapi.Client, service Service, 
 	state, found, err := client.InspectService(ctx, service.Container)
 	if err != nil {
 		return "", err //nolint:wrapcheck // the caller names the service
+	}
+
+	if found && state.Spec == "" {
+		return "", notOurs(service.Container)
 	}
 
 	if found && state.Spec == service.Spec {
@@ -117,7 +124,11 @@ func waitReady(ctx context.Context, client *dockerapi.Client, id string, service
 	deadline := time.Now().Add(service.Timeout)
 
 	for {
-		code, err := client.Exec(ctx, id, dockerapi.ExecOptions{Cmd: service.Ready, Stdout: io.Discard, Stderr: io.Discard})
+		attempt, cancel := context.WithDeadline(ctx, deadline)
+		code, err := client.Exec(attempt, id, dockerapi.ExecOptions{Cmd: service.Ready, Stdout: io.Discard, Stderr: io.Discard})
+
+		cancel()
+
 		if err == nil && code == 0 {
 			return nil
 		}
@@ -139,7 +150,7 @@ func waitReady(ctx context.Context, client *dockerapi.Client, id string, service
 	}
 }
 
-// ServiceRunning reports whether the service's container is running with this configuration.
+// ServiceRunning reports whether the service's container is running with this configuration; a container steps did not create is an error, since a put would refuse it.
 func ServiceRunning(ctx context.Context, container, spec string) (bool, error) {
 	client, err := dockerapi.New("")
 	if err != nil {
@@ -153,5 +164,13 @@ func ServiceRunning(ctx context.Context, container, spec string) (bool, error) {
 		return false, fmt.Errorf("service %s: %w", container, err)
 	}
 
+	if found && state.Spec == "" {
+		return false, notOurs(container)
+	}
+
 	return found && state.Running && state.Spec == spec, nil
+}
+
+func notOurs(container string) error {
+	return fmt.Errorf("container %s already exists and %w: remove or rename it, or give the resource another container", container, errNotOurs)
 }
