@@ -173,7 +173,7 @@ func TestResourceCacheRejectsATraversingKey(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	cache, err := newResourceCache(copyBackend{}, root, 10)
+	cache, err := newResourceCache(copyBackend{}, nil, root, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

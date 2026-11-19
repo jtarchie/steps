@@ -76,6 +76,7 @@ func readHeld(dir string) (map[string]heldRecord, error) {
 
 // claimAll asks every holder to keep its tree for this run; any one gone makes the entry a miss, since a partial restore would hand a step an input nobody has.
 func claimAll(ctx context.Context, held map[string]heldRecord) error {
+	held = remoteOnly(held)
 	if len(held) == 0 {
 		return nil
 	}
@@ -86,7 +87,7 @@ func claimAll(ctx context.Context, held map[string]heldRecord) error {
 	}
 
 	for name, record := range held {
-		if record.Digest == "" || record.Holder == "" {
+		if record.Digest == "" {
 			return fmt.Errorf("held output %q: an incomplete record", name)
 		}
 
@@ -107,6 +108,19 @@ func claimEntry(ctx context.Context, path string) (map[string]heldRecord, error)
 	}
 
 	return held, claimAll(ctx, held)
+}
+
+// remoteOnly are the records a docker holds; one with no holder names a tree in this machine's store.
+func remoteOnly(records map[string]heldRecord) map[string]heldRecord {
+	remote := map[string]heldRecord{}
+
+	for name, record := range records {
+		if record.Holder != "" {
+			remote[name] = record
+		}
+	}
+
+	return remote
 }
 
 // unheld are req's outputs an entry keeps as bytes.
@@ -158,7 +172,7 @@ func (b *isolatingBuild) heldOutputs(ctx context.Context, req StepCacheRequest) 
 // fetchHeld answers a resource cache entry docker holds: the tree is claimed and held under name, nothing fetched. False is a miss of any kind, logged when it was a failure.
 func (b *isolatingBuild) fetchHeld(ctx context.Context, path, name string) bool {
 	held, err := readHeld(path)
-	if err == nil && len(held) == 0 {
+	if err == nil && held[resourceHeldKey].Holder == "" {
 		return false
 	}
 
@@ -190,19 +204,5 @@ var errFiledHeld = errors.New("filed as held")
 
 // storeHeld files a resource entry as a pointer at the tree docker holds for name.
 func (c *resourceCache) storeHeld(ctx context.Context, path string, remote RemoteArtifact) {
-	err := replaceTree(path, c.backend.remove, func(staged string) error {
-		mkErr := os.MkdirAll(staged, 0o750)
-		if mkErr != nil {
-			return fmt.Errorf("creating cache entry: %w", mkErr)
-		}
-
-		return writeHeld(staged, map[string]heldRecord{resourceHeldKey: {Name: remote.Name, Digest: remote.Digest, Holder: remote.Holder}})
-	})
-	if err != nil {
-		slog.WarnContext(ctx, "workspace.cache_store_failed", "entry", path, "error", err)
-
-		return
-	}
-
-	slog.DebugContext(ctx, "workspace.cache_store", "entry", path, "held", true)
+	c.point(ctx, path, heldRecord{Name: remote.Name, Digest: remote.Digest, Holder: remote.Holder})
 }

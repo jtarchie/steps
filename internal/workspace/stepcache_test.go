@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -229,17 +230,24 @@ func TestStepCacheRestoreLeavesArtifactsIntactWhenItFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Corrupt the second output in the entry so restoring it must fail after
-	// the first one has already been staged.
+	// Point the second output at a symlinked tree so restoring it must fail after the first one has already been staged.
 	build := bw.(*isolatingBuild)
 	entry, _ := build.stepCache.entries.path(res.Key)
+	bogus := strings.Repeat("f", 64)
 
-	err = os.RemoveAll(filepath.Join(entry, "coverage"))
+	err = os.Symlink(t.TempDir(), filepath.Join(build.stepCache.store.dir, bogus))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = os.Symlink(t.TempDir(), filepath.Join(entry, "coverage"))
+	records, err := readHeld(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	records["coverage"] = heldRecord{Digest: bogus}
+
+	err = writeHeld(entry, records)
 	if err != nil {
 		t.Fatal(err)
 	}

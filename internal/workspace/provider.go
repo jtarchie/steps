@@ -42,7 +42,9 @@ type isolatingProvider struct {
 	stepCache *stepCache
 	// taskCaches holds caches: directories between runs; under a provider-owned temp root they last only the run.
 	taskCaches *entryStore
-	builds     atomic.Int64
+	// store holds the bytes both caches point at, nil with them.
+	store  *treeStore
+	builds atomic.Int64
 }
 
 // enableCache attaches the caches a durable root keeps across builds.
@@ -57,12 +59,17 @@ type isolatingProvider struct {
 // the step whose result must never be reused.
 func (p *isolatingProvider) enableCache(ws *Settings) error {
 	if !p.ownsRoot {
-		cache, err := newResourceCache(p.backend, p.root, ws.resourceCacheMax())
+		store, err := newTreeStore(p.backend, p.root)
 		if err != nil {
 			return err
 		}
 
-		p.cache = cache
+		cache, err := newResourceCache(p.backend, store, p.root, ws.resourceCacheMax())
+		if err != nil {
+			return err
+		}
+
+		p.store, p.cache = store, cache
 	}
 
 	taskCaches, err := newEntryStore(p.root, taskCacheDirName, defaultTaskCacheMaxEntries, p.backend.remove)
@@ -76,12 +83,13 @@ func (p *isolatingProvider) enableCache(ws *Settings) error {
 		return nil
 	}
 
-	stepCache, err := newStepCache(p.backend, p.root, defaultStepCacheMaxEntries)
+	stepCache, err := newStepCache(p.backend, p.store, p.root, defaultStepCacheMaxEntries)
 	if err != nil {
 		return err
 	}
 
 	p.stepCache = stepCache
+	p.store.pointers = []string{p.cache.entries.dir, stepCache.entries.dir}
 
 	return nil
 }

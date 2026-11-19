@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 )
 
@@ -54,10 +53,8 @@ func (p *isolatingProvider) AttachArtifactStore(blobs BlobStore, index StepIndex
 	return true
 }
 
-// rehydrate materializes an entry's missing outputs from the blob store,
-// reporting whether every one of them landed. A false is an ordinary miss:
-// the step runs, and its store refills both halves.
-func (c *stepCache) rehydrate(ctx context.Context, key, path string, missing []string) bool {
+// rehydrate files an entry's missing outputs in the store from the blob store, naming each in records, and reports whether every one landed. A false is an ordinary miss: the step runs, and its store refills both halves.
+func (c *stepCache) rehydrate(ctx context.Context, key string, missing []string, records map[string]heldRecord) bool {
 	if c.blobs == nil || c.index == nil {
 		return false
 	}
@@ -79,30 +76,25 @@ func (c *stepCache) rehydrate(ctx context.Context, key, path string, missing []s
 			return false
 		}
 
-		if !c.fetchOutput(ctx, path, out, digest) {
+		if !c.fetchOutput(ctx, out, digest) {
 			return false
 		}
+
+		records[out] = heldRecord{Digest: digest}
 	}
 
-	slog.DebugContext(ctx, "workspace.blob_rehydrated", "entry", path, "outputs", len(missing))
+	slog.DebugContext(ctx, "workspace.blob_rehydrated", "key", key, "outputs", len(missing))
 
 	return true
 }
 
-// fetchOutput lands one output in the entry, staged and verified first.
-//
-// Verified by re-digesting what arrived:
-// the key is a claim, and a corrupted or truncated blob installed unchecked
-// would serve wrong bytes under a right key for as long as the entry lives.
-func (c *stepCache) fetchOutput(ctx context.Context, path, out, digest string) bool {
-	err := os.MkdirAll(path, 0o750)
-	if err != nil {
-		slog.WarnContext(ctx, "workspace.blob_fetch_failed", "output", out, "error", err)
-
-		return false
+// fetchOutput files one output's tree in the store, verified by re-digesting what arrived: the key is a claim, and a corrupted blob installed unchecked would serve wrong bytes under a right key.
+func (c *stepCache) fetchOutput(ctx context.Context, out, digest string) bool {
+	if c.store.has(digest) {
+		return true
 	}
 
-	err = replaceTree(filepath.Join(path, out), c.backend.remove, func(tmp string) error {
+	staged, err := stageTree(filepath.Join(c.store.dir, ".fetch"), c.backend.remove, func(tmp string) error {
 		buildErr := c.backend.createEmpty(ctx, tmp)
 		if buildErr != nil {
 			return fmt.Errorf("staging: %w", buildErr)
@@ -122,6 +114,10 @@ func (c *stepCache) fetchOutput(ctx context.Context, path, out, digest string) b
 
 		return nil
 	})
+	if err == nil {
+		err = c.store.install(staged, digest)
+	}
+
 	if err != nil && !errors.Is(err, errBlobDigestMismatch) {
 		slog.WarnContext(ctx, "workspace.blob_fetch_failed", "output", out, "digest", digest, "error", err)
 	}
@@ -129,34 +125,27 @@ func (c *stepCache) fetchOutput(ctx context.Context, path, out, digest string) b
 	return err == nil
 }
 
-// publish mirrors a just-stored entry to the blob store and records the
-// digests in the index — after the local store succeeded, best-effort, and
-// index-last: an index row naming blobs that never landed would promise a
-// rehydration that must fail, while blobs without a row merely wait for the
-// next record.
-func (c *stepCache) publish(ctx context.Context, key, path string, digests func(string) (string, error), req StepCacheRequest) {
+// publish mirrors a just-filed entry's trees to the blob store and records their digests in the index — best-effort, and index-last: a row naming blobs that never landed would promise a rehydration that must fail.
+func (c *stepCache) publish(ctx context.Context, key string, records map[string]heldRecord) {
 	if c.blobs == nil || c.index == nil {
 		return
 	}
 
-	outputs := make(map[string]string, len(req.Outputs))
+	outputs := make(map[string]string, len(records))
 
-	for _, out := range req.Outputs {
-		digest, err := digests(mappedName(out, req.OutputMapping))
-		if err != nil || digest == "" {
-			slog.WarnContext(ctx, "workspace.blob_publish_failed", "output", out, "error", err)
-
-			return
+	for out, record := range records {
+		dir, err := c.store.path(record.Digest)
+		if err == nil {
+			err = c.putIfAbsent(ctx, record.Digest, dir)
 		}
 
-		err = c.putIfAbsent(ctx, digest, filepath.Join(path, out))
 		if err != nil {
-			slog.WarnContext(ctx, "workspace.blob_publish_failed", "output", out, "digest", digest, "error", err)
+			slog.WarnContext(ctx, "workspace.blob_publish_failed", "output", out, "digest", record.Digest, "error", err)
 
 			return
 		}
 
-		outputs[out] = digest
+		outputs[out] = record.Digest
 	}
 
 	err := c.index.RecordStepBlobs(ctx, key, outputs)

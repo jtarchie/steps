@@ -62,6 +62,10 @@ func interruptible(t *testing.T, provider Provider) *atomic.Bool {
 		p.stepCache.backend = backend
 	}
 
+	if p.store != nil {
+		p.store.backend = backend
+	}
+
 	return failing
 }
 
@@ -183,7 +187,7 @@ func TestResourceCacheRefusedRestoreStillFetches(t *testing.T) {
 
 	fetchOnce()
 
-	provider.(*isolatingProvider).cache.backend = interruptedBackend{failing: failing, refuses: true}
+	provider.(*isolatingProvider).store.backend = interruptedBackend{failing: failing, refuses: true}
 	failing.Store(true)
 
 	dir := fetchOnce()

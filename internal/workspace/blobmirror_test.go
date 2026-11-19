@@ -94,6 +94,16 @@ func mirroredBuild(t *testing.T, root string, blobs BlobStore, index StepIndex) 
 	return seededBuild(t, provider, "input-content")
 }
 
+// evictLocal drops this machine's half, pointers and trees: the shape of a pruned cache or another machine.
+func evictLocal(root string) error {
+	err := os.RemoveAll(filepath.Join(root, stepCacheDirName))
+	if err != nil {
+		return err //nolint:wrapcheck // a test helper
+	}
+
+	return os.RemoveAll(filepath.Join(root, storeDirName)) //nolint:wrapcheck // a test helper
+}
+
 // mirrorRequest is the request shape the round-trip tests share.
 func mirrorRequest() StepCacheRequest {
 	return StepCacheRequest{ContentHash: "content-hash-1", Inputs: []string{"repo"}, Outputs: []string{"out"}}
@@ -137,7 +147,7 @@ func TestStepCacheMirrorsAndRematerializes(t *testing.T) {
 	}
 
 	// Evict the local half: the shape of a pruned cache or another machine.
-	err := os.RemoveAll(filepath.Join(root, stepCacheDirName))
+	err := evictLocal(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +188,7 @@ func TestStepCacheRefusesABlobThatDigestsWrong(t *testing.T) {
 
 	blobs.plant(t, digest, "not what the digest says")
 
-	err = os.RemoveAll(filepath.Join(root, stepCacheDirName))
+	err = evictLocal(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +225,7 @@ func TestStepCacheMissesWhenTheMirrorHasNoAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = os.RemoveAll(filepath.Join(root, stepCacheDirName))
+	err = evictLocal(root)
 	if err != nil {
 		t.Fatal(err)
 	}

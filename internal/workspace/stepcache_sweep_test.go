@@ -38,7 +38,7 @@ func TestDiscardStagedRemovesOnlyWhatWasNotCommitted(t *testing.T) {
 
 	root := t.TempDir()
 
-	cache, err := newStepCache(copyBackend{}, root, 10)
+	cache, err := newStepCache(copyBackend{}, nil, root, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

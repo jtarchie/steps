@@ -130,10 +130,10 @@ func TestEndToEndArtifactStoreRematerializesEvictedOutputs(t *testing.T) {
 		t.Fatal("the run published nothing to the artifact store")
 	}
 
-	// Evict the local bytes: the step cache entries are gone, the state
+	// Evict the local bytes: the step cache entries and the store are gone, the state
 	// database survives — the shape of a second machine given the state, or
 	// a cache swept locally.
-	err := os.RemoveAll(filepath.Join(root, "steps-cache"))
+	err := evictLocalCache(root)
 	if err != nil {
 		t.Fatalf("evicting the local step cache: %v", err)
 	}

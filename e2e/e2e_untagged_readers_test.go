@@ -124,7 +124,7 @@ jobs:
 		t.Fatal("the run published nothing, so the held output never reached the mirror")
 	}
 
-	err := os.RemoveAll(filepath.Join(root, "steps-cache"))
+	err := evictLocalCache(root)
 	if err != nil {
 		t.Fatal(err)
 	}
