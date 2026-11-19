@@ -29,10 +29,20 @@ func TestSandboxDeniesCredentialReadsOnly(t *testing.T) {
 	elsewhere := t.TempDir()
 
 	for path, body := range map[string]string{
-		home + "/.ssh/id_ed25519":         "key",
-		elsewhere + "/aws/credentials":    "secret",
-		home + "/notes.txt":               "fine",
-		home + "/.docker/contexts/marker": "fine",
+		home + "/.ssh/id_ed25519":                    "key",
+		elsewhere + "/aws/credentials":               "secret",
+		home + "/notes.txt":                          "fine",
+		home + "/.config/git/config":                 "fine",
+		home + "/.docker/contexts/meta/x/meta.json":  "endpoint",
+		home + "/.git-credentials":                   "secret",
+		home + "/.config/git/credentials":            "secret",
+		home + "/.npmrc":                             "secret",
+		home + "/.pypirc":                            "secret",
+		home + "/.cargo/credentials":                 "secret",
+		home + "/.cargo/credentials.toml":            "secret",
+		home + "/.azure/msal_token_cache.json":       "secret",
+		home + "/.terraform.d/credentials.tfrc.json": "secret",
+		home + "/.config/op/config":                  "secret",
 	} {
 		err := os.MkdirAll(filepath.Dir(path), 0o700)
 		if err == nil {
@@ -54,10 +64,20 @@ func TestSandboxDeniesCredentialReadsOnly(t *testing.T) {
 	runner := fencedRunner(t, t.TempDir(), "")
 
 	for path, allowed := range map[string]bool{
-		"$HOME/.ssh/id_ed25519":         false,
-		"$HOME/.aws/credentials":        false,
-		"$HOME/notes.txt":               true,
-		"$HOME/.docker/contexts/marker": true,
+		"$HOME/.ssh/id_ed25519":                    false,
+		"$HOME/.aws/credentials":                   false,
+		"$HOME/notes.txt":                          true,
+		"$HOME/.config/git/config":                 true,
+		"$HOME/.docker/contexts/meta/x/meta.json":  false,
+		"$HOME/.git-credentials":                   false,
+		"$HOME/.config/git/credentials":            false,
+		"$HOME/.npmrc":                             false,
+		"$HOME/.pypirc":                            false,
+		"$HOME/.cargo/credentials":                 false,
+		"$HOME/.cargo/credentials.toml":            false,
+		"$HOME/.azure/msal_token_cache.json":       false,
+		"$HOME/.terraform.d/credentials.tfrc.json": false,
+		"$HOME/.config/op/config":                  false,
 	} {
 		checkRead(t, runner, path, allowed)
 	}

@@ -1,0 +1,16 @@
+# A step carrying its own run: is inline and never consults the tasks: entry of
+# the same name, so that entry's image: is not the step's. It runs on the host,
+# where network: none would promise an isolation that does not exist.
+# expect: job "ship" step 0 (line 14): network "none" requires image:
+
+tasks:
+- name: build
+  image: alpine
+  run: echo built
+
+jobs:
+- name: ship
+  plan:
+  - task: build
+    run: curl https://example.com
+    network: none

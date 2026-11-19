@@ -139,6 +139,38 @@ func (s suite) TestPruneKeepsARunWaitingToBeResumed(t *testing.T) {
 	}
 }
 
+// TestPruneKeepsARunWaitingToBeRetried: a Retry pressed on the oldest kept run while another build of the job finishes must survive that build's Prune, or the queue row cascades away with it.
+func (s suite) TestPruneKeepsARunWaitingToBeRetried(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	seedRuns(t, st, "build", "OLDEST01", "NEWER001")
+
+	for _, id := range []string{"OLDEST01", "NEWER001"} {
+		err := st.FinishRun(ctx, id, store.RunFailed)
+		if err != nil {
+			t.Fatalf("FinishRun(%s): %v", id, err)
+		}
+	}
+
+	err := st.EnqueueRerunJob(ctx, "build", "retry (web)", "OLDEST01", "local:ops")
+	if err != nil {
+		t.Fatalf("EnqueueRerunJob: %v", err)
+	}
+
+	err = st.Prune(ctx, store.Retention{JobName: "build", Runs: 1}, "NEWER001")
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	claim, found, err := st.ClaimNextJob(ctx)
+	if err != nil || !found || claim.RerunOf != "OLDEST01" {
+		t.Errorf("ClaimNextJob = %+v, %v, %v; want the retry of OLDEST01: retention reaped the run it retries", claim, found, err)
+	}
+}
+
 func (s suite) TestAResumedRunIsInFlightAgain(t *testing.T) {
 	t.Parallel()
 

@@ -265,12 +265,8 @@ func (c *Config) resolvedStepFix(step Step) *FixSpec {
 		return step.Fix
 	}
 
-	if step.Task == "" {
-		return nil
-	}
-
-	task, err := c.FindTask(step.Task)
-	if err != nil {
+	task := c.taskEntry(step)
+	if task == nil {
 		return nil
 	}
 

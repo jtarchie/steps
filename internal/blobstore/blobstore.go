@@ -30,7 +30,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"strconv"
 	"strings"
 	"time"
 
@@ -98,7 +97,7 @@ func Parse(raw string) (Options, error) {
 
 // Store is one bucket-and-prefix, holding trees by digest.
 //
-// Five object verbs signed with the SDK's own SigV4 signer rather than the S3 service client: that client was ~4MB of the binary (every S3 operation is kept, because kong and text/template defeat the linker's dead-method pruning) for HEAD, GET, PUT, DELETE and a presign.
+// Three object verbs signed with the SDK's own SigV4 signer rather than the S3 service client: that client was ~4MB of the binary (every S3 operation is kept, because kong and text/template defeat the linker's dead-method pruning) for HEAD, GET and PUT.
 type Store struct {
 	http        *http.Client
 	credentials aws.CredentialsProvider
@@ -155,7 +154,7 @@ func New(ctx context.Context, opts Options) (*Store, error) {
 	return &Store{http: client, credentials: cfg.Credentials, signer: signer, region: region, opts: opts}, nil
 }
 
-// unsignedPayload is S3's opt-out of hashing a body into the signature: an upload streams its file once instead of reading it twice, and a presigned URL cannot know the body it will carry.
+// unsignedPayload is S3's opt-out of hashing a body into the signature: an upload streams its file once instead of reading it twice.
 const unsignedPayload = "UNSIGNED-PAYLOAD"
 
 // objectURL addresses key: path-style under ?endpoint= (an S3-compatible server has no per-bucket DNS) and for a dotted bucket (whose virtual host no wildcard certificate covers), virtual-hosted on AWS otherwise.
@@ -295,35 +294,6 @@ func attach(request *http.Request, body *os.File) error {
 	return nil
 }
 
-// presign mints a URL for method on key that signs Host and nothing else — see TestPresignedURLsSignOnlyHost for why that is load-bearing.
-func (s *Store) presign(ctx context.Context, method, key string, ttl time.Duration) (string, error) {
-	target, err := s.objectURL(key)
-	if err != nil {
-		return "", err
-	}
-
-	query := target.Query()
-	query.Set("X-Amz-Expires", strconv.Itoa(int(ttl.Seconds())))
-	target.RawQuery = query.Encode()
-
-	request, err := http.NewRequestWithContext(ctx, method, target.String(), nil)
-	if err != nil {
-		return "", fmt.Errorf("building %s %s: %w", method, key, err)
-	}
-
-	creds, err := s.credentials.Retrieve(ctx)
-	if err != nil {
-		return "", fmt.Errorf("reading AWS credentials: %w", err)
-	}
-
-	signed, _, err := s.signer.PresignHTTP(ctx, creds, request, unsignedPayload, "s3", s.region, time.Now())
-	if err != nil {
-		return "", fmt.Errorf("signing %s %s: %w", method, key, err)
-	}
-
-	return signed, nil
-}
-
 // s3Error is a non-2xx answer: the code from S3's XML error body, or for a bodiless HEAD, the status spelled as S3 spells it.
 type s3Error struct {
 	status  int
@@ -369,114 +339,22 @@ func (s *Store) key(digest string) string {
 	return path.Join(s.opts.Prefix, "blobs", digest)
 }
 
-// rawKey places a caller-chosen key under the store's prefix. The typed tree
-// API above owns the blobs/ namespace; everything else — the venue data
-// plane's wire/ objects — names its own key through the raw API below.
-func (s *Store) rawKey(key string) string {
-	return path.Join(s.opts.Prefix, key)
-}
-
-// Has reports whether the store holds key.
-func (s *Store) Has(ctx context.Context, key string) (bool, error) {
-	return s.head(ctx, key, s.rawKey(key))
-}
-
-// head is Has and HasTree's shared body: name is what an error calls the object, full the already-built key, which stays with the caller because the two build it differently.
-func (s *Store) head(ctx context.Context, name, full string) (bool, error) {
-	response, err := s.do(ctx, http.MethodHead, full, nil)
+// HasTree reports whether the store already holds digest, so a Put can be
+// skipped — the point of content addressing is that a key never needs
+// re-uploading.
+func (s *Store) HasTree(ctx context.Context, digest string) (bool, error) {
+	response, err := s.do(ctx, http.MethodHead, s.key(digest), nil)
 	if err != nil {
 		if isNotFound(err) {
 			return false, nil
 		}
 
-		return false, fmt.Errorf("checking %s in %q: %w", name, s.opts.URL, err)
+		return false, fmt.Errorf("checking %s in %q: %w", digest, s.opts.URL, err)
 	}
 
 	_ = response.Body.Close()
 
 	return true, nil
-}
-
-// PutFile uploads one local file as the object at key. A file rather than a
-// reader because S3 signs the payload: an upload needs a length and a
-// seekable body.
-func (s *Store) PutFile(ctx context.Context, key, name string) error {
-	file, err := os.Open(name) //nolint:gosec // a path the caller staged
-	if err != nil {
-		return fmt.Errorf("uploading %s to %q: %w", key, s.opts.URL, err)
-	}
-
-	defer func() { _ = file.Close() }()
-
-	full := s.rawKey(key)
-
-	response, err := s.do(ctx, http.MethodPut, full, file)
-	if err != nil {
-		return fmt.Errorf("uploading %s to %q: %w", key, s.opts.URL, err)
-	}
-
-	_ = response.Body.Close()
-
-	return nil
-}
-
-// Get streams the object at key. The caller closes it.
-func (s *Store) Get(ctx context.Context, key string) (io.ReadCloser, error) {
-	full := s.rawKey(key)
-
-	response, err := s.do(ctx, http.MethodGet, full, nil)
-	if err != nil {
-		if isNotFound(err) {
-			return nil, fmt.Errorf("%w: %s is not in %q", ErrMissingBlob, key, s.opts.URL)
-		}
-
-		return nil, fmt.Errorf("fetching %s from %q: %w", key, s.opts.URL, err)
-	}
-
-	return response.Body, nil
-}
-
-// Delete removes the object at key. Absence is success — the object being
-// gone is the outcome asked for.
-func (s *Store) Delete(ctx context.Context, key string) error {
-	full := s.rawKey(key)
-
-	response, err := s.do(ctx, http.MethodDelete, full, nil)
-	if err != nil {
-		return fmt.Errorf("deleting %s from %q: %w", key, s.opts.URL, err)
-	}
-
-	_ = response.Body.Close()
-
-	return nil
-}
-
-// PresignGet mints a URL that reads key with no credentials but the URL
-// itself — how a venue with zero AWS identity is handed exactly the blobs
-// its job needs and nothing else.
-func (s *Store) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	return s.presignAs(ctx, http.MethodGet, "a read", key, ttl)
-}
-
-// PresignPut is PresignGet for writing key.
-func (s *Store) PresignPut(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	return s.presignAs(ctx, http.MethodPut, "a write", key, ttl)
-}
-
-func (s *Store) presignAs(ctx context.Context, method, what, key string, ttl time.Duration) (string, error) {
-	signed, err := s.presign(ctx, method, s.rawKey(key), ttl)
-	if err != nil {
-		return "", fmt.Errorf("presigning %s of %s in %q: %w", what, key, s.opts.URL, err)
-	}
-
-	return signed, nil
-}
-
-// HasTree reports whether the store already holds digest, so a Put can be
-// skipped — the point of content addressing is that a key never needs
-// re-uploading.
-func (s *Store) HasTree(ctx context.Context, digest string) (bool, error) {
-	return s.head(ctx, digest, s.key(digest))
 }
 
 // PutTree uploads dir as one blob under digest.
@@ -517,7 +395,7 @@ func (s *Store) PutTree(ctx context.Context, digest, dir string) error {
 	return nil
 }
 
-// GetTree materializes digest's blob into dir, which must not already exist.
+// GetTree materializes digest's blob into dir, creating it if absent.
 // The caller owns verifying that what arrived digests to what was asked for —
 // the digest function lives beside the step cache, not here.
 func (s *Store) GetTree(ctx context.Context, digest, dir string) error {

@@ -433,6 +433,53 @@ func TestPoolReplacesAnEvictedJobsMachineAheadOfTheQueue(t *testing.T) {
 	mustRelease(t, waiting)
 }
 
+// A check arriving while every place is kept for an evicted job launches nothing: its machine would be handed to the next job, and the kept place would launch a second one past ?max=.
+func TestPoolCheckWaitsWhileEveryPlaceIsKept(t *testing.T) {
+	t.Parallel()
+
+	fake := &countingAcquirer{}
+	registry := NewRegistryWith(fake.acquire)
+	raw := poolTemplate + "?exclusive&max=1"
+
+	evicted := poolLeases(t, registry, raw)
+	dead := mustResolve(t, evicted)
+	evicted.Abandon("box", dead)
+
+	newcomer := poolLeases(t, registry, raw)
+	waiting := resolveAsync(context.Background(), newcomer)
+
+	eventually(t, "the newcomer queued behind the kept place", func() bool { return waitersOf(registry) == 1 })
+
+	check := registry.CheckLeases(boxWorker(t, raw))
+	checked := resolveAsync(context.Background(), check)
+
+	eventually(t, "the check waited for a machine within ?max=", func() bool { return waitersOf(registry) == 2 })
+
+	replacement := mustResolve(t, evicted)
+
+	rode := within(t, "the check riding on the replacement", checked)
+	if rode.err != nil || rode.worker.Instance != replacement.Instance {
+		t.Fatalf("the check got %+v, want to ride along on %s", rode, replacement.Instance)
+	}
+
+	if acquired, _ := fake.counts(); acquired != 2 {
+		t.Errorf("%d acquisitions, want the dead machine and its one replacement", acquired)
+	}
+
+	mustRelease(t, check)
+	mustRelease(t, evicted)
+
+	if answer := within(t, "the newcomer served", waiting); answer.err != nil || answer.worker.Instance != replacement.Instance {
+		t.Errorf("the newcomer got %+v, want %s", answer, replacement.Instance)
+	}
+
+	mustRelease(t, newcomer)
+
+	if acquired, _ := fake.counts(); acquired != 2 {
+		t.Errorf("%d acquisitions, want no machine past ?max=1", acquired)
+	}
+}
+
 // A job's evicted machine whose job ends without re-placing gives its place to the next waiter.
 func TestPoolGivesUpAKeptPlaceWhenTheJobEnds(t *testing.T) {
 	t.Parallel()

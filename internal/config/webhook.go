@@ -33,7 +33,7 @@ type WebhookSignature struct {
 	Timestamp string `yaml:"timestamp,omitempty"`
 }
 
-// WebhookCustom is the provider whose scheme is the resource's own signature:.
+// WebhookCustom is the provider whose scheme is the resource's own signature:. It repeats webhook.Custom because depguard keeps config and webhook stdlib-only leaves, so neither may import the other.
 const WebhookCustom = "custom"
 
 // WebhookSource decodes this resource's source: strictly, so a misspelled key is a load error rather than a filter nobody applies.
@@ -75,6 +75,14 @@ func (s *WebhookSignature) validate(resource, provider string) error {
 		return fmt.Errorf("resource %q: source.signature.encoding must be hex or base64, not %q", resource, s.Encoding)
 	case !slices.Contains([]string{"", "sha256", "sha1", "sha512"}, s.Algorithm):
 		return fmt.Errorf("resource %q: source.signature.algorithm must be sha256, sha1 or sha512, not %q", resource, s.Algorithm)
+	}
+
+	return s.validateTimestamp(resource)
+}
+
+func (s *WebhookSignature) validateTimestamp(resource string) error {
+	if s.Timestamp != "" && s.Signed == "" {
+		return fmt.Errorf("resource %q: source.signature.timestamp needs signed: to build a message that includes it — a timestamp outside the signature can be rewritten by whoever replays a delivery, so it would refuse nothing (write signed: 'body' if the body carries it)", resource)
 	}
 
 	return nil

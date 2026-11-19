@@ -4,7 +4,6 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -23,17 +22,8 @@ import (
 // a `to: {failure: ...}` on the wrapper fire, and what keeps an aborted inner
 // step from being reported as a green job. An earlier revision called
 // dispatchNonGetStep and returned nil from here, which cost both at once.
-func runTryStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
-	content, err := merkle.TryNodeContent(r.cfg, step)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (try): %w", i, err)
-	}
-
-	hash, err := merkle.HashNode(merkle.NodeKindTry, content, parentHash)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (try): %w", i, err)
-	}
-
+func runTryStep(ctx context.Context, r stepRunner, i int, step config.Step, node merkle.Node) (stepResult, error) {
+	hash := node.Hash
 	inner := *step.Try
 	name := executedStepName(inner)
 
@@ -52,7 +42,8 @@ func runTryStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 		class = outcome.Succeeded
 	}
 
-	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTry, StepIndex: i, Resource: name, Content: content}
+	// The inner step's name, even when the wrapper carries a label of its own.
+	node.Resource = name
 	recordBlockAs(ctx, r, node, class, nil, innerErr)
 
 	// The wrapper's row names the try node, not the failure its inner step

@@ -29,16 +29,8 @@ type memberVote struct {
 // A single model has blind spots: one reviewer's "approve" carries no signal
 // about how much to trust it. The cost is the obvious tradeoff — N agents cost
 // N times one — which is why this is the step a job budget: is worth setting.
-func runEnsembleStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
-	content, err := merkle.EnsembleNodeContent(r.cfg, step)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (ensemble): %w", i, err)
-	}
-
-	hash, err := merkle.HashNode(merkle.NodeKindEnsemble, content, parentHash)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (ensemble): %w", i, err)
-	}
+func runEnsembleStep(ctx context.Context, r stepRunner, i int, step config.Step, node merkle.Node) (stepResult, error) {
+	hash := node.Hash
 
 	slog.DebugContext(ctx, "job.step", "job", r.jobName, "index", i, "kind", "ensemble", "members", len(step.Ensemble.Agents))
 
@@ -46,10 +38,6 @@ func runEnsembleStep(ctx context.Context, r stepRunner, i int, step config.Step,
 
 	verdict, err := decideEnsemble(ctx, r, i, step, hash, votes)
 
-	node := merkle.Node{
-		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindEnsemble,
-		StepIndex: i, Resource: executedStepName(step), Content: content,
-	}
 	recordBlock(ctx, r, node, ensembleRecord(votes, verdict), err)
 
 	if err != nil {

@@ -739,6 +739,8 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		{"pipelines", "current_revision_id", "pipeline_revisions", "RESTRICT"},
 		{"revision_includes", "revision_id", "pipeline_revisions", "CASCADE"},
 		{"memories", "pipeline_id", "pipelines", "CASCADE"},
+		{"resource_configs", "pipeline_id", "pipelines", "CASCADE"},
+		{"run_inputs", "run_id", "runs", "CASCADE"},
 	} {
 		if !hasForeignKey(ctx, t, st, want.table, want.column, want.target, want.onDelete) {
 			t.Errorf("%s.%s does not declare REFERENCES %s ... ON DELETE %s",
@@ -873,6 +875,140 @@ func declaresForeignKey(ctx context.Context, t *testing.T, st *Store, table, col
 	}
 
 	return false
+}
+
+// The five columns the root CLAUDE.md names: each holds another row's key and must not declare it (the negative assertions above say why).
+var deliberateNonReferences = map[string]bool{
+	"nodes.parent_hash":         true,
+	"job_runs.root_hash":        true,
+	"run_events.parent_step_id": true,
+	"agent_usage.step_id":       true,
+	"run_steps.hash":            true,
+}
+
+// Named like a reference, holding no other table's key, so the foreign-key rule has nothing to say about them.
+var keylessColumns = map[string]string{
+	"node_content.content_hash":    "the table's own primary key",
+	"sessions.token_hash":          "the table's own primary key",
+	"oauth_tokens.token_hash":      "the table's own primary key",
+	"resource_configs.config_hash": "a digest of a resource's type and source, compared, never joined",
+	"job_versions.build_id":        "the build label inside a run (\"<run>#0\"), no table's key",
+	"run_steps.build_id":           "the build label inside a run (\"<run>#0\"), no table's key",
+	"run_events.step_id":           "a step's number within its run, which every event of the step repeats",
+	"run_step_outputs.step_id":     "run_events.step_id, which is no key; the run is the reference",
+	"run_placements.instance_id":   "a cloud provider's instance id",
+	"users.account_id":             "the sign-in provider's account id",
+}
+
+// The rule's reach is derived from the schema, not a hand list: a hand list is how resource_configs.pipeline_id and run_inputs.run_id went unchecked.
+func TestEveryKeyColumnDeclaresItsReference(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	st := mustOpenStore(t, path)
+
+	defer func() { _ = st.Close() }()
+
+	tables := queryStrings(t, path, `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	if len(tables) < 20 {
+		t.Fatalf("the walk found %d tables; it has stopped reading the schema, and an empty walk passes everything", len(tables))
+	}
+
+	seen := map[string]bool{}
+
+	for _, table := range tables {
+		referencing := map[string]bool{}
+
+		for _, fk := range foreignKeys(ctx, t, st, table) {
+			referencing[fk.from] = true
+
+			if fk.onDelete == "NO ACTION" {
+				t.Errorf("%s.%s references %s with no ON DELETE action; the rule wants one chosen", table, fk.from, fk.target)
+			}
+		}
+
+		for _, column := range queryStrings(t, path, `SELECT name FROM pragma_table_info('`+table+`')`) {
+			name := table + "." + column
+			seen[name] = true
+
+			if problem := keyColumnProblem(name, column, referencing[column]); problem != "" {
+				t.Error(problem)
+			}
+		}
+	}
+
+	for _, name := range staleListings(seen) {
+		t.Errorf("%s is listed, but the schema no longer has it; drop it from the list", name)
+	}
+}
+
+// keyColumnProblem is what is wrong with one column under the rule, or "".
+func keyColumnProblem(name, column string, references bool) string {
+	_, keyless := keylessColumns[name]
+
+	switch {
+	case (deliberateNonReferences[name] || keyless) && references:
+		return name + " declares a foreign key but is listed as holding none"
+	case deliberateNonReferences[name], keyless, references:
+		return ""
+	case strings.HasSuffix(column, "_id"), strings.HasSuffix(column, "_hash"):
+		return name + " declares no REFERENCES; add one with an ON DELETE action, or name it in keylessColumns with why it holds no key"
+	}
+
+	return ""
+}
+
+// staleListings are the listed columns the schema no longer has, so neither list outlives what it describes.
+func staleListings(seen map[string]bool) []string {
+	var stale []string
+
+	for name := range deliberateNonReferences {
+		if !seen[name] {
+			stale = append(stale, name)
+		}
+	}
+
+	for name := range keylessColumns {
+		if !seen[name] {
+			stale = append(stale, name)
+		}
+	}
+
+	return stale
+}
+
+type foreignKey struct{ from, target, onDelete string }
+
+func foreignKeys(ctx context.Context, t *testing.T, st *Store, table string) []foreignKey {
+	t.Helper()
+
+	rows, err := st.db.QueryContext(ctx, `SELECT "from", "table", on_delete FROM pragma_foreign_key_list(?)`, table)
+	if err != nil {
+		t.Fatalf("foreign_key_list(%s): %v", table, err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	var fks []foreignKey
+
+	for rows.Next() {
+		var fk foreignKey
+
+		err = rows.Scan(&fk.from, &fk.target, &fk.onDelete)
+		if err != nil {
+			t.Fatalf("foreign_key_list(%s): %v", table, err)
+		}
+
+		fks = append(fks, fk)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		t.Fatalf("foreign_key_list(%s): %v", table, err)
+	}
+
+	return fks
 }
 
 // TestRunOrderIsTimeOrder pins the stored timestamp format against the trap that

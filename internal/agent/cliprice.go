@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/usage"
@@ -23,14 +24,14 @@ func estimateCLICost(model string, spent cliUsage) float64 {
 // The CLI's own figure wins whenever there is one: it is authoritative, it
 // covers whatever the vendor actually charged, and it needs no rate card. The
 // estimate is the fallback for the crash case, and only there.
-func attemptCost(model string, run cliRunResult) float64 {
+func attemptCost(ctx context.Context, model string, run cliRunResult) float64 {
 	if run.costUSD > 0 {
 		return run.costUSD
 	}
 
 	estimate := estimateCLICost(model, run.streamed)
 	if estimate == 0 && run.streamed.prompt()+run.streamed.OutputTokens > 0 {
-		slog.Warn("agent.cli.unpriced_attempt",
+		slog.WarnContext(ctx, "agent.cli.unpriced_attempt",
 			"model", model,
 			"prompt_tokens", run.streamed.prompt(),
 			"output_tokens", run.streamed.OutputTokens,

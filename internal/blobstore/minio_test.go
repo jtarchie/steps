@@ -3,13 +3,11 @@ package blobstore
 import (
 	"context"
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -112,7 +110,6 @@ func TestAgainstARealS3(t *testing.T) {
 	_ = created.Body.Close()
 
 	minioTreeRoundTrip(t, store)
-	minioPresignedRoundTrip(t, store)
 	minioAwkwardUploads(t, store)
 
 	http.DefaultClient.CloseIdleConnections()
@@ -120,7 +117,7 @@ func TestAgainstARealS3(t *testing.T) {
 	// The server is not just answering: a wrong secret is refused.
 	forged := minioStore(t, endpoint, "not-the-secret")
 
-	_, err = forged.Has(context.Background(), "wire/anything")
+	_, err = forged.HasTree(context.Background(), "anything")
 
 	var s3Err *s3Error
 	if !errors.As(err, &s3Err) || s3Err.status != http.StatusForbidden {
@@ -170,99 +167,23 @@ func minioTreeRoundTrip(t *testing.T, store *Store) {
 	}
 }
 
-// minioPresignedRoundTrip uses a key with a space in it, which is where S3's own path escaping and the signer's would disagree.
-func minioPresignedRoundTrip(t *testing.T, store *Store) {
-	t.Helper()
-
-	ctx := context.Background()
-
-	putURL, err := store.PresignPut(ctx, "wire/out 1", time.Minute)
-	if err != nil {
-		t.Fatalf("PresignPut: %v", err)
-	}
-
-	request, err := http.NewRequestWithContext(ctx, http.MethodPut, putURL, strings.NewReader("worker-bytes"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatalf("PUT to the presigned URL: %v", err)
-	}
-
-	_ = response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("presigned PUT status = %d", response.StatusCode)
-	}
-
-	getURL, err := store.PresignGet(ctx, "wire/out 1", time.Minute)
-	if err != nil {
-		t.Fatalf("PresignGet: %v", err)
-	}
-
-	response, err = http.Get(getURL) //nolint:noctx,gosec // a URL this test minted
-	if err != nil {
-		t.Fatalf("GET from the presigned URL: %v", err)
-	}
-
-	body, _ := io.ReadAll(response.Body)
-	_ = response.Body.Close()
-
-	if string(body) != "worker-bytes" {
-		t.Fatalf("presigned GET = %d %q", response.StatusCode, body)
-	}
-
-	minioRawReadAndDelete(t, store, "wire/out 1")
-}
-
-func minioRawReadAndDelete(t *testing.T, store *Store, key string) {
-	t.Helper()
-
-	ctx := context.Background()
-
-	reader, err := store.Get(ctx, key)
-	if err != nil {
-		t.Fatalf("Get of the presigned upload: %v", err)
-	}
-
-	_ = reader.Close()
-
-	err = store.Delete(ctx, key)
-	if err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-
-	has, err := store.Has(ctx, key)
-	if err != nil || has {
-		t.Fatalf("Has after Delete = %v, %v", has, err)
-	}
-}
-
-// minioAwkwardUploads: keys holding characters url.PathEscape leaves bare and SigV4 encodes (signed one way, checked the other: 403), each an empty file, which net/http sends chunked unless told its length (411).
+// minioAwkwardUploads: keys holding characters url.PathEscape leaves bare and SigV4 encodes (signed one way, checked the other: 403).
 func minioAwkwardUploads(t *testing.T, store *Store) {
 	t.Helper()
 
 	ctx := context.Background()
-	empty := filepath.Join(t.TempDir(), "empty")
 
-	err := os.WriteFile(empty, nil, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, key := range []string{"wire/plain", "wire/a+b", "wire/a=b:c@d$e&f"} {
-		err = store.PutFile(ctx, key, empty)
+	for _, key := range []string{"plain", "a+b", "a=b:c@d$e&f"} {
+		err := store.PutTree(ctx, key, t.TempDir())
 		if err != nil {
-			t.Errorf("PutFile(%q) of an empty file: %v", key, err)
+			t.Errorf("PutTree(%q): %v", key, err)
 
 			continue
 		}
 
-		has, err := store.Has(ctx, key)
+		has, err := store.HasTree(ctx, key)
 		if err != nil || !has {
-			t.Errorf("Has(%q) after PutFile = %v, %v", key, has, err)
+			t.Errorf("HasTree(%q) after PutTree = %v, %v", key, has, err)
 		}
 	}
 }

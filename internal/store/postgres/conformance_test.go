@@ -48,15 +48,26 @@ func TestAccountsConformance(t *testing.T) {
 	t.Parallel()
 	requirePostgres(t)
 
-	storetest.RunAccounts(t, func(t *testing.T) store.Accounts {
+	storetest.RunAccounts(t, func(t *testing.T) (store.Accounts, storetest.OpenFunc) {
 		t.Helper()
 
-		accounts, err := OpenAccounts(newDatabase(t))
+		rawURL := newDatabase(t)
+
+		accounts, err := OpenAccounts(rawURL)
 		if err != nil {
 			t.Fatalf("OpenAccounts: %v", err)
 		}
 
-		return accounts
+		return accounts, func(t *testing.T, pipeline string) store.Store {
+			t.Helper()
+
+			st, err := OpenStore(rawURL, pipeline)
+			if err != nil {
+				t.Fatalf("OpenStore(%q): %v", pipeline, err)
+			}
+
+			return st
+		}
 	}, func(t *testing.T, accounts store.Accounts, clientID string) {
 		t.Helper()
 
@@ -69,5 +80,56 @@ func TestAccountsConformance(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	})
+}
+
+// TestContentSweepConformance runs the narrowed node_content sweep's conformance test against a real Postgres.
+func TestContentSweepConformance(t *testing.T) {
+	t.Parallel()
+	requirePostgres(t)
+
+	rawURL := newDatabase(t)
+
+	raw := func(t *testing.T, st store.Store) *Store {
+		t.Helper()
+
+		pgStore, ok := st.(*Store)
+		if !ok {
+			t.Fatalf("store is %T, want *Store", st)
+		}
+
+		return pgStore
+	}
+
+	storetest.RunContentSweep(t, func(t *testing.T, pipeline string) store.Store {
+		t.Helper()
+
+		st, err := OpenStore(rawURL, pipeline)
+		if err != nil {
+			t.Fatalf("OpenStore(%q): %v", pipeline, err)
+		}
+
+		return st
+	}, storetest.ContentProbe{
+		Plant: func(t *testing.T, st store.Store, contentHash string) {
+			t.Helper()
+
+			_, err := raw(t, st).db.ExecContext(t.Context(), `INSERT INTO node_content (content_hash, content) VALUES ($1, '{}')`, contentHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+		},
+		Rows: func(t *testing.T, st store.Store, contentHash string) int {
+			t.Helper()
+
+			var count int
+
+			err := raw(t, st).db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM node_content WHERE content_hash = $1`, contentHash).Scan(&count)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			return count
+		},
 	})
 }

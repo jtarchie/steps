@@ -69,7 +69,7 @@ func (s *Store) RecordNode(ctx context.Context, node store.NodeRecord, jobName s
 				error        = excluded.error,
 				created_at   = excluded.created_at
 		`,
-			s.pipelineID, node.Hash, nullable(node.ParentHash), node.Kind, jobName, node.Resource, node.StepIndex,
+			s.pipelineID, node.Hash, nullable(node.ParentHash), node.Kind, jobName, clean(node.Resource), node.StepIndex,
 			contentHash, nullableBytes(resultJSON), status, errText(execErr), now(),
 		)
 

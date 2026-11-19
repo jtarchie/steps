@@ -136,17 +136,22 @@ func looksBinary(head []byte) bool {
 	}
 
 	// A head cut mid-rune is still text: the cut is ours, not the file's.
-	for i := len(head) - 1; i >= max(0, len(head)-utf8.UTFMax); i-- {
-		if utf8.RuneStart(head[i]) {
-			if !utf8.FullRune(head[i:]) {
-				head = head[:i]
+	return !utf8.Valid(dropPartialRune(head))
+}
+
+// dropPartialRune trims a rune a byte cap split at the end of b, so a cut prefix stays valid UTF-8.
+func dropPartialRune(b []byte) []byte {
+	for i := len(b) - 1; i >= max(0, len(b)-utf8.UTFMax); i-- {
+		if utf8.RuneStart(b[i]) {
+			if !utf8.FullRune(b[i:]) {
+				return b[:i]
 			}
 
 			break
 		}
 	}
 
-	return !utf8.Valid(head)
+	return b
 }
 
 // isNonText reports whether read_file must answer for head's file with

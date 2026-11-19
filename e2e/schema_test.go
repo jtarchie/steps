@@ -270,7 +270,7 @@ func TestSchemaKeysMatchStructs(t *testing.T) {
 func compareKeys(t *testing.T, where string, structType reflect.Type, inSchema map[string]any) {
 	t.Helper()
 
-	inStruct := yamlTagNames(structType)
+	inStruct := yamlTagNames(t, structType)
 
 	for name := range inStruct {
 		if _, ok := inSchema[name]; !ok {
@@ -288,11 +288,18 @@ func compareKeys(t *testing.T, where string, structType reflect.Type, inSchema m
 // yamlTagNames collects the yaml key of every field on a struct, following
 // `yaml:",inline"` fields (Hooks) into the parent's key space, and skipping
 // `yaml:"-"` (computed, never written).
-func yamlTagNames(structType reflect.Type) map[string]struct{} {
+func yamlTagNames(t *testing.T, structType reflect.Type) map[string]struct{} {
+	t.Helper()
+
 	out := map[string]struct{}{}
 
 	for i := range structType.NumField() {
-		tag := structType.Field(i).Tag.Get("yaml")
+		tag, declared := structType.Field(i).Tag.Lookup("yaml")
+		if !declared && structType.Field(i).IsExported() {
+			// yaml.v3 decodes an untagged exported field under its lowercased name, a key no schema, doc or hash table would know about.
+			t.Errorf("config.%s.%s has no yaml tag; name its key, or yaml:\"-\" if it is never written", structType.Name(), structType.Field(i).Name)
+		}
+
 		if tag == "" || tag == "-" {
 			continue
 		}
@@ -301,7 +308,7 @@ func yamlTagNames(structType reflect.Type) map[string]struct{} {
 
 		if strings.Contains(options, "inline") {
 			field := structType.Field(i).Type
-			for inlined := range yamlTagNames(field) {
+			for inlined := range yamlTagNames(t, field) {
 				out[inlined] = struct{}{}
 			}
 

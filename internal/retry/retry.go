@@ -56,11 +56,16 @@ func Stop(err error) error {
 // A nil err, a live attemptCtx, or a canceled ctx (a job abort, which Do
 // handles on its own path) all pass err through untouched.
 func StopOnDeadline(ctx, attemptCtx context.Context, err error) error {
+	return StopOnDeadlineAs(ctx, attemptCtx, err, func(err error) error { return err })
+}
+
+// StopOnDeadlineAs also marks the expired attempt's error, so one check both stops the retries and classifies the step (callers pass outcome.Fail, which this leaf cannot import).
+func StopOnDeadlineAs(ctx, attemptCtx context.Context, err error, mark func(error) error) error {
 	if err == nil || attemptCtx.Err() == nil || ctx.Err() != nil {
 		return err
 	}
 
-	return Stop(err)
+	return Stop(mark(err))
 }
 
 // Do calls fn up to attempts times (attempts < 1 is treated as 1),

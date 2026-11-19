@@ -37,6 +37,8 @@ type Queue interface {
 	// A row whose run is still running goes back to pending carrying that run (ClaimedJob.Resume); a row whose run already finished is closed with the run's status, so a run somebody aborted is never built again.
 	ResetStaleRunning(ctx context.Context) error
 	ListTriggerQueue(ctx context.Context, limit int) ([]QueueRow, error)
+	// QueuedWithoutInputs reports whether a queued or claimed row of the job has yet to record the versions its build was created with (RecordRunInput): Concourse's pending build before it adopts its inputs, which a trigger must not make a second of. Queued counts too, because the claim that turns a queued row into a running one can land between a trigger's judgement and its enqueue, which then dedups against nothing.
+	QueuedWithoutInputs(ctx context.Context, jobName string) (bool, error)
 	// SyncJobLimits replaces both admission mirrors from one configuration, in
 	// one transaction. A job in neither map has no serial group and is
 	// admitted one at a time: a missing row means the job left the pipeline

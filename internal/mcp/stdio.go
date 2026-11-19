@@ -45,7 +45,7 @@ func commandTransport(ctx context.Context, srv config.MCPServer) *sdkmcp.Command
 	cmd := exec.CommandContext(ctx, srv.Command, srv.Args...) //nolint:gosec // running a pipeline-defined mcp server is this feature's purpose; explicit argv, never a shell
 	cmd.Dir = srv.Cwd                                         // "" leaves the steps process's own cwd inherited
 	cmd.Env = shell.HostEnv()                                 // same trust boundary as every other host-executed command
-	cmd.Stderr = &stderrLogger{server: srv.Name}
+	cmd.Stderr = &stderrLogger{ctx: ctx, server: srv.Name}
 	cmd.WaitDelay = stdioWaitDelay
 	setProcessGroup(cmd)
 
@@ -63,7 +63,7 @@ func commandTransport(ctx context.Context, srv config.MCPServer) *sdkmcp.Command
 func imageTransport(ctx context.Context, srv config.MCPServer) (sdkmcp.Transport, error) {
 	slog.DebugContext(ctx, "mcp.stdio.spawn", "server", srv.Name, "image", srv.Image, "command", redact.Command(srv.Command), "cwd", srv.Cwd)
 
-	attached, err := shell.Attach(ctx, shell.RunnerSpec{Image: srv.Image}, append([]string{srv.Command}, srv.Args...), srv.Cwd, &stderrLogger{server: srv.Name})
+	attached, err := shell.Attach(ctx, shell.RunnerSpec{Image: srv.Image}, append([]string{srv.Command}, srv.Args...), srv.Cwd, &stderrLogger{ctx: ctx, server: srv.Name})
 	if err != nil {
 		return nil, fmt.Errorf("mcp: server %q: %w", srv.Name, err)
 	}
@@ -86,6 +86,7 @@ const stderrLoggerMaxLine = 8 << 10
 // cmd.Wait (via Close) synchronizes after that goroutine finishes, so no
 // locking is needed here.
 type stderrLogger struct {
+	ctx    context.Context //nolint:containedctx // io.Writer takes no context, and slog routes a record to the invocation's stderr by the one it is logged with
 	server string
 	buf    bytes.Buffer
 }
@@ -100,11 +101,11 @@ func (w *stderrLogger) Write(p []byte) (int, error) {
 		}
 
 		line := w.buf.Next(idx + 1)
-		slog.Debug("mcp.stdio.stderr", "server", w.server, "line", string(bytes.TrimRight(line, "\n")))
+		slog.DebugContext(w.ctx, "mcp.stdio.stderr", "server", w.server, "line", string(bytes.TrimRight(line, "\n")))
 	}
 
 	if w.buf.Len() > stderrLoggerMaxLine {
-		slog.Debug("mcp.stdio.stderr", "server", w.server, "line", w.buf.String())
+		slog.DebugContext(w.ctx, "mcp.stdio.stderr", "server", w.server, "line", w.buf.String())
 		w.buf.Reset()
 	}
 

@@ -106,8 +106,8 @@ func judgeAll(ctx context.Context, dir, work string, mutants []mutant, workers i
 		seconds[test.name] = test.seconds
 	}
 
-	runTier(ctx, dir, work, mutants, workers, seconds, func(m *mutant) []string { return m.fast })
-	runTier(ctx, dir, work, mutants, 1, seconds, func(m *mutant) []string {
+	runTier(ctx, dir, work, mutants, workers, seconds, []string{noDocker}, func(m *mutant) []string { return m.fast })
+	runTier(ctx, dir, work, mutants, 1, seconds, nil, func(m *mutant) []string {
 		if m.Outcome != "LIVED" && m.Outcome != "" {
 			return nil
 		}
@@ -384,8 +384,8 @@ func coveringTests(file string, at token.Position, tests []testRun) ([]string, [
 	return fast, slow
 }
 
-// runTier runs, workers at a time, every mutant that tests() names tests for, and records the outcome. A mutant it names none for keeps the outcome it had.
-func runTier(ctx context.Context, dir, work string, mutants []mutant, workers int, seconds map[string]float64, tests func(*mutant) []string) {
+// runTier runs, workers at a time, every mutant that tests() names tests for, under env on top of this process's, and records the outcome. A mutant it names none for keeps the outcome it had.
+func runTier(ctx context.Context, dir, work string, mutants []mutant, workers int, seconds map[string]float64, env []string, tests func(*mutant) []string) {
 	var queue []int
 
 	for i := range mutants {
@@ -402,7 +402,7 @@ func runTier(ctx context.Context, dir, work string, mutants []mutant, workers in
 
 	parallel(len(queue), workers, func(i int, worker int) {
 		m := &mutants[queue[i]]
-		m.Outcome, m.Killers = sweepMutant(ctx, dir, filepath.Join(work, "w"+strconv.Itoa(worker)), *m, tests(m), seconds)
+		m.Outcome, m.Killers = sweepMutant(ctx, dir, filepath.Join(work, "w"+strconv.Itoa(worker)), *m, tests(m), seconds, env)
 
 		done.Lock()
 		count++
@@ -412,7 +412,7 @@ func runTier(ctx context.Context, dir, work string, mutants []mutant, workers in
 }
 
 // sweepMutant builds the package's test binary with the mutant overlaid and runs the named tests, failing fast: killed if any fails.
-func sweepMutant(ctx context.Context, dir, work string, m mutant, tests []string, seconds map[string]float64) (string, []string) {
+func sweepMutant(ctx context.Context, dir, work string, m mutant, tests []string, seconds map[string]float64, env []string) (string, []string) {
 	overlay, err := writeOverlay(work, m)
 	if err != nil {
 		return "error: " + err.Error(), nil
@@ -449,6 +449,8 @@ func sweepMutant(ctx context.Context, dir, work string, m mutant, tests []string
 	//nolint:gosec // a binary this command built, running tests its profile named
 	test := exec.CommandContext(runCtx, binary, "-test.run", "^("+strings.Join(quoted, "|")+")$", "-test.v", "-test.count=1", "-test.failfast")
 	test.Dir = dir
+	// The tier's env is the one its tests were profiled under, or a fast-tier test reaches the docker it was classified as not needing.
+	test.Env = append(os.Environ(), env...)
 	test.WaitDelay = 10 * time.Second
 	out, err = test.CombinedOutput()
 

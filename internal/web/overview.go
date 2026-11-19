@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"html"
 	"html/template"
 	"net/http"
 	"slices"
@@ -379,9 +380,9 @@ func nextTagIn(loc *locale, at time.Time) template.HTML {
 	short, spoken := untilCompactIn(loc, time.Until(at))
 	clock := at.Format("Mon Jan 2 15:04 MST")
 
-	//nolint:gosec // G203: every interpolation is machine-formatted, not input
-	return template.HTML(fmt.Sprintf(`<time datetime=%q title=%q><span aria-hidden="true">%s</span><span class="visually-hidden">%s, %s</span></time>`,
-		at.UTC().Format(time.RFC3339), clock, short, spoken, clock))
+	//nolint:gosec // G203: every interpolation is escaped here; the words come from a translator's catalog
+	return template.HTML(fmt.Sprintf(`<time datetime="%s" title="%s"><span aria-hidden="true">%s</span><span class="visually-hidden">%s, %s</span></time>`,
+		html.EscapeString(at.UTC().Format(time.RFC3339)), html.EscapeString(clock), html.EscapeString(short), html.EscapeString(spoken), html.EscapeString(clock)))
 }
 
 // handleIndex answers the bare root, and its answer depends on how many

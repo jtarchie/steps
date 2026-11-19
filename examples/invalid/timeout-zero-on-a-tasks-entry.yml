@@ -1,0 +1,13 @@
+# Omitting timeout: already means no deadline, so a 0 on a tasks: entry is as ambiguous as on a task step.
+
+# expect: task "compile": timeout must be a positive duration
+
+tasks:
+- name: compile
+  timeout: "0"
+  run: echo building
+
+jobs:
+- name: build
+  plan:
+  - task: compile

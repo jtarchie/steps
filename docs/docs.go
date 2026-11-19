@@ -60,8 +60,6 @@ func (b Block) Mode() string {
 			return field
 		case field == "noexec" || strings.HasPrefix(field, "noexec="):
 			return "noexec"
-		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="), strings.HasPrefix(field, "deliver="), strings.HasPrefix(field, "github="), strings.HasPrefix(field, "linear="), strings.HasPrefix(field, "slack="), strings.HasPrefix(field, "registry="):
-			return "run"
 		}
 	}
 
@@ -87,126 +85,55 @@ func NoexecReasons() []string {
 }
 
 // NoexecReason is the reason a noexec block names, "" when it names none.
-func (b Block) NoexecReason() string {
-	for _, field := range strings.Fields(b.Info) {
-		if reason, ok := strings.CutPrefix(field, "noexec="); ok {
-			return reason
-		}
-	}
-
-	return ""
-}
+func (b Block) NoexecReason() string { return b.field("noexec") }
 
 // TestID is the fake-LLM scenario this block runs against, "" when none.
-func (b Block) TestID() string {
-	for _, field := range strings.Fields(b.Info) {
-		if id, ok := strings.CutPrefix(field, "test="); ok {
-			return id
-		}
-	}
-
-	return ""
-}
+func (b Block) TestID() string { return b.field("test") }
 
 // DeliverID is the captured webhook delivery this block runs with (docs_deliveries_test.go), "" when none.
-func (b Block) DeliverID() string {
-	for _, field := range strings.Fields(b.Info) {
-		if id, ok := strings.CutPrefix(field, "deliver="); ok {
-			return id
-		}
-	}
-
-	return ""
-}
+func (b Block) DeliverID() string { return b.field("deliver") }
 
 // MCPID is the fake MCP fixture this block's mcp_servers: are pointed at
 // during execution (docs_mcp_test.go), "" when none.
-func (b Block) MCPID() string {
-	for _, field := range strings.Fields(b.Info) {
-		if id, ok := strings.CutPrefix(field, "mcp="); ok {
-			return id
-		}
-	}
-
-	return ""
-}
+func (b Block) MCPID() string { return b.field("mcp") }
 
 // GitHubID is the fake GitHub fixture this block's github-* resources are
 // pointed at during execution (docs_github_test.go), "" when none.
-func (b Block) GitHubID() string {
-	for _, field := range strings.Fields(b.Info) {
-		if id, ok := strings.CutPrefix(field, "github="); ok {
-			return id
-		}
-	}
-
-	return ""
-}
+func (b Block) GitHubID() string { return b.field("github") }
 
 // LinearID is the fake Linear fixture this block's linear-* resources are
 // pointed at during execution (docs_linear_test.go), "" when none.
-func (b Block) LinearID() string {
-	for _, field := range strings.Fields(b.Info) {
-		if id, ok := strings.CutPrefix(field, "linear="); ok {
-			return id
-		}
-	}
-
-	return ""
-}
+func (b Block) LinearID() string { return b.field("linear") }
 
 // SlackID is the fake Slack fixture this block's slack-* resources are
 // pointed at during execution (docs_slack_test.go), "" when none.
-func (b Block) SlackID() string {
-	for _, field := range strings.Fields(b.Info) {
-		if id, ok := strings.CutPrefix(field, "slack="); ok {
-			return id
-		}
-	}
-
-	return ""
-}
+func (b Block) SlackID() string { return b.field("slack") }
 
 // RegistryID is the fake registry fixture this block's registry-image resources are
 // pointed at during execution (docs_registry_test.go), "" when none.
-func (b Block) RegistryID() string {
-	for _, field := range strings.Fields(b.Info) {
-		if id, ok := strings.CutPrefix(field, "registry="); ok {
-			return id
-		}
-	}
-
-	return ""
-}
+func (b Block) RegistryID() string { return b.field("registry") }
 
 // Name identifies the block in test output: page, line, and scenario or MCP
 // fixture if any.
 func (b Block) Name() string {
-	if id := b.TestID(); id != "" {
-		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
-	}
-
-	if id := b.MCPID(); id != "" {
-		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
-	}
-
-	if id := b.GitHubID(); id != "" {
-		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
-	}
-
-	if id := b.LinearID(); id != "" {
-		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
-	}
-
-	if id := b.SlackID(); id != "" {
-		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
-	}
-
-	if id := b.RegistryID(); id != "" {
-		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
+	for _, key := range []string{"test", "mcp", "github", "linear", "slack", "registry"} {
+		if id := b.field(key); id != "" {
+			return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
+		}
 	}
 
 	return fmt.Sprintf("%s:%d", b.Page, b.Line)
+}
+
+// field is the value of the first key=value in the fence info, "" when none.
+func (b Block) field(key string) string {
+	for _, field := range strings.Fields(b.Info) {
+		if value, ok := strings.CutPrefix(field, key+"="); ok {
+			return value
+		}
+	}
+
+	return ""
 }
 
 // Pages lists the embedded doc pages, README.md first (it is the index),
@@ -381,6 +308,10 @@ func extract(page, body string) ([]Block, error) {
 	for i, line := range strings.Split(body, "\n") {
 		fence := strings.HasPrefix(line, "```")
 
+		if !inside && yamlLookalike(line) {
+			return nil, fmt.Errorf("%s:%d: %q is not a column-0 ```yaml fence, so its example would go untested", page, i+1, strings.TrimSpace(line))
+		}
+
 		switch {
 		case fence && !inside:
 			inside = true
@@ -407,4 +338,18 @@ func extract(page, body string) ([]Block, error) {
 	}
 
 	return blocks, nil
+}
+
+// yamlLookalike is a fence a reader takes for a yaml example and extract does not: indented, opened with ~~~, or spelled yml or YAML.
+func yamlLookalike(line string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+
+	marker, ok := strings.CutPrefix(trimmed, "```")
+	if !ok {
+		marker, ok = strings.CutPrefix(trimmed, "~~~")
+	}
+
+	lang, _, _ := strings.Cut(strings.TrimSpace(marker), " ")
+
+	return ok && (strings.EqualFold(lang, "yaml") || strings.EqualFold(lang, "yml")) && !strings.HasPrefix(line, "```yaml")
 }

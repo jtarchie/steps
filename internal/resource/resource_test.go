@@ -220,16 +220,16 @@ func TestShellExtraEnvUnionsWithTypeEnv(t *testing.T) {
 	}
 }
 
-// TestParseVersionJSON covers the reason this decodes with UseNumber: a
+// TestDecodeVersion covers the reason this decodes with UseNumber: a
 // recorded version goes straight back into a check template and out over the
 // wire. Slack's ts through encoding/json's default float64 renders as
 // 1.6998876540012e+09, which is not a timestamp any API has heard of.
-func TestParseVersionJSON(t *testing.T) {
+func TestDecodeVersion(t *testing.T) {
 	t.Parallel()
 
-	version, err := ParseVersionJSON(`{"ts": 1699887654.001200, "id": 12345678901234567890}`)
+	version, err := DecodeVersion([]byte(`{"ts": 1699887654.001200, "id": 12345678901234567890}`))
 	if err != nil {
-		t.Fatalf("ParseVersionJSON: %v", err)
+		t.Fatalf("DecodeVersion: %v", err)
 	}
 
 	if got := fmt.Sprint(version["ts"]); got != "1699887654.001200" {
@@ -240,9 +240,9 @@ func TestParseVersionJSON(t *testing.T) {
 		t.Errorf("id = %s, want an id wider than float64 to survive", got)
 	}
 
-	_, err = ParseVersionJSON("not json")
+	_, err = DecodeVersion([]byte("not json"))
 	if err == nil {
-		t.Error("ParseVersionJSON(not json): want an error")
+		t.Error("DecodeVersion(not json): want an error")
 	}
 }
 

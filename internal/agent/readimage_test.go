@@ -597,7 +597,7 @@ func TestCLIStreamCarriesAnEchoedImage(t *testing.T) {
 		`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + payload + `"}}]}]}}` + "\n" +
 		`{"type":"result","subtype":"success","result":"done","num_turns":1}` + "\n"
 
-	got, err := parseCLIStream(strings.NewReader(stream), nil, nil)
+	got, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}

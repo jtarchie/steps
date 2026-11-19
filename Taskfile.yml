@@ -133,6 +133,9 @@ tasks:
       # can report; goleak already fails any package that leaves one running,
       # so the second buys nothing, once per package.
       GORACE: atexit_sleep_ms=0
+      # Where a test process that found no docker daemon says so (internal/testdocker); the seal prints it, so a stamp never vouches for a skipped docker tier in silence. Absolute, since each test runs in its own package directory.
+      STEPS_DOCKER_UNREACHABLE_MARKER:
+        sh: git rev-parse --path-format=absolute --git-path steps-docker-unreachable
     cmds:
       # -race on every package but ./e2e. A data race in the SSM data
       # channel's retransmit path shipped green through this whole sequence,

@@ -350,7 +350,7 @@ mcp_exports:
     args: { owner: acme }
     params:
       query: { max_length: 200, pattern: '^[^;]*$' }
-      limit: { max: 50, default: 20 }
+      limit: { min: 1, max: 50, default: 20 }
     rules: [acme-only, sanity]    # this tool, after the export's
 
 jobs:

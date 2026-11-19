@@ -39,6 +39,16 @@ func (c Container) ResolveWrite(ctx context.Context, rel string) (string, error)
 		return resolved, c.rejectLinkEscape(ctx, resolved, rel)
 	}
 
+	// `[ -e ]` follows links, so a dangling one reads as missing — and the write would create its target wherever it points.
+	dangling, err := c.isLink(ctx, resolved)
+	if err != nil {
+		return "", err
+	}
+
+	if dangling {
+		return "", fmt.Errorf("write_file: %q is a symlink to a path that does not exist, and writing through it could create a file outside the working directory", rel)
+	}
+
 	for ancestor := path.Dir(resolved); ancestor != c.dir && len(ancestor) > len(c.dir); ancestor = path.Dir(ancestor) {
 		found, existsErr := c.pathExists(ctx, ancestor)
 		if existsErr != nil {
@@ -104,6 +114,15 @@ func (c Container) realPath(ctx context.Context, p string) (string, error) {
 	}
 
 	return resolved, nil
+}
+
+func (c Container) isLink(ctx context.Context, p string) (bool, error) {
+	out, code, err := c.read(ctx, `[ -L `+shQuote(p)+` ] && printf yes`)
+	if err != nil {
+		return false, err
+	}
+
+	return code == 0 && strings.TrimSpace(out) == "yes", nil
 }
 
 // pathExists answers whether anything is at p, following links the way the tools that will open it do.

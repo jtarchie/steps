@@ -118,8 +118,8 @@ func TestContainerOpenRangeAsksSedOnlyWhenThereIsALimit(t *testing.T) {
 			t.Errorf("OpenRange(through %d) ran %q; a sed range is wanted exactly when there is a limit (%v)", through, script, wantSed)
 		}
 
-		if wantSed && !strings.Contains(script, "sed -n '1,3p'") {
-			t.Errorf("OpenRange(through %d) ran %q, want the range 1,3", through, script)
+		if wantSed && !strings.Contains(script, "sed -n '1,3p;3q'") {
+			t.Errorf("OpenRange(through %d) ran %q, want the range 1,3 and a quit after line 3 so sed never reads the rest of the file", through, script)
 		}
 
 		if !strings.Contains(script, "head -c") {

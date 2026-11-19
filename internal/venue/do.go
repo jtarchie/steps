@@ -674,23 +674,16 @@ func doAwaitDocker(ctx context.Context, worker Worker, machine *doMachine, confi
 
 // doDockerReady runs the docker wait in one session and hands back what it printed, the only account of why a droplet refused.
 func doDockerReady(ctx context.Context, client *ssh.Client) (string, error) {
-	session, err := client.NewSession()
+	out, err := sessionOutput(ctx, client, doReadyScript(), true)
+	if strings.Contains(out, doReadyMark) {
+		return out, nil
+	}
+
 	if err != nil {
-		return "", fmt.Errorf("opening a session: %w", err)
+		return out, err
 	}
 
-	// CombinedOutput takes no context: closing the client is what ends a wait the job no longer wants.
-	stop := context.AfterFunc(ctx, func() { _ = client.Close() })
-	out, err := session.CombinedOutput(doReadyScript())
-	_ = session.Close()
-
-	stop()
-
-	if strings.Contains(string(out), doReadyMark) {
-		return string(out), nil
-	}
-
-	return string(out), cmp.Or(err, errDockerNotReady)
+	return out, errDockerNotReady
 }
 
 func lastLine(out string) string {

@@ -28,7 +28,7 @@ func TestSpillDirGoesBeforeCaptureOnlyWhenCaptureWouldTakeIt(t *testing.T) {
 			t.Parallel()
 
 			dir := t.TempDir()
-			spillDir := newToolOutputSpillDir(filepath.Join(dir, spillUnder), "test-agent")
+			spillDir := newToolOutputSpillDir(t.Context(), filepath.Join(dir, spillUnder), "test-agent")
 
 			prepared := preparedAgentStep{step: config.Step{Outputs: []string{"built"}}, space: dirSpace(dir), spillDir: spillDir}
 			prepared.removeSpillDirIfCaptured()

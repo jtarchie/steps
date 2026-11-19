@@ -33,10 +33,10 @@ func (p ProgressFlags) wantsLive(out io.Writer) bool {
 	return isTerminal(out) && os.Getenv("CI") == "" && os.Getenv("TERM") != "dumb"
 }
 
-// draw installs the live view when one is wanted and returns what takes it down; with none, RunJob prints plainly on its own.
+// draw names the renderer RunJob draws the run with — the live view when one is wanted, else plain lines on ctx's stdout — and returns what takes it down.
 func (p ProgressFlags) draw(ctx context.Context, out io.Writer, st store.Usage) (context.Context, func()) {
 	if !p.wantsLive(out) {
-		return ctx, func() {}
+		return events.WithRenderer(ctx, runview.Plain(events.Stdout(ctx))), func() {}
 	}
 
 	ctx, live, stop := newLive(ctx, out, st)

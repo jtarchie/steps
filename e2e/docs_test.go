@@ -721,6 +721,35 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"SlackReactionSource":    reflect.TypeOf(config.SlackReactionSource{}),
 		"SlackReplyParams":       reflect.TypeOf(config.SlackReplyParams{}),
 		"SlackReactionParams":    reflect.TypeOf(config.SlackReactionParams{}),
+		"Rule":                   reflect.TypeOf(config.Rule{}),
+		"ParamSpec":              reflect.TypeOf(config.ParamSpec{}),
+		"TaskCache":              reflect.TypeOf(config.TaskCache{}),
+	}
+}
+
+// docsCoverageExempt are the schema-held types the walk above cannot reach, each with why.
+var docsCoverageExempt = map[reflect.Type]string{ //nolint:gochecknoglobals // read-only table
+	reflect.TypeOf(config.ExprResourceConfig{}): "resource_types: config: is not walked, and check_file/in_file/out_file need a sibling file a doc block cannot carry",
+}
+
+// A type the schema holds key-for-key is part of the DSL, so it is documented or named here: Rule, ParamSpec and TaskCache were schema-held and never walked.
+func TestDocsCoverageCoversTheSchemaTypes(t *testing.T) {
+	t.Parallel()
+
+	covered := map[reflect.Type]bool{}
+	for _, typ := range docsCoverageTypes() {
+		covered[typ] = true
+	}
+
+	for def, typ := range schemaDefsByType() {
+		_, exempt := docsCoverageExempt[typ]
+
+		switch {
+		case covered[typ] && exempt:
+			t.Errorf("config.%s is both covered and exempt; drop it from docsCoverageExempt", typ.Name())
+		case !covered[typ] && !exempt:
+			t.Errorf("$defs/%s (config.%s) is held to the schema but not to the docs: add it to docsCoverageTypes and walk its position, or say why in docsCoverageExempt", def, typ.Name())
+		}
 	}
 }
 
@@ -758,7 +787,7 @@ func TestDocsCoverage(t *testing.T) {
 	for name, typ := range docsCoverageTypes() {
 		var missing []string
 
-		for tag := range yamlTagNames(typ) {
+		for tag := range yamlTagNames(t, typ) {
 			if !used[name][tag] {
 				missing = append(missing, tag)
 			}
@@ -815,8 +844,16 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 		"mcp_servers":    "MCPServer",
 		"mcp_exports":    "MCPExport",
 		"tasks":          "Task",
+		"rules":          "Rule",
 	} {
 		eachOf(doc, key, func(entry any) { record(used, typeName, entry) })
+	}
+
+	for _, key := range []string{"agents", "mcp_exports", "tasks"} {
+		eachOf(doc, key, func(entry any) {
+			holder, _ := entry.(map[string]any)
+			recordToolsAndCaches(used, holder)
+		})
 	}
 
 	eachOf(doc, "resources", func(entry any) {
@@ -960,11 +997,26 @@ func collectStepKeys(steps []any, used map[string]map[string]bool) {
 		record(used, "Step", step)
 		record(used, "Assert", step["assert"])
 		record(used, "StepMemory", step["memory"])
+		recordToolsAndCaches(used, step)
 
 		for _, group := range nestedStepGroups(step) {
 			collectStepKeys(group.steps, used)
 		}
 	}
+}
+
+// recordToolsAndCaches records the params: of each tools: grant as ParamSpec and each caches: entry as TaskCache.
+func recordToolsAndCaches(used map[string]map[string]bool, holder map[string]any) {
+	eachOf(holder, "tools", func(entry any) {
+		tool, _ := entry.(map[string]any)
+		params, _ := tool["params"].(map[string]any)
+
+		for _, spec := range params {
+			record(used, "ParamSpec", spec)
+		}
+	})
+
+	eachOf(holder, "caches", func(entry any) { record(used, "TaskCache", entry) })
 }
 
 // docLinkPattern matches [text](target) inline links. Good enough for this

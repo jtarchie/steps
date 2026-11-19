@@ -72,6 +72,13 @@ CREATE UNIQUE INDEX idx_trigger_queue_pending_pin
 );`),
 	execStep(`ALTER TABLE approvals ADD COLUMN notified_at TEXT;
 ALTER TABLE questions ADD COLUMN notified_at TEXT;`),
+	execStep(`ALTER TABLE oauth_tokens ADD COLUMN pipeline_id INTEGER REFERENCES pipelines(id) ON DELETE CASCADE;
+UPDATE oauth_tokens SET pipeline_id = (SELECT p.id FROM pipelines p WHERE p.name = oauth_tokens.pipeline);
+DELETE FROM oauth_tokens WHERE grant_kind = 'export' AND pipeline_id IS NULL;
+DROP INDEX idx_oauth_tokens_grant;
+ALTER TABLE oauth_tokens DROP COLUMN pipeline;
+CREATE INDEX idx_oauth_tokens_grant ON oauth_tokens(client_id, actor, pipeline_id, export);
+CREATE INDEX idx_oauth_tokens_pipeline ON oauth_tokens(pipeline_id);`),
 	execStep(`CREATE TABLE cache_entries (
     kind    TEXT NOT NULL CHECK (kind IN ('step', 'resource')),
     key     TEXT NOT NULL,

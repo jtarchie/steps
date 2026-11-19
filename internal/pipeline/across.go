@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -84,6 +85,11 @@ func resetCollectedArtifacts(ctx context.Context, label string, step config.Step
 	artifacts := config.CollectedArtifacts(step)
 	if len(artifacts) == 0 {
 		return nil
+	}
+
+	_, err := holdArtifacts(ctx, true)
+	if err != nil {
+		return fmt.Errorf("%s: %w", label, err)
 	}
 
 	for _, name := range artifacts {
@@ -282,7 +288,7 @@ func planCells(ctx context.Context, r stepRunner, cells []config.Step, cellParen
 		}
 	}
 
-	if forced(ctx) || len(hashes) == 0 {
+	if !cellReuse(ctx) || len(hashes) == 0 {
 		return plans
 	}
 
@@ -324,7 +330,7 @@ func runAcrossCell(ctx context.Context, r stepRunner, i int, cell config.Step, p
 		return false, plan.err
 	}
 
-	if plan.cacheable && !forced(ctx) {
+	if plan.cacheable && cellReuse(ctx) {
 		done := plan.done
 
 		if !plan.known {
@@ -345,4 +351,41 @@ func runAcrossCell(ctx context.Context, r stepRunner, i int, cell config.Step, p
 	_, err := runNonGetStep(withCellVars(ctx), r, i, cell, nil, cellParent)
 
 	return false, err
+}
+
+type cellReuseKey struct{}
+
+// withoutCellReuse marks a chain whose hash no longer says what a cell reads: a cell's key is its chain, and an agent's or a volatile: step's node hashes what it was told, not what it wrote.
+func withoutCellReuse(ctx context.Context) context.Context {
+	return context.WithValue(ctx, cellReuseKey{}, true)
+}
+
+// cellReuse reports whether a matrix may skip a cell an earlier run already succeeded at.
+func cellReuse(ctx context.Context) bool {
+	off, _ := ctx.Value(cellReuseKey{}).(bool)
+
+	return !off && !forced(ctx)
+}
+
+// foldCellReuse is ctx for the step after step: without cell reuse once step is one merkle.UncacheableReason names, or reads something undeclared.
+func foldCellReuse(ctx context.Context, cfg *config.Config, step config.Step) context.Context {
+	if !cellReuse(ctx) {
+		return ctx
+	}
+
+	reason, err := merkle.UncacheableReason(cfg, step)
+	if err != nil || reason != "" || holdsVolatile(step) {
+		return withoutCellReuse(ctx)
+	}
+
+	return ctx
+}
+
+// holdsVolatile reports whether step, or any step it runs, is volatile:.
+func holdsVolatile(step config.Step) bool {
+	if step.Volatile || (step.Try != nil && holdsVolatile(*step.Try)) {
+		return true
+	}
+
+	return slices.ContainsFunc(merkle.ContainerBranches(step), holdsVolatile)
 }

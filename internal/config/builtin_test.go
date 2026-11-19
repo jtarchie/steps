@@ -56,6 +56,23 @@ resources:
 	}
 }
 
+// The Go-backed built-ins with no command run in this process, as slack-* do; given an image, the built-in was dropped for an empty shell type that loaded with no check.
+func TestABuiltinWithNoCommandIsRefusedAnImage(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{WebhookType, CronType, RegistryImageType, DockerServiceType, GitHubIssuesType, LinearTypes()[0]} {
+		_, err := Parse([]byte("resource_types:\n- {name: "+name+", image: alpine:3}\n"), "image", nil)
+		if err == nil || !strings.Contains(err.Error(), "image: cannot apply to "+name) {
+			t.Errorf("%s given an image = %v, want it refused as having nothing to run there", name, err)
+		}
+	}
+
+	_, err := Parse([]byte("resource_types:\n- {name: mine, image: alpine:3}\n"), "image", nil)
+	if err == nil || !strings.Contains(err.Error(), `resource_type "mine": sets none of check/in/out`) {
+		t.Errorf("a shell type with no commands = %v, want it refused", err)
+	}
+}
+
 // A user entry for a built-in name supplies what it sets and inherits the
 // rest. Built-in profiles carry no source: — only the user knows which model
 // to call — so before this, naming @builtin/reviewer to supply one discarded

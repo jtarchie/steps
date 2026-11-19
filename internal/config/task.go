@@ -113,7 +113,7 @@ type FixSpec struct {
 }
 
 // UnmarshalYAML decodes a FixSpec from either a scalar (agent name) or a
-// mapping ({agent, prompt, message_files, dir, tools, attempts, timeout}) YAML
+// mapping ({agent, messages, message_files, dir, tools, attempts, timeout}) YAML
 // node.
 func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
@@ -146,11 +146,25 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 
 		return nil
 	default:
-		return fmt.Errorf("task fix at line %d must be an agent name or a {agent, prompt, ...} mapping", value.Line)
+		return fmt.Errorf("task fix at line %d must be an agent name or a {agent, messages, ...} mapping", value.Line)
 	}
 }
 
 // FindTask returns the task with the given name, or an error if not found.
 func (c *Config) FindTask(name string) (*Task, error) {
 	return findNamed("task", name, c.Tasks, func(t Task) string { return t.Name })
+}
+
+// taskEntry is the tasks: entry step runs, or nil: an inline run: never consults one (see ResolveTask), and an unknown name is another validator's to report.
+func (c *Config) taskEntry(step Step) *Task {
+	if step.Task == "" || step.Run != "" {
+		return nil
+	}
+
+	task, err := c.FindTask(step.Task)
+	if err != nil {
+		return nil
+	}
+
+	return task
 }

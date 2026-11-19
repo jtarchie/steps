@@ -115,6 +115,9 @@ func (d *daemon) renamable(from, to string) (*servedPipeline, error) {
 	return served, nil
 }
 
+// runningListed caps how many runs a refusal names, so a pipeline with a wide in_parallel of jobs still gets a readable one.
+const runningListed = 5
+
 func (d *daemon) refuseWhileRunning(name string) error {
 	builds := d.runner.Running(name)
 	if len(builds) == 0 {
@@ -137,9 +140,9 @@ func (d *daemon) refuseWhileRunning(name string) error {
 
 // Split from start because all of it can still refuse, which a rename must hear while the old name is still served.
 func (d *daemon) open(name string) (store.Store, workspace.Provider, error) {
-	st, err := openState(d.state, name)
+	st, err := d.stateFor(name, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("could not open state for %q: %w", name, err)
+		return nil, nil, err
 	}
 
 	provider, err := d.provider(st)

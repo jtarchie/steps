@@ -98,6 +98,38 @@ func TestBareCachesNeverFollowASymlinkOutOfTheStep(t *testing.T) {
 	}
 }
 
+// TestBareCacheKeyReachesTheShellQuoted: a key is a digest today, but it lands in an rm -rf, where a space would split it into two targets.
+func TestBareCacheKeyReachesTheShellQuoted(t *testing.T) {
+	t.Parallel()
+
+	const key = "a b'c"
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "steps-build.x")
+
+	err := os.MkdirAll(filepath.Join(dir, "c"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := &bareSession{dir: dir, worker: Worker{Root: root}, attached: map[int]bool{0: true}, pipeline: "p", spec: shell.RunnerSpec{Caches: map[string]string{"c": key}}}
+
+	out, err := exec.CommandContext(t.Context(), "sh", "-c", s.attachScript()+s.detachCaches()).CombinedOutput() //nolint:gosec // the scripts under test, over t.TempDir() paths
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+
+	info, err := os.Stat(filepath.Join(root, "steps-task-caches", key))
+	if err != nil || !info.IsDir() {
+		t.Errorf("the cache was not filed back under its own key: %v (%s)", err, out)
+	}
+
+	pipeline, err := os.ReadFile(filepath.Join(root, "steps-task-caches", key+".pipeline")) //nolint:gosec // under t.TempDir()
+	if err != nil || string(pipeline) != "p" {
+		t.Errorf("the cache's pipeline record = %q, %v; want p", pipeline, err)
+	}
+}
+
 // TestBareCloseFilesBackOnlyTheCachesPutInPlace: one cache of two failing to restore leaves its path to the input, which close must not file over the kept cache.
 func TestBareCloseFilesBackOnlyTheCachesPutInPlace(t *testing.T) {
 	t.Parallel()
@@ -106,7 +138,7 @@ func TestBareCloseFilesBackOnlyTheCachesPutInPlace(t *testing.T) {
 	s.markAttached("attached 0\n")
 
 	script := s.detachCaches()
-	if !strings.Contains(script, "steps-task-caches/aaa") || strings.Contains(script, "steps-task-caches/bbb") {
+	if !strings.Contains(script, "steps-task-caches/'aaa'") || strings.Contains(script, "steps-task-caches/'bbb'") {
 		t.Errorf("close files back %q, want only the cache put in place (aaa)", script)
 	}
 }

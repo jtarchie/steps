@@ -276,7 +276,12 @@ func ParseWorker(raw string) (Worker, error) {
 
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return Worker{}, fmt.Errorf("%w %q: %w", ErrWorker, raw, err)
+		return Worker{}, unparsedWorker(raw, err)
+	}
+
+	err = refusePassword(parsed)
+	if err != nil {
+		return Worker{}, err
 	}
 
 	worker, err := applyScheme(Worker{URL: raw, Scheme: Scheme(parsed.Scheme)}, parsed)
@@ -300,6 +305,28 @@ func ParseWorker(raw string) (Worker, error) {
 	}
 
 	return worker, nil
+}
+
+// unparsedWorker does not repeat a URL carrying userinfo, since url.Parse's error quotes it and a password with a # or / is exactly what fails to parse.
+func unparsedWorker(raw string, err error) error {
+	if strings.Contains(raw, "@") {
+		return fmt.Errorf("%w: a URL with userinfo does not parse (not repeated here, as it may carry a password)", ErrWorker)
+	}
+
+	return fmt.Errorf("%w %q: %w", ErrWorker, raw, err)
+}
+
+// refusePassword refuses rather than ignores a password: the URL is logged and drawn wherever the worker is named, so the refusal shows it redacted.
+func refusePassword(parsed *url.URL) error {
+	if parsed.User == nil {
+		return nil
+	}
+
+	if _, ok := parsed.User.Password(); ok {
+		return fmt.Errorf("%w %q: a worker URL carries no password — ssh authenticates with a key (?identity=) or the agent", ErrWorker, parsed.Redacted())
+	}
+
+	return nil
 }
 
 // checkScheme runs whichever scheme-specific refusals the mapping's scheme

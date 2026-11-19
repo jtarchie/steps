@@ -210,6 +210,24 @@ func (s *Store) CompleteJob(ctx context.Context, id int64, status store.QueueSta
 	return nil
 }
 
+// QueuedWithoutInputs counts a row not yet claimed, or claimed with no run started: run_id is NULL until StartRun, and NOT EXISTS over a NULL run_id is true.
+func (s *Store) QueuedWithoutInputs(ctx context.Context, jobName string) (bool, error) {
+	var claimed bool
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM trigger_queue q
+			WHERE q.pipeline_id = $1 AND q.job_name = $2 AND q.status IN ('pending', 'running')
+			  AND NOT EXISTS (SELECT 1 FROM run_inputs i WHERE i.run_id = q.run_id)
+		)
+	`, s.pipelineID, jobName).Scan(&claimed)
+	if err != nil {
+		return false, fmt.Errorf("could not read the claims of job %q: %w", jobName, err)
+	}
+
+	return claimed, nil
+}
+
 // AbortQueuedJob keeps the row, so the queue still says somebody stopped it.
 func (s *Store) AbortQueuedJob(ctx context.Context, jobName string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `

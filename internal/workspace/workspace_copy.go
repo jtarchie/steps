@@ -7,13 +7,8 @@ import (
 	"os/exec"
 )
 
-// newCopyProvider builds the isolatingProvider for strategy: copy: portable
-// across macOS and Linux, using cp for the actual materialization (see
-// copyTree) so copy-on-write is used automatically wherever the underlying
-// filesystem supports it. root is resolved once at construction time (see
-// newIsolatingRoot) rather than lazily, so isolatingProvider always has a
-// real, absolute path to build under.
-func newCopyProvider(ws *Settings, keep bool) (Provider, error) {
+// newCopyProvider materializes with cp (see copyTree) so copy-on-write is used wherever the filesystem offers it, and resolves root at construction (see newIsolatingRoot) so the provider always has a real, absolute path to build under.
+func newCopyProvider(ws *Settings, keep bool) (*isolatingProvider, error) {
 	root, ownsRoot, err := newIsolatingRoot(ws.Root)
 	if err != nil {
 		return nil, err

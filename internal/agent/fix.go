@@ -135,7 +135,7 @@ func RunFix(
 		return fmt.Errorf("%w", err)
 	}
 
-	spillDir := newToolOutputSpillDir(dir, fix.Agent)
+	spillDir := newToolOutputSpillDir(ctx, dir, fix.Agent)
 	if spillDir != "" {
 		defer func() { _ = os.RemoveAll(spillDir) }()
 	}

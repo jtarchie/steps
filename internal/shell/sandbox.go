@@ -24,7 +24,9 @@ type sandboxer interface {
 
 // credentialPaths are the home-relative paths a fenced command may not read. Reads are otherwise open: a host command needs its toolchain wherever the operator installed it, and enumerating that is what makes deny-default reads unusable.
 var credentialPaths = []string{ //nolint:gochecknoglobals // static, read-only list
-	".ssh", ".aws", ".config/gh", ".config/gcloud", ".kube", ".gnupg", ".netrc", ".docker/config.json", "Library/Keychains",
+	".ssh", ".aws", ".config/gh", ".config/gcloud", ".kube", ".gnupg", ".netrc", ".docker", "Library/Keychains",
+	".git-credentials", ".config/git/credentials", ".npmrc", ".pypirc", ".cargo/credentials", ".cargo/credentials.toml",
+	".azure", ".terraform.d", ".config/op",
 }
 
 // hostFence is one sandboxed HostRunner: its policy and the private TMPDIR it owns, which Close removes.

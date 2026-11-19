@@ -677,12 +677,12 @@ func TestCLIStepStateAccumulatesAcrossAttempts(t *testing.T) {
 	// Attempt 1: emitted a verdict through the bridge and made two calls,
 	// then died before reporting a result (so no text, no turns).
 	first := newFakeBridgeObservation(t, "approve", "looks fine", []recordedToolCall{{name: "verdict", ok: true}})
-	state.absorb("sonnet", cliRunResult{turns: 0, trajectory: []recordedToolCall{{name: "Read", ok: true}}}, first)
+	state.absorb(t.Context(), "sonnet", cliRunResult{turns: 0, trajectory: []recordedToolCall{{name: "Read", ok: true}}}, first)
 
 	// Attempt 2: resumed, finished, said nothing about a verdict because it
 	// had already given one.
 	second := newFakeBridgeObservation(t, "", "", nil)
-	state.absorb("sonnet", cliRunResult{text: "done", turns: 3, trajectory: []recordedToolCall{{name: "Write", ok: true}}}, second)
+	state.absorb(t.Context(), "sonnet", cliRunResult{text: "done", turns: 3, trajectory: []recordedToolCall{{name: "Write", ok: true}}}, second)
 
 	result := state.result("sonnet", nil)
 
@@ -710,8 +710,8 @@ func TestCLIStepStateKeepsEarlierAnswer(t *testing.T) {
 	t.Parallel()
 
 	state := newCLIStepState()
-	state.absorb("sonnet", cliRunResult{text: "the real answer", turns: 2}, newFakeBridgeObservation(t, "reject", "", nil))
-	state.absorb("sonnet", cliRunResult{}, newFakeBridgeObservation(t, "", "", nil))
+	state.absorb(t.Context(), "sonnet", cliRunResult{text: "the real answer", turns: 2}, newFakeBridgeObservation(t, "reject", "", nil))
+	state.absorb(t.Context(), "sonnet", cliRunResult{}, newFakeBridgeObservation(t, "", "", nil))
 
 	result := state.result("sonnet", nil)
 	if result.text != "the real answer" || result.verdict != "reject" {
@@ -728,8 +728,8 @@ func TestCLIStepStateAbsorbSkipsTheAnswerOnAnErrorRun(t *testing.T) {
 	t.Parallel()
 
 	state := newCLIStepState()
-	state.absorb("sonnet", cliRunResult{text: "real answer", turns: 1}, newFakeBridgeObservation(t, "", "", nil))
-	state.absorb("sonnet", cliRunResult{
+	state.absorb(t.Context(), "sonnet", cliRunResult{text: "real answer", turns: 1}, newFakeBridgeObservation(t, "", "", nil))
+	state.absorb(t.Context(), "sonnet", cliRunResult{
 		isError: true, errSubtype: "success", text: "You've hit your session limit",
 	}, newFakeBridgeObservation(t, "", "", nil))
 
@@ -746,7 +746,7 @@ func TestCLIStepStateAbsorbFinishReason(t *testing.T) {
 	t.Parallel()
 
 	state := newCLIStepState()
-	state.absorb("sonnet", cliRunResult{
+	state.absorb(t.Context(), "sonnet", cliRunResult{
 		isError: true, errSubtype: "success", text: "You've hit your session limit",
 	}, newFakeBridgeObservation(t, "", "", nil))
 
@@ -757,14 +757,14 @@ func TestCLIStepStateAbsorbFinishReason(t *testing.T) {
 	// A later, genuinely successful attempt still overwrites it — "last
 	// non-empty wins" is unchanged. A real CLI success event always reports
 	// subtype "success" even when is_error is false.
-	state.absorb("sonnet", cliRunResult{text: "done", turns: 1, errSubtype: "success"}, newFakeBridgeObservation(t, "", "", nil))
+	state.absorb(t.Context(), "sonnet", cliRunResult{text: "done", turns: 1, errSubtype: "success"}, newFakeBridgeObservation(t, "", "", nil))
 
 	if state.finishReason != "success" {
 		t.Errorf("finishReason = %q, want success after a later successful attempt", state.finishReason)
 	}
 
 	maxTurns := newCLIStepState()
-	maxTurns.absorb("sonnet", cliRunResult{isError: true, errSubtype: "error_max_turns"}, newFakeBridgeObservation(t, "", "", nil))
+	maxTurns.absorb(t.Context(), "sonnet", cliRunResult{isError: true, errSubtype: "error_max_turns"}, newFakeBridgeObservation(t, "", "", nil))
 
 	if maxTurns.finishReason != "error_max_turns" {
 		t.Errorf("finishReason = %q, want error_max_turns recorded verbatim", maxTurns.finishReason)

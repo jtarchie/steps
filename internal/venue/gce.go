@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
 	"strings"
@@ -81,6 +82,9 @@ var reclaimOperations = map[string]bool{
 // machine created moments ago means "not yet".
 var errGCENotFound = errors.New("the instance does not exist")
 
+// errGCEOperationFailed is an operation GCE finished and reported failed: a refusal that built nothing, unlike a wait that never heard back.
+var errGCEOperationFailed = errors.New("the operation failed")
+
 // errGuestAttributesDisabled is an instance that cannot attest its host keys.
 var errGuestAttributesDisabled = errors.New("guest attributes are disabled on the instance")
 
@@ -111,11 +115,7 @@ var gceFor = func(ctx context.Context, worker Worker) (gceAPI, error) {
 	return newGCEFuncs(&gceClient{service: service}), nil
 }
 
-// gceService is the process's Compute Engine client, resolved once and cached
-// only on success. A session is dialled per STEP, so without this every
-// placed step re-read the credentials, re-minted a token and opened a fresh
-// connection pool — the same cost artifactStores caches away for the data
-// plane. Nothing about the client is worker-specific, so one serves them all.
+// gceService is the process's Compute Engine client, cached only on success: a session is dialled per STEP, so without it every placed step re-read the credentials, re-minted a token and opened a fresh connection pool, and nothing about the client is worker-specific.
 //
 //nolint:gochecknoglobals // one credential resolution per process, documented above
 var (
@@ -199,11 +199,11 @@ func zoneOperationOutcome(op *compute.Operation) error {
 	if op.Error != nil && len(op.Error.Errors) > 0 {
 		first := op.Error.Errors[0]
 
-		return fmt.Errorf("the operation failed: %s: %s", first.Code, first.Message)
+		return fmt.Errorf("%w: %s: %s", errGCEOperationFailed, first.Code, first.Message)
 	}
 
 	if op.HttpErrorStatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("the operation failed: HTTP %d: %s", op.HttpErrorStatusCode, op.HttpErrorMessage)
+		return fmt.Errorf("%w: HTTP %d: %s", errGCEOperationFailed, op.HttpErrorStatusCode, op.HttpErrorMessage)
 	}
 
 	return nil
@@ -671,7 +671,17 @@ func gceAwaitParkComplete(ctx context.Context, api gceAPI, worker Worker, projec
 }
 
 func stopGCE(api gceAPI, project, zone, name string) func(context.Context) error {
-	return func(ctx context.Context) error { return api.Stop(ctx, project, zone, name) }
+	return func(ctx context.Context) error {
+		err := api.Stop(ctx, project, zone, name)
+		if err != nil {
+			return err //nolint:wrapcheck // the caller names the instance and the worker
+		}
+
+		// The next start is a fresh boot whose docker has to be waited for again.
+		gcpReady.Delete(gcpReadyKey(project, zone, name))
+
+		return nil
+	}
 }
 
 // gceOwns is ec2Owns for Compute Engine.
@@ -762,19 +772,27 @@ func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone str
 	// anonymous billing machine.
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: creating %s from template %s (%s=%s)",
 		worker.URL, name, worker.Template, labelWorker, labels[labelWorker]))
+	slog.InfoContext(ctx, "worker.launching", "worker", worker.URL, "instance", name, "template", worker.Template)
+
+	// Not the caller's context, as CreateFleet's is not: the insert is ACCEPTED before its operation is waited out, so a cancel mid-wait leaves a machine being built. Bounded instead, and the caller checked once the operation is done.
+	insertCtx, cancelInsert := context.WithTimeout(context.WithoutCancel(ctx), acquireTimeout)
+	defer cancelInsert()
 
 	// Labelled in the insert itself, for the reason fleetRequest tags in the fleet request.
-	err := api.InsertFromTemplate(ctx, project, zone, name, worker.Template, labels)
+	err := api.InsertFromTemplate(insertCtx, project, zone, name, worker.Template, labels)
 	if err != nil {
-		// The insert is two-phased — the create is ACCEPTED before its
-		// operation is waited out — so an error here (the caller's context
-		// cancelled mid-wait, most likely) can leave a machine being built
-		// that nothing later will delete. Deleting a machine that was never
-		// created answers 404 and is a no-op.
 		//nolint:contextcheck // as cleanupAfterFailure: the caller's context may be the problem
-		gceDeleteInstance(api, worker, project, zone, name)
+		gceDeleteLostInsert(api, worker, project, zone, name, gceInsertRefused(err))
 
 		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, err)
+	}
+
+	if ctx.Err() != nil {
+		slog.WarnContext(ctx, "venue.launch_abandoned", "instance", name, "worker", worker.URL, "error", ctx.Err())
+		//nolint:contextcheck // as cleanupAfterFailure: the caller's context is the problem
+		gceDeleteInstance(api, worker, project, zone, name)
+
+		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, ctx.Err())
 	}
 
 	err = gceWaitForRunning(ctx, api, worker, project, zone, name, "")
@@ -800,8 +818,63 @@ func gceDeleteInstance(api gceAPI, worker Worker, project, zone, name string) {
 	cleanupAfterFailure(worker, name, "venue.delete_failed", deleteGCE(api, project, zone, name))
 }
 
+// gceInsertRefused reports an insert that built nothing: a 4xx on the call itself, or an operation GCE finished as failed.
+func gceInsertRefused(err error) bool {
+	var apiErr *googleapi.Error
+
+	return errors.Is(err, errGCEOperationFailed) || (errors.As(err, &apiErr) && apiErr.Code/100 == 4)
+}
+
+// gceDeleteLostInsert is terminateLostLaunch for Compute Engine: GCE's delete answers a 404 as success, and GCE briefly denies a fresh instance exists, so one delete can be a silent no-op on a machine that is billing. Unless refused, the name is read until the instance shows, then deleted.
+func gceDeleteLostInsert(api gceAPI, worker Worker, project, zone, name string, refused bool) {
+	if refused {
+		gceDeleteInstance(api, worker, project, zone, name)
+
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(acquirePoll)
+	defer ticker.Stop()
+
+search:
+	for range lostLaunchSearches {
+		_, err := api.Status(ctx, project, zone, name)
+		if err == nil {
+			slog.Warn("venue.lost_launch_deleted", "instance", name, "worker", worker.URL)
+			gceDeleteInstance(api, worker, project, zone, name)
+
+			return
+		}
+
+		if !errors.Is(err, errGCENotFound) {
+			slog.Warn("venue.lost_launch_search_failed", "instance", name, "worker", worker.URL, "error", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			break search
+		case <-ticker.C:
+		}
+	}
+
+	slog.Warn("venue.lost_launch_not_found", "instance", name, "worker", worker.URL,
+		"advice", "if an instance has this name, nothing will delete it")
+}
+
 func deleteGCE(api gceAPI, project, zone, name string) func(context.Context) error {
-	return func(ctx context.Context) error { return api.Delete(ctx, project, zone, name) }
+	return func(ctx context.Context) error {
+		err := api.Delete(ctx, project, zone, name)
+		if err != nil {
+			return err //nolint:wrapcheck // the caller names the instance and the worker
+		}
+
+		gcpReady.Delete(gcpReadyKey(project, zone, name))
+
+		return nil
+	}
 }
 
 const gceNamePrefix = "steps-"

@@ -236,7 +236,7 @@ func blockAnchorSpans(content, find string) []string {
 
 	originalLines := strings.Split(content, "\n")
 
-	candidates := blockAnchorCandidates(originalLines, searchLines)
+	candidates, _ := blockAnchorCandidates(originalLines, searchLines)
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -280,26 +280,29 @@ type anchorCandidate struct{ start, end int }
 // search block's first anchor and whose closing anchor (the FIRST later
 // line matching the last anchor — an inner lone "}" can therefore shadow
 // the block's real end, a known limitation inherited from opencode's
-// original) lands within ±25% of the search block's length.
-func blockAnchorCandidates(originalLines, searchLines []string) []anchorCandidate {
+// original) lands within ±25% of the search block's length. scanned counts the lines examined for a closing anchor: the work a model-supplied find costs against a large file.
+func blockAnchorCandidates(originalLines, searchLines []string) (candidates []anchorCandidate, scanned int) {
 	firstAnchor := strings.TrimSpace(searchLines[0])
 	lastAnchor := strings.TrimSpace(searchLines[len(searchLines)-1])
 	searchSize := len(searchLines)
 	maxLineDelta := max(1, searchSize/4)
-
-	var candidates []anchorCandidate
 
 	for i, line := range originalLines {
 		if strings.TrimSpace(line) != firstAnchor {
 			continue
 		}
 
-		for j := i + 2; j < len(originalLines); j++ {
+		// A closing anchor past this line makes a block too long to be a candidate, so scanning on to EOF is quadratic work for nothing.
+		end := min(len(originalLines), i+searchSize+maxLineDelta)
+
+		for j := i + 2; j < end; j++ {
+			scanned++
+
 			if strings.TrimSpace(originalLines[j]) != lastAnchor {
 				continue
 			}
 
-			if actual := j - i + 1; actual-searchSize <= maxLineDelta && searchSize-actual <= maxLineDelta {
+			if actual := j - i + 1; searchSize-actual <= maxLineDelta {
 				candidates = append(candidates, anchorCandidate{i, j})
 			}
 
@@ -307,7 +310,7 @@ func blockAnchorCandidates(originalLines, searchLines []string) []anchorCandidat
 		}
 	}
 
-	return candidates
+	return candidates, scanned
 }
 
 // anchorSimilarity averages per-line similarity across the candidate's

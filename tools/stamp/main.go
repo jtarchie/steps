@@ -19,6 +19,9 @@ import (
 const (
 	pendingFile = "steps-task-pending"
 	stampFile   = "steps-task-stamp"
+	// dockerMarker is written by internal/testdocker when the tests `task` runs found no daemon (the Taskfile names it in STEPS_DOCKER_UNREACHABLE_MARKER); dockerNote is that marker kept beside the stamp it qualifies.
+	dockerMarker = "steps-docker-unreachable"
+	dockerNote   = "steps-task-stamp-docker"
 )
 
 func main() {
@@ -39,11 +42,11 @@ func run(ctx context.Context, verb string, stdin io.Reader, stdout io.Writer) er
 	case "begin":
 		return begin(ctx)
 	case "seal":
-		return seal(ctx)
+		return seal(ctx, stdout)
 	case "check":
 		return check(ctx)
 	case "pushed":
-		return pushed(ctx, stdin)
+		return pushed(ctx, stdin, stdout)
 	case "guard":
 		return guard(stdin, stdout)
 	default:
@@ -57,10 +60,16 @@ func begin(ctx context.Context) error {
 		return err
 	}
 
+	// A marker an earlier, unsealed run left is about tests this run has not run yet.
+	err = removeGitFile(ctx, dockerMarker)
+	if err != nil {
+		return err
+	}
+
 	return writeGitFile(ctx, pendingFile, tree)
 }
 
-func seal(ctx context.Context) error {
+func seal(ctx context.Context, stdout io.Writer) error {
 	began, err := readGitFile(ctx, pendingFile)
 	if err != nil {
 		return fmt.Errorf("no run to seal: %w", err)
@@ -79,7 +88,38 @@ func seal(ctx context.Context) error {
 		return fmt.Errorf("the tree changed while the checks ran, so they vouch for neither version — rerun `task`:\n%s", treeDiff(ctx, began, tree))
 	}
 
-	return writeGitFile(ctx, stampFile, tree)
+	err = writeGitFile(ctx, stampFile, tree)
+	if err != nil {
+		return err
+	}
+
+	return noteDockerSkipped(ctx, stdout)
+}
+
+// noteDockerSkipped says, in one line and without refusing (D13), that the stamp vouches for a run whose docker-backed tests all skipped, and keeps the reason beside the stamp for pre-push.
+func noteDockerSkipped(ctx context.Context, stdout io.Writer) error {
+	err := removeGitFile(ctx, dockerNote)
+	if err != nil {
+		return err
+	}
+
+	reason, err := readGitFile(ctx, dockerMarker)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintf(stdout, "stamp: sealed, but no docker daemon was reachable, so every docker-backed test skipped (%s)\n", reason)
+
+	err = writeGitFile(ctx, dockerNote, reason)
+	if err != nil {
+		return err
+	}
+
+	return removeGitFile(ctx, dockerMarker)
 }
 
 func check(ctx context.Context) error {
@@ -112,11 +152,13 @@ func check(ctx context.Context) error {
 }
 
 // pushed is pre-push: every tip being sent must be EXACTLY the validated tree. git writes one line per ref on stdin — local ref, local sha, remote ref, remote sha.
-func pushed(ctx context.Context, stdin io.Reader) error {
+func pushed(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	raw, err := io.ReadAll(stdin)
 	if err != nil {
 		return fmt.Errorf("reading the refs being pushed: %w", err)
 	}
+
+	sent := false
 
 	for _, line := range strings.Split(string(raw), "\n") {
 		fields := strings.Fields(line)
@@ -129,6 +171,13 @@ func pushed(ctx context.Context, stdin io.Reader) error {
 		if err != nil {
 			return err
 		}
+
+		sent = true
+	}
+
+	reason, err := readGitFile(ctx, dockerNote)
+	if sent && err == nil {
+		_, _ = fmt.Fprintf(stdout, "stamp: pushing a tree validated with every docker-backed test skipped (%s)\n", reason)
 	}
 
 	return nil
@@ -220,6 +269,20 @@ func writeGitFile(ctx context.Context, name, content string) error {
 	return nil
 }
 
+func removeGitFile(ctx context.Context, name string) error {
+	path, err := gitFile(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	err = os.Remove(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing %s: %w", name, err)
+	}
+
+	return nil
+}
+
 func readGitFile(ctx context.Context, name string) (string, error) {
 	path, err := gitFile(ctx, name)
 	if err != nil {
@@ -295,8 +358,10 @@ func guard(stdin io.Reader, stdout io.Writer) error {
 //
 // ponytail: a quote-aware word splitter, not a shell parser — it does not expand variables or aliases, so `git $X` is not seen. Upgrade to mvdan.cc/sh if the agent is ever caught going around it that way.
 func bypass(command string) string {
-	var state scan
+	return scanFrom(command, scan{})
+}
 
+func scanFrom(command string, state scan) string {
 	for _, raw := range shellWords(withoutHeredocs(command)) {
 		if reason := state.next(raw); reason != "" {
 			return reason
@@ -306,27 +371,51 @@ func bypass(command string) string {
 	return ""
 }
 
-// scan is where bypass is in the command line: inside which command, and whether the next word is data or a script to read.
-type scan struct{ inGit, inCommit, inShell, takesValue, recurse bool }
+// scan is where bypass is in the command line: inside which command, whether the next word is data or a script to read, and whether the hooks-path key was named before git ran (keyed outlives a separator, as an export would).
+type scan struct{ inGit, inCommit, inShell, takesValue, recurse, keyed bool }
+
+// hooksKey is git's config key for the hook directory, lowercased because git reads config keys case-insensitively, and split so this file's own commands do not name it.
+const hooksKey = "core." + "hookspath"
+
+const hooksReason = "the hooks-path config key is what points git at hack/hooks, so changing it disables the commit gate"
+
+func namesHooksKey(raw string) bool {
+	return strings.Contains(strings.ToLower(raw), hooksKey)
+}
 
 func (s *scan) next(raw string) string {
 	word := unquote(raw)
 
 	switch {
 	case raw == separator:
-		*s = scan{}
+		*s = scan{keyed: s.keyed}
 	case s.recurse:
 		s.recurse = false
 
-		return bypass(word)
-	case !s.inGit && s.shellStep(word):
+		return scanFrom(word, scan{keyed: s.keyed})
+	case !s.inGit && s.beforeGit(raw, word):
 	case word == "git" || strings.HasSuffix(word, "/git"):
+		if s.keyed {
+			return hooksReason
+		}
+
 		s.inGit, s.inCommit = true, false
 	case s.inGit:
 		return s.gitStep(raw, word)
 	}
 
 	return ""
+}
+
+// beforeGit reads a word ahead of any git: GIT_CONFIG_KEY_0=<key>, env or export set config in the environment of the git that follows.
+func (s *scan) beforeGit(raw, word string) bool {
+	if namesHooksKey(raw) {
+		s.keyed = true
+
+		return true
+	}
+
+	return s.shellStep(word)
 }
 
 // shellStep tracks `sh -c SCRIPT` and `eval SCRIPT`, whose next word is a command line of its own.
@@ -345,13 +434,13 @@ func (s *scan) shellStep(word string) bool {
 
 func (s *scan) gitStep(raw, word string) string {
 	switch {
-	case strings.Contains(raw, "core.hooksPath"):
-		return "core.hooksPath is what points git at hack/hooks, so changing it disables the commit gate"
+	case namesHooksKey(raw):
+		return hooksReason
 	case s.takesValue:
 		s.takesValue = false
 	case word == "commit":
 		s.inCommit = true
-	case word == "--no-verify":
+	case abbreviatesNoVerify(word):
 		return "--no-verify skips the commit gate"
 	case s.inCommit && shortNoVerify(word):
 		return "`git commit -n` is --no-verify, which skips the commit gate"
@@ -360,6 +449,13 @@ func (s *scan) gitStep(raw, word string) string {
 	}
 
 	return ""
+}
+
+// abbreviatesNoVerify is --no-verify or a prefix of it from --no-v on: git takes any unambiguous prefix of a long option, so --no-verif is --no-verify.
+func abbreviatesNoVerify(word string) bool {
+	const option = "--no-verify"
+
+	return len(word) >= len("--no-v") && len(word) <= len(option) && option[:len(word)] == word
 }
 
 // commitValueFlags are the git commit options whose next word is data, such as a message that may name the flags this guard refuses.

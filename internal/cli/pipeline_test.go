@@ -61,7 +61,7 @@ func TestOnlyASetConflictSaysToReRead(t *testing.T) {
 	}))
 	t.Cleanup(daemon.Close)
 
-	client := newDaemonClient(daemon.URL)
+	client := mustDaemonClient(t, daemon.URL)
 
 	_, err := client.set("app", web.SetRequest{Source: "jobs: []"})
 	if err == nil || !strings.Contains(err.Error(), "re-read") {
@@ -84,7 +84,7 @@ func TestARefusalTravelsBackToTheTerminalThatAsked(t *testing.T) {
 	daemon := httptest.NewServer(held.server.Handler())
 	t.Cleanup(daemon.Close)
 
-	client := newDaemonClient(daemon.URL)
+	client := mustDaemonClient(t, daemon.URL)
 
 	result, err := client.set("app", web.SetRequest{Source: idlePipeline})
 	if err != nil || !result.Created {
@@ -116,7 +116,7 @@ func TestASlowDaemonIsNotCalledUnreachable(t *testing.T) {
 		daemon.Close()
 	})
 
-	client := newDaemonClient(daemon.URL)
+	client := mustDaemonClient(t, daemon.URL)
 	client.http.Timeout = 50 * time.Millisecond
 
 	err := client.rename("app", "renamed")
@@ -124,7 +124,7 @@ func TestASlowDaemonIsNotCalledUnreachable(t *testing.T) {
 		t.Errorf("a daemon that did not answer in time = %v, want it reported busy rather than down", err)
 	}
 
-	err = newDaemonClient("http://127.0.0.1:1").rename("app", "renamed")
+	err = mustDaemonClient(t, "http://127.0.0.1:1").rename("app", "renamed")
 	if err == nil || !strings.Contains(err.Error(), "start one") {
 		t.Errorf("a daemon nothing answers for = %v, want the advice to start one", err)
 	}
@@ -262,7 +262,7 @@ func TestARepairIsCompareAndSet(t *testing.T) {
 	daemon := httptest.NewServer(restarted.server.Handler())
 	t.Cleanup(daemon.Close)
 
-	client := newDaemonClient(daemon.URL)
+	client := mustDaemonClient(t, daemon.URL)
 
 	held, err := client.get("app")
 	current, broken := held.Config, held.Broken

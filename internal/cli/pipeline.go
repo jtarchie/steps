@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -32,14 +31,9 @@ type TargetFlags struct {
 	Target string `default:"http://127.0.0.1:8088" env:"STEPS_TARGET" help:"the steps web daemon to talk to, optionally http://user:password@host" name:"target"`
 }
 
-// Validate is kong's hook. A target that does not parse cannot have its credentials taken off, and every message after this one would quote it whole — url.Parse's own error included.
+// Validate is kong's hook, so a bad target is refused before a verb's other checks; newDaemonClient repeats it for the verbs whose --target is not TargetFlags.
 func (f TargetFlags) Validate() error {
-	_, err := url.Parse(strings.TrimSuffix(f.Target, "/"))
-	if err != nil {
-		return errors.New("--target does not parse as a URL; check its syntax, percent-encoding any / : @ in the password (not repeated here, as it may carry one)")
-	}
-
-	return nil
+	return checkTarget(f.Target)
 }
 
 // PipelineNameFlag is which pipeline on that daemon a verb is about.
@@ -67,9 +61,9 @@ func (p *PipelineSetCmd) Run(streams Streams) error {
 		name = config.Slugify(p.Config)
 	}
 
-	err := config.ValidPipelineName(name)
+	valid, err := namedPipeline(name, "pipeline set")
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return err
 	}
 
 	// Substituted and parsed HERE, so the daemon receives the substituted text (stored in the revision, printed in the confirm diff, returned by `pipeline get`), and the parse is what resolves the includes that travel with it.
@@ -80,11 +74,11 @@ func (p *PipelineSetCmd) Run(streams Streams) error {
 
 	// The parsed config's own source, not a second read: two reads of one path have no ordering between them, so an editor saving in the window uploads bytes nobody validated.
 
-	return p.upload(out, name, cfg.Revision.Source, cfg.Revision.Includes)
+	return p.upload(streams.In, out, valid, cfg.Revision.Source, cfg.Revision.Includes)
 }
 
 // namedPipeline refuses a name before it is concatenated into a URL: "#" truncates the path into a fragment nobody sends and "?" into a query, so `-p prod#old` asked the daemon about `prod` — which for destroy is the wrong pipeline, irrecoverably.
-func namedPipeline(name, verb string) (string, error) {
+func namedPipeline(name, verb string) (pipelineName, error) {
 	if name == "" {
 		return "", fmt.Errorf("steps %s needs -p <name>", verb)
 	}
@@ -94,13 +88,16 @@ func namedPipeline(name, verb string) (string, error) {
 		return "", fmt.Errorf("%w", err)
 	}
 
-	return name, nil
+	return pipelineName(name), nil
 }
 
 // upload is the half that talks to the daemon: read what it serves, diff,
 // ask, and send the sha that diff was against.
-func (p *PipelineSetCmd) upload(out io.Writer, name, source string, includes map[string]string) error {
-	client := newDaemonClient(p.Target)
+func (p *PipelineSetCmd) upload(in io.Reader, out io.Writer, name pipelineName, source string, includes map[string]string) error {
+	client, err := newDaemonClient(p.Target)
+	if err != nil {
+		return err
+	}
 
 	current, err := client.get(name)
 	if err != nil {
@@ -118,7 +115,7 @@ func (p *PipelineSetCmd) upload(out io.Writer, name, source string, includes map
 		return nil
 	}
 
-	err = p.confirm(out, name, current, source, includes)
+	err = p.confirmFrom(in, out, string(name), current, source, includes)
 	if err != nil {
 		return err
 	}
@@ -156,8 +153,8 @@ func setVerb(result web.SetResult) string {
 	}
 }
 
-// confirm shows what would change and asks, unless told not to.
-func (p *PipelineSetCmd) confirm(out io.Writer,
+// confirmFrom shows what would change and asks, unless told not to.
+func (p *PipelineSetCmd) confirmFrom(in io.Reader, out io.Writer,
 	name string, current Held, source string, includes map[string]string,
 ) error {
 	if p.NonInteractive {
@@ -176,7 +173,7 @@ func (p *PipelineSetCmd) confirm(out io.Writer,
 		_, _ = fmt.Fprint(out, diffIncludes(convertIncludes[string](current.Config.Includes), includes))
 	}
 
-	return ask(out, "apply configuration?", "not applied")
+	return askFrom(in, out, "apply configuration?", "not applied")
 }
 
 // The includes are as much of a deploy as the YAML is — a run_file: decides what a step executes — so an edit that only moved one of them was shown a pipeline reported as unchanged, and confirmed on that.
@@ -212,13 +209,18 @@ func convertIncludes[To, From ~string | ~[]byte](includes map[string]From) map[s
 	return converted
 }
 
-// ask is the one confirmation both destructive verbs read, so a closed stdin is a no rather than a crash in one of them and a crash in the other.
-func ask(out io.Writer, question, refusal string) error {
+// askFrom is the one confirmation both destructive verbs read, so a closed stdin is a no rather than a crash in one of them and a crash in the other.
+func askFrom(in io.Reader, out io.Writer, question, refusal string) error {
 	_, _ = fmt.Fprint(out, question+" [y/N] ")
+
+	// An invocation handed no stdin is one with nobody to answer, which is a closed stdin.
+	if in == nil {
+		return errors.New(refusal)
+	}
 
 	var answer string
 
-	_, err := fmt.Scanln(&answer)
+	_, err := fmt.Fscanln(in, &answer)
 	if err != nil && !errors.Is(err, io.EOF) {
 		answer = ""
 	}
@@ -270,7 +272,10 @@ type PipelineListCmd struct {
 func (p *PipelineListCmd) Run(streams Streams) error {
 	out := streams.Out
 
-	client := newDaemonClient(p.Target)
+	client, err := newDaemonClient(p.Target)
+	if err != nil {
+		return err
+	}
 
 	rows, err := client.list()
 	if err != nil {
@@ -287,21 +292,12 @@ func (p *PipelineListCmd) Run(streams Streams) error {
 	_, _ = fmt.Fprintln(writer, "PIPELINE\tJOBS\tCONFIG\tSTATE\tSET FROM")
 
 	for _, row := range rows {
-		state := "running"
-
-		switch {
-		case row.Broken != "":
-			state = "broken"
-		case row.Paused:
-			state = "paused"
-		}
-
 		from := row.From
 		if from == "" {
 			from = "-"
 		}
 
-		_, _ = fmt.Fprintf(writer, "%s\t%d\t%s\t%s\t%s\n", row.Name, row.Jobs, shortConfig(row.SHA), state, from)
+		_, _ = fmt.Fprintf(writer, "%s\t%d\t%s\t%s\t%s\n", row.Name, row.Jobs, shortConfig(row.SHA), servedState(row), from)
 	}
 
 	err = flush(writer)
@@ -319,6 +315,17 @@ func (p *PipelineListCmd) Run(streams Streams) error {
 	return nil
 }
 
+func servedState(row web.PipelineSummary) string {
+	switch {
+	case row.Broken != "":
+		return "broken"
+	case row.Paused:
+		return "paused"
+	default:
+		return "running"
+	}
+}
+
 // PipelineGetCmd prints what a daemon serves, which after a local edit is the only place that configuration still exists.
 type PipelineGetCmd struct {
 	TargetFlags      `embed:""`
@@ -334,7 +341,10 @@ func (p *PipelineGetCmd) Run(streams Streams) error {
 		return err
 	}
 
-	client := newDaemonClient(p.Target)
+	client, err := newDaemonClient(p.Target)
+	if err != nil {
+		return err
+	}
 
 	current, err := client.get(name)
 	if err != nil {
@@ -351,7 +361,8 @@ func (p *PipelineGetCmd) Run(streams Streams) error {
 
 	_, _ = fmt.Fprint(out, current.Config.Source)
 
-	for path, content := range current.Config.Includes {
+	for _, path := range slices.Sorted(maps.Keys(current.Config.Includes)) {
+		content := current.Config.Includes[path]
 		sayf(out, "\n# --- %s (%d bytes) ---\n%s", path, len(content), content)
 	}
 
@@ -376,13 +387,18 @@ func (p *PipelineDestroyCmd) Run(streams Streams) error {
 
 	// Asked because it is not recoverable: history, versions and the merkle cache go with the row, and nothing here is a soft delete.
 	if !p.NonInteractive {
-		err = ask(out, "destroy "+name+", everything recorded under it, and its mcp logins?", "not destroyed")
+		err = askFrom(streams.In, out, "destroy "+string(name)+", everything recorded under it, and its mcp logins?", "not destroyed")
 		if err != nil {
 			return err
 		}
 	}
 
-	err = newDaemonClient(p.Target).destroy(name)
+	client, err := newDaemonClient(p.Target)
+	if err != nil {
+		return err
+	}
+
+	err = client.destroy(name)
 	if err != nil {
 		return err
 	}
@@ -420,7 +436,12 @@ func pauseVerb(out io.Writer, target, pipeline, verb string) error {
 		return err
 	}
 
-	err = newDaemonClient(target).pause(name, verb)
+	client, err := newDaemonClient(target)
+	if err != nil {
+		return err
+	}
+
+	err = client.pause(name, verb)
 	if err != nil {
 		return err
 	}
@@ -451,7 +472,12 @@ func (p *PipelineRenameCmd) Run(streams Streams) error {
 		return fmt.Errorf("%w", err)
 	}
 
-	err = newDaemonClient(p.Target).rename(name, p.To)
+	client, err := newDaemonClient(p.Target)
+	if err != nil {
+		return err
+	}
+
+	err = client.rename(name, p.To)
 	if err != nil {
 		return err
 	}

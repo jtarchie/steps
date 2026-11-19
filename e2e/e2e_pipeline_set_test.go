@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -141,6 +143,12 @@ func TestPipelineSetCarriesIncludes(t *testing.T) {
 	}
 
 	writePipelineFile(t, filepath.Join(dir, "ci", "build.sh"), "echo from-the-include >> "+log+"\n")
+
+	// Several, so get's listing has an order to keep.
+	for _, name := range []string{"e", "a", "d", "b", "c"} {
+		writePipelineFile(t, filepath.Join(dir, "ci", name+".sh"), "true\n")
+	}
+
 	writePipelineFile(t, path, `
 jobs:
 - name: build
@@ -148,6 +156,16 @@ jobs:
   - task: compile
     inputs: []
     run_file: ci/build.sh
+  - task: e
+    run_file: ci/e.sh
+  - task: a
+    run_file: ci/a.sh
+  - task: d
+    run_file: ci/d.sh
+  - task: b
+    run_file: ci/b.sh
+  - task: c
+    run_file: ci/c.sh
 `)
 
 	served := startWebFor(t, path, "--interval", "1h")
@@ -170,6 +188,17 @@ jobs:
 	out := captureStdout(t, func() { served.pipeline(t, "get", "-p", cli.PipelineName(path)) })
 	if !strings.Contains(out, "run_file: ci/build.sh") {
 		t.Errorf("get does not print the configuration that was set:\n%s", out)
+	}
+
+	listed := regexp.MustCompile(`(?m)^# --- (\S+) `).FindAllStringSubmatch(out, -1)
+
+	includes := make([]string, 0, len(listed))
+	for _, match := range listed {
+		includes = append(includes, match[1])
+	}
+
+	if want := []string{"ci/a.sh", "ci/b.sh", "ci/build.sh", "ci/c.sh", "ci/d.sh", "ci/e.sh"}; !slices.Equal(includes, want) {
+		t.Errorf("get listed the includes as %v, want %v: one order, so two gets of one configuration diff clean", includes, want)
 	}
 }
 

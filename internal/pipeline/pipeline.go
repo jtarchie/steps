@@ -216,7 +216,48 @@ func recordBlock(ctx context.Context, r stepRunner, node merkle.Node, result map
 }
 
 func recordBlockAs(ctx context.Context, r stepRunner, node merkle.Node, class outcome.Class, result map[string]any, err error) {
+	if class == outcome.Succeeded {
+		bestEffort(ctx, "RecordNode", recordSucceeded(context.WithoutCancel(ctx), r, node, result))
+
+		return
+	}
+
 	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(ctx, node), r.jobName, store.NodeStatus(class), result, err))
+}
+
+type ownNodeKey struct{}
+
+// ownNode is what the step runNonGetStep is running recorded as its own success.
+type ownNode struct {
+	record store.NodeRecord
+	result map[string]any
+}
+
+// withOwnNode scopes ctx to one step's own node record, which nested steps shadow with theirs.
+func withOwnNode(ctx context.Context) (context.Context, *ownNode) {
+	own := &ownNode{}
+
+	return context.WithValue(ctx, ownNodeKey{}, own), own
+}
+
+// recordSucceeded records node succeeded and keeps it as the step's own, for a hook that fails the step afterwards.
+func recordSucceeded(ctx context.Context, r stepRunner, node merkle.Node, result map[string]any) error {
+	record := nodeRecord(ctx, node)
+
+	if own, _ := ctx.Value(ownNodeKey{}).(*ownNode); own != nil {
+		own.record, own.result = record, result
+	}
+
+	return r.st.RecordNode(ctx, record, r.jobName, store.NodeSucceeded, result, nil) //nolint:wrapcheck // each caller names the step
+}
+
+// failedBy re-records the step's own node under the outcome a hook gave it: left succeeded, every reader of the node, the matrix cache's HasNodeSucceeded among them, calls a failed step green.
+func (own *ownNode) failedBy(ctx context.Context, r stepRunner, err error) {
+	if own.record.Hash == "" {
+		return
+	}
+
+	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), own.record, r.jobName, store.NodeStatus(outcome.Classify(ctx, err)), own.result, err))
 }
 
 // runPlaced owns a leaf step's recording order: the node, then where it ran — run_placements references the node, and a step that FAILED on a worker is the one whose machine somebody wants named.
@@ -233,7 +274,7 @@ func runPlaced(
 		return failedAt(node.Hash), err
 	}
 
-	err = r.st.RecordNode(ctx, nodeRecord(ctx, node), r.jobName, store.NodeSucceeded, result, nil)
+	err = recordSucceeded(ctx, r, node, result)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (%s %q): could not record node %q: %w", node.StepIndex, node.Kind, placedAs, node.Hash, err)
 	}

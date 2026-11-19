@@ -166,7 +166,7 @@ func OpenExisting(path, pipelineName string) (*Store, error) {
 		return nil, fmt.Errorf("could not resolve pipeline %q in %q: %w", pipelineName, path, err)
 	}
 
-	return &Store{db: reader.db, reads: reader.db, path: path, pipeline: pipelineName, pipelineID: id, readOnly: true}, nil
+	return &Store{db: reader.db, reads: reader.db, path: path, pipeline: pipelineName, pipelineID: id, skipsCompaction: true}, nil
 }
 
 // names is the "did you mean" half of the refusal above.
@@ -311,10 +311,7 @@ func Attach(path, pipelineName string) (*Store, error) {
 	}
 
 	if err != nil {
-		if held.release() {
-			_ = held.reads.Close()
-			_ = held.db.Close()
-		}
+		_ = held.drop()
 
 		return nil, err
 	}
@@ -323,10 +320,7 @@ func Attach(path, pipelineName string) (*Store, error) {
 
 	err = held.reads.QueryRowContext(context.Background(), `SELECT id FROM pipelines WHERE name = ?`, pipelineName).Scan(&id)
 	if err != nil {
-		if held.release() {
-			_ = held.reads.Close()
-			_ = held.db.Close()
-		}
+		_ = held.drop()
 
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: %s is not in %s", store.ErrNoSuchPipeline, pipelineName, path)

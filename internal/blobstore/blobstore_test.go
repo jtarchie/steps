@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -82,9 +81,6 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		_, _ = w.Write(body)
-	case http.MethodDelete:
-		delete(f.objects, r.URL.Path)
-		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -192,158 +188,21 @@ func TestParseRefusals(t *testing.T) {
 	}
 }
 
-// TestRawKeyRoundTrip covers the untyped half the venue data plane uses:
-// whole objects by caller-chosen key, presigned for a machine with no AWS
-// identity of its own.
-func TestRawKeyRoundTrip(t *testing.T) {
-	store, fake := newTestStore(t)
-	ctx := context.Background()
-
-	staged := filepath.Join(t.TempDir(), "payload")
-
-	err := os.WriteFile(staged, []byte("packed-bytes"), 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = store.PutFile(ctx, "wire/abc", staged)
-	if err != nil {
-		t.Fatalf("PutFile: %v", err)
-	}
-
-	assertStoredAt(t, fake, "/cas/team/wire/abc")
-
-	if !hasKey(t, store, "wire/abc") {
-		t.Fatal("Has = false, want true")
-	}
-
-	body, err := store.Get(ctx, "wire/abc")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-
-	got, err := io.ReadAll(body)
-	_ = body.Close()
-
-	if err != nil || string(got) != "packed-bytes" {
-		t.Fatalf("Get = %q, %v; want the uploaded bytes", got, err)
-	}
-
-	err = store.Delete(ctx, "wire/abc")
-	if err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-
-	if hasKey(t, store, "wire/abc") {
-		t.Fatal("Has after delete = true, want false")
-	}
-}
-
-func hasKey(t *testing.T, store *Store, key string) bool {
-	t.Helper()
-
-	has, err := store.Has(context.Background(), key)
-	if err != nil {
-		t.Fatalf("Has: %v", err)
-	}
-
-	return has
-}
-
-// TestPresignedURLsWorkWithPlainHTTP is the whole point of presigning: the
-// far end speaks nothing but net/http, and the URL alone carries the
-// authority.
-func TestPresignedURLsWorkWithPlainHTTP(t *testing.T) {
-	store, _ := newTestStore(t)
-	ctx := context.Background()
-
-	putURL, err := store.PresignPut(ctx, "wire/out-1", time.Minute)
-	if err != nil {
-		t.Fatalf("PresignPut: %v", err)
-	}
-
-	request, err := http.NewRequestWithContext(ctx, http.MethodPut, putURL, strings.NewReader("worker-bytes"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatalf("PUT to the presigned URL: %v", err)
-	}
-
-	_ = response.Body.Close()
-
-	if response.StatusCode >= 300 {
-		t.Fatalf("PUT status = %d", response.StatusCode)
-	}
-
-	getURL, err := store.PresignGet(ctx, "wire/out-1", time.Minute)
-	if err != nil {
-		t.Fatalf("PresignGet: %v", err)
-	}
-
-	response, err = http.Get(getURL) //nolint:noctx,gosec // a test URL this test minted
-	if err != nil {
-		t.Fatalf("GET from the presigned URL: %v", err)
-	}
-
-	got, err := io.ReadAll(response.Body)
-	_ = response.Body.Close()
-
-	if err != nil || string(got) != "worker-bytes" {
-		t.Fatalf("GET = %q, %v; want what the PUT stored", got, err)
-	}
-}
-
-// TestPresignedURLsSignOnlyHost is the hermetic guard for a bug that reached
-// real AWS and nothing before it.
-//
-// The S3 SDK's default checksum behavior (it was this package's client) added x-amz-checksum-mode to a GetObject
-// and folded it into SignedHeaders, which made the URL valid ONLY for a
-// client that sends that header. Everything that ever fetches one of ours
-// sends nothing but Host — a plain GET from net/http or curl —
-// so real S3 answered 403 SignatureDoesNotMatch every time, while the fake
-// above answered 200 to anything request-shaped.
-//
-// Signing is offline, so this needs no network and no fixture: it reads the
-// signature actually produced. Any future change that pulls another
-// header into the signature fails here rather than in production.
-func TestPresignedURLsSignOnlyHost(t *testing.T) {
-	store, _ := newTestStore(t)
-	ctx := context.Background()
-
-	get, err := store.PresignGet(ctx, "wire/probe", time.Minute)
-	if err != nil {
-		t.Fatalf("PresignGet: %v", err)
-	}
-
-	put, err := store.PresignPut(ctx, "wire/probe", time.Minute)
-	if err != nil {
-		t.Fatalf("PresignPut: %v", err)
-	}
-
-	for name, raw := range map[string]string{"GET": get, "PUT": put} {
-		parsed, parseErr := url.Parse(raw)
-		if parseErr != nil {
-			t.Fatalf("%s: unparseable presigned URL: %v", name, parseErr)
-		}
-
-		signed := parsed.Query().Get("X-Amz-SignedHeaders")
-		if signed != "host" {
-			t.Errorf("%s signs %q, want exactly \"host\" — a client that sends only Host gets 403 from real S3", name, signed)
-		}
-	}
-}
-
-// TestRegionQueryOverridesTheAmbientRegion: ?region= is the knob for a bucket outside the operator's default region, and real S3 refuses a request signed for the wrong one. The credential scope names the region the URL was signed for.
+// TestRegionQueryOverridesTheAmbientRegion: ?region= is the knob for a bucket outside the operator's default region, and real S3 refuses a request signed for the wrong one. The credential scope names the region the request was signed for.
 func TestRegionQueryOverridesTheAmbientRegion(t *testing.T) {
+	var authorization atomic.Value
+
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		authorization.Store(r.Header.Get("Authorization"))
+	}))
+	t.Cleanup(server.Close)
+
 	t.Setenv("AWS_ACCESS_KEY_ID", "test")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
 	t.Setenv("AWS_REGION", "eu-west-1")
 	t.Setenv("AWS_DEFAULT_REGION", "eu-west-1")
 
-	opts, err := Parse("s3://cas/team?region=us-west-2&endpoint=http://127.0.0.1:1")
+	opts, err := Parse("s3://cas/team?region=us-west-2&endpoint=" + server.URL)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -353,17 +212,12 @@ func TestRegionQueryOverridesTheAmbientRegion(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	raw, err := store.PresignGet(context.Background(), "wire/probe", time.Minute)
+	_, err = store.HasTree(context.Background(), "probe")
 	if err != nil {
-		t.Fatalf("PresignGet: %v", err)
+		t.Fatalf("HasTree: %v", err)
 	}
 
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		t.Fatalf("unparseable presigned URL: %v", err)
-	}
-
-	credential := parsed.Query().Get("X-Amz-Credential")
+	credential, _ := authorization.Load().(string)
 	if !strings.Contains(credential, "/us-west-2/s3/") {
 		t.Fatalf("credential scope %q, want the ?region= override us-west-2", credential)
 	}
@@ -438,7 +292,7 @@ func TestA5xxIsRetriedAndA4xxIsNot(t *testing.T) {
 		calls.Store(0)
 		answer.Store([2]string{tc.status, "<Error><Code>" + tc.code + "</Code></Error>"})
 
-		err = store.Delete(context.Background(), "k")
+		err = store.PutTree(context.Background(), "k", t.TempDir())
 
 		// Retried: the second call's 200 is the answer. Not: the first call's refusal is.
 		want := map[bool]int32{true: 2, false: 1}[tc.retried]
@@ -448,7 +302,7 @@ func TestA5xxIsRetriedAndA4xxIsNot(t *testing.T) {
 	}
 }
 
-// TestRequestsAreSentAsS3VerifiesThem is minioAwkwardUploads without minio: the path S3 re-encodes before checking the signature must already be in that encoding, and an empty body must still say its length.
+// TestRequestsAreSentAsS3VerifiesThem is minioAwkwardUploads without minio: the path S3 re-encodes before checking the signature must already be in that encoding, and a body must say its length.
 func TestRequestsAreSentAsS3VerifiesThem(t *testing.T) {
 	var (
 		mu      sync.Mutex
@@ -478,14 +332,7 @@ func TestRequestsAreSentAsS3VerifiesThem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	empty := filepath.Join(t.TempDir(), "empty")
-
-	err = os.WriteFile(empty, nil, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = store.PutFile(context.Background(), "wire/a+b=c", empty)
+	err = store.PutTree(context.Background(), "a+b=c", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +340,7 @@ func TestRequestsAreSentAsS3VerifiesThem(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if len(paths) != 1 || paths[0] != "/cas/team/wire/a%2Bb%3Dc" || chunked {
-		t.Fatalf("sent %v (chunked=%v), want /cas/team/wire/a%%2Bb%%3Dc with a Content-Length", paths, chunked)
+	if len(paths) != 1 || paths[0] != "/cas/team/blobs/a%2Bb%3Dc" || chunked {
+		t.Fatalf("sent %v (chunked=%v), want /cas/team/blobs/a%%2Bb%%3Dc with a Content-Length", paths, chunked)
 	}
 }

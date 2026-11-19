@@ -29,7 +29,7 @@ type Report struct {
 }
 
 var (
-	createTable = regexp.MustCompile(`(?s)CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\s*\)`)
+	createTable = regexp.MustCompile(`(?s)CREATE TABLE (?:IF NOT EXISTS )?(\w+) \((.*?)\n\s*\)`)
 	statement   = regexp.MustCompile(`(?i)^\s*(SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH)\b`)
 	runColumn   = regexp.MustCompile(`(?i)\brun_id\b[^,\n]*\bREFERENCES\s+runs\b`)
 	addColumn   = regexp.MustCompile(`(?i)ALTER TABLE\s+(\w+)\s+ADD\s+(?:COLUMN\s+)?pipeline_id\b`)

@@ -129,7 +129,7 @@ func TestPreflightReturnsToARecoveredPrimary(t *testing.T) {
 		t.Fatalf("problems = %+v, want none — the fallback should have absorbed the outage", problems)
 	}
 
-	selection, pinned := selectedSource(testPin("returner"))
+	selection, pinned := selectedSource(t.Context(), testPin("returner"))
 	if !pinned || selection.source.Model != "openai/backup" {
 		t.Fatalf("selection = %+v (pinned=%v), want the fallback pinned", selection, pinned)
 	}
@@ -144,7 +144,7 @@ func TestPreflightReturnsToARecoveredPrimary(t *testing.T) {
 		t.Fatalf("problems = %+v, want none — the primary is answering again", problems)
 	}
 
-	if _, stillPinned := selectedSource(testPin("returner")); stillPinned {
+	if _, stillPinned := selectedSource(t.Context(), testPin("returner")); stillPinned {
 		t.Error("the agent is still pinned to the fallback after its primary recovered")
 	}
 
@@ -197,7 +197,7 @@ func TestPreflightFailsOverToTheSameModelElsewhere(t *testing.T) {
 		t.Fatalf("problems = %+v, want none — the same model answered on the fallback's endpoint", problems)
 	}
 
-	if selection, pinned := selectedSource(testPin("mirrored")); !pinned || selection.source.Endpoint != fallbackURL {
+	if selection, pinned := selectedSource(t.Context(), testPin("mirrored")); !pinned || selection.source.Endpoint != fallbackURL {
 		t.Errorf("selection = %+v (pinned=%v), want the fallback's endpoint pinned", selection, pinned)
 	}
 }
@@ -216,7 +216,7 @@ func TestPreflightKeepsAServingFallback(t *testing.T) {
 	primaryUp.Store(false)
 	Preflight(t.Context(), cfg, []string{"stayer"}, &config.Preflight{})
 
-	if _, pinned := selectedSource(testPin("stayer")); !pinned {
+	if _, pinned := selectedSource(t.Context(), testPin("stayer")); !pinned {
 		t.Fatal("no fallback was pinned for an agent whose primary is down")
 	}
 
@@ -224,7 +224,7 @@ func TestPreflightKeepsAServingFallback(t *testing.T) {
 	expireProbes()
 	Preflight(t.Context(), cfg, []string{"stayer"}, &config.Preflight{})
 
-	selection, pinned := selectedSource(testPin("stayer"))
+	selection, pinned := selectedSource(t.Context(), testPin("stayer"))
 	if !pinned {
 		t.Fatal("the pin was dropped while the primary was still down and the fallback still serving")
 	}
@@ -250,7 +250,7 @@ func TestPreflightRedecidesWhenThePinnedSourceDies(t *testing.T) {
 	primaryUp.Store(false)
 	Preflight(t.Context(), cfg, []string{"stranded"}, &config.Preflight{})
 
-	if _, pinned := selectedSource(testPin("stranded")); !pinned {
+	if _, pinned := selectedSource(t.Context(), testPin("stranded")); !pinned {
 		t.Fatal("no fallback was pinned for an agent whose primary is down")
 	}
 
@@ -264,7 +264,7 @@ func TestPreflightRedecidesWhenThePinnedSourceDies(t *testing.T) {
 		t.Error("preflight reported no problems with every source down")
 	}
 
-	if _, pinned := selectedSource(testPin("stranded")); pinned {
+	if _, pinned := selectedSource(t.Context(), testPin("stranded")); pinned {
 		t.Error("the agent is still pinned to a fallback that stopped answering")
 	}
 
@@ -302,7 +302,7 @@ func TestPreflightDoesNotDemoteAPinnedFallback(t *testing.T) {
 
 	Preflight(t.Context(), cfg, []string{"demoted"}, &config.Preflight{})
 
-	selection, pinned := selectedSource(testPin("demoted"))
+	selection, pinned := selectedSource(t.Context(), testPin("demoted"))
 	if !pinned {
 		t.Fatal("the pin was dropped while the primary was down and the pinned fallback still serving")
 	}
@@ -423,7 +423,7 @@ func TestAServingFallbackDoesNotRefreshThePinsClock(t *testing.T) {
 	// every poll would.
 	pinServedSource(scope, &cfg.Agents[0], 0)
 
-	if _, pinned := selectedSource(scope); pinned {
+	if _, pinned := selectedSource(t.Context(), scope); pinned {
 		t.Error("a step serving on the fallback renewed the pin's lifetime — a busy pipeline would never re-decide")
 	}
 }
@@ -460,7 +460,7 @@ func TestPreflightKeepsAPinAgainstACachedRecovery(t *testing.T) {
 
 	Preflight(t.Context(), cfg, []string{"cached"}, &config.Preflight{})
 
-	selection, pinned := selectedSource(scope)
+	selection, pinned := selectedSource(t.Context(), scope)
 	if !pinned {
 		t.Fatal("the pin was dropped on a cached positive taken before the outage that earned it")
 	}
@@ -496,7 +496,7 @@ func TestPreflightStillReturnsOnAFreshProbe(t *testing.T) {
 
 	Preflight(t.Context(), cfg, []string{"asked"}, &config.Preflight{})
 
-	if _, pinned := selectedSource(scope); pinned {
+	if _, pinned := selectedSource(t.Context(), scope); pinned {
 		t.Error("the agent is still pinned after its primary was asked, and answered")
 	}
 }
@@ -539,7 +539,7 @@ func TestThePreRunProbeRenewsThePinItKeeps(t *testing.T) {
 
 	Preflight(t.Context(), cfg, []string{"renewed"}, &config.Preflight{})
 
-	selection, pinned := selectedSource(scope)
+	selection, pinned := selectedSource(t.Context(), scope)
 	if !pinned {
 		t.Fatal("the pin expired while preflight was re-deciding it every run")
 	}
@@ -577,7 +577,7 @@ func TestPreflightReleasesEveryAgentSharingARecoveredPrimary(t *testing.T) {
 	Preflight(t.Context(), cfg, names, &config.Preflight{})
 
 	for _, name := range names {
-		if _, pinned := selectedSource(agentPinScope(cfg, name)); !pinned {
+		if _, pinned := selectedSource(t.Context(), agentPinScope(cfg, name)); !pinned {
 			t.Fatalf("%q was not pinned by an outage of the model it runs on", name)
 		}
 	}
@@ -587,7 +587,7 @@ func TestPreflightReleasesEveryAgentSharingARecoveredPrimary(t *testing.T) {
 	Preflight(t.Context(), cfg, names, &config.Preflight{})
 
 	for _, name := range names {
-		if _, pinned := selectedSource(agentPinScope(cfg, name)); pinned {
+		if _, pinned := selectedSource(t.Context(), agentPinScope(cfg, name)); pinned {
 			t.Errorf("%q is still pinned after the shared primary answered this very pass", name)
 		}
 	}
@@ -618,7 +618,7 @@ func TestPreflightRedecidesWhenTheSharedPinnedSourceDies(t *testing.T) {
 	primaryUp.Store(false)
 	Preflight(t.Context(), cfg, []string{"neighbour", "pinned"}, &config.Preflight{})
 
-	if _, pinned := selectedSource(scope); !pinned {
+	if _, pinned := selectedSource(t.Context(), scope); !pinned {
 		t.Fatal("the fallback was not pinned by an outage of the primary")
 	}
 
@@ -627,7 +627,7 @@ func TestPreflightRedecidesWhenTheSharedPinnedSourceDies(t *testing.T) {
 	expireProbes()
 	Preflight(t.Context(), cfg, []string{"neighbour", "pinned"}, &config.Preflight{})
 
-	if _, pinned := selectedSource(scope); pinned {
+	if _, pinned := selectedSource(t.Context(), scope); pinned {
 		t.Error("the pin survived a fallback this pass had already found dead — every step of the run would go to it")
 	}
 }
@@ -723,7 +723,7 @@ func TestPreflightReportsAnAgentStrandedBetweenTwoDeadSources(t *testing.T) {
 	primaryUp.Store(false)
 	Preflight(t.Context(), cfg, []string{"stranded-pair"}, &config.Preflight{})
 
-	if _, pinned := selectedSource(scope); !pinned {
+	if _, pinned := selectedSource(t.Context(), scope); !pinned {
 		t.Fatal("no fallback was pinned for an agent whose primary is down")
 	}
 
@@ -770,7 +770,7 @@ func TestPreflightReleasesAnAgentWhoseNeighbourAskedTheQuestion(t *testing.T) {
 	}
 
 	for name, scope := range scopes {
-		if _, pinned := selectedSource(scope); !pinned {
+		if _, pinned := selectedSource(t.Context(), scope); !pinned {
 			t.Fatalf("%q was not pinned by an outage of the model it runs on", name)
 		}
 	}
@@ -783,7 +783,7 @@ func TestPreflightReleasesAnAgentWhoseNeighbourAskedTheQuestion(t *testing.T) {
 	Preflight(t.Context(), cfg, []string{"late"}, &config.Preflight{})
 
 	for name, scope := range scopes {
-		if _, pinned := selectedSource(scope); pinned {
+		if _, pinned := selectedSource(t.Context(), scope); pinned {
 			t.Errorf("%q is still pinned after the primary answered — for it, only a neighbour's pass had asked", name)
 		}
 	}

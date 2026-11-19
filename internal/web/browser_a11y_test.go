@@ -255,7 +255,8 @@ func TestTheKeyboardReachesEverythingVisibly(t *testing.T) {
 func walkTabs(ctx context.Context, t *testing.T, base, path string) {
 	t.Helper()
 
-	count := must(ctx, t, chromedp.Evaluate[int](`document.querySelectorAll('a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])').length`), media("light", false), chromedp.Navigate(base+path))
+	// Every main pre and table counts too: app.js gives an overflowing one a tab stop from a ResizeObserver, which on a loaded machine has not fired yet when this is read.
+	count := must(ctx, t, chromedp.Evaluate[int](`document.querySelectorAll('a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"]), main pre, main table').length`), media("light", false), chromedp.Navigate(base+path))
 
 	for press := range count + 5 {
 		stop := must(ctx, t, chromedp.Evaluate[*tabStop](readStop), chromedp.KeyEvent(kb.Tab))

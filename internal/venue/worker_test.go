@@ -173,6 +173,29 @@ func TestParseWorkerRefusesOptionsItDoesNotKnow(t *testing.T) {
 	}
 }
 
+// A password in a worker URL would be logged wherever the URL is, and ssh here authenticates by key: refused, without the refusal repeating the secret.
+func TestParseWorkerRefusesAPasswordWithoutEchoingIt(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{
+		"ssh://jt:hunter2-secret@box",
+		"docker+ssh://jt:hunter2-secret@box",
+		"ssh://:hunter2-secret@box/srv",
+		"ssh://jt:hunter2-secret#x@box",
+	} {
+		_, err := ParseWorker(raw)
+		if !errors.Is(err, ErrWorker) {
+			t.Errorf("ParseWorker(%q) = %v, want ErrWorker", raw, err)
+
+			continue
+		}
+
+		if strings.Contains(err.Error(), "hunter2-secret") {
+			t.Errorf("ParseWorker(%q) error repeats the password: %v", raw, err)
+		}
+	}
+}
+
 // Address is what the run record and the browser show of an ssh worker: the user is part of which machine it was, and a mapping without one gains no stray @.
 func TestSSHAddressKeepsTheUserOnlyWhenOneWasWritten(t *testing.T) {
 	t.Parallel()

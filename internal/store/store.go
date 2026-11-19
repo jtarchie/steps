@@ -92,13 +92,7 @@ type Store interface {
 	Credentials
 }
 
-// ErrSchemaVersion is a database some other build of steps wrote.
-//
-// There is no migration path, deliberately: a driver refuses a schema it
-// cannot write rather than upgrading it, and the answer is to delete the
-// database. What this exists for is that somebody is TOLD — an unrecognised
-// schema used to open fine, lack a column, fail every insert naming it, and
-// leave a green build that had recorded nothing.
+// ErrSchemaVersion is a database at a schema this open cannot use: older than the driver's oldestUpgradable, newer than this build, or merely older to a read-only open, which never upgrades; it exists so somebody is TOLD, since an unrecognised schema used to open fine, lack a column, fail every insert naming it, and leave a green build that had recorded nothing.
 var ErrSchemaVersion = errors.New("the state database was written by a different version of steps")
 
 // MaxStoredErrorBytes bounds the error text any column here keeps.

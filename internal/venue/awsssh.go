@@ -27,8 +27,20 @@ var errAWSInstall = errors.New("installing steps' ssh key on the instance did no
 // awsInstalled maps an instance to the host key its install reported, so later steps skip a SendCommand that takes seconds.
 var awsInstalled sync.Map //nolint:gochecknoglobals // per-process memory of what this process installed where
 
-// awsInstalling holds a lock per instance, so concurrent dials share one install.
+// awsInstalling holds a lock per instance, so concurrent dials share one install: a one-slot channel rather than a mutex, so a waiter can leave with its context.
 var awsInstalling sync.Map //nolint:gochecknoglobals // as above
+
+func lockInstall(ctx context.Context, instance string) (func(), error) {
+	held, _ := awsInstalling.LoadOrStore(instance, make(chan struct{}, 1))
+	slot := held.(chan struct{}) //nolint:forcetypeassert // this map holds one type
+
+	select {
+	case slot <- struct{}{}:
+		return func() { <-slot }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("waiting for another step's install on %s: %w", instance, ctx.Err())
+	}
+}
 
 func awsSSHClient(ctx context.Context, worker Worker) (*ssh.Client, error) {
 	api, err := ssmAPIFor(ctx, worker)
@@ -96,9 +108,12 @@ func isAuthRefusal(err error) bool {
 
 func awsHostKey(ctx context.Context, api ssmdial.API, worker Worker, platform ssmdial.Platform, signer ssh.Signer) (ssh.PublicKey, error) {
 	// One install per instance at a time: parallel steps on a fresh machine would each send a SendCommand that waits minutes for docker.
-	lock, _ := awsInstalling.LoadOrStore(worker.Instance, &sync.Mutex{})
-	lock.(*sync.Mutex).Lock()         //nolint:forcetypeassert // this map holds one type
-	defer lock.(*sync.Mutex).Unlock() //nolint:forcetypeassert // as above
+	unlock, err := lockInstall(ctx, worker.Instance)
+	if err != nil {
+		return nil, fmt.Errorf("worker %q: %w", worker.URL, err)
+	}
+
+	defer unlock()
 
 	if cached, ok := awsInstalled.Load(worker.Instance); ok {
 		return cached.(ssh.PublicKey), nil //nolint:forcetypeassert // this map holds one type

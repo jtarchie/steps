@@ -133,6 +133,9 @@ var notRecorded = map[string]string{ //nolint:gosec // route keys and reasons, n
 	"POST /p/:pipeline/hooks/:resource": "a webhook delivery is automatic: the run it starts already says webhook: <resource>",
 }
 
+// noEffectKey marks a request that succeeded without changing anything — a decision on an approval somebody else already decided — so the log does not record an act that never took effect.
+const noEffectKey = "steps.no_effect"
+
 // recordActivity writes an entry for a mutating route once it has succeeded, through the handle of the pipeline it acted on.
 func (s *Server) recordActivity(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c *echo.Context) error {
@@ -155,7 +158,7 @@ func (s *Server) recordActivity(next echo.HandlerFunc) echo.HandlerFunc {
 		err := next(c)
 
 		_, status := echo.ResolveResponseStatus(c.Response(), err)
-		if status >= http.StatusBadRequest {
+		if status >= http.StatusBadRequest || c.Get(noEffectKey) == true {
 			return err
 		}
 

@@ -53,9 +53,7 @@ func ReadSource(path string, vars map[string]string) ([]byte, error) {
 // Slugify turns a pipeline path into its identity: the base name without its
 // extension.
 //
-// It lives here, and web.Slugify calls it, because a second copy is how the
-// identity split the first time. internal/web cannot be imported from this
-// package, and the string is needed on both sides.
+// It lives here, and cli.PipelineName calls it, because a second copy is how the identity split the first time.
 func Slugify(path string) string {
 	base := filepath.Base(path)
 

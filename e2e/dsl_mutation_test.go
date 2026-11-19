@@ -232,7 +232,7 @@ func TestDSLMutationCoversStep(t *testing.T) {
 		covered[operator.tag] = true
 	}
 
-	for tag := range yamlTagNames(reflect.TypeOf(config.Step{})) {
+	for tag := range yamlTagNames(t, reflect.TypeOf(config.Step{})) {
 		if covered[tag] {
 			continue
 		}

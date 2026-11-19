@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
 	rsrc "github.com/jtarchie/steps/internal/resource"
@@ -134,6 +135,8 @@ type resourceHistory struct {
 	// history. For those, EMPTY is an answer — "nothing has passed" — and
 	// must not fall back to a check that would resolve around the gate.
 	gated map[string]bool
+	// together is, per gated resource no get fans out over, its version in the set that passed upstream together (store.Versions.PassedSet) — nil when no set did — so latest builds a pair the trigger judged rather than each resource's newest green version alone.
+	together map[string]map[string]any
 }
 
 // loadResourceHistory reads the history of every resource this job gets, once
@@ -141,7 +144,7 @@ type resourceHistory struct {
 // the executor have to judge the same list, and a lazy per-resource read
 // could see a poll land between them.
 func loadResourceHistory(ctx context.Context, st store.Versions, job *config.Job) (*resourceHistory, error) {
-	history := &resourceHistory{versions: map[string][]map[string]any{}, gated: map[string]bool{}}
+	history := &resourceHistory{versions: map[string][]map[string]any{}, gated: map[string]bool{}, together: map[string]map[string]any{}}
 
 	// A passed:-constrained resource resolves among GREEN versions, not raw
 	// history. Enforcing the gate here — at resolution — is what makes it a
@@ -157,11 +160,13 @@ func loadResourceHistory(ctx context.Context, st store.Versions, job *config.Job
 	// gate. Note a --pin still overrides; naming a version is an instruction.
 	constraints := job.PassedConstraints()
 
+	together, err := passedTogether(ctx, st, constraints)
+	if err != nil {
+		return nil, err
+	}
+
 	for _, name := range job.GetResourceNames() {
-		var (
-			versions []map[string]any
-			err      error
-		)
+		var versions []map[string]any
 
 		if upstreams, constrained := constraints[name]; constrained {
 			history.gated[name] = true
@@ -169,6 +174,11 @@ func loadResourceHistory(ctx context.Context, st store.Versions, job *config.Job
 			versions, err = st.GreenVersions(ctx, name, upstreams)
 			if versions == nil {
 				versions = []map[string]any{}
+			}
+
+			// ponytail: a version: every get still walks green versions one at a time by its cursor, uncorrelated with the job's other gates; Concourse's group resolver pages every-inputs by build too.
+			if !slices.ContainsFunc(job.ResourceGets(name), fansOutOverEveryVersion) {
+				history.together[name] = together[name]
 			}
 		} else {
 			versions, err = checkedVersions(ctx, st, name)
@@ -182,6 +192,60 @@ func loadResourceHistory(ctx context.Context, st store.Versions, job *config.Job
 	}
 
 	return history, nil
+}
+
+// passedTogether decodes the job's PassedSet; an empty map when no set passed, so every gated resource reads as having none.
+func passedTogether(ctx context.Context, st store.Versions, constraints map[string][]string) (map[string]map[string]any, error) {
+	together := map[string]map[string]any{}
+
+	if len(constraints) == 0 {
+		return together, nil
+	}
+
+	set, found, err := st.PassedSet(ctx, constraints)
+	if err != nil || !found {
+		return together, err //nolint:wrapcheck // the store names the job
+	}
+
+	for resource, encoded := range set {
+		version, err := store.DecodeVersion(encoded)
+		if err != nil {
+			return nil, fmt.Errorf("could not read the passed version of %q: %w", resource, err)
+		}
+
+		together[resource] = version
+	}
+
+	return together, nil
+}
+
+// resolvable is get's list as a get resolves it: a fan-in's set that passed together goes last, where latest takes it, and a pin still finds any green version; none passed together is none at all.
+func (h *resourceHistory) resolvable(resourceName string) []map[string]any {
+	versions := h.get(resourceName)
+
+	if h == nil {
+		return versions
+	}
+
+	pick, decided := h.together[resourceName]
+	if !decided {
+		return versions
+	}
+
+	if pick == nil {
+		return []map[string]any{}
+	}
+
+	key, _ := encodeVersion(pick)
+	ordered := make([]map[string]any, 0, len(versions))
+
+	for _, version := range versions {
+		if encoded, ok := encodeVersion(version); !ok || encoded != key {
+			ordered = append(ordered, version)
+		}
+	}
+
+	return append(ordered, pick)
 }
 
 // get returns the versions recorded for a resource, or nil when there are

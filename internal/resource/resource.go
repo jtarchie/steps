@@ -3,9 +3,7 @@
 package resource
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -133,16 +131,7 @@ func runShellCheck(ctx context.Context, rt config.ResourceType, spec shell.Runne
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	// UseNumber, for the reason the mcp path (decodeMapSlice) and
-	// ParseVersionJSON already have it: a version field goes straight back
-	// out — into in:'s template, into a put's payload, into an API's query
-	// string. encoding/json's default float64 turns an id of
-	// 1234567890123456789 into 1.2345678901234568e+18 and a fractional
-	// timestamp into exponent notation, so the value the resource is asked
-	// about is not the value it reported.
-	//
-	// A version is an identity, and this is the path that mints one.
-	versions, err := decodeVersionArray(out)
+	versions, err := DecodeVersions(out)
 	if err != nil {
 		slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "output_bytes", len(out))
 
@@ -424,7 +413,7 @@ func (shellBackend) out(ctx context.Context, c Call) (map[string]any, error) {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	result, unmarshalErr := decodeOutVersion(out)
+	result, unmarshalErr := DecodeVersion(out)
 	if unmarshalErr != nil {
 		slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "output_bytes", len(out), "parse_error", unmarshalErr)
 
@@ -432,27 +421,6 @@ func (shellBackend) out(ctx context.Context, c Call) (map[string]any, error) {
 	}
 
 	slog.InfoContext(ctx, "resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", result)
-
-	return result, nil
-}
-
-// decodeOutVersion parses an out: command's stdout with exact digits, as
-// ParseVersionJSON does for a check, so one version encodes one way wherever
-// it came from. Trailing data is refused, as json.Unmarshal did.
-func decodeOutVersion(out []byte) (map[string]any, error) {
-	var result map[string]any
-
-	decoder := json.NewDecoder(bytes.NewReader(out))
-	decoder.UseNumber()
-
-	err := decoder.Decode(&result)
-	if err != nil {
-		return nil, fmt.Errorf("decoding out: output: %w", err)
-	}
-
-	if decoder.More() {
-		return nil, errors.New("trailing data after version")
-	}
 
 	return result, nil
 }

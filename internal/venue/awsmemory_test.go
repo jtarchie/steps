@@ -2,7 +2,7 @@ package venue
 
 import (
 	"context"
-	"sync"
+	"errors"
 	"testing"
 )
 
@@ -18,7 +18,7 @@ func TestTerminateForgetsTheInstancesInstallMemory(t *testing.T) {
 	}
 
 	awsInstalled.Store(instance, true)
-	awsInstalling.Store(instance, &sync.Mutex{})
+	awsInstalling.Store(instance, make(chan struct{}, 1))
 
 	t.Cleanup(func() {
 		awsInstalled.Delete(instance)
@@ -43,5 +43,37 @@ func TestTerminateForgetsTheInstancesInstallMemory(t *testing.T) {
 	installed, installing = holds()
 	if installed || installing {
 		t.Errorf("memory outlived the instance: installed=%v installing=%v", installed, installing)
+	}
+}
+
+// An aborted step must not sit out a sibling's install, which waits minutes for docker on a fresh machine.
+func TestAWSInstallWaitEndsWithItsContext(t *testing.T) {
+	t.Parallel()
+
+	const instance = "i-0installing"
+
+	unlock, err := lockInstall(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("lockInstall: %v", err)
+	}
+
+	t.Cleanup(func() {
+		unlock()
+		awsInstalling.Delete(instance)
+	})
+
+	ctx, abort := context.WithCancel(context.Background())
+	got := make(chan error, 1)
+
+	go func() {
+		_, err := awsHostKey(ctx, nil, Worker{URL: "aws://" + instance, Instance: instance}, "", nil)
+		got <- err
+	}()
+
+	abort()
+
+	err = within(t, "the aborted wait returned", got)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("awsHostKey = %v, want the abort", err)
 	}
 }

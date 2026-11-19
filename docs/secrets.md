@@ -185,7 +185,10 @@ named `docs`, the release path is never tried.
 
 - **`command:`** runs under `sh -c` as the daemon's user, with the daemon's
   whole environment, so `op`, `vault` and `aws` find their own logins. The
-  lookup path reaches it as `{{ .path }}`; quote it with `shellquote`. What it
+  lookup path reaches it as `{{ .path }}`; write it as a bare
+  `{{ .path | shellquote }}`, never inside quotes of its own, and keep heredocs,
+  backticks, `$'…'`, `eval` and a nested `sh -c` out of the command: the daemon
+  refuses any of those, since a job or resource name could run as shell. What it
   prints on stdout is the value, with exactly one trailing newline removed. An
   empty value is refused.
 - **`missing:`** is an expression over `exit_code` and `stderr` that says "this

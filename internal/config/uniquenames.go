@@ -15,12 +15,7 @@ import (
 // It runs before built-ins are registered, because declaring a built-in's
 // name is how a pipeline replaces a resource type or configures an agent.
 // mcp_servers: is checked by validateMCPServers.
-func (c *Config) validateUniqueNames(source []byte) error {
-	var doc yaml.Node
-
-	// The strict decode already succeeded; a failed re-parse only costs the line numbers.
-	_ = yaml.Unmarshal(source, &doc)
-
+func (c *Config) validateUniqueNames(doc *yaml.Node) error {
 	var root *yaml.Node
 	if len(doc.Content) > 0 {
 		root = doc.Content[0]

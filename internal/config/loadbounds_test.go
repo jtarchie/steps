@@ -192,6 +192,19 @@ jobs:
 			want: `task "t": invalid timeout "soon"`,
 		},
 		{
+			name: "tasks: entry, zero",
+			pipeline: `
+tasks:
+- name: t
+  run: "true"
+  timeout: "0"
+jobs:
+- name: j
+  plan: [{ task: t }]
+`,
+			want: `task "t": timeout must be a positive duration`,
+		},
+		{
 			name: "tasks: entry's fix:",
 			pipeline: `
 agents:

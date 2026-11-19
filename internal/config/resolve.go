@@ -59,52 +59,6 @@ type ResolvedTask struct {
 	Caches []TaskCache
 }
 
-// resolveTaskRuntime merges the execution settings a step may override on the
-// tasks: entry it references. The agents: sibling is resolveAgentRuntime; both
-// exist to keep their callers inside the linter's complexity budget.
-//
-// image:, user: and network: are non-empty-wins; env: is DECLARED-wins,
-// because an explicit `env: []` on a step means "nothing beyond the baseline"
-// and a non-empty test would silently keep the task's list instead.
-func resolveTaskRuntime(task *Task, step Step) containerSettings {
-	settings := task.containerSettings()
-
-	if step.Image != "" {
-		settings.Image = step.Image
-	}
-
-	if step.Env != nil {
-		settings.Env = step.Env
-	}
-
-	if step.User != "" {
-		settings.User = step.User
-	}
-
-	if step.Network != "" {
-		settings.Network = step.Network
-	}
-
-	// True-wins rather than set-wins: there is no spelling for "force
-	// unprivileged from a step whose task asked for it", matching how image:
-	// has no spelling for "force host execution". A step that needs the
-	// narrower grant does not reference that task.
-	if step.Privileged {
-		settings.Privileged = true
-	}
-
-	if step.Limits != nil {
-		settings.Limits = step.Limits
-	}
-
-	// True-only, like Privileged: a step can fence an entry that did not ask, never unfence one that did.
-	if step.Sandboxed() {
-		settings.Sandbox = true
-	}
-
-	return settings
-}
-
 // ResolveTask resolves step into a ResolvedTask: a step carrying its own
 // run: is inline and used as-is; otherwise step.Task names a tasks: entry,
 // whose run/fix/inputs/outputs/image/timeout are used, except the step's own
@@ -142,7 +96,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		outputs = step.Outputs
 	}
 
-	runtime := resolveTaskRuntime(task, step)
+	runtime := task.containerSettings().overriddenBy(step)
 
 	timeout := task.Timeout
 	if step.Timeout != "" {
@@ -273,50 +227,9 @@ type ResolvedInvocation struct {
 	Caches []TaskCache
 }
 
-// resolveAgentRuntime merges the three container settings a step may override
-// on its agents: entry. Split out of ResolveAgentInvocation only to keep that
-// function inside the linter's complexity budget.
-//
-// image: and user: are non-empty-wins; env: is DECLARED-wins, because an
-// explicit `env: []` on a step means "nothing beyond the baseline" and a
-// non-empty test would silently keep the agent's list instead.
-func resolveAgentRuntime(agent *Agent, step Step) (settings containerSettings) {
-	settings = agent.containerSettings()
-
-	if step.Image != "" {
-		settings.Image = step.Image
-	}
-
-	if step.Env != nil {
-		settings.Env = step.Env
-	}
-
-	if step.User != "" {
-		settings.User = step.User
-	}
-
-	if step.Network != "" {
-		settings.Network = step.Network
-	}
-
-	// True-wins rather than set-wins: there is no spelling for "force
-	// unprivileged from a step whose task asked for it", matching how image:
-	// has no spelling for "force host execution". A step that needs the
-	// narrower grant does not reference that task.
-	if step.Privileged {
-		settings.Privileged = true
-	}
-
-	if step.Limits != nil {
-		settings.Limits = step.Limits
-	}
-
-	// True-only, like Privileged: a step can fence an entry that did not ask, never unfence one that did.
-	if step.Sandboxed() {
-		settings.Sandbox = true
-	}
-
-	return settings
+// resolveAgentRuntime is the agents: entry's container settings with step's overrides applied.
+func resolveAgentRuntime(agent *Agent, step Step) containerSettings {
+	return agent.containerSettings().overriddenBy(step)
 }
 
 // ResolveAgentInvocation resolves the agent named by step against c,

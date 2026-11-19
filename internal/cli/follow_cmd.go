@@ -91,7 +91,11 @@ func (r *RunsFollowCmd) followRemote(streams Streams) error {
 		return err
 	}
 
-	client := newDaemonClient(r.Target)
+	client, err := newDaemonClient(r.Target)
+	if err != nil {
+		return err
+	}
+
 	remote := remoteRuns{client: client, pipeline: name}
 
 	ctx, cancel := streams.cancellable()

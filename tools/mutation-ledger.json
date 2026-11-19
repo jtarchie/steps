@@ -660,6 +660,17 @@
         }
       ]
     },
+    "./internal/mcpstatus": {
+      "swept_at": "45bb79b6",
+      "date": "2026-11-19",
+      "killed": 6,
+      "lived": 0,
+      "timed_out": 0,
+      "not_covered": 0,
+      "efficacy": 100,
+      "note": "First measured 2026-11-19 on the uncommitted split from internal/config (#296 phase 4); swept_at is the parent commit, so mutate-stale counts the whole package as changed until the next sweep.",
+      "equivalent": []
+    },
     "./internal/merkle": {
       "swept_at": "824ba22",
       "date": "2026-10-09",

@@ -1,13 +1,7 @@
 // Package dockerapi talks to a docker engine, and is the only package in this
 // repo that holds an engine client.
 //
-// It exists because container execution used to spawn the `docker` binary, and
-// a binary answers questions a library does not. Which daemon (the context
-// store, not just DOCKER_HOST — see host.go) and which credentials (the
-// config.json auths and the credential helpers — see auth.go) both arrived
-// free with the CLI and stop being free the moment the daemon is reached any
-// other way. Those answers live here rather than at the call sites, so there
-// is one place that knows what "the docker CLI would have done" means.
+// It exists because container execution used to spawn the `docker` binary, which answered which daemon (the context store, not just DOCKER_HOST — see host.go) and which credentials (only a login the caller attached, never config.json or a credential helper — see auth.go); both answers live here so no call site re-derives them.
 //
 // It is deliberately a separate package from internal/shell rather than a few
 // more imports inside it. shell is reached by nearly everything and had been

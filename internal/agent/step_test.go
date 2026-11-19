@@ -68,7 +68,7 @@ func TestNewToolOutputSpillDir(t *testing.T) {
 
 	workDir := t.TempDir()
 
-	spillDir := newToolOutputSpillDir(workDir, "test-agent")
+	spillDir := newToolOutputSpillDir(t.Context(), workDir, "test-agent")
 	if spillDir == "" {
 		t.Fatal("newToolOutputSpillDir returned \"\", want a directory path")
 	}
@@ -210,7 +210,7 @@ func TestResolveDeferredMessagesRejectsSymlinkEscape(t *testing.T) {
 func TestPreparedAgentStepCloseRemovesSpillDir(t *testing.T) {
 	t.Parallel()
 
-	spillDir := newToolOutputSpillDir(t.TempDir(), "test-agent")
+	spillDir := newToolOutputSpillDir(t.Context(), t.TempDir(), "test-agent")
 	if spillDir == "" {
 		t.Fatal("newToolOutputSpillDir returned \"\"")
 	}

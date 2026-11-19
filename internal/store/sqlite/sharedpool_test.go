@@ -208,3 +208,27 @@ func TestReadPoolKeepsASmallPageCache(t *testing.T) {
 		t.Fatalf("cache_size: reads %d, writer %d; want -512 (KiB) and SQLite's default -2000", reads, writes)
 	}
 }
+
+// The read pool is a second set of connections beside the one writer; a write that strayed onto it would be a second writer the pool's queue no longer serializes, so it must fail rather than land.
+func TestReadPoolRefusesWrites(t *testing.T) {
+	t.Parallel()
+
+	st := mustOpenStoreNamed(t, filepath.Join(t.TempDir(), "state.db"), "p")
+	defer func() { _ = st.Close() }()
+
+	_, err := st.reads.ExecContext(context.Background(), `UPDATE pipelines SET path = 'strayed' WHERE id = ?`, st.pipelineID)
+	if err == nil {
+		t.Fatal("a write on the read pool succeeded; it must be refused")
+	}
+
+	var path string
+
+	err = st.db.QueryRowContext(context.Background(), `SELECT path FROM pipelines WHERE id = ?`, st.pipelineID).Scan(&path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if path == "strayed" {
+		t.Fatal("the refused write landed anyway")
+	}
+}

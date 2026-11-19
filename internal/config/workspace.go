@@ -9,12 +9,9 @@ import (
 )
 
 // refuseWorkspaceBlock names what each workspace: key became, before the strict decode would answer only "field workspace not found". Refused rather than kept as an alias: an alias honored keeps the pipeline overriding the operator, the thing being removed, and one ignored reads as configured and binds nothing.
-func refuseWorkspaceBlock(source []byte) error {
-	var doc yaml.Node
-
-	err := yaml.Unmarshal(source, &doc)
-	if err != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
-		return nil //nolint:nilerr // the strict decode reports a malformed document with its line
+func refuseWorkspaceBlock(doc *yaml.Node) error {
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil
 	}
 
 	top := doc.Content[0].Content

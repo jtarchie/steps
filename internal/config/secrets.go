@@ -493,14 +493,15 @@ func (c *Config) effectiveEnvAndSecrets(step *Step) ([]string, map[string]string
 
 	var secrets map[string]string
 
-	task, taskErr := c.FindTask(step.Task)
-	if step.Run == "" && step.Task != "" && taskErr == nil && task != nil {
+	if task := c.taskEntry(*step); task != nil {
 		env, secrets = task.Env, task.Secrets
 	}
 
-	agent, agentErr := c.FindAgent(step.Agent)
-	if step.Agent != "" && agentErr == nil && agent != nil {
-		env, secrets = agent.Env, agent.Secrets
+	if step.Agent != "" {
+		agent, err := c.FindAgent(step.Agent)
+		if err == nil && agent != nil {
+			env, secrets = agent.Env, agent.Secrets
+		}
 	}
 
 	if step.Env != nil {
@@ -600,8 +601,8 @@ func (c *Config) effectiveFix(step *Step) *FixSpec {
 		return step.Fix
 	}
 
-	task, err := c.FindTask(step.Task)
-	if err != nil || task == nil {
+	task := c.taskEntry(*step)
+	if task == nil {
 		return nil
 	}
 

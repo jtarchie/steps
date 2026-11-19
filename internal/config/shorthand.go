@@ -25,13 +25,10 @@ import (
 //
 // Only step positions are walked — a plan, a hook, a block's branches — so an
 // in_parallel: key inside free-form params: or source: is the author's data.
-func expandInParallelShorthand(source []byte) ([]byte, func(error) error) {
+func expandInParallelShorthand(source []byte, doc *yaml.Node) ([]byte, func(error) error) {
 	unchanged := func(err error) error { return err }
 
-	var doc yaml.Node
-
-	err := yaml.Unmarshal(source, &doc)
-	if err != nil || len(doc.Content) == 0 {
+	if len(doc.Content) == 0 {
 		return source, unchanged
 	}
 
@@ -48,7 +45,7 @@ func expandInParallelShorthand(source []byte) ([]byte, func(error) error) {
 	}
 
 	if found.reencode {
-		return found.reencoded(&doc, source)
+		return found.reencoded(doc, source)
 	}
 
 	return found.inserted(source)

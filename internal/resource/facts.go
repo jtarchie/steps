@@ -123,7 +123,7 @@ const maxInAnswerBytes = 64 << 10
 
 // reportInAnswer reports the facts of an in: whose whole stdout is Concourse's answer, carrying metadata. Any other stdout is the script's own output and says nothing.
 func reportInAnswer(ctx context.Context, stdout string) {
-	answer, err := decodeOutVersion([]byte(stdout))
+	answer, err := DecodeVersion([]byte(stdout))
 	if err != nil {
 		return
 	}

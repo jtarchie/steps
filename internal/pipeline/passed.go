@@ -294,9 +294,7 @@ func recordPassedVersions(ctx context.Context, st store.Versions, jobName, build
 // individually fine and jointly untested. Concourse resolves passed: across a
 // whole plan at once for this reason; see docs/conformance.md.
 //
-// Exported for internal/trigger, which is where the constraint bites: a set
-// that has not passed upstream must not enqueue the downstream job at all,
-// rather than starting it and discovering the problem later.
+// The trigger and resolution ask store.Versions.PassedSet, which finds such a set rather than judging one; this is the conformance tests' direct question.
 func VersionSetPassedUpstream(ctx context.Context, st store.Versions, upstreamJob string, versions map[string]map[string]any) (bool, error) {
 	want := make(map[string]store.VersionKey, len(versions))
 

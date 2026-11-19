@@ -221,19 +221,17 @@ func (s *Server) authenticate(next echo.HandlerFunc) echo.HandlerFunc {
 			return next(c)
 		}
 
-		if who, found := s.sessionActor(c); found {
-			c.Set(sessionKey, true)
+		if who, session, found := s.credentialed(c); found {
+			if session {
+				c.Set(sessionKey, true)
+			}
+
 			c.SetRequest(actingAs(c.Request(), who))
 
 			return next(c)
 		}
 
-		username, password, sent := c.Request().BasicAuth()
-		if sent && s.auth.matches(username, password) {
-			c.SetRequest(actingAs(c.Request(), actor.Local(username)))
-
-			return next(c)
-		}
+		_, _, sent := c.Request().BasicAuth()
 
 		if !sent && s.sessions != nil && wantsPage(c.Request()) {
 			return c.Redirect(http.StatusSeeOther, loginPath+"?next="+url.QueryEscape(c.Request().URL.RequestURI()))
@@ -248,6 +246,20 @@ func (s *Server) authenticate(next echo.HandlerFunc) echo.HandlerFunc {
 
 		return echo.ErrUnauthorized
 	}
+}
+
+// credentialed is who a request's credential names: its session, else a Basic pair that matches. session says which, since only a session is a browser that signed in.
+func (s *Server) credentialed(c *echo.Context) (who actor.Actor, session, found bool) {
+	if who, found := s.sessionActor(c); found {
+		return who, true, true
+	}
+
+	username, password, sent := c.Request().BasicAuth()
+	if sent && s.auth.matches(username, password) {
+		return actor.Local(username), false, true
+	}
+
+	return actor.Actor{}, false, false
 }
 
 // wantsPage is a browser navigating, as opposed to the CLI or a page's own poll: a poll redirected to a sign-in form would swap that form into the page it is refreshing.

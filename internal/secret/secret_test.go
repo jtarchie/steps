@@ -45,13 +45,13 @@ func resolverFor(t *testing.T, body string) *Resolver {
 	return resolver
 }
 
-const opScript = `sh -c 'if [ -f "$1" ]; then cat "$1"; elif [ -f "$(dirname "$1")/EXPIRED" ]; then echo "session expired" >&2; exit 1; else echo "isn'"'"'t an item" >&2; exit 1; fi' sh `
+const opScript = `; if [ -f "$p" ]; then cat "$p"; elif [ -f "$(dirname "$p")/EXPIRED" ]; then echo "session expired" >&2; exit 1; else echo "isn't an item" >&2; exit 1; fi`
 
 func opSource(dir, lookup string) string {
 	return `
 source:
   ci:
-    command: ` + opScript + `{{ printf "%s/%s" "` + dir + `" .path | shellquote }}
+    command: p={{ printf "%s/%s" "` + dir + `" .path | shellquote }}` + opScript + `
     missing: exit_code == 1 && stderr contains "isn't an item"
     lookup:
 ` + lookup
@@ -274,6 +274,51 @@ func TestParseRefusesAnUnquotedPath(t *testing.T) {
 	_, err = Parse([]byte("source: {ci: {command: 'op read {{ .path | shellquote }}', lookup: [{path: a}]}}"))
 	if err != nil {
 		t.Errorf("Parse of a quoted path = %v", err)
+	}
+}
+
+// The x'y sentinel alone passed the first two (shellquote inside "…" still lets $(…) run; a filter after .path changes the sentinel), and the template scan alone misses the third.
+func TestParseRefusesAPathTheShellReadsAsSyntax(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{
+		`op read "{{ .path | shellquote }}"`,
+		`op read {{ .path | upper }}`,
+		`op read {{ index . "path" }}`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Parse(fmt.Appendf(nil, "source: {ci: {command: %q, lookup: [{path: a}]}}", command))
+			if err == nil || !strings.Contains(err.Error(), "{{ .path | shellquote }}") {
+				t.Fatalf("Parse = %v, want it refused naming {{ .path | shellquote }}", err)
+			}
+		})
+	}
+}
+
+// Job names have no character rule, so a job named as a command substitution must reach the source as one literal word.
+func TestLookupNeverRunsAJobNameAsShell(t *testing.T) {
+	t.Parallel()
+
+	pwned := filepath.Join(t.TempDir(), "pwned")
+	job := `$(touch "$PWNED")`
+
+	resolver := resolverFor(t, fmt.Sprintf(`
+source:
+  ci:
+    command: PWNED=%s; printf '%%s\n' {{ .path | shellquote }}
+    lookup: [{path: '{{ .job }}'}]
+`, pwned))
+
+	value, err := resolver.Lookup(t.Context(), Ref{Pipeline: "p", Job: job, Source: "ci", Name: "x"})
+	if err != nil || value != job {
+		t.Fatalf("Lookup = %q, %v; want the job name back verbatim", value, err)
+	}
+
+	_, err = os.Stat(pwned)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the job name ran as shell: stat %s = %v", pwned, err)
 	}
 }
 

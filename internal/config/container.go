@@ -137,6 +137,16 @@ func (c *Config) visitTypeAndExportSettings(fn func(context string, settings con
 		}
 	}
 
+	// A stdio server's image: runs on this machine's daemon whatever step grants it, so it is pre-pulled and checked like any other.
+	for i := range c.MCPServers {
+		server := c.MCPServers[i]
+
+		err := fn(fmt.Sprintf("mcp_servers %q", server.Name), containerSettings{Image: server.Image}.from("mcp_server", server.Name))
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -239,8 +249,8 @@ func (c *Config) resolvedStepImage(step Step) string {
 
 	switch kind, _ := step.Kind(); kind {
 	case StepKindTask:
-		task, err := c.FindTask(step.Task)
-		if err != nil {
+		task := c.taskEntry(step)
+		if task == nil {
 			return ""
 		}
 
@@ -258,4 +268,39 @@ func (c *Config) resolvedStepImage(step Step) string {
 	}
 
 	return ""
+}
+
+// overriddenBy merges the execution settings a step may override on the tasks: or agents: entry it references: image:, user:, network: and limits: are set-wins; env: is DECLARED-wins, because an explicit `env: []` on a step means "nothing beyond the baseline" and a non-empty test would silently keep the entry's list instead.
+func (c containerSettings) overriddenBy(step Step) containerSettings {
+	if step.Image != "" {
+		c.Image = step.Image
+	}
+
+	if step.Env != nil {
+		c.Env = step.Env
+	}
+
+	if step.User != "" {
+		c.User = step.User
+	}
+
+	if step.Network != "" {
+		c.Network = step.Network
+	}
+
+	// True-wins rather than set-wins: there is no spelling for "force unprivileged from a step whose entry asked for it", matching how image: has no spelling for "force host execution". A step that needs the narrower grant does not reference that entry.
+	if step.Privileged {
+		c.Privileged = true
+	}
+
+	if step.Limits != nil {
+		c.Limits = step.Limits
+	}
+
+	// True-only, like Privileged: a step can fence an entry that did not ask, never unfence one that did.
+	if step.Sandboxed() {
+		c.Sandbox = true
+	}
+
+	return c
 }

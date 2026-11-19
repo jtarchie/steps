@@ -1,11 +1,16 @@
 package e2e
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/testdocker"
 )
 
@@ -101,6 +106,104 @@ jobs:
 `)
 
 	err := stepsRun(t, []string{"run", path, "--job", "up"})
+	if err == nil || !strings.Contains(err.Error(), "never became ready") {
+		t.Errorf("run: err = %v, want the put to say the service never became ready", err)
+	}
+}
+
+// TestEndToEndADockerServiceRefusesAContainerItDidNotMake: a container already holding the configured name, made by someone else, is left alone and named in the error, by a put and by a check alike, rather than removed with its anonymous volumes.
+func TestEndToEndADockerServiceRefusesAContainerItDidNotMake(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+	requireDockerE2E(t)
+
+	container, network := serviceNames(t)
+	docker, foreign := operatorContainer(t, container)
+
+	path := writePipeline(t, t.TempDir(), `
+resources:
+- name: cache
+  type: docker-service
+  source:
+    container: `+container+`
+    image: `+serviceRedis+`
+    network: `+network+`
+jobs:
+- name: up
+  plan:
+  - put: cache
+- name: read
+  plan:
+  - get: cache
+`)
+
+	for _, job := range []string{"up", "read"} {
+		err := stepsRun(t, []string{"run", path, "--job", job})
+		if err == nil || !strings.Contains(err.Error(), container) || !strings.Contains(err.Error(), "steps did not create it") {
+			t.Errorf("run --job %s: err = %v, want it refused, naming %s as a container steps did not create", job, err, container)
+		}
+	}
+
+	state, found, err := docker.InspectService(t.Context(), container)
+	if err != nil || !found || state.ID != foreign {
+		t.Errorf("the operator's container %s: found = %v, id = %s, err = %v; want it untouched", foreign, found, state.ID, err)
+	}
+}
+
+// operatorContainer creates a plain, unstarted container named name, as an operator's own would be, and returns a client and its id.
+func operatorContainer(t *testing.T, name string) (*dockerapi.Client, string) {
+	t.Helper()
+
+	docker, err := dockerapi.New("")
+	if err != nil {
+		t.Fatalf("dialling docker: %v", err)
+	}
+
+	t.Cleanup(func() { _ = docker.Close() })
+
+	if !docker.ImagePresent(t.Context(), serviceRedis) {
+		err = docker.Pull(t.Context(), serviceRedis, io.Discard)
+		if err != nil {
+			t.Skipf("cannot pull %s: %v", serviceRedis, err)
+		}
+	}
+
+	id, err := docker.CreateHolder(t.Context(), name, serviceRedis, nil, nil)
+	if err != nil {
+		t.Fatalf("creating the operator's container: %v", err)
+	}
+
+	return docker, id
+}
+
+// TestEndToEndADockerServiceWhoseReadyHangsFailsThePut: ready_timeout bounds each ready attempt, not only the gap between them, so a ready command that never returns still fails the put.
+func TestEndToEndADockerServiceWhoseReadyHangsFailsThePut(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+	requireDockerE2E(t)
+
+	container, network := serviceNames(t)
+
+	path := writePipeline(t, t.TempDir(), `
+resources:
+- name: cache
+  type: docker-service
+  source:
+    container: `+container+`
+    image: `+serviceRedis+`
+    network: `+network+`
+    ready: [sleep, "3600"]
+    ready_timeout: 2s
+jobs:
+- name: up
+  plan:
+  - put: cache
+`)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+
+	err := cli.RunContext(ctx, streamsFor(t), []string{"run", path, "--job", "up"})
 	if err == nil || !strings.Contains(err.Error(), "never became ready") {
 		t.Errorf("run: err = %v, want the put to say the service never became ready", err)
 	}

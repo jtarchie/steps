@@ -461,6 +461,7 @@ agents:
       echo filed {{ .args.title | shellquote }} as {{ .args.severity | shellquote }}
     params:
       title:
+        min_length: 3
         max_length: 40
         pattern: '^[^;]*$'        # unanchored unless you write ^ and $
       severity:

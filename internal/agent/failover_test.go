@@ -373,13 +373,13 @@ func TestPinnedSourceOnlyAfterServing(t *testing.T) {
 	// The primary serving pins nothing: it is the default already.
 	pinServedSource(testPin("writer"), agent, -1)
 
-	if _, pinned := selectedSource(testPin("writer")); pinned {
+	if _, pinned := selectedSource(t.Context(), testPin("writer")); pinned {
 		t.Error("the primary serving must not pin anything")
 	}
 
 	pinServedSource(testPin("writer"), agent, 1)
 
-	selection, pinned := selectedSource(testPin("writer"))
+	selection, pinned := selectedSource(t.Context(), testPin("writer"))
 	if !pinned {
 		t.Fatal("a fallback that served was not pinned")
 	}
@@ -392,7 +392,7 @@ func TestPinnedSourceOnlyAfterServing(t *testing.T) {
 	// rather than preferring a source that just failed.
 	releaseSource(testPin("writer"))
 
-	if _, pinned := selectedSource(testPin("writer")); pinned {
+	if _, pinned := selectedSource(t.Context(), testPin("writer")); pinned {
 		t.Error("an exhausted cascade left a pin behind — the next run would prefer a dead source")
 	}
 }
@@ -416,7 +416,7 @@ func TestSelectedSourceIndexSurvivesDuplicateSources(t *testing.T) {
 
 	pinServedSource(testPin("writer"), agent, 1)
 
-	selection, pinned := selectedSource(testPin("writer"))
+	selection, pinned := selectedSource(t.Context(), testPin("writer"))
 	if !pinned {
 		t.Fatal("nothing was pinned")
 	}

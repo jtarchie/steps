@@ -476,12 +476,22 @@ func (c *Config) validateOneResourceTypeConfig(rt ResourceType) error {
 			rt.Name, strings.Join(declared, ", "))
 	}
 
+	return c.validateResourceTypeBackend(rt)
+}
+
+func (c *Config) validateResourceTypeBackend(rt ResourceType) error {
 	switch rt.Config.Backend() {
 	case BackendMCP:
 		return c.validateMCPResourceConfig(rt.Name, rt.Config.MCP)
 	case BackendExpr:
 		return validateExprResourceConfig(rt)
-	case BackendShell, BackendWebhook, BackendCron, BackendGitHub, BackendLinear, BackendConcourse, BackendRegistry, BackendService:
+	case BackendShell:
+		if rt.Config.Check == "" && rt.Config.In == "" && rt.Config.Out == "" {
+			return fmt.Errorf("resource_type %q: sets none of check/in/out, so it can neither detect, fetch, nor publish anything", rt.Name)
+		}
+	case BackendWebhook, BackendCron, BackendGitHub, BackendLinear, BackendRegistry, BackendService:
+		return validateBuiltinImage(rt)
+	case BackendConcourse:
 	}
 
 	return nil

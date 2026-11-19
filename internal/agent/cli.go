@@ -97,7 +97,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	}
 
 	// The CLI is always a host subprocess (see cliexec.go), so its transcript lands under the host's ~/.claude.
-	defer cleanupCLISession(session)
+	defer cleanupCLISession(ctx, session)
 
 	// One state for the whole step, not one per attempt: the attempts share a
 	// conversation now, so what an attempt observed stays true for the ones
@@ -215,7 +215,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			return retry.Stop(attemptErr)
 		}
 
-		return retry.StopOnDeadline(ctx, attemptCtx, outcome.FailOnDeadline(ctx, attemptCtx, attemptErr))
+		return retry.StopOnDeadlineAs(ctx, attemptCtx, attemptErr, outcome.Fail)
 	}
 
 	runErr := runCLIMessages(ctx, prepared, state, &nudges, &spent, &sent, attempts)
@@ -642,7 +642,7 @@ func newCLIStepState() *cliStepState {
 
 // absorb folds one attempt's observations in. The model is needed only to
 // price an attempt that died before reporting its own spend — see attemptCost.
-func (s *cliStepState) absorb(model string, run cliRunResult, bridge *cliBridge) {
+func (s *cliStepState) absorb(ctx context.Context, model string, run cliRunResult, bridge *cliBridge) {
 	verdict, note, satisfied, bridgeCalls := bridge.observed()
 
 	s.turns += run.turns
@@ -652,7 +652,7 @@ func (s *cliStepState) absorb(model string, run cliRunResult, bridge *cliBridge)
 	// conversation, so what a resumed run spent adds to what the first one
 	// did rather than replacing it.
 	s.cachedTokens += run.cachedTokens
-	s.costUSD += attemptCost(model, run)
+	s.costUSD += attemptCost(ctx, model, run)
 
 	// Last non-empty wins, matching the answer and the verdict below: a
 	// crashed attempt reports no subtype and must not erase how an earlier
@@ -757,7 +757,7 @@ func newCLISessionID() (string, error) {
 // Best effort throughout. A step that did its work must not fail over tidying,
 // and a CLI that stores transcripts somewhere else simply leaves nothing to
 // find.
-func cleanupCLISession(session string) {
+func cleanupCLISession(ctx context.Context, session string) {
 	// ponytail: hardcodes claude's ~/.claude/projects/*/<id>.jsonl layout because cliProviders has only "claude"; add a per-CLI profile (transcript glob) when a second CLI appears.
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -772,7 +772,7 @@ func cleanupCLISession(session string) {
 	for _, match := range matches {
 		err := os.Remove(match)
 		if err != nil {
-			slog.Debug("agent.cli.session_cleanup_failed", "path", match, "error", err)
+			slog.DebugContext(ctx, "agent.cli.session_cleanup_failed", "path", match, "error", err)
 		}
 	}
 }
@@ -808,7 +808,7 @@ func runCLIAttempt(
 
 	run, runErr := execCLI(ctx, prepared, mcpConfig, plan, expected)
 
-	state.absorb(prepared.ri.ModelName, run, bridge)
+	state.absorb(ctx, prepared.ri.ModelName, run, bridge)
 	prepared.conv.usage.addTokens(run.inputTokens, run.outputTokens)
 
 	// The latch the HTTP loop checks after each turn (conversation.go), ahead of runErr: a placed agent whose worker went away has nothing a resume or a nudge could reach, and the child's own exit is a symptom of that.

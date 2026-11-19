@@ -17,11 +17,7 @@ import (
 // remoteRuns answers a follower's reads from a daemon's API rather than a state file, which is what reaches a daemon on another host.
 type remoteRuns struct {
 	client   *daemonClient
-	pipeline string
-}
-
-func (r remoteRuns) path(rest string) string {
-	return "/api/pipelines/" + url.PathEscape(r.pipeline) + rest
+	pipeline pipelineName
 }
 
 // getJSON reads one answer into into, reporting false for a 404.
@@ -49,32 +45,41 @@ func (r remoteRuns) getJSON(ctx context.Context, path string, into any) (bool, e
 
 // FindRunRow reads a 404 as gone, the run and its pipeline alike: a reaped one-off is both.
 func (r remoteRuns) FindRunRow(ctx context.Context, id string) (store.RunRow, bool, error) {
-	var run store.RunRow
+	var run web.RunJSON
 
-	found, err := r.getJSON(ctx, r.path("/runs/"+url.PathEscape(id)), &run)
+	found, err := r.getJSON(ctx, pipelinePath(r.pipeline, "runs", id), &run)
 
-	return run, found, err
+	return run.Row(), found, err
 }
 
 func (r remoteRuns) RunEvents(ctx context.Context, runID string, afterSeq int64, limit int) ([]store.RunEventRow, error) {
-	var rows []store.RunEventRow
+	var answer []web.RunEventJSON
 
 	query := url.Values{"after": {strconv.FormatInt(afterSeq, 10)}, "limit": {strconv.Itoa(limit)}}
 
-	found, err := r.getJSON(ctx, r.path("/runs/"+url.PathEscape(runID)+"/events?"+query.Encode()), &rows)
-	if err == nil && !found {
+	found, err := r.getJSON(ctx, pipelinePath(r.pipeline, "runs", runID, "events")+"?"+query.Encode(), &answer)
+	if err != nil {
+		return nil, err
+	}
+
+	if !found {
 		return nil, fmt.Errorf("%s no longer serves %s", r.client.target, r.pipeline)
 	}
 
-	return rows, err
+	rows := make([]store.RunEventRow, 0, len(answer))
+	for _, row := range answer {
+		rows = append(rows, row.Row())
+	}
+
+	return rows, nil
 }
 
 func (r remoteRuns) newest(ctx context.Context, job string) (store.RunRow, bool, error) {
-	var runs []store.RunRow
+	var runs []web.RunJSON
 
 	query := url.Values{"job": {job}, "limit": {"1"}}
 
-	found, err := r.getJSON(ctx, r.path("/runs?"+query.Encode()), &runs)
+	found, err := r.getJSON(ctx, pipelinePath(r.pipeline, "runs")+"?"+query.Encode(), &runs)
 	if err != nil {
 		return store.RunRow{}, false, err
 	}
@@ -87,7 +92,7 @@ func (r remoteRuns) newest(ctx context.Context, job string) (store.RunRow, bool,
 		return store.RunRow{}, false, nil
 	}
 
-	return runs[0], true, nil
+	return runs[0].Row(), true, nil
 }
 
 // target is the run named, or the newest — of job when given.

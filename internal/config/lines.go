@@ -15,15 +15,11 @@ import (
 // The second parse is deliberate. Giving Step its own UnmarshalYAML to capture
 // node.Line would opt the largest key surface in the schema out of
 // KnownFields (see strictUnmarshal) — trading typo detection on ~30 keys for a
-// line number. Walking the tree afterwards costs one extra parse per load and
-// keeps both. Failures here are ignored: the strict decode has already
+// line number. Walking the tree afterwards costs one more parse per load and keeps both. Failures here are ignored: the strict decode has already
 // succeeded by this point, so a line number is a nicety, never a reason to
 // reject a valid pipeline.
-func (c *Config) stampLines(data []byte) {
-	var doc yaml.Node
-
-	err := yaml.Unmarshal(data, &doc)
-	if err != nil || len(doc.Content) == 0 {
+func (c *Config) stampLines(doc *yaml.Node) {
+	if len(doc.Content) == 0 {
 		return
 	}
 

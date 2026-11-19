@@ -131,7 +131,7 @@ func readyProvider(provider workspace.Provider, check func(workspace.Provider) e
 	return nil
 }
 
-// attachArtifactStore mirrors the provider's step cache to --artifact-store. With no durable --workspace-root there is no step cache to mirror, which is warned about rather than refused, because the flag's other consumer, a placed step's data plane, works without one.
+// attachArtifactStore mirrors the provider's step cache to --artifact-store. With no durable --workspace-root there is no step cache to mirror, which is warned about rather than refused.
 func attachArtifactStore(provider workspace.Provider, raw string) error {
 	if raw == "" {
 		return nil
@@ -150,7 +150,7 @@ func attachArtifactStore(provider workspace.Provider, raw string) error {
 	if !provider.AttachArtifactStore(blobs) {
 		slog.Warn("artifact_store.no_step_cache",
 			"store", raw,
-			"why", "no durable --workspace-root, so cached step outputs are not mirrored; placed steps still use the store as their data plane")
+			"why", "no durable --workspace-root, so cached step outputs are not mirrored")
 	}
 
 	return nil

@@ -101,7 +101,7 @@ func TestAttemptCostPrefersTheReportedFigure(t *testing.T) {
 		costUSD:   0.42,
 		streamed:  cliUsage{InputTokens: 1_000_000},
 	}
-	if got := attemptCost("sonnet", finished); !closeEnough(got, 0.42) {
+	if got := attemptCost(t.Context(), "sonnet", finished); !closeEnough(got, 0.42) {
 		t.Errorf("a finished attempt cost $%v, want the reported $0.42", got)
 	}
 
@@ -109,7 +109,7 @@ func TestAttemptCostPrefersTheReportedFigure(t *testing.T) {
 	// what it reported would hand the retry the full purse again.
 	crashed := cliRunResult{streamed: cliUsage{InputTokens: 50_000, OutputTokens: 5_000}}
 
-	got := attemptCost("sonnet", crashed)
+	got := attemptCost(t.Context(), "sonnet", crashed)
 	if want := 0.15 + 0.075; !closeEnough(got, want) {
 		t.Errorf("a crashed attempt cost $%v, want the streamed usage priced at $%v", got, want)
 	}

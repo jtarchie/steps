@@ -797,6 +797,23 @@ func TestExecReadFile(t *testing.T) {
 	})
 }
 
+// The cap is a byte count, so a rune straddling it is dropped whole rather than shown to the model half-cut.
+func TestExecReadFileTruncationCutsOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte(strings.Repeat("x", maxReadFileBytes-1)+"€tail"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content, _ := execReadFile(t.Context(), map[string]any{"path": "big.txt"}, testEnv(dir))["content"].(string)
+	if !utf8.ValidString(content) || !strings.HasSuffix(content, "</file_truncated>\n\n"+strings.Repeat("x", maxReadFileBytes-1)) {
+		t.Errorf("content ends %q (valid UTF-8 %v); want the x run alone after the tag", content[max(0, len(content)-8):], utf8.ValidString(content))
+	}
+}
+
 // writeLines writes n newline-joined "line N" records to path.
 func writeLines(t *testing.T, path string, n int) {
 	t.Helper()
@@ -1023,7 +1040,7 @@ func TestExecReadFileCanReadSpilledRunShellOutput(t *testing.T) {
 
 	dir := t.TempDir()
 	env := testEnv(dir)
-	env.spillDir = newToolOutputSpillDir(dir, "test-agent")
+	env.spillDir = newToolOutputSpillDir(t.Context(), dir, "test-agent")
 
 	if env.spillDir == "" {
 		t.Fatal("newToolOutputSpillDir returned \"\"")

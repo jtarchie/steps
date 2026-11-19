@@ -1,0 +1,20 @@
+# A timestamp: is refused outside five minutes, but the default signed message is
+# the raw body; a header timestamp outside the signature can be rewritten by
+# anyone replaying a captured delivery, so the check would protect nothing.
+# expect: source.signature.timestamp needs signed:
+
+resources:
+- name: hook
+  type: webhook
+  source:
+    provider: custom
+    secret_env: HOOK_SECRET
+    signature:
+      header: X-Signature
+      timestamp: 'headers["x-timestamp"]'
+
+jobs:
+- name: build
+  plan:
+  - get: hook
+    trigger: true

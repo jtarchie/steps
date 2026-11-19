@@ -21,6 +21,20 @@ func fanOut(
 	run func(ctx context.Context, index int),
 	onPanic func(index int, err error),
 ) {
+	for _, itemLog := range fanOutLogged(ctx, count, limit, admit, run, onPanic) {
+		if itemLog != nil {
+			mergeExecLog(ctx, itemLog)
+		}
+	}
+}
+
+// fanOutLogged is fanOut leaving each item's execution log to the caller, for a race: that keeps only its winner's.
+func fanOutLogged(
+	ctx context.Context, count, limit int,
+	admit func(index int) bool,
+	run func(ctx context.Context, index int),
+	onPanic func(index int, err error),
+) []*execLog {
 	var (
 		wg   sync.WaitGroup
 		slot = newLimiter(limit, count)
@@ -53,11 +67,7 @@ func fanOut(
 
 	wg.Wait()
 
-	for _, itemLog := range logs {
-		if itemLog != nil {
-			mergeExecLog(ctx, itemLog)
-		}
-	}
+	return logs
 }
 
 // recoverBranch is the deferred recover shared by every goroutine that runs a branch: the panic becomes that branch's error via onPanic. It must be deferred directly, since recover only works in the deferred function itself.

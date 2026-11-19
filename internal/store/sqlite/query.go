@@ -60,7 +60,7 @@ func scanString(rows *sql.Rows) (string, error) {
 // package, and the last of those five steps is
 // the one that is quietly forgotten. what names the thing being read, for the
 // error message.
-func collect[T any](ctx context.Context, db *sql.DB, what, query string, args []any, scan func(*sql.Rows) (T, error)) ([]T, error) {
+func collect[T any](ctx context.Context, db executor, what, query string, args []any, scan func(*sql.Rows) (T, error)) ([]T, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("could not read %s: %w", what, err)

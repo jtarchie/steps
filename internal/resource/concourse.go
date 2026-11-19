@@ -3,7 +3,6 @@ package resource
 // A Concourse resource image's own scripts (steps#237): /opt/resource/check, in and out, each handed Concourse's request as JSON on stdin — never on a command line, since source: is where these images take credentials — and in and out answering {version, metadata} on stdout.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -83,7 +82,7 @@ func runConcourseCheck(ctx context.Context, c Call, spec shell.RunnerSpec, reque
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	versions, err := decodeVersionArray(out)
+	versions, err := DecodeVersions(out)
 	if err != nil {
 		return nil, fmt.Errorf("check %q: could not parse JSON output: %w", rt.Name, err)
 	}
@@ -164,10 +163,7 @@ var errNullVersion = errors.New("the script answered with no version")
 func unwrapConcourseAnswer(ctx context.Context, out []byte) (map[string]any, error) {
 	var answer concourseAnswer
 
-	decoder := json.NewDecoder(bytes.NewReader(out))
-	decoder.UseNumber()
-
-	err := decoder.Decode(&answer)
+	_, err := decodeExact(out, &answer)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse the script's answer as {version, metadata}: %w", err)
 	}

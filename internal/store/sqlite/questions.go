@@ -6,6 +6,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -77,6 +78,10 @@ func (s *Store) AskQuestion(ctx context.Context, question store.Question) (store
 // nobody chose — see CloseQuestion on why these stay two entry points.
 func (s *Store) AnswerQuestion(ctx context.Context, id int64, answer, by string) error {
 	question, err := s.QuestionStatus(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("question %d: %w (never existed)", id, store.ErrQuestionNotPending)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -86,8 +91,8 @@ func (s *Store) AnswerQuestion(ctx context.Context, id int64, answer, by string)
 	}
 
 	if question.OptionsRequired && !slices.Contains(question.Options, answer) {
-		return fmt.Errorf("question %d: answer %q is not one of the offered options: %s",
-			id, answer, strings.Join(question.Options, ", "))
+		return fmt.Errorf("question %d: answer %q is %w: %s",
+			id, answer, store.ErrAnswerNotOffered, strings.Join(question.Options, ", "))
 	}
 
 	return s.closeQuestion(ctx, id, store.QuestionAnswered, answer, by)

@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,49 +10,38 @@ import (
 	"testing"
 )
 
-func FuzzVersionDecoders(f *testing.F) {
+func FuzzDecodeVersions(f *testing.F) {
 	f.Add(`{"ref":"abc"}`)
 	f.Add(`{"ts":1699887654.001200}`)
+	f.Add(`{"id":12345678901234567890}`)
 	f.Add(`{"a":1} {"b":2}`)
+	f.Add(`{"a":1}}`)
 	f.Add(`[{"ref":"a"},{"ref":"b"}]`)
 	f.Add(`[{"ref":"a"}] trailing`)
+	f.Add(`[{"a":{"b":[1,2.50,null]}},null]`)
 	f.Add(`null`)
 
 	f.Fuzz(func(t *testing.T, raw string) {
-		parsed, parseErr := ParseVersionJSON(raw)
-
-		out, outErr := decodeOutVersion([]byte(raw))
-		if outErr == nil {
-			if parseErr != nil {
-				t.Fatalf("out: accepted %q that a recorded version refuses: %v", raw, parseErr)
-			}
-
-			if !reflect.DeepEqual(out, parsed) {
-				t.Fatalf("out: and recorded decoders disagree on %q: %#v vs %#v", raw, out, parsed)
-			}
+		out, err := DecodeVersion([]byte(raw))
+		if err == nil && out != nil {
+			checkStable(t, out)
 		}
 
-		if parseErr == nil && parsed != nil {
-			checkStored(t, parsed)
-		}
-
-		checked, checkErr := decodeVersionArray([]byte(raw))
-		mcp, mcpErr := decodeMapSlice([]byte(raw))
-
-		if (checkErr == nil) != (mcpErr == nil) || !reflect.DeepEqual(checked, mcp) {
-			t.Fatalf("shell and mcp checks disagree on %q: %#v (%v) vs %#v (%v)", raw, checked, checkErr, mcp, mcpErr)
+		checked, err := DecodeVersions([]byte(raw))
+		if err != nil {
+			return
 		}
 
 		for _, version := range checked {
 			if version != nil {
-				checkStored(t, version)
+				checkStable(t, version)
 			}
 		}
 	})
 }
 
-// checkStored holds a version to surviving the trip into resource_checks.version_json and back, digits intact.
-func checkStored(t *testing.T, version map[string]any) {
+// checkStable holds a version to surviving encode and decode with its digits and its encoding unchanged, since the encoding is the key a version is filed under.
+func checkStable(t *testing.T, version map[string]any) {
 	t.Helper()
 
 	encoded, err := json.Marshal(version)
@@ -59,9 +49,14 @@ func checkStored(t *testing.T, version map[string]any) {
 		t.Fatalf("version %#v does not encode: %v", version, err)
 	}
 
-	stored, err := ParseVersionJSON(string(encoded))
-	if err != nil || !reflect.DeepEqual(stored, version) {
-		t.Fatalf("%q does not read back as the version it was: %#v vs %#v (%v)", encoded, stored, version, err)
+	again, err := DecodeVersion(encoded)
+	if err != nil || !reflect.DeepEqual(again, version) {
+		t.Fatalf("%q does not read back as the version it was: %#v vs %#v (%v)", encoded, again, version, err)
+	}
+
+	reencoded, err := json.Marshal(again)
+	if err != nil || !bytes.Equal(reencoded, encoded) {
+		t.Fatalf("%q re-encodes differently: %q (%v)", encoded, reencoded, err)
 	}
 }
 

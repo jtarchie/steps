@@ -77,7 +77,7 @@ func (d *daemon) OneOff(ctx context.Context, req web.OneOffRequest) (web.OneOffR
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
 	defer cancel()
 
-	_, err = d.runner.Enqueue(writeCtx, served.target.Pipeline, req.Job, "one-off", false)
+	err = d.runner.Enqueue(writeCtx, served.target.Pipeline, req.Job, "one-off", false)
 	if err != nil {
 		return web.OneOffResult{}, errors.Join(fmt.Errorf("could not queue %s: %w", req.Job, err), d.destroyLocked(writeCtx, name))
 	}
@@ -131,10 +131,10 @@ func (d *daemon) reapWhenDone(ctx context.Context, st store.Queue, name string) 
 	}
 }
 
-// queueSettled is a queue that has run something and holds nothing waiting or running: a restart's interrupted run reads pending again, so it is resumed before it is reaped.
+// queueSettled is a queue holding nothing waiting or running: a restart's interrupted run reads pending again, so it is resumed before it is reaped. An empty one is settled too, so the grace counts from the start: the revision is durable before the job is queued, and a crash or a failed queue in between leaves a one-off with nothing to run that every restart would serve again.
 func queueSettled(ctx context.Context, st store.Queue) bool {
 	rows, err := st.ListTriggerQueue(ctx, 20)
-	if err != nil || len(rows) == 0 {
+	if err != nil {
 		return false
 	}
 

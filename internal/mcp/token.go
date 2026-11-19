@@ -53,7 +53,7 @@ func lookupCredential(ctx context.Context, name, ref string) (string, error) {
 	return value, nil
 }
 
-// TokenScope is what a secret-backed server adds to a probe cache key: the same definition resolves to a different credential per pipeline, so one pipeline's verdict must not vouch for another's.
+// TokenScope is what a secret-backed server adds to a probe cache key: the same definition resolves to a different credential per pipeline and per job (a lookup path may name .job), so one's verdict must not vouch for another's.
 func TokenScope(ctx context.Context, srv config.MCPServer) string {
 	ref := srv.Auth.TokenSecret()
 	if ref == "" {
@@ -61,6 +61,7 @@ func TokenScope(ctx context.Context, srv config.MCPServer) string {
 	}
 
 	source, _ := ctx.Value(tokenLookupKey{}).(tokenSource)
+	meta := shell.MetadataFrom(ctx)
 
-	return cmp.Or(shell.MetadataFrom(ctx).PipelineName, source.pipeline) + "|" + ref
+	return cmp.Or(meta.PipelineName, source.pipeline) + "|" + meta.JobName + "|" + ref
 }

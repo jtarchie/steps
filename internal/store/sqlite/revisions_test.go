@@ -145,67 +145,6 @@ func TestTheNewestRevisionSurvivesRetention(t *testing.T) {
 	}
 }
 
-// TestRevisionsAreBoundedWithoutAnyRunsBeingReaped is the other orphaning
-// event, and the one the first bound missed entirely: an operator iterating
-// on a pipeline with `steps web` watching it mints a multi-kilobyte row per
-// distinct save, and none of those saves has to run anything. Waiting for a
-// job to pass run_history: before reclaiming them is not a bound.
-func TestRevisionsAreBoundedWithoutAnyRunsBeingReaped(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
-
-	defer func() { _ = st.Close() }()
-
-	for edit := 1; edit <= 50; edit++ {
-		err := st.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit), nil)
-		if err != nil {
-			t.Fatalf("RecordRevision: %v", err)
-		}
-
-		err = st.Prune(ctx, store.Retention{}, "")
-		if err != nil {
-			t.Fatalf("Prune: %v", err)
-		}
-	}
-
-	// One: the newest. Nothing ran, so nothing else is reachable.
-	if rows := countRows(ctx, t, st, "pipeline_revisions"); rows != 1 {
-		t.Errorf("%d configurations survive 50 saves that ran nothing, want 1", rows)
-	}
-}
-
-// TestRevisionsAreBoundedWhenRunsAreUnlimited: run_history: 0 means no limit
-// on RUNS, and the run pass returns early on it — which left the configurations
-// unbounded for the life of the file, on the one setting an operator chooses
-// when they want to keep everything about their runs and nothing about their
-// editor's autosaves.
-func TestRevisionsAreBoundedWhenRunsAreUnlimited(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
-
-	defer func() { _ = st.Close() }()
-
-	for edit := 1; edit <= 20; edit++ {
-		err := st.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit), nil)
-		if err != nil {
-			t.Fatalf("RecordRevision: %v", err)
-		}
-
-		err = st.Prune(ctx, store.Retention{JobName: "build", Runs: 0}, "")
-		if err != nil {
-			t.Fatalf("Prune: %v", err)
-		}
-	}
-
-	if rows := countRows(ctx, t, st, "pipeline_revisions"); rows != 1 {
-		t.Errorf("%d configurations survive under run_history: 0, want 1", rows)
-	}
-}
-
 // TestARevertedConfigurationSurvivesTheSweep is the row the sweep protects
 // getting the wrong answer from MAX(id).
 //

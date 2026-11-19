@@ -46,6 +46,9 @@ const drainIdleBackoff = 250 * time.Millisecond
 // Bounded because a job with no timeout: of its own and a hung command would otherwise hold shutdown forever; one needing longer says so with its own timeout:, which still applies.
 const nonInterruptibleGrace = 10 * time.Minute
 
+// Detached because a finalize most often runs just after a SIGINT cancelled its caller; bounded because a wedged database must not hold the drain, and with it shutdown, forever.
+const finalizeBound = 30 * time.Second
+
 // LocalRunner drains each pipeline's queue in this process. It is the Runner
 // the `steps web` command installs; a read-only server has none.
 type LocalRunner struct {
@@ -70,6 +73,8 @@ type LocalRunner struct {
 	process context.Context //nolint:containedctx // a lifetime to compare against, never one a call runs under
 	// A field rather than the constant so a test can shorten it.
 	grace time.Duration
+	// A field rather than finalizeBound so a test can see it applied.
+	finalizeBound time.Duration
 	// forced is keyed by job because the queue row has no force column and EnqueueJob returns no id, so the claim spends it and AbortQueued drops it: a flag outliving its row forces a build nobody asked for.
 	// In memory rather than in the schema because a force is a property of
 	// this request, not of the job: a forced row that outlived a restart and
@@ -114,12 +119,13 @@ func NewLocalRunner(
 	}
 
 	return &LocalRunner{
-		providers:  held,
-		base:       base,
-		concurrent: concurrent,
-		grace:      nonInterruptibleGrace,
-		forced:     map[string]bool{},
-		running:    map[runKey]runningBuild{},
+		providers:     held,
+		base:          base,
+		concurrent:    concurrent,
+		grace:         nonInterruptibleGrace,
+		finalizeBound: finalizeBound,
+		forced:        map[string]bool{},
+		running:       map[runKey]runningBuild{},
 	}
 }
 
@@ -245,25 +251,24 @@ func (r *LocalRunner) RemoveProvider(slug string) { r.providers.remove(slug) }
 func (r *LocalRunner) Close() { r.providers.Close() }
 
 // Enqueue puts a person's trigger on the pipeline's queue.
-func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, reason string, force bool) (int64, error) {
+func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, reason string, force bool) error {
+	// Before the enqueue: set after, a worker claiming the row in between ran it cached and left the flag to force the job's next poll. Two forced requests collapse into one forced run, which is what a double-click meant.
+	if force {
+		r.mu.Lock()
+		r.forced[jobKey(target.Slug, jobName)] = true
+		r.mu.Unlock()
+	}
+
 	err := target.Store.EnqueueManualJob(ctx, jobName, reason, actor.From(ctx).String())
 	if err != nil {
-		return 0, fmt.Errorf("scheduler: %w", err)
+		if force {
+			r.takeForce(target.Slug, jobName)
+		}
+
+		return fmt.Errorf("scheduler: %w", err)
 	}
 
-	if !force {
-		return 0, nil
-	}
-
-	// The row id is not returned by EnqueueManualJob, so mark the job itself: the
-	// next claim of this job consumes the flag. Two forced requests for one
-	// job collapse into one forced run, which is what a person double-clicking
-	// the button meant anyway.
-	r.mu.Lock()
-	r.forced[jobKey(target.Slug, jobName)] = true
-	r.mu.Unlock()
-
-	return 0, nil
+	return nil
 }
 
 // requestPin is the daemon's own --pin with one request's pin laid over it: the request is the narrower word.
@@ -514,7 +519,10 @@ func (r *LocalRunner) DrainOne(ctx context.Context, target *Pipeline) bool {
 		// Detached, like every other finalize here: a job the config no
 		// longer names is terminal, and a SIGINT at this instant must not
 		// strand the row running with nothing recorded.
-		_ = target.Store.CompleteJob(context.WithoutCancel(ctx), id, store.QueueFailed, err)
+		finalize, cancel := r.detached(ctx)
+		_ = target.Store.CompleteJob(finalize, id, store.QueueFailed, err)
+
+		cancel()
 
 		return true
 	}
@@ -533,8 +541,13 @@ func ordinaryRow(claim store.ClaimedJob) bool {
 	return claim.RerunOf == "" && claim.Pin == "" && claim.Resume == ""
 }
 
+// detached is the context a finalize runs under; see finalizeBound.
+func (r *LocalRunner) detached(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), r.finalizeBound)
+}
+
 // finalizePanic makes a panic out of one run cost that run, not the daemon and every pipeline it holds.
-func finalizePanic(ctx context.Context, target *Pipeline, job *config.Job, id int64) {
+func (r *LocalRunner) finalizePanic(ctx context.Context, target *Pipeline, job *config.Job, id int64) {
 	recovered := recover()
 	if recovered == nil {
 		return
@@ -544,7 +557,10 @@ func finalizePanic(ctx context.Context, target *Pipeline, job *config.Job, id in
 
 	slog.ErrorContext(ctx, "web.job.panic", "pipeline", target.Slug, "job", job.Name, "recovered", recovered, "stack", string(debug.Stack()))
 
-	err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, store.QueueFailed, panicErr)
+	finalize, cancel := r.detached(ctx)
+	defer cancel()
+
+	err := target.Store.CompleteJob(finalize, id, store.QueueFailed, panicErr)
 	if err != nil {
 		slog.ErrorContext(ctx, "web.job.panic_unrecorded", "pipeline", target.Slug, "job", job.Name, "error", err)
 	}
@@ -556,7 +572,7 @@ func (r *LocalRunner) runAndFinalize(
 ) {
 	slog.InfoContext(ctx, "web.job.run", "pipeline", target.Slug, "job", job.Name)
 
-	defer finalizePanic(ctx, target, job, id)
+	defer r.finalizePanic(ctx, target, job, id)
 
 	aborted, runErr := r.runJob(ctx, target, cfg, job, force, trigger)
 
@@ -564,7 +580,10 @@ func (r *LocalRunner) runAndFinalize(
 	if runErr != nil && aborted {
 		slog.InfoContext(ctx, "web.job.aborted", "pipeline", target.Slug, "job", job.Name)
 
-		err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, store.QueueAborted, runErr)
+		finalize, cancel := r.detached(ctx)
+		defer cancel()
+
+		err := target.Store.CompleteJob(finalize, id, store.QueueAborted, runErr)
 		if err != nil {
 			slog.ErrorContext(ctx, "web.complete", "pipeline", target.Slug, "job", job.Name, "error", err)
 		}
@@ -593,7 +612,10 @@ func (r *LocalRunner) runAndFinalize(
 
 	slog.InfoContext(ctx, "web.job.done", "pipeline", target.Slug, "job", job.Name, "status", status)
 
-	err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, status, runErr)
+	finalize, cancel := r.detached(ctx)
+	defer cancel()
+
+	err := target.Store.CompleteJob(finalize, id, status, runErr)
 	if err != nil {
 		slog.ErrorContext(ctx, "web.complete", "pipeline", target.Slug, "job", job.Name, "error", err)
 	}
@@ -647,7 +669,10 @@ func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobNam
 	slog.WarnContext(ctx, "web.job.held", "pipeline", target.Slug, "job", jobName,
 		"release", "steps jobs release "+jobName+" -p <pipeline>")
 
-	err = target.Store.CompleteJob(context.WithoutCancel(ctx), id, store.QueueSkipped, nil)
+	finalize, cancel := r.detached(ctx)
+	defer cancel()
+
+	err = target.Store.CompleteJob(finalize, id, store.QueueSkipped, nil)
 	if err != nil {
 		slog.ErrorContext(ctx, "web.complete", "pipeline", target.Slug, "job", jobName, "error", err)
 	}
@@ -664,8 +689,11 @@ func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobNam
 func (r *LocalRunner) recordBreaker(ctx context.Context, target *Pipeline, job *config.Job, runErr error) {
 	// Detached: the outcome is already terminal, and a SIGINT arriving here
 	// must not lose the count a later run reasons about.
+	finalize, cancel := r.detached(ctx)
+	defer cancel()
+
 	paused, consecutive, err := target.Store.RecordJobOutcome(
-		context.WithoutCancel(ctx), job.Name, runErr == nil, job.MaxConsecutiveFailures)
+		finalize, job.Name, runErr == nil, job.MaxConsecutiveFailures)
 	if err != nil {
 		slog.WarnContext(ctx, "web.breaker_error", "pipeline", target.Slug, "job", job.Name, "error", err)
 
@@ -725,7 +753,10 @@ func (r *LocalRunner) runJob(
 			return
 		}
 
-		_ = target.Store.FinishRun(context.WithoutCancel(ctx), runID, store.RunFailed)
+		finalize, cancel := r.detached(ctx)
+		_ = target.Store.FinishRun(finalize, runID, store.RunFailed)
+
+		cancel()
 
 		panic(recovered)
 	}()

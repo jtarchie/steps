@@ -595,20 +595,42 @@ func scrubEvent(ctx context.Context, event Event) Event {
 	return event
 }
 
-// scrubAttr renders a non-string value (an error, a Stringer) to text first, since that is the form a handler would print it in.
+// scrubAttr renders a non-string value (an error, a Stringer, a map, a slice, bytes) to text first, since that is the form a handler would print it in.
 func scrubAttr(a slog.Attr, scrub func(string) string) slog.Attr {
 	value := a.Value.Resolve()
 
 	switch value.Kind() { //nolint:exhaustive // only text can carry a secret
 	case slog.KindString:
 		return slog.String(a.Key, scrub(value.String()))
+	case slog.KindGroup:
+		group := value.Group()
+
+		scrubbed := make([]slog.Attr, len(group))
+		for i, member := range group {
+			scrubbed[i] = scrubAttr(member, scrub)
+		}
+
+		return slog.Attr{Key: a.Key, Value: slog.GroupValue(scrubbed...)}
 	case slog.KindAny:
 		switch typed := value.Any().(type) {
 		case error:
 			return slog.String(a.Key, scrub(typed.Error()))
 		case fmt.Stringer:
 			return slog.String(a.Key, scrub(typed.String()))
+		case []byte:
+			return scrubRendered(a, string(typed), scrub)
+		default:
+			return scrubRendered(a, fmt.Sprintf("%+v", typed), scrub)
 		}
+	}
+
+	return a
+}
+
+// scrubRendered swaps the value for its masked text only when masking changed it, so a clean map stays a map for a JSON handler.
+func scrubRendered(a slog.Attr, text string, scrub func(string) string) slog.Attr {
+	if masked := scrub(text); masked != text {
+		return slog.String(a.Key, masked)
 	}
 
 	return a
@@ -728,7 +750,7 @@ func Hold(ctx context.Context) (io.Writer, func()) {
 
 type rendererKey struct{}
 
-// WithRenderer names what should draw a run started under ctx: the observer a bus the runner attaches will call, in place of its plain lines.
+// WithRenderer names what should draw a run started under ctx: the observer a bus the runner attaches will call. A run with none is recorded and drawn by nobody.
 func WithRenderer(ctx context.Context, render func(Event)) context.Context {
 	return context.WithValue(ctx, rendererKey{}, render)
 }

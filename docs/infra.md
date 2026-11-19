@@ -632,7 +632,7 @@ jobs:
 What the fence allows:
 
 - **Writes** only under the step's workspace (its caches included, since a host step's caches live there) and a private `TMPDIR` made for the step and removed after it. The shared temp directory is not writable, because every other step's workspace lives in it.
-- **Reads** everywhere except credential paths: `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.config/gcloud`, `~/.kube`, `~/.gnupg`, `~/.netrc`, `~/.docker/config.json` and `~/Library/Keychains`, each also by its real path when it is a symlink. Reads stay open because a host command needs its toolchain wherever the operator installed it.
+- **Reads** everywhere except credential paths: `~/.ssh`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.config/gcloud`, `~/.config/op`, `~/.kube`, `~/.gnupg`, `~/.netrc`, `~/.docker`, `~/.git-credentials`, `~/.config/git/credentials`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials` (and `.toml`), `~/.terraform.d` and `~/Library/Keychains`, each also by its real path when it is a symlink. Reads stay open because a host command needs its toolchain wherever the operator installed it.
 - **Network** stays open unless the entry also says `network: none`, which cuts the command off from everything, loopback and unix sockets included. Any other `network:` value beside `sandbox:` is a load error, because the sandbox can only cut the network off, not join one.
 
 Rules and edges:
@@ -1015,6 +1015,9 @@ commit def456 → deploy  ok
     r1 + c2  ->  released  # green together in build 2
   ```
 
+  The job builds the newest such set, `steps run` included: per upstream job one green build holding every resource that job constrains, the jobs agreeing on any resource they share (Concourse's group resolver). A build is newer by its versions' discovery order rather than by when it finished, so a rerun of an old build does not jump ahead of a newer version. With no set green together the get fails, rather than building a pair nothing tested. A `version: every` get still walks its green versions one at a time.
+- **Only a `trigger: true` get starts a job.** Upstream going green releases a job when one of its `trigger: true` gets has a version no run of the job has taken yet; a newer version on a `passed:` get without `trigger:` is fetched by the next build but starts none. A job whose gets are all `passed:` without `trigger: true` runs only when someone triggers it — as in Concourse.
+- **A failed run used its versions.** A run takes its versions when it starts, so a job that failed on `v1` — or was aborted, or is still running — is not released for `v1` again; it waits for a new version to pass upstream, or for someone to press Trigger (or Retry). That is Concourse's rule, and it is why a failing gated job no longer runs every poll until the [circuit breaker](#circuit-breaker-max_consecutive_failures) holds it. A run stopped before it took any version (refused by preflight or an image pull) used nothing, and is released again.
 - **A held-back job is not a lost trigger.** The version stays current, so the next poll after the upstream job goes green enqueues it.
 - **Load-time checks.** `passed:` is get-only, may not name its own job, and may not name a job that neither gets nor puts the same resource — that last one would be a deadlock spelled as a typo. A `put:` only in a job-level `on_failure`/`on_error`/`on_abort` hook does not count: those run only when the build is not green, so nothing they publish can pass.
 

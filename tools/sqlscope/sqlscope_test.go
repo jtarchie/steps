@@ -14,13 +14,20 @@ var unscopedByDesign = map[string]map[string]string{
 		"LEFT JOIN pipeline_revisions v ON v.id = p.current_revision_id":                               "Reader.Pipelines lists every pipeline in the file; the join is one row per pipeline through its own RESTRICTed revision id",
 		"JOIN pipeline_revisions r ON r.id = p.current_revision_id":                                    "CurrentRevision is scoped by WHERE p.id = ?, the pipelines row itself, and reaches the revision through that row's own foreign key",
 		"WHERE content_hash NOT IN (SELECT content_hash FROM nodes)":                                   "node_content is global, keyed by a hash of the content, and its sweep must stay pipeline-blind or the RESTRICT fires (see pruneNodeContent)",
+		"AND NOT EXISTS (SELECT 1 FROM nodes n WHERE n.content_hash = node_content.content_hash)":      "a prune's sweep is narrowed to the content hashes it freed, but whether another pipeline still names one is the same pipeline-blind question pruneNodeContent asks (see pruneFreedContent)",
 		"DELETE FROM activity WHERE id <= (SELECT id FROM activity ORDER BY id DESC LIMIT 1 OFFSET ?)": "the activity log is one per database, capped by count across every pipeline, so its trim is daemon-wide by design and deletes only the oldest entries",
+		"AND id NOT IN (SELECT client_id FROM oauth_tokens)":                                           "a client's eviction asks whether ANY grant, in any pipeline, still holds it; tokens are daemon-level (store.Accounts), pipeline_id is what a grant names, not a scope",
+		"DELETE FROM oauth_tokens WHERE expires_at <= ? OR revoked_at IS NOT NULL":                     "the sweep of ended tokens is daemon-wide by design: tokens are store.Accounts', and an ended token is dead whatever pipeline it named",
+		"UPDATE oauth_tokens SET revoked_at = ? WHERE token_hash = ?":                                  "a token is found and revoked by its digest, which is unique across the daemon; tokens are store.Accounts', not a pipeline handle's",
 	},
 	"../../internal/store/postgres": {
 		"LEFT JOIN pipeline_revisions v ON v.id = p.current_revision_id":                                "Reader.Pipelines lists every pipeline in the schema; the join is one row per pipeline through its own RESTRICTed revision id",
 		"JOIN pipeline_revisions r ON r.id = p.current_revision_id":                                     "CurrentRevision is scoped by WHERE p.id = $1, the pipelines row itself, and reaches the revision through that row's own foreign key",
 		"AND NOT EXISTS (SELECT 1 FROM nodes n WHERE n.content_hash = c.content_hash)":                  "node_content is global, keyed by a hash of the content, and its sweep must stay pipeline-blind or the RESTRICT fires (see pruneNodeContent)",
 		"DELETE FROM activity WHERE id <= (SELECT id FROM activity ORDER BY id DESC LIMIT 1 OFFSET $1)": "the activity log is one per database, capped by count across every pipeline, so its trim is daemon-wide by design and deletes only the oldest entries",
+		"AND id NOT IN (SELECT client_id FROM oauth_tokens)":                                            "a client's eviction asks whether ANY grant, in any pipeline, still holds it; tokens are daemon-level (store.Accounts), pipeline_id is what a grant names, not a scope",
+		"DELETE FROM oauth_tokens WHERE expires_at <= $1 OR revoked_at IS NOT NULL":                     "the sweep of ended tokens is daemon-wide by design: tokens are store.Accounts', and an ended token is dead whatever pipeline it named",
+		"UPDATE oauth_tokens SET revoked_at = $1 WHERE token_hash = $2":                                 "a token is found and revoked by its digest, which is unique across the daemon; tokens are store.Accounts', not a pipeline handle's",
 	},
 }
 
@@ -84,6 +91,7 @@ func TestCheckFindsExactlyTheUnscopedStatements(t *testing.T) {
 		"nodes: DELETE FROM nodes WHERE hash IN ( ? )",
 		"run_steps: INSERT INTO run_steps (run_id, step_name) VALUES (?, ?)",
 		"late: DELETE FROM late WHERE id = ?",
+		"migrated: UPDATE migrated SET name = ?",
 	}
 
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -28,17 +29,7 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// Resources returns the distinct resource names referenced by any get
-// step with trigger: true, anywhere in any job's plan, in first-seen order.
-// A get step's resource: alias is resolved to the underlying resource name
-// (see config.Step.GetResourceName), so two gets aliasing the same resource
-// poll it once and a version change affects every job that references it.
-//
-// Delegates to config.Config.PolledResourceNames, which carries the full
-// doc on why passed: counts alongside trigger: true — internal/pipeline
-// needs the same predicate (to know which resources NOT to touch when
-// recording a run's resolved version) and cannot import this package, since
-// this package already imports internal/pipeline.
+// Resources is every resource a poll checks; the predicate lives in config.Config.PolledResourceNames because internal/pipeline needs it and cannot import this package.
 func Resources(cfg *config.Config) []string {
 	return cfg.PolledResourceNames()
 }
@@ -432,7 +423,12 @@ type observedResource struct {
 	previousFound bool
 }
 
-// pollOnce checks every trigger resource once and enqueues (deduplicated)
+// pollOnce is pollResources over every trigger resource.
+func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, error) {
+	return pollResources(ctx, cfg, st, Resources(cfg))
+}
+
+// pollResources checks each named resource once and enqueues (deduplicated)
 // every job affected by a resource whose latest version changed since the
 // last recorded check. It returns the job names it enqueued, in sorted
 // order.
@@ -451,11 +447,6 @@ type observedResource struct {
 // first time ever seeds a baseline and is never itself considered dirty on
 // that first check — this keeps a fresh (or freshly lost) state db from
 // mass-triggering every job on daemon startup.
-func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, error) {
-	return pollResources(ctx, cfg, st, Resources(cfg))
-}
-
-// pollResources is pollOnce over the resources named.
 func pollResources(ctx context.Context, cfg *config.Config, st PollStore, names []string) ([]string, error) {
 	observed := map[string]observedResource{}
 
@@ -467,7 +458,7 @@ func pollResources(ctx context.Context, cfg *config.Config, st PollStore, names 
 			return nil, errors.Join(append(failures, ctx.Err())...)
 		}
 
-		obs, hasVersion, err := observe(events.WithLogAttrs(ctx, "resource", name), cfg, st, name)
+		obs, hasVersion, err := observeRecovering(events.WithLogAttrs(ctx, "resource", name), cfg, st, name)
 		if err != nil {
 			failures = append(failures, checkFailure{resource: name, err: err})
 
@@ -522,6 +513,25 @@ type checkFailure struct {
 func (f checkFailure) Error() string { return f.err.Error() }
 
 func (f checkFailure) Unwrap() error { return f.err }
+
+// observeRecovering is observe with a panic turned into that resource's check failure: the poller's goroutine has no recover above it (resource.CheckShare re-panics a check's), so a built-in type's panic took the whole daemon down.
+func observeRecovering(ctx context.Context, cfg *config.Config, st PollStore, name string) (obs observedResource, hasVersion bool, err error) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+
+		slog.ErrorContext(ctx, "trigger.check_panic", "resource", name, "panic", recovered, "stack", string(debug.Stack()))
+
+		obs, hasVersion = observedResource{}, false
+		err = fmt.Errorf("trigger resource %q: check panicked: %v", name, recovered)
+
+		recordCheckOutcome(ctx, st, name, err)
+	}()
+
+	return observe(ctx, cfg, st, name)
+}
 
 // observe is one resource's turn in a poll: a check whose findings are filed into history, or — for a webhook resource, which has no check — what the deliveries already say.
 func observe(ctx context.Context, cfg *config.Config, st PollStore, name string) (observedResource, bool, error) {
@@ -643,12 +653,12 @@ func affectedJobs(
 				continue
 			}
 
-			ready, err := jobReadyFor(ctx, st, job)
+			due, err := jobDue(ctx, st, job)
 			if err != nil {
 				return nil, err
 			}
 
-			if !ready {
+			if !due {
 				continue
 			}
 
@@ -659,21 +669,17 @@ func affectedJobs(
 	return reasons, nil
 }
 
-// releaseConstrainedJobs enqueues every passed:-constrained job for which
-// some version has now gone green upstream that the job has not itself run.
+// releaseConstrainedJobs enqueues every passed:-constrained job that has a
+// trigger: true get, once the versions it would build have gone green
+// upstream and it has not itself run its trigger inputs.
 //
-// The candidate is the newest GREEN version, not the newest version: those
-// differ exactly when the head keeps failing upstream, and judging only the
-// head starved the downstream job forever while a validated older version
-// sat in history. Concourse selects the latest version satisfying the
-// constraint, which is what asking the store — rather than this poll's
-// observation — amounts to.
+// Only a trigger: true get starts a job, as in Concourse, where a build is
+// created only when a trigger input's version is a first occurrence
+// (atc/scheduler/scheduler.go, ensurePendingBuildExists). A job whose gets are
+// all passed: without trigger: is started by a person, never by its upstream
+// going green.
 //
-// The guard against enqueueing the same work forever is the job's OWN passed
-// record: once it succeeds against a version it has recorded one, so it stops
-// being releasable for that version. A job that keeps failing is re-attempted
-// one at a time (the queue holds at most one pending row per job) until the
-// circuit breaker pauses it, which is what the breaker is for.
+// The guard against releasing the same work forever is the job's own builds of its trigger inputs, passed or failed (see jobAlreadyRanThese): a failing job waits for a new trigger version or a person, as in Concourse, rather than running every poll until a breaker holds it.
 func releaseConstrainedJobs(
 	ctx context.Context, cfg *config.Config, st PollStore, alreadyEnqueued []string,
 ) ([]string, error) {
@@ -682,26 +688,16 @@ func releaseConstrainedJobs(
 	for i := range cfg.Jobs {
 		job := &cfg.Jobs[i]
 
-		constraints := job.PassedConstraints()
-		if len(constraints) == 0 || slices.Contains(alreadyEnqueued, job.Name) {
+		if len(job.PassedConstraints()) == 0 || slices.Contains(alreadyEnqueued, job.Name) {
 			continue
 		}
 
-		ready, err := jobReadyFor(ctx, st, job)
+		due, err := jobDue(ctx, st, job)
 		if err != nil {
 			return nil, err
 		}
 
-		if !ready {
-			continue
-		}
-
-		done, err := jobAlreadyRanThese(ctx, st, job.Name, constraints)
-		if err != nil {
-			return nil, err
-		}
-
-		if done {
+		if !due {
 			continue
 		}
 
@@ -716,32 +712,60 @@ func releaseConstrainedJobs(
 	return released, nil
 }
 
-// jobAlreadyRanThese reports whether the job has itself already succeeded
-// against every constrained resource's candidate version — the fact that
-// stops a released job being released again on the next poll.
-func jobAlreadyRanThese(
-	ctx context.Context, st PollStore, jobName string,
-	constraints map[string][]string,
-) (bool, error) {
-	want, complete, err := candidateSetFor(ctx, st, constraints)
-	if err != nil {
-		return false, err
+// jobDue reports whether a poll should start a job: its passed: gates hold, and a gated job has no queued or claimed build still to take its versions and some trigger input no build of it has used. A check's new version asks it as the release does, or a version upstream has not yet passed rebuilds the gated set the job already used.
+func jobDue(ctx context.Context, st PollStore, job *config.Job) (bool, error) {
+	set, ready, err := passedSetFor(ctx, st, job)
+	if err != nil || !ready || len(job.PassedConstraints()) == 0 {
+		return ready, err
 	}
 
-	if !complete {
-		return false, nil
+	// Holding is safe because a gated job is judged again every poll by releaseConstrainedJobs.
+	pending, err := st.QueuedWithoutInputs(ctx, job.Name)
+	if err != nil || pending {
+		return false, err //nolint:wrapcheck // the store names the job
 	}
 
-	passed, err := pipeline.VersionSetPassedUpstream(ctx, st, jobName, want)
-	if err != nil {
-		return false, fmt.Errorf("passed: constraint for job %q: %w", jobName, err)
-	}
+	done, err := jobAlreadyRanThese(ctx, st, job, set)
 
-	return passed, nil
+	return !done, err
 }
 
-// jobReadyFor reports whether every passed: constraint the job declares is
-// satisfied by some recorded version — the newest green one per resource.
+// jobAlreadyRanThese reports whether a build of the job, however it ended, already took each version its trigger: true gets would build (gated ones from the set that passed together, the rest at their newest), each on its own: Concourse's IsFirstOccurrence asks per input over build_resource_config_version_inputs and filters on no status. A trigger input with no version holds the job, having nothing to build with; a job with no trigger: true get has vacuously run, since only a person starts it.
+func jobAlreadyRanThese(ctx context.Context, st PollStore, job *config.Job, set map[string]store.VersionKey) (bool, error) {
+	for _, input := range job.Inputs() {
+		if !input.Trigger {
+			continue
+		}
+
+		version, found := set[input.Resource]
+		if !found {
+			var err error
+
+			version, found, err = st.NewestVersion(ctx, input.Resource)
+			if err != nil {
+				return false, fmt.Errorf("trigger input %q of job %q: %w", input.Resource, job.Name, err)
+			}
+		}
+
+		if !found {
+			return true, nil
+		}
+
+		runs, err := st.VersionRuns(ctx, input.Resource, []store.VersionKey{version})
+		if err != nil {
+			return false, fmt.Errorf("trigger input %q of job %q: %w", input.Resource, job.Name, err)
+		}
+
+		if !slices.ContainsFunc(runs, func(run store.VersionRun) bool { return run.Run.JobName == job.Name }) {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// jobReadyFor reports whether some set of versions satisfies every passed:
+// constraint the job declares at once.
 //
 // This is the correctness gap passed: exists to close: without it, the poll loop can
 // trigger `deploy` on a commit the `test` job ALREADY FAILED on, and there is
@@ -752,98 +776,35 @@ func jobAlreadyRanThese(
 // is durable, so the poll after the upstream job goes green enqueues it —
 // even if newer, unproven versions have arrived on top in the meantime.
 func jobReadyFor(ctx context.Context, st PollStore, job *config.Job) (bool, error) {
-	// Inverted from resource -> upstream jobs into upstream job -> the set of
-	// constrained resources naming it. That inversion IS the fix: each
-	// upstream job is asked once, about every version it vouches for at once,
-	// so a combination that passed only in pieces is refused. Asking per
-	// resource could never see the combination at all.
-	constraints := job.PassedConstraints()
+	_, ready, err := passedSetFor(ctx, st, job)
 
-	for _, upstreamJob := range upstreamJobsOf(job) {
-		constrained := map[string][]string{}
-
-		for resource, upstream := range constraints {
-			if slices.Contains(upstream, upstreamJob) {
-				constrained[resource] = upstream
-			}
-		}
-
-		want, complete, err := candidateSetFor(ctx, st, constrained)
-		if err != nil {
-			return false, err
-		}
-
-		if !complete {
-			// A constrained resource has no green version at all, so there is
-			// nothing to judge. Holding the job back is the conservative
-			// reading, and the one that matches "only run against a version
-			// that passed".
-			return false, nil
-		}
-
-		passed, err := pipeline.VersionSetPassedUpstream(ctx, st, upstreamJob, want)
-		if err != nil {
-			return false, fmt.Errorf("passed: constraint for job %q: %w", job.Name, err)
-		}
-
-		if !passed {
-			names := slices.Sorted(maps.Keys(want))
-
-			slog.InfoContext(ctx, "trigger.waiting_on_passed", "job", job.Name, "upstream", upstreamJob, "resources", names)
-
-			return false, nil
-		}
-	}
-
-	return true, nil
+	return ready, err
 }
 
-// upstreamJobsOf lists every job named by any of this job's passed:
-// constraints, in a stable order.
-func upstreamJobsOf(job *config.Job) []string {
-	seen := map[string]bool{}
-
-	for _, upstream := range job.PassedConstraints() {
-		for _, name := range upstream {
-			seen[name] = true
-		}
-	}
-
-	return slices.Sorted(maps.Keys(seen))
-}
-
-// candidateSetFor picks, for every constrained resource, the version a
-// released job would actually build: the newest one green in all of that
-// resource's upstream jobs. complete is false when any resource has none —
-// there is then nothing to release for.
+// passedSetFor is the set a released job would build its gated gets from:
+// per upstream job one green build holding every resource it vouches for,
+// which is the version set internal/pipeline's loadResourceHistory resolves
+// the build to, so what is judged here and what is built there agree.
 //
 // Reading the store rather than this poll's observation is the point. The
 // observed head is one version, and judging only it meant a head that kept
 // failing upstream starved the job forever while a validated version sat in
-// history. It also kept the gate honest across the enqueue/claim window:
-// the build resolves green versions again at claim time (see
-// pipeline.loadResourceHistory), so what is judged here and what is built
-// there come from the same durable record rather than a moment that has
-// passed.
-func candidateSetFor(
-	ctx context.Context, st PollStore, constraints map[string][]string,
-) (want map[string]map[string]any, complete bool, err error) {
-	want = make(map[string]map[string]any, len(constraints))
+// history. Taking each resource's newest green version independently was the
+// other half of the same mistake: a fan-in whose newest versions never passed
+// TOGETHER was held forever while an older set that did sat in history.
+func passedSetFor(ctx context.Context, st PollStore, job *config.Job) (map[string]store.VersionKey, bool, error) {
+	constraints := job.PassedConstraints()
 
-	for resource, upstreams := range constraints {
-		green, err := st.GreenVersions(ctx, resource, upstreams)
-		if err != nil {
-			return nil, false, fmt.Errorf("passed: constraint on %q: %w", resource, err)
-		}
-
-		if len(green) == 0 {
-			return nil, false, nil
-		}
-
-		want[resource] = green[len(green)-1]
+	set, found, err := st.PassedSet(ctx, constraints)
+	if err != nil {
+		return nil, false, fmt.Errorf("passed: constraint for job %q: %w", job.Name, err)
 	}
 
-	return want, true, nil
+	if !found {
+		slog.InfoContext(ctx, "trigger.waiting_on_passed", "job", job.Name, "resources", slices.Sorted(maps.Keys(constraints)))
+	}
+
+	return set, found, nil
 }
 
 // checkResource runs resourceName's check command and reports its latest
@@ -937,7 +898,7 @@ func recordedVersion(
 
 	encoded = last.Version
 
-	version, err = rsrc.ParseVersionJSON(string(encoded))
+	version, err = store.DecodeVersion(encoded)
 	if err != nil {
 		return "", nil, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}

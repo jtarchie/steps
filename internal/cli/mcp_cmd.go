@@ -16,6 +16,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	"github.com/jtarchie/steps/internal/mcpstatus"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/web"
 )
@@ -110,7 +111,7 @@ func (m *MCPListCmd) Run(streams Streams) error {
 
 	for i, srv := range cfg.MCPServers {
 		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s",
-			srv.Name, srv.Transport(), srv.Target(), srv.AuthLabel(), cfg.MCPUsers(srv.Name), statuses[i])
+			srv.Name, mcpstatus.Transport(srv), mcpstatus.Target(srv), mcpstatus.AuthLabel(srv), mcpstatus.Users(cfg, srv.Name), statuses[i])
 
 		_, _ = fmt.Fprintln(writer, row)
 	}
@@ -188,7 +189,7 @@ func probeMCPServers(ctx context.Context, cfg *config.Config, statuses []string)
 
 			tools, err := stepsmcp.ListServerTools(probeCtx, cfg.Name, srv)
 			if err != nil {
-				statuses[i] = "✗ " + elideMiddle(config.MCPStatusReason(srv.Name, err))
+				statuses[i] = "✗ " + elideMiddle(mcpstatus.Reason(srv.Name, err))
 
 				return
 			}
@@ -389,7 +390,10 @@ func (m *MCPLoginCmd) remote(ctx context.Context, out io.Writer) error {
 		return err
 	}
 
-	client := newDaemonClient(m.Target)
+	client, err := newDaemonClient(m.Target)
+	if err != nil {
+		return err
+	}
 
 	status, err := client.startLogin(ctx, name, m.Server)
 	if err != nil {
@@ -398,6 +402,22 @@ func (m *MCPLoginCmd) remote(ctx context.Context, out io.Writer) error {
 
 	sayf(out, "→ %s is authorizing %q…\n", client.target, m.Server)
 
+	status, err = m.awaitLogin(ctx, out, client, name, status)
+	if err != nil {
+		return err
+	}
+
+	if status.State != web.LoginAuthorized {
+		return fmt.Errorf("mcp login: %s", status.Message)
+	}
+
+	sayf(out, "✓ authorized %q on %s (saved there, sealed in its state database)\n", m.Server, client.target)
+
+	return nil
+}
+
+// awaitLogin polls a pending login until the daemon settles it, opening the browser once it hands back where to authorize.
+func (m *MCPLoginCmd) awaitLogin(ctx context.Context, out io.Writer, client *daemonClient, name pipelineName, status web.LoginStatus) (web.LoginStatus, error) {
 	announced := false
 
 	for status.State == web.LoginPending {
@@ -409,23 +429,19 @@ func (m *MCPLoginCmd) remote(ctx context.Context, out io.Writer) error {
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("mcp login: %w", ctx.Err())
+			return status, fmt.Errorf("mcp login: %w", ctx.Err())
 		case <-time.After(loginPoll):
 		}
 
+		var err error
+
 		status, err = client.loginStatus(ctx, name, m.Server)
 		if err != nil {
-			return err
+			return status, err
 		}
 	}
 
-	if status.State != web.LoginAuthorized {
-		return fmt.Errorf("mcp login: %s", status.Message)
-	}
-
-	sayf(out, "✓ authorized %q on %s (saved there, sealed in its state database)\n", m.Server, client.target)
-
-	return nil
+	return status, nil
 }
 
 // openBrowser launches the OS's default browser at url. Its caller

@@ -30,7 +30,6 @@ import (
 
 	"github.com/labstack/echo/v5"
 
-	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -189,23 +188,12 @@ func (s *Server) handleRunEvents(c *echo.Context) error {
 
 // mayStillWatch is authenticate and authorize asked again of a stream already open: the same session, account and role-narrowing questions, with the reader's own cookie.
 func (s *Server) mayStillWatch(c *echo.Context) bool {
-	who, found := s.sessionActor(c)
+	who, _, found := s.credentialed(c)
 	if !found {
-		username, password, sent := c.Request().BasicAuth()
-		if !sent || !s.auth.matches(username, password) {
-			return false
-		}
-
-		who = actor.Local(username)
+		return false
 	}
 
-	ctx := c.Request().Context()
-	id := s.identityOf(ctx, who)
-	role := s.roles.highest(id)
-
-	if target := pipelineOf(c); target != nil {
-		role = target.narrow(role, id)
-	}
+	role, _ := s.roleFor(c.Request().Context(), who, pipelineOf(c))
 
 	return role >= RoleViewer
 }
@@ -251,7 +239,7 @@ func endStream(c *echo.Context, runID string, err error) error {
 		return nil
 	}
 
-	slog.Warn("web.live.stream_failed", "run", runID, "path", c.Request().URL.Path, "error", err)
+	slog.WarnContext(c.Request().Context(), "web.live.stream_failed", "run", runID, "path", c.Request().URL.Path, "error", err)
 
 	return fmt.Errorf("web: %w", err)
 }

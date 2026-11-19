@@ -48,15 +48,8 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env too
 
 	parts := make([]*genai.Part, 0, len(calls))
 
-	// Before the result is a message: the model, the transcript and the live stream all read it from here, and none of them may see a secret a tool printed.
-	secrets := redact.SecretsFrom(ctx)
-
 	for i, call := range calls {
 		response := responses[i]
-		if !secrets.Empty() {
-			response, _ = scrubValues(response, secrets.String).(map[string]any)
-		}
-
 		if env.spillShown != "" {
 			response, _ = scrubValues(response, env.showSpill).(map[string]any)
 		}
@@ -92,9 +85,9 @@ func runGroup(ctx context.Context, calls []*genai.FunctionCall, env toolEnv, reg
 			defer func() { <-slot }()
 			defer func() {
 				if p := recover(); p != nil {
-					slog.ErrorContext(ctx, "agent.tool_panic", "tool", call.Name, "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+					slog.ErrorContext(ctx, "agent.tool_panic", "tool", call.Name, "panic", redact.SecretsFrom(ctx).String(fmt.Sprint(p)), "stack", string(debug.Stack()))
 
-					out[i] = errorResult(fmt.Sprintf("%s: panic: %v", call.Name, p))
+					out[i] = scrubSecrets(ctx, errorResult(fmt.Sprintf("%s: panic: %v", call.Name, p)))
 				}
 			}()
 
@@ -116,7 +109,7 @@ func admitTool(call *genai.FunctionCall, maxCalls, callCounts map[string]int) ma
 	return nil
 }
 
-// runBudgetedTool runs call after admission: rejection, when non-nil, is the result and the tool never runs. Every call (budget-rejected or dispatched) is bracketed by a debug-level "agent.tool_call"/"agent.tool_result" log pair: the args a call was made with, and how it finished (duration, error/exit_code, plus a size-capped preview of the rest of the result via debugToolResultPreview, the gap that once made a model silently abandoning a granted tool for a worse fallback undiagnosable without an out-of-band probe). Debug logging is opt-in, so this is silent unless an operator has already asked to see command/output content at that level; call.Args/the result can hold a model-authored value (e.g. a custom tool's args, or write_file's content), no different from the full command/output internal/shell already logs at this level.
+// runBudgetedTool runs call after admission: rejection, when non-nil, is the result and the tool never runs. Every call (budget-rejected or dispatched) is bracketed by a debug-level "agent.tool_call"/"agent.tool_result" log pair: the args a call was made with, and how it finished (duration, error/exit_code, plus a size-capped preview of the rest of the result via debugToolResultPreview, the gap that once made a model silently abandoning a granted tool for a worse fallback undiagnosable without an out-of-band probe). Debug logging is opt-in, so this is silent unless an operator has already asked to see command/output content at that level; the result is logged after the run's secrets are masked in it (scrubSecrets), but call.Args is logged as the model wrote it.
 func runBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv, registry map[string]toolImpl, rejection map[string]any) map[string]any {
 	// Which run/job/step/depth this call belongs to — the identity every
 	// nested call (sub-agent, MCP, custom tool) shares with its enclosing
@@ -134,7 +127,7 @@ func runBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv,
 
 	response := rejection
 	if response == nil {
-		response = executeAgentTool(ctx, call, env, registry)
+		response = scrubSecrets(ctx, executeAgentTool(ctx, call, env, registry))
 	}
 
 	slog.DebugContext(ctx, "agent.tool_result", "tool", call.Name, "id", call.ID,
@@ -145,6 +138,18 @@ func runBudgetedTool(ctx context.Context, call *genai.FunctionCall, env toolEnv,
 	span.end(ctx, response)
 
 	return response
+}
+
+// scrubSecrets masks the run's secrets in a tool's result before anything reads it: the debug log, the span, the transcript, the live stream and the model all see this one value, since read_file and web_fetch return bytes no runner masked.
+func scrubSecrets(ctx context.Context, response map[string]any) map[string]any {
+	secrets := redact.SecretsFrom(ctx)
+	if secrets.Empty() {
+		return response
+	}
+
+	masked, _ := scrubValues(response, secrets.String).(map[string]any)
+
+	return masked
 }
 
 // lazyToolResultPreview defers rendering a tool result until a handler

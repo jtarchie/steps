@@ -26,12 +26,7 @@ func Identity(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 
-	defer func() {
-		if held.release() {
-			_ = held.reads.Close()
-			_ = held.db.Close()
-		}
-	}()
+	defer func() { _ = held.drop() }()
 
 	tx, err := held.db.BeginTx(ctx, nil)
 	if err != nil {

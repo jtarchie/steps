@@ -126,9 +126,10 @@ func readFileFull(ctx context.Context, files tree.Tree, resolved, rel string, si
 
 	content := string(data)
 	if stat.Size > maxReadFileBytes {
+		data = dropPartialRune(data)
 		content = fmt.Sprintf(
 			"<file_truncated>\nThis file is %s, exceeding the %s inline read limit. Showing the first %s below. Use start_line/end_line to read further into the file.\n</file_truncated>\n\n%s",
-			shell.FormatBytes(int(stat.Size)), shell.FormatBytes(maxReadFileBytes), shell.FormatBytes(len(data)), content,
+			shell.FormatBytes(int(stat.Size)), shell.FormatBytes(maxReadFileBytes), shell.FormatBytes(len(data)), data,
 		)
 	}
 

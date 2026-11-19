@@ -19,7 +19,7 @@ func TestParseCLIStreamNestsAForkCutOffMidRun(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		_, err := parseCLIStream(reader, rec, nil)
+		_, err := parseCLIStream(t.Context(), reader, rec, nil)
 		done <- err
 	}()
 
@@ -72,7 +72,7 @@ func TestParseCLIStreamLeavesNarratedForksToTheStream(t *testing.T) {
 		go func() {
 			defer close(done)
 
-			_, _ = parseCLIStream(reader, rec, nil)
+			_, _ = parseCLIStream(t.Context(), reader, rec, nil)
 		}()
 
 		_, _ = fmt.Fprintln(writer, line)
@@ -105,7 +105,7 @@ func TestParseCLIStreamClosesOnlyTheForkNamed(t *testing.T) {
 	go func() {
 		defer close(done)
 
-		_, _ = parseCLIStream(reader, rec, nil)
+		_, _ = parseCLIStream(t.Context(), reader, rec, nil)
 	}()
 
 	_, _ = fmt.Fprintln(writer, stream)

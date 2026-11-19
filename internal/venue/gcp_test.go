@@ -66,6 +66,11 @@ type fakeGCE struct {
 	calls []string
 	// reclaimOp is what Reclaimed answers: an operation taking the instance away.
 	reclaimOp string
+	// hidden is how many more Status reads deny an instance that exists, GCE's read lag after a create; while it lasts, Delete answers as a 404 does: nil, and nothing deleted.
+	hidden int
+	// onInsert runs as the insert is accepted; insertCtxErr is what the insert's context said then.
+	onInsert     func()
+	insertCtxErr error
 }
 
 func (f *fakeGCE) Owner(_ context.Context, _, _, name string) (ownedInstance, error) {
@@ -102,7 +107,7 @@ func (f *fakeGCE) ListOwned(context.Context, string, string) ([]ownedInstance, e
 	return f.running, nil
 }
 
-func (f *fakeGCE) InsertFromTemplate(_ context.Context, _, _, name, template string, labels map[string]string) error {
+func (f *fakeGCE) InsertFromTemplate(ctx context.Context, _, _, name, template string, labels map[string]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -110,8 +115,18 @@ func (f *fakeGCE) InsertFromTemplate(_ context.Context, _, _, name, template str
 		return f.insertErr
 	}
 
+	if f.onInsert != nil {
+		f.onInsert()
+	}
+
+	f.insertCtxErr = ctx.Err()
 	f.inserts = append(f.inserts, template+"->"+name)
 	f.labels = append(f.labels, labels)
+
+	// Accepted, then the operation wait aborted: the machine is being built all the same.
+	if ctx.Err() != nil {
+		return fmt.Errorf("scripted: waiting for the operation: %w", ctx.Err())
+	}
 
 	return nil
 }
@@ -145,6 +160,10 @@ func (f *fakeGCE) Delete(_ context.Context, _, _, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.hidden > 0 {
+		return nil
+	}
+
 	f.deletes = append(f.deletes, name)
 	f.calls = append(f.calls, "delete "+name)
 
@@ -154,6 +173,12 @@ func (f *fakeGCE) Delete(_ context.Context, _, _, name string) error {
 func (f *fakeGCE) Status(_ context.Context, _, _, _ string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.hidden > 0 {
+		f.hidden--
+
+		return "", fmt.Errorf("%w: scripted read lag", errGCENotFound)
+	}
 
 	if len(f.statuses) == 0 {
 		return "RUNNING", nil
@@ -488,6 +513,52 @@ func TestGCECleanupThatFailsIsLogged(t *testing.T) {
 		if !strings.Contains(logged.String(), want) {
 			t.Errorf("log = %q, want %q", logged.String(), want)
 		}
+	}
+}
+
+// Docker readiness is a fact about one boot of one instance: a park or delete ends that boot, and the same name in another project or zone is another machine.
+func TestGCPReadinessIsForgottenWhenTheMachineIsGivenBack(t *testing.T) {
+	t.Parallel()
+
+	api := &fakeGCE{}
+	gives := map[string]func(context.Context) error{
+		"steps-ready-deleted":         deleteGCE(api, "p", "z", "steps-ready-deleted"),
+		"steps-ready-parked":          parkGCE(api, Worker{}, "p", "z", "steps-ready-parked", false),
+		"steps-ready-parked-labelled": parkGCE(api, Worker{}, "p", "z", "steps-ready-parked-labelled", true),
+	}
+
+	for name, give := range gives {
+		gcpReady.Store(gcpReadyKey("p", "z", name), true)
+		gcpReady.Store(gcpReadyKey("p", "other-zone", name), true)
+		t.Cleanup(func() { gcpReady.Delete(gcpReadyKey("p", "other-zone", name)) })
+
+		err := give(context.Background())
+		if err != nil {
+			t.Fatalf("giving back %s: %v", name, err)
+		}
+
+		if _, ok := gcpReady.Load(gcpReadyKey("p", "z", name)); ok {
+			t.Errorf("%s: docker readiness outlived the machine's give-back", name)
+		}
+
+		if _, ok := gcpReady.Load(gcpReadyKey("p", "other-zone", name)); !ok {
+			t.Errorf("%s: giving back one zone's machine forgot another zone's of the same name", name)
+		}
+	}
+}
+
+// The literal keys the cache tests seed and probe are only meaningful while they are the spelling the code uses.
+func TestGCEInstanceKeyIsProjectZoneName(t *testing.T) {
+	t.Parallel()
+
+	const want = "test-project/us-central1-a/half-ttl"
+
+	if got := gceInstanceOf("test-project", "us-central1-a", Worker{Instance: "half-ttl"}).key(); got != want {
+		t.Errorf("gceInstanceOf(...).key() = %q, want %q", got, want)
+	}
+
+	if got := gcpReadyKey("test-project", "us-central1-a", "half-ttl"); got != want {
+		t.Errorf("gcpReadyKey = %q, want %q", got, want)
 	}
 }
 
@@ -1121,6 +1192,80 @@ func TestGCPLaunchFailedInsertDeletesTheInstance(t *testing.T) {
 	}
 }
 
+// GCE briefly denies a fresh instance exists, and its delete answers that 404 as success: a lost insert's give-back must wait for the machine to show rather than call one silent no-op a cleanup.
+func TestGCPLostInsertIsDeletedDespiteReadLag(t *testing.T) {
+	fake := &fakeGCE{insertErr: errors.New("scripted: the answer was lost"), hidden: 2}
+	seamGCP(t, fake, nil)
+
+	worker, _ := ParseWorker("gcp://launch/steps-workers?project=test-project&zone=us-central1-a")
+
+	_, _, err := acquire(context.Background(), worker)
+	if err == nil {
+		t.Fatal("a lost insert was acquired")
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.deletes) != 1 {
+		t.Errorf("deletes = %v, want the instance found once the read lag passed, and deleted", fake.deletes)
+	}
+}
+
+// A refusal built nothing, so its give-back does not sit out the read lag waiting for a machine that will never show.
+func TestGCPRefusedInsertDoesNotWaitOnReads(t *testing.T) {
+	for name, refusal := range map[string]error{
+		"refused":          fmt.Errorf("creating: %w", &googleapi.Error{Code: 400}),
+		"operation failed": fmt.Errorf("creating: %w: QUOTA_EXCEEDED", errGCEOperationFailed),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeGCE{insertErr: refusal, hidden: 1 << 30}
+			seamGCP(t, fake, nil)
+
+			worker, _ := ParseWorker("gcp://launch/steps-workers?project=test-project&zone=us-central1-a")
+
+			_, _, err := acquire(context.Background(), worker)
+			if err == nil {
+				t.Fatal("a refused insert was acquired")
+			}
+
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+
+			if fake.hidden != 1<<30 {
+				t.Errorf("status reads = %d, want none after a refusal", 1<<30-fake.hidden)
+			}
+		})
+	}
+}
+
+// Cancelled while GCE is accepting the insert: the insert and its wait finish under their own context, so the machine is known, and deleted rather than handed to a caller that is gone.
+func TestGCPCancelledMidInsertDeletesTheInstance(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fake := &fakeGCE{onInsert: cancel}
+	seamGCP(t, fake, nil)
+
+	worker, _ := ParseWorker("gcp://launch/steps-workers?project=test-project&zone=us-central1-a")
+
+	_, _, err := acquire(ctx, worker)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("acquire = %v, want the cancellation", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if fake.insertCtxErr != nil {
+		t.Errorf("the insert ran under a context that said %v, want one the caller's cancel cannot abort", fake.insertCtxErr)
+	}
+
+	if len(fake.inserts) != 1 || len(fake.deletes) != 1 {
+		t.Errorf("inserts %v, deletes %v — want the one instance created and then deleted", fake.inserts, fake.deletes)
+	}
+}
+
 // TestGCPParkedRungWaitsOutAnUnfinishedStop pins the pre-Start wait: release
 // returns once the stop is ACCEPTED, so back-to-back jobs find the instance
 // still STOPPING — and starting it then loses a fingerprint race inside GCE.
@@ -1202,6 +1347,19 @@ func TestGCPLaunchVanishedInstanceFailsFast(t *testing.T) {
 
 	if len(fake.deletes) != 1 {
 		t.Errorf("deletes = %v, want the cleanup attempted all the same", fake.deletes)
+	}
+}
+
+// A step already aborted must not read a RUNNING answer as an acquisition its caller will go on to use.
+func TestGCEWaitForRunningRefusesACancelledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := gceWaitForRunning(ctx, &fakeGCE{}, Worker{URL: "gcp://launch/t"}, "p", "z", "steps-1", "")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("gceWaitForRunning = %v, want the abort even though the instance reads RUNNING", err)
 	}
 }
 

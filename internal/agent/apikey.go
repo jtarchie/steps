@@ -53,7 +53,7 @@ func apiKeyFor(ctx context.Context, ri config.ResolvedInvocation) (string, error
 	return key, nil
 }
 
-// keyProbeScope is what a secret-backed source adds to its probe cache key: the same variable name resolves to a different credential per pipeline, so one pipeline's answer must not vouch for another's.
+// keyProbeScope is what a secret-backed source adds to its probe cache key: the same variable name resolves to a different credential per pipeline and per job (a lookup path may name .job), so one's answer must not vouch for another's.
 func keyProbeScope(ctx context.Context, ri config.ResolvedInvocation) string {
 	if ri.APIKeySecret == "" {
 		return ""
@@ -61,5 +61,7 @@ func keyProbeScope(ctx context.Context, ri config.ResolvedInvocation) string {
 
 	source, _ := ctx.Value(keyLookupKey{}).(keySource)
 
-	return "|" + cmp.Or(shell.MetadataFrom(ctx).PipelineName, source.pipeline) + "|" + ri.APIKeySecret
+	meta := shell.MetadataFrom(ctx)
+
+	return "|" + cmp.Or(meta.PipelineName, source.pipeline) + "|" + meta.JobName + "|" + ri.APIKeySecret
 }

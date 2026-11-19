@@ -166,9 +166,10 @@ func (s *Server) handleDecideApproval(c *echo.Context) error {
 	switch {
 	case err == nil:
 	case errors.Is(err, store.ErrApprovalNotPending):
-		slog.Info("web.approval_not_pending", "id", id, "error", err)
+		slog.InfoContext(c.Request().Context(), "web.approval_not_pending", "id", id, "error", err)
+		c.Set(noEffectKey, true)
 	default:
-		slog.Error("web.approval_decide_failed", "id", id, "error", err)
+		slog.ErrorContext(c.Request().Context(), "web.approval_decide_failed", "id", id, "error", err)
 
 		return echo.NewHTTPError(http.StatusInternalServerError, "could not record the decision").Wrap(err)
 	}
@@ -208,7 +209,7 @@ func (s *Server) handleAnswerQuestion(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "the answer is too long")
 	}
 
-	// Two failures, and only one of them is the caller's business. A question
+	// Three failures, and only one of them is the caller's business. A question
 	// somebody else just answered (or that expired while this form sat open) is
 	// a resubmission, exactly like a double-clicked approval: the row is the
 	// answer of record and it already has one, so settle on it.
@@ -216,15 +217,19 @@ func (s *Server) handleAnswerQuestion(c *echo.Context) error {
 	// A REFUSED answer is different and must be shown. Redirecting on an
 	// options-fence rejection left the question listed as pending with no
 	// message anywhere, so the person retypes the same thing or concludes the
-	// step is stuck — while the agent is still waiting on them.
+	// step is stuck — while the agent is still waiting on them. Anything else
+	// is the daemon failing, and a 400 would blame the person for it.
 	err = pipeline.Store.AnswerQuestion(c.Request().Context(), id, answer, decidedBy(c))
 
 	switch {
 	case err == nil:
 	case errors.Is(err, store.ErrQuestionNotPending):
-		slog.Info("web.question_already_resolved", "id", id, "error", err)
-	default:
+		slog.InfoContext(c.Request().Context(), "web.question_already_resolved", "id", id, "error", err)
+		c.Set(noEffectKey, true)
+	case errors.Is(err, store.ErrAnswerNotOffered):
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	default:
+		return echoError(err)
 	}
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim

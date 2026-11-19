@@ -195,7 +195,7 @@ func executeTask(
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	err = space.Capture(ctx)
+	err = captureHeld(ctx, space.Capture)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}

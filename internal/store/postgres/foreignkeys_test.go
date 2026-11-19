@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -86,33 +87,115 @@ func TestEveryForeignKeyIsIndexed(t *testing.T) {
 	}
 }
 
-// TestTheDeliberateNonReferencesStayThatWay pins the four columns that name
-// a row and must not reference it, for the reasons the schema gives. Adding
-// either of the first two makes every block step fail to record.
-func TestTheDeliberateNonReferencesStayThatWay(t *testing.T) {
+// The five columns the root CLAUDE.md names: each holds another row's key and must not declare it, for the reasons the sqlite schema gives.
+var deliberateNonReferences = map[string]bool{
+	"nodes.parent_hash":         true,
+	"job_runs.root_hash":        true,
+	"run_events.parent_step_id": true,
+	"agent_usage.step_id":       true,
+	"run_steps.hash":            true,
+}
+
+// Named like a reference, holding no other table's key, so the foreign-key rule has nothing to say about them.
+var keylessColumns = map[string]string{
+	"node_content.content_hash":    "the table's own primary key",
+	"sessions.token_hash":          "the table's own primary key",
+	"oauth_tokens.token_hash":      "the table's own primary key",
+	"resource_configs.config_hash": "a digest of a resource's type and source, compared, never joined",
+	"job_versions.build_id":        "the build label inside a run (\"<run>#0\"), no table's key",
+	"run_steps.build_id":           "the build label inside a run (\"<run>#0\"), no table's key",
+	"run_events.step_id":           "a step's number within its run, which every event of the step repeats",
+	"run_step_outputs.step_id":     "run_events.step_id, which is no key; the run is the reference",
+	"run_placements.instance_id":   "a cloud provider's instance id",
+	"users.account_id":             "the sign-in provider's account id",
+}
+
+// The rule's reach is derived from the catalog, not a hand list: every *_id/*_hash column references, is one of the five (which must not), or is named as holding no key.
+func TestEveryKeyColumnDeclaresItsReference(t *testing.T) {
 	t.Parallel()
 
 	rawURL := newDatabase(t)
 	openStore(t, rawURL, "p")
 
-	db := rawDB(t, rawURL)
+	rows, err := rawDB(t, rawURL).QueryContext(t.Context(), `
+		SELECT r.relname, a.attname, EXISTS (
+		    SELECT 1 FROM pg_constraint c
+		    WHERE c.contype = 'f' AND c.conrelid = a.attrelid AND a.attnum = ANY(c.conkey)
+		)
+		FROM pg_attribute a JOIN pg_class r ON r.oid = a.attrelid
+		WHERE r.relkind = 'r' AND r.relnamespace = 'steps'::regnamespace AND a.attnum > 0 AND NOT a.attisdropped
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	for table, column := range map[string]string{
-		"nodes": "parent_hash", "job_runs": "root_hash", "run_events": "parent_step_id", "agent_usage": "step_id",
-	} {
-		var references int
+	defer func() { _ = rows.Close() }()
 
-		err := db.QueryRowContext(t.Context(), `
-			SELECT COUNT(*) FROM pg_constraint c
-			JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
-			WHERE c.contype = 'f' AND c.conrelid = ('steps.' || $1)::regclass AND a.attname = $2
-		`, table, column).Scan(&references)
+	seen := map[string]bool{}
+
+	for rows.Next() {
+		var (
+			table, column string
+			references    bool
+		)
+
+		err = rows.Scan(&table, &column, &references)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		if references != 0 {
-			t.Errorf("%s.%s declares a foreign key; it must not (see the sqlite schema)", table, column)
+		name := table + "." + column
+		seen[name] = true
+
+		if problem := keyColumnProblem(name, column, references); problem != "" {
+			t.Error(problem)
 		}
 	}
+
+	if rows.Err() != nil {
+		t.Fatal(rows.Err())
+	}
+
+	if len(seen) < 100 {
+		t.Fatalf("the walk found %d columns; it has stopped reading the schema, and an empty walk passes everything", len(seen))
+	}
+
+	for _, name := range staleListings(seen) {
+		t.Errorf("%s is listed, but the schema no longer has it; drop it from the list", name)
+	}
+}
+
+// keyColumnProblem is what is wrong with one column under the rule, or "".
+func keyColumnProblem(name, column string, references bool) string {
+	_, keyless := keylessColumns[name]
+
+	switch {
+	case (deliberateNonReferences[name] || keyless) && references:
+		return name + " declares a foreign key but is listed as holding none"
+	case deliberateNonReferences[name], keyless, references:
+		return ""
+	case strings.HasSuffix(column, "_id"), strings.HasSuffix(column, "_hash"):
+		return name + " declares no REFERENCES; add one with an ON DELETE action, or name it in keylessColumns with why it holds no key"
+	}
+
+	return ""
+}
+
+// staleListings are the listed columns the schema no longer has, so neither list outlives what it describes.
+func staleListings(seen map[string]bool) []string {
+	var stale []string
+
+	for name := range deliberateNonReferences {
+		if !seen[name] {
+			stale = append(stale, name)
+		}
+	}
+
+	for name := range keylessColumns {
+		if !seen[name] {
+			stale = append(stale, name)
+		}
+	}
+
+	return stale
 }

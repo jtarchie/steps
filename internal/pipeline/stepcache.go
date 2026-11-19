@@ -74,10 +74,20 @@ func lookupStepCache(
 		return workspace.StepCacheResult{}
 	}
 
-	res := workspace.LookupStepCache(ctx, r.bw, req)
-	if res.Hit {
-		slog.InfoContext(ctx, "job.skip", "step", name, "reason", "reused", "key", res.Key)
+	// A hit restores into the build's artifacts, which a race: hands one branch at a time; a branch never waits to look, since a sibling holding them is about to win and the race is a hedge on time.
+	release, err := holdArtifacts(ctx, false)
+	if err != nil {
+		return workspace.StepCacheResult{}
 	}
+
+	res := workspace.LookupStepCache(ctx, r.bw, req)
+	if !res.Hit {
+		release()
+
+		return res
+	}
+
+	slog.InfoContext(ctx, "job.skip", "step", name, "reason", "reused", "key", res.Key)
 
 	return res
 }

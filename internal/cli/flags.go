@@ -357,7 +357,7 @@ func (s State) isDefaultDaemonState() bool {
 // PipelineName is a pipeline's identity inside a state database: the YAML's
 // base name without its extension.
 //
-// The same string web.Slugify and config.Slugify produce, and deliberately so
+// The same string config.Slugify produces, and deliberately so
 // — the UI's /p/<slug> route, the database's pipelines.name and the Config's
 // own name are one identity, not three that have to be kept in agreement.
 func PipelineName(pipeline string) string {

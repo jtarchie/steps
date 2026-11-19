@@ -54,6 +54,8 @@ type planWalk struct {
 	index            int
 	parentHash       string
 	chainUnskippable bool
+	// cellReuseOff is chainUnskippable or a volatile: step upstream: see withoutCellReuse.
+	cellReuseOff bool
 
 	// passes counts how many times the walk has recorded each step index, guard skips included: a resume replays the recorded passes in that order, and this is how it knows which one comes next.
 	passes map[int]int
@@ -167,7 +169,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 	var err error
 
 	if !resumed {
-		res, err = runNonGetStep(ctx, w.stepRunner, w.index, step, w.skippable, w.parentHash)
+		res, err = runNonGetStep(w.cellReuseContext(ctx), w.stepRunner, w.index, step, w.skippable, w.parentHash)
 	}
 
 	if spendsVisit(res) {
@@ -206,6 +208,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 	}
 
 	w.chainUnskippable = unskippable
+	w.foldCellReuse(step)
 
 	if res.hash != "" {
 		w.parentHash = res.hash
@@ -214,6 +217,20 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 	w.index = nextIndex
 
 	return false, nil
+}
+
+// cellReuseContext is ctx for the walk's next step: without cell reuse once the chain before it holds what its hash cannot see.
+func (w *planWalk) cellReuseContext(ctx context.Context) context.Context {
+	if w.cellReuseOff {
+		return withoutCellReuse(ctx)
+	}
+
+	return ctx
+}
+
+// foldCellReuse turns cell reuse off for the rest of the walk once the chain is unskippable or step held a volatile: one.
+func (w *planWalk) foldCellReuse(step config.Step) {
+	w.cellReuseOff = w.cellReuseOff || w.chainUnskippable || holdsVolatile(step)
 }
 
 // skipCompleted skips a plan step a previous attempt of this run already
@@ -323,18 +340,32 @@ func recordStepOutcome(ctx context.Context, step config.Step, out agentOutcome) 
 // block done the moment any one branch succeeded.
 func recordCompletedStep(ctx context.Context, st store.Runs, build string, i, visit int, step config.Step, hash, outcome string) {
 	resume := resumeFrom(ctx)
-	if resume == nil {
+	if resume == nil || capturesVar(step) {
 		return
 	}
 
 	bestEffort(ctx, "RecordRunStep", st.RecordRunStep(context.WithoutCancel(ctx), resume.id, store.RunStep{BuildID: build, Index: i, Visit: visit, Name: executedStepName(step), Hash: hash, Outcome: outcome}))
 }
 
+// capturesVar reports whether step, or a step it runs, captures a ((.:name)) the plan reads after it: a value lives only in the attempt that captured it, so a resume runs such a step again rather than skip it. A matrix's captures end with it.
+func capturesVar(step config.Step) bool {
+	if len(step.Across) > 0 {
+		return false
+	}
+
+	if step.LoadVar != "" || (step.Try != nil && capturesVar(*step.Try)) {
+		return true
+	}
+
+	return slices.ContainsFunc(merkle.ContainerBranches(step), capturesVar)
+}
+
 // runNonGetStep runs a non-get step and dispatches its hooks around the
 // outcome. A skipped (merkle-cached) step fires no hooks — it did not run, so
 // there is nothing for its observers to react to. When a green step is failed
-// by its own on_success/ensure hook, the true (failed) outcome is recorded so
-// the store and skip-cache reflect it.
+// by its own on_success/ensure hook, its node is re-recorded with that
+// outcome; the chain skip index needs nothing, since the failing walk forgets
+// every chain through the step (forgetUnfinishedChains).
 func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, skippable map[string]bool, parentHash string) (stepResult, error) {
 	started := time.Now()
 
@@ -359,6 +390,8 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	ctx = events.WithStepID(ctx, mark.id)
 
 	ctx = withPendingHook(ctx, r.scope(stepLabel(i, step)), step.Hooks.OnPending)
+
+	ctx, own := withOwnNode(ctx)
 
 	res, err := dispatchNonGetStep(ctx, r, i, step, skippable, parentHash)
 
@@ -403,7 +436,7 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 
 	final := runHooks(ctx, r.scope(stepLabel(i, step)), step.Hooks, err)
 	if err == nil && final != nil {
-		bestEffort(ctx, "ForgetChain", r.st.ForgetChain(context.WithoutCancel(ctx), r.jobName, res.hash))
+		own.failedBy(ctx, r, final)
 
 		return stepResult{verdict: res.verdict, note: res.note, stepID: mark.id}, final
 	}
@@ -533,32 +566,38 @@ func dispatchContainerKind(
 	ctx context.Context, r stepRunner, kind config.StepKind, i int, step config.Step,
 	skippable map[string]bool, parentHash string,
 ) (stepResult, error) {
+	// ContainerNode reads any other kind as in_parallel: and would dereference its missing block.
+	if kind == config.StepKindGet {
+		return stepResult{}, unrecognizedStep(i)
+	}
+
+	node, err := merkle.ContainerNode(r.cfg, step, kind, i, parentHash)
+	if err != nil {
+		return stepResult{}, err //nolint:wrapcheck // ContainerNode already names the step and its kind
+	}
+
 	// A block whose branches are all cacheable is a chain node like a task,
 	// and a chain through it that already succeeded is skipped from here.
-	if len(skippable) > 0 {
-		node, err := merkle.ContainerNode(r.cfg, step, kind, i, parentHash)
-		if err != nil {
-			return stepResult{}, fmt.Errorf("step %d (%s): %w", i, kind, err)
-		}
+	if skippable[node.Hash] {
+		slog.InfoContext(ctx, "job.skip", "kind", kind, "reason", "cached", "hash", node.Hash)
 
-		if skippable[node.Hash] {
-			slog.InfoContext(ctx, "job.skip", "kind", kind, "reason", "cached", "hash", node.Hash)
-
-			return stepResult{hash: parentHash, nodeHash: node.Hash, disposition: stepChainSkipped}, nil
-		}
+		return stepResult{hash: parentHash, nodeHash: node.Hash, disposition: stepChainSkipped}, nil
 	}
+
+	// The plan's node leaves most blocks unnamed; the recorded one names the step as executed.
+	node.Resource = executedStepName(step)
 
 	switch kind { //nolint:exhaustive // the leaf kinds are handled by dispatchByKind; default catches config.StepKindGet, which never reaches here
 	case config.StepKindTry:
-		return runTryStep(ctx, r, i, step, parentHash)
+		return runTryStep(ctx, r, i, step, node)
 	case config.StepKindInParallel:
-		return runParallelStep(ctx, r, i, step, parentHash)
+		return runParallelStep(ctx, r, i, step, node)
 	case config.StepKindDo:
-		return runDoStep(ctx, r, i, step, parentHash)
+		return runDoStep(ctx, r, i, step, node)
 	case config.StepKindRace:
-		return runRaceStep(ctx, r, i, step, parentHash)
+		return runRaceStep(ctx, r, i, step, node)
 	case config.StepKindEnsemble:
-		return runEnsembleStep(ctx, r, i, step, parentHash)
+		return runEnsembleStep(ctx, r, i, step, node)
 	default: // config.StepKindGet — dispatchNonGetStep is only called for non-get steps
 		return stepResult{}, unrecognizedStep(i)
 	}

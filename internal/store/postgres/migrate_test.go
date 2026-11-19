@@ -16,7 +16,7 @@ import (
 var v010 string
 
 // loadV010 is a database steps v0.1.0 wrote, rows and all.
-func loadV010(t *testing.T) string {
+func loadV010(t *testing.T, rows ...string) string {
 	t.Helper()
 
 	rawURL := newDatabase(t)
@@ -28,7 +28,7 @@ func loadV010(t *testing.T) string {
 
 	defer func() { _ = conn.Close() }()
 
-	_, err = conn.ExecContext(t.Context(), "CREATE SCHEMA steps; SET search_path = steps;\n"+v010)
+	_, err = conn.ExecContext(t.Context(), "CREATE SCHEMA steps; SET search_path = steps;\n"+v010+strings.Join(rows, ""))
 	if err != nil {
 		t.Fatalf("loading the fixture: %v", err)
 	}

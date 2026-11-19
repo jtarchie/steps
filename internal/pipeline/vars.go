@@ -19,7 +19,6 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/redact"
-	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -190,7 +189,7 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindLoadVar,
 		StepIndex: i, Resource: step.LoadVar, Content: content,
 	}
-	bestEffort(ctx, "RecordNode", r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(ctx, node), r.jobName, store.NodeSucceeded, nil, nil))
+	bestEffort(ctx, "RecordNode", recordSucceeded(context.WithoutCancel(ctx), r, node, nil))
 
 	return ran(hash), nil
 }

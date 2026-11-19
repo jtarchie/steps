@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 42 replaced oauth_tokens.pipeline (a name) with pipeline_id REFERENCES pipelines: a grant followed a reused name onto a pipeline nobody granted, and lost a renamed one.
+//
 // 41 added approvals.notified_at and questions.notified_at, when a park's on_pending was attempted, so a restart neither announces it twice nor loses an announcement a crash cut short.
 //
 // 38 added run_placements.image_digest, what a step's image: resolved to on the machine that ran it: a tag moves, and the row otherwise could not say which bytes ran.
@@ -110,7 +112,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 43
+const schemaVersion = 44
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -977,15 +979,6 @@ CREATE INDEX IF NOT EXISTS idx_run_placements_run ON run_placements(run_id, step
 -- node_hash is its last column, not a prefix.
 CREATE INDEX IF NOT EXISTS idx_run_placements_node ON run_placements(pipeline_id, node_hash);
 
--- Full agent conversation transcripts, one row per agent node, kept OUT of
--- nodes.result deliberately: result rides along on every node listing (the
--- CLI's node table, the web UI's node and run pages) and must stay bounded,
--- while a transcript is read on demand ("what did this step actually say and
--- do"). Same hash key as nodes; replaces on re-record like nodes does.
---
--- The largest single value the schema stores, and the one whose bound was
--- missing: internal/agent caps a single tool RESULT, but a conversation has
--- unboundedly many turns, so the row itself needs store.MaxTranscriptBytes.
 -- A browser signed in to the daemon (store.Accounts). Daemon-level, so no
 -- pipeline: a session is somebody's standing with the daemon. The token is
 -- never stored, only its digest, so a copy of this file signs nobody in.
@@ -1022,20 +1015,23 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     created_at    TEXT NOT NULL
 );
 -- client_id names a registered client, and deleting the client takes its
--- tokens: a client nobody can find again must not keep working.
+-- tokens: a client nobody can find again must not keep working. An export
+-- grant names its pipeline by id, so destroying the pipeline takes the grant
+-- and a rename keeps it; a read grant names none (NULL).
 CREATE TABLE IF NOT EXISTS oauth_tokens (
-    token_hash TEXT PRIMARY KEY,
-    kind       TEXT NOT NULL,
-    grant_kind TEXT NOT NULL DEFAULT 'export' CHECK (grant_kind IN ('export', 'read')),
-    client_id  TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
-    actor      TEXT NOT NULL,
-    pipeline   TEXT NOT NULL,
-    export     TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    revoked_at TEXT
+    token_hash  TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,
+    grant_kind  TEXT NOT NULL DEFAULT 'export' CHECK (grant_kind IN ('export', 'read')),
+    client_id   TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+    actor       TEXT NOT NULL,
+    pipeline_id INTEGER REFERENCES pipelines(id) ON DELETE CASCADE,
+    export      TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    revoked_at  TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(client_id, actor, pipeline, export);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(client_id, actor, pipeline_id, export);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_pipeline ON oauth_tokens(pipeline_id);
 
 -- What people did: set, trigger, approve, abort, pause and the rest
 -- (store.Activity). One log per database, trimmed by count across every
@@ -1058,6 +1054,15 @@ CREATE TABLE IF NOT EXISTS activity (
 -- The SET NULL child key: without it every pipeline destroyed scans the log.
 CREATE INDEX IF NOT EXISTS idx_activity_pipeline ON activity(pipeline_id);
 
+-- Full agent conversation transcripts, one row per agent node, kept OUT of
+-- nodes.result deliberately: result rides along on every node listing (the
+-- CLI's node table, the web UI's node and run pages) and must stay bounded,
+-- while a transcript is read on demand ("what did this step actually say and
+-- do"). Same hash key as nodes; replaces on re-record like nodes does.
+--
+-- The largest single value the schema stores, and the one whose bound was
+-- missing: internal/agent caps a single tool RESULT, but a conversation has
+-- unboundedly many turns, so the row itself needs store.MaxTranscriptBytes.
 CREATE TABLE IF NOT EXISTS node_transcripts (
     pipeline_id INTEGER NOT NULL,
     hash       TEXT NOT NULL,

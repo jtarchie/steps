@@ -1656,9 +1656,9 @@ jobs:
 | `ready` | no | a command run in the container, once a second, until it exits 0; with none, the put returns once the container runs |
 | `ready_timeout` | no | how long the put waits for `ready`, a Go duration; 60s when unset |
 
-- **Replaced only when `source:` changes.** The container carries a hash of its `source:`; a put that finds the same hash running does nothing, finds it stopped starts it, and finds another replaces it, keeping its named volumes. The version is that hash, `{spec}`.
+- **Replaced only when `source:` changes.** The container carries a hash of its `source:`; a put that finds the same hash running does nothing, finds it stopped starts it, and finds another replaces it, keeping its named volumes. The version is that hash, `{spec}`. **A container under that name that steps did not make is refused, not replaced**: the put and the check both fail naming it, and it is left as it was, since removing it would take its anonymous volumes with it.
 - **It outlives the run.** The daemon restarts it with itself (`--restart=always`), and no sweep takes it: steps never removes one. Changing `container:` leaves the old one running.
-- **A `ready` that never succeeds fails the put**, naming the command; a container that exits while it waits fails it with its last lines of output.
+- **A `ready` that never succeeds fails the put**, naming the command, including one that never returns: `ready_timeout` bounds each attempt too; a container that exits while it waits fails it with its last lines of output.
 - **A check reports whether it runs**: the running `{spec}`, or no versions when the container is down or runs another configuration. A get writes `container` and `network` files. A cached get does not ask again, so a put, not a get, is what proves the service is up.
 - **This machine's daemon only.** A network belongs to one daemon, so a step placed on a worker (`tags:`) that names a service's `network:` is refused at load, and `tags:` on the resource is refused, as for every type that runs inside this process. A put takes no `params:`.
 

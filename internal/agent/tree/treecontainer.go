@@ -110,7 +110,7 @@ func (c Container) ReadBytes(ctx context.Context, p string, limit int64) ([]byte
 func (c Container) OpenRange(ctx context.Context, p string, through int) (io.ReadCloser, error) {
 	body := fmt.Sprintf(`head -c %d -- "$p"`, int64(MaxScanBytes))
 	if through > 0 {
-		body = fmt.Sprintf(`sed -n '1,%dp' -- "$p" | head -c %d`, through, int64(MaxScanBytes))
+		body = fmt.Sprintf(`sed -n '1,%dp;%dq' -- "$p" | head -c %d`, through, through, int64(MaxScanBytes))
 	}
 
 	script := fmt.Sprintf(`p=%s; [ -f "$p" ] || exit 1; %s`, shQuote(p), body)

@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -117,8 +116,7 @@ func TestStaleReason(t *testing.T) {
 // A refusal belongs to the login that earned it: the page says so until a
 // login replaces it, and not a moment after.
 func TestInspectTokenSaysARefusedLoginNeedsAnother(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
-	UseVault(fileVault{})
+	useConfigDir(t)
 
 	srv := config.MCPServer{Name: "refused", Endpoint: inspectEndpoint, Auth: config.MCPServerAuth{Type: "oauth"}}
 	first := time.Now().Add(-time.Hour)
@@ -142,8 +140,7 @@ func TestInspectTokenSaysARefusedLoginNeedsAnother(t *testing.T) {
 // A refresh that names a scope replaces what the login was granted; one that
 // names none leaves it, since omitted means unchanged.
 func TestARefreshKeepsWhatTheLoginWasGranted(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
-	UseVault(fileVault{})
+	useConfigDir(t)
 
 	logged := time.Now().Add(-time.Hour)
 	shared := &sharedToken{pipeline: testPipeline, server: "granted", file: &TokenFile{Endpoint: inspectEndpoint, Granted: []string{"a"}, LoggedIn: logged}}
@@ -167,8 +164,7 @@ func TestARefreshKeepsWhatTheLoginWasGranted(t *testing.T) {
 
 // What only the server can say: the scopes it offers now.
 func TestCheckScopesAgainstWhatTheServerOffers(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
-	UseVault(fileVault{})
+	useConfigDir(t)
 
 	offered := []string{"content:read", "content:write"}
 	mux := http.NewServeMux()

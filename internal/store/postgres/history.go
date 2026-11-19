@@ -218,7 +218,7 @@ func (s *Store) RecordVersionMetadata(ctx context.Context, resourceName string, 
 		_, err = tx.ExecContext(ctx,
 			`UPDATE resource_versions SET metadata = $4
 			 WHERE pipeline_id = $1 AND resource_name = $2 AND version_json = $3`,
-			s.pipelineID, resourceName, versionJSON, metadata)
+			s.pipelineID, resourceName, versionJSON, clean(metadata))
 
 		return err //nolint:wrapcheck // wrapped below
 	})

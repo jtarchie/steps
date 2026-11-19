@@ -69,16 +69,26 @@ var daemonWriteBound = 30 * time.Second
 
 // pending counts each served pipeline's queued builds, for the steps.queue.pending gauge.
 func (d *daemon) pending(ctx context.Context) map[string]int64 {
+	// Queried outside the lock, which every set, destroy and reap waits on, so a slow scrape stalls none of them.
 	d.mu.Lock()
-	defer d.mu.Unlock()
 
-	counts := make(map[string]int64, len(d.served))
-
+	queues := make(map[string]store.Queue, len(d.served))
 	for name, served := range d.served {
+		queues[name] = served.target.Store
+	}
+
+	d.mu.Unlock()
+
+	counts := make(map[string]int64, len(queues))
+
+	for name, queue := range queues {
 		// ponytail: newest rows first, and enqueue coalesces to one pending row per job, so a pipeline would need over a thousand jobs to undercount; a COUNT query on the Queue facet is the upgrade.
-		rows, err := served.target.Store.ListTriggerQueue(ctx, 1000)
+		rows, err := queue.ListTriggerQueue(ctx, 1000)
 		if err != nil {
-			slog.WarnContext(ctx, "telemetry.queue", "pipeline", name, "error", err)
+			// A destroy since the snapshot closed this store: counted as nothing pending, which is what it now holds.
+			if d.serves(name) {
+				slog.WarnContext(ctx, "telemetry.queue", "pipeline", name, "error", err)
+			}
 
 			continue
 		}
@@ -91,6 +101,15 @@ func (d *daemon) pending(ctx context.Context) map[string]int64 {
 	}
 
 	return counts
+}
+
+func (d *daemon) serves(name string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, ok := d.served[name]
+
+	return ok
 }
 
 // servedPipeline is one pipeline plus what has to be shut down when it goes.
@@ -200,7 +219,7 @@ func interruptedTrees(ctx context.Context, state State, rows []store.PipelineRow
 	var trees []string
 
 	for _, row := range rows {
-		st, err := openState(state, row.Name)
+		st, err := openExistingState(state, row.Name)
 		if err != nil {
 			slog.WarnContext(ctx, "web.interrupted_unread", "pipeline", row.Name, "error", err)
 
@@ -237,9 +256,9 @@ func (d *daemon) restore(ctx context.Context, name, from string) error {
 //
 //nolint:contextcheck // opening and closing a store take none, and the placement check deliberately reads the daemon's own context — see accept
 func (d *daemon) restoreLocked(ctx context.Context, name, from string) error {
-	st, err := openState(d.state, name)
+	st, err := d.stateFor(name, nil)
 	if err != nil {
-		return fmt.Errorf("web: could not open state for %q: %w", name, err)
+		return fmt.Errorf("web: %w", err)
 	}
 
 	revision, found, err := st.CurrentRevision(ctx)
@@ -351,9 +370,19 @@ func (d *daemon) stateFor(name string, existing *servedPipeline) (store.Store, e
 		return existing.target.Store, nil
 	}
 
-	st, err := openState(d.state, name)
+	st, err := d.openStore(name)
 	if err != nil {
 		return nil, fmt.Errorf("could not open state for %q: %w", name, err)
+	}
+
+	return st, nil
+}
+
+// openStore is every handle the daemon opens, so a fault a test installs through wrapStore is under all of them.
+func (d *daemon) openStore(name string) (store.Store, error) {
+	st, err := openState(d.state, name)
+	if err != nil {
+		return nil, err
 	}
 
 	if d.wrapStore != nil {
@@ -635,6 +664,9 @@ func (d *daemon) destroyLocked(ctx context.Context, name string) error {
 
 		restoreErr := d.restoreLocked(restoreCtx, name, served.target.Path())
 		if restoreErr != nil {
+			// Shown broken, as a restart's failed restore is: unlisted, the pipeline would vanish until the next restart while its rows stay, and a second destroy would answer that there is no such pipeline.
+			d.server.MarkBroken(web.BrokenPipeline{Name: name, SHA: served.target.Config().Revision.SHA, From: served.target.Path(), Reason: restoreErr.Error()})
+
 			return fmt.Errorf("could not destroy %q: %w; nor could it be served again, so a restart does: %w", name, err, restoreErr)
 		}
 
@@ -648,7 +680,7 @@ func (d *daemon) destroyLocked(ctx context.Context, name string) error {
 //
 //nolint:contextcheck // opening a store takes none
 func (d *daemon) destroyBroken(ctx context.Context, name string) error {
-	st, err := openState(d.state, name)
+	st, err := d.openStore(name)
 	if err != nil {
 		return fmt.Errorf("could not destroy %q: %w", name, err)
 	}
@@ -686,9 +718,6 @@ func (d *daemon) forgetPipeline(ctx context.Context, name, loginsOf string) erro
 
 	return nil
 }
-
-// runningListed caps how many runs a refusal names, so a pipeline with a wide in_parallel of jobs still gets a readable one.
-const runningListed = 5
 
 // detach waits for the loops before returning, so nothing is still reading a handle its caller is about to close.
 func (d *daemon) detach(name string) (*servedPipeline, error) {

@@ -317,18 +317,27 @@ func runMutant(ctx context.Context, dir string, m mutant, seconds map[string]flo
 	//nolint:gosec // a binary this command built, running tests the attribution named
 	test := exec.CommandContext(runCtx, binary, "-test.run", "^("+strings.Join(m.Tests, "|")+")$", "-test.v", "-test.count=1")
 	test.Dir = "e2e"
-	out, _ = test.CombinedOutput()
+	out, err = test.CombinedOutput()
 
 	if runCtx.Err() != nil {
 		return "timed out", nil
 	}
 
-	killers := failedTests(string(out))
-	if len(killers) == 0 {
-		return "lived", nil
+	return judged(string(out), err)
+}
+
+// judged is one run's outcome: killed by the tests that failed, crashed when the binary failed naming none (a panic before any test, a goleak verdict in TestMain), lived only when it exited clean.
+func judged(out string, err error) (string, []string) {
+	killers := failedTests(out)
+
+	switch {
+	case len(killers) > 0:
+		return "killed", killers
+	case err != nil:
+		return "crashed", nil
 	}
 
-	return "killed", killers
+	return "lived", nil
 }
 
 // writeOverlay writes the mutated file and the overlay naming it, returning the overlay's path.

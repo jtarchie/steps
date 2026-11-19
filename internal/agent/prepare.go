@@ -298,7 +298,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	spillDir := newToolOutputSpillDir(dir, step.Agent)
+	spillDir := newToolOutputSpillDir(ctx, dir, step.Agent)
 
 	conv := agentConversation{
 		// Named for THIS machine, and replaced by openTree with the container's own spelling for an agent whose tools run in one. Set here so a step that never opens a tree still carries a system message.
@@ -431,7 +431,7 @@ func resolveWithFailover(ctx context.Context, cfg *config.Config, step config.St
 
 		// Judged against the run's start, not the wall clock: every step of one
 		// job must see the same source (see WithRunBoundary).
-		selection, ok = selectedSourceAt(scope, runInstant(ctx))
+		selection, ok = selectedSourceAt(ctx, scope, runInstant(ctx))
 		if !ok {
 			return resolvedAgent{ri: primary, primary: primary, agent: agent, fallbackIndex: -1}, nil
 		}
@@ -525,12 +525,12 @@ func resolveDeferredMessages(spaceDir string, step config.Step) ([]string, error
 // behavior, not something a step should abort over (e.g. a read-only
 // workspace would otherwise turn an unrelated pipeline failure into an agent
 // step failure).
-func newToolOutputSpillDir(dir, stepLabel string) string {
+func newToolOutputSpillDir(ctx context.Context, dir, stepLabel string) string {
 	spillDir := filepath.Join(dir, tree.SpillDirName)
 
 	err := os.MkdirAll(spillDir, 0o750)
 	if err != nil {
-		slog.Warn("agent.spill_dir", "agent", stepLabel, "error", err)
+		slog.WarnContext(ctx, "agent.spill_dir", "agent", stepLabel, "error", err)
 
 		return ""
 	}

@@ -106,7 +106,7 @@ func TestAnExportUsesTheServersItShares(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := cfg.MCPUsers("github"); got != "export support" {
-		t.Errorf("MCPUsers(github) = %q, want the export named", got)
+	if got := cfg.MCPServerUsers("github"); len(got) != 1 || got[0] != "export support" {
+		t.Errorf("MCPServerUsers(github) = %q, want the export named", got)
 	}
 }

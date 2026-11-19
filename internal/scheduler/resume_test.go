@@ -253,7 +253,7 @@ jobs:
 		t.Fatalf("EnqueueResumeJob: %v", err)
 	}
 
-	_, err = runner.Enqueue(ctx, target, "build", "trigger, no cache (cli)", true)
+	err = runner.Enqueue(ctx, target, "build", "trigger, no cache (cli)", true)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}

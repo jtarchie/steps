@@ -1,86 +1,9 @@
 package config
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
-
-// The vocabulary two front ends share. It lived in internal/cli, where `steps mcp list` could read it and the web UI could not, so the page would have had to invent its own words for the same four facts.
-func TestMCPServerRendersItsOwnRow(t *testing.T) {
-	t.Parallel()
-
-	stdio := MCPServer{Name: "gopls", Command: "gopls", Args: []string{"mcp"}, Cwd: "repo"}
-	if got, want := stdio.Target(), "gopls mcp (cwd: repo)"; got != want {
-		t.Errorf("Target(stdio) = %q, want %q", got, want)
-	}
-
-	if got, want := stdio.Transport(), "stdio"; got != want {
-		t.Errorf("Transport(stdio) = %q, want %q", got, want)
-	}
-
-	http := MCPServer{Endpoint: "https://x/mcp"}
-	if got, want := http.Target(), "https://x/mcp"; got != want {
-		t.Errorf("Target(http) = %q, want %q", got, want)
-	}
-
-	if got, want := http.Transport(), "http"; got != want {
-		t.Errorf("Transport(http) = %q, want %q", got, want)
-	}
-
-	// The env var NAME is what an operator checks; the value is never read here.
-	bearer := MCPServer{Auth: MCPServerAuth{Type: "bearer", APIKeyEnv: "GITHUB_PAT"}}
-	if got, want := bearer.AuthLabel(), "bearer $GITHUB_PAT"; got != want {
-		t.Errorf("AuthLabel(bearer) = %q, want %q", got, want)
-	}
-
-	if got, want := (MCPServer{}).AuthLabel(), "none"; got != want {
-		t.Errorf("AuthLabel(unset) = %q, want %q", got, want)
-	}
-}
-
-// The cell that says what breaks while a server is disconnected, and the one that says nothing does.
-//
-//nolint:gosec // G101: APIKeyEnv is the NAME of a variable, which is the whole point — the value is never in the YAML and never here
-func TestMCPUsersNamesTheConsumersOrSaysThereAreNone(t *testing.T) {
-	t.Parallel()
-
-	cfg := &Config{
-		MCPServers: []MCPServer{{Name: "linear", Endpoint: "https://x/mcp"}, {Name: "spare", Endpoint: "https://x/mcp"}},
-		Agents: []Agent{{
-			Name:   "triager",
-			Source: AgentSource{Model: "openrouter/qwen/qwen3.7-flash", APIKeyEnv: "OPENROUTER_API_KEY"},
-			Tools:  []ToolSpec{{MCP: "linear", MCPTool: "list_issues"}},
-		}},
-	}
-
-	if got := cfg.MCPUsers("linear"); got != "agent triager" {
-		t.Errorf("MCPUsers(linear) = %q, want the agent that grants it", got)
-	}
-
-	if got := cfg.MCPUsers("spare"); got != "(unused)" {
-		t.Errorf("MCPUsers(spare) = %q, want it named as unused", got)
-	}
-}
-
-// The row's first column is already the server's name, so the error's copies of it are noise in front of the part somebody has to act on.
-func TestMCPStatusReasonDropsTheNameTheRowAlreadyCarries(t *testing.T) {
-	t.Parallel()
-
-	reason := MCPStatusReason("linear", errors.New(`mcp server "linear" is not authorized (run `+"`steps mcp login`"+`)`))
-	if want := "is not authorized (run `steps mcp login`)"; reason != want {
-		t.Errorf("MCPStatusReason = %q, want %q", reason, want)
-	}
-
-	if got := MCPStatusReason("test", errors.New(`mcp: connect to "test": dial tcp: refused`)); got != "dial tcp: refused" {
-		t.Errorf("MCPStatusReason(connect) = %q", got)
-	}
-
-	// A multi-line error is a cell one line high; the first line is the one that says what happened.
-	if got := MCPStatusReason("test", errors.New("first line\nsecond line")); got != "first line" {
-		t.Errorf("MCPStatusReason kept more than the first line: %q", got)
-	}
-}
 
 // The four shapes, and the two answers this package deliberately does not give.
 // Not t.Parallel(): the environment is what is under test, and t.Setenv refuses a parallel test for exactly that reason.

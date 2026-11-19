@@ -11,7 +11,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"github.com/jtarchie/steps/internal/events"
 	"io"
 	"log/slog"
 	"os"
@@ -20,6 +19,7 @@ import (
 	"github.com/alecthomas/kong"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/telemetry"
 )
 
@@ -96,11 +96,12 @@ func shortConfig(sha string) string {
 // end-to-end suite drive a real invocation in-process rather than spawning
 // a binary.
 func Run(args []string) error {
-	return RunWith(Streams{Out: os.Stdout, Err: os.Stderr}, args)
+	return RunWith(Streams{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}, args)
 }
 
-// Streams is where one invocation writes what a person reads. The process's own streams are only ever named in Run, so two invocations in one process (the end-to-end suite runs hundreds side by side) each write to their own.
+// Streams is where one invocation reads what a person types and writes what a person reads. The process's own streams are only ever named in Run, so two invocations in one process (the end-to-end suite runs hundreds side by side) each write to their own.
 type Streams struct {
+	In  io.Reader
 	Out io.Writer
 	Err io.Writer
 	// stop is RunContext's ctx.Done(), nil under Run and RunWith.

@@ -173,12 +173,12 @@ func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, compile
 	// Only after receiverFor resolved it: the path segment is the sender's, and a guessed name must never become a line's identity.
 	ctx = events.WithLogAttrs(ctx, "resource", name)
 
-	body, valid := verified(ctx, w, r, entry, name)
+	request, valid := verified(ctx, w, r, entry, name)
 	if !valid {
 		return
 	}
 
-	result, err := receiver.Accept(requestFrom(r, body))
+	result, err := receiver.Accept(request)
 	if err != nil {
 		// A 500 the sender logs as failed, so it can be redelivered once the pipeline is fixed; nothing is recorded meanwhile.
 		slog.ErrorContext(ctx, "webhook.expr_error", "resource", name, "error", err)
@@ -218,20 +218,20 @@ func receiverFor(ctx context.Context, w http.ResponseWriter, compiled map[string
 	return entry, true
 }
 
-func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, entry compiledReceiver, name string) ([]byte, bool) {
+func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, entry compiledReceiver, name string) (webhook.Request, bool) {
 	receiver := entry.receiver
 
 	body, err := receiver.ReadBody(w, r)
 	if errors.Is(err, webhook.ErrTooLarge) {
 		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 
-		return nil, false
+		return webhook.Request{}, false
 	}
 
 	if err != nil {
 		http.Error(w, "could not read the body", http.StatusBadRequest)
 
-		return nil, false
+		return webhook.Request{}, false
 	}
 
 	secret, err := deliverySecret(ctx, entry, name)
@@ -239,18 +239,20 @@ func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, entry
 		// Not a 401: the sender did nothing wrong, and a 5xx is what it records as worth redelivering. Never on to Verify, where an empty secret would read as the pipeline's.
 		http.Error(w, "the webhook secret is unavailable", http.StatusServiceUnavailable)
 
-		return nil, false
+		return webhook.Request{}, false
 	}
 
-	err = receiver.Verify(requestFrom(r, body), secret, time.Now())
+	request := requestFrom(r, body)
+
+	err = receiver.Verify(request, secret, time.Now())
 	if err != nil {
 		slog.DebugContext(ctx, "webhook.unauthorized", "resource", name)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 
-		return nil, false
+		return webhook.Request{}, false
 	}
 
-	return body, true
+	return request, true
 }
 
 // deliverySecret is what the delivery's signature is checked against: looked up for a secret_env naming a secrets: key, read from the daemon's environment otherwise.
@@ -270,7 +272,7 @@ func deliverySecret(ctx context.Context, entry compiledReceiver, name string) (s
 }
 
 func requestFrom(r *http.Request, body []byte) webhook.Request {
-	return webhook.Request{Method: r.Method, Header: r.Header, Query: r.URL.Query(), Body: body}
+	return webhook.NewRequest(r.Method, r.Header, r.URL.Query(), body)
 }
 
 func record(ctx context.Context, w http.ResponseWriter, cfg *config.Config, st HookStore, name string, accepted webhook.Delivery) {
@@ -336,12 +338,10 @@ func observeDeliveries(ctx context.Context, st PollStore, name string) (observed
 		return observedResource{}, false, fmt.Errorf("webhook resource %q: %w", name, err)
 	}
 
-	versions, err := st.ResourceVersionsJSON(ctx, name)
-	if err != nil || len(versions) == 0 {
+	latest, delivered, err := st.NewestVersion(ctx, name)
+	if err != nil || !delivered {
 		return observedResource{}, false, err //nolint:wrapcheck // the store names the resource
 	}
-
-	latest := versions[len(versions)-1]
 
 	version, err := store.DecodeVersion(latest)
 	if err != nil {

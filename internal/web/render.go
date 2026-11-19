@@ -684,9 +684,9 @@ func agoCompactTagIn(loc *locale, t time.Time) template.HTML {
 
 	short, spoken := agoCompactIn(loc, time.Since(t))
 
-	//nolint:gosec // G203: every interpolation is machine-formatted, not input
-	return template.HTML(fmt.Sprintf(`<time datetime=%q><span aria-hidden="true">%s</span><span class="visually-hidden">%s</span></time>`,
-		t.UTC().Format(time.RFC3339Nano), short, spoken))
+	//nolint:gosec // G203: every interpolation is escaped here; the words come from a translator's catalog
+	return template.HTML(fmt.Sprintf(`<time datetime="%s"><span aria-hidden="true">%s</span><span class="visually-hidden">%s</span></time>`,
+		html.EscapeString(t.UTC().Format(time.RFC3339Nano)), html.EscapeString(short), html.EscapeString(spoken)))
 }
 
 // elapsedTag renders a duration that is still accumulating: a finished run

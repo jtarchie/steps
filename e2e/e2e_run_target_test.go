@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -118,15 +119,20 @@ jobs:
 
 	name := cli.PipelineName(path)
 
-	err := stepsRun(t, []string{"runs", "trigger", "build", "-p", name, "--target", served.target()})
+	var err error
+
+	queued := captureStdout(t, func() {
+		err = stepsRun(t, []string{"runs", "trigger", "build", "-p", name, "--target", served.target()})
+	})
 	if err != nil {
 		t.Fatalf("steps runs trigger: %v", err)
 	}
 
 	newestRun(t, served.state, name, "build")
 
+	// Followed by the command the trigger printed, which must find the daemon it was queued on.
 	out := captureStdout(t, func() {
-		err = stepsRun(t, []string{"runs", "follow", "-p", name, "--job", "build", "--target", served.target(), "--progress", "plain"})
+		err = stepsRun(t, append(followHint(t, queued), "--progress", "plain"))
 	})
 	if err != nil {
 		t.Fatalf("steps runs follow --target: %v\n%s", err, out)
@@ -201,5 +207,146 @@ func TestRunTargetAsksWhatASetAsks(t *testing.T) {
 
 	if !fileExists(ran) {
 		t.Error("an admin's one-off did not run")
+	}
+}
+
+// run and follow take --target as a bare flag rather than TargetFlags, and a target url.Parse refuses still carries its credentials, so the refusal must not quote it.
+func TestAnUnparseableTargetNeverPrintsItsPassword(t *testing.T) {
+	t.Parallel()
+
+	// url.Parse cuts at the #, so its error quotes the half before it: neither half may appear.
+	const target = "http://u:hunter#22@127.0.0.1:1"
+
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi
+`)
+
+	for _, args := range [][]string{
+		{"run", path, "--target", target},
+		{"runs", "follow", "-p", "demo", "--target", target},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			stderr := captureStderr(t)
+
+			var err error
+
+			out := captureStdout(t, func() {
+				err = stepsRun(t, args)
+			})
+
+			if err == nil {
+				t.Fatalf("steps %s accepted an unparseable target", strings.Join(args, " "))
+			}
+
+			if !strings.Contains(err.Error(), "--target") {
+				t.Errorf("steps %s = %v, want --target named", strings.Join(args, " "), err)
+			}
+
+			for where, text := range map[string]string{"error": err.Error(), "stdout": out, "stderr": stderr()} {
+				if strings.Contains(text, "hunter") || strings.Contains(text, "#22") {
+					t.Errorf("the %s repeated the password: %s", where, text)
+				}
+			}
+		})
+	}
+}
+
+// followHint is the `steps runs follow` command a verb printed, as args, up to the line's prose.
+func followHint(t *testing.T, out string) []string {
+	t.Helper()
+
+	_, hint, ok := strings.Cut(out, "steps runs follow ")
+	if !ok {
+		t.Fatalf("no follow command printed:\n%s", out)
+	}
+
+	hint, _, _ = strings.Cut(strings.TrimSpace(hint), " watches")
+
+	return append([]string{"runs", "follow"}, strings.Fields(hint)...)
+}
+
+// A queue or a resume on a daemon other than the default must print a follow that reaches it, and never with the password it was given.
+func TestTheQueuedHintsNameTheDaemon(t *testing.T) {
+	t.Parallel()
+
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) }))
+	defer daemon.Close()
+
+	target := "http://alex:hunter2@" + strings.TrimPrefix(daemon.URL, "http://")
+
+	for verb, args := range map[string][]string{
+		"trigger": {"runs", "trigger", "build", "-p", "app", "--target", target},
+		"resume":  {"runs", "resume", "RUN", "-p", "app", "--target", target},
+	} {
+		t.Run(verb, func(t *testing.T) {
+			var err error
+
+			out := captureStdout(t, func() { err = stepsRun(t, args) })
+			if err != nil {
+				t.Fatalf("steps runs %s: %v", verb, err)
+			}
+
+			hint := strings.Join(followHint(t, out), " ")
+			if !strings.Contains(hint, "--target "+daemon.URL+" ") || strings.Contains(out, "hunter2") {
+				t.Errorf("steps runs %s printed %q, want the follow to name --target %s without its password", verb, out, daemon.URL)
+			}
+		})
+	}
+}
+
+// A one-off carries the source, its includes and the job; any other run flag would be dropped on the way, so it is refused rather than silently ignored.
+func TestRunTargetRefusesTheFlagsADaemonWouldIgnore(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := writePipeline(t, dir, "jobs:\n- name: build\n  plan:\n  - task: say\n    run: echo hi\n")
+
+	for flag, args := range map[string][]string{
+		"db":                 {"--db", filepath.Join(dir, "x.db")},
+		"name":               {"--name", "x=" + path},
+		"resume":             {"--resume", "RUN"},
+		"replay":             {"--replay", "RUN"},
+		"from":               {"--from", "say"},
+		"rerun":              {"--rerun", "RUN"},
+		"pin":                {"--pin", "n=1"},
+		"force":              {"--force"},
+		"answer":             {"--answer", "which bump=minor"},
+		"deliver":            {"--deliver", "push=push.http"},
+		"worker":             {"--worker", "gpu=ssh://jt@box"},
+		"config":             {"--config", filepath.Join(dir, "steps.yml")},
+		"no-preflight":       {"--no-preflight"},
+		"artifact-store":     {"--artifact-store", "s3://bucket/prefix"},
+		"keep-workspace":     {"--keep-workspace"},
+		"workspace-root":     {"--workspace-root", dir},
+		"resource-cache-max": {"--resource-cache-max", "5"},
+		"version-history":    {"--version-history", "5"},
+		"run-history":        {"--run-history", "5"},
+	} {
+		t.Run(flag, func(t *testing.T) {
+			t.Parallel()
+
+			err := stepsRun(t, append([]string{"run", path, "--target", "http://127.0.0.1:1"}, args...))
+			if err == nil || !strings.Contains(err.Error(), "--"+flag+" does not apply with --target") {
+				t.Errorf("steps run --target %s = %v, want --%s refused", strings.Join(args, " "), err, flag)
+			}
+		})
+	}
+}
+
+// Not t.Parallel(): t.Setenv. An exported default is a standing preference for local runs, not something this one-off asked for.
+func TestRunTargetIgnoresEnvironmentDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, "jobs:\n- name: build\n  plan:\n  - task: say\n    run: echo hi\n")
+
+	t.Setenv("STEPS_KEEP_WORKSPACE", "true")
+	t.Setenv("STEPS_WORKSPACE_ROOT", dir)
+
+	err := stepsRun(t, []string{"run", path, "--target", "http://127.0.0.1:1", "--progress", "plain"})
+	if err == nil || strings.Contains(err.Error(), "does not apply with --target") {
+		t.Errorf("steps run --target with STEPS_KEEP_WORKSPACE and STEPS_WORKSPACE_ROOT exported = %v, want it sent and refused only by the unreachable daemon", err)
 	}
 }
