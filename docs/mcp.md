@@ -83,6 +83,35 @@ A `command:` server is a local subprocess `steps` spawns and speaks newline-deli
 - **Lifecycle**: for an agent tool grant, one subprocess is spawned per agent step per grant and reaped when the step ends. For a resource-type `mcp:` backend, a fresh subprocess is spawned **per** `check`/`in`/`out` call — including every `steps web` poll — fine for a fast-starting binary, a poor fit for one that's slow to start.
 - **Diagnostics**: the subprocess's stderr is logged at debug level (`--log-level=debug`), under `mcp.stdio.stderr` with the server's name attached — the only way to see why a stdio server failed to start.
 
+### A stdio server in a container (`image:`)
+
+`image:` runs the server's `command:` in a container from that image instead of on this machine, the way `image:` on a task or agent does. It is how a stdio server is [fenced](web.md#fencing-commands-fence): under `fence: warn`, a stdio server without one is listed, and so is one whose `command:` is `docker` (a `docker run -i …` written by hand), because steps cannot check what a container it did not start may reach.
+
+```yaml noexec=docker
+mcp_servers:
+- name: fetch
+  image: mcp/fetch        # the server runs here; the image needs no steps of its own
+  command: mcp-server-fetch
+
+agents:
+- name: reader
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools:
+  - mcp: fetch
+
+jobs:
+- name: read
+  plan:
+  - agent: reader
+    messages:
+      - "Summarize https://example.com."
+```
+
+- **One container per connection**, removed when the step (or the `check`/`in`/`out` call) ends. It is created over this machine's docker daemon, whatever `tags:` the agent has.
+- **The container sees the image's own environment**, not the host allowlist above.
+- **No step directory is mounted.** An absolute `cwd:` is a directory in the container; a relative one is refused at load.
+- `steps mcp list --offline` cannot say whether the command exists in an image it has not pulled, so the row reads `runs in image …` until a probe connects.
+
 ## Taking inventory: `steps mcp list`
 
 What servers does this pipeline configure, who uses each one, and are they working *here*?

@@ -14,6 +14,7 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -35,12 +36,17 @@ func (c *Config) HostCommands() []HostCommand {
 	found := c.hostResources()
 
 	for _, server := range c.MCPServers {
-		if server.Command != "" {
-			found = append(found, HostCommand{
-				Name: server.Name, Where: fmt.Sprintf("mcp_servers %q", server.Name),
-				Why: "a stdio server: its command runs on the host, and an mcp server has no image:",
-			})
+		if server.Command == "" || server.Image != "" {
+			continue
 		}
+
+		why := "a stdio server: its command runs on the host; set image:"
+		// steps cannot see what a container started by hand mounts or how privileged it is, so it is no fence of steps'.
+		if filepath.Base(server.Command) == "docker" {
+			why = "a stdio server that runs docker itself: steps cannot check what that container may reach; move its image into image:"
+		}
+
+		found = append(found, HostCommand{Name: server.Name, Where: fmt.Sprintf("mcp_servers %q", server.Name), Why: why})
 	}
 
 	for _, job := range c.Jobs {

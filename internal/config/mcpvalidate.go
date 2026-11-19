@@ -195,8 +195,8 @@ func validateMCPServerTransport(srv MCPServer) error {
 // validateMCPServerHTTPOnlyFields rejects args/cwd (stdio-only fields) on
 // an http server.
 func validateMCPServerHTTPOnlyFields(srv MCPServer) error {
-	if len(srv.Args) != 0 || srv.Cwd != "" {
-		return fmt.Errorf("mcp server %q: args/cwd are only valid with command (stdio transport)", srv.Name)
+	if len(srv.Args) != 0 || srv.Cwd != "" || srv.Image != "" {
+		return fmt.Errorf("mcp server %q: args/cwd/image are only valid with command (stdio transport)", srv.Name)
 	}
 
 	return nil
@@ -209,6 +209,11 @@ func validateMCPServerHTTPOnlyFields(srv MCPServer) error {
 func validateMCPServerStdioAuth(srv MCPServer) error {
 	if !srv.Auth.None() {
 		return fmt.Errorf("mcp server %q: auth.type %q requires an http endpoint; a stdio server has no request to authenticate", srv.Name, srv.Auth.Type)
+	}
+
+	// ponytail: no step tree is mounted into the server's container; mounting the step's volume would make a relative cwd mean what it does on the host.
+	if srv.Image != "" && srv.Cwd != "" && !filepath.IsAbs(srv.Cwd) {
+		return fmt.Errorf("mcp server %q: cwd %q is relative, and a server in image: has no step directory to resolve it against; give a path in the container", srv.Name, srv.Cwd)
 	}
 
 	return nil

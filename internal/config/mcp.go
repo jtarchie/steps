@@ -68,6 +68,8 @@ type MCPServer struct {
 	Endpoint string   `yaml:"endpoint,omitempty"`
 	Command  string   `yaml:"command,omitempty"`
 	Args     []string `yaml:"args,omitempty"`
+	// Image runs the stdio command in a container from this image instead of on this machine: the fence #263 asks of every stdio server. cwd: is then a path in the container.
+	Image string `yaml:"image,omitempty"`
 	// Cwd is the working directory a stdio server's subprocess is spawned
 	// in. An ABSOLUTE path is used verbatim — a fixed location on the host,
 	// resolved identically for every step. A RELATIVE path is resolved

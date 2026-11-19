@@ -313,6 +313,34 @@ jobs:
 	}
 }
 
+// A stdio server is fenced by image: (#263); one that runs docker itself is listed, since steps cannot see into the container it starts, and says why.
+func TestUnfencedFencesAStdioServerByItsImage(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]byte(`
+mcp_servers:
+- {name: boxed, image: node:24-alpine, command: npx, args: [server]}
+- {name: loose, command: npx, args: [server]}
+- {name: by-hand, command: /usr/local/bin/docker, args: [run, -i, --rm, server]}
+`), "fence", nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, host := range cfg.Unfenced(true) {
+		got[host.Name] = host.Why
+	}
+
+	if _, listed := got["boxed"]; listed || len(got) != 2 {
+		t.Errorf("want loose and by-hand listed and boxed not: %q", got)
+	}
+
+	if !strings.Contains(got["by-hand"], "runs docker itself") || strings.Contains(got["loose"], "docker") {
+		t.Errorf("the by-hand docker server is not told apart: %q", got)
+	}
+}
+
 // A built-in type given only image: runs in it (#263), so its resources are fenced, checkout: git's clone included.
 func TestUnfencedCountsABuiltinRunInAnImage(t *testing.T) {
 	t.Parallel()

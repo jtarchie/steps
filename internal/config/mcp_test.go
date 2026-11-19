@@ -195,6 +195,29 @@ jobs: [{ name: j, plan: [] }]
 			want: "only valid with command",
 		},
 		{
+			name: "image without command",
+			pipeline: `
+mcp_servers:
+- name: gopls
+  endpoint: https://example.com/mcp
+  image: golang:1.26
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "only valid with command",
+		},
+		{
+			name: "image with a relative cwd",
+			pipeline: `
+mcp_servers:
+- name: gopls
+  command: gopls
+  image: golang:1.26
+  cwd: repo
+jobs: [{ name: j, plan: [] }]
+`,
+			want: "no step directory",
+		},
+		{
 			name: "command with bearer auth",
 			pipeline: `
 mcp_servers:
