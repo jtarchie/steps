@@ -233,7 +233,7 @@ func (r *RunsTriggerCmd) Run(streams Streams) error {
 		return err
 	}
 
-	sayf(out, "queued: %s on %s; watch it with steps runs follow -p %s --job %s\n", r.Job, name, name, r.Job)
+	sayf(out, "queued: %s on %s; watch it with steps runs follow --target %s -p %s --job %s\n", r.Job, name, client.target, name, r.Job)
 
 	return nil
 }
@@ -294,7 +294,7 @@ func (r *RunsResumeCmd) Run(streams Streams) error {
 	}
 
 	// Not "follow it now": until the claim puts the run back in flight it reads failed, and follow would replay the old attempt and exit failed.
-	sayf(streams.Out, "queued: a resume of %s on %s, from the step that failed; it reads failed until the daemon starts it, then steps runs follow -p %s %s watches it\n", r.RunID, name, name, r.RunID)
+	sayf(streams.Out, "queued: a resume of %s on %s, from the step that failed; it reads failed until the daemon starts it, then steps runs follow --target %s -p %s %s watches it\n", r.RunID, name, client.target, name, r.RunID)
 
 	return nil
 }

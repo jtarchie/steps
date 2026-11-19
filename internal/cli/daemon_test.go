@@ -1151,6 +1151,110 @@ func TestAFailedDestroyLeavesThePipelineServed(t *testing.T) {
 	}
 }
 
+type destroyStuck struct {
+	store.Store
+	fail *atomic.Bool
+}
+
+func (s destroyStuck) Delete(ctx context.Context) error {
+	if s.fail.Load() {
+		return errors.New("disk on fire")
+	}
+
+	return s.Store.Delete(ctx) //nolint:wrapcheck // test double
+}
+
+func (s destroyStuck) CurrentRevision(ctx context.Context) (store.Revision, bool, error) {
+	if s.fail.Load() {
+		return store.Revision{}, false, errors.New("disk gone")
+	}
+
+	return s.Store.CurrentRevision(ctx) //nolint:wrapcheck // test double
+}
+
+// A destroy that can neither delete nor serve again leaves the rows behind, so the pipeline is shown broken, where a second destroy finds it, rather than vanishing until a restart.
+func TestADestroyThatCannotRestoreShowsThePipelineBroken(t *testing.T) {
+	isolateLogins(t)
+
+	held := servingDaemon(t)
+
+	var fail atomic.Bool
+
+	held.wrapStore = func(st store.Store) store.Store { return destroyStuck{Store: st, fail: &fail} }
+
+	setPipeline(t, held, "doomed", idlePipeline)
+
+	fail.Store(true)
+
+	err := held.Destroy(t.Context(), "doomed")
+	if err == nil || !strings.Contains(err.Error(), "nor could it be served again") {
+		t.Fatalf("destroy = %v, want both the delete and the restore failed", err)
+	}
+
+	reason, broken := held.server.BrokenReason("doomed")
+	if !broken || !strings.Contains(reason, "disk gone") {
+		t.Fatalf("after a destroy whose restore failed, broken = %v (%q), want listed broken with the restore's error", broken, reason)
+	}
+
+	fail.Store(false)
+
+	err = held.Destroy(t.Context(), "doomed")
+	if err != nil {
+		t.Fatalf("destroying the broken pipeline: %v", err)
+	}
+
+	if slices.Contains(pipelineNames(t, string(held.state)), "doomed") {
+		t.Error("the broken pipeline's rows survived its destroy")
+	}
+}
+
+type lockProbe struct {
+	store.Store
+	held           *daemon
+	probing, under *atomic.Bool
+	listed         *atomic.Int32
+}
+
+func (s lockProbe) ListTriggerQueue(ctx context.Context, limit int) ([]store.QueueRow, error) {
+	if s.probing.Load() {
+		s.listed.Add(1)
+
+		if s.held.mu.TryLock() {
+			s.held.mu.Unlock()
+		} else {
+			s.under.Store(true)
+		}
+	}
+
+	return s.Store.ListTriggerQueue(ctx, limit) //nolint:wrapcheck // test double
+}
+
+// The gauge's scrape reads every pipeline's queue, which must not hold up the set, destroy or reap waiting on the daemon's lock.
+func TestThePendingGaugeReadsQueuesOutsideTheDaemonLock(t *testing.T) {
+	t.Parallel()
+
+	held := servingDaemon(t)
+
+	var probing, under atomic.Bool
+
+	var listed atomic.Int32
+
+	held.wrapStore = func(st store.Store) store.Store {
+		return lockProbe{Store: st, held: held, probing: &probing, under: &under, listed: &listed}
+	}
+
+	setPipeline(t, held, "a", idlePipeline)
+	setPipeline(t, held, "b", idlePipeline)
+
+	probing.Store(true)
+	counts := held.pending(t.Context())
+	probing.Store(false)
+
+	if listed.Load() < 2 || under.Load() {
+		t.Errorf("pending listed %d queues, under the daemon lock = %v; want both listed, neither under it (counts %v)", listed.Load(), under.Load(), counts)
+	}
+}
+
 type deleteExpires struct {
 	store.Store
 	grant func()

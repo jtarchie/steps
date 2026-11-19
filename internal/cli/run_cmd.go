@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/alecthomas/kong"
+
 	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
@@ -39,17 +41,31 @@ type RunCmd struct {
 	Target string `help:"run the job on this steps web daemon instead of here, and follow it; optionally http://user:password@host" name:"target"`
 }
 
+// notWithTarget is every run flag a one-off cannot carry: the request holds the source, its includes and the job, and the daemon runs it with its own state, workers and settings.
+var notWithTarget = []string{
+	"db", "name", "resume", "replay", "from", "rerun", "pin", "force",
+	"answer", "deliver", "worker", "config", "no-preflight", "artifact-store",
+	"keep-workspace", "workspace-root", "resource-cache-max", "version-history", "run-history",
+}
+
+// refuseIgnoredFlags reads the command line, not the struct: an exported STEPS_KEEP_WORKSPACE is a standing preference for local runs, not something this one-off asked for and would silently drop.
+func refuseIgnoredFlags(kctx *kong.Context) error {
+	for _, path := range kctx.Path {
+		if path.Flag != nil && !path.Resolved && slices.Contains(notWithTarget, path.Flag.Name) {
+			return fmt.Errorf("--%s does not apply with --target: a one-off is a new run on the daemon, under the daemon's own state, workers and settings", path.Flag.Name)
+		}
+	}
+
+	return nil
+}
+
 // runOnDaemon hands the job to a daemon as a one-off and follows it there, so the run has the daemon's record, workers and page whether the daemon is on this machine or another.
-func (r *RunCmd) runOnDaemon(streams Streams) error {
+func (r *RunCmd) runOnDaemon(streams Streams, kctx *kong.Context) error {
 	out := streams.Out
 
-	for flag, given := range map[string]bool{
-		"--resume": r.Resume != "", "--replay": r.Replay != "", "--rerun": r.Rerun != "",
-		"--pin": len(r.Pin) > 0, "--force": r.Force, "--db": r.DB != "",
-	} {
-		if given {
-			return fmt.Errorf("%s does not apply with --target: a one-off is a new run on the daemon, recorded there", flag)
-		}
+	err := refuseIgnoredFlags(kctx)
+	if err != nil {
+		return err
 	}
 
 	client, err := newDaemonClient(r.Target)
@@ -173,9 +189,9 @@ func (r *RunCmd) applyReplay(
 
 // Run loads the pipeline, selects a job, and runs it once via
 // pipeline.RunJob.
-func (r *RunCmd) Run(streams Streams) error {
+func (r *RunCmd) Run(streams Streams, kctx *kong.Context) error {
 	if r.Target != "" {
-		return r.runOnDaemon(streams)
+		return r.runOnDaemon(streams, kctx)
 	}
 
 	return r.runHere(streams)

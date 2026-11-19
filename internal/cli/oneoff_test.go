@@ -1,16 +1,20 @@
 package cli
 
 import (
+	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/scheduler"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -40,6 +44,8 @@ func TestAOneOffIsForgottenOnceItsRunIsOverAndTheGraceHasPassed(t *testing.T) {
 	}
 
 	waitUnserved(t, held, created.Pipeline)
+	// Unserved is the destroy's first step, and its rows go after the loops end.
+	held.reaping.Wait()
 
 	if slices.Contains(pipelineNames(t, string(held.state)), created.Pipeline) {
 		t.Errorf("the reaped one-off %s is still in the state database", created.Pipeline)
@@ -112,6 +118,73 @@ func TestARestartedDaemonStillReapsAOneOff(t *testing.T) {
 	}
 
 	waitUnserved(t, restarted, created.Pipeline)
+}
+
+// A failed queue whose undo cannot delete leaves a one-off served with nothing queued, as a crash between the record and the queue does for a restart; it is reaped all the same.
+func TestAOneOffWithNothingQueuedIsStillReaped(t *testing.T) {
+	isolateLogins(t)
+
+	held := servingDaemon(t)
+	held.oneOffGrace = 0
+
+	var faulty atomic.Bool
+	faulty.Store(true)
+
+	deleted := make(chan struct{}, 1)
+	held.wrapStore = func(st store.Store) store.Store {
+		return neverQueued{Store: st, faulty: &faulty, deleted: deleted}
+	}
+
+	_, err := held.OneOff(t.Context(), web.OneOffRequest{Source: onRoot("true"), Job: "build"})
+	if err == nil {
+		t.Fatal("a one-off whose job could not be queued was accepted")
+	}
+
+	held.mu.Lock()
+	names := slices.Collect(maps.Keys(held.served))
+	held.mu.Unlock()
+
+	if len(names) != 1 || !isOneOff(names[0]) {
+		t.Fatalf("served %v, want the one-off the failed undo restored", names)
+	}
+
+	faulty.Store(false)
+
+	select {
+	case <-deleted:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s, served with nothing queued, was never reaped", names[0])
+	}
+}
+
+type neverQueued struct {
+	store.Store
+	faulty  *atomic.Bool
+	deleted chan<- struct{}
+}
+
+func (s neverQueued) EnqueueManualJob(ctx context.Context, jobName, reason, by string) error {
+	if s.faulty.Load() {
+		return errors.New("queue on fire")
+	}
+
+	return s.Store.EnqueueManualJob(ctx, jobName, reason, by) //nolint:wrapcheck // test double
+}
+
+func (s neverQueued) Delete(ctx context.Context) error {
+	if s.faulty.Load() {
+		return errors.New("disk on fire")
+	}
+
+	err := s.Store.Delete(ctx)
+	if err == nil {
+		select {
+		case s.deleted <- struct{}{}:
+		default:
+		}
+	}
+
+	return err //nolint:wrapcheck // test double
 }
 
 // The prefix is how a restart knows a one-off, so nothing else may take it on.

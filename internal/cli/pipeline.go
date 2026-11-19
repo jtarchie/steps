@@ -356,7 +356,8 @@ func (p *PipelineGetCmd) Run(streams Streams) error {
 
 	_, _ = fmt.Fprint(out, current.Config.Source)
 
-	for path, content := range current.Config.Includes {
+	for _, path := range slices.Sorted(maps.Keys(current.Config.Includes)) {
+		content := current.Config.Includes[path]
 		sayf(out, "\n# --- %s (%d bytes) ---\n%s", path, len(content), content)
 	}
 
