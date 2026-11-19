@@ -1155,6 +1155,9 @@ lists).
 --resource-cache-max
                  how many fetched resource versions the root keeps, least
                  recently used evicted first (default 50)
+--store-max-bytes
+                 how many bytes of cached trees the root's store keeps, least
+                 recently used evicted first (default 8 GiB)
 --fence          off (default) or warn: list every command a pipeline would
                  run unfenced, on set and on its page (see Fencing commands)
 --read-only      serve without trigger, retry, approve/reject, answer, release,

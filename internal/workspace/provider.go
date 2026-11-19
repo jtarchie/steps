@@ -68,7 +68,7 @@ func (p *isolatingProvider) enableCache(ws *Settings) error {
 		}
 	}
 
-	p.store, err = newTreeStore(p.backend, p.root)
+	p.store, err = newTreeStore(p.backend, p.root, ws.storeMaxBytes())
 	p.resourceCacheMax = ws.resourceCacheMax()
 
 	return err

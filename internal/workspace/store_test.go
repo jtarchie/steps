@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // storeTreesIn lists the digests filed in a provider's store.
@@ -115,10 +116,126 @@ func TestADurableRootDropsTheOldWholeTreeCaches(t *testing.T) {
 	}
 }
 
+// TestStoreBoundSparesTheTreeJustFiled: a tree bigger than the whole bound is still kept until the next one is filed, or the entry about to name it would be a miss before anything could hit it.
+func TestStoreBoundSparesTheTreeJustFiled(t *testing.T) {
+	t.Parallel()
+
+	store, err := newTreeStore(copyBackend{}, t.TempDir(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	digests := make([]string, 0, 2)
+
+	for _, content := range []string{"sixty bytes, well past a ten byte bound, first", "sixty bytes, well past a ten byte bound, second"} {
+		src := t.TempDir()
+
+		err = os.WriteFile(filepath.Join(src, "f"), []byte(content), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		digest, putErr := store.put(context.Background(), src)
+		if putErr != nil {
+			t.Fatal(putErr)
+		}
+
+		digests = append(digests, digest)
+	}
+
+	if store.has(digests[0]) || !store.has(digests[1]) {
+		t.Errorf("first kept = %v, second kept = %v; want only the tree just filed", store.has(digests[0]), store.has(digests[1]))
+	}
+}
+
+// TestStoreBoundEvictsTheLeastRecentlyUsed: a hit refreshes a tree, so the one evicted is the one used longest ago, not the one filed first.
+func TestStoreBoundEvictsTheLeastRecentlyUsed(t *testing.T) {
+	t.Parallel()
+
+	store, err := newTreeStore(copyBackend{}, t.TempDir(), 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	put := func(content string) string {
+		t.Helper()
+
+		src := t.TempDir()
+
+		writeErr := os.WriteFile(filepath.Join(src, "f"), []byte(content), 0o600)
+		if writeErr != nil {
+			t.Fatal(writeErr)
+		}
+
+		digest, putErr := store.put(context.Background(), src)
+		if putErr != nil {
+			t.Fatal(putErr)
+		}
+
+		return digest
+	}
+
+	first := put("ten bytes1")
+	second := put("ten bytes2")
+
+	// first filed an hour ago, second a minute after it; then first is used, and the hit is all that keeps it.
+	filed := time.Now().Add(-time.Hour)
+	for i, digest := range []string{first, second} {
+		at := filed.Add(time.Duration(i) * time.Minute)
+
+		chErr := os.Chtimes(filepath.Join(store.dir, digest), at, at)
+		if chErr != nil {
+			t.Fatal(chErr)
+		}
+	}
+
+	err = store.materialize(context.Background(), first, filepath.Join(t.TempDir(), "hit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	put("ten bytes3")
+
+	if !store.has(first) || store.has(second) {
+		t.Errorf("used first kept = %v, unused second kept = %v; want the least recently used evicted", store.has(first), store.has(second))
+	}
+}
+
+// TestStoreMeasuresATreeWhoseSizeWasNotRecorded: a size record lost (or a tree from before them) is measured, not counted as nothing, or the bound would never see it.
+func TestStoreMeasuresATreeWhoseSizeWasNotRecorded(t *testing.T) {
+	t.Parallel()
+
+	store, err := newTreeStore(copyBackend{}, t.TempDir(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	src := t.TempDir()
+
+	err = os.WriteFile(filepath.Join(src, "f"), []byte("12345"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	digest, err := store.put(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Remove(filepath.Join(store.dir, sizesDirName, digest))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := store.size(digest); got != 5 {
+		t.Errorf("size = %d, want the 5 bytes the tree holds", got)
+	}
+}
+
 func TestStoreRefusesADigestThatIsAPath(t *testing.T) {
 	t.Parallel()
 
-	store, err := newTreeStore(copyBackend{}, t.TempDir())
+	store, err := newTreeStore(copyBackend{}, t.TempDir(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

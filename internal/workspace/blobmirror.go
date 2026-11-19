@@ -83,7 +83,7 @@ func (c *stepCache) fetchOutput(ctx context.Context, out, digest string) bool {
 		return nil
 	})
 	if err == nil {
-		err = c.store.install(staged, digest)
+		err = c.store.install(ctx, staged, digest)
 	}
 
 	if err != nil && !errors.Is(err, errBlobDigestMismatch) {

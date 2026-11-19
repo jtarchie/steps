@@ -207,11 +207,12 @@ type ExecFlags struct {
 	// The machine's, never the pipeline's: a pipeline names no machine, so where trees live and what is kept between builds is the operator's to say (the workspace: block that held these is refused at load).
 	WorkspaceRoot    string `env:"STEPS_WORKSPACE_ROOT"                                                                                                        help:"keep build trees, the step cache and task caches under this directory (steps run: a temp directory removed at exit; steps web: workspace/ beside its state database)" name:"workspace-root" placeholder:"DIR"`
 	ResourceCacheMax int    `help:"how many fetched resource versions --workspace-root keeps for later builds, least recently used evicted first (default 50)" name:"resource-cache-max"`
+	StoreMaxBytes    int64  `help:"how many bytes of cached trees --workspace-root keeps, least recently used evicted first (default 8 GiB)"                   name:"store-max-bytes"`
 }
 
 // workspace is the Settings a provider is built from, with root standing in for an unset --workspace-root (empty keeps the temp directory).
 func (e ExecFlags) workspace(root string) *workspace.Settings {
-	return &workspace.Settings{Root: cmp.Or(e.WorkspaceRoot, root), ResourceCacheMaxEntries: e.ResourceCacheMax}
+	return &workspace.Settings{Root: cmp.Or(e.WorkspaceRoot, root), ResourceCacheMaxEntries: e.ResourceCacheMax, StoreMaxBytes: e.StoreMaxBytes}
 }
 
 // DeliverFlags is --deliver, apart from ExecFlags because only the local commands take it: a daemon receives deliveries at POST /p/<pipeline>/hooks/<resource>.

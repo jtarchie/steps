@@ -159,6 +159,54 @@ func TestStoreIndexIsSharedAcrossPipelines(t *testing.T) {
 	}
 }
 
+// TestStoreEvictsTheLeastRecentlyUsedTreePastItsByteBound: --store-max-bytes bounds the store as the worker cache is bounded, oldest use first; the step whose tree went runs again, and the build is green.
+func TestStoreEvictsTheLeastRecentlyUsedTreePastItsByteBound(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ran, seen := filepath.Join(dir, "ran.log"), filepath.Join(dir, "seen.log")
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: a
+  plan:
+  - task: make-a
+    outputs: [out]
+    run: |
+      echo a >> %[1]s
+      head -c 60 /dev/zero | tr '\0' a > out/file
+  - task: read
+    volatile: true
+    inputs: [out]
+    run: wc -c < out/file >> %[2]s
+- name: b
+  plan:
+  - task: make-b
+    outputs: [out]
+    run: |
+      echo b >> %[1]s
+      head -c 60 /dev/zero | tr '\0' b > out/file
+`, ran, seen))
+	root := wsRoot(path)
+	bound := []string{"--workspace-root", root, "--store-max-bytes", "100"}
+
+	mustRun(t, append([]string{"run", path, "--job", "a"}, bound...)...)
+	mustRun(t, append([]string{"run", path, "--job", "b"}, bound...)...)
+
+	if got := storeTrees(t, root); len(got) != 1 {
+		t.Fatalf("store holds %d trees %v of 60 bytes each under a 100 byte bound, want 1", len(got), got)
+	}
+
+	mustRun(t, append([]string{"run", path, "--job", "a", "--force"}, bound...)...)
+
+	if got := readFileString(t, ran); got != "a\nb\na\n" {
+		t.Errorf("steps that ran = %q, want make-a run again: its tree was evicted", got)
+	}
+
+	if got := strings.Fields(readFileString(t, seen)); len(got) != 2 || got[1] != "60" {
+		t.Errorf("the reader saw %v, want the 60 bytes make-a wrote, both times", got)
+	}
+}
+
 // evictLocalCache drops this machine's store, the index in the state database surviving: the shape of a second machine handed that database.
 func evictLocalCache(root string) error {
 	return os.RemoveAll(filepath.Join(root, "store")) //nolint:wrapcheck // a test helper

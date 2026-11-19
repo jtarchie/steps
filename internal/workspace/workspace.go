@@ -192,6 +192,10 @@ func NewProvider(ws *Settings, keep bool) (Provider, error) {
 		ws = &Settings{}
 	}
 
+	if ws.StoreMaxBytes < 0 {
+		return nil, fmt.Errorf("--store-max-bytes %d must not be negative", ws.StoreMaxBytes)
+	}
+
 	if ws.ResourceCacheMaxEntries < 0 {
 		return nil, fmt.Errorf("--resource-cache-max %d must not be negative", ws.ResourceCacheMaxEntries)
 	}
@@ -205,6 +209,16 @@ type Settings struct {
 	Root string
 	// ResourceCacheMaxEntries bounds the resource cache by count; 0 takes DefaultResourceCacheMaxEntries. The cache itself is always on under a durable Root, as Concourse's resource caches are: a fetched version is reused by type, source, params and version.
 	ResourceCacheMaxEntries int
+	// StoreMaxBytes bounds the store's trees by file bytes; 0 takes DefaultStoreMaxBytes.
+	StoreMaxBytes int64
+}
+
+func (s *Settings) storeMaxBytes() int64 {
+	if s.StoreMaxBytes <= 0 {
+		return DefaultStoreMaxBytes
+	}
+
+	return s.StoreMaxBytes
 }
 
 // DefaultResourceCacheMaxEntries bounds the resource cache when the operator does not say how big: big enough that a handful of resources never evicts what it still wants, small enough that an abandoned pipeline's entries are bounded.
