@@ -46,7 +46,7 @@ func ctxT() context.Context { return context.Background() }
 func TestNilConfigDefaultsToCopyIsolation(t *testing.T) {
 	t.Parallel()
 
-	p, err := NewProvider(nil, false)
+	p, err := newTestProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider(nil): %v", err)
 	}
@@ -525,7 +525,7 @@ func TestIsolatingProviderSweepsStaleBuilds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	provider, err := NewProvider(&Settings{Root: root}, false)
+	provider, err := newTestProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,7 +564,7 @@ func TestIsolatingProviderKeepSkipsTheSweep(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	provider, err := NewProvider(&Settings{Root: root}, true)
+	provider, err := newTestProvider(&Settings{Root: root}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +594,7 @@ func TestProbeChecksTheRootWithoutSweepingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	provider, err := NewProvider(&Settings{Root: root}, false)
+	provider, err := newTestProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,7 +644,7 @@ func TestIsolatingProviderBuildDirsDoNotCollideAcrossInvocations(t *testing.T) {
 
 		// keep: true so the first invocation's directory is still there when
 		// the second one runs — exactly the situation a crash leaves behind.
-		provider, err := NewProvider(cfg, true)
+		provider, err := newTestProvider(cfg, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -674,7 +674,7 @@ func TestIsolatingProviderBuildDirsDoNotCollideAcrossInvocations(t *testing.T) {
 func openOwnedBuild(t *testing.T) (Provider, string, string, BuildWorkspace) {
 	t.Helper()
 
-	p, err := NewProvider(nil, false)
+	p, err := newTestProvider(nil, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}

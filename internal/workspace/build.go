@@ -152,8 +152,7 @@ func (b *isolatingBuild) FetchResource(ctx context.Context, name, cacheKey strin
 		return dir, fetch(dir)
 	}
 
-	path, ok := b.cache.entries.path(cacheKey)
-	if ok && b.fetchHeld(ctx, path, name) {
+	if b.fetchHeld(ctx, cacheKey, name) {
 		return dir, nil
 	}
 
@@ -166,8 +165,8 @@ func (b *isolatingBuild) FetchResource(ctx context.Context, name, cacheKey strin
 			return err
 		}
 
-		if remote, held := b.remoteArtifact(name); held && docker && ok {
-			b.cache.storeHeld(ctx, path, remote)
+		if remote, held := b.remoteArtifact(name); held && docker {
+			b.cache.storeHeld(ctx, cacheKey, remote)
 
 			return errFiledHeld
 		}

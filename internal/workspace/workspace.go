@@ -42,10 +42,10 @@ type Provider interface {
 	Resuming(dir string) Provider
 	// Spare keeps dirs out of the stale-build sweep, the trees of runs a restart resumes. Called before Validate, which sweeps.
 	Spare(dirs []string)
-	// AttachArtifactStore wires the two halves of the artifact store into the
-	// step cache, reporting whether anything was attached — false with no
-	// durable --workspace-root, where there is no local cache to mirror.
-	AttachArtifactStore(blobs BlobStore, index StepIndex) bool
+	// AttachCacheIndex turns the step and resource caches on over index, reporting false with no durable --workspace-root, where nothing outlives the run to be indexed.
+	AttachCacheIndex(index CacheIndex) bool
+	// AttachArtifactStore mirrors the step cache's trees to blobs; false without a step cache.
+	AttachArtifactStore(blobs BlobStore) bool
 	Close() error
 }
 

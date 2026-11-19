@@ -4,13 +4,7 @@ package workspace
 // store, so bytes evicted locally — or never on this machine — can be
 // materialized back instead of re-earned by running the step.
 //
-// Both halves arrive as interfaces this package declares, because neither
-// implementation may be imported from here: the blobs are internal/blobstore
-// (an AWS SDK), the index is internal/store (SQLite), and workspace's depguard
-// allow-list names neither. main wires them in through AttachArtifactStore.
-// Everything here is best-effort in both directions — a mirror that cannot be
-// read costs a re-run, one that cannot be written costs the next machine a
-// re-run, and neither may fail the build that is otherwise working.
+// The index is the cache index (index.go): an entry names its trees by digest, and a tree this machine's store lacks is asked of the mirror by that digest. Best-effort both ways: a mirror that cannot be read or written costs a re-run, never a build.
 
 import (
 	"context"
@@ -34,56 +28,30 @@ type BlobStore interface {
 	GetTree(ctx context.Context, digest, dir string) error
 }
 
-// StepIndex is the durable action-key-to-output-digest mapping:
-// internal/store's shape. The index is truth and stays on the orchestrator;
-// the blob store holds bytes and nothing else.
-type StepIndex interface {
-	StepBlobs(ctx context.Context, actionKey string) (map[string]string, error)
-	RecordStepBlobs(ctx context.Context, actionKey string, outputs map[string]string) error
-}
-
-func (p *isolatingProvider) AttachArtifactStore(blobs BlobStore, index StepIndex) bool {
+func (p *isolatingProvider) AttachArtifactStore(blobs BlobStore) bool {
 	if p.stepCache == nil {
 		return false
 	}
 
 	p.stepCache.blobs = blobs
-	p.stepCache.index = index
 
 	return true
 }
 
-// rehydrate files an entry's missing outputs in the store from the blob store, naming each in records, and reports whether every one landed. A false is an ordinary miss: the step runs, and its store refills both halves.
-func (c *stepCache) rehydrate(ctx context.Context, key string, missing []string, records map[string]heldRecord) bool {
-	if c.blobs == nil || c.index == nil {
-		return false
-	}
-
-	digests, err := c.index.StepBlobs(ctx, key)
-	if err != nil {
-		slog.WarnContext(ctx, "workspace.blob_index_lookup_failed", "key", key, "error", err)
-
-		return false
-	}
-
-	if len(digests) == 0 {
+// rehydrate files each missing output's tree in the store from the blob store, by the digest its entry names, and reports whether every one landed. A false is an ordinary miss: the step runs.
+func (c *stepCache) rehydrate(ctx context.Context, missing []string, records map[string]heldRecord) bool {
+	if c.blobs == nil {
 		return false
 	}
 
 	for _, out := range missing {
-		digest, ok := digests[out]
-		if !ok || digest == "" {
+		record, ok := records[out]
+		if !ok || record.Holder != "" || !c.fetchOutput(ctx, out, record.Digest) {
 			return false
 		}
-
-		if !c.fetchOutput(ctx, out, digest) {
-			return false
-		}
-
-		records[out] = heldRecord{Digest: digest}
 	}
 
-	slog.DebugContext(ctx, "workspace.blob_rehydrated", "key", key, "outputs", len(missing))
+	slog.DebugContext(ctx, "workspace.blob_rehydrated", "outputs", len(missing))
 
 	return true
 }
@@ -125,13 +93,11 @@ func (c *stepCache) fetchOutput(ctx context.Context, out, digest string) bool {
 	return err == nil
 }
 
-// publish mirrors a just-filed entry's trees to the blob store and records their digests in the index — best-effort, and index-last: a row naming blobs that never landed would promise a rehydration that must fail.
-func (c *stepCache) publish(ctx context.Context, key string, records map[string]heldRecord) {
-	if c.blobs == nil || c.index == nil {
+// publish mirrors a just-filed entry's trees to the blob store. The entry is already indexed, so a tree that never lands costs another machine a miss, never a wrong tree.
+func (c *stepCache) publish(ctx context.Context, records map[string]heldRecord) {
+	if c.blobs == nil {
 		return
 	}
-
-	outputs := make(map[string]string, len(records))
 
 	for out, record := range records {
 		dir, err := c.store.path(record.Digest)
@@ -144,13 +110,6 @@ func (c *stepCache) publish(ctx context.Context, key string, records map[string]
 
 			return
 		}
-
-		outputs[out] = record.Digest
-	}
-
-	err := c.index.RecordStepBlobs(ctx, key, outputs)
-	if err != nil {
-		slog.WarnContext(ctx, "workspace.blob_index_record_failed", "key", key, "error", err)
 	}
 }
 

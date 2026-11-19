@@ -104,7 +104,7 @@ func TestStepCacheInterruptedStoreIsAMiss(t *testing.T) {
 	}
 
 	failing.Store(false)
-	assertNoStagingLeft(t, filepath.Join(root, stepCacheDirName))
+	assertNoStagingLeft(t, filepath.Join(root, storeDirName))
 
 	second := seededBuild(t, provider, "notes")
 
@@ -118,7 +118,7 @@ func TestStepCacheInterruptedStoreIsAMiss(t *testing.T) {
 func resourceFetcher(t *testing.T, root string) (Provider, func() string, *int) {
 	t.Helper()
 
-	provider, err := NewProvider(&Settings{Root: root, ResourceCacheMaxEntries: 10}, false)
+	provider, err := newTestProvider(&Settings{Root: root, ResourceCacheMaxEntries: 10}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestResourceCacheInterruptedStoreIsAMiss(t *testing.T) {
 	fetchOnce()
 	failing.Store(false)
 
-	assertNoStagingLeft(t, filepath.Join(root, cacheDirName))
+	assertNoStagingLeft(t, filepath.Join(root, storeDirName))
 
 	dir := fetchOnce()
 

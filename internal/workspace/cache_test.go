@@ -14,7 +14,7 @@ import (
 func cachingBuild(t *testing.T, root string, maxEntries int) BuildWorkspace {
 	t.Helper()
 
-	provider, err := NewProvider(&Settings{Root: root, ResourceCacheMaxEntries: maxEntries}, false)
+	provider, err := newTestProvider(&Settings{Root: root, ResourceCacheMaxEntries: maxEntries}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,28 +167,6 @@ func TestResourceCacheEmptyKeyIsNotCached(t *testing.T) {
 	}
 }
 
-// TestResourceCacheRejectsATraversingKey guards the one input that could let a
-// cache entry escape its directory.
-func TestResourceCacheRejectsATraversingKey(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	cache, err := newResourceCache(copyBackend{}, nil, root, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, key := range []string{"", "..", "../escape", "a/b", `a\b`} {
-		if _, ok := cache.entries.path(key); ok {
-			t.Errorf("entry path(%q) was accepted, want it refused", key)
-		}
-	}
-
-	if _, ok := cache.entries.path("abc123"); !ok {
-		t.Error("entry path rejected an ordinary hex key")
-	}
-}
-
 // TestResourceCacheEvictsLeastRecentlyUsed keeps an unbounded cache from
 // filling the disk on a long-lived watch host.
 func TestResourceCacheEvictsLeastRecentlyUsed(t *testing.T) {
@@ -208,18 +186,17 @@ func TestResourceCacheEvictsLeastRecentlyUsed(t *testing.T) {
 		}
 	}
 
-	entries, err := os.ReadDir(filepath.Join(root, cacheDirName))
-	if err != nil {
-		t.Fatal(err)
+	kept := 0
+
+	for _, key := range []string{"key-1", "key-2", "key-3"} {
+		trees, _ := indexFor(root).CacheEntry(context.Background(), kindResource, key)
+		if len(trees) > 0 {
+			kept++
+		}
 	}
 
-	if len(entries) > 2 {
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			names = append(names, e.Name())
-		}
-
-		t.Errorf("cache holds %v, want at most 2 entries", names)
+	if kept > 2 {
+		t.Errorf("the index holds %d entries, want at most 2", kept)
 	}
 }
 
@@ -241,15 +218,10 @@ func TestSweepStaleBuildsSpareTheCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entry := filepath.Join(root, cacheDirName, "key-abc")
-
-	_, err = os.Stat(entry)
-	if err != nil {
-		t.Fatalf("expected a cache entry at %s: %v", entry, err)
-	}
+	entry := onlyStoreTree(t, root)
 
 	// A fresh provider over the same root sweeps on Validate.
-	provider, err := NewProvider(&Settings{Root: root}, false)
+	provider, err := newTestProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +257,7 @@ func TestResourceCacheIsOnUnderADurableRootOnly(t *testing.T) {
 			fetches := 0
 
 			for range 2 {
-				provider, err := NewProvider(settings, false)
+				provider, err := newTestProvider(settings, false)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -335,7 +307,7 @@ func TestResourceCacheRefusesASymlinkedEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entry := filepath.Join(root, cacheDirName, "key-abc")
+	entry := onlyStoreTree(t, root)
 
 	err = os.RemoveAll(entry)
 	if err != nil {
@@ -402,10 +374,20 @@ func TestResourceCacheRefusesToStoreASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entry := filepath.Join(root, cacheDirName, "key-abc")
-
-	_, statErr := os.Stat(entry)
-	if statErr == nil {
+	trees, _ := indexFor(root).CacheEntry(context.Background(), kindResource, "key-abc")
+	if len(trees) > 0 {
 		t.Error("a symlinked fetch result was stored in the cache")
 	}
+}
+
+// onlyStoreTree is the one tree root's store holds.
+func onlyStoreTree(t *testing.T, root string) string {
+	t.Helper()
+
+	trees := storeTreesIn(t, &treeStore{dir: filepath.Join(root, storeDirName)})
+	if len(trees) != 1 {
+		t.Fatalf("store holds %v, want one tree", trees)
+	}
+
+	return filepath.Join(root, storeDirName, trees[0])
 }

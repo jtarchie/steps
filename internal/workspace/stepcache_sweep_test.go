@@ -38,16 +38,12 @@ func TestDiscardStagedRemovesOnlyWhatWasNotCommitted(t *testing.T) {
 
 	root := t.TempDir()
 
-	cache, err := newStepCache(copyBackend{}, nil, root, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	cache := &stepCache{backend: copyBackend{}}
 	leftover := stagingPath(filepath.Join(root, "out"))
 	committed := filepath.Join(root, "done")
 
 	for _, dir := range []string{leftover, committed} {
-		err = os.MkdirAll(dir, 0o750)
+		err := os.MkdirAll(dir, 0o750)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -55,7 +51,7 @@ func TestDiscardStagedRemovesOnlyWhatWasNotCommitted(t *testing.T) {
 
 	cache.discardStaged([]stagedOutput{{tmp: leftover, dst: filepath.Join(root, "out")}, {tmp: "", dst: committed}})
 
-	_, err = os.Stat(leftover)
+	_, err := os.Stat(leftover)
 	if err == nil {
 		t.Error("an uncommitted staged output was left behind")
 	}

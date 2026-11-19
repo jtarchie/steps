@@ -13,7 +13,7 @@ import (
 func stepCacheProvider(t *testing.T, root string) Provider {
 	t.Helper()
 
-	provider, err := NewProvider(&Settings{Root: root}, false)
+	provider, err := newTestProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,6 @@ func TestStepCacheRestoreLeavesArtifactsIntactWhenItFails(t *testing.T) {
 
 	// Point the second output at a symlinked tree so restoring it must fail after the first one has already been staged.
 	build := bw.(*isolatingBuild)
-	entry, _ := build.stepCache.entries.path(res.Key)
 	bogus := strings.Repeat("f", 64)
 
 	err = os.Symlink(t.TempDir(), filepath.Join(build.stepCache.store.dir, bogus))
@@ -240,14 +239,14 @@ func TestStepCacheRestoreLeavesArtifactsIntactWhenItFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	records, err := readHeld(entry)
+	records, err := build.stepCache.index.CacheEntry(context.Background(), kindStep, res.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	records["coverage"] = heldRecord{Digest: bogus}
+	records["coverage"] = CachedTree{Digest: bogus}
 
-	err = writeHeld(entry, records)
+	_, err = build.stepCache.index.RecordCacheEntry(context.Background(), kindStep, res.Key, records, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +305,7 @@ func TestStepCacheNeverHitsWithoutOutputs(t *testing.T) {
 func TestStepCacheNeedsADurableRoot(t *testing.T) {
 	t.Parallel()
 
-	provider, err := NewProvider(&Settings{}, false)
+	provider, err := newTestProvider(&Settings{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -57,6 +57,28 @@ CREATE UNIQUE INDEX idx_trigger_queue_pending_pin
 )`,
 	`ALTER TABLE approvals ADD COLUMN notified_at TIMESTAMPTZ;
 ALTER TABLE questions ADD COLUMN notified_at TIMESTAMPTZ`,
+	`CREATE TABLE cache_entries (
+    kind    TEXT NOT NULL CHECK (kind IN ('step', 'resource')),
+    key     TEXT NOT NULL,
+    used_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (kind, key)
+);
+CREATE TABLE cache_entry_trees (
+    kind      TEXT NOT NULL,
+    key       TEXT NOT NULL,
+    name      TEXT NOT NULL,
+    tree_name TEXT NOT NULL DEFAULT '',
+    digest    TEXT NOT NULL,
+    holder    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (kind, key, name),
+    FOREIGN KEY (kind, key) REFERENCES cache_entries(kind, key) ON DELETE CASCADE
+);
+CREATE INDEX idx_cache_entries_used ON cache_entries(kind, used_at);
+INSERT INTO cache_entries (kind, key, used_at)
+    SELECT 'step', action_key, now() FROM step_blobs GROUP BY action_key;
+INSERT INTO cache_entry_trees (kind, key, name, digest)
+    SELECT DISTINCT ON (action_key, output) 'step', action_key, output, digest FROM step_blobs ORDER BY action_key, output, seq DESC;
+DROP TABLE step_blobs`,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

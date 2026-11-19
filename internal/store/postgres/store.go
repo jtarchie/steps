@@ -40,6 +40,7 @@ const (
 	classSchema   = 7301
 	classPipeline = 7302
 	classContent  = 7303
+	classCache    = 7304
 )
 
 // lockHolderIdleLimit is idle_in_transaction_session_timeout for a

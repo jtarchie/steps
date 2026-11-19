@@ -17,7 +17,7 @@ import (
 // storeDirName is the store's directory under a durable root; the stale-build sweep leaves it alone because it is not a buildDirPrefix name.
 const storeDirName = "store"
 
-// defaultStoreGrace is how long a freshly filed tree is safe from the sweep: a tree is filed a moment before the pointer naming it, and another steps process sharing the root cannot see that moment.
+// defaultStoreGrace is how long a tree filed or used is safe from release: another steps process sharing the root may be between filing it and indexing it, which this one cannot see.
 const defaultStoreGrace = 10 * time.Minute
 
 var errStoreTreeGone = errors.New("the store no longer has this tree")
@@ -26,8 +26,6 @@ type treeStore struct {
 	backend treeBackend
 	dir     string
 	grace   time.Duration
-	// pointers are the cache directories whose entries name trees here; a tree none of them names is garbage.
-	pointers []string
 }
 
 func newTreeStore(backend treeBackend, root string) (*treeStore, error) {
@@ -153,64 +151,26 @@ func (s *treeStore) touch(path string) {
 	}
 }
 
-// collect sweeps every tree no cache entry points at.
-func (s *treeStore) collect() {
-	referenced := map[string]bool{}
-
-	for _, dir := range s.pointers {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			// A pointer this cannot read could name any tree, so nothing is swept.
-			slog.Warn("workspace.store_sweep_skipped", "dir", dir, "error", err)
-
-			return
-		}
-
-		for _, entry := range entries {
-			records, readErr := readHeld(filepath.Join(dir, entry.Name()))
-			if readErr != nil {
-				continue
-			}
-
-			for _, record := range records {
-				if record.Holder == "" {
-					referenced[record.Digest] = true
-				}
-			}
-		}
-	}
-
-	s.sweep(referenced)
-}
-
-// sweep removes every tree no pointer names, and staging leftovers, once they are older than the grace a tree has between being filed and being pointed at.
-func (s *treeStore) sweep(referenced map[string]bool) {
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		slog.Debug("workspace.store_sweep_skipped", "dir", s.dir, "error", err)
-
-		return
-	}
-
+// release removes the trees an index stopped naming, sparing one touched within the grace: another state database sharing this root may have just filed or used the same bytes.
+func (s *treeStore) release(digests []string) {
 	cutoff := time.Now().Add(-s.grace)
 
-	for _, entry := range entries {
-		if referenced[entry.Name()] {
+	for _, digest := range digests {
+		path, err := s.path(digest)
+		if err != nil {
 			continue
 		}
 
-		info, infoErr := entry.Info()
-		if infoErr != nil || info.ModTime().After(cutoff) {
+		info, err := os.Stat(path)
+		if err != nil || info.ModTime().After(cutoff) {
 			continue
 		}
-
-		path := filepath.Join(s.dir, entry.Name())
 
 		slog.Info("workspace.store_evict", "tree", path)
 
-		removeErr := s.backend.remove(path)
-		if removeErr != nil {
-			slog.Warn("workspace.store_evict_failed", "tree", path, "error", removeErr)
+		err = s.backend.remove(path)
+		if err != nil {
+			slog.Warn("workspace.store_evict_failed", "tree", path, "error", err)
 		}
 	}
 }

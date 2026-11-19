@@ -110,7 +110,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 42
+const schemaVersion = 43
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -272,29 +272,26 @@ CREATE TABLE IF NOT EXISTS job_runs (
     PRIMARY KEY (pipeline_id, job_name, root_hash)
 );
 
--- The artifact-store index: which content digests a step's outputs had, keyed
--- by the same action key the on-disk step cache files them under. This is the
--- half of #80's split that stays home — S3 holds bytes by digest and NOTHING
--- else, so the mapping from "this work over these input bytes" to "these
--- output digests" has to live where truth lives. It is what lets a machine
--- whose local cache bytes are gone (evicted, or a different machine given
--- this state file) materialize a step's outputs from the store instead of
--- re-running the step.
---
--- action_key is a workspace-computed hash, not a merkle node hash, and names
--- no table — there is nothing to reference. Pipeline-scoped like every cache
--- table (see nodes), and bounded like one too: by COUNT of entries, newest
--- kept, mirroring the on-disk step cache's own bound — never by age, per this
--- schema's standing rule about caches. Rows for an entry are replaced
--- wholesale on record, and losing part of an entry to eviction only costs a
--- re-run: a lookup missing any declared output reads as a miss.
-CREATE TABLE IF NOT EXISTS step_blobs (
-    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
-    action_key  TEXT NOT NULL,
-    output      TEXT NOT NULL,
-    digest      TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, action_key, output)
+-- The cache index (#259): for each step-cache entry (keyed by its action key) and resource-cache entry (keyed by type, source, params and version), which tree each name points at, and who holds it: an empty holder is this machine's store under --workspace-root, otherwise a docker. MACHINE-WIDE, not pipeline-scoped, and deliberately: Concourse's resource_caches carry no pipeline or team (atc/db resource_cache_factory.go keys one by resource config, version and params), because the key already hashes everything that determines the bytes; and the store's sweep spares only trees some entry names, so an index split by pipeline would let one pipeline's sweep delete another's trees. Bounded by count per kind, least recently used first, never by age. Also the --artifact-store mirror's index: a tree this machine's store lacks is asked of the mirror by the same digest.
+CREATE TABLE IF NOT EXISTS cache_entries (
+    kind    TEXT NOT NULL CHECK (kind IN ('step', 'resource')),
+    key     TEXT NOT NULL,
+    used_at TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
 );
+
+CREATE TABLE IF NOT EXISTS cache_entry_trees (
+    kind      TEXT NOT NULL,
+    key       TEXT NOT NULL,
+    name      TEXT NOT NULL,
+    tree_name TEXT NOT NULL DEFAULT '',
+    digest    TEXT NOT NULL,
+    holder    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (kind, key, name),
+    FOREIGN KEY (kind, key) REFERENCES cache_entries(kind, key) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_cache_entries_used ON cache_entries(kind, used_at);
 
 -- The configuration (type and source) each resource's version history belongs to, as a hash. Concourse keys versions to a resource_config_scope and points the resource at a new one when its type or source changes (steps#280); this is that pointer, and a hash that differs on the next load empties the resource's history rather than letting a version from the old source answer for the new one.
 CREATE TABLE IF NOT EXISTS resource_configs (

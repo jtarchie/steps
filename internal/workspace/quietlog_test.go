@@ -148,19 +148,18 @@ func TestSweepAndARefusedSpaceLogNoFailure(t *testing.T) {
 func TestResourceCacheLogsNoFailureWhenItWorks(t *testing.T) {
 	logs := captureSlog(t)
 	bw := cachingBuild(t, t.TempDir(), 1)
-
-	write := func(dir string) error {
-		return os.WriteFile(filepath.Join(dir, "V"), []byte("x"), 0o600)
-	}
+	bw.(*isolatingBuild).cache.store.grace = 0
 
 	for _, key := range []string{"key-1", "key-2", "key-2"} {
-		_, err := bw.FetchResource(context.Background(), "repo", key, write)
+		_, err := bw.FetchResource(context.Background(), "repo", key, func(dir string) error {
+			return os.WriteFile(filepath.Join(dir, "V"), []byte(key), 0o600)
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	if !logs.has("workspace.cache_evict") {
+	if !logs.has("workspace.store_evict") {
 		t.Fatal("nothing was evicted; the scenario does not reach the eviction path")
 	}
 
@@ -176,7 +175,7 @@ func TestStepCacheMirrorLogsNoFailureWhenItWorks(t *testing.T) {
 
 	runAndStore(t, mirroredBuild(t, root, blobs, index), req)
 
-	err := os.RemoveAll(filepath.Join(root, stepCacheDirName))
+	err := evictLocal(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,14 +191,10 @@ func TestDiscardStagedLogsNoFailureWhenItWorks(t *testing.T) {
 	logs := captureSlog(t)
 	root := t.TempDir()
 
-	cache, err := newStepCache(copyBackend{}, nil, root, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	cache := &stepCache{backend: copyBackend{}}
 	leftover := stagingPath(filepath.Join(root, "out"))
 
-	err = os.MkdirAll(leftover, 0o750)
+	err := os.MkdirAll(leftover, 0o750)
 	if err != nil {
 		t.Fatal(err)
 	}

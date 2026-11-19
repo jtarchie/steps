@@ -22,7 +22,7 @@ func TestTheSweepSparesATreeARestartResumes(t *testing.T) {
 		}
 	}
 
-	provider, err := NewProvider(&Settings{Root: root}, false)
+	provider, err := newTestProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestResumingContinuesOneRunAndLeavesTheProviderAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	provider, err := NewProvider(&Settings{Root: root}, false)
+	provider, err := newTestProvider(&Settings{Root: root}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

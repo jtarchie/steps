@@ -5,7 +5,6 @@ package e2e
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -386,7 +385,7 @@ func TestAStepCacheEntryDockerEvictedIsAMiss(t *testing.T) {
 
 	mustRun(t, "run", path, "--force", "--workspace-root", wsRoot(path))
 
-	evictHeld(t, wsRoot(path))
+	evictHeld(t, path)
 
 	mustRun(t, "run", path, "--force", "--workspace-root", wsRoot(path))
 
@@ -399,38 +398,50 @@ func TestAStepCacheEntryDockerEvictedIsAMiss(t *testing.T) {
 	}
 }
 
-// evictHeld removes the digest alias of every tree a step cache entry under root names, which is what the worker's own eviction does.
-func evictHeld(t *testing.T, root string) {
+// evictHeld removes the digest alias of every tree a step cache entry of the pipeline at path names, which is what the worker's own eviction does.
+func evictHeld(t *testing.T, path string) {
 	t.Helper()
 
-	records, err := filepath.Glob(filepath.Join(root, "steps-cache", "*", ".held.json"))
-	if err != nil || len(records) == 0 {
-		t.Fatalf("no step cache entry names a held tree (%v), so there is nothing to evict", err)
+	rows, err := openStateDB(t, path).QueryContext(t.Context(), `SELECT digest FROM cache_entry_trees WHERE kind = 'step' AND holder <> ''`)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	for _, record := range records {
-		var held map[string]struct {
-			Digest string `json:"digest"`
-		}
+	defer func() { _ = rows.Close() }()
 
-		err = json.Unmarshal([]byte(readFileString(t, record)), &held)
+	var digests []string
+
+	for rows.Next() {
+		var digest string
+
+		err = rows.Scan(&digest)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		for _, tree := range held {
-			//nolint:gosec // a filter built from a digest this test read back
-			out, err := exec.CommandContext(t.Context(), "docker", "volume", "ls", "-q", "--filter", "label=steps.cache=alias", "--filter", "label=steps.digest="+tree.Digest).Output()
-			if err != nil {
-				t.Fatalf("listing aliases: %v", err)
-			}
+		digests = append(digests, digest)
+	}
 
-			for _, alias := range strings.Fields(string(out)) {
-				//nolint:gosec // a volume name docker just listed
-				err = exec.CommandContext(t.Context(), "docker", "volume", "rm", alias).Run()
-				if err != nil {
-					t.Fatalf("removing %s: %v", alias, err)
-				}
+	if rows.Err() != nil {
+		t.Fatal(rows.Err())
+	}
+
+	if len(digests) == 0 {
+		t.Fatal("no step cache entry names a held tree, so there is nothing to evict")
+	}
+
+	for _, digest := range digests {
+		//nolint:gosec // a filter built from a digest this test read back
+		out, err := exec.CommandContext(t.Context(), "docker", "volume", "ls", "-q", "--filter", "label=steps.cache=alias", "--filter", "label=steps.digest="+digest).Output()
+		if err != nil {
+			t.Fatalf("listing aliases: %v", err)
+		}
+
+		for _, alias := range strings.Fields(string(out)) {
+			//nolint:gosec // a volume name docker just listed
+			err = exec.CommandContext(t.Context(), "docker", "volume", "rm", alias).Run()
+			if err != nil {
+				t.Fatalf("removing %s: %v", alias, err)
 			}
 		}
 	}

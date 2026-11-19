@@ -3,8 +3,6 @@ package workspace
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -42,8 +40,8 @@ func heldBuild(t *testing.T, provider Provider) *isolatingBuild {
 	return build
 }
 
-// storeHeldOutput runs a step whose output docker holds through the cache's miss and store, and returns the entry's directory.
-func storeHeldOutput(t *testing.T, provider Provider, req StepCacheRequest, holds Holds) string {
+// storeHeldOutput runs a step whose output docker holds through the cache's miss and store, and returns the entry's trees.
+func storeHeldOutput(t *testing.T, provider Provider, req StepCacheRequest, holds Holds) map[string]CachedTree {
 	t.Helper()
 
 	ctx := WithHolds(t.Context(), holds)
@@ -65,9 +63,12 @@ func storeHeldOutput(t *testing.T, provider Provider, req StepCacheRequest, hold
 		t.Fatalf("store: %v", err)
 	}
 
-	entry, _ := first.stepCache.entries.path(miss.Key)
+	trees, err := first.stepCache.index.CacheEntry(ctx, kindStep, miss.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	return entry
+	return trees
 }
 
 // TestTheStepCacheFilesAHeldOutputWhereDockerHoldsIt: the entry records the holder and digest, never the bytes, and a hit claims the tree and hands it on held.
@@ -84,11 +85,10 @@ func TestTheStepCacheFilesAHeldOutputWhereDockerHoldsIt(t *testing.T) {
 	provider := stepCacheProvider(t, t.TempDir())
 	req := StepCacheRequest{ContentHash: "work", Outputs: []string{"out"}, OutputMapping: map[string]string{"out": "built"}}
 
-	entry := storeHeldOutput(t, provider, req, holds)
+	trees := storeHeldOutput(t, provider, req, holds)
 
-	_, err := os.Stat(filepath.Join(entry, "out"))
-	if err == nil {
-		t.Error("the entry holds the output's bytes; it should name where docker holds them")
+	if trees["out"].Holder == "" {
+		t.Errorf("the entry names %+v; it should name where docker holds the output, not this machine's store", trees["out"])
 	}
 
 	second := heldBuild(t, provider)

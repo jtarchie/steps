@@ -53,12 +53,6 @@ func scanString(rows *sql.Rows) (string, error) {
 	return value, rows.Scan(&value) //nolint:wrapcheck // collect wraps with the thing being read
 }
 
-func scanPair(rows *sql.Rows) ([2]string, error) {
-	var pair [2]string
-
-	return pair, rows.Scan(&pair[0], &pair[1]) //nolint:wrapcheck // collect wraps with the thing being read
-}
-
 // collect runs a query and decodes every row through scan.
 //
 // It exists because the alternative — query, defer Close, loop, scan, check

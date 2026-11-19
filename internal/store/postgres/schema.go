@@ -36,7 +36,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 28
+const schemaVersion = 29
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -144,14 +144,26 @@ CREATE TABLE IF NOT EXISTS job_runs (
     PRIMARY KEY (pipeline_id, job_name, root_hash)
 );
 
-CREATE TABLE IF NOT EXISTS step_blobs (
-    seq         BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE,
-    pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
-    action_key  TEXT NOT NULL,
-    output      TEXT NOT NULL,
-    digest      TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, action_key, output)
+-- The cache index, machine-wide on purpose; see the sqlite schema.
+CREATE TABLE IF NOT EXISTS cache_entries (
+    kind    TEXT NOT NULL CHECK (kind IN ('step', 'resource')),
+    key     TEXT NOT NULL,
+    used_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (kind, key)
 );
+
+CREATE TABLE IF NOT EXISTS cache_entry_trees (
+    kind      TEXT NOT NULL,
+    key       TEXT NOT NULL,
+    name      TEXT NOT NULL,
+    tree_name TEXT NOT NULL DEFAULT '',
+    digest    TEXT NOT NULL,
+    holder    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (kind, key, name),
+    FOREIGN KEY (kind, key) REFERENCES cache_entries(kind, key) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_cache_entries_used ON cache_entries(kind, used_at);
 
 CREATE TABLE IF NOT EXISTS resource_configs (
     pipeline_id   BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,

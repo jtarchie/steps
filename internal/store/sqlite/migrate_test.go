@@ -75,6 +75,27 @@ func assertBackedUp(t *testing.T, backup string) {
 	}
 }
 
+// TestTheUpgradeFoldsStepBlobsIntoTheCacheIndex: the --artifact-store index an older steps kept per pipeline becomes the machine-wide cache index, so a mirrored output is still found by its action key.
+func TestTheUpgradeFoldsStepBlobsIntoTheCacheIndex(t *testing.T) {
+	t.Parallel()
+
+	old := filepath.Join(t.TempDir(), "old.db")
+	execFile(t, old, v010+`
+INSERT INTO step_blobs (pipeline_id, action_key, output, digest) VALUES (1, 'key-1', 'out', 'aaa'), (1, 'key-1', 'logs', 'bbb');`)
+
+	st, err := OpenStore(old, "app")
+	if err != nil {
+		t.Fatalf("opening the v0.1.0 database: %v", err)
+	}
+
+	defer func() { _ = st.Close() }()
+
+	got, err := st.CacheEntry(context.Background(), store.CacheStep, "key-1")
+	if err != nil || len(got) != 2 || got["out"].Digest != "aaa" || got["logs"].Digest != "bbb" {
+		t.Errorf("key-1 after the upgrade = %v (%v), want both mirrored outputs", got, err)
+	}
+}
+
 // TestEveryVersionHasItsMigration: schemaVersion and the step list are two facts about one thing.
 func TestEveryVersionHasItsMigration(t *testing.T) {
 	t.Parallel()

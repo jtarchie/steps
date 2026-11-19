@@ -72,6 +72,28 @@ CREATE UNIQUE INDEX idx_trigger_queue_pending_pin
 );`),
 	execStep(`ALTER TABLE approvals ADD COLUMN notified_at TEXT;
 ALTER TABLE questions ADD COLUMN notified_at TEXT;`),
+	execStep(`CREATE TABLE cache_entries (
+    kind    TEXT NOT NULL CHECK (kind IN ('step', 'resource')),
+    key     TEXT NOT NULL,
+    used_at TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
+);
+CREATE TABLE cache_entry_trees (
+    kind      TEXT NOT NULL,
+    key       TEXT NOT NULL,
+    name      TEXT NOT NULL,
+    tree_name TEXT NOT NULL DEFAULT '',
+    digest    TEXT NOT NULL,
+    holder    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (kind, key, name),
+    FOREIGN KEY (kind, key) REFERENCES cache_entries(kind, key) ON DELETE CASCADE
+);
+CREATE INDEX idx_cache_entries_used ON cache_entries(kind, used_at);
+INSERT INTO cache_entries (kind, key, used_at)
+    SELECT 'step', action_key, strftime('%Y-%m-%dT%H:%M:%S.000000000Z', 'now') FROM step_blobs GROUP BY action_key;
+INSERT OR IGNORE INTO cache_entry_trees (kind, key, name, digest)
+    SELECT 'step', action_key, output, digest FROM step_blobs ORDER BY rowid DESC;
+DROP TABLE step_blobs;`),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {

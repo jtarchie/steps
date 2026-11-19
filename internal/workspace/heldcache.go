@@ -4,16 +4,10 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 )
-
-// heldEntryFile names, inside an entry directory, the trees docker holds for it. A leading dot is no artifact name, so it cannot be a step cache entry's output; a fetched tree whose top level is exactly this file reads as an unclaimable pointer, which costs a fetch, never a wrong tree.
-const heldEntryFile = ".held.json"
 
 // Holds is how this package reaches a tree docker holds, injected because it does not know how a worker is dialled.
 type Holds struct {
@@ -37,42 +31,6 @@ func holdsFrom(ctx context.Context) (Holds, bool) {
 }
 
 var errNoHolds = errors.New("a held tree in the cache, and no way to reach docker")
-
-// writeHeld records held (output name → where docker holds it) in an entry directory being built.
-func writeHeld(dir string, held map[string]heldRecord) error {
-	data, err := json.Marshal(held)
-	if err != nil {
-		return fmt.Errorf("recording held outputs: %w", err)
-	}
-
-	err = os.WriteFile(filepath.Join(dir, heldEntryFile), data, 0o600)
-	if err != nil {
-		return fmt.Errorf("recording held outputs: %w", err)
-	}
-
-	return nil
-}
-
-// readHeld is an entry's held trees: none for an entry with no record, which is a tree filed whole.
-func readHeld(dir string) (map[string]heldRecord, error) {
-	data, err := os.ReadFile(filepath.Join(dir, heldEntryFile)) //nolint:gosec // a path under the cache this package owns
-	if errors.Is(err, os.ErrNotExist) {
-		return map[string]heldRecord{}, nil
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("reading held outputs: %w", err)
-	}
-
-	var held map[string]heldRecord
-
-	err = json.Unmarshal(data, &held)
-	if err != nil {
-		return nil, fmt.Errorf("reading held outputs: %w", err)
-	}
-
-	return held, nil
-}
 
 // claimAll asks every holder to keep its tree for this run; any one gone makes the entry a miss, since a partial restore would hand a step an input nobody has.
 func claimAll(ctx context.Context, held map[string]heldRecord) error {
@@ -100,11 +58,11 @@ func claimAll(ctx context.Context, held map[string]heldRecord) error {
 	return nil
 }
 
-// claimEntry is an entry's held trees, each claimed for this run; an error is a miss.
-func claimEntry(ctx context.Context, path string) (map[string]heldRecord, error) {
-	held, err := readHeld(path)
+// claimEntry is an entry's trees, each docker holds claimed for this run; an error is a miss.
+func claimEntry(ctx context.Context, index CacheIndex, kind, key string) (map[string]heldRecord, error) {
+	held, err := index.CacheEntry(ctx, kind, key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading the cache index: %w", err)
 	}
 
 	return held, claimAll(ctx, held)
@@ -170,8 +128,8 @@ func (b *isolatingBuild) heldOutputs(ctx context.Context, req StepCacheRequest) 
 }
 
 // fetchHeld answers a resource cache entry docker holds: the tree is claimed and held under name, nothing fetched. False is a miss of any kind, logged when it was a failure.
-func (b *isolatingBuild) fetchHeld(ctx context.Context, path, name string) bool {
-	held, err := readHeld(path)
+func (b *isolatingBuild) fetchHeld(ctx context.Context, key, name string) bool {
+	held, err := b.cache.index.CacheEntry(ctx, kindResource, key)
 	if err == nil && held[resourceHeldKey].Holder == "" {
 		return false
 	}
@@ -185,14 +143,14 @@ func (b *isolatingBuild) fetchHeld(ctx context.Context, path, name string) bool 
 	}
 
 	if err != nil {
-		slog.WarnContext(ctx, "workspace.cache_held_miss", "entry", path, "error", err)
+		slog.WarnContext(ctx, "workspace.cache_held_miss", "key", key, "error", err)
 
 		return false
 	}
 
-	b.cache.entries.touch(path)
+	b.cache.touch(ctx, key)
 
-	slog.DebugContext(ctx, "workspace.cache_hit", "entry", path, "held", true)
+	slog.DebugContext(ctx, "workspace.cache_hit", "key", key, "held", true)
 
 	return true
 }
@@ -203,6 +161,6 @@ const resourceHeldKey = "tree"
 var errFiledHeld = errors.New("filed as held")
 
 // storeHeld files a resource entry as a pointer at the tree docker holds for name.
-func (c *resourceCache) storeHeld(ctx context.Context, path string, remote RemoteArtifact) {
-	c.point(ctx, path, heldRecord{Name: remote.Name, Digest: remote.Digest, Holder: remote.Holder})
+func (c *resourceCache) storeHeld(ctx context.Context, key string, remote RemoteArtifact) {
+	c.point(ctx, key, heldRecord{Name: remote.Name, Digest: remote.Digest, Holder: remote.Holder})
 }

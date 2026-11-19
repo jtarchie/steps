@@ -34,44 +34,22 @@ type isolatingProvider struct {
 	// token distinguishes this invocation's build directories from any other's
 	// — see newInvocationToken.
 	token string
-	// cache is the cross-build resource cache, nil when the pipeline did not
-	// has a durable root (see enableCache).
-	cache *resourceCache
-	// stepCache reuses task/agent outputs across runs, nil when the root is
-	// this provider's own temp directory — see enableCache.
+	// cache and stepCache are nil until AttachCacheIndex, which needs a durable root.
+	cache     *resourceCache
 	stepCache *stepCache
 	// taskCaches holds caches: directories between runs; under a provider-owned temp root they last only the run.
 	taskCaches *entryStore
-	// store holds the bytes both caches point at, nil with them.
-	store  *treeStore
-	builds atomic.Int64
+	// store holds the bytes both caches point at, nil under a provider-owned temp root.
+	store            *treeStore
+	resourceCacheMax int
+	builds           atomic.Int64
 }
 
-// enableCache attaches the caches a durable root keeps across builds.
-//
-// The step cache and the resource cache ask for no opt-in: a durable root is
-// the whole requirement, and naming one (or running steps web, which always
-// has one) is already the deliberate act. The resource cache follows
-// Concourse, whose resource caches are always on: a version's in: does not run
-// again for a fetch with the same type, source, params and version, which the
-// resource contract makes safe. Under a provider-owned temp root neither is
-// kept, since the root is removed at Close. Per-step control is volatile:, on
-// the step whose result must never be reused.
+// legacyCacheDirs held whole trees per entry before the store and the index replaced them; nothing reads them, and they can be gigabytes.
+var legacyCacheDirs = []string{"cache", "steps-cache"} //nolint:gochecknoglobals // a fact about old roots
+
+// enableCache prepares what a durable root keeps across builds. The step and resource caches ask for no opt-in beyond the root (Concourse's resource caches are always on); volatile: is the per-step control.
 func (p *isolatingProvider) enableCache(ws *Settings) error {
-	if !p.ownsRoot {
-		store, err := newTreeStore(p.backend, p.root)
-		if err != nil {
-			return err
-		}
-
-		cache, err := newResourceCache(p.backend, store, p.root, ws.resourceCacheMax())
-		if err != nil {
-			return err
-		}
-
-		p.store, p.cache = store, cache
-	}
-
 	taskCaches, err := newEntryStore(p.root, taskCacheDirName, defaultTaskCacheMaxEntries, p.backend.remove)
 	if err != nil {
 		return err
@@ -83,15 +61,17 @@ func (p *isolatingProvider) enableCache(ws *Settings) error {
 		return nil
 	}
 
-	stepCache, err := newStepCache(p.backend, p.store, p.root, defaultStepCacheMaxEntries)
-	if err != nil {
-		return err
+	for _, dir := range legacyCacheDirs {
+		removeErr := p.backend.remove(filepath.Join(p.root, dir))
+		if removeErr != nil {
+			slog.Warn("workspace.legacy_cache_remove_failed", "dir", dir, "error", removeErr)
+		}
 	}
 
-	p.stepCache = stepCache
-	p.store.pointers = []string{p.cache.entries.dir, stepCache.entries.dir}
+	p.store, err = newTreeStore(p.backend, p.root)
+	p.resourceCacheMax = ws.resourceCacheMax()
 
-	return nil
+	return err
 }
 
 func (p *isolatingProvider) Validate() error {

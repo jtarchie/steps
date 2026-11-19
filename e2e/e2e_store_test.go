@@ -73,7 +73,13 @@ func TestStoreKeepsOneTreeForIdenticalOutputs(t *testing.T) {
 		t.Fatalf("store holds %d trees %v after two steps wrote the same bytes, want 1", len(got), got)
 	}
 
-	assertNoCachedBytes(t, filepath.Join(root, "steps-cache"))
+	var entries, digests int
+
+	err := openStateDB(t, path).QueryRowContext(t.Context(),
+		`SELECT COUNT(DISTINCT key), COUNT(DISTINCT digest) FROM cache_entry_trees WHERE kind = 'step' AND holder = ''`).Scan(&entries, &digests)
+	if err != nil || entries != 2 || digests != 1 {
+		t.Fatalf("the index holds %d entries naming %d trees (%v), want both steps naming one tree", entries, digests, err)
+	}
 
 	// --force bypasses only the chain skip, so make is answered by the step cache, from the store.
 	mustRun(t, "run", path, "--job", "a", "--workspace-root", root, "--force")
@@ -124,34 +130,36 @@ func TestStoreTamperedTreeIsAMiss(t *testing.T) {
 	}
 }
 
-// evictLocalCache drops this machine's cached step outputs, pointers and trees both: the shape of a second machine handed the state database.
-func evictLocalCache(root string) error {
-	for _, dir := range []string{"steps-cache", "store"} {
-		err := os.RemoveAll(filepath.Join(root, dir))
-		if err != nil {
-			return err //nolint:wrapcheck // a test helper
-		}
+// TestStoreIndexIsSharedAcrossPipelines: the index lives in the state database and is machine-wide, as Concourse's resource caches are, so a second pipeline doing the same work over the same bytes is answered by the first one's tree.
+func TestStoreIndexIsSharedAcrossPipelines(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ran, seen := filepath.Join(dir, "ran.log"), filepath.Join(dir, "seen.log")
+	state := filepath.Join(dir, "shared.db")
+	root := filepath.Join(dir, "ws")
+
+	first := storePipeline(t, t.TempDir(), ran, seen)
+	second := storePipeline(t, t.TempDir(), ran, seen)
+
+	mustRun(t, "run", first, "--job", "a", "--workspace-root", root, "--db", state)
+	mustRun(t, "run", second, "--job", "a", "--workspace-root", root, "--db", state)
+
+	if got := readFileString(t, ran); got != "a\n" {
+		t.Errorf("steps that ran = %q, want the second pipeline's make answered by the first's", got)
 	}
 
-	return nil
+	if got := readFileString(t, seen); got != "same bytes\nsame bytes\n" {
+		t.Errorf("the readers saw %q, want the stored bytes both times", got)
+	}
+
+	_, err := os.Stat(filepath.Join(root, "steps-cache"))
+	if err == nil {
+		t.Error("steps-cache/ exists: the index belongs in the state database")
+	}
 }
 
-// assertNoCachedBytes fails when a cache directory holds anything but pointers: the bytes belong in the store, once.
-func assertNoCachedBytes(t *testing.T, dir string) {
-	t.Helper()
-
-	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if !entry.IsDir() && entry.Name() != ".held.json" {
-			t.Errorf("%s holds bytes (%s), want only pointers into the store", dir, path)
-		}
-
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walking %s: %v", dir, err)
-	}
+// evictLocalCache drops this machine's store, the index in the state database surviving: the shape of a second machine handed that database.
+func evictLocalCache(root string) error {
+	return os.RemoveAll(filepath.Join(root, "store")) //nolint:wrapcheck // a test helper
 }

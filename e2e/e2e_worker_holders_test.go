@@ -260,9 +260,10 @@ func TestEndToEndAnInputNamesAlikeLocalOrHeld(t *testing.T) {
 
 	dir := t.TempDir()
 	root := filepath.Join(dir, "cache")
+	state := filepath.Join(dir, "state.db")
 	ran := filepath.Join(dir, "consume-ran.log")
 
-	// A pipeline per placement, each in its own directory, so neither shares the other's state database and no chain skip stands in for the step cache.
+	// A pipeline per placement, each its own pipeline in one state database, so no chain skip stands in for the step cache, whose index the database holds for both.
 	pipeline := func(seedTags string) string {
 		return writePipeline(t, t.TempDir(), `
 jobs:
@@ -286,10 +287,10 @@ jobs:
 `)
 	}
 
-	mustRun(t, pipeline(""), "--workspace-root", root)
+	mustRun(t, pipeline(""), "--workspace-root", root, "--db", state)
 
 	_, _, workers := twoWorkers(t)
-	mustRun(t, append([]string{pipeline("\n    tags: [a]"), "--workspace-root", root}, workers...)...)
+	mustRun(t, append([]string{pipeline("\n    tags: [a]"), "--workspace-root", root, "--db", state}, workers...)...)
 
 	if got := strings.Count(readFileString(t, ran), "ran"); got != 1 {
 		t.Errorf("consume ran %d times, want 1: the held input's digest differs from the local one, so the step cache missed", got)

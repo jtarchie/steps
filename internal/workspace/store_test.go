@@ -49,7 +49,7 @@ func TestStoreSweepsATreeNoEntryNamesAnyMore(t *testing.T) {
 
 	provider := stepCacheProvider(t, t.TempDir())
 	p := provider.(*isolatingProvider)
-	p.stepCache.entries.maxEntries = 1
+	p.stepCache.maxEntries = 1
 	p.store.grace = 0
 
 	fileStep(t, provider, "first", "first bytes")
@@ -84,11 +84,34 @@ func TestStoreSweepSparesATreeYoungerThanItsGrace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Filed, not yet pointed at: what another process sharing the root sees between the two.
-	p.store.collect()
+	// Released by this index while another process sharing the root has just filed the same bytes, which this one cannot see.
+	p.store.release([]string{digest})
 
 	if !p.store.has(digest) {
-		t.Fatal("a tree filed a moment ago was swept before anything could point at it")
+		t.Fatal("a tree filed a moment ago was removed before anything could index it")
+	}
+}
+
+// TestADurableRootDropsTheOldWholeTreeCaches: nothing reads cache/ and steps-cache/ since the store and the index replaced them, and they can hold gigabytes.
+func TestADurableRootDropsTheOldWholeTreeCaches(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	for _, dir := range []string{"cache", "steps-cache"} {
+		err := os.MkdirAll(filepath.Join(root, dir, "entry"), 0o750)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stepCacheProvider(t, root)
+
+	for _, dir := range []string{"cache", "steps-cache"} {
+		_, err := os.Stat(filepath.Join(root, dir))
+		if err == nil {
+			t.Errorf("%s/ survived; nothing reads it any more", dir)
+		}
 	}
 }
 

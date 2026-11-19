@@ -63,45 +63,33 @@ func (m *memBlobs) plant(t *testing.T, digest, content string) {
 	}
 }
 
-// memIndex is a StepIndex over a map.
-type memIndex struct {
-	entries map[string]map[string]string
-}
-
-func newMemIndex() *memIndex { return &memIndex{entries: map[string]map[string]string{}} }
-
-func (m *memIndex) StepBlobs(_ context.Context, actionKey string) (map[string]string, error) {
-	return m.entries[actionKey], nil
-}
-
-func (m *memIndex) RecordStepBlobs(_ context.Context, actionKey string, outputs map[string]string) error {
-	m.entries[actionKey] = outputs
-
-	return nil
-}
-
-// mirroredBuild is the harness: a durable-root provider with the mirror
-// attached, holding one seeded input.
-func mirroredBuild(t *testing.T, root string, blobs BlobStore, index StepIndex) BuildWorkspace {
+// mirroredBuild is the harness: a durable-root provider over index with the mirror attached, holding one seeded input. index outlives the providers, as the state database outlives a machine's store.
+func mirroredBuild(t *testing.T, root string, blobs BlobStore, index *memIndex) BuildWorkspace {
 	t.Helper()
 
-	provider := stepCacheProvider(t, root)
+	provider, err := NewProvider(&Settings{Root: root}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if !provider.AttachArtifactStore(blobs, index) {
-		t.Fatal("AttachArtifactStore reported nothing attached against a durable root")
+	t.Cleanup(func() { _ = provider.Close() })
+
+	if !provider.AttachCacheIndex(index) || !provider.AttachArtifactStore(blobs) {
+		t.Fatal("attaching reported nothing attached against a durable root")
 	}
 
 	return seededBuild(t, provider, "input-content")
 }
 
-// evictLocal drops this machine's half, pointers and trees: the shape of a pruned cache or another machine.
+// evictLocal drops this machine's trees, the index surviving: the shape of a swept store or another machine handed the state database.
 func evictLocal(root string) error {
-	err := os.RemoveAll(filepath.Join(root, stepCacheDirName))
-	if err != nil {
-		return err //nolint:wrapcheck // a test helper
-	}
-
 	return os.RemoveAll(filepath.Join(root, storeDirName)) //nolint:wrapcheck // a test helper
+}
+
+func indexedDigest(index *memIndex, key, out string) string {
+	trees, _ := index.CacheEntry(context.Background(), kindStep, key)
+
+	return trees[out].Digest
 }
 
 // mirrorRequest is the request shape the round-trip tests share.
@@ -137,7 +125,7 @@ func TestStepCacheMirrorsAndRematerializes(t *testing.T) {
 
 	key := runAndStore(t, mirroredBuild(t, root, blobs, index), req)
 
-	digest := index.entries[key]["out"]
+	digest := indexedDigest(index, key, "out")
 	if digest == "" {
 		t.Fatal("the store recorded no digest for the output")
 	}
@@ -179,7 +167,7 @@ func TestStepCacheRefusesABlobThatDigestsWrong(t *testing.T) {
 	key := runAndStore(t, mirroredBuild(t, root, blobs, index), req)
 
 	// Corrupt the mirror: same digest, different bytes.
-	digest := index.entries[key]["out"]
+	digest := indexedDigest(index, key, "out")
 
 	err := os.RemoveAll(blobs.dir(digest))
 	if err != nil {
@@ -220,7 +208,7 @@ func TestStepCacheMissesWhenTheMirrorHasNoAnswer(t *testing.T) {
 	key := runAndStore(t, mirroredBuild(t, root, blobs, index), req)
 
 	// The blob expired — a lifecycle rule, say — while the index row lives.
-	err := os.RemoveAll(blobs.dir(index.entries[key]["out"]))
+	err := os.RemoveAll(blobs.dir(indexedDigest(index, key, "out")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +237,7 @@ func TestAttachArtifactStoreNeedsADurableRoot(t *testing.T) {
 
 	t.Cleanup(func() { _ = provider.Close() })
 
-	if provider.AttachArtifactStore(newMemBlobs(t), newMemIndex()) {
+	if provider.AttachArtifactStore(newMemBlobs(t)) {
 		t.Fatal("an artifact store attached to a provider with nowhere to mirror from")
 	}
 }

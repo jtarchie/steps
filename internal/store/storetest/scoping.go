@@ -532,26 +532,3 @@ func (s suite) TestResumeRunIsScopedToItsPipeline(t *testing.T) {
 		t.Fatalf("resuming another pipeline's run returned %v, want store.ErrNoSuchRun", err)
 	}
 }
-
-// TestStepBlobsAreScopedToThePipeline holds the standing rule: two pipelines
-// sharing a state file never see each other's rows, even for an identical
-// action key.
-func (s suite) TestStepBlobsAreScopedToThePipeline(t *testing.T) {
-	t.Parallel()
-
-	ctx := ctxFor(t)
-
-	first := s.open(t, "app")
-
-	second := s.open(t, "infra")
-
-	err := first.RecordStepBlobs(ctx, "same-key", map[string]string{"out": "app-digest"})
-	if err != nil {
-		t.Fatalf("RecordStepBlobs: %v", err)
-	}
-
-	got, err := second.StepBlobs(ctx, "same-key")
-	if err != nil || len(got) != 0 {
-		t.Fatalf("the other pipeline sees %v, %v; want nothing", got, err)
-	}
-}

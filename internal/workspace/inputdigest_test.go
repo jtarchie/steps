@@ -18,7 +18,7 @@ type inputDigests interface {
 func memoBuild(t *testing.T) BuildWorkspace {
 	t.Helper()
 
-	provider, err := NewProvider(&Settings{}, false)
+	provider, err := newTestProvider(&Settings{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
