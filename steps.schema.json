@@ -846,7 +846,7 @@
         },
         "project": {
           "type": "string",
-          "description": "A project name or id."
+          "description": "A project of the team, by name (without regard to case) or id; one the team does not have fails the check by name."
         },
         "assignee": {
           "type": "string",
