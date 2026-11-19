@@ -14,7 +14,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -235,6 +237,28 @@ const (
 
 type pendingSignIns = ttlMap[pendingSignIn]
 
+// signInsPerSource is how many trips one address may have in flight: a person needs one or two, and past it a source displaces only its own, so a flood from one address cannot push out anybody else's sign-in.
+const signInsPerSource = 32
+
+// signInSource is the address a start came from, as the connection says and never as a header the caller writes; an IPv6 address counts by its /64, which one host is routinely handed whole.
+func signInSource(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+
+	if addr.Is6() && !addr.Is4In6() {
+		return netip.PrefixFrom(addr, 64).Masked().String()
+	}
+
+	return addr.Unmap().String()
+}
+
 // handleSignInStart sends the browser to the provider.
 func (s *Server) handleSignInStart(c *echo.Context) error {
 	provider, found := s.providerNamed(c.Param("provider"))
@@ -256,7 +280,7 @@ func (s *Server) handleSignInStart(c *echo.Context) error {
 		return echoError(err)
 	}
 
-	s.pending.put(state, pendingSignIn{provider: provider.Name, session: session.Marshal(), next: safeNext(c.QueryParam("next"))}, time.Now().Add(signInWait))
+	s.pending.putFrom(signInSource(c.Request()), signInsPerSource, state, pendingSignIn{provider: provider.Name, session: session.Marshal(), next: safeNext(c.QueryParam("next"))}, time.Now().Add(signInWait))
 
 	// The state is also this browser's: a callback link somebody else started and sent here would otherwise sign this browser in as them.
 	setCookie(c, signInCookie, state, "/auth/", int(signInWait.Seconds()))

@@ -174,6 +174,18 @@ func (s *Server) identityOf(ctx context.Context, who actor.Actor) Identity {
 
 const roleKey = "steps.role"
 
+// roleFor is what who may do, narrowed by p's own rules on a pipeline's routes (p nil elsewhere): the one answer authorize and a live stream's recheck both give.
+func (s *Server) roleFor(ctx context.Context, who actor.Actor, p *Pipeline) (Role, Identity) {
+	id := s.identityOf(ctx, who)
+	role := s.roles.highest(id)
+
+	if p != nil {
+		role = p.narrow(role, id)
+	}
+
+	return role, id
+}
+
 // roleOf is what this request's person may do; everything on a server nobody signs in to.
 func (s *Server) roleOf(c *echo.Context) Role {
 	if role, ok := c.Get(roleKey).(Role); ok {
@@ -183,18 +195,45 @@ func (s *Server) roleOf(c *echo.Context) Role {
 	return RoleAdmin
 }
 
-// neededRole is what a route asks of the person calling it.
+// routeRoles is what each route outside activityRoutes asks beyond the default: GET and HEAD read, anything else operates. TestEveryMutatingRouteDeclaresItsRole holds every mutating route to one table or the other.
+var routeRoles = map[string]Role{
+	"GET /activity":          RoleAdmin,
+	"POST " + pauseAllPath:   RoleAdmin,
+	"POST " + unpauseAllPath: RoleAdmin,
+	"POST " + oneOffPath:     RoleAdmin,
+	// A person ending their own session, letting their own agent connect, or cutting it off again.
+	"POST " + logoutPath:    RoleViewer,
+	"POST " + authorizePath: RoleViewer,
+	"POST " + revokePath:    RoleViewer,
+	// Never asked: each carries its own credential — a password, an agent's token, a sender's signature — and skips authorize.
+	"POST " + loginPath:                 RoleViewer,
+	"POST " + registerPath:              RoleViewer,
+	"POST " + tokenPath:                 RoleViewer,
+	"POST " + exportPath:                RoleViewer,
+	"DELETE " + exportPath:              RoleViewer,
+	"POST " + readPath:                  RoleViewer,
+	"DELETE " + readPath:                RoleViewer,
+	"POST /p/:pipeline/hooks/:resource": RoleViewer,
+}
+
+// neededRole is what a route asks of the person calling it. A mutating route nobody declared asks for an operator, so one added without a thought fails closed.
 func neededRole(c *echo.Context) Role {
-	if route, recorded := activityRoutes[c.Request().Method+" "+c.Path()]; recorded {
+	method := c.Request().Method
+	key := method + " " + c.Path()
+
+	if route, recorded := activityRoutes[key]; recorded {
 		return route.role
 	}
 
-	switch c.Path() {
-	case "/activity", pauseAllPath, unpauseAllPath, oneOffPath:
-		return RoleAdmin
+	if role, declared := routeRoles[key]; declared {
+		return role
 	}
 
-	return RoleViewer
+	if method == http.MethodGet || method == http.MethodHead {
+		return RoleViewer
+	}
+
+	return RoleOperator
 }
 
 // authorize refuses a request its person's role does not cover, on the server, whatever the page drew: a hidden button is a courtesy and this is the check.
@@ -205,18 +244,18 @@ func (s *Server) authorize(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		who := actor.From(c.Request().Context())
-		id := s.identityOf(c.Request().Context(), who)
-		role := s.roles.highest(id)
+
+		var target *Pipeline
+		if name := c.Param("pipeline"); name != "" {
+			target = s.Lookup(name)
+		}
+
+		role, id := s.roleFor(c.Request().Context(), who, target)
 		c.Set(identityKey, id)
 
-		// A pipeline's own rules narrow what the daemon's allow, on that pipeline's routes; somebody it hides is told it does not exist, as they would be for a name nobody set.
-		if name := c.Param("pipeline"); name != "" {
-			if target := s.Lookup(name); target != nil {
-				role = target.narrow(role, id)
-				if role == 0 {
-					return s.notServed(c, name)
-				}
-			}
+		// Somebody a pipeline's own rules hide is told it does not exist, as they would be for a name nobody set.
+		if target != nil && role == 0 {
+			return s.notServed(c, c.Param("pipeline"))
 		}
 
 		c.Set(roleKey, role)

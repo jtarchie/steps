@@ -456,7 +456,11 @@ is a link.
   the name it had, marked `gone`, and the destroy is one of them. A rename
   keeps its history too, and answers to the new name.
 - **Only what happened is recorded.** A refused action — a read-only server,
-  a pipeline that would not load — leaves no line.
+  a pipeline that would not load — leaves no line, and neither does a
+  decision that changed nothing: a second operator approving what the first
+  already rejected, a double-clicked answer, or a form naming an approval or
+  question that no longer waits is settled on with the usual redirect, and
+  only the decision that took effect is in the log.
 - **Bounded by count**, `--activity-history` (default 10,000), the oldest
   dropped first, whichever pipeline they belong to. Names in it are personal
   data; that bound is how long they are kept.
@@ -1013,8 +1017,12 @@ body is capped at 1 MiB, except a `steps pipeline set` under `/api` (8 MiB)
 and a webhook delivery (bounded by the resource that reads it). An approval's
 reason and a question's answer are capped at 64 KiB each, from the browser and
 from `steps approvals`/`steps questions answer` alike. In-flight sign-ins,
-consents and authorization codes share one table of at most 1,000 entries; a
-flood of them evicts the oldest rather than growing without end. A live stream
+consents and authorization codes are each held to at most 1,000 entries; a
+flood of them evicts the oldest rather than growing without end. A sign-in
+start is also held to 32 in flight per address the connection came from (an
+IPv6 address counts by its /64), past which an address displaces only its own,
+so a flood from one place cannot push out anybody else's sign-in. Behind a
+proxy every visitor shares the proxy's address and that cap. A live stream
 is authorized when it opens and re-checked every 30 seconds, so a sign-out, a
 removed account or a narrowed `access:` rule stops it without waiting for the
 run to end.

@@ -100,6 +100,9 @@ type Question struct {
 // both report it as "somebody got there first" rather than as a failure.
 var ErrQuestionNotPending = errors.New("question is not pending")
 
+// ErrAnswerNotOffered is an answer the options fence refused: the answerer's to correct, so the web UI shows it as a 400 while any other failure is the daemon's.
+var ErrAnswerNotOffered = errors.New("not one of the offered options")
+
 // MemoKey identifies a question WITHIN one run: the same text offering the
 // same options is the same question, however many steps ask it.
 //
