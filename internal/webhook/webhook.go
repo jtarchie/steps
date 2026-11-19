@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -35,6 +36,29 @@ type Request struct {
 	Header http.Header
 	Query  url.Values
 	Body   []byte
+	// parsed is shared by every copy, so Verify, Accept and each provider field read one parse of the body; nil re-parses per read.
+	parsed *parsedBody
+}
+
+type parsedBody struct {
+	once    sync.Once
+	payload any
+}
+
+// NewRequest is a delivery whose body is parsed as JSON at most once, however many of Verify and Accept read it.
+func NewRequest(method string, header http.Header, query url.Values, body []byte) Request {
+	return Request{Method: method, Header: header, Query: query, Body: body, parsed: &parsedBody{}}
+}
+
+// payload is the body decoded as JSON, nil when it is not JSON; parsed lazily so Verify parses only for a scheme whose expressions read the body.
+func (r Request) payload() any {
+	if r.parsed == nil {
+		return decodeJSON(r.Body)
+	}
+
+	r.parsed.once.Do(func() { r.parsed.payload = decodeJSON(r.Body) })
+
+	return r.parsed.payload
 }
 
 // input is the delivery as an expression sees it.
@@ -46,7 +70,7 @@ func (r Request) input(provider, event string) Input {
 		Headers:  flatten(r.Header),
 		Query:    flatten(r.Query),
 		Body:     string(r.Body),
-		Payload:  decodeJSON(r.Body),
+		Payload:  r.payload(),
 	}
 }
 
@@ -173,6 +197,10 @@ func (r *Receiver) Accept(request Request) (Result, error) {
 	provider, ok := r.provider()
 	if !ok {
 		return Result{}, fmt.Errorf("webhook: unknown provider %q", r.Provider)
+	}
+
+	if request.parsed == nil {
+		request.parsed = &parsedBody{}
 	}
 
 	in := request.input(r.Provider, provider.Event(request))

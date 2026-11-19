@@ -187,6 +187,8 @@ jobs:
 
 `signed` and `timestamp` only **build strings**. The HMAC and the comparison happen in Go, the same code the built-in providers use, so an expression can never be the thing that decides a signature is valid. A `timestamp:` protects against replay only if `signed` includes it, as above, so a `timestamp:` without a `signed:` is refused at load (write `signed: 'body'` when the body carries the timestamp).
 
+A `hex` signature must be **lowercase**: the comparison is byte for byte, so a sender that sends `A1B2…` never verifies.
+
 ## Receiving deliveries
 
 The route keeps the daemon's rules for anything a machine rather than a browser sends:

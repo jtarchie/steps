@@ -33,7 +33,7 @@ type WebhookSignature struct {
 	Timestamp string `yaml:"timestamp,omitempty"`
 }
 
-// WebhookCustom is the provider whose scheme is the resource's own signature:.
+// WebhookCustom is the provider whose scheme is the resource's own signature:. It repeats webhook.Custom because depguard keeps config and webhook stdlib-only leaves, so neither may import the other.
 const WebhookCustom = "custom"
 
 // WebhookSource decodes this resource's source: strictly, so a misspelled key is a load error rather than a filter nobody applies.

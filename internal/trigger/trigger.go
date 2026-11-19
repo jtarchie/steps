@@ -29,17 +29,7 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// Resources returns the distinct resource names referenced by any get
-// step with trigger: true, anywhere in any job's plan, in first-seen order.
-// A get step's resource: alias is resolved to the underlying resource name
-// (see config.Step.GetResourceName), so two gets aliasing the same resource
-// poll it once and a version change affects every job that references it.
-//
-// Delegates to config.Config.PolledResourceNames, which carries the full
-// doc on why passed: counts alongside trigger: true — internal/pipeline
-// needs the same predicate (to know which resources NOT to touch when
-// recording a run's resolved version) and cannot import this package, since
-// this package already imports internal/pipeline.
+// Resources is every resource a poll checks; the predicate lives in config.Config.PolledResourceNames because internal/pipeline needs it and cannot import this package.
 func Resources(cfg *config.Config) []string {
 	return cfg.PolledResourceNames()
 }
@@ -433,7 +423,12 @@ type observedResource struct {
 	previousFound bool
 }
 
-// pollOnce checks every trigger resource once and enqueues (deduplicated)
+// pollOnce is pollResources over every trigger resource.
+func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, error) {
+	return pollResources(ctx, cfg, st, Resources(cfg))
+}
+
+// pollResources checks each named resource once and enqueues (deduplicated)
 // every job affected by a resource whose latest version changed since the
 // last recorded check. It returns the job names it enqueued, in sorted
 // order.
@@ -452,11 +447,6 @@ type observedResource struct {
 // first time ever seeds a baseline and is never itself considered dirty on
 // that first check — this keeps a fresh (or freshly lost) state db from
 // mass-triggering every job on daemon startup.
-func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, error) {
-	return pollResources(ctx, cfg, st, Resources(cfg))
-}
-
-// pollResources is pollOnce over the resources named.
 func pollResources(ctx context.Context, cfg *config.Config, st PollStore, names []string) ([]string, error) {
 	observed := map[string]observedResource{}
 

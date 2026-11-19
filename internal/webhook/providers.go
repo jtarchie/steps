@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -107,12 +106,7 @@ func header(name string) func(Request) string {
 // jsonField reads a string at a path in a JSON body, "" when the body is not JSON or the path is not a string.
 func jsonField(path ...string) func(Request) string {
 	return func(r Request) string {
-		var node any
-
-		err := json.Unmarshal(r.Body, &node)
-		if err != nil {
-			return ""
-		}
+		node := r.payload()
 
 		for _, key := range path {
 			object, _ := node.(map[string]any)
