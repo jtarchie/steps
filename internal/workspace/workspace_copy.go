@@ -96,6 +96,11 @@ func (copyBackend) remove(dir string) error {
 // copy-on-write and fall back to a plain recursive copy if the filesystem
 // doesn't support it.
 func copyTree(ctx context.Context, src, dst string) error {
+	err := cloneTree(src, dst)
+	if err == nil {
+		return nil
+	}
+
 	var lastErr error
 
 	for _, argv := range copyTreeCandidates(src, dst) {
