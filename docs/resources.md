@@ -454,6 +454,7 @@ A version is `{number, sha}`: the pull request and its head commit, so a push is
 | `base` | no | the branch it would merge into |
 | `draft` | no | `true` keeps only drafts, `false` only ready ones; both when unset |
 | `checkout` | no | `false` skips the tree and writes only the metadata files; `git` lays down a git repository instead of the tree ([below](#checkout-git-a-repository-to-run-git-in)); default `true` |
+| `include` | no | `[reviews]` also writes the pull request's reviews ([below](#include-reviews-what-reviewers-have-said)); default none |
 | `token_env` | no | the variable holding the token; default `GH_TOKEN` |
 | `endpoint` | no | the REST API base; default `https://api.github.com`, and `https://<host>/api/v3` for GitHub Enterprise Server; plain `http` is accepted only for a loopback host (`localhost`, `127.0.0.0/8`, `::1`), because the token would otherwise travel in cleartext |
 
@@ -466,8 +467,45 @@ A version is `{number, sha}`: the pull request and its head commit, so a push is
 | `pr.number`, `pr.sha` | the version |
 | `pr.mergebase` | the commit it branched from, for a step that wants to stage the change onto it |
 | `pr.url` | its page |
+| `pr.reviews.json` | with `include: [reviews]`: the submitted reviews, oldest first |
+| `pr.pending_review.json` | with `include: [reviews]`: the token user's own unsubmitted draft, and only when there is one |
 
 The diff and the merge base are computed against the version's commit rather than read from the pull request, whose own diff is always of its *current* head, so a pinned or replayed version sees the change as it was. A repository that has a file of one of those names at its root is refused by name rather than overwritten; set `checkout: false` and fetch the tree with a `git` resource there.
+
+#### `include: [reviews]`: what reviewers have said
+
+A pipeline that reviews a pull request more than once wants to know what it already said: how many reviews it has sent, and whether a draft of its own is already waiting. That lives on GitHub, beside the pull request, where a wiped state database cannot reset it. `include: [reviews]` writes it:
+
+```yaml github=pr-reviews
+resources:
+- name: pr
+  type: github-prs
+  source:
+    repo: acme/app
+    review_requested: "@me"
+    checkout: false
+    include: [reviews]
+
+jobs:
+- name: review
+  plan:
+  - get: pr
+    trigger: true
+  - task: read
+    inputs: [pr]
+    run: |
+      sent=$(grep -o '"state":"[A-Z]*"' pr/pr.reviews.json | tr '\n' ' ')
+      draft=none
+      test -f pr/pr.pending_review.json && draft=$(grep -o '"body":"[^"]*"' pr/pr.pending_review.json)
+      echo "sent: ${sent}draft: $draft"
+    assert:
+      stdout: 'sent: "state":"COMMENTED" "state":"APPROVED" draft: "body":"half written"'
+  assert:
+    execution: [pr, read]
+    outcome: succeeded
+```
+
+`pr.reviews.json` is every submitted review, as GitHub's objects, oldest first. `pr.pending_review.json` is the token user's own draft, kept apart from them: GitHub lists a draft to its author alone, and a step that hands `pr.reviews.json` to something public must never publish a review its author has not sent. Anybody else's draft is never listed. Both are read at the get, not at the commit, so they are as of the first fetch of the version: the resource cache keeps that fetch for it, and a review sent afterwards arrives with the next push. The listing stops at 1000 reviews.
 
 #### `checkout: git`: a repository to run git in
 

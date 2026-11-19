@@ -107,7 +107,14 @@ type GitHubPRsSource struct {
 	Draft *bool `yaml:"draft,omitempty"`
 	// Checkout is what the get lays beside the metadata files: the tree at the version's commit (true, the default), nothing (false), or a git repository at it (git).
 	Checkout GitHubCheckout `yaml:"checkout,omitempty"`
+	// Include opts a get into what has been said about the pull request, as
+	// of the get: reviews (the submitted ones, and apart from them the token
+	// user's own draft). Nothing unasked, since each is pages of requests.
+	Include []string `yaml:"include,omitempty"`
 }
+
+// Includes reports whether a get was asked to include what.
+func (s GitHubPRsSource) Includes(what string) bool { return slices.Contains(s.Include, what) }
 
 // Connection is where this resource talks to.
 func (s GitHubPRsSource) Connection() GitHubConnection {
@@ -424,6 +431,11 @@ func ParseGitHubPRsSource(raw map[string]any) (GitHubPRsSource, error) {
 
 	if source.Base != "" && strings.ContainsAny(source.Base, " \t\n\"") {
 		return source, fmt.Errorf("source.base: %q is not a branch name", source.Base)
+	}
+
+	err = oneOfEach("source.include", "something a pull request can include", source.Include, GitHubIncludeReviews)
+	if err != nil {
+		return source, err
 	}
 
 	return source, nil

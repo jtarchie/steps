@@ -29,6 +29,9 @@ const (
 	prSHAFile       = "pr.sha"
 	prMergeBaseFile = "pr.mergebase"
 	prURLFile       = "pr.url"
+	// With include: [reviews].
+	prReviewsFile       = "pr.reviews.json"
+	prPendingReviewFile = "pr.pending_review.json"
 )
 
 // githubStages is what one github-* type implements: a finder has a check

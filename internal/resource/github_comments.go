@@ -706,5 +706,5 @@ func fetchCommentedPR(ctx context.Context, client *githubClient, source config.G
 		return err
 	}
 
-	return fetchPullRequest(ctx, client, source.Repo, number, pull.Head.SHA, source.Checkout, destDir)
+	return fetchPullRequest(ctx, client, source.Repo, number, pull.Head.SHA, source.Checkout, nil, destDir)
 }

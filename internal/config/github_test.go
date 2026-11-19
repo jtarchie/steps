@@ -76,6 +76,8 @@ func TestGitHubLoadRules(t *testing.T) {
 		"reviewer with a space":     {extra: "\n    review_requested: 'a b'", want: "source.review_requested"},
 		"label with a quote":        {extra: "\n    labels: ['say \"hi\"']", want: "source.labels"},
 		"base with a space":         {extra: "\n    base: 'main is:closed'", want: "source.base"},
+		"include reviews":           {extra: "\n    include: [reviews]", plan: "\n  - get: pr", want: ""},
+		"include a comment's thing": {extra: "\n    include: [conversation]", want: `source.include: "conversation" is not something a pull request can include`},
 		"token as a value":          {extra: "\n    token_env: ghp_abc=123", want: "NAME of an environment variable"},
 		"endpoint not a url":        {extra: "\n    endpoint: api.github.com", want: "source.endpoint"},
 		"https endpoint any host":   {extra: "\n    endpoint: https://ghe.example.com/api/v3", want: ""},

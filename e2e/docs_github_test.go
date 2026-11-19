@@ -146,6 +146,16 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 		},
 		reviews: map[int][]fakeReview{42: {{ID: 1, User: "bob", State: "CHANGES_REQUESTED", Body: "Two blocking, see inline."}}},
 	},
+	"pr-reviews": {
+		prs: []fakePR{docPR()},
+		reviews: map[int][]fakeReview{42: {
+			{ID: 1, User: "bob", State: "COMMENTED", Body: "why retry here?"},
+			// Another user's draft: GitHub never lists it to the token's user, so neither file may carry it.
+			{ID: 2, User: "carol", State: "PENDING", Body: "carol's draft"},
+			{ID: 3, User: docGitHubLogin, State: "PENDING", Body: "half written"},
+			{ID: 4, User: "alice", State: "APPROVED", Body: ""},
+		}},
+	},
 	"label": {
 		prs:           []fakePR{func() fakePR { pr := docPR(); pr.Labels = []string{"ready-for-review", "factory:queued"}; return pr }()},
 		labeledIssues: map[int][]string{12: {"release"}},

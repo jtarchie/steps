@@ -695,6 +695,11 @@
         "checkout": {
           "oneOf": [{"type": "boolean"}, {"const": "git"}],
           "description": "What a get lays beside the metadata files: the tree at the version's commit (true, the default), nothing (false), or a git repository at that commit with origin/<base> fetched and history down to the merge base (git, which needs the git binary)."
+        },
+        "include": {
+          "type": "array",
+          "items": { "enum": ["reviews"] },
+          "description": "What a get also writes about the pull request, as of the get: reviews (pr.reviews.json, the submitted reviews oldest first, and pr.pending_review.json, the token user's own unsubmitted draft, only when there is one). None when unset."
         }
       }
     },

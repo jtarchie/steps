@@ -1096,9 +1096,12 @@ func (f *fakeGitHub) replyInThread(w http.ResponseWriter, r *http.Request, numbe
 	respondJSON(w, http.StatusCreated, map[string]any{"id": f.nextID, "in_reply_to_id": id, "html_url": f.html("pull", number)})
 }
 
-// listReviews pages oldest first, the one order GitHub lists reviews in.
+// listReviews pages oldest first, the one order GitHub lists reviews in,
+// and as GitHub does, lists a draft only to the user who wrote it.
 func (f *fakeGitHub) listReviews(w http.ResponseWriter, r *http.Request, number int) {
-	reviews := f.reviews[number]
+	reviews := slices.DeleteFunc(slices.Clone(f.reviews[number]), func(review fakeReview) bool {
+		return review.State == "PENDING" && review.User != f.login
+	})
 	perPage := max(atoi(r.URL.Query().Get("per_page")), 1)
 	start := min((max(atoi(r.URL.Query().Get("page")), 1)-1)*perPage, len(reviews))
 	end := min(start+perPage, len(reviews))

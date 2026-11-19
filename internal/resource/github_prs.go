@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -217,13 +218,82 @@ func githubPRsIn(ctx context.Context, raw, version map[string]any, destDir strin
 		return err
 	}
 
-	return fetchPullRequest(ctx, client, source.Repo, number, sha, source.Checkout, destDir)
+	var extra map[string][]byte
+
+	if source.Includes(config.GitHubIncludeReviews) {
+		extra, err = pullRequestReviews(ctx, client, source.Repo, number)
+		if err != nil {
+			return err
+		}
+	}
+
+	return fetchPullRequest(ctx, client, source.Repo, number, sha, source.Checkout, extra, destDir)
+}
+
+// pullRequestReviews is a pull request's reviews as the files a get writes:
+// the submitted ones, and the token user's own draft apart from them. Apart,
+// because a step that hands pr.reviews.json to anything public must never
+// publish a review its author has not sent, and a step deciding whether a
+// draft is already waiting needs to see that one. GitHub lists a draft to
+// its author alone, so the login check is belt and braces, and costs a
+// request only when a draft is listed at all.
+func pullRequestReviews(ctx context.Context, client *githubClient, repo, number string) (map[string][]byte, error) {
+	listing := "/repos/" + repo + "/pulls/" + url.PathEscape(number) + "/reviews"
+
+	listed, err := listAll(ctx, client, listing, url.Values{})
+	if err != nil {
+		return nil, err
+	}
+
+	sent, err := submitted(listed)
+	if err != nil {
+		return nil, fmt.Errorf("github: GET %s: %w", listing, err)
+	}
+
+	encoded, err := json.Marshal(sent)
+	if err != nil {
+		return nil, fmt.Errorf("github: reviews: %w", err)
+	}
+
+	files := map[string][]byte{prReviewsFile: encoded}
+
+	if len(sent) == len(listed) {
+		return files, nil
+	}
+
+	login, err := client.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, raw := range listed {
+		var review struct {
+			State string `json:"state"`
+			User  struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		}
+
+		err = json.Unmarshal(raw, &review)
+		if err != nil {
+			return nil, fmt.Errorf("github: GET %s: %w", listing, err)
+		}
+
+		if review.State == "PENDING" && strings.EqualFold(review.User.Login, login) {
+			files[prPendingReviewFile] = raw
+
+			break
+		}
+	}
+
+	return files, nil
 }
 
 // fetchPullRequest lays down one pull request at one commit: the tree first,
-// when asked for, then the metadata beside it — written so a repository file
-// of the same name is a loud collision rather than a silent overwrite.
-func fetchPullRequest(ctx context.Context, client *githubClient, repo, number, sha string, checkout config.GitHubCheckout, destDir string) error {
+// when asked for, then the metadata beside it, extra included — written so a
+// repository file of the same name is a loud collision rather than a silent
+// overwrite.
+func fetchPullRequest(ctx context.Context, client *githubClient, repo, number, sha string, checkout config.GitHubCheckout, extra map[string][]byte, destDir string) error {
 	if checkout == config.GitHubCheckoutTree {
 		err := fetchTree(ctx, client, repo, sha, destDir)
 		if err != nil {
@@ -290,14 +360,17 @@ func fetchPullRequest(ctx context.Context, client *githubClient, repo, number, s
 
 	reportFacts(ctx, []events.Fact{{Name: "url", Value: pull.HTMLURL}, {Name: "title", Value: pull.Title}, {Name: "author", Value: pull.User.Login}})
 
-	return writeGetFiles(destDir, map[string][]byte{
+	files := map[string][]byte{
 		prJSONFile:      pullJSON,
 		prDiffFile:      diff.body,
 		prNumberFile:    []byte(number),
 		prSHAFile:       []byte(sha),
 		prMergeBaseFile: []byte(comparison.MergeBase.SHA),
 		prURLFile:       []byte(pull.HTMLURL),
-	}, checkout)
+	}
+	maps.Copy(files, extra)
+
+	return writeGetFiles(destDir, files, checkout)
 }
 
 // escapeRef keeps a branch's slashes, which the compare route reads as part
