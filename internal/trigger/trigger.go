@@ -104,10 +104,21 @@ const requestBacklog = 16
 // Requests carries a person's "check this now" to a pipeline's running poller, which takes it between ticks. Through the loop rather than beside it because the loop is the pipeline's one checker: a requested check run alongside a scheduled one would race it over the same resource's recorded version and history.
 type Requests struct {
 	names chan string
+	set   chan struct{}
 }
 
 // NewRequests is a pipeline's empty backlog.
-func NewRequests() *Requests { return &Requests{names: make(chan string, requestBacklog)} }
+func NewRequests() *Requests {
+	return &Requests{names: make(chan string, requestBacklog), set: make(chan struct{}, 1)}
+}
+
+// Set tells the poller its configuration was replaced, so it adopts the new one now rather than at its next tick: a run started in between would otherwise refresh a moved resource from the old source's cursor (steps#280).
+func (r *Requests) Set() {
+	select {
+	case r.set <- struct{}{}:
+	default:
+	}
+}
 
 // Check asks for resource to be checked and reports false when the backlog is full — a request is a nudge, and those already waiting will do.
 func (r *Requests) Check(resource string) bool {
@@ -185,16 +196,23 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 // until ctx is canceled.
 func runPoller(ctx context.Context, current ConfigSource, st PollStore, interval time.Duration, requests *Requests) {
 	admitted := &admission{}
+	adopted := &adoption{}
 
-	admitted.poll(ctx, current(), st)
+	if cfg := current(); adopted.adopt(ctx, cfg, st) {
+		admitted.poll(ctx, cfg, st)
+	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	// A nil channel is never ready, so a loop nobody can ask is the plain ticker.
-	var asked <-chan string
+	var (
+		asked <-chan string
+		set   <-chan struct{}
+	)
+
 	if requests != nil {
-		asked = requests.names
+		asked, set = requests.names, requests.set
 	}
 
 	for {
@@ -203,11 +221,43 @@ func runPoller(ctx context.Context, current ConfigSource, st PollStore, interval
 			return
 		case <-ticker.C:
 			// Read per cycle, not captured: see Poll.
-			admitted.poll(ctx, current(), st)
+			cfg := current()
+			if adopted.adopt(ctx, cfg, st) {
+				admitted.poll(ctx, cfg, st)
+			}
 		case name := <-asked:
-			checkRequested(ctx, current(), st, name)
+			cfg := current()
+			if adopted.adopt(ctx, cfg, st) {
+				checkRequested(ctx, cfg, st, name)
+			}
+		case <-set:
+			adopted.adopt(ctx, current(), st)
 		}
 	}
+}
+
+// adoption files each configuration's resource types and sources once, from the poller's own goroutine: between polls, so no check still running under the configuration being replaced can write the old source's versions or cursor after the reset (steps#280).
+type adoption struct {
+	// filed is the configuration last adopted, compared by identity as admission's is.
+	filed *config.Config
+}
+
+// adopt reports whether cfg's history is ready to poll; a failure is retried at the next tick rather than polled through, which would hand a moved resource the old source's cursor.
+func (a *adoption) adopt(ctx context.Context, cfg *config.Config, st PollStore) bool {
+	if cfg == a.filed {
+		return true
+	}
+
+	err := pipeline.AdoptResourceConfigs(ctx, st, cfg)
+	if err != nil {
+		slog.ErrorContext(ctx, "trigger.adopt", "pipeline", cfg.Name, "error", err)
+
+		return false
+	}
+
+	a.filed = cfg
+
+	return true
 }
 
 // checkRequested is one resource's turn in a poll, taken because a person asked. Any resource, not only a trigger: true one — Concourse's check button checks whatever it is pressed on — and without admission's preflight, whose job is to stop a loop repeating a failure every tick: a person asked once, and a failure is recorded for them to read. A paused pipeline checks nothing, asked or not.

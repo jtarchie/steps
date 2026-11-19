@@ -64,6 +64,12 @@ CREATE UNIQUE INDEX idx_trigger_queue_pending_pin
 	execStep(`ALTER TABLE run_placements ADD COLUMN image_digest TEXT NOT NULL DEFAULT '';`),
 	execStep(`ALTER TABLE oauth_tokens ADD COLUMN grant_kind TEXT NOT NULL DEFAULT 'export' CHECK (grant_kind IN ('export', 'read'));`),
 	execStep(`ALTER TABLE resource_versions ADD COLUMN metadata TEXT NOT NULL DEFAULT '';`),
+	execStep(`CREATE TABLE resource_configs (
+    pipeline_id   INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    resource_name TEXT NOT NULL,
+    config_hash   TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, resource_name)
+);`),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {

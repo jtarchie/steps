@@ -49,6 +49,12 @@ CREATE UNIQUE INDEX idx_trigger_queue_pending_pin
 	`ALTER TABLE run_placements ADD COLUMN image_digest TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE oauth_tokens ADD COLUMN grant_kind TEXT NOT NULL DEFAULT 'export' CHECK (grant_kind IN ('export', 'read'))`,
 	`ALTER TABLE resource_versions ADD COLUMN metadata TEXT NOT NULL DEFAULT ''`,
+	`CREATE TABLE resource_configs (
+    pipeline_id   BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    resource_name TEXT NOT NULL,
+    config_hash   TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, resource_name)
+)`,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

@@ -1807,6 +1807,15 @@ Three things follow:
   record with it, so a `passed:` gate can no longer clear for it. That is
   correct — a version out of history cannot be built — but it means a limit
   set below what a slow downstream job needs will hold that job back.
+- **A changed `type:` or `source:` is a different resource.** History belongs
+  to a resource's type, its type's `image:`, and its `source:`, as it does in
+  Concourse. When `steps run` loads, or `steps pipeline set` sets, a pipeline
+  where any of them changed, that resource's history is forgotten — its versions,
+  its check cursor, which versions jobs passed, and how far `version: every`
+  got — so the first run after moving a resource checks the new source rather
+  than fetching a version that only ever existed at the old one. Changing it
+  back does not bring the old history back. A type's own commands, a
+  resource's `tags:` and its `check_timeout:` are not part of it.
 
 #### How much to remember
 

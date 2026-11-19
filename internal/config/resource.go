@@ -4,6 +4,9 @@ package config
 // referenced resource exists, and lookup by name.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -647,6 +650,30 @@ func (c *Config) ResourceIsPolled(resourceName string) bool {
 // upstream job via passed: — see PolledResourceNames for why passed: counts.
 func stepIsPolled(step Step) bool {
 	return step.Get != "" && (step.Trigger || len(step.Passed) > 0)
+}
+
+// ResourceConfigHashes is what each resource's version history belongs to, by name: its type's name, that type's image, and its source (type defaults already laid under). Concourse keys versions the same way — base type name or custom type's own config, plus source — and starts a fresh history when any of them changes (steps#280). A type's commands are deliberately left out: a built-in type's change with a steps upgrade must not empty every pipeline's history, as Concourse's base types do not.
+func (c *Config) ResourceConfigHashes() (map[string]string, error) {
+	hashes := make(map[string]string, len(c.Resources))
+
+	for _, resource := range c.Resources {
+		identity := map[string]any{"type": resource.Type, "source": resource.Source}
+
+		resourceType, err := c.FindResourceType(resource.Type)
+		if err == nil {
+			identity["image"] = resourceType.Image
+		}
+
+		encoded, err := json.Marshal(identity)
+		if err != nil {
+			return nil, fmt.Errorf("resource %q: could not hash its configuration: %w", resource.Name, err)
+		}
+
+		sum := sha256.Sum256(encoded)
+		hashes[resource.Name] = hex.EncodeToString(sum[:])
+	}
+
+	return hashes, nil
 }
 
 // FindResourceType returns the resource type with the given name, or an error if not found.
