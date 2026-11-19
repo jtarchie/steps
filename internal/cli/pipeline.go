@@ -61,9 +61,9 @@ func (p *PipelineSetCmd) Run(streams Streams) error {
 		name = config.Slugify(p.Config)
 	}
 
-	err := config.ValidPipelineName(name)
+	valid, err := namedPipeline(name, "pipeline set")
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return err
 	}
 
 	// Substituted and parsed HERE, so the daemon receives the substituted text (stored in the revision, printed in the confirm diff, returned by `pipeline get`), and the parse is what resolves the includes that travel with it.
@@ -74,11 +74,11 @@ func (p *PipelineSetCmd) Run(streams Streams) error {
 
 	// The parsed config's own source, not a second read: two reads of one path have no ordering between them, so an editor saving in the window uploads bytes nobody validated.
 
-	return p.upload(streams.In, out, name, cfg.Revision.Source, cfg.Revision.Includes)
+	return p.upload(streams.In, out, valid, cfg.Revision.Source, cfg.Revision.Includes)
 }
 
 // namedPipeline refuses a name before it is concatenated into a URL: "#" truncates the path into a fragment nobody sends and "?" into a query, so `-p prod#old` asked the daemon about `prod` — which for destroy is the wrong pipeline, irrecoverably.
-func namedPipeline(name, verb string) (string, error) {
+func namedPipeline(name, verb string) (pipelineName, error) {
 	if name == "" {
 		return "", fmt.Errorf("steps %s needs -p <name>", verb)
 	}
@@ -88,12 +88,12 @@ func namedPipeline(name, verb string) (string, error) {
 		return "", fmt.Errorf("%w", err)
 	}
 
-	return name, nil
+	return pipelineName(name), nil
 }
 
 // upload is the half that talks to the daemon: read what it serves, diff,
 // ask, and send the sha that diff was against.
-func (p *PipelineSetCmd) upload(in io.Reader, out io.Writer, name, source string, includes map[string]string) error {
+func (p *PipelineSetCmd) upload(in io.Reader, out io.Writer, name pipelineName, source string, includes map[string]string) error {
 	client, err := newDaemonClient(p.Target)
 	if err != nil {
 		return err
@@ -115,7 +115,7 @@ func (p *PipelineSetCmd) upload(in io.Reader, out io.Writer, name, source string
 		return nil
 	}
 
-	err = p.confirmFrom(in, out, name, current, source, includes)
+	err = p.confirmFrom(in, out, string(name), current, source, includes)
 	if err != nil {
 		return err
 	}
@@ -387,7 +387,7 @@ func (p *PipelineDestroyCmd) Run(streams Streams) error {
 
 	// Asked because it is not recoverable: history, versions and the merkle cache go with the row, and nothing here is a soft delete.
 	if !p.NonInteractive {
-		err = askFrom(streams.In, out, "destroy "+name+", everything recorded under it, and its mcp logins?", "not destroyed")
+		err = askFrom(streams.In, out, "destroy "+string(name)+", everything recorded under it, and its mcp logins?", "not destroyed")
 		if err != nil {
 			return err
 		}

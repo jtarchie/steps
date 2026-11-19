@@ -233,6 +233,39 @@ type OneOffResult struct {
 	Job      string `json:"job"`
 }
 
+// RunJSON is a run as the API answers it. Keys keep the Go field spellings the untagged store row went out under, so a CLI and a daemon of different versions still read each other.
+type RunJSON struct {
+	ID          string    `json:"ID"`
+	JobName     string    `json:"JobName"`
+	Status      string    `json:"Status"`
+	StartedAt   time.Time `json:"StartedAt"`
+	FinishedAt  time.Time `json:"FinishedAt"`
+	ParentRunID string    `json:"ParentRunID"`
+	ConfigSHA   string    `json:"ConfigSHA"`
+	RerunOf     string    `json:"RerunOf"`
+	CreatedBy   string    `json:"CreatedBy"`
+}
+
+// RunEventJSON is one recorded run event as the API answers it, keyed as RunJSON is.
+type RunEventJSON struct {
+	Seq          int64     `json:"Seq"`
+	RunID        string    `json:"RunID"`
+	Type         string    `json:"Type"`
+	StepIndex    int       `json:"StepIndex"`
+	StepName     string    `json:"StepName"`
+	StepKind     string    `json:"StepKind"`
+	StepID       int64     `json:"StepID"`
+	ParentStepID int64     `json:"ParentStepID"`
+	Status       string    `json:"Status"`
+	Hash         string    `json:"Hash"`
+	Text         string    `json:"Text"`
+	Name         string    `json:"Name"`
+	Detail       string    `json:"Detail"`
+	DurationMS   int64     `json:"DurationMS"`
+	Worker       string    `json:"Worker"`
+	At           time.Time `json:"At"`
+}
+
 // SetRequest is one upload: the substituted YAML, the files it includes, and the revision the sender believed it was replacing.
 type SetRequest struct {
 	Source string `json:"source"`

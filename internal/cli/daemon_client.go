@@ -77,6 +77,21 @@ func splitTargetCredentials(target string) (string, string, string) {
 	return strings.TrimSuffix(parsed.String(), "/"), username, password
 }
 
+// pipelineName is a name namedPipeline accepted, the only kind pipelinePath takes.
+type pipelineName string
+
+// pipelinePath escapes every segment, the name too, so a run id or job name holding "/", "?" or "#" stays one segment rather than becoming another route.
+func pipelinePath(name pipelineName, segs ...string) string {
+	escaped := make([]string, 0, len(segs)+1)
+	escaped = append(escaped, url.PathEscape(string(name)))
+
+	for _, seg := range segs {
+		escaped = append(escaped, url.PathEscape(seg))
+	}
+
+	return "/api/pipelines/" + strings.Join(escaped, "/")
+}
+
 // Held is what the daemon answers for a pipeline name. Present is false for a pipeline the daemon does not serve, which is a set creating one rather than an error; Broken is why, when the daemon holds it and a restart could not serve it — a set then repairs it.
 type Held struct {
 	Config  web.PipelineConfig
@@ -84,10 +99,10 @@ type Held struct {
 	Broken  string
 }
 
-func (c *daemonClient) get(name string) (Held, error) {
+func (c *daemonClient) get(name pipelineName) (Held, error) {
 	var current web.PipelineConfig
 
-	status, body, err := c.do(http.MethodGet, "/api/pipelines/"+name, nil)
+	status, body, err := c.do(http.MethodGet, pipelinePath(name), nil)
 	if err != nil {
 		return Held{Config: current}, err
 	}
@@ -138,7 +153,7 @@ func (c *daemonClient) list() ([]web.PipelineSummary, error) {
 	return rows, nil
 }
 
-func (c *daemonClient) set(name string, req web.SetRequest) (web.SetResult, error) {
+func (c *daemonClient) set(name pipelineName, req web.SetRequest) (web.SetResult, error) {
 	var result web.SetResult
 
 	payload, err := json.Marshal(req)
@@ -146,7 +161,7 @@ func (c *daemonClient) set(name string, req web.SetRequest) (web.SetResult, erro
 		return result, fmt.Errorf("could not encode the configuration: %w", err)
 	}
 
-	status, body, err := c.do(http.MethodPut, "/api/pipelines/"+name, payload)
+	status, body, err := c.do(http.MethodPut, pipelinePath(name), payload)
 	if err != nil {
 		return result, err
 	}
@@ -167,8 +182,8 @@ func (c *daemonClient) set(name string, req web.SetRequest) (web.SetResult, erro
 	return result, nil
 }
 
-func (c *daemonClient) destroy(name string) error {
-	status, body, err := c.do(http.MethodDelete, "/api/pipelines/"+name, nil)
+func (c *daemonClient) destroy(name pipelineName) error {
+	status, body, err := c.do(http.MethodDelete, pipelinePath(name), nil)
 	if err != nil {
 		return err
 	}
@@ -180,12 +195,12 @@ func (c *daemonClient) destroy(name string) error {
 	return nil
 }
 
-func (c *daemonClient) pause(name, verb string) error {
-	return c.post("/api/pipelines/"+name+"/"+verb, http.StatusNoContent)
+func (c *daemonClient) pause(name pipelineName, verb string) error {
+	return c.post(pipelinePath(name, verb), http.StatusNoContent)
 }
 
 // startLogin sends c.target as the address to build the redirect from — the field the credentials were already taken off of.
-func (c *daemonClient) startLogin(ctx context.Context, name, server string) (web.LoginStatus, error) {
+func (c *daemonClient) startLogin(ctx context.Context, name pipelineName, server string) (web.LoginStatus, error) {
 	payload, err := json.Marshal(web.LoginRequest{Base: c.target})
 	if err != nil {
 		return web.LoginStatus{}, fmt.Errorf("could not encode the login request: %w", err)
@@ -194,14 +209,14 @@ func (c *daemonClient) startLogin(ctx context.Context, name, server string) (web
 	return c.login(ctx, http.MethodPost, name, server, payload, http.StatusAccepted)
 }
 
-func (c *daemonClient) loginStatus(ctx context.Context, name, server string) (web.LoginStatus, error) {
+func (c *daemonClient) loginStatus(ctx context.Context, name pipelineName, server string) (web.LoginStatus, error) {
 	return c.login(ctx, http.MethodGet, name, server, nil, http.StatusOK)
 }
 
-func (c *daemonClient) login(ctx context.Context, method, name, server string, payload []byte, want int) (web.LoginStatus, error) {
+func (c *daemonClient) login(ctx context.Context, method string, name pipelineName, server string, payload []byte, want int) (web.LoginStatus, error) {
 	var status web.LoginStatus
 
-	code, body, err := c.doContext(ctx, method, "/api/pipelines/"+name+"/mcp/"+url.PathEscape(server)+"/login", payload)
+	code, body, err := c.doContext(ctx, method, pipelinePath(name, "mcp", server, "login"), payload)
 	if err != nil {
 		return status, err
 	}
@@ -237,13 +252,13 @@ func (c *daemonClient) send(path string, payload []byte, want int) error {
 	return nil
 }
 
-func (c *daemonClient) rename(from, to string) error {
+func (c *daemonClient) rename(from pipelineName, to string) error {
 	payload, err := json.Marshal(map[string]string{"to": to})
 	if err != nil {
 		return fmt.Errorf("could not encode the new name: %w", err)
 	}
 
-	status, body, err := c.do(http.MethodPost, "/api/pipelines/"+from+"/rename", payload)
+	status, body, err := c.do(http.MethodPost, pipelinePath(from, "rename"), payload)
 	if err != nil {
 		return err
 	}

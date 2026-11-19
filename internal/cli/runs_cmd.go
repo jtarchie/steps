@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -180,7 +179,7 @@ func (a *RunsAbortCmd) Run(streams Streams) error {
 	}
 
 	if a.Queued != "" {
-		err = client.post("/api/pipelines/"+name+"/jobs/"+url.PathEscape(a.Queued)+"/queued/abort", http.StatusNoContent)
+		err = client.post(pipelinePath(name, "jobs", a.Queued, "queued", "abort"), http.StatusNoContent)
 		if err != nil {
 			return err
 		}
@@ -190,7 +189,7 @@ func (a *RunsAbortCmd) Run(streams Streams) error {
 		return nil
 	}
 
-	err = client.post("/api/pipelines/"+name+"/runs/"+url.PathEscape(a.RunID)+"/abort", http.StatusAccepted)
+	err = client.post(pipelinePath(name, "runs", a.RunID, "abort"), http.StatusAccepted)
 	if err != nil {
 		return err
 	}
@@ -228,7 +227,7 @@ func (r *RunsTriggerCmd) Run(streams Streams) error {
 		return err
 	}
 
-	err = client.send("/api/pipelines/"+name+"/jobs/"+url.PathEscape(r.Job)+"/trigger", payload, http.StatusAccepted)
+	err = client.send(pipelinePath(name, "jobs", r.Job, "trigger"), payload, http.StatusAccepted)
 	if err != nil {
 		return err
 	}
@@ -259,7 +258,7 @@ func (r *RunsRetryCmd) Run(streams Streams) error {
 		return err
 	}
 
-	err = client.post("/api/pipelines/"+name+"/runs/"+url.PathEscape(r.RunID)+"/rerun", http.StatusAccepted)
+	err = client.post(pipelinePath(name, "runs", r.RunID, "rerun"), http.StatusAccepted)
 	if err != nil {
 		return err
 	}
@@ -288,7 +287,7 @@ func (r *RunsResumeCmd) Run(streams Streams) error {
 		return err
 	}
 
-	err = client.post("/api/pipelines/"+name+"/runs/"+url.PathEscape(r.RunID)+"/resume", http.StatusAccepted)
+	err = client.post(pipelinePath(name, "runs", r.RunID, "resume"), http.StatusAccepted)
 	if err != nil {
 		return err
 	}

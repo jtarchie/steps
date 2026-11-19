@@ -416,7 +416,7 @@ func (m *MCPLoginCmd) remote(ctx context.Context, out io.Writer) error {
 }
 
 // awaitLogin polls a pending login until the daemon settles it, opening the browser once it hands back where to authorize.
-func (m *MCPLoginCmd) awaitLogin(ctx context.Context, out io.Writer, client *daemonClient, name string, status web.LoginStatus) (web.LoginStatus, error) {
+func (m *MCPLoginCmd) awaitLogin(ctx context.Context, out io.Writer, client *daemonClient, name pipelineName, status web.LoginStatus) (web.LoginStatus, error) {
 	announced := false
 
 	for status.State == web.LoginPending {

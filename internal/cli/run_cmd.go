@@ -98,7 +98,13 @@ func (r *RunCmd) runOnDaemon(streams Streams, kctx *kong.Context) error {
 		return err
 	}
 
-	remote := remoteRuns{client: client, pipeline: created.Pipeline}
+	// The daemon's answer is not trusted to be a name before it goes into every URL the follow asks.
+	minted, err := namedPipeline(created.Pipeline, "run --target")
+	if err != nil {
+		return err
+	}
+
+	remote := remoteRuns{client: client, pipeline: minted}
 
 	ctx, cancel := streams.cancellable()
 	defer cancel()
