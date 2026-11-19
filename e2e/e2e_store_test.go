@@ -266,6 +266,52 @@ func TestForceRunsACachedStepAgainAndRefilesIt(t *testing.T) {
 	}
 }
 
+// TestAResumeUnderAnExplicitRootFindsItsTree: a failed run keeps its build tree for --resume, and the next steps run under the same --workspace-root must not sweep it away as a crashed process's leftovers.
+func TestAResumeUnderAnExplicitRootFindsItsTree(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	flag, made := filepath.Join(dir, "fail"), filepath.Join(dir, "made.log")
+	root := filepath.Join(dir, "ws")
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: make
+    outputs: [out]
+    run: |
+      echo made >> %[2]s
+      echo made > out/file
+  - task: check
+    inputs: [out]
+    run: test ! -f %[1]s && cat out/file
+`, flag, made))
+
+	err := os.WriteFile(flag, nil, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = captureStdout(t, func() {
+		if stepsRun(t, []string{"run", path, "--workspace-root", root}) == nil {
+			t.Fatal("expected the check to fail")
+		}
+	})
+
+	runID := resumeIDFrom(t, path)
+
+	err = os.Remove(flag)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, "run", path, "--workspace-root", root, "--resume", runID)
+
+	if got := readFileString(t, made); got != "made\n" {
+		t.Errorf("make ran %q, want once: the resume continues the failed run in its kept tree", got)
+	}
+}
+
 // editReader changes storePipeline's reader so the chain skip cannot answer for the job, and make has to come from the step cache.
 func editReader(t *testing.T, path, seen string) {
 	t.Helper()

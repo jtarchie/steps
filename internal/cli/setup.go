@@ -102,12 +102,35 @@ func localProvider(st store.Store, pipelinePath string, flags StateFlags, exec E
 		return nil, fmt.Errorf("could not build workspace provider: %w", err)
 	}
 
+	provider.Spare(resumableTrees(st))
+
 	err = readyProvider(provider, check, st, exec.ArtifactStore)
 	if err != nil {
 		return nil, err
 	}
 
 	return provider, nil
+}
+
+// resumableTrees are the build trees this pipeline's failed and interrupted runs kept for --resume, which the stale-build sweep must leave.
+func resumableTrees(st store.Runs) []string {
+	runs, err := st.ListRuns(context.Background(), "", 0)
+	if err != nil {
+		// ponytail: the sweep then may take a tree a later --resume needs; that resume refuses, naming the missing workspace.
+		slog.Warn("workspace.resumable_unread", "error", err)
+
+		return nil
+	}
+
+	var trees []string
+
+	for _, run := range runs {
+		if run.Status == store.RunFailed || run.Status == store.RunRunning {
+			trees = append(trees, run.Workspace)
+		}
+	}
+
+	return trees
 }
 
 // readyProvider checks a freshly built provider, indexes its caches in st and attaches --artifact-store to it, closing it on any failure: the provider owns a temp root it created and only its Close removes one, so a caller that closed its store alone left a steps-* directory behind on every attempt, with nothing to reap it.
