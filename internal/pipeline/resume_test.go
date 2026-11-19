@@ -232,3 +232,59 @@ func TestResumeJobNameIsTheRecordedRunsJob(t *testing.T) {
 		t.Error("ResumeJobName found a job for a run that was never recorded")
 	}
 }
+
+// TestCapturesVarFindsALoadVarAStepRuns: a resume re-runs what captures a value the plan reads after it, so a load_var: a block holds counts, and one a matrix holds does not outlive the matrix.
+func TestCapturesVarFindsALoadVarAStepRuns(t *testing.T) {
+	t.Parallel()
+
+	loadVar := config.Step{LoadVar: "token", VarFile: "meta/token.txt"}
+	task := config.Step{Task: "work", Run: "true"}
+
+	for name, tc := range map[string]struct {
+		step config.Step
+		want bool
+	}{
+		"a load_var:":          {loadVar, true},
+		"a task":               {task, false},
+		"a do: holding one":    {config.Step{Do: []config.Step{task, loadVar}}, true},
+		"a parallel branch":    {config.Step{InParallel: &config.InParallel{Steps: []config.Step{task, loadVar}}}, true},
+		"a try: around one":    {config.Step{Try: &loadVar}, true},
+		"a matrix holding one": {config.Step{Across: []config.AcrossVar{{Var: "x", Values: []string{"a"}}}, Do: []config.Step{loadVar}}, false},
+		"a hook holding one":   {config.Step{Task: "work", Run: "true", Hooks: config.Hooks{Ensure: &config.Step{Do: []config.Step{loadVar}}}}, false},
+		"a do: of plain steps": {config.Step{Do: []config.Step{task, task}}, false},
+	} {
+		if got := capturesVar(tc.step); got != tc.want {
+			t.Errorf("%s: capturesVar = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// TestRefuseSkippedSendersOnlyWhenTheReaderRuns: a resume is refused when a step it would run reads a decision held by a step it would skip — wherever either sits — and not when the reader is skipped too.
+func TestRefuseSkippedSendersOnlyWhenTheReaderRuns(t *testing.T) {
+	t.Parallel()
+
+	sender := config.Step{Agent: "triager"}
+	reader := config.Step{Task: "record", Context: &config.ContextSpec{From: map[string]config.FromLevel{"triager": config.FromVerdict}}}
+	other := config.Step{Task: "other"}
+	get := config.Step{Get: "repo"}
+
+	for name, tc := range map[string]struct {
+		plan    []config.Step
+		done    map[doneKey]doneStep
+		refused bool
+	}{
+		"the sender kept, the reader to run":    {[]config.Step{sender, reader}, map[doneKey]doneStep{{"R", 0, 1}: {}}, true},
+		"both kept, a later step to run":        {[]config.Step{sender, reader, other}, map[doneKey]doneStep{{"R", 0, 1}: {}, {"R", 1, 1}: {}}, false},
+		"the sender itself to run":              {[]config.Step{other, sender, reader}, map[doneKey]doneStep{{"R", 0, 1}: {}}, false},
+		"the sender kept inside a do:":          {[]config.Step{{Do: []config.Step{other, sender}}, reader}, map[doneKey]doneStep{{"R", 0, 1}: {}}, true},
+		"the reader inside a block to run":      {[]config.Step{sender, {InParallel: &config.InParallel{Steps: []config.Step{other, reader}}}}, map[doneKey]doneStep{{"R", 0, 1}: {}}, true},
+		"the reader in a hook of a step to run": {[]config.Step{sender, {Task: "work", Hooks: config.Hooks{OnFailure: &reader}}}, map[doneKey]doneStep{{"R", 0, 1}: {}}, true},
+		"across a get, in the build":            {[]config.Step{get, sender, reader}, map[doneKey]doneStep{{"R#0", 0, 1}: {}}, true},
+		"a sender before the get":               {[]config.Step{sender, get, reader}, map[doneKey]doneStep{{"R", 0, 1}: {}}, true},
+	} {
+		err := refuseSkippedSenders("R", tc.done, &config.Job{Name: "build", Plan: tc.plan})
+		if (err != nil) != tc.refused {
+			t.Errorf("%s: refuseSkippedSenders = %v, want refused %v", name, err, tc.refused)
+		}
+	}
+}

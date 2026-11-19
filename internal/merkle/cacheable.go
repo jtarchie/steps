@@ -15,6 +15,8 @@ import (
 // hand the step consuming the collected artifact a directory the skipped
 // cell's contribution is simply missing from — and the store keeps no
 // artifact bytes to replay. Re-running is the only honest answer.
+//
+// The rest are StepCacheable's exclusions for its reasons (a skip lets the plan carry on), plus a ((.:name)) this hash reads unsubstituted.
 func CellHash(cfg *config.Config, cell config.Step, parentHash string) (string, bool, error) {
 	content, err := stepContentMap(cfg, cell)
 	if err != nil {
@@ -28,8 +30,8 @@ func CellHash(cfg *config.Config, cell config.Step, parentHash string) (string, 
 		return "", false, fmt.Errorf("across cell: %w", err)
 	}
 
-	cacheable := kind == config.StepKindTask && cell.Fix == nil && cell.When == nil && cell.To == nil &&
-		!taskCellProducesOutputs(cfg, cell)
+	cacheable := kind == config.StepKindTask && cell.When == nil && !cell.Volatile && !cell.Routes() &&
+		!cell.ReadsFrom() && cell.Hooks.Empty() && len(cell.LocalRefs()) == 0 && taskCellReplayable(cfg, cell)
 
 	return hash, cacheable, nil
 }
@@ -80,7 +82,7 @@ func StepCacheable(cfg *config.Config, step config.Step) bool {
 	case config.StepKindAgent:
 		return len(step.Outputs) > 0
 	case config.StepKindTask:
-		// Conservative on a resolution error, matching taskCellProducesOutputs:
+		// Conservative on a resolution error, matching taskCellReplayable:
 		// a step that cannot be resolved must not be reported cacheable.
 		rt, err := cfg.ResolveTask(step)
 
@@ -110,16 +112,11 @@ func stepRecordsOnlyOutputs(step config.Step) bool {
 		step.OutputSubdir == ""
 }
 
-// taskCellProducesOutputs reports whether a task cell captures artifacts,
-// through its own declaration or the tasks: entry it references. Conservative
-// on a resolution error: an unresolvable cell must not be reported cacheable.
-func taskCellProducesOutputs(cfg *config.Config, cell config.Step) bool {
+// taskCellReplayable reports whether a task cell, as it resolves (its tasks: entry's outputs and fix: included), captures nothing and carries no fix:; false when it cannot be resolved.
+func taskCellReplayable(cfg *config.Config, cell config.Step) bool {
 	rt, err := cfg.ResolveTask(cell)
-	if err != nil {
-		return true
-	}
 
-	return len(rt.Outputs) > 0
+	return err == nil && rt.Fix == nil && len(rt.Outputs) == 0
 }
 
 // UncacheableReason names why a step keeps its chain from being skipped, or ""

@@ -162,7 +162,8 @@ func ExpandAcrossValues(label string, step Step, runtime map[string][]string) ([
 	// have already run.
 	for _, combo := range combos {
 		cell := step
-		cell.Across, cell.Parallelism = nil, nil
+		// Hooks stay on the matrix, which fires them once around every cell, as Concourse does.
+		cell.Across, cell.Parallelism, cell.Hooks = nil, nil, Hooks{}
 
 		err = renderCell(label, &cell, combo, parsed)
 		if err != nil {

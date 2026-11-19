@@ -168,9 +168,9 @@ func runAgentConversation(
 		return agentOutcome{hash: node.Hash, response: res.Response}, fail(err)
 	}
 
-	err = prepared.Capture(ctx)
+	err = captureHeld(ctx, prepared.Capture)
 	if err == nil {
-		err = r.st.RecordNode(ctx, nodeRecord(ctx, node), r.jobName, store.NodeSucceeded, res.Record, nil)
+		err = recordSucceeded(ctx, r, node, res.Record)
 	}
 
 	if err != nil {

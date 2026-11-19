@@ -149,6 +149,11 @@ func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *con
 		return false, err
 	}
 
+	err = refuseSkippedSenders(runID, done, job)
+	if err != nil {
+		return false, err
+	}
+
 	err = refuseLostInputs(ctx, st, runID, inputs, done, job)
 	if err != nil {
 		return false, err
@@ -313,6 +318,83 @@ func refuseMovedSteps(runID string, steps []store.RunStep, build string, plan []
 	}
 
 	return nil
+}
+
+// planSegment is one walk a run records its steps against: the plan before the first get under the run's id, the remainder after it under its build's.
+type planSegment struct {
+	build string
+	plan  []config.Step
+}
+
+func planSegments(runID string, job *config.Job) []planSegment {
+	for first, step := range job.Plan {
+		if step.Get != "" {
+			return []planSegment{{runID, job.Plan[:first]}, {triggeredBuild(runID), job.Plan[first+1:]}}
+		}
+	}
+
+	return []planSegment{{runID, job.Plan}}
+}
+
+// refuseSkippedSenders refuses a resume that would run a context: from: reader after skipping the step it reads: an agent's decision is held only by the attempt that made it (agent.RecordOutcome), so the reader would be handed nothing.
+func refuseSkippedSenders(runID string, done map[doneKey]doneStep, job *config.Job) error {
+	segments := planSegments(runID, job)
+	finished := finishedNames(segments, done)
+
+	var refusal error
+
+	for _, segment := range segments {
+		at, unfinished := firstUnfinished(done, segment.build, segment.plan)
+		if !unfinished {
+			continue
+		}
+
+		for _, step := range segment.plan[at:] {
+			eachStepIn(step, func(reader config.Step) {
+				for _, sender := range reader.FromSenders() {
+					if refusal == nil && finished[sender] {
+						refusal = fmt.Errorf("cannot resume run %q: %q reads context from %q, which the resume would skip and whose decision only the earlier attempt held — start a new run", runID, executedStepName(reader), sender)
+					}
+				}
+			})
+		}
+	}
+
+	return refusal
+}
+
+// finishedNames is every step a resume would skip, by name, nested ones included.
+func finishedNames(segments []planSegment, done map[doneKey]doneStep) map[string]bool {
+	finished := map[string]bool{}
+
+	for _, segment := range segments {
+		for key := range done {
+			if key.build == segment.build && key.index < len(segment.plan) {
+				eachStepIn(segment.plan[key.index], func(step config.Step) { finished[executedStepName(step)] = true })
+			}
+		}
+	}
+
+	return finished
+}
+
+// eachStepIn calls fn for step and every step it runs: a try: body, a block's steps, and its hooks.
+func eachStepIn(step config.Step, fn func(config.Step)) {
+	fn(step)
+
+	if step.Try != nil {
+		eachStepIn(*step.Try, fn)
+	}
+
+	for _, branch := range merkle.ContainerBranches(step) {
+		eachStepIn(branch, fn)
+	}
+
+	_ = step.Hooks.Each(func(_ string, hook *config.Step) error {
+		eachStepIn(*hook, fn)
+
+		return nil
+	})
 }
 
 // refuseMissingWorkspace refuses a resume that would keep artifacts from a

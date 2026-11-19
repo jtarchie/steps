@@ -47,7 +47,7 @@ jobs:
                                                           # and note-abort are absent
 ```
 
-- **Hooks observe, they don't consume.** A failing step's `on_failure` runs, and the failure still propagates — the job fails, `steps run` exits nonzero. This is the opposite of "swallow the error": a hook never clears a failure (only a matching `assert.execution` does that — see below). The one way a hook changes an outcome is upward: a failing `on_success` or `ensure` fails an otherwise-green step/job, since a broken notification or cleanup shouldn't read as success. A failing `on_failure`/`on_error`/`on_abort` is only logged.
+- **Hooks observe, they don't consume.** A failing step's `on_failure` runs, and the failure still propagates — the job fails, `steps run` exits nonzero. This is the opposite of "swallow the error": a hook never clears a failure (only a matching `assert.execution` does that — see below). The one way a hook changes an outcome is upward: a failing `on_success` or `ensure` fails an otherwise-green step/job — and the step's node is recorded failed — since a broken notification or cleanup shouldn't read as success. A failing `on_failure`/`on_error`/`on_abort` is only logged.
 - **Classification** buckets every step error against the job context: **failed** (a task-level failure — nonzero exit, a red fix verdict, a required tool that never succeeded, or the step's own `timeout:` expiring), **errored** (everything else unmarked — workspace setup, docker, LLM transport, a resource check), or **aborted** (`ctx.Err() != nil`, i.e. SIGINT/SIGTERM mid-run, or one run stopped with `steps runs abort` — see [web.md](web.md#aborting-a-run)). A docker-level exit (125/126/127) classifies as *failed*, since it's indistinguishable from the command's own exit code.
 - **Ordering**: the single matching `on_*` hook runs, then `ensure` always runs last. Hooks reached after cancellation run under a 60-second grace period detached from the canceled context, so they complete but not forever.
 - **A row, but no cache identity**: a hook step records no cache node and no `job_run` — the enclosing step/job records the aggregate outcome. It is a row in the run's transcript, though, labelled like `hook  on_failure · task page`: a step hook sits under the step it guards, a job hook after the plan, and the row carries the hook's output, notes and agent turns.
@@ -580,6 +580,7 @@ The rest of the rules:
 
 - **"First success" means completed without error** — not a judgment about output quality. A fast but mediocre answer still wins. Gate quality with a downstream `assert:`/`verdicts:` step.
 - **The winner's outputs are the step's outputs**, so a downstream step never has to know which branch won. Every branch must therefore declare the *same* `outputs:` — a mismatch is a load error.
+- **A loser never writes over the winner.** The first branch to write the race's outputs holds them until it finishes; a branch done in the meantime waits for that outcome (`race: fast holds the race's outputs; slow waits for its outcome`), and writes only if the holder failed. "First success" is therefore the first success of a branch that could keep its outputs.
 - **A race needs at least two branches.** One runner is a step with extra words.
 - **When every branch fails, the block fails** and reports all of them. A hedge is not a guarantee.
 
@@ -615,7 +616,9 @@ Concourse re-runs the **entire** matrix on any change. Here each cell is hashed 
 
 That works because cells are **siblings**, parented on the step before the block rather than on the block itself — the block's own hash folds in every cell, so parenting cells under it would make one cell's edit change every cell's identity, which is exactly the whole-matrix re-run this exists to avoid.
 
-Cells that are puts or agents are never skipped, for the same reasons those steps never are anywhere else: side effects and non-determinism.
+Cells that are puts or agents are never skipped, for the same reasons those steps never are anywhere else: side effects and non-determinism. Nor is a cell the [step cache](workspace.md#step-output-cache-volatile) would never reuse — one declaring `outputs:`, `volatile:`, a `when:`, `to:`, `context: { from: ... }`, hooks or a `fix:` (its `tasks:` entry's included), or reading a `((.:name))`.
+
+A cell's identity is its chain, which says what the steps before it were *told* to do, not what they *wrote*. So once the chain holds an agent, a `volatile:` step, or anything else the run names in `note: … makes this chain uncacheable`, no cell after it is skipped: a cell reading what an agent wrote would otherwise be reported unchanged against bytes it never saw.
 
 ### The rest
 
@@ -624,6 +627,27 @@ Cells that are puts or agents are never skipped, for the same reasons those step
 - **Classification follows the worst cell**, as it does for `in_parallel:`: an errored cell (infrastructure) outranks a failed one, so `on_error` fires rather than `on_failure`. Concourse answers the same way.
 - **Cells are named for their coordinates** — `check [mode=fast suite=unit]` — unless you interpolate a variable into the name yourself.
 - **An empty axis, a duplicate `var:`, or a misspelled `{{ .vars.x }}` are load errors.** Each would otherwise mean silently running the wrong matrix.
+- **Hooks fire once, around the whole matrix**, as in Concourse: a hook on an `across:` step guards the step, not each cell. `on_success` fires only when every cell passed, and `ensure` once whatever happened:
+
+```yaml
+jobs:
+- name: matrix
+  plan:
+  - across:
+    - var: shard
+      values: [a, b]
+    task: test
+    run: echo testing shard {{ .vars.shard }}
+    ensure:
+      task: tidy
+      run: echo tidying once
+  assert:
+    execution:                     # one tidy, after every cell
+    - test [shard=a]
+    - test [shard=b]
+    - tidy
+    outcome: succeeded
+```
 
 ### A width a step decides: `from_file:`
 

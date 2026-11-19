@@ -74,6 +74,7 @@ func runDoChildren(ctx context.Context, r stepRunner, i int, step config.Step, c
 		// transcript would attribute a do: child's output to whichever step
 		// happened to share its number.
 		childRes, childErr := runNonGetStep(ctx, r, i, child, nil, childParent)
+		ctx = foldCellReuse(ctx, r.cfg, child)
 
 		// A try: child tolerates its own failure here, for the reason a try:
 		// branch does inside a concurrent block (see runBranches): the plan

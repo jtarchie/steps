@@ -81,9 +81,13 @@ func TestRaceBranchPanicIsThatBranchsError(t *testing.T) {
 		t.Errorf("winner = %d, want -1: a panicked branch cannot win", winner)
 	}
 
-	for _, result := range results {
+	for index, result := range results {
 		if result.err == nil || !strings.Contains(result.err.Error(), "panic") {
 			t.Errorf("branch %d err = %v, want the recovered panic", result.index, result.err)
+		}
+
+		if result.index != index || result.name != branches[index].Task {
+			t.Errorf("branch %d reported as %d %q: a panicking branch keeps its name", index, result.index, result.name)
 		}
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -139,4 +140,53 @@ jobs:
 	}
 
 	return st, int(started.Load())
+}
+
+// TestACellAfterAVolatileStepRunsAgain: a volatile: step's node hashes its command, not what it wrote, so a cell reading its artifact kept its key when the artifact changed — in the plan, and inside a do: whose earlier steps the walk never sees.
+func TestACellAfterAVolatileStepRunsAgain(t *testing.T) {
+	t.Parallel()
+
+	for name, indent := range map[string]string{"in the plan": "  ", "in a do: block": "    "} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			counter, seen := filepath.Join(dir, "counter"), filepath.Join(dir, "seen")
+
+			steps := strings.ReplaceAll(`- task: stamp
+  volatile: true
+  outputs: [stamp]
+  run: echo x >> `+counter+` && wc -l < `+counter+` > stamp/n
+- across:
+  - var: shard
+    values: [a]
+  task: read
+  inputs: [stamp]
+  run: cat stamp/n >> `+seen, "\n", "\n"+indent)
+
+			plan := indent + steps
+			if indent != "  " {
+				plan = "  - do:\n" + plan
+			}
+
+			cfg, job, st, provider := fixtureFrom(t, "jobs:\n- name: build\n  plan:\n"+plan+"\n")
+			defer func() { _ = st.Close(); _ = provider.Close() }()
+
+			for range 2 {
+				err := RunJob(context.Background(), cfg, job, st, Run{Provider: provider})
+				if err != nil {
+					t.Fatalf("RunJob: %v", err)
+				}
+			}
+
+			got, err := os.ReadFile(seen) //nolint:gosec // the test's own temp file
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if lines := strings.Fields(string(got)); len(lines) != 2 || lines[1] != "2" {
+				t.Errorf("the cell read %q over two runs, want each run's stamp", got)
+			}
+		})
+	}
 }

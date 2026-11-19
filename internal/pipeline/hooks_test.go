@@ -10,7 +10,9 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -400,5 +402,36 @@ jobs:
 
 	if inner.started.ParentStepID != outer.started.StepID {
 		t.Errorf("nested hook parent = %d, want the outer hook's id %d", inner.started.ParentStepID, outer.started.StepID)
+	}
+}
+
+// TestAFailingOnSuccessRecordsTheBlockFailed: the node a hook's failure re-records is the block's own, not the child's that recorded under it, which still succeeded.
+func TestAFailingOnSuccessRecordsTheBlockFailed(t *testing.T) {
+	t.Parallel()
+
+	cfg, job, st, provider := fixtureFrom(t, `
+jobs:
+- name: build
+  plan:
+  - do:
+    - task: work
+      run: "true"
+    on_success:
+      task: notify
+      run: "false"
+`)
+	defer func() { _ = st.Close(); _ = provider.Close() }()
+
+	err := RunJob(context.Background(), cfg, job, st, Run{Provider: provider})
+	if err == nil {
+		t.Fatal("a failing on_success did not fail the job")
+	}
+
+	if got := blockNode(t, st, merkle.NodeKindDo).Status; got != store.NodeFailed {
+		t.Errorf("the do: block's node is %q, want failed: its on_success failed it", got)
+	}
+
+	if got := blockNode(t, st, merkle.NodeKindTask).Status; got != store.NodeSucceeded {
+		t.Errorf("the child's node is %q, want succeeded: the hook failed the block, not it", got)
 	}
 }
