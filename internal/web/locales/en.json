@@ -666,6 +666,7 @@
  "verb.release": "release",
  "verb.rename": "rename",
  "verb.rerun": "rerun",
+ "verb.resume": "resume",
  "verb.set": "set",
  "verb.trigger": "trigger",
  "verb.unpause": "unpause",

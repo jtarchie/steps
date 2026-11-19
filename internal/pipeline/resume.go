@@ -211,27 +211,21 @@ func keptIn(steps []store.RunStep, build string) int {
 	return kept
 }
 
-// ResumePoint is what a resume of a failed run would do, for a person deciding whether to press it: the step it picks up at, and how many finished passes it keeps. ok is false when a resume would gain nothing (no finished step to keep, or nothing left unfinished in the build) or would be refused.
-func ResumePoint(ctx context.Context, st resumeFacets, runID string, job *config.Job) (string, int, bool) {
-	run, err := findRun(ctx, st, runID)
-	if err != nil || run.Status != store.RunFailed {
+// ResumePoint is what a resume of a failed run would do, for a person deciding whether to press it: the step it picks up at, and how many finished passes it keeps. ok is false when a resume would gain nothing (no finished step to keep, or nothing left unfinished in the build) or would be refused: CheckResumable's answer for a build with work left, read once because a failed run's page asks on every poll.
+func ResumePoint(ctx context.Context, st store.Runs, run store.RunRow, job *config.Job) (string, int, bool) {
+	if run.Status != store.RunFailed || run.Workspace == "" {
 		return "", 0, false
 	}
 
-	fresh, err := CheckResumable(ctx, st, runID, job)
-	if err != nil || fresh {
-		return "", 0, false
-	}
-
-	steps, err := st.CompletedRunSteps(ctx, runID)
+	steps, err := st.CompletedRunSteps(ctx, run.ID)
 	if err != nil {
 		return "", 0, false
 	}
 
-	build := triggeredBuild(runID)
+	build := triggeredBuild(run.ID)
 
 	kept := keptIn(steps, build)
-	if kept == 0 || run.Workspace == "" {
+	if kept == 0 {
 		return "", 0, false
 	}
 
@@ -239,6 +233,11 @@ func ResumePoint(ctx context.Context, st resumeFacets, runID string, job *config
 
 	at, unfinished := firstUnfinished(foldRunSteps(steps), build, plan)
 	if !unfinished || at >= len(plan) {
+		return "", 0, false
+	}
+
+	_, err = os.Stat(run.Workspace)
+	if err != nil {
 		return "", 0, false
 	}
 

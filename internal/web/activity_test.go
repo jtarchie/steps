@@ -14,6 +14,22 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
+// TestEveryActivityVerbIsInTheCatalog: word falls back to the stored verb, so a verb with no entry reads as English in every locale's activity log.
+func TestEveryActivityVerbIsInTheCatalog(t *testing.T) {
+	t.Parallel()
+
+	english, err := loadLocale(englishTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for verb := range targetPages {
+		if _, ok := english.msgs["verb."+verb]; !ok {
+			t.Errorf("verb.%s is not in the catalog", verb)
+		}
+	}
+}
+
 func TestReasonDetailCutsOnARuneBoundary(t *testing.T) {
 	t.Parallel()
 

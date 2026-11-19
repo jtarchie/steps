@@ -193,7 +193,7 @@ func (r *LocalRunner) ResumePoint(ctx context.Context, target *Pipeline, runID s
 		return ResumeAt{}, false
 	}
 
-	from, kept, ok := pipeline.ResumePoint(ctx, target.Store, runID, job)
+	from, kept, ok := pipeline.ResumePoint(ctx, target.Store, run, job)
 
 	return ResumeAt{From: from, Kept: kept}, ok
 }
@@ -484,9 +484,9 @@ func (r *LocalRunner) DrainOne(ctx context.Context, target *Pipeline) bool {
 
 	id, jobName := claim.ID, claim.JobName
 
-	// Before anything can finalize the row without running it (a job the config dropped, one the breaker paused), since the claim is what spends a force. A rerun or a pinned trigger spends none: the flag belongs to the job's ordinary row.
+	// Before anything can finalize the row without running it (a job the config dropped, one the breaker paused), since the claim is what spends a force.
 	force := r.base.Force
-	if claim.RerunOf == "" && claim.Pin == "" {
+	if ordinaryRow(claim) {
 		force = r.takeForce(target.Slug, jobName) || force
 	}
 
@@ -515,6 +515,11 @@ func (r *LocalRunner) DrainOne(ctx context.Context, target *Pipeline) bool {
 	r.runAndFinalize(ctx, target, cfg, job, id, force, claim)
 
 	return true
+}
+
+// ordinaryRow is a claim of the job's ordinary trigger, the row a force belongs to: a rerun, a pinned trigger and a resume are requests of their own.
+func ordinaryRow(claim store.ClaimedJob) bool {
+	return claim.RerunOf == "" && claim.Pin == "" && claim.Resume == ""
 }
 
 // finalizePanic makes a panic out of one run cost that run, not the daemon and every pipeline it holds.
@@ -580,6 +585,11 @@ func (r *LocalRunner) runAndFinalize(
 	err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, status, runErr)
 	if err != nil {
 		slog.ErrorContext(ctx, "web.complete", "pipeline", target.Slug, "job", job.Name, "error", err)
+	}
+
+	// A refused resume ran nothing, so it is no outcome of the job's to count toward holding it.
+	if errors.Is(runErr, ErrNotResumable) {
+		return
 	}
 
 	r.recordBreaker(ctx, target, job, runErr)

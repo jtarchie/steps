@@ -38,9 +38,8 @@ func runBar(pipeline *Pipeline, run store.RunRow, jobDeclared bool, resume sched
 		return bar
 	}
 
-	bar.Retry = jobDeclared
-
 	if jobDeclared {
+		bar.Retry = true
 		bar.ResumeFrom, bar.ResumeKept = resume.From, resume.Kept
 	}
 

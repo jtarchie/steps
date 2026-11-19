@@ -639,6 +639,7 @@
  "verb.release": "释放",
  "verb.rename": "重命名",
  "verb.rerun": "重新运行",
+ "verb.resume": "继续",
  "verb.set": "设置",
  "verb.trigger": "触发",
  "verb.unpause": "取消暂停",

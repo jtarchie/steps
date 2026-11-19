@@ -578,7 +578,7 @@ buttons that would start something are disabled, and say why when hovered.
 
 ## Triggering, retrying, approving, releasing
 
-Nine controls, each doing what a CLI verb does:
+Eleven controls, each doing what a CLI verb does:
 
 - **Trigger** enqueues the job into the durable trigger
   queue `steps web` uses — the same queue this process's own polling fills.
@@ -615,7 +615,7 @@ Nine controls, each doing what a CLI verb does:
 - **Test** any declared `mcp_servers:` entry from the same tab — the only
   thing on that page that connects to anything.
 
-`--read-only` withholds all nine: the controls disappear from the pages and
+`--read-only` withholds all eleven: the controls disappear from the pages and
 the routes refuse. The mcp tab keeps its status column — that a server needs a
 login is a diagnostic a build box should still show, and the row names the CLI
 command instead. The queue is still drained, polling still runs, and

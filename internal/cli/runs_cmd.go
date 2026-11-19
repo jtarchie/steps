@@ -277,7 +277,8 @@ func (r *RunsResumeCmd) Run(streams Streams) error {
 		return err
 	}
 
-	sayf(streams.Out, "queued: %s on %s continues from the step that failed; watch it with steps runs follow -p %s %s\n", r.RunID, name, name, r.RunID)
+	// Not "follow it now": until the claim puts the run back in flight it reads failed, and follow would replay the old attempt and exit failed.
+	sayf(streams.Out, "queued: a resume of %s on %s, from the step that failed; it reads failed until the daemon starts it, then steps runs follow -p %s %s watches it\n", r.RunID, name, name, r.RunID)
 
 	return nil
 }

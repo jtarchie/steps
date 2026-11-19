@@ -55,7 +55,7 @@ jobs:
 	}
 }
 
-// A person's resume whose tree went between the press and the claim fails rather than falling back as a restart's does: building from the top is the cost they pressed Resume to avoid.
+// A person's resume whose tree went between the press and the claim fails rather than falling back as a restart's does: building from the top is the cost they pressed Resume to avoid. Nothing ran, so the breaker does not count it.
 func TestAPersonsResumeWhoseTreeIsGoneFailsRatherThanRebuilding(t *testing.T) {
 	t.Parallel()
 
@@ -65,6 +65,7 @@ func TestAPersonsResumeWhoseTreeIsGoneFailsRatherThanRebuilding(t *testing.T) {
 	runner, target, st := drainable(t, dir, `
 jobs:
   - name: build
+    max_consecutive_failures: 1
     plan:
       - task: first
         inputs: []
@@ -104,6 +105,64 @@ jobs:
 	runs, err := st.ListRuns(ctx, "build", 0)
 	if err != nil || len(runs) != 1 || runs[0].Status != store.RunFailed {
 		t.Errorf("runs = %+v (%v), want the one run, still failed", runs, err)
+	}
+
+	requireNotHeld(t, st, "a refused resume ran nothing for the breaker to count")
+}
+
+func requireNotHeld(t *testing.T, st store.Store, why string) {
+	t.Helper()
+
+	held, err := st.IsJobHeld(t.Context(), "build")
+	if err != nil || held {
+		t.Errorf("IsJobHeld = %v (%v), want false: %s", held, err, why)
+	}
+}
+
+// A resume claimed ahead of a "no cache" trigger of the same job must not spend the flag that trigger set: the resume is not the job's ordinary row.
+func TestAResumeClaimLeavesAnotherRequestsForceAlone(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tally := filepath.Join(dir, "tally")
+
+	runner, target, st := drainable(t, dir, `
+jobs:
+  - name: build
+    plan:
+      - task: append
+        inputs: []
+        run: echo ran >> `+tally+`
+`)
+	ctx := t.Context()
+
+	runner.DrainOne(ctx, target)
+
+	runs, err := st.ListRuns(ctx, "build", 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("ListRuns = %+v (%v), want the one run", runs, err)
+	}
+
+	err = st.FinishRun(ctx, runs[0].ID, store.RunFailed)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = st.EnqueueResumeJob(ctx, "build", "resume (web)", runs[0].ID, "")
+	if err != nil {
+		t.Fatalf("EnqueueResumeJob: %v", err)
+	}
+
+	_, err = runner.Enqueue(ctx, target, "build", "trigger, no cache (cli)", true)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runner.DrainOne(ctx, target)
+	runner.DrainOne(ctx, target)
+
+	if lines := countLines(t, tally); lines != 2 {
+		t.Errorf("tally = %d, want 2: the no-cache trigger lost its flag to the resume claimed before it", lines)
 	}
 }
 

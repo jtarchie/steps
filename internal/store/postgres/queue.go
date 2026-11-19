@@ -60,14 +60,18 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason, by string
 	return nil
 }
 
-// EnqueueResumeJob reads before it writes (no pending index covers a row carrying a run), so it takes the pipeline lock: two presses at once must not queue the run twice.
+// EnqueueResumeJob reads before it writes (no pending index covers a row carrying a run), so it takes the pipeline lock: two presses at once must not queue the run twice. A row claimed after the run last finished is a resume in flight that has not reached ResumeRun, so the run still reads failed.
 func (s *Store) EnqueueResumeJob(ctx context.Context, jobName, reason, runID, by string) error {
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, run_id, status, enqueued_at)
 			SELECT $1, $2, $3, $6, TRUE, $4, 'pending', $5
 			WHERE NOT EXISTS (
-			    SELECT 1 FROM trigger_queue WHERE pipeline_id = $1 AND run_id = $4 AND status = 'pending'
+			    SELECT 1 FROM trigger_queue AS q
+			    WHERE q.pipeline_id = $1 AND q.run_id = $4
+			      AND (q.status = 'pending' OR (q.status = 'running' AND q.started_at > (
+			          SELECT r.finished_at FROM runs AS r WHERE r.id = q.run_id AND r.pipeline_id = q.pipeline_id
+			      )))
 			)
 		`, s.pipelineID, jobName, clean(reason), runID, now(), clean(by))
 

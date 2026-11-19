@@ -126,7 +126,7 @@ func (s *Server) handleRun(c *echo.Context) error {
 		"Job":       job,
 		"Approvals": approvals,
 		"Questions": questions,
-		"Bar":       runBar(pipeline, view.Run, jobErr == nil, s.resumePoint(ctx, pipeline, view.Run)),
+		"Bar":       runBar(pipeline, view.Run, jobErr == nil, s.resumePoint(ctx, pipeline, view.Run, nav.ReadOnly)),
 		"Title":     runTitle(view.Run),
 		"Crumbs": []crumb{
 			{Label: s.renderer.localeOf(c).text("tab.jobs"), URL: "/p/" + pipeline.Slug},
@@ -136,9 +136,9 @@ func (s *Server) handleRun(c *echo.Context) error {
 	})
 }
 
-// resumePoint asks the runner only of a failed run on a server that can act: a read-only server has no runner, and nothing else is ever offered a resume.
-func (s *Server) resumePoint(ctx context.Context, pipeline *Pipeline, run store.RunRow) scheduler.ResumeAt {
-	if s.runner == nil || run.Status != store.RunFailed {
+// resumePoint asks the runner only of a failed run, and only for a reader the bar is drawn for: a read-only server has no runner, a viewer gets no bar, and the page asks again on every poll.
+func (s *Server) resumePoint(ctx context.Context, pipeline *Pipeline, run store.RunRow, readOnly bool) scheduler.ResumeAt {
+	if s.runner == nil || readOnly || run.Status != store.RunFailed {
 		return scheduler.ResumeAt{}
 	}
 
