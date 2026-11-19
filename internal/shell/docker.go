@@ -105,8 +105,7 @@ type dockerSession struct {
 	// ones this process's own environment does not hold — a venue's
 	// STEPS_WORKER.
 	envValues map[string]string
-	// user is the already-resolved --user value (see containerUser); empty
-	// takes the image's own default.
+	// user is the already-resolved --user value; empty takes the image's own default.
 	user string
 	// network is the --network value; empty takes docker's own default.
 	network string
@@ -286,7 +285,7 @@ func (s *dockerSession) start(ctx context.Context, name string) (string, error) 
 		WorkingDir: s.workingDir(),
 		Volumes:    s.volumes,
 		// Build metadata is NOT fixed here but sent with each exec: a session can outlive the context that started it.
-		Env:         s.containerEnv(nil),
+		Env:         s.containerEnv(),
 		Labels:      OwnershipLabels(),
 		User:        s.user,
 		Network:     s.network,
@@ -697,14 +696,8 @@ func commandFailure(command string, code int, runErr error) error {
 // Caller-supplied values WIN over this process's own. A venue's STEPS_WORKER
 // is the case: the pipeline's env: is the authority on the orchestrator, and
 // the variable names a fact about the worker that nothing here has set.
-func (s *dockerSession) containerEnv(extra map[string]string) []string {
+func (s *dockerSession) containerEnv() []string {
 	names := slices.Clone(s.envNames)
-
-	for name := range extra {
-		if !slices.Contains(names, name) {
-			names = append(names, name)
-		}
-	}
 
 	for name := range s.envValues {
 		if !slices.Contains(names, name) {
@@ -717,12 +710,6 @@ func (s *dockerSession) containerEnv(extra map[string]string) []string {
 	env := make([]string, 0, len(names))
 
 	for _, name := range names {
-		if value, ok := extra[name]; ok {
-			env = append(env, name+"="+value)
-
-			continue
-		}
-
 		if value, ok := s.envValues[name]; ok {
 			env = append(env, name+"="+value)
 

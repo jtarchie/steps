@@ -64,14 +64,15 @@ func TestBuildMetadataDropsAValueWithNUL(t *testing.T) {
 
 func TestContainerEnvPrecedenceAndOrder(t *testing.T) {
 	t.Setenv("STEPS_T_HOST", "host")
+	t.Setenv("STEPS_T_SHADOWED", "host")
 
 	s := &dockerSession{
-		envNames:  []string{"STEPS_T_HOST", "STEPS_RUN_ID", "STEPS_T_MISSING"},
-		envValues: map[string]string{"STEPS_JOB_NAME": "supplied", "STEPS_URL": "supplied"},
+		envNames:  []string{"STEPS_T_HOST", "STEPS_T_SHADOWED", "STEPS_T_MISSING"},
+		envValues: map[string]string{"STEPS_JOB_NAME": "supplied", "STEPS_T_SHADOWED": "supplied"},
 	}
 
-	got := s.containerEnv(map[string]string{"STEPS_RUN_ID": "extra", "STEPS_URL": "extra"})
-	want := []string{"STEPS_JOB_NAME=supplied", "STEPS_RUN_ID=extra", "STEPS_T_HOST=host", "STEPS_URL=extra"}
+	got := s.containerEnv()
+	want := []string{"STEPS_JOB_NAME=supplied", "STEPS_T_HOST=host", "STEPS_T_SHADOWED=supplied"}
 
 	if !slices.Equal(got, want) {
 		t.Errorf("containerEnv = %v, want %v", got, want)

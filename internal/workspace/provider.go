@@ -34,8 +34,7 @@ type isolatingProvider struct {
 	// token distinguishes this invocation's build directories from any other's
 	// — see newInvocationToken.
 	token string
-	// cache is the cross-build resource cache, nil when the pipeline did not
-	// has a durable root (see enableCache).
+	// cache is the cross-build resource cache, nil without a durable root (see enableCache).
 	cache *resourceCache
 	// stepCache reuses task/agent outputs across runs, nil when the root is
 	// this provider's own temp directory — see enableCache.

@@ -119,8 +119,7 @@ func readyProvider(provider workspace.Provider, check func(workspace.Provider) e
 // attachArtifactStore wires --artifact-store into the provider's step cache:
 // the blob half from the URL, the index half from the state store the digests
 // are truth in. A pipeline with no durable --workspace-root has no step cache
-// to mirror — that half is warned about rather than refused, because the
-// flag's other consumer, a placed step's data plane, works without one.
+// to mirror, which is warned about rather than refused.
 func attachArtifactStore(provider workspace.Provider, st store.Blobs, raw string) error {
 	if raw == "" {
 		return nil
@@ -139,7 +138,7 @@ func attachArtifactStore(provider workspace.Provider, st store.Blobs, raw string
 	if !provider.AttachArtifactStore(blobs, st) {
 		slog.Warn("artifact_store.no_step_cache",
 			"store", raw,
-			"why", "no durable --workspace-root, so cached step outputs are not mirrored; placed steps still use the store as their data plane")
+			"why", "no durable --workspace-root, so cached step outputs are not mirrored")
 	}
 
 	return nil

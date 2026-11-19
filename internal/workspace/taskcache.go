@@ -227,17 +227,12 @@ func move(ctx context.Context, src, dst string) error {
 
 // ClearTaskCaches deletes the caches keyed by keys under ws's root, reporting which were there; ws must name a root, since under a temp one no cache outlives its run.
 func ClearTaskCaches(ws *Settings, keys []string) (map[string]bool, error) {
-	provider, err := NewProvider(ws, false)
+	p, err := newProvider(ws, false)
 	if err != nil {
 		return nil, err
 	}
 
-	defer func() { _ = provider.Close() }()
-
-	p, ok := provider.(*isolatingProvider)
-	if !ok {
-		return nil, fmt.Errorf("%w: provider %T", errUnsupportedStrategy, provider)
-	}
+	defer func() { _ = p.Close() }()
 
 	found := make(map[string]bool, len(keys))
 
@@ -262,5 +257,3 @@ func ClearTaskCaches(ws *Settings, keys []string) (map[string]bool, error) {
 
 	return found, nil
 }
-
-var errUnsupportedStrategy = errors.New("not supported on this machine")

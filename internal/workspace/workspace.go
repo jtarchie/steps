@@ -15,11 +15,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 )
 
-// Provider is built once per CLI invocation from the operator's Settings (nil taking
-// every default — see NewProvider). It owns whatever on-disk root its strategy
-// needs and fails fast, at startup, on anything that would only surface as a
-// confusing mid-build error otherwise (wrong platform, wrong filesystem,
-// missing binaries).
+// Provider is built once per CLI invocation from the operator's Settings (nil taking every default — see NewProvider), and fails fast at startup on a root that would only surface as a confusing mid-build error otherwise.
 type Provider interface {
 	Validate() error
 	// NewBuild creates the workspace for one triggered build (see
@@ -174,13 +170,7 @@ func sanitizeLabel(label string) string {
 	return sanitized
 }
 
-// NewProvider builds the provider a pipeline's workspace: block selects.
-// Every provider isolates: a step's directory is materialized from its own
-// declared inputs:/outputs: and nothing else. ws == nil (no block present)
-// takes every default — strategy copy under a system temp root. (The old
-// shared single-mutable-directory mode, where every step saw everything, is
-// gone: an artifact a step never declared reaching it anyway was ambient
-// data flow, and every flow here is opt-in.)
+// NewProvider builds the operator's provider, ws == nil taking every default (a system temp root); a step's directory is materialized from its declared inputs:/outputs: and nothing else, because an undeclared artifact reaching a step is ambient data flow.
 //
 // keep leaves each build's directory on disk instead of removing it at Close,
 // and prints where it is. A build workspace is otherwise destroyed
@@ -188,6 +178,15 @@ func sanitizeLabel(label string) string {
 // task had just edited when it failed, the most useful thing to look at, were
 // always already gone by the time the error reached the terminal.
 func NewProvider(ws *Settings, keep bool) (Provider, error) {
+	provider, err := newProvider(ws, keep)
+	if err != nil {
+		return nil, err
+	}
+
+	return provider, nil
+}
+
+func newProvider(ws *Settings, keep bool) (*isolatingProvider, error) {
 	if ws == nil {
 		ws = &Settings{}
 	}

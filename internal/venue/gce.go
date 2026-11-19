@@ -115,11 +115,7 @@ var gceFor = func(ctx context.Context, worker Worker) (gceAPI, error) {
 	return newGCEFuncs(&gceClient{service: service}), nil
 }
 
-// gceService is the process's Compute Engine client, resolved once and cached
-// only on success. A session is dialled per STEP, so without this every
-// placed step re-read the credentials, re-minted a token and opened a fresh
-// connection pool — the same cost artifactStores caches away for the data
-// plane. Nothing about the client is worker-specific, so one serves them all.
+// gceService is the process's Compute Engine client, cached only on success: a session is dialled per STEP, so without it every placed step re-read the credentials, re-minted a token and opened a fresh connection pool, and nothing about the client is worker-specific.
 //
 //nolint:gochecknoglobals // one credential resolution per process, documented above
 var (
