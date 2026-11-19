@@ -390,7 +390,7 @@ var docScenarios = map[string]docScenario{
 
 			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
 				schema := string(req.Tools[0].Function.Parameters)
-				for _, published := range []string{`"maxLength":40`, `"pattern":"^[^;]*$"`, `"enum":["low","high"]`, `"default":"low"`} {
+				for _, published := range []string{`"minLength":3`, `"maxLength":40`, `"pattern":"^[^;]*$"`, `"enum":["low","high"]`, `"default":"low"`} {
 					if !strings.Contains(schema, published) {
 						t.Errorf("the model was not told %s:\n%s", published, schema)
 					}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,5 +64,24 @@ func TestJudgeFailsWhenNoMutantBuilt(t *testing.T) {
 	err = requireJudged(append(broken, mutant{Outcome: "lived"}))
 	if err != nil {
 		t.Errorf("requireJudged(one built) = %v, want nil", err)
+	}
+}
+
+// A binary that exits nonzero naming no failed test (a panic in TestMain, goleak's verdict) broke under the mutant: reading only `--- FAIL:` lines scored that as lived.
+func TestJudgedCallsANamelessFailureACrash(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []struct {
+		out     string
+		err     error
+		outcome string
+	}{
+		{"--- FAIL: TestA (0.00s)\nFAIL\n", errors.New("exit status 1"), "killed"},
+		{"PASS\ngoleak: Errors on successful test run: found unexpected goroutines\n", errors.New("exit status 1"), "crashed"},
+		{"PASS\n", nil, "lived"},
+	} {
+		if outcome, _ := judged(c.out, c.err); outcome != c.outcome {
+			t.Errorf("judged(%q, %v) = %q, want %q", c.out, c.err, outcome, c.outcome)
+		}
 	}
 }

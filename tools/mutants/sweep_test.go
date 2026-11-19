@@ -16,7 +16,8 @@ func TestSweepJudgesEachMutantByTheTestsThatRunIt(t *testing.T) {
 		"go.mod": "module fixture\n\ngo 1.25\n",
 		"fix.go": "package fix\n\nfunc Max(a, b int) int {\n\tif a > b {\n\t\treturn a\n\t}\n\n\treturn b\n}\n\nfunc Neg(x int) int { return -x }\n\nfunc Unused(x int) bool { return x == 1 }\n",
 		"fix_test.go": "package fix\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\n" +
-			"func TestMax(t *testing.T) {\n\tif Max(2, 1) != 2 || Max(1, 2) != 2 {\n\t\tt.Fatal(\"max\")\n\t}\n}\n\n" +
+			// TestMax fails unless it sees the docker-free env it was profiled under, so a fast tier that drops that env kills the boundary mutant that must live.
+			"func TestMax(t *testing.T) {\n\tif os.Getenv(\"DOCKER_HOST\") != \"unix:///nonexistent.sock\" {\n\t\tt.Fatal(\"a docker-free test ran where docker is reachable\")\n\t}\n\n\tif Max(2, 1) != 2 || Max(1, 2) != 2 {\n\t\tt.Fatal(\"max\")\n\t}\n}\n\n" +
 			"func TestNeg(t *testing.T) {\n\tif os.Getenv(\"DOCKER_HOST\") == \"unix:///nonexistent.sock\" {\n\t\tt.Skip(\"wants docker\")\n\t}\n\n\tif Neg(3) != -3 {\n\t\tt.Fatal(\"neg\")\n\t}\n}\n",
 	}
 

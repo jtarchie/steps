@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS late (
 );
 ALTER TABLE late ADD COLUMN pipeline_id INTEGER NOT NULL DEFAULT 0`
 
+// A migration step creates its table bare, with no IF NOT EXISTS.
+const migration = `CREATE TABLE migrated (
+	pipeline_id INTEGER NOT NULL,
+	name TEXT NOT NULL
+)`
+
 const columns = `hash`
 
 const (
@@ -45,6 +51,8 @@ var (
 	_ = `INSERT INTO run_steps (run_id, step_name) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND pipeline_id = ?)`
 	_ = `SELECT s.step_name FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE r.pipeline_id = ?`
 	_ = `DELETE FROM late WHERE id = ?`
+	_ = migration
+	_ = `UPDATE migrated SET name = ?`
 )
 
 func placeholders() string { return "?" }

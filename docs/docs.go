@@ -60,8 +60,6 @@ func (b Block) Mode() string {
 			return field
 		case field == "noexec" || strings.HasPrefix(field, "noexec="):
 			return "noexec"
-		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="), strings.HasPrefix(field, "deliver="), strings.HasPrefix(field, "github="), strings.HasPrefix(field, "linear="), strings.HasPrefix(field, "slack="), strings.HasPrefix(field, "registry="):
-			return "run"
 		}
 	}
 
@@ -381,6 +379,10 @@ func extract(page, body string) ([]Block, error) {
 	for i, line := range strings.Split(body, "\n") {
 		fence := strings.HasPrefix(line, "```")
 
+		if !inside && yamlLookalike(line) {
+			return nil, fmt.Errorf("%s:%d: %q is not a column-0 ```yaml fence, so its example would go untested", page, i+1, strings.TrimSpace(line))
+		}
+
 		switch {
 		case fence && !inside:
 			inside = true
@@ -407,4 +409,18 @@ func extract(page, body string) ([]Block, error) {
 	}
 
 	return blocks, nil
+}
+
+// yamlLookalike is a fence a reader takes for a yaml example and extract does not: indented, opened with ~~~, or spelled yml or YAML.
+func yamlLookalike(line string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+
+	marker, ok := strings.CutPrefix(trimmed, "```")
+	if !ok {
+		marker, ok = strings.CutPrefix(trimmed, "~~~")
+	}
+
+	lang, _, _ := strings.Cut(strings.TrimSpace(marker), " ")
+
+	return ok && (strings.EqualFold(lang, "yaml") || strings.EqualFold(lang, "yml")) && !strings.HasPrefix(line, "```yaml")
 }

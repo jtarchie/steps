@@ -90,6 +90,7 @@ func TestCheckFindsExactlyTheUnscopedStatements(t *testing.T) {
 		"nodes: DELETE FROM nodes WHERE hash IN ( ? )",
 		"run_steps: INSERT INTO run_steps (run_id, step_name) VALUES (?, ?)",
 		"late: DELETE FROM late WHERE id = ?",
+		"migrated: UPDATE migrated SET name = ?",
 	}
 
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {

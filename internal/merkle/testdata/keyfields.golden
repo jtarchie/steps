@@ -251,6 +251,91 @@
     "source": null,
     "user": "User"
   },
+  "Step/task": {
+    "assert": {
+      "code": 99,
+      "files": [
+        "Assert.Files[0]"
+      ],
+      "nudge": true,
+      "shape": {
+        "Assert.Shape.key": "Assert.Shape.value"
+      },
+      "stdout": "Assert.Stdout",
+      "tool_calls": [
+        {
+          "args": {
+            "Assert.ToolCalls[0].Args.key": "Assert.ToolCalls[0].Args.value"
+          },
+          "name": "Assert.ToolCalls[0].Name"
+        }
+      ],
+      "verdict": "Assert.Verdict"
+    },
+    "context_from": [
+      "Context.From.key=Context.From.value"
+    ],
+    "cpu_shares": 77,
+    "env": [
+      "Env[0]"
+    ],
+    "image": "Image",
+    "input_mapping": {
+      "InputMapping.key": "InputMapping.value"
+    },
+    "inputs": [
+      "Inputs.Names[0]"
+    ],
+    "label": "Label",
+    "max_visits": 0,
+    "memory_bytes": 58,
+    "network": "Network",
+    "output_mapping": {
+      "OutputMapping.key": "OutputMapping.value"
+    },
+    "outputs": [
+      "Outputs[0]"
+    ],
+    "privileged": true,
+    "run": "make",
+    "sandbox": true,
+    "secrets": {
+      "Secrets.key": "Secrets.value"
+    },
+    "to": {
+      "To.key": "To.value"
+    },
+    "user": "User",
+    "verdicts": [
+      {
+        "name": "Verdicts[0].Name",
+        "target": "Verdicts[0].Target"
+      }
+    ],
+    "when": "When.Run"
+  },
+  "Task/run": {
+    "cpu_shares": 77,
+    "env": [
+      "Env[0]"
+    ],
+    "image": "Image",
+    "inputs": [
+      "Inputs.Names[0]"
+    ],
+    "memory_bytes": 58,
+    "network": "Network",
+    "outputs": [
+      "Outputs[0]"
+    ],
+    "privileged": true,
+    "run": "make",
+    "sandbox": true,
+    "secrets": {
+      "Secrets.key": "Secrets.value"
+    },
+    "user": "User"
+  },
   "ToolSpec/builtin": [
     {
       "allow": [

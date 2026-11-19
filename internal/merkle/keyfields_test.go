@@ -334,6 +334,34 @@ func keyProbes() []keyProbe {
 		return out
 	}
 
+	taskName := "observed: a rename keys nothing, yet the step's name picks its working directory (/tmp/build/<sha256 of the name>, docs/infra.md), which a command can read"
+	fixUncached := "source: UncacheableReason — a task with fix: is never skipped, so no cached result answers for it"
+	deadline := "source: config.Step.Tags — a deadline or a retry count is not part of what a step produces, the reasoning placement shares"
+
+	stepTaskSilent := map[string]string{
+		"Task": taskName, "RunFile": loadedInto, "Fix": fixUncached, "Caches": agentSilent["Caches"],
+		"Timeout": deadline, "Attempts": deadline,
+		"Tags":         "source: config.Step.Tags — NOT hashed: placement decides where a step runs, not what it produces",
+		"Volatile":     "source: config.Step.Volatile — a volatile step is never reused (stepRecordsOnlyOutputs), so no key answers for it",
+		"MaxVisits":    "source: withRouting — max_visits: is folded beside to:, the routing it bounds",
+		"Across":       "source: stepContentMap — a step with across: hashes through AcrossPlanContent, which folds the axes in; this builder sees its cells",
+		"Parallelism":  "source: config.Step.Parallelism — desugared at load into across:, which AcrossPlanContent keys; a Step built by hand skips the loader",
+		"Line":         "source: yaml:\"-\" — the source line the loader stamps for error messages",
+		"NoteRequired": "source: yaml:\"-\" — computed at load for an agent sender's verdict note; a task sends none",
+		"OutputSubdir": "source: yaml:\"-\" — computed at across: expansion from the coordinates the cell's keyed Label already carries",
+	}
+
+	for _, field := range []string{"Agent", "Approval", "Do", "Ensemble", "Get", "InParallel", "LoadVar", "Put", "Race", "Try"} {
+		stepTaskSilent[field] = "source: validateStepKinds — a second kind field is a load error, so a task step never carries one"
+	}
+
+	for _, field := range []string{
+		"Messages", "MessageFiles", "Dir", "Tools", "MaxTurns", "MaxQuestions", "MaxContextBytes", "ContextPaths", "Memory",
+		"Trigger", "Version", "Params", "Passed", "Resource", "VarFile", "Format", "Reveal", "Budget", "MaxInFlight",
+	} {
+		stepTaskSilent[field] = "source: validateStepFieldPlacement — a field of another step kind is a load error on a task step"
+	}
+
 	return []keyProbe{
 		probeOf("ContainerLimits", config.ContainerLimits{}, map[string]string{}, func(l config.ContainerLimits) (any, error) {
 			content := map[string]any{}
@@ -377,6 +405,30 @@ func keyProbes() []keyProbe {
 
 			return out
 		}(), func(a config.Agent) (any, error) { return agentContent(a) }).choosing(agentEnums).leaving("Source.Endpoint", "Tools"),
+		probeOf("Task/run", config.Task{Name: "build", Run: "make"}, map[string]string{
+			"Name": taskName, "File": loadedInto, "RunFile": loadedInto, "Fix": fixUncached, "Timeout": deadline, "Caches": agentSilent["Caches"],
+		}, func(task config.Task) (any, error) {
+			cfg := &config.Config{Tasks: []config.Task{task}}
+			step := config.Step{Task: task.Name}
+
+			rt, err := cfg.ResolveTask(step)
+			if err != nil {
+				return nil, fmt.Errorf("resolving: %w", err)
+			}
+
+			return TaskNodeContent(cfg, step, rt)
+		}),
+		// A hook is a whole step of its own, which a filled one is not, so the hooks are left unset when every keyed field is filled.
+		probeOf("Step/task", config.Step{Task: "build", Run: "make"}, stepTaskSilent, func(step config.Step) (any, error) {
+			cfg := &config.Config{}
+
+			rt, err := cfg.ResolveTask(step)
+			if err != nil {
+				return nil, fmt.Errorf("resolving: %w", err)
+			}
+
+			return TaskNodeContent(cfg, step, rt)
+		}).leaving("Hooks.OnSuccess", "Hooks.OnFailure", "Hooks.OnError", "Hooks.OnAbort", "Hooks.Ensure", "Hooks.OnPending"),
 		probeOf("Agent/as a sub-agent", config.Agent{Name: "extra", Source: source, Description: "a helper"}, with(agentSilent, map[string]string{
 			"MaxQuestions": "source: AgentContentMap keys max_questions: only for an agent that grants ask_user, and this child grants nothing",
 		}), func(a config.Agent) (any, error) {

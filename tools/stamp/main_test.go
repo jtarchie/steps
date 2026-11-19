@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,7 +58,7 @@ func validate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = seal(ctx)
+	err = seal(ctx, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +139,77 @@ func commit(t *testing.T, message string) string {
 
 const zeroSHA = "0000000000000000000000000000000000000000"
 
+func dockerMarkerPath(t *testing.T) string {
+	t.Helper()
+
+	marker, err := gitFile(context.Background(), dockerMarker)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return marker
+}
+
+func TestBeginClearsAMarkerAnUnsealedRunLeft(t *testing.T) {
+	repo(t)
+
+	marker := dockerMarkerPath(t)
+	write(t, marker, "left by a run that never sealed")
+
+	err := begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = os.Stat(marker)
+	if err == nil {
+		t.Error("begin kept a marker an earlier run left, so this run would be reported for tests it has not run")
+	}
+}
+
+// D13: a run whose docker tier skipped wholesale is sealed all the same, but says so at seal and again at push rather than vouching in silence.
+func TestASealOverASkippedDockerTierSaysSoWithoutRefusing(t *testing.T) {
+	repo(t)
+	ctx := context.Background()
+
+	err := begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	write(t, dockerMarkerPath(t), "no docker daemon\n")
+
+	var sealed strings.Builder
+
+	err = seal(ctx, &sealed)
+	if err != nil {
+		t.Fatalf("a run with the docker tier skipped was refused; D13 says note it, never fail it: %v", err)
+	}
+
+	if strings.Count(sealed.String(), "\n") != 1 || !strings.Contains(sealed.String(), "no docker daemon") {
+		t.Errorf("seal said %q, want one line carrying the reason", sealed.String())
+	}
+
+	sh(t, "add", "-A")
+	tip := commit(t, "validated without docker")
+	refs := "refs/heads/main " + tip + " refs/heads/main " + zeroSHA + "\n"
+
+	var pushing strings.Builder
+
+	err = pushed(ctx, strings.NewReader(refs), &pushing)
+	if err != nil || !strings.Contains(pushing.String(), "no docker daemon") {
+		t.Errorf("pushed = %q, %v; want the push allowed with the skipped tier named", pushing.String(), err)
+	}
+
+	validate(t)
+	pushing.Reset()
+
+	err = pushed(ctx, strings.NewReader(refs), &pushing)
+	if err != nil || pushing.Len() != 0 {
+		t.Errorf("after a run that reached docker, pushed = %q, %v; want silence", pushing.String(), err)
+	}
+}
+
 func TestAPushOfTheWholeValidatedTreeIsAllowed(t *testing.T) {
 	repo(t)
 	write(t, "second.txt", "validated")
@@ -147,7 +219,7 @@ func TestAPushOfTheWholeValidatedTreeIsAllowed(t *testing.T) {
 	sh(t, "add", "second.txt")
 	tip := commit(t, "second of the series")
 
-	err := pushed(context.Background(), strings.NewReader("refs/heads/main "+tip+" refs/heads/main "+zeroSHA+"\n"))
+	err := pushed(context.Background(), strings.NewReader("refs/heads/main "+tip+" refs/heads/main "+zeroSHA+"\n"), io.Discard)
 	if err != nil {
 		t.Fatalf("the tip of a complete series was refused: %v", err)
 	}
@@ -161,7 +233,7 @@ func TestAPushThatLeavesAValidatedFileBehindIsRefusedByName(t *testing.T) {
 	sh(t, "add", "kept.txt")
 	tip := commit(t, "the series, abandoned halfway")
 
-	err := pushed(context.Background(), strings.NewReader("refs/heads/main "+tip+" refs/heads/main "+zeroSHA+"\n"))
+	err := pushed(context.Background(), strings.NewReader("refs/heads/main "+tip+" refs/heads/main "+zeroSHA+"\n"), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "forgotten.txt") {
 		t.Fatalf("error = %v, want a refusal naming forgotten.txt", err)
 	}
@@ -170,7 +242,7 @@ func TestAPushThatLeavesAValidatedFileBehindIsRefusedByName(t *testing.T) {
 func TestDeletingARemoteBranchPushesNoTreeToJudge(t *testing.T) {
 	repo(t)
 
-	err := pushed(context.Background(), strings.NewReader("(delete) "+zeroSHA+" refs/heads/gone "+zeroSHA+"\n"))
+	err := pushed(context.Background(), strings.NewReader("(delete) "+zeroSHA+" refs/heads/gone "+zeroSHA+"\n"), io.Discard)
 	if err != nil {
 		t.Fatalf("a branch deletion was refused: %v", err)
 	}
@@ -200,7 +272,7 @@ func TestATreeEditedDuringTheRunIsNotSealed(t *testing.T) {
 
 	write(t, "kept.txt", "edited by another session mid-run")
 
-	err = seal(ctx)
+	err = seal(ctx, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "kept.txt") {
 		t.Fatalf("error = %v, want a refusal naming kept.txt", err)
 	}
@@ -223,7 +295,7 @@ func TestARunThatSkippedTestsIsNotSealed(t *testing.T) {
 
 	t.Setenv("GOFLAGS", "-skip=TestSlow")
 
-	err = seal(ctx)
+	err = seal(ctx, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "GOFLAGS") {
 		t.Fatalf("error = %v, want a refusal naming GOFLAGS", err)
 	}
@@ -235,13 +307,24 @@ func TestARunThatSkippedTestsIsNotSealed(t *testing.T) {
 }
 
 func TestBypass(t *testing.T) {
+	// Split, so running this file's own commands never names the key the guard refuses.
+	key := "core." + "hooksPath"
+
 	refused := []string{
 		"git commit --no-verify -m x",
 		"git commit -n -m x",
 		"git commit -anm x",
 		"cd repo && git push --no-verify",
-		"git -c core.hooksPath=/dev/null commit -m x",
-		"git config core.hooksPath /dev/null",
+		"git -c " + key + "=/dev/null commit -m x",
+		"git config " + key + " /dev/null",
+		"git -c " + strings.ToLower(key) + "=/dev/null commit -m x",
+		"git config " + strings.ToUpper(key) + " /dev/null",
+		"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=" + key + " GIT_CONFIG_VALUE_0=/dev/null git commit -m x",
+		`env GIT_CONFIG_PARAMETERS="'` + strings.ToLower(key) + `=/dev/null'" git commit -m x`,
+		"export GIT_CONFIG_KEY_0=" + key + "; git commit -m x",
+		"GIT_CONFIG_KEY_0=" + key + " bash -c 'git commit -m x'",
+		"git commit --no-verif -m x",
+		"git push --no-veri",
 		"/usr/bin/git commit --no-verify",
 		"cat > msg.txt <<EOF\nan innocent message\nEOF\ngit commit --no-verify -F msg.txt",
 		"git commit -F - <<<'message' --no-verify",
@@ -263,7 +346,10 @@ func TestBypass(t *testing.T) {
 	allowed := []string{
 		"git commit -m 'guard refuses --no-verify and -n'",
 		"git commit -m \"$(cat <<'EOF'\nstamp: refuse git commit -n\nEOF\n)\"",
-		"cat > msg.txt <<'EOF'\nsealing points core.hooksPath at hack/hooks; git commit -n is refused\nEOF\ngit add x && git commit -q -F msg.txt",
+		"cat > msg.txt <<'EOF'\nsealing points " + key + " at hack/hooks; git commit -n is refused\nEOF\ngit add x && git commit -q -F msg.txt",
+		"grep -rn " + key + " tools/stamp",
+		"git status && grep -rn " + key + " tools/stamp",
+		"git commit --no-verbose -m x",
 		"git push -n",
 		"git log -n 5",
 		"grep -rn -- --no-verify CLAUDE.md",
