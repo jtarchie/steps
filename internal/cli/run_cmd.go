@@ -52,6 +52,11 @@ func (r *RunCmd) runOnDaemon(streams Streams) error {
 		}
 	}
 
+	client, err := newDaemonClient(r.Target)
+	if err != nil {
+		return err
+	}
+
 	cfg, err := r.Load(r.Path, resolvePipelineName(r.Path, r.Name))
 	if err != nil {
 		return err
@@ -66,8 +71,6 @@ func (r *RunCmd) runOnDaemon(streams Streams) error {
 	if err != nil {
 		from = r.Path
 	}
-
-	client := newDaemonClient(r.Target)
 
 	created, err := client.oneOff(web.OneOffRequest{
 		Source:   cfg.Revision.Source,

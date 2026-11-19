@@ -174,7 +174,10 @@ func (a *RunsAbortCmd) Run(streams Streams) error {
 		return errors.New("steps runs abort needs a run id or --queued <job>, and not both")
 	}
 
-	client := newDaemonClient(a.Target)
+	client, err := newDaemonClient(a.Target)
+	if err != nil {
+		return err
+	}
 
 	if a.Queued != "" {
 		err = client.post("/api/pipelines/"+name+"/jobs/"+url.PathEscape(a.Queued)+"/queued/abort", http.StatusNoContent)
@@ -220,7 +223,10 @@ func (r *RunsTriggerCmd) Run(streams Streams) error {
 		return fmt.Errorf("could not encode the trigger: %w", err)
 	}
 
-	client := newDaemonClient(r.Target)
+	client, err := newDaemonClient(r.Target)
+	if err != nil {
+		return err
+	}
 
 	err = client.send("/api/pipelines/"+name+"/jobs/"+url.PathEscape(r.Job)+"/trigger", payload, http.StatusAccepted)
 	if err != nil {
@@ -248,7 +254,12 @@ func (r *RunsRetryCmd) Run(streams Streams) error {
 		return err
 	}
 
-	err = newDaemonClient(r.Target).post("/api/pipelines/"+name+"/runs/"+url.PathEscape(r.RunID)+"/rerun", http.StatusAccepted)
+	client, err := newDaemonClient(r.Target)
+	if err != nil {
+		return err
+	}
+
+	err = client.post("/api/pipelines/"+name+"/runs/"+url.PathEscape(r.RunID)+"/rerun", http.StatusAccepted)
 	if err != nil {
 		return err
 	}
@@ -272,7 +283,12 @@ func (r *RunsResumeCmd) Run(streams Streams) error {
 		return err
 	}
 
-	err = newDaemonClient(r.Target).post("/api/pipelines/"+name+"/runs/"+url.PathEscape(r.RunID)+"/resume", http.StatusAccepted)
+	client, err := newDaemonClient(r.Target)
+	if err != nil {
+		return err
+	}
+
+	err = client.post("/api/pipelines/"+name+"/runs/"+url.PathEscape(r.RunID)+"/resume", http.StatusAccepted)
 	if err != nil {
 		return err
 	}

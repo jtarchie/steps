@@ -389,7 +389,10 @@ func (m *MCPLoginCmd) remote(ctx context.Context, out io.Writer) error {
 		return err
 	}
 
-	client := newDaemonClient(m.Target)
+	client, err := newDaemonClient(m.Target)
+	if err != nil {
+		return err
+	}
 
 	status, err := client.startLogin(ctx, name, m.Server)
 	if err != nil {
@@ -398,6 +401,22 @@ func (m *MCPLoginCmd) remote(ctx context.Context, out io.Writer) error {
 
 	sayf(out, "→ %s is authorizing %q…\n", client.target, m.Server)
 
+	status, err = m.awaitLogin(ctx, out, client, name, status)
+	if err != nil {
+		return err
+	}
+
+	if status.State != web.LoginAuthorized {
+		return fmt.Errorf("mcp login: %s", status.Message)
+	}
+
+	sayf(out, "✓ authorized %q on %s (saved there, sealed in its state database)\n", m.Server, client.target)
+
+	return nil
+}
+
+// awaitLogin polls a pending login until the daemon settles it, opening the browser once it hands back where to authorize.
+func (m *MCPLoginCmd) awaitLogin(ctx context.Context, out io.Writer, client *daemonClient, name string, status web.LoginStatus) (web.LoginStatus, error) {
 	announced := false
 
 	for status.State == web.LoginPending {
@@ -409,23 +428,19 @@ func (m *MCPLoginCmd) remote(ctx context.Context, out io.Writer) error {
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("mcp login: %w", ctx.Err())
+			return status, fmt.Errorf("mcp login: %w", ctx.Err())
 		case <-time.After(loginPoll):
 		}
 
+		var err error
+
 		status, err = client.loginStatus(ctx, name, m.Server)
 		if err != nil {
-			return err
+			return status, err
 		}
 	}
 
-	if status.State != web.LoginAuthorized {
-		return fmt.Errorf("mcp login: %s", status.Message)
-	}
-
-	sayf(out, "✓ authorized %q on %s (saved there, sealed in its state database)\n", m.Server, client.target)
-
-	return nil
+	return status, nil
 }
 
 // openBrowser launches the OS's default browser at url. Its caller

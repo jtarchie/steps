@@ -203,3 +203,48 @@ func TestRunTargetAsksWhatASetAsks(t *testing.T) {
 		t.Error("an admin's one-off did not run")
 	}
 }
+
+// run and follow take --target as a bare flag rather than TargetFlags, and a target url.Parse refuses still carries its credentials, so the refusal must not quote it.
+func TestAnUnparseableTargetNeverPrintsItsPassword(t *testing.T) {
+	t.Parallel()
+
+	// url.Parse cuts at the #, so its error quotes the half before it: neither half may appear.
+	const target = "http://u:hunter#22@127.0.0.1:1"
+
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi
+`)
+
+	for _, args := range [][]string{
+		{"run", path, "--target", target},
+		{"runs", "follow", "-p", "demo", "--target", target},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			stderr := captureStderr(t)
+
+			var err error
+
+			out := captureStdout(t, func() {
+				err = stepsRun(t, args)
+			})
+
+			if err == nil {
+				t.Fatalf("steps %s accepted an unparseable target", strings.Join(args, " "))
+			}
+
+			if !strings.Contains(err.Error(), "--target") {
+				t.Errorf("steps %s = %v, want --target named", strings.Join(args, " "), err)
+			}
+
+			for where, text := range map[string]string{"error": err.Error(), "stdout": out, "stderr": stderr()} {
+				if strings.Contains(text, "hunter") || strings.Contains(text, "#22") {
+					t.Errorf("the %s repeated the password: %s", where, text)
+				}
+			}
+		})
+	}
+}

@@ -29,7 +29,12 @@ type daemonClient struct {
 // A set runs every validator the daemon has, so it is not instant — and a daemon that stopped answering must say so rather than hang a terminal.
 const daemonTimeout = 30 * time.Second
 
-func newDaemonClient(target string) *daemonClient {
+func newDaemonClient(target string) (*daemonClient, error) {
+	err := checkTarget(target)
+	if err != nil {
+		return nil, err
+	}
+
 	base, username, password := splitTargetCredentials(target)
 
 	return &daemonClient{
@@ -43,10 +48,20 @@ func newDaemonClient(target string) *daemonClient {
 			Timeout:   daemonTimeout,
 			Transport: telemetry.Transport(&http.Transport{DisableKeepAlives: true}),
 		},
-	}
+	}, nil
 }
 
-// splitTargetCredentials takes the userinfo off a target URL, returning the address to talk to and the credentials to send. A target that does not parse comes back untouched and credential-free; TargetFlags.Validate refuses one before it gets here.
+// checkTarget is the one refusal every --target goes through. A target that does not parse cannot have its credentials taken off, and every message after this one would quote it — url.Parse's own error included.
+func checkTarget(target string) error {
+	_, err := url.Parse(strings.TrimSuffix(target, "/"))
+	if err != nil {
+		return errors.New("--target does not parse as a URL; check its syntax, percent-encoding any / : @ # in the password (not repeated here, as it may carry one)")
+	}
+
+	return nil
+}
+
+// splitTargetCredentials takes the userinfo off a target URL, returning the address to talk to and the credentials to send. A target that does not parse comes back untouched and credential-free; checkTarget refuses one before it gets here.
 func splitTargetCredentials(target string) (string, string, string) {
 	trimmed := strings.TrimSuffix(target, "/")
 

@@ -31,7 +31,7 @@ func TestTheTargetsCredentialsTravelInTheHeaderAndNotTheURL(t *testing.T) {
 
 	withCreds := strings.Replace(server.URL, "http://", "http://ops:s3cret@", 1)
 
-	client := newDaemonClient(withCreds)
+	client := mustDaemonClient(t, withCreds)
 
 	_, err := client.get("demo")
 	if err != nil {
@@ -65,7 +65,7 @@ func TestATargetWithoutCredentialsSendsNone(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := newDaemonClient(server.URL).get("demo")
+	_, err := mustDaemonClient(t, server.URL).get("demo")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestNoMessageCarriesThePasswordOutOfTheTarget(t *testing.T) {
 
 		target := strings.Replace(server.URL, "http://", "http://ops:"+password+"@", 1)
 
-		_, err := newDaemonClient(target).get("demo")
+		_, err := mustDaemonClient(t, target).get("demo")
 		if err == nil {
 			t.Fatalf("%s: a refusal was read as an answer", name)
 		}
@@ -112,7 +112,7 @@ func TestNoMessageCarriesThePasswordOutOfTheTarget(t *testing.T) {
 
 	target := strings.Replace(dead.URL, "http://", "http://ops:"+password+"@", 1)
 
-	_, err := newDaemonClient(target).get("demo")
+	_, err := mustDaemonClient(t, target).get("demo")
 	if err == nil {
 		t.Fatal("a closed port was read as an answer")
 	}
@@ -142,6 +142,17 @@ func TestAnUnparseableTargetIsRefusedWithoutRepeatingIt(t *testing.T) {
 	}
 }
 
+func mustDaemonClient(t *testing.T, target string) *daemonClient {
+	t.Helper()
+
+	client, err := newDaemonClient(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return client
+}
+
 // echo's own 401 body is "Unauthorized", which names neither what is missing nor where it goes.
 func TestA401NamesTheFix(t *testing.T) {
 	t.Parallel()
@@ -153,7 +164,7 @@ func TestA401NamesTheFix(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := newDaemonClient(server.URL).get("demo")
+	_, err := mustDaemonClient(t, server.URL).get("demo")
 	if err == nil {
 		t.Fatal("a 401 was read as an answer")
 	}

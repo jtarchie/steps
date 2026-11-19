@@ -72,7 +72,7 @@ func TestASetTouchingTwoCappedPoolsIsRefusedAtTheTerminal(t *testing.T) {
 	daemon := httptest.NewServer(held.server.Handler())
 	t.Cleanup(daemon.Close)
 
-	_, err := newDaemonClient(daemon.URL).set("app", web.SetRequest{Source: twoPools})
+	_, err := mustDaemonClient(t, daemon.URL).set("app", web.SetRequest{Source: twoPools})
 	if err == nil {
 		t.Fatal("a job touching two capped pools was accepted")
 	}
