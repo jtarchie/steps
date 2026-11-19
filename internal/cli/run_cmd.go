@@ -356,7 +356,7 @@ func (t *TestCmd) Run(streams Streams) error {
 		return err
 	}
 
-	opts.Provider, opts.Force, opts.ReopenTaken = provider, true, true
+	opts.Provider, opts.RunAll, opts.ReopenTaken = provider, true, true
 	opts.AnswerDB = answerDB(t.Pipeline, t.DB)
 
 	var (

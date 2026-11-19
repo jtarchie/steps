@@ -33,6 +33,11 @@ func PrepareRerun(ctx context.Context, st runLookup, runID string) (string, stri
 // nothing at all for a build that passed. Safe since #145, because skipping
 // the cache no longer re-opens taken versions, and a rerun takes none.
 func rerunSkipsCache(opts Run) bool {
+	return opts.Force || opts.RunAll || opts.RerunOf != ""
+}
+
+// refreshesStepCache: --force and a rerun run every step, so the step cache answers for none, though each still files what it made.
+func refreshesStepCache(opts Run) bool {
 	return opts.Force || opts.RerunOf != ""
 }
 

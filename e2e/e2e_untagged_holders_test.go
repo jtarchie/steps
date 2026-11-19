@@ -356,7 +356,10 @@ func TestTheStepCacheKeepsWhatAnUntaggedImageStepHeldInDocker(t *testing.T) {
 
 	assertNeverLanded(t, wsRoot(path))
 
-	mustRun(t, "run", path, "--force", "--workspace-root", wsRoot(path))
+	// A changed publish keeps the chain skip from answering for the job, so make and consume have to come from the step cache.
+	rewritePipeline(t, path, "run: cat out/got >> ", "run: true && cat out/got >> ")
+
+	mustRun(t, "run", path, "--workspace-root", wsRoot(path))
 
 	lines := strings.Fields(readFileString(t, sums))
 	if len(lines) != 2 || lines[0] != lines[1] {

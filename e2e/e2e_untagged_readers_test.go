@@ -129,7 +129,9 @@ jobs:
 		t.Fatal(err)
 	}
 
-	mustRun(t, "run", path, "--force", "--workspace-root", root, "--artifact-store", storeFlag)
+	rewritePipeline(t, path, "run: cat src/sum >> ", "run: true && cat src/sum >> ")
+
+	mustRun(t, "run", path, "--workspace-root", root, "--artifact-store", storeFlag)
 
 	if got := storeNodeResult(t, path, "make"); !strings.Contains(got, `"reused":true`) {
 		t.Errorf("make on the second run: %s, want it restored from the artifact store", got)

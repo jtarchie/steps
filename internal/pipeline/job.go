@@ -153,7 +153,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	log := &execLog{}
 	ctx = withExecLog(ctx, log)
 
-	ctx = withRunContext(ctx, job, skipCache)
+	ctx = withRunContext(ctx, job, skipCache, refreshesStepCache(opts))
 
 	// Remember which versions this run fetched or put, so a successful job
 	// can mark them green for any downstream job's passed: constraint. A
@@ -265,7 +265,11 @@ func failedStatus(ctx context.Context, err error) store.RunStatus {
 // providers ignore it outright. --force has to reach the runners that keep
 // their own cache rather than consulting the chain index (across: cells).
 // A load_var: value says nothing about the next run, so it is scoped here too.
-func withRunContext(ctx context.Context, job *config.Job, skipCache bool) context.Context {
+func withRunContext(ctx context.Context, job *config.Job, skipCache, refresh bool) context.Context {
+	if refresh {
+		ctx = withoutStepCacheLookups(ctx)
+	}
+
 	ctx = llmclient.WithNewRun(ctx, job.Name)
 	// The instant every agent pin in this job is judged against, so a long
 	// job cannot have a fallback expire out from under its later steps.

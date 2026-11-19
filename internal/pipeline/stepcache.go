@@ -80,6 +80,8 @@ func lookupStepCache(
 		return workspace.StepCacheResult{}
 	}
 
+	req.Refresh = !stepCacheLookups(ctx)
+
 	res := workspace.LookupStepCache(ctx, r.bw, req)
 	if !res.Hit {
 		release()
@@ -90,6 +92,19 @@ func lookupStepCache(
 	slog.InfoContext(ctx, "job.skip", "step", name, "reason", "reused", "key", res.Key)
 
 	return res
+}
+
+type noLookupsKey struct{}
+
+// withoutStepCacheLookups is --force and a rerun: every step runs, and what each makes still refreshes its entry.
+func withoutStepCacheLookups(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noLookupsKey{}, true)
+}
+
+func stepCacheLookups(ctx context.Context) bool {
+	off, _ := ctx.Value(noLookupsKey{}).(bool)
+
+	return !off
 }
 
 // reuseStep looks a step up and, on a hit, records its node as succeeded: the

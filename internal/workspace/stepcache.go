@@ -47,6 +47,8 @@ type StepCacheRequest struct {
 	// restore, and what a miss will later store.
 	Outputs       []string
 	OutputMapping map[string]string
+	// Refresh computes the key without restoring anything, so the step runs and its outputs replace the entry: --force.
+	Refresh bool
 }
 
 // StepCacheResult is what a lookup decided: the key this step's work is filed
@@ -300,6 +302,10 @@ func (b *isolatingBuild) RestoreStep(ctx context.Context, req StepCacheRequest) 
 	key, err := b.stepCache.actionKey(b.artifactDigest, req)
 	if err != nil {
 		return StepCacheResult{}, err
+	}
+
+	if req.Refresh {
+		return StepCacheResult{Key: key}, nil
 	}
 
 	// Claimed before anything is replaced: a held tree docker has since evicted makes the whole entry a miss, which costs a run and nothing else.

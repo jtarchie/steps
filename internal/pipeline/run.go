@@ -19,9 +19,10 @@ type Run struct {
 	Provider workspace.Provider
 	// Pinned applies to every get step's version selection.
 	Pinned map[string]string
-	// Force (--force) bypasses chain-skip planning only; results are still
-	// recorded.
+	// Force (--force) runs every step: neither the chain skip nor the step cache answers for one, though what the run makes is still recorded and filed.
 	Force bool
+	// RunAll bypasses the chain skip only, leaving the step cache to answer: what `steps test` asks, so its asserts are evaluated on every run without re-earning cached work.
+	RunAll bool
 	// ID fixes the id of the run RunJob starts, so a caller can address that
 	// run — to abort it — before it exists. Empty mints one; a resume keeps
 	// the id of the run it continues.

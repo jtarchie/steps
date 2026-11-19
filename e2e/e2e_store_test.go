@@ -81,8 +81,8 @@ func TestStoreKeepsOneTreeForIdenticalOutputs(t *testing.T) {
 		t.Fatalf("the index holds %d entries naming %d trees (%v), want both steps naming one tree", entries, digests, err)
 	}
 
-	// --force bypasses only the chain skip, so make is answered by the step cache, from the store.
-	mustRun(t, "run", path, "--job", "a", "--workspace-root", root, "--force")
+	editReader(t, path, seen)
+	mustRun(t, "run", path, "--job", "a", "--workspace-root", root)
 
 	if got := readFileString(t, ran); got != "a\nb\n" {
 		t.Errorf("steps that ran = %q, want make answered from the store on the rerun", got)
@@ -114,7 +114,8 @@ func TestStoreTamperedTreeIsAMiss(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mustRun(t, "run", path, "--job", "a", "--workspace-root", root, "--force")
+	editReader(t, path, seen)
+	mustRun(t, "run", path, "--job", "a", "--workspace-root", root)
 
 	if got := readFileString(t, ran); got != "a\na\n" {
 		t.Errorf("steps that ran = %q, want make to run again over a tampered tree", got)
@@ -196,7 +197,8 @@ jobs:
 		t.Fatalf("store holds %d trees %v of 60 bytes each under a 100 byte bound, want 1", len(got), got)
 	}
 
-	mustRun(t, append([]string{"run", path, "--job", "a", "--force"}, bound...)...)
+	rewritePipeline(t, path, "run: wc -c < out/file >> "+seen+"\n", "run: wc -c < out/file >> "+seen+" && true\n")
+	mustRun(t, append([]string{"run", path, "--job", "a"}, bound...)...)
 
 	if got := readFileString(t, ran); got != "a\nb\na\n" {
 		t.Errorf("steps that ran = %q, want make-a run again: its tree was evicted", got)
@@ -232,6 +234,43 @@ func TestStepsRunKeepsItsCachesWithoutARoot(t *testing.T) {
 	if trees := storeTrees(t, filepath.Join(dir, ".steps", "workspace")); len(trees) != 1 {
 		t.Errorf("the default root's store holds %v, want make's one tree", trees)
 	}
+}
+
+// TestForceRunsACachedStepAgainAndRefilesIt: --force asks the step cache nothing, so every step runs, but what it makes is still filed, so the next unforced run is a hit again.
+func TestForceRunsACachedStepAgainAndRefilesIt(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ran, seen := filepath.Join(dir, "ran.log"), filepath.Join(dir, "seen.log")
+	path := storePipeline(t, dir, ran, seen)
+
+	mustRun(t, "run", path, "--job", "a")
+
+	// Only the forced run's filing can answer the last run.
+	err := evictLocalCache(filepath.Join(dir, ".steps", "workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, "run", path, "--job", "a", "--force")
+
+	if got := readFileString(t, ran); got != "a\na\n" {
+		t.Errorf("steps that ran = %q, want make run again under --force", got)
+	}
+
+	editReader(t, path, seen)
+	mustRun(t, "run", path, "--job", "a")
+
+	if got := readFileString(t, ran); got != "a\na\n" {
+		t.Errorf("steps that ran = %q, want the forced run's outputs answering the next run", got)
+	}
+}
+
+// editReader changes storePipeline's reader so the chain skip cannot answer for the job, and make has to come from the step cache.
+func editReader(t *testing.T, path, seen string) {
+	t.Helper()
+
+	rewritePipeline(t, path, "run: cat out/file >> "+seen+"\n", "run: cat out/file >> "+seen+" && true\n")
 }
 
 // evictLocalCache drops this machine's store, the index in the state database surviving: the shape of a second machine handed that database.
