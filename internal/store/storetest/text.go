@@ -73,6 +73,31 @@ func (s suite) TestHostileTextIsRecorded(t *testing.T) {
 	assertReadable(t, "queue error", rows[0].Error)
 }
 
+// TestHostileVersionMetadataIsRecorded: a resource's metadata is its script's output, as hostile as any task's, and a refused write loses it.
+func (s suite) TestHostileVersionMetadataIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	version, err := store.EncodeVersion(map[string]any{"n": "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = st.RecordVersionMetadata(ctx, "items", version, hostile)
+	if err != nil {
+		t.Fatalf("RecordVersionMetadata: %v", err)
+	}
+
+	metadata, err := st.VersionMetadata(ctx, "items", []store.VersionKey{version})
+	if err != nil {
+		t.Fatalf("VersionMetadata: %v", err)
+	}
+
+	assertReadable(t, "version metadata", metadata[version])
+}
+
 func assertReadable(t *testing.T, what, got string) {
 	t.Helper()
 
