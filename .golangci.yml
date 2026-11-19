@@ -918,6 +918,7 @@ linters:
             - "github.com/jtarchie/steps/internal/events"
             # exprlang to compile a rule's expressions when a pipeline is validated or set, which config cannot do.
             - "github.com/jtarchie/steps/internal/exprlang"
+            # test-only (PipelineRunviewTestOnly): a test draws a run the way a terminal caller would.
             - "github.com/jtarchie/steps/internal/runview"
             - "github.com/jtarchie/steps/internal/merkle"
             - "github.com/jtarchie/steps/internal/outcome"
@@ -933,6 +934,13 @@ linters:
             - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/usage"
             - "github.com/jtarchie/steps/internal/workspace"
+        PipelineRunviewTestOnly:
+          files:
+            - "**/internal/pipeline/**"
+            - "!$test"
+          deny:
+            - pkg: "github.com/jtarchie/steps/internal/runview"
+              desc: "test-only in pipeline: the caller names a run's renderer with events.WithRenderer"
         # scheduler drains each held pipeline's queue: workers, --max-runs
         # slots, serial/max_in_flight sync, the breaker, pause, abort, and the
         # leased workspace provider. It sits above pipeline and reaches

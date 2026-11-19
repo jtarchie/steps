@@ -193,7 +193,7 @@ jobs:
 
 	var err error
 
-	out := captureStdout(t, func() { err = f.run(context.Background()) })
+	out := captureStdout(t, func() { err = f.run(plainRun(context.Background())) })
 	if err != nil {
 		t.Fatalf("an oversized version must not fail the build: %v", err)
 	}
@@ -243,7 +243,7 @@ jobs:
 
 	f.provider.Reuse(dir)
 
-	out := captureStdout(t, func() { err = f.run(resumeCtx) })
+	out := captureStdout(t, func() { err = f.run(plainRun(resumeCtx)) })
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}

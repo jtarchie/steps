@@ -522,7 +522,7 @@ func TestASuccessfulRefreshWarnsOfNothing(t *testing.T) {
 
 	var err error
 
-	out := captureStdout(t, func() { err = runBuild(context.Background(), t, cfg, st) })
+	out := captureStdout(t, func() { err = runBuild(plainRun(context.Background()), t, cfg, st) })
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}
@@ -583,7 +583,7 @@ jobs:
 
 	provider.Reuse(workspaceDir)
 
-	out := captureStdout(t, func() { err = RunJob(ctx, cfg, job, st, Run{Provider: provider}) })
+	out := captureStdout(t, func() { err = RunJob(plainRun(ctx), cfg, job, st, Run{Provider: provider}) })
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}

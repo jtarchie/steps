@@ -332,7 +332,7 @@ func TestAJobAcquiresNoMachineToRefreshAPolledResource(t *testing.T) {
 
 	var err error
 
-	out := captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider}) })
+	out := captureStdout(t, func() { err = RunJob(plainRun(ctx), cfg, &cfg.Jobs[0], st, Run{Provider: provider}) })
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestARefreshStillChecksAResourceNothingPolls(t *testing.T) {
 
 	var err error
 
-	out := captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider}) })
+	out := captureStdout(t, func() { err = RunJob(plainRun(ctx), cfg, &cfg.Jobs[0], st, Run{Provider: provider}) })
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}
@@ -756,7 +756,7 @@ func TestADeadWarmMachineIsReplacedOnce(t *testing.T) {
 
 			var err error
 
-			out := captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider}) })
+			out := captureStdout(t, func() { err = RunJob(plainRun(ctx), cfg, &cfg.Jobs[0], st, Run{Provider: provider}) })
 			if err != nil {
 				t.Fatalf("RunJob: %v", err)
 			}

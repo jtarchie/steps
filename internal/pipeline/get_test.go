@@ -73,7 +73,7 @@ jobs:
 
 	provider.Reuse(workspaceDir)
 
-	out := captureStdout(t, func() { err = RunJob(ctx, cfg, job, st, Run{Provider: provider, Pinned: pin}) })
+	out := captureStdout(t, func() { err = RunJob(plainRun(ctx), cfg, job, st, Run{Provider: provider, Pinned: pin}) })
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}

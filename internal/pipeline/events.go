@@ -15,7 +15,6 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/outcome"
-	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -62,8 +61,10 @@ func StoreSink(st store.Events) func(events.Event) {
 // attachEventBus makes sure the run publishes somewhere. A caller that
 // already installed a bus (the web server, which also fans events out to live
 // viewers) keeps theirs, and prints what it chooses to; everyone else gets a
-// bus that records the run and prints it plainly, so it is readable both while
-// it happens and afterwards, regardless of how it was started.
+// bus that records the run and draws it with the renderer the caller named
+// (events.WithRenderer), so it is readable both while it happens and
+// afterwards, regardless of how it was started. With no renderer the run is
+// recorded and drawn by nobody: choosing how a run looks is the caller's.
 //
 // The returned func must be called when the run ends: it drains the sink so
 // the last events land before the process moves on.
@@ -72,13 +73,12 @@ func attachEventBus(ctx context.Context, st store.Events) (context.Context, func
 		return ctx, func() {}
 	}
 
-	render := events.Renderer(ctx)
-	if render == nil {
-		render = runview.Plain(events.Stdout(ctx))
-	}
-
 	bus := events.New(StoreSink(st))
-	stopPrinting := bus.Observe(render)
+
+	stopPrinting := func() {}
+	if render := events.Renderer(ctx); render != nil {
+		stopPrinting = bus.Observe(render)
+	}
 
 	return events.WithBus(ctx, bus), func() {
 		stopPrinting()

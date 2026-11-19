@@ -750,7 +750,7 @@ func Hold(ctx context.Context) (io.Writer, func()) {
 
 type rendererKey struct{}
 
-// WithRenderer names what should draw a run started under ctx: the observer a bus the runner attaches will call, in place of its plain lines.
+// WithRenderer names what should draw a run started under ctx: the observer a bus the runner attaches will call. A run with none is recorded and drawn by nobody.
 func WithRenderer(ctx context.Context, render func(Event)) context.Context {
 	return context.WithValue(ctx, rendererKey{}, render)
 }
