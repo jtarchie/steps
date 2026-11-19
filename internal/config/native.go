@@ -56,7 +56,7 @@ func (c *Config) nativeResourceType(name string) string {
 	return c.nativeType(resource.Type)
 }
 
-// validateNativeGets refuses params: on a get from any native type: none reads them, so a Concourse habit like depth: 1 would load and do nothing.
+// validateNativeGets refuses params: on a get from any native type but registry-image: none of the others reads them, so a Concourse habit like depth: 1 would load and do nothing.
 func (c *Config) validateNativeGets() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
@@ -65,7 +65,8 @@ func (c *Config) validateNativeGets() error {
 			}
 
 			kind := c.nativeResourceType(step.GetResourceName())
-			if kind == "" {
+			// registry-image's get has params: of its own, checked by validateRegistryImageGets.
+			if kind == "" || kind == RegistryImageType {
 				return nil
 			}
 

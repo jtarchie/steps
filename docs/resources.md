@@ -1411,15 +1411,20 @@ jobs:
 
 **The version is `{digest}`**, the content the tag pointed at when the check ran. A new push to the tag is a new version; a push of the same content is not. A tag the registry does not have fails the check, naming it, rather than reading as "no versions yet", so a misspelled tag cannot hold a pipeline back in silence. A multi-platform image is one version: the digest of its index, which each machine's docker resolves to its own platform.
 
-**A get fetches no layers.** It asks the registry that the digest is still there, then writes three files, because the image is pulled by whatever runs it, by digest:
+**A get fetches no layers unless asked.** It asks the registry that the digest is still there, then writes three files, because the image is pulled by whatever runs it, by digest:
 
 | file | what it holds |
 |---|---|
 | `repository` | `source.repository` as written |
 | `tag` | the tag the check followed |
 | `digest` | the version's digest, `sha256:…` |
+| `oci/` | only with `format: oci-layout`: the whole image as an [OCI layout](https://github.com/opencontainers/image-spec/blob/main/image-layout.md), every platform of a multi-platform one, its one entry the version's digest |
 
-A get takes no `params:`. Concourse's get downloads the image as a root filesystem by default; here the step that runs it does that.
+| `params:` field | required | meaning |
+|---|---|---|
+| `format` | no | `oci-layout` downloads the image into `oci/`, for a [build to start from](#building-on-a-tracked-base-image). Unset, nothing is downloaded |
+
+Concourse's get downloads the image as a root filesystem by default; here the step that runs it does that, so `rootfs` (and `oci`, its single-platform tarball) are refused. `oci-layout` is Concourse's name and layout: a put of `oci/` to another repository pushes the same digest, which is how an image is mirrored.
 
 ### Pushing: `put`
 
@@ -1483,6 +1488,68 @@ The put's version is the pushed digest; the next build's get of `app-image` find
 | `additional_tags` | no | a file of whitespace-separated tags the image also gets, beside `source.tag` |
 
 Both paths are refused at load when they name an artifact the put does not list in its `inputs:`, and at run when one leads out of the build's tree.
+
+### Building on a tracked base image
+
+When the base image is a resource too, a new push of it is a new version: `trigger: true` on its get starts the build, and the build takes its `FROM` from the exact image that get downloaded, not from whatever the tag points at by the time BuildKit asks. The base's login is the resource's, so a private base needs nothing inside the build.
+
+```yaml registry=rebuild
+tasks:
+- name: oci-build
+  image: moby/buildkit:v0.17.3
+  privileged: true
+  caches:
+  - path: buildkit
+  run: |
+    buildctl-daemonless.sh build \
+      --frontend dockerfile.v0 --local context=src --local dockerfile=src \
+      --oci-layout base=base-image/oci \
+      --opt "context:ghcr.io/acme/base=oci-layout://base@$(cat base-image/digest)" \
+      --export-cache type=local,dest=buildkit,mode=max --import-cache type=local,src=buildkit \
+      --opt build-arg:SOURCE_DATE_EPOCH=0 \
+      --output type=oci,dest=image/image.tar,rewrite-timestamp=true
+
+resources:
+- name: base-image
+  type: registry-image
+  source:
+    repository: ghcr.io/acme/base
+    username: robot
+    password_env: REGISTRY_TOKEN
+- name: app-image
+  type: registry-image
+  source:
+    repository: ghcr.io/acme/app
+    username: robot
+    password_env: REGISTRY_TOKEN
+
+jobs:
+- name: publish
+  plan:
+  - get: base-image
+    trigger: true                      # a new base starts a rebuild
+    params:
+      format: oci-layout               # download it, every platform, into base-image/oci
+  - task: source                       # stands in for a get of the repository holding the Dockerfile
+    outputs: [src]
+    run: |
+      printf 'FROM ghcr.io/acme/base\nCOPY hello /hello\n' > src/Dockerfile
+      echo hello > src/hello
+  - task: oci-build
+    inputs: [src, base-image]
+    outputs: [image]
+  - put: app-image
+    inputs: [image]
+    params:
+      image: image/image.tar
+  assert:
+    execution: [base-image, source, oci-build, app-image]
+    outcome: succeeded
+```
+
+- **`--oci-layout base=…` and `context:<name>=oci-layout://base@<digest>`** are BuildKit's: the first names the downloaded layout, the second answers the Dockerfile's `FROM ghcr.io/acme/base` from it, so the Dockerfile stays one a plain `docker build` also builds. Concourse's oci-build-task does the same through `IMAGE_ARG_*`, which asks the Dockerfile for an `ARG`.
+- **A multi-platform base** is one layout holding every platform; a build with `--opt platform=linux/amd64,linux/arm64` takes each platform's base from it.
+- **The digest file pins it.** A get's `params:` are part of its cache key, and its version is the digest, so an unchanged base is the same get, and the build that follows reuses its cache.
 
 `tags:` is refused, as for every type that runs inside this process: check, get and put are steps' own requests, made from this machine.
 

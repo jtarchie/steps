@@ -20,12 +20,18 @@ type docRegistryFixture struct {
 	seed []string
 	// pushed are the tags the block must leave in the registry, all naming one digest.
 	pushed []string
+	// base is the one repository path seeded, with a real image for this machine's platform holding baseMarker; every other repository the block pushes must carry that file, so the build took its FROM from the get.
+	base string
 }
+
+const baseMarker = "base-marker"
 
 var docRegistryFixtures = map[string]docRegistryFixture{ //nolint:gochecknoglobals // read-only fixture table, like docGitHubFixtures
 	"private": {username: "robot", password: "fake-registry-token", seed: []string{"latest"}},
 	// publish starts empty: the block pushes what its get then finds.
 	"publish": {username: "robot", password: "fake-registry-token", pushed: []string{"latest", "v1"}},
+	// rebuild seeds the base a build names in FROM; the image it pushes must be built on it.
+	"rebuild": {username: "robot", password: "fake-registry-token", base: "acme/base", pushed: []string{"latest"}},
 }
 
 var docRegistryToken sync.Once //nolint:gochecknoglobals // one process-wide dummy, as docSlackToken
@@ -97,6 +103,10 @@ func pointDocRegistryResource(t *testing.T, fake *fakeRegistry, fixture docRegis
 		})
 	}
 
+	if path == fixture.base {
+		fake.seedBase(t, fake.repo(path)+":latest", &authn.Basic{Username: fixture.username, Password: fixture.password})
+	}
+
 	tag, _ := source["tag"].(string)
 	for _, seeded := range fixture.seed {
 		if tag == "" || tag == seeded {
@@ -116,9 +126,17 @@ func checkDocRegistryPushes(t *testing.T, fake *fakeRegistry, fixture docRegistr
 	repository, _ := source["repository"].(string)
 	login := &authn.Basic{Username: fixture.username, Password: fixture.password}
 
+	if fixture.base != "" && repository == fake.repo(fixture.base) {
+		return
+	}
+
 	t.Cleanup(func() {
 		if t.Failed() {
 			return
+		}
+
+		if fixture.base != "" && !fake.hasFile(t, repository+":"+fixture.pushed[0], baseMarker, login) {
+			t.Errorf("%s:%s has no %s: the build did not take its FROM from the base get", repository, fixture.pushed[0], baseMarker)
 		}
 
 		first := fake.digestOf(t, repository+":"+fixture.pushed[0], login)
