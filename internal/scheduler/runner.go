@@ -172,8 +172,8 @@ func (r *LocalRunner) EnqueueRerun(ctx context.Context, target *Pipeline, jobNam
 	return nil
 }
 
-// ErrNotResumable is a resume asked of a run that cannot continue: not failed, nothing finished to keep, or its tree gone.
-var ErrNotResumable = errors.New("this run cannot be resumed: only a failed run that finished a step, with its workspace still on disk, can; Retry runs it from the top")
+// ErrNotResumable is a resume asked of a run that cannot continue: not failed, nothing finished to keep, its tree gone, or its finished steps moved by an edit.
+var ErrNotResumable = errors.New("this run cannot be resumed: only a failed run that finished a step, with its workspace still on disk and its finished steps where the pipeline still has them, can; Retry runs it from the top")
 
 // ResumeAt is where a resume of a failed run would pick up: the step it runs first, and how many finished passes it keeps.
 type ResumeAt struct {
@@ -204,7 +204,18 @@ func (r *LocalRunner) EnqueueResume(ctx context.Context, target *Pipeline, jobNa
 		return ErrNotResumable
 	}
 
-	err := target.Store.EnqueueResumeJob(ctx, jobName, reason, runID, actor.From(ctx).String())
+	job, err := target.Config().FindJob(jobName)
+	if err != nil {
+		return fmt.Errorf("scheduler: %w", err)
+	}
+
+	// The page skips this check because it reads every version the job gets, so the press pays for it once instead of every poll.
+	_, err = pipeline.CheckResumable(ctx, target.Store, runID, job)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrNotResumable, err)
+	}
+
+	err = target.Store.EnqueueResumeJob(ctx, jobName, reason, runID, actor.From(ctx).String())
 	if err != nil {
 		return fmt.Errorf("scheduler: %w", err)
 	}
@@ -763,7 +774,12 @@ func resumeAsked(
 
 	if runID != "" {
 		run, found, err := target.Store.FindRunRow(ctx, runID)
-		asked = err == nil && found && run.Status == store.RunFailed
+		if err != nil {
+			// Unread, a person's resume is indistinguishable from a restart's, and the restart's fallback builds from the top: the cost Resume was pressed to avoid.
+			return ctx, provider, "", fmt.Errorf("scheduler: run %s: %w", runID, err)
+		}
+
+		asked = found && run.Status == store.RunFailed
 	}
 
 	ctx, provider, resumed := resume(ctx, target, job, runID, provider)

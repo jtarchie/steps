@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,6 +109,57 @@ jobs:
 	}
 
 	requireNotHeld(t, st, "a refused resume ran nothing for the breaker to count")
+}
+
+type unreadableRuns struct{ store.Store }
+
+func (unreadableRuns) FindRunRow(context.Context, string) (store.RunRow, bool, error) {
+	return store.RunRow{}, false, errors.New("database is locked")
+}
+
+// A claim that cannot read the run it was asked to resume fails rather than build the job from the top as a new run.
+func TestAResumeWhoseRunCannotBeReadDoesNotRebuild(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tally := filepath.Join(dir, "tally")
+
+	runner, target, st := drainable(t, dir, `
+jobs:
+  - name: build
+    plan:
+      - task: first
+        inputs: []
+        run: echo first >> `+tally+`
+`)
+
+	ctx := context.Background()
+
+	interruptRun(t, st, "UNREAD01", dir)
+
+	err := st.FinishRun(ctx, "UNREAD01", store.RunFailed)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = st.CompleteJob(ctx, 1, store.QueueFailed, nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	err = st.EnqueueResumeJob(ctx, "build", "resume (web)", "UNREAD01", "")
+	if err != nil {
+		t.Fatalf("EnqueueResumeJob: %v", err)
+	}
+
+	target.Store = unreadableRuns{st}
+
+	runner.DrainOne(ctx, target)
+
+	_, err = os.Stat(tally)
+	if !os.IsNotExist(err) {
+		t.Errorf("a step ran (%v): an unreadable run was built from the top", err)
+	}
 }
 
 func requireNotHeld(t *testing.T, st store.Store, why string) {

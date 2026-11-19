@@ -144,6 +144,16 @@ func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *con
 	done := foldRunSteps(steps)
 	build := triggeredBuild(runID)
 
+	err = refuseMovedSteps(runID, steps, build, remainderSteps(job))
+	if err != nil {
+		return false, err
+	}
+
+	err = refuseLostInputs(ctx, st, runID, inputs, done, job)
+	if err != nil {
+		return false, err
+	}
+
 	if len(inputs) > 0 && buildFinished(done, build, remainderSteps(job)) {
 		if state := resumeFrom(ctx); state != nil {
 			state.refetch = true
@@ -230,6 +240,9 @@ func ResumePoint(ctx context.Context, st store.Runs, run store.RunRow, job *conf
 	}
 
 	plan := remainderSteps(job)
+	if refuseMovedSteps(run.ID, steps, build, plan) != nil {
+		return "", 0, false
+	}
 
 	at, unfinished := firstUnfinished(foldRunSteps(steps), build, plan)
 	if !unfinished || at >= len(plan) {
@@ -264,6 +277,42 @@ func replayedNext(steps []config.Step, i int, step config.Step, outcome string) 
 	}
 
 	return i + 1
+}
+
+// refuseLostInputs refuses, before the run is put back in flight, the resume resumeInputSets would refuse after: a build that kept steps but recorded no inputs, or one whose recorded version history has since pruned.
+func refuseLostInputs(ctx context.Context, st store.Versions, runID string, inputs []store.RunInput, done map[doneKey]doneStep, job *config.Job) error {
+	if len(inputs) == 0 {
+		return refuseUnrecordedBuild(&resumeState{id: runID, done: done})
+	}
+
+	history, err := loadResourceHistory(ctx, st, job)
+	if err != nil {
+		return fmt.Errorf("could not read the history run %q resumes against: %w", runID, err)
+	}
+
+	_, err = recordedInputSet(runID, inputs, history)
+
+	return err
+}
+
+// refuseMovedSteps refuses a resume whose finished steps no longer sit where the plan puts them: the replay skips by position, so a step inserted before them would be credited as done without running. An edit that leaves them in place, like a fix to the step that failed, resumes.
+func refuseMovedSteps(runID string, steps []store.RunStep, build string, plan []config.Step) error {
+	for _, step := range steps {
+		if step.BuildID != build || step.Name == "" {
+			continue
+		}
+
+		now := ""
+		if step.Index < len(plan) {
+			now = executedStepName(plan[step.Index])
+		}
+
+		if now != step.Name {
+			return fmt.Errorf("cannot resume run %q: the step it finished at position %d was %q and the pipeline now has %q there — start a new run", runID, step.Index, step.Name, now)
+		}
+	}
+
+	return nil
 }
 
 // refuseMissingWorkspace refuses a resume that would keep artifacts from a

@@ -187,3 +187,134 @@ func requireResumeFrom(t *testing.T, page, resume, from string) {
 		t.Fatalf("the Resume button does not name %s as where the run picks up:\n%s", from, page)
 	}
 }
+
+// TestResumeSurvivesAFixButNotAMove: a resume replays the run's finished steps by their place in the plan, so a set that edits the failed step still offers it, while one that moves the finished steps would credit a step that never ran: the page offers only Retry and a POST anyway is refused.
+func TestResumeSurvivesAFixButNotAMove(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	versions := filepath.Join(dir, "versions.json")
+	tally := filepath.Join(dir, "ran.txt")
+	path := filepath.Join(dir, "edited.yml")
+
+	writePipelineFile(t, versions, `[{"n":"one"}]`)
+
+	pipeline := func(inserted, broken string) string {
+		return `
+resource_types:
+- name: counter
+  config:
+    check: cat ` + versions + `
+    in: echo {{ .version.n | shellquote }} > n.txt
+
+resources:
+- name: ticks
+  type: counter
+  source: {}
+
+jobs:
+  - name: build
+    plan:
+      - get: ticks` + inserted + `
+      - task: fine
+        run: echo fine >> ` + tally + `
+      - task: broken
+        run: ` + broken + `
+`
+	}
+
+	writePipelineFile(t, path, pipeline("", `"false"`))
+
+	served := startWebFor(t, path)
+	defer served.stop(t)
+
+	name := cli.PipelineName(path)
+	served.trigger(t, name, "build")
+
+	run := newestRun(t, served.state, name, "build")
+	waitForRunStatus(t, served.state, name, run.ID, "failed")
+
+	resume := "/p/" + name + "/runs/" + run.ID + "/resume"
+
+	if page := pageGet(t, served.addr, "/p/"+name+"/runs/"+run.ID); !strings.Contains(page, `action="`+resume+`"`) {
+		t.Fatalf("the failed run offers no Resume before the edit, so its absence below proves nothing")
+	}
+
+	writePipelineFile(t, path, pipeline("", `"exit 2"`))
+	served.set(t, name, path)
+
+	requireResumeFrom(t, pageGet(t, served.addr, "/p/"+name+"/runs/"+run.ID), resume, "broken")
+
+	writePipelineFile(t, path, pipeline(`
+      - task: inserted
+        run: echo inserted >> `+tally, `"exit 2"`))
+	served.set(t, name, path)
+
+	if page := pageGet(t, served.addr, "/p/"+name+"/runs/"+run.ID); strings.Contains(page, `action="`+resume+`"`) {
+		t.Errorf("the page offers Resume for a run whose pipeline has since changed")
+	}
+
+	if status := postEmpty(t, "http://"+served.addr+resume); status != http.StatusConflict {
+		t.Errorf("POST resume answered %d, want %d", status, http.StatusConflict)
+	}
+}
+
+// TestResumeOfAPrunedVersionIsRefusedAtThePress: a resume rebuilds against the version the run was created with, so once version_history has pruned it the press is refused naming the version, rather than putting the run back in flight only to fail it again.
+func TestResumeOfAPrunedVersionIsRefusedAtThePress(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	versions := filepath.Join(dir, "versions.json")
+	path := filepath.Join(dir, "pruned.yml")
+
+	writePipelineFile(t, versions, `[{"n":"one"}]`)
+
+	err := os.WriteFile(path, []byte(`
+defaults:
+  version_history: 1
+
+resource_types:
+- name: counter
+  config:
+    check: cat `+versions+`
+    in: echo {{ .version.n | shellquote }} > n.txt
+
+resources:
+- name: ticks
+  type: counter
+  source: {}
+
+jobs:
+  - name: build
+    plan:
+      - get: ticks
+        trigger: true
+      - task: fine
+        run: "true"
+      - task: broken
+        run: "false"
+`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	served := startWebFor(t, path, "--interval", "50ms")
+	defer served.stop(t)
+
+	name := cli.PipelineName(path)
+
+	run := newestRun(t, served.state, name, "build")
+	waitForRunStatus(t, served.state, name, run.ID, "failed")
+
+	writePipelineFile(t, versions, `[{"n":"two"}]`)
+	settle(t, served.state, name, "ticks")
+
+	if status := postEmpty(t, "http://"+served.addr+"/p/"+name+"/runs/"+run.ID+"/resume"); status != http.StatusConflict {
+		t.Errorf("POST resume answered %d, want %d", status, http.StatusConflict)
+	}
+
+	err = stepsRun(t, []string{"runs", "resume", run.ID, "-p", name, "--target", served.target()})
+	if err == nil || !strings.Contains(err.Error(), "no longer in the resource's history") {
+		t.Errorf("steps runs resume = %v, want the refusal naming the pruned version", err)
+	}
+}
