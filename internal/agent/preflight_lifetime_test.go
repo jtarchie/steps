@@ -43,7 +43,7 @@ func TestAPinIsReleasedAtARunBoundaryNotMidJob(t *testing.T) {
 	// Two steps of ONE job: the second resolves long after the lifetime would
 	// have fired on wall-clock, and must still see the same source.
 	for i, at := range []time.Time{jobStart, jobStart} {
-		if _, pinned := selectedSourceAt(scope, at); !pinned {
+		if _, pinned := selectedSourceAt(t.Context(), scope, at); !pinned {
 			t.Fatalf("step %d of one job lost the pin; a run decides before it starts", i+1)
 		}
 	}
@@ -51,7 +51,7 @@ func TestAPinIsReleasedAtARunBoundaryNotMidJob(t *testing.T) {
 	// The NEXT run is where it goes, because that is a boundary at which
 	// nothing is half-done.
 	nextRun := record.decided.Add(pinLifetime + time.Minute)
-	if _, pinned := selectedSourceAt(scope, nextRun); pinned {
+	if _, pinned := selectedSourceAt(t.Context(), scope, nextRun); pinned {
 		t.Fatal("a pin outlived its lifetime across a run boundary")
 	}
 }

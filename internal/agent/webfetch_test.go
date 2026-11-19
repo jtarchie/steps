@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 )
 
 func fetchResult(t *testing.T, allow []string, args map[string]any) map[string]any {
@@ -53,6 +54,23 @@ func TestWebFetchTruncatesAtCap(t *testing.T) {
 
 	if body, _ := result["body"].(string); len(body) != maxWebFetchBytes || result["truncated"] != true {
 		t.Errorf("body length = %d, truncated = %v; want the cap with truncated true", len(result["body"].(string)), result["truncated"])
+	}
+}
+
+// The cap is a byte count, so a rune straddling it must be dropped whole rather than handed to the model half-cut.
+func TestWebFetchTruncationCutsOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", maxWebFetchBytes-1) + "€"))
+	}))
+	defer server.Close()
+
+	result := fetchResult(t, []string{"127.0.0.1"}, map[string]any{"url": server.URL})
+
+	body, _ := result["body"].(string)
+	if !utf8.ValidString(body) || body != strings.Repeat("x", maxWebFetchBytes-1) || result["truncated"] != true {
+		t.Errorf("body = %d bytes ending %q, truncated = %v; want the x run alone, valid UTF-8, truncated", len(body), body[max(0, len(body)-4):], result["truncated"])
 	}
 }
 

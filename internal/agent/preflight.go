@@ -380,7 +380,7 @@ func reconsiderPin(
 		return renewPinIf(scope, selection) && pinnedProbe.Healthy
 	}
 
-	return releasePin(scope, agent, selection, primary, candidate, primaryProbe)
+	return releasePin(ctx, scope, agent, selection, primary, candidate, primaryProbe)
 }
 
 // releasePin performs reconsiderPin's drop half: the compare-and-delete and
@@ -388,6 +388,7 @@ func reconsiderPin(
 // exactly one case — the pin it meant to drop is no longer the pin that is
 // there.
 func releasePin(
+	ctx context.Context,
 	scope pinScope,
 	agent *config.Agent,
 	selection sourceSelection,
@@ -420,7 +421,7 @@ func releasePin(
 	// recovery nobody had probed for — the exact line the stale-positive
 	// defect used to print.
 	if primaryProbe.Recovered() {
-		slog.Warn("agent.failover.returned",
+		slog.WarnContext(ctx, "agent.failover.returned",
 			"pipeline", scope.pipeline,
 			"agent", agent.Name,
 			"from", candidate.ModelName,
@@ -430,7 +431,7 @@ func releasePin(
 		return false
 	}
 
-	slog.Warn("agent.failover.pin_lost",
+	slog.WarnContext(ctx, "agent.failover.pin_lost",
 		"pipeline", scope.pipeline,
 		"agent", agent.Name,
 		"model", candidate.ModelName,

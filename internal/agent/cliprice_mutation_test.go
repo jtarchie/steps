@@ -21,7 +21,7 @@ func TestAttemptCostWarnsOnlyWhenSpendGoesUnpriced(t *testing.T) {
 	for _, tc := range cases {
 		logs := captureLogs(t)
 
-		attemptCost(tc.model, cliRunResult{streamed: tc.usage})
+		attemptCost(t.Context(), tc.model, cliRunResult{streamed: tc.usage})
 
 		if got := strings.Contains(logs.String(), "agent.cli.unpriced_attempt"); got != tc.warn {
 			t.Errorf("%s: warned = %v, want %v: %s", tc.name, got, tc.warn, logs.String())

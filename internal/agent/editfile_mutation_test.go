@@ -188,3 +188,22 @@ func TestExecEditFileAtTheSizeLimit(t *testing.T) {
 		t.Errorf("file starts %q, want the edit applied", data[:10])
 	}
 }
+
+// A find whose opening anchor is on every line and whose closing anchor is nowhere was quadratic in the file's length: each opening scanned on to EOF. The ±25% window bounds each scan to the longest block that could still be a candidate.
+func TestBlockAnchorCandidatesScanIsBoundedByTheWindow(t *testing.T) {
+	t.Parallel()
+
+	const lines = 5000
+
+	original := strings.Split(strings.Repeat("}\n", lines), "\n")
+	search := []string{"}", "a()", "b()", "never"}
+
+	candidates, scanned := blockAnchorCandidates(original, search)
+	if len(candidates) != 0 {
+		t.Fatalf("candidates = %v, want none: the closing anchor never appears", candidates)
+	}
+
+	if limit := lines * (len(search) + 1); scanned > limit {
+		t.Errorf("scanned %d lines for %d openings, want at most %d: the scan must stop at the window, not EOF", scanned, lines, limit)
+	}
+}

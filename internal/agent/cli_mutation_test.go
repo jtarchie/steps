@@ -149,7 +149,7 @@ func TestCleanupCLISessionRemovesItsTranscript(t *testing.T) {
 		}
 	}
 
-	cleanupCLISession("11111111-2222-4333-8444-555555555555")
+	cleanupCLISession(t.Context(), "11111111-2222-4333-8444-555555555555")
 
 	_, err = os.Stat(mine)
 	if !os.IsNotExist(err) {

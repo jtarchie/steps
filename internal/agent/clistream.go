@@ -17,6 +17,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -186,7 +187,7 @@ type cliContentBlock struct {
 // tests pass nil because they predate attestation entirely.
 // The recorder may be nil — a caller that only wants the reduced result, and
 // every test that predates the transcript, passes one.
-func parseCLIStream(reader io.Reader, rec *transcriptRecorder, expected []string) (cliRunResult, error) {
+func parseCLIStream(ctx context.Context, reader io.Reader, rec *transcriptRecorder, expected []string) (cliRunResult, error) {
 	var result cliRunResult
 
 	attesting := expected != nil
@@ -203,7 +204,7 @@ func parseCLIStream(reader io.Reader, rec *transcriptRecorder, expected []string
 	scanner.Buffer(make([]byte, 0, 64<<10), cliStreamMaxLine)
 
 	for scanner.Scan() {
-		err := parseCLILine(scanner.Bytes(), &result, rec, index, expected, attesting)
+		err := parseCLILine(ctx, scanner.Bytes(), &result, rec, index, expected, attesting)
 		if err != nil {
 			return result, err
 		}
@@ -232,7 +233,7 @@ func parseCLIStream(reader io.Reader, rec *transcriptRecorder, expected []string
 // budget. A blank or unparsable line is skipped, not an error — the schema
 // belongs to the CLI, so tolerance is the point (see the file header).
 func parseCLILine(
-	line []byte, result *cliRunResult, rec *transcriptRecorder, index map[string]int, expected []string, attesting bool,
+	ctx context.Context, line []byte, result *cliRunResult, rec *transcriptRecorder, index map[string]int, expected []string, attesting bool,
 ) error {
 	if len(line) == 0 {
 		return nil
@@ -242,7 +243,7 @@ func parseCLILine(
 
 	err := json.Unmarshal(line, &event)
 	if err != nil {
-		slog.Debug("agent.cli.stream.skip", "reason", "unparsable line", "error", err)
+		slog.DebugContext(ctx, "agent.cli.stream.skip", "reason", "unparsable line", "error", err)
 
 		return nil
 	}
@@ -258,11 +259,11 @@ func parseCLILine(
 	case "system":
 		recordCLIFork(rec, event)
 
-		return recordCLIInit(result, event, expected, attesting)
+		return recordCLIInit(ctx, result, event, expected, attesting)
 	case "result":
 		recordCLIResult(result, event)
 	default:
-		slog.Debug("agent.cli.stream.skip", "type", event.Type)
+		slog.DebugContext(ctx, "agent.cli.stream.skip", "type", event.Type)
 	}
 
 	return nil
@@ -272,9 +273,9 @@ func parseCLILine(
 // system/init event attestation reads, and checked against expected the
 // instant it is parsed when attesting — extracted from parseCLIStream's own
 // switch to keep that function's complexity within the linter's budget.
-func recordCLIInit(result *cliRunResult, event cliEvent, expected []string, attesting bool) error {
+func recordCLIInit(ctx context.Context, result *cliRunResult, event cliEvent, expected []string, attesting bool) error {
 	if event.Subtype != "init" {
-		slog.Debug("agent.cli.stream.skip", "type", event.Type, "subtype", event.Subtype)
+		slog.DebugContext(ctx, "agent.cli.stream.skip", "type", event.Type, "subtype", event.Subtype)
 
 		return nil
 	}

@@ -274,8 +274,8 @@ const (
 // to a pin has in common — the pre-run probe, a step resolving its source,
 // the cascade. Hanging the lifetime off any single writer would leave it
 // exactly as skippable as reconsiderPin already is.
-func selectedSource(scope pinScope) (sourceSelection, bool) {
-	return selectedSourceAt(scope, time.Now())
+func selectedSource(ctx context.Context, scope pinScope) (sourceSelection, bool) {
+	return selectedSourceAt(ctx, scope, time.Now())
 }
 
 // runBoundaryKey carries the run a context belongs to.
@@ -350,7 +350,7 @@ func runSelection(ctx context.Context, scope pinScope) (sourceSelection, bool) {
 }
 
 // selectedSourceAt is selectedSource judged against a caller-chosen instant.
-func selectedSourceAt(scope pinScope, now time.Time) (sourceSelection, bool) {
+func selectedSourceAt(ctx context.Context, scope pinScope, now time.Time) (sourceSelection, bool) {
 	selectedSources.mu.Lock()
 
 	record, ok := selectedSources.by[scope]
@@ -366,7 +366,7 @@ func selectedSourceAt(scope pinScope, now time.Time) (sourceSelection, bool) {
 		// As loud as arriving and as loud as returning: an operator watching
 		// for a change in model quality needs every edge, and this one moves
 		// an agent back to its primary with no probe behind it.
-		slog.Warn("agent.failover.pin_expired",
+		slog.WarnContext(ctx, "agent.failover.pin_expired",
 			"pipeline", scope.pipeline,
 			"agent", scope.agent,
 			"model", record.selection.source.Model,

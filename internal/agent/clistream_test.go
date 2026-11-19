@@ -19,7 +19,7 @@ func TestParseCLIStream(t *testing.T) {
 		`{"type":"result","subtype":"success","result":"all done","num_turns":3,"is_error":false,"usage":{"input_tokens":120,"output_tokens":45}}`,
 	}, "\n")
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
+	result, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestParseCLIStreamTolerance(t *testing.T) {
 		`{"type":"result","subtype":"success","result":"fine","num_turns":1}`,
 	}, "\n")
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
+	result, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestParseCLIStreamTruncated(t *testing.T) {
 	// retry this and not that.
 	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 1"}}]}}`
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
+	result, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestParseCLIStreamReportsAProviderErrorAsSuccessSubtype(t *testing.T) {
 
 	stream := `{"type":"result","subtype":"success","is_error":true,"result":"You've hit your session limit · resets 11:20am"}`
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
+	result, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestParseCLIStreamReportsFailure(t *testing.T) {
 
 	stream := `{"type":"result","subtype":"error_max_turns","result":"","num_turns":8,"is_error":true}`
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
+	result, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestParseCLIStreamRecordsTheConversation(t *testing.T) {
 
 	rec := &transcriptRecorder{}
 
-	_, err := parseCLIStream(strings.NewReader(stream), rec, nil)
+	_, err := parseCLIStream(t.Context(), strings.NewReader(stream), rec, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestParseCLIStreamRecordsABridgedCallOnce(t *testing.T) {
 
 	rec := &transcriptRecorder{}
 
-	result, err := parseCLIStream(strings.NewReader(stream), rec, nil)
+	result, err := parseCLIStream(t.Context(), strings.NewReader(stream), rec, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestParseCLIStreamKeepsAnUnrecognizedNameVerbatim(t *testing.T) {
 
 	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"echo hi"}}]}}`
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
+	result, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestParseCLIStreamRecordsBlockShapedResults(t *testing.T) {
 
 	rec := &transcriptRecorder{}
 
-	_, err := parseCLIStream(strings.NewReader(stream), rec, nil)
+	_, err := parseCLIStream(t.Context(), strings.NewReader(stream), rec, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestParseCLIStreamReportsWhatItSpent(t *testing.T) {
 		`"total_cost_usd":0.25,"usage":{"input_tokens":10,"output_tokens":5,` +
 		`"cache_creation_input_tokens":100,"cache_read_input_tokens":900}}`
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
+	result, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestParseCLIStreamAttestationExact(t *testing.T) {
 		`{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false}`,
 	}, "\n")
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil, []string{"mcp__steps__read_file", "mcp__steps__run_shell"})
+	result, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, []string{"mcp__steps__read_file", "mcp__steps__run_shell"})
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestParseCLIStreamAttestationSurplus(t *testing.T) {
 		`{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false}`,
 	}, "\n")
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil, []string{"mcp__steps__read_file"})
+	result, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, []string{"mcp__steps__read_file"})
 	if !errors.Is(err, errCLIToolSurface) {
 		t.Fatalf("parseCLIStream error = %v, want errCLIToolSurface", err)
 	}
@@ -410,7 +410,7 @@ func TestParseCLIStreamAttestationMissing(t *testing.T) {
 
 	stream := `{"type":"system","subtype":"init","tools":["mcp__steps__read_file"]}`
 
-	_, err := parseCLIStream(strings.NewReader(stream), nil, []string{"mcp__steps__read_file", "mcp__steps__run_shell"})
+	_, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, []string{"mcp__steps__read_file", "mcp__steps__run_shell"})
 	if !errors.Is(err, errCLIToolSurface) {
 		t.Fatalf("parseCLIStream error = %v, want errCLIToolSurface", err)
 	}
@@ -431,12 +431,12 @@ func TestParseCLIStreamAttestationAbsent(t *testing.T) {
 
 	resultOnly := `{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false}`
 
-	_, err := parseCLIStream(strings.NewReader(resultOnly), nil, []string{"mcp__steps__read_file"})
+	_, err := parseCLIStream(t.Context(), strings.NewReader(resultOnly), nil, []string{"mcp__steps__read_file"})
 	if !errors.Is(err, errCLIToolSurface) {
 		t.Fatalf("parseCLIStream error = %v, want errCLIToolSurface for a result with no init", err)
 	}
 
-	result, err := parseCLIStream(strings.NewReader(""), nil, []string{"mcp__steps__read_file"})
+	result, err := parseCLIStream(t.Context(), strings.NewReader(""), nil, []string{"mcp__steps__read_file"})
 	if err != nil {
 		t.Fatalf("an empty stream (neither event) should not be an attestation failure: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestParseCLIStreamAttestationLateArriving(t *testing.T) {
 		`{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false}`,
 	}, "\n")
 
-	_, err := parseCLIStream(strings.NewReader(stream), nil, []string{"mcp__steps__read_file"})
+	_, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, []string{"mcp__steps__read_file"})
 	if !errors.Is(err, errCLIToolSurface) {
 		t.Fatalf("parseCLIStream error = %v, want errCLIToolSurface even for a late-arriving init event", err)
 	}
@@ -479,7 +479,7 @@ func TestParseCLIStreamOtherSystemEventsAreNotAttestations(t *testing.T) {
 		`{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false}`,
 	}, "\n")
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil, []string{"mcp__steps__read_file"})
+	result, err := parseCLIStream(t.Context(), strings.NewReader(stream), nil, []string{"mcp__steps__read_file"})
 	if err != nil {
 		t.Fatalf("an unrelated system event tripped attestation: %v", err)
 	}

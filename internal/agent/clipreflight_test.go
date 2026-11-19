@@ -111,7 +111,7 @@ func TestPreflightCLIFailsOverToHostedProvider(t *testing.T) {
 		t.Fatalf("problems = %+v, want none — the fallback should have absorbed the missing cli", problems)
 	}
 
-	selection, selected := selectedSource(testPin("reviewer"))
+	selection, selected := selectedSource(t.Context(), testPin("reviewer"))
 	if !selected {
 		t.Fatal("no fallback was selected for an agent whose cli is missing")
 	}

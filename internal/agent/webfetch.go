@@ -148,7 +148,7 @@ func doWebFetch(ctx context.Context, target *url.URL, allow []string) map[string
 
 	truncated := len(body) > maxWebFetchBytes
 	if truncated {
-		body = body[:maxWebFetchBytes]
+		body = dropPartialRune(body[:maxWebFetchBytes])
 	}
 
 	return map[string]any{

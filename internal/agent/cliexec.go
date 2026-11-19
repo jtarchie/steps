@@ -66,7 +66,7 @@ func execCLI(
 	cmd.Dir = prepared.conv.env.dir
 	cmd.Env = cliEnv(ctx, prepared.ri)
 	cmd.Stdin = strings.NewReader(plan.prompt)
-	cmd.Stderr = &cliStderrLogger{agent: prepared.ri.AgentName}
+	cmd.Stderr = &cliStderrLogger{ctx: ctx, agent: prepared.ri.AgentName}
 	cmd.WaitDelay = cliWaitDelay
 
 	stdout, err := cmd.StdoutPipe()
@@ -86,7 +86,7 @@ func execCLI(
 	// The step's own recorder, so every turn the child takes is published as
 	// it happens under the step that spawned it. It is set for every agent
 	// step in PreparedStep.Run, whichever path runs — this one just never used it.
-	run, parseErr := parseCLIStream(stdout, prepared.conv.recorder, expected)
+	run, parseErr := parseCLIStream(ctx, stdout, prepared.conv.recorder, expected)
 
 	// An attestation failure kills the child right here, before Wait: the
 	// child's own natives are gone and its tool surface is exactly what the
@@ -366,6 +366,7 @@ func cliToolTimeoutEnv(ri config.ResolvedInvocation) []string {
 // on internal/mcp's stdio server logger, and safe for the same reason: only
 // os/exec's copy goroutine writes, and cmd.Wait synchronizes after it.
 type cliStderrLogger struct {
+	ctx   context.Context //nolint:containedctx // an io.Writer has no ctx parameter, and the step's ctx is what routes each line to its invocation
 	agent string
 	buf   bytes.Buffer
 }
@@ -380,7 +381,7 @@ func (w *cliStderrLogger) Write(p []byte) (int, error) {
 		}
 
 		line := w.buf.Next(idx + 1)
-		slog.Debug("agent.cli.stderr", "agent", w.agent, "line", string(bytes.TrimRight(line, "\n")))
+		slog.DebugContext(w.ctx, "agent.cli.stderr", "agent", w.agent, "line", string(bytes.TrimRight(line, "\n")))
 	}
 
 	return len(p), nil

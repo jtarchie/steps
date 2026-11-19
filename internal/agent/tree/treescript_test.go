@@ -3,6 +3,7 @@ package tree
 // The parts of the container path that can be checked without a container.
 
 import (
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // TestShQuoteSurvivesTheShell is what stands in for an argv exec. Model-authored text reaches the container as one shell word, so anything this gets wrong is a path, a pattern or a file's contents being read as syntax — and `sh -c` is the only judge of that worth asking.
@@ -226,5 +229,38 @@ func TestSortLikeWalkDirMatchesTheHostWalk(t *testing.T) {
 
 	if !slices.Equal(got, want) {
 		t.Errorf("sortLikeWalkDir = %v, want the order filepath.WalkDir produced %v", got, want)
+	}
+}
+
+// The program OpenRange sends is run by a real sed here, so a quit that stops a line early or a program sed refuses shows up as the wrong lines rather than as a passing string match.
+func TestContainerOpenRangeScriptReturnsExactlyTheRange(t *testing.T) {
+	t.Parallel()
+
+	_, err := exec.LookPath("sed")
+	if err != nil {
+		t.Skip("no sed to run the range script against")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+
+	err = os.WriteFile(path, []byte("one\ntwo\nthree\nfour\nfive\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner, err := shell.NewRunner(shell.RunnerSpec{Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := Container{Runner: runner, dir: dir, Lost: &Lost{}}.OpenRange(t.Context(), path, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := io.ReadAll(body)
+	if err != nil || string(got) != "one\ntwo\nthree\n" {
+		t.Errorf("OpenRange(through 3) = %q, %v; want the first three lines", got, err)
 	}
 }

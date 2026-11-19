@@ -24,12 +24,12 @@ func FuzzParseCLIStream(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, stream string) {
-		_, err := parseCLIStream(strings.NewReader(stream), &transcriptRecorder{}, nil)
+		_, err := parseCLIStream(t.Context(), strings.NewReader(stream), &transcriptRecorder{}, nil)
 		if err != nil {
 			t.Fatalf("an unattested parse failed: %v", err)
 		}
 
-		_, err = parseCLIStream(strings.NewReader(stream), &transcriptRecorder{}, []string{"Read"})
+		_, err = parseCLIStream(t.Context(), strings.NewReader(stream), &transcriptRecorder{}, []string{"Read"})
 		if err != nil && !errors.Is(err, errCLIToolSurface) {
 			t.Fatalf("an attested parse failed for a reason other than the tool surface: %v", err)
 		}
