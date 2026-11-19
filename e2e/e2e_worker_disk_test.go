@@ -57,7 +57,7 @@ jobs:
     image: `+dockerE2EImage+`
     inputs: [src]
     outputs: [out]
-    run: test -s src/blob.bin && head -c `+strconv.Itoa(written)+` /dev/urandom > out/note.bin
+    run: test -s src/blob.bin && test -d out && head -c `+strconv.Itoa(written)+` /dev/urandom > out/note.bin
 `)
 
 	mustRun(t, append([]string{path}, workers...)...)

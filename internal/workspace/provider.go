@@ -243,7 +243,7 @@ func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWo
 
 	return &isolatingBuild{
 		backend: p.backend, root: root, artifacts: artifacts, stepsDir: steps,
-		keep: p.keep, cache: p.cache, stepCache: p.stepCache, taskCaches: p.taskCaches,
+		keep: p.keep, announce: p.keep && !p.ownsRoot, cache: p.cache, stepCache: p.stepCache, taskCaches: p.taskCaches,
 	}, nil
 }
 

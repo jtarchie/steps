@@ -87,24 +87,24 @@ jobs:
 	}
 
 	writePipeline("v1")
-	mustRun(t, path)
+	mustRun(t, "--workspace-root", t.TempDir(), path)
 	assertLineCount(t, getCounter, 1)
 	assertLineCount(t, taskCounter, 1)
 
 	// Unchanged rerun: identical content hash, so both steps are skipped.
-	mustRun(t, path)
+	mustRun(t, "--workspace-root", t.TempDir(), path)
 	assertLineCount(t, getCounter, 1)
 	assertLineCount(t, taskCounter, 1)
 
 	// Changing the resource source changes the get node's hash, so both
 	// steps (get, and the task chained after it) re-execute.
 	writePipeline("v2")
-	mustRun(t, path)
+	mustRun(t, "--workspace-root", t.TempDir(), path)
 	assertLineCount(t, getCounter, 2)
 	assertLineCount(t, taskCounter, 2)
 
 	// --force bypasses the skip cache even though nothing changed.
-	mustRun(t, "--force", path)
+	mustRun(t, "--force", "--workspace-root", t.TempDir(), path)
 	assertLineCount(t, getCounter, 3)
 	assertLineCount(t, taskCounter, 3)
 }
@@ -143,11 +143,11 @@ jobs:
 		t.Fatal(err)
 	}
 
-	mustRun(t, path)
+	mustRun(t, "--workspace-root", t.TempDir(), path)
 	assertLineCount(t, getCounter, 1)
 	assertLineCount(t, putCounter, 1)
 
-	mustRun(t, path)
+	mustRun(t, "--workspace-root", t.TempDir(), path)
 
 	// get is an ancestor of the put in this chain, so it re-executes too:
 	// whole-job skip granularity marks an entire chain non-skippable when

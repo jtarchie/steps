@@ -214,17 +214,15 @@ func runHappyPath(t *testing.T) {
 		t.Errorf("job_runs = %+v, want none (a succeeded chain containing a put/agent is never recorded)", runs)
 	}
 
-	// With nothing recorded to skip against, the whole plan re-executes on a
-	// rerun — whole-chain granularity, not per-step: the get and the task
-	// rerun even though their own content is unchanged.
+	// With nothing recorded to skip against, the whole plan re-executes on a rerun — but steps run keeps its caches under workspace/ beside the state database, so the unchanged get is answered by the resource cache and the unchanged task by the step cache, and only the agent, which is never cached, talks to a model again.
 
 	fake2 := newFakeLLM(t, happyPathScript()...)
 	rerunPath := e2ePipeline(t, dir, fake2.URL)
 
 	mustRun(t, rerunPath)
 
-	assertLineCount(t, filepath.Join(dir, "get.log"), 2)
-	assertLineCount(t, filepath.Join(dir, "task.log"), 2)
+	assertLineCount(t, filepath.Join(dir, "get.log"), 1)
+	assertLineCount(t, filepath.Join(dir, "task.log"), 1)
 
 	if got := fake2.requestCount(); got != len(happyPathScript()) {
 		t.Errorf("provider requests on rerun = %d, want %d (agent steps are never skip-cached)", got, len(happyPathScript()))

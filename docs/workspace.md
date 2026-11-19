@@ -123,7 +123,8 @@ steps run pipeline.yml --workspace-root /var/lib/steps/workspace
 steps web                       # workspace/ beside its state database, always
 ```
 
-- **`steps run` and `steps test` default to a temp directory** removed when they exit, which keeps nothing between runs: no step cache, no task caches, no resource cache. Name a root to keep them.
+- **`steps run` defaults to `workspace/` beside its state database** (`.steps/workspace` next to the pipeline file), as `steps web` does, so the step cache, task caches and the resource cache work with no flag. This is a change: `steps run` used a temp directory removed at exit, so a second run of an unchanged step now reuses its outputs. `volatile:` on a step, or a fresh `--workspace-root`, is how to run it regardless. A failed run's build tree stays there for `--resume`; `steps run` never sweeps its default root, because pipelines beside each other share it.
+- **`steps test` defaults to a temp directory** removed when it exits, so a test keeps nothing between runs. Name a root to keep its caches.
 - **`steps web` always has a durable root**: `--workspace-root`, or `workspace/` beside its sqlite state file (`.steps/workspace` for the default database, and in the working directory for a postgres one). Every pipeline it serves builds there.
 - **`workspace:` in a pipeline is a load error** that names where each of its keys went: `root:` is `--workspace-root`, `cache.resources:` is gone (the resource cache is always on, below), `cache.max_entries:` is `--resource-cache-max`, and `strategy:` needs no replacement.
 - **One store for what the caches keep.** Every tree the step cache and the resource cache keep on this machine is filed once, by its content hash, under `store/` in the root. Which entry names which tree is kept in the state database, shared by every pipeline in it, as Concourse shares resource caches across pipelines: an entry's key already covers everything that decides its bytes, so a second pipeline doing the same work over the same inputs is answered by the first one's tree. Two steps that produce the same bytes cost one tree. A tree is removed once the database's last entry naming it is evicted; a tree some other state database sharing the root named is left for it. **The store is bounded by bytes**, as a worker's docker cache is: `--store-max-bytes` (default 8 GiB) of file bytes, least recently used tree evicted first, never the one just filed. An entry whose tree was evicted is a miss, and its step runs again. A tree whose bytes no longer match its hash — edited by hand, say — is never handed to a step: it is removed and the lookup is a miss, so the step runs.
@@ -151,7 +152,7 @@ Agent and `put` steps make their chains unskippable, so without a cache a real r
 
 The resource cache above keeps what a `get` fetched. This one keeps what a **task or agent step produced**, so the steps that cost money can skip too.
 
-It turns on by itself under a durable `--workspace-root` (which `steps web` always has) — there is no second switch. A step is looked up before it runs, and on a hit its declared `outputs:` are restored into the artifact store and the plan carries on with the next step:
+It turns on by itself under a durable root (which `steps run` and `steps web` have by default) — there is no second switch. A step is looked up before it runs, and on a hit its declared `outputs:` are restored into the artifact store and the plan carries on with the next step:
 
 ```
 agent: reviewer

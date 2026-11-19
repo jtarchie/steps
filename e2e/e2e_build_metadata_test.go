@@ -155,7 +155,7 @@ jobs:
 `)
 
 	for range 2 {
-		err := stepsRun(t, []string{"run", path, "--job", "build", "--db", state, "--force"})
+		err := stepsRun(t, []string{"run", "--workspace-root", t.TempDir(), path, "--job", "build", "--db", state, "--force"})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}

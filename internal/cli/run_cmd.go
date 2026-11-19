@@ -189,7 +189,7 @@ func (r *RunCmd) runHere(streams Streams) error {
 		return err
 	}
 
-	st, provider, cleanup, err := setup(cfg, r.Path, r.StateFlags, r.ExecFlags)
+	st, provider, cleanup, err := setup(cfg, r.Path, r.StateFlags, r.ExecFlags, true)
 	if err != nil {
 		return err
 	}
@@ -315,7 +315,7 @@ func (t *TestCmd) Run(streams Streams) error {
 		return err
 	}
 
-	st, provider, cleanup, err := setup(cfg, t.Pipeline, t.StateFlags, t.ExecFlags)
+	st, provider, cleanup, err := setup(cfg, t.Pipeline, t.StateFlags, t.ExecFlags, false)
 	if err != nil {
 		return err
 	}

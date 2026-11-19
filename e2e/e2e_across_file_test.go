@@ -134,11 +134,11 @@ jobs:
     run: "true"
 `, produced))
 
-	mustRun(t, path)
+	mustRun(t, "--workspace-root", t.TempDir(), path)
 	assertLineCount(t, produced, 1)
 
 	// Same pipeline, second run: the producer must run again.
-	mustRun(t, path)
+	mustRun(t, "--workspace-root", t.TempDir(), path)
 	assertLineCount(t, produced, 2)
 }
 

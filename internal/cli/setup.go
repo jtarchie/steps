@@ -17,8 +17,10 @@ import (
 // (logging, not returning, any close error — mirroring the deferred
 // close-error handling the commands used inline before this helper
 // existed).
+//
+// durable gives an unset --workspace-root the default steps web has, workspace/ beside the state database, so the step and resource caches outlive the run; without it the root is a temp directory removed at exit.
 func setup(
-	cfg *config.Config, pipelinePath string, flags StateFlags, exec ExecFlags,
+	cfg *config.Config, pipelinePath string, flags StateFlags, exec ExecFlags, durable bool,
 ) (store.Store, workspace.Provider, func(), error) {
 	name := resolvePipelineName(pipelinePath, flags.Name)
 
@@ -65,14 +67,7 @@ func setup(
 		return nil, nil, nil, fmt.Errorf("pipeline %q: %w", cfg.Name, err)
 	}
 
-	provider, err := workspace.NewProvider(exec.workspace(""), exec.KeepWorkspace)
-	if err != nil {
-		_ = st.Close()
-
-		return nil, nil, nil, fmt.Errorf("could not build workspace provider: %w", err)
-	}
-
-	err = readyProvider(provider, workspace.Provider.Validate, st, exec.ArtifactStore)
+	provider, err := localProvider(st, pipelinePath, flags, exec, durable)
 	if err != nil {
 		_ = st.Close()
 
@@ -92,6 +87,27 @@ func setup(
 	}
 
 	return st, provider, cleanup, nil
+}
+
+// localProvider is setup's workspace provider, ready to build.
+func localProvider(st store.Store, pipelinePath string, flags StateFlags, exec ExecFlags, durable bool) (workspace.Provider, error) {
+	root, check := "", workspace.Provider.Validate
+	if durable && exec.WorkspaceRoot == "" {
+		// Probe, not Validate: the sweep takes every build tree under the root, and this one holds the trees failed runs keep for --resume, of this pipeline and of any other whose state sits beside it.
+		root, check = daemonWorkspaceRoot(StatePath(pipelinePath, flags.DB)), workspace.Provider.Probe
+	}
+
+	provider, err := workspace.NewProvider(exec.workspace(root), exec.KeepWorkspace)
+	if err != nil {
+		return nil, fmt.Errorf("could not build workspace provider: %w", err)
+	}
+
+	err = readyProvider(provider, check, st, exec.ArtifactStore)
+	if err != nil {
+		return nil, err
+	}
+
+	return provider, nil
 }
 
 // readyProvider checks a freshly built provider, indexes its caches in st and attaches --artifact-store to it, closing it on any failure: the provider owns a temp root it created and only its Close removes one, so a caller that closed its store alone left a steps-* directory behind on every attempt, with nothing to reap it.

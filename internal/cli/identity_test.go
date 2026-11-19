@@ -40,7 +40,7 @@ func TestSetupRefusesAConfigLoadedUnderADifferentIdentity(t *testing.T) {
 		Name: map[string]string{"prod": path},
 	}
 
-	_, _, cleanup, err := setup(cfg, path, flags, ExecFlags{}) //nolint:exhaustruct // no execution flags are read on this path
+	_, _, cleanup, err := setup(cfg, path, flags, ExecFlags{}, false) //nolint:exhaustruct // no execution flags are read on this path
 	if err == nil {
 		t.Cleanup(cleanup)
 		t.Fatal("setup accepted a Config whose identity is not the one its state is scoped to")

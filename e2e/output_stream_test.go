@@ -262,7 +262,7 @@ resources:
   source: {}
 - name: dep
   type: slow
-  source: {}
+  source: {for: dep}
 
 jobs:
 - name: build

@@ -646,7 +646,7 @@ jobs:
     version: {digest: "` + gone + `"}
 `
 	path := writePipeline(t, t.TempDir(), pipeline)
-	mustRun(t, "run", path, "--job", "consume")
+	mustRun(t, "run", "--workspace-root", t.TempDir(), path, "--job", "consume")
 
 	digest, err := name.NewDigest(fake.repo("team/app") + "@" + gone)
 	if err != nil {
@@ -660,7 +660,7 @@ jobs:
 
 	fake.seed(t, ref, authn.Anonymous)
 
-	err = stepsRun(t, []string{"run", path, "--job", "consume", "--force"})
+	err = stepsRun(t, []string{"run", "--workspace-root", t.TempDir(), path, "--job", "consume", "--force"})
 	if err == nil || !strings.Contains(err.Error(), fake.repo("team/app")+"@"+gone+" does not exist") {
 		t.Errorf("run: err = %v, want the gone digest named", err)
 	}

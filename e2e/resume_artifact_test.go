@@ -104,7 +104,8 @@ func TestResumeContinuesFromTheArtifactTheSkippedStepsChanged(t *testing.T) {
 	}{
 		"plain get":      {"  - get: repo\n    resource: ticks", 1},
 		"version: every": {"  - get: repo\n    resource: ticks\n    version: every", 1},
-		"in-place get":   {"  - get: a\n    resource: ticks\n  - get: repo\n    resource: ticks", 2},
+		// The second get of one version is answered by the resource cache, as Concourse's is.
+		"in-place get": {"  - get: a\n    resource: ticks\n  - get: repo\n    resource: ticks", 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -120,7 +121,7 @@ func TestResumeContinuesFromTheArtifactTheSkippedStepsChanged(t *testing.T) {
 			writePipelineFile(t, filepath.Join(dir, "fixed"), "")
 
 			out := captureStdout(t, func() {
-				err := stepsRun(t, []string{"run", path, "--resume", runID})
+				err := stepsRun(t, []string{"run", "--workspace-root", t.TempDir(), path, "--resume", runID})
 				if err != nil {
 					t.Fatalf("resume failed: %v", err)
 				}
@@ -166,7 +167,7 @@ func TestResumeRerunsAJobHookAfterEveryBuildFinished(t *testing.T) {
 	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
 
 	out := captureStdout(t, func() {
-		err := stepsRun(t, []string{"run", path, "--resume", runID})
+		err := stepsRun(t, []string{"run", "--workspace-root", t.TempDir(), path, "--resume", runID})
 		if err != nil {
 			t.Fatalf("resume failed: %v", err)
 		}
@@ -304,7 +305,7 @@ jobs:
 
 	writePipelineFile(t, fixed, "")
 
-	err := stepsRun(t, []string{"run", path, "--resume", runID})
+	err := stepsRun(t, []string{"run", "--workspace-root", t.TempDir(), path, "--resume", runID})
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}

@@ -86,7 +86,7 @@ resource_types:
 - name: flaky
   config:
     check: echo '[{"ref":"v1"}]'
-    in: test ! -f %[1]s
+    in: test ! -f %[1]s && echo flaky > flaky.txt
 
 resources:
 - name: thing
@@ -98,7 +98,7 @@ jobs:
 - name: build
   plan:`+plan, flag, counter))
 
-			mustRun(t, path)
+			mustRun(t, "--workspace-root", t.TempDir(), path)
 			assertLineCount(t, counter, 1)
 
 			err := os.WriteFile(flag, nil, 0o600)
@@ -106,12 +106,12 @@ jobs:
 				t.Fatal(err)
 			}
 
-			err = stepsRun(t, []string{"--force", path})
+			err = stepsRun(t, []string{"--force", "--workspace-root", t.TempDir(), path})
 			if err == nil {
 				t.Fatal("forced run: want failure, got success")
 			}
 
-			err = stepsRun(t, []string{path})
+			err = stepsRun(t, []string{"--workspace-root", t.TempDir(), path})
 			if err == nil {
 				t.Fatal("rerun after a forced failure: want it to re-run and fail, got success (skipped on the older success)")
 			}

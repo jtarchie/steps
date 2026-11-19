@@ -34,7 +34,7 @@ func TestAnUntaggedImageStepRunsLikeOneTaggedLocal(t *testing.T) {
     inputs: [in]
     outputs: [out]
     run: |
-      pwd > out/seen
+      pwd > out/seen # %[1]s, so the two jobs are different work and neither is the other's step cache hit
       cat in/seed >> out/seen
   - task: publish
     inputs: [out]

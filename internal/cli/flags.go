@@ -205,7 +205,7 @@ type ExecFlags struct {
 	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                                               help:"leave the build workspace on disk instead of deleting it"`
 	NoPreflight   bool              `help:"skip the pre-run health check of the models and MCP servers a job needs"                           name:"no-preflight"`
 	// The machine's, never the pipeline's: a pipeline names no machine, so where trees live and what is kept between builds is the operator's to say (the workspace: block that held these is refused at load).
-	WorkspaceRoot    string `env:"STEPS_WORKSPACE_ROOT"                                                                                                        help:"keep build trees, the step cache and task caches under this directory (steps run: a temp directory removed at exit; steps web: workspace/ beside its state database)" name:"workspace-root" placeholder:"DIR"`
+	WorkspaceRoot    string `env:"STEPS_WORKSPACE_ROOT"                                                                                                        help:"keep build trees, the step cache and task caches under this directory (steps run and steps web: workspace/ beside the state database; steps test: a temp directory removed at exit)" name:"workspace-root" placeholder:"DIR"`
 	ResourceCacheMax int    `help:"how many fetched resource versions --workspace-root keeps for later builds, least recently used evicted first (default 50)" name:"resource-cache-max"`
 	StoreMaxBytes    int64  `help:"how many bytes of cached trees --workspace-root keeps, least recently used evicted first (default 8 GiB)"                   name:"store-max-bytes"`
 }

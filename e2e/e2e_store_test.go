@@ -207,6 +207,33 @@ jobs:
 	}
 }
 
+// TestStepsRunKeepsItsCachesWithoutARoot: steps run's default root is workspace/ beside its state database, as steps web's is, so the step cache works with no flag.
+func TestStepsRunKeepsItsCachesWithoutARoot(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ran, seen := filepath.Join(dir, "ran.log"), filepath.Join(dir, "seen.log")
+	path := storePipeline(t, dir, ran, seen)
+
+	mustRun(t, "run", path, "--job", "a")
+
+	// A changed reader keeps the chain skip from answering for the whole job, so make has to come from the step cache.
+	rewritePipeline(t, path, "run: cat out/file >> "+seen, "run: cat out/file >> "+seen+" && true")
+	mustRun(t, "run", path, "--job", "a")
+
+	if got := readFileString(t, ran); got != "a\n" {
+		t.Errorf("steps that ran = %q, want make answered by the step cache on the second run", got)
+	}
+
+	if got := readFileString(t, seen); got != "same bytes\nsame bytes\n" {
+		t.Errorf("the reader saw %q, want the stored bytes both times", got)
+	}
+
+	if trees := storeTrees(t, filepath.Join(dir, ".steps", "workspace")); len(trees) != 1 {
+		t.Errorf("the default root's store holds %v, want make's one tree", trees)
+	}
+}
+
 // evictLocalCache drops this machine's store, the index in the state database surviving: the shape of a second machine handed that database.
 func evictLocalCache(root string) error {
 	return os.RemoveAll(filepath.Join(root, "store")) //nolint:wrapcheck // a test helper

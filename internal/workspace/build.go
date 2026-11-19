@@ -19,6 +19,7 @@ type isolatingBuild struct {
 	artifacts   string
 	stepsDir    string
 	keep        bool
+	announce    bool
 	cache       *resourceCache
 	stepCache   *stepCache
 	taskCaches  *entryStore
@@ -224,10 +225,11 @@ func (b *isolatingBuild) ResetArtifact(ctx context.Context, name string) error {
 // Close removes the build's root directory and the materialized trees under
 // it, through backend.remove.
 func (b *isolatingBuild) Close() error {
-	// The provider prints its own kept-root line when it owns the root; a
-	// build under a user-supplied --workspace-root has none, so say it here.
+	// The provider prints its own kept-root line when it owns the root; a build under a durable root has none, so --keep-workspace is answered here.
 	if b.keep {
-		slog.Debug("workspace.kept", "dir", b.root)
+		if b.announce {
+			slog.Info("workspace.kept", "dir", b.root)
+		}
 
 		return nil
 	}
