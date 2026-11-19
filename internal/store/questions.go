@@ -26,6 +26,8 @@ type Questions interface {
 	// the endings nobody answered.
 	CloseQuestion(ctx context.Context, id int64, status QuestionStatus, answer, by string) error
 	QuestionStatus(ctx context.Context, id int64) (Question, error)
+	// MarkQuestionNotified records that the question's on_pending was attempted, so a later wait on the same row does not announce it again.
+	MarkQuestionNotified(ctx context.Context, id int64) error
 	// Questions is the audit trail, what is still waiting first and then
 	// newest first, capped by limit (zero means no limit). pendingOnly lists
 	// only what is waiting, OLDEST first, and its callers pass zero — for the
@@ -88,6 +90,8 @@ type Question struct {
 	AnsweredAt time.Time
 	AnsweredBy string
 	Answer     string
+	// NotifiedAt is when its on_pending was attempted; zero while nothing has announced it.
+	NotifiedAt time.Time
 }
 
 // ErrQuestionNotPending is what every answer path gets when the row it aimed

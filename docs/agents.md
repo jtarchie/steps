@@ -330,9 +330,11 @@ That is a local `steps run`, which keeps its state beside the YAML; under `steps
 
 The row is written **before** any of those are tried, so nothing about the audit trail depends on which channel answered — or on the run still being alive when one does. Every conversation inside a run can ask: a plan step, a sub-agent (on behalf of the same run), a task's `fix:` agent mid-repair, and a hook. Each question is filed under the name of the agent that asked it, not the step that invoked it. The web UI's **questions** page reads the same rows and writes the same answer; `--read-only` withholds that control the way it withholds approve/reject (see [web.md](web.md)).
 
+A question that reaches a person — no seed, no responder, nobody at the terminal — fires the nearest [`on_pending`](control-flow.md#telling-someone-on_pending) hook once, so the pipeline can tell somebody who is not looking. The hook reads the question as `$STEPS_PENDING_MESSAGE` (never substituted into a command: a model wrote it) and the command that answers it as `((.:pending.command))`.
+
 #### Nobody answered
 
-When the wait expires, what happens depends on whether the grant declared a `default:`:
+When the wait expires — counted from when the question was first asked, so a second asker waiting on the same row does not get a fresh wait — what happens depends on whether the grant declared a `default:`:
 
 ```
 tool_result ask_user:

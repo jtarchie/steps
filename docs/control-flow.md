@@ -936,7 +936,7 @@ Stated deliberately rather than left to be discovered. Who decided is recorded, 
 
 ### Telling someone: `on_pending`
 
-A parked approval is seen only by someone watching `steps web` or the terminal. `on_pending` is a hook that runs once, when the approval starts waiting, so the pipeline can tell somebody who is not looking — through any resource you `put:` to, or any task or agent. On the job it covers every park in the plan; on a step or a block it covers that step and everything inside it. Here both approvals expire, because nobody answers in one second:
+A parked approval, or a question an agent asks with [`ask_user`](agents.md#ask_user), is seen only by someone watching `steps web` or the terminal. `on_pending` is a hook that runs once, when the run starts waiting on a person, so the pipeline can tell somebody who is not looking — through any resource you `put:` to, or any task or agent. On the job it covers every park in the plan; on a step or a block it covers that step and everything inside it. Here both approvals expire, because nobody answers in one second:
 
 ```yaml slack=pending-dm
 resources:
@@ -983,18 +983,19 @@ What the hook reads, as `((.:pending.<field>))` and, in any command it runs, as 
 
 | field | what it is |
 |---|---|
-| `id` | the approval's id |
-| `kind` | `approval` |
+| `id` | the approval's or question's id |
+| `kind` | `approval`, or `ask_user` for an agent's question |
 | `job` | the job that is waiting |
-| `message` | the approval's `message:` |
-| `options` | the choices offered, as a JSON list; empty for an approval |
-| `command` | the exact `steps approvals approve <id> -p <pipeline> …` that answers it |
-| `url` | the approvals page narrowed to this one (`/p/<pipeline>/approvals?id=<id>`) under `steps web`; empty under `steps run`, which has no address to link to |
-| `expires_at` | when it expires unanswered, RFC 3339 in UTC |
+| `message` | the approval's `message:`, or the question as the model wrote it |
+| `options` | the choices offered, as a JSON list; empty for an approval, and for a question offered none |
+| `command` | the exact `steps approvals approve <id> -p <pipeline> …`, or `steps questions answer <id> <answer> -p <pipeline> …`, that answers it |
+| `url` | the approvals or questions page narrowed to this one (`/p/<pipeline>/approvals?id=<id>`) under `steps web`; empty under `steps run`, which has no address to link to |
+| `expires_at` | when it expires unanswered, RFC 3339 in UTC, counted from when it was asked |
 
 - **The nearest one fires, and only it.** A step's `on_pending` replaces its job's and any enclosing block's for that step. This is the one place hooks differ from the others, where a step's `on_failure` and its job's both fire: both firing here would send every notice twice.
 - **Once per park, before the wait.** A daemon that restarts while a run waits resumes onto the same approval and does not announce it again; the store records when it was announced (`notified_at`). An approval decided while nobody watched is not announced on resume.
+- **Only a question a person must answer is announced.** One a `--answer` seed or an `answered_by:` agent settles is not, nor one put to a person at the terminal running `steps run`, who is already being asked. Twelve `across:` cells asking the same question reach one row and send one notice: the cell that asked it announces, the others wait on its row. A question's notice runs beside the wait rather than before it, so a slow `put:` does not eat into how long a CLI agent's tool call may take; the step does not finish until the notice has.
 - **Its failure does not change the wait.** A failing `on_pending` is logged and noted on the run, and the run keeps waiting; the approval's outcome is the approval's own. Its outcome hooks (`on_success`, `on_failure`, `on_abort`) already say what was decided, so there is no hook for "resolved".
-- **`message` and `options` are refused in `run:`** (and `image:`, `dir:`, `file:`) at load: a captured value is substituted into a command as text, and once a model's question can be announced the same way that text could carry a shell command. Read `$STEPS_PENDING_MESSAGE` in a command, as `page` does, or pass it in `params:` or `messages:`, which are data. The other fields are steps' own and are allowed anywhere.
+- **`message` and `options` are refused in `run:`** (and `image:`, `dir:`, `file:`) at load: a captured value is substituted into a command as text, and for an `ask_user` park that text is the model's, so it could carry a shell command. It can carry a Slack `<!channel>` or a link just as well; quote it, as `publish` does, when it reaches a chat message. Read `$STEPS_PENDING_MESSAGE` in a command, as `page` does, or pass it in `params:` or `messages:`, which are data. The other fields are steps' own and are allowed anywhere.
 - **A park cannot park.** The body takes any hook body but `approval:` and an agent granted `ask_user`, and `on_pending` is not valid inside another hook, or on a `get`, neither of which ever waits on a person. `((.:pending.*))` exists only inside the body, so a capture named `pending` is refused where it would be hidden.
 - **Never cached**, like every hook; it is folded into the step's hash like the others.

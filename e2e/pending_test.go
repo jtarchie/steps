@@ -51,6 +51,69 @@ jobs:
 	}
 }
 
+// A question a model parks mid-step fires the job's on_pending, the model's own text reaching the command only through STEPS_PENDING_*; a question a --answer seed settles is never announced.
+func TestOnPendingAnnouncesAQuestionAModelAsks(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	notice := filepath.Join(dir, "notice")
+
+	fake := newRoutedFakeLLM(t, func(req capturedRequest) turn {
+		switch req.historyCallCount("ask_user") {
+		case 0:
+			return callsTool("ask_user", map[string]any{"question": "Seeded?"})
+		case 1:
+			return callsTool("ask_user", map[string]any{"question": "Which environment?", "options": []any{"staging", "prod"}})
+		default:
+			return says("done")
+		}
+	})
+
+	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+agents:
+- name: deployer
+  source: { endpoint: `+fake.URL+`/v1/, model: test-model, api_key_env: STEPS_TEST_AGENT_API_KEY }
+  tools:
+  - builtin: ask_user
+    timeout: 2m
+jobs:
+- name: deploy
+  on_pending:
+    task: notify
+    run: printf '%s|%s|%s|%s|%s\n' "((.:pending.kind))" "((.:pending.job))" "$STEPS_PENDING_MESSAGE" "$STEPS_PENDING_OPTIONS" "$STEPS_PENDING_COMMAND" >> `+notice+`
+  plan:
+  - agent: deployer
+    messages: [Ask, then say done.]
+`)
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- stepsRun(t, []string{"run", path, "--job", "deploy", "--answer", "Seeded?=seeded-only"})
+	}()
+
+	waitForFile(t, notice)
+
+	// The seed settled question 1, so the one parked is 2.
+	id := "2"
+	mustRun(t, append([]string{"questions", "answer", id, "staging"}, readArgs(path)...)...)
+
+	err := <-done
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	got := strings.TrimSpace(readFileString(t, notice))
+	want := `ask_user|deploy|Which environment?|["staging","prod"]|steps questions answer ` + id + ` <answer> ` + strings.Join(readArgs(path), " ")
+
+	if got != want {
+		t.Errorf("on_pending wrote %q, want %q: one notice, for the question a person had to answer", got, want)
+	}
+}
+
 // The nearest on_pending wins: a step's replaces the job's for that step, so one park is one notice. Its failure is logged and the wait's outcome is the wait's own: here nobody answers, so the step expires.
 func TestOnPendingNearestWinsAndItsFailureLeavesTheWaitAlone(t *testing.T) {
 	t.Parallel()

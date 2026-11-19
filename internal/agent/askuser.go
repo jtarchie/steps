@@ -312,14 +312,65 @@ func (g askGrant) ask(ctx context.Context, args map[string]any, env toolEnv) map
 		return g.alreadyResolved(env, row, existing)
 	}
 
+	// Only the asker announces: twelve cells reaching one row is one notice, as it is one question.
+	announced := func() {}
+
 	if !existing {
 		answered := g.answerFromMachines(ctx, env, row)
 		if answered != nil {
 			return answered
 		}
+
+		announced = g.announce(ctx, env, row)
 	}
 
+	defer announced()
+
 	return g.waitForAnswer(ctx, env, row)
+}
+
+// ParkAnnouncer tells someone a question is waiting until expiresAt, reporting whether there was anything to tell them with.
+type ParkAnnouncer func(ctx context.Context, row store.Question, expiresAt time.Time) bool
+
+type parkAnnouncerKey struct{}
+
+// WithParkAnnouncer carries the run's on_pending to a question parked anywhere under ctx; this package cannot reach the pipeline that runs it.
+func WithParkAnnouncer(ctx context.Context, announce ParkAnnouncer) context.Context {
+	return context.WithValue(ctx, parkAnnouncerKey{}, announce)
+}
+
+// announce runs the run's on_pending beside the wait rather than before it, so a slow notice cannot eat a CLI agent's tool-call margin; the returned func waits for it, so it never outlives the step.
+func (g askGrant) announce(ctx context.Context, env toolEnv, row store.Question) func() {
+	announcer, _ := ctx.Value(parkAnnouncerKey{}).(ParkAnnouncer)
+
+	// Somebody at this terminal is being asked already; the notice is for someone who is not looking.
+	if announcer == nil || (env.ask.prompt != nil && !events.Headless(ctx)) {
+		return func() {}
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		if announcer(ctx, row, g.deadline(row)) {
+			err := env.ask.st.MarkQuestionNotified(context.WithoutCancel(ctx), row.ID)
+			if err != nil {
+				slog.WarnContext(ctx, "agent.question_notified_unrecorded", "question", row.ID, "error", err)
+			}
+		}
+	}()
+
+	return func() { <-done }
+}
+
+// deadline counts from when the question was asked, as an approval's does: a wait resumed on the same row is the same wait.
+func (g askGrant) deadline(row store.Question) time.Time {
+	if row.AskedAt.IsZero() {
+		return time.Now().Add(g.wait)
+	}
+
+	return row.AskedAt.Add(g.wait)
 }
 
 // alreadyResolved reports a row that was resolved before this call read it
@@ -439,7 +490,7 @@ func responderRequest(row store.Question) string {
 // waitForAnswer parks the question until somebody answers it, the wait
 // expires, or the step ends.
 func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Question) map[string]any {
-	deadline := time.Now().Add(g.wait)
+	deadline := g.deadline(row)
 
 	announceQuestion(ctx, row, g.wait, g.answerFlags)
 

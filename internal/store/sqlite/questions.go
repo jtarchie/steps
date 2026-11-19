@@ -164,6 +164,19 @@ func (s *Store) questionByMemo(ctx context.Context, runID, memoKey string) (stor
 	return question, nil
 }
 
+// MarkQuestionNotified stamps when the question's on_pending was attempted.
+func (s *Store) MarkQuestionNotified(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE questions SET notified_at = ?
+		WHERE id = ? AND EXISTS (SELECT 1 FROM runs WHERE id = questions.run_id AND pipeline_id = ?)
+	`, now(), id, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not mark question %d notified: %w", id, err)
+	}
+
+	return nil
+}
+
 // Questions lists what a pipeline has asked. pendingOnly narrows it to the
 // questions still waiting; limit <= 0 means no limit, the convention this repo
 // uses everywhere.
@@ -197,25 +210,25 @@ func (s *Store) Questions(ctx context.Context, pendingOnly bool, limit int) ([]s
 const questionColumns = `
 	SELECT q.id, q.run_id, q.job_name, q.agent_name, q.question, q.options, q.options_required,
 	       COALESCE(q.default_answer, ''), q.status, q.asked_at,
-	       COALESCE(q.answered_at, ''), COALESCE(q.answered_by, ''), COALESCE(q.answer, '')
+	       COALESCE(q.answered_at, ''), COALESCE(q.answered_by, ''), COALESCE(q.answer, ''), COALESCE(q.notified_at, '')
 	FROM questions q JOIN runs r ON r.id = q.run_id
 `
 
 func (s *Store) scanQuestion(row rowScanner) (store.Question, error) {
 	var (
-		question        store.Question
-		options         string
-		asked, answered string
+		question                  store.Question
+		options                   string
+		asked, answered, notified string
 	)
 
 	err := row.Scan(&question.ID, &question.RunID, &question.JobName, &question.AgentName,
 		&question.Question, &options, &question.OptionsRequired, &question.Default,
-		&question.Status, &asked, &answered, &question.AnsweredBy, &question.Answer)
+		&question.Status, &asked, &answered, &question.AnsweredBy, &question.Answer, &notified)
 	if err != nil {
 		return store.Question{}, err //nolint:wrapcheck // every caller wraps with what it was reading
 	}
 
-	question.AskedAt, question.AnsweredAt = parseTimestamp(asked), parseTimestamp(answered)
+	question.AskedAt, question.AnsweredAt, question.NotifiedAt = parseTimestamp(asked), parseTimestamp(answered), parseTimestamp(notified)
 
 	question.Options, err = store.DecodeOptions(options)
 

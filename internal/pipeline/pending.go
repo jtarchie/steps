@@ -44,9 +44,9 @@ type park struct {
 
 // fields are ((.:pending.*)), and STEPS_PENDING_* spelled as text.
 func (p park) fields(ctx context.Context, cfg *config.Config, job string) (map[string]any, map[string]string) {
-	section, verb := "approvals", "approvals approve"
+	section, command := "approvals", fmt.Sprintf("steps approvals approve %d %s", p.id, agent.AnswerFlags(ctx, cfg.Name))
 	if p.kind != "approval" {
-		section, verb = "questions", "questions answer"
+		section, command = "questions", fmt.Sprintf("steps questions answer %d <answer> %s", p.id, agent.AnswerFlags(ctx, cfg.Name))
 	}
 
 	link := ""
@@ -65,7 +65,7 @@ func (p park) fields(ctx context.Context, cfg *config.Config, job string) (map[s
 		"job":        job,
 		"message":    p.message,
 		"options":    options,
-		"command":    fmt.Sprintf("steps %s %d %s", verb, p.id, agent.AnswerFlags(ctx, cfg.Name)),
+		"command":    command,
 		"url":        link,
 		"expires_at": p.expiresAt.UTC().Format(time.RFC3339),
 	}
@@ -115,4 +115,9 @@ func announceApproval(ctx context.Context, st store.Approvals, id int64, message
 	if announce(ctx, park{id: id, kind: "approval", message: message, expiresAt: row.RequestedAt.Add(timeout)}) {
 		bestEffort(ctx, "MarkApprovalNotified", st.MarkApprovalNotified(context.WithoutCancel(ctx), id))
 	}
+}
+
+// announceQuestion is the agent package's ParkAnnouncer: an ask_user question parked mid-step.
+func announceQuestion(ctx context.Context, row store.Question, expiresAt time.Time) bool {
+	return announce(ctx, park{id: row.ID, kind: "ask_user", message: row.Question, options: row.Options, expiresAt: expiresAt})
 }

@@ -66,6 +66,34 @@ func (s suite) TestAskQuestionMemoizesWithinARun(t *testing.T) {
 	}
 }
 
+// TestAQuestionRemembersItWasAnnounced: the row carries when its on_pending was attempted, and a notice's link narrows the trail to it.
+func (s suite) TestAQuestionRemembersItWasAnnounced(t *testing.T) {
+	t.Parallel()
+
+	st := s.startQuestionRun(t)
+	ctx := ctxFor(t)
+
+	question, _ := askBump(t, st, "run-1")
+	if !question.NotifiedAt.IsZero() {
+		t.Fatalf("a fresh question reads notified at %v, want never", question.NotifiedAt)
+	}
+
+	err := st.MarkQuestionNotified(ctx, question.ID)
+	if err != nil {
+		t.Fatalf("MarkQuestionNotified: %v", err)
+	}
+
+	read, err := st.QuestionStatus(ctx, question.ID)
+	if err != nil || time.Since(read.NotifiedAt) > time.Minute {
+		t.Errorf("an announced question reads notified at %v (%v), want now", read.NotifiedAt, err)
+	}
+
+	found, err := st.FindQuestions(ctx, store.QuestionQuery{ID: question.ID + 1})
+	if err != nil || len(found) != 0 {
+		t.Errorf("FindQuestions(ID: %d) = %+v (%v), want nothing", question.ID+1, found, err)
+	}
+}
+
 // TestAskQuestionMemoIsPerRun holds the other half: an answer given yesterday
 // must not stand in silently for a question asked today.
 func (s suite) TestAskQuestionMemoIsPerRun(t *testing.T) {

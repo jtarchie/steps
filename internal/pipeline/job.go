@@ -76,6 +76,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	// internal/agent reads these off the context, the same way approval: does.
 	ctx = agent.WithAnswerDB(ctx, opts.AnswerDB)
 	ctx = agent.WithAnswerSeeds(ctx, opts.Answers)
+	ctx = agent.WithParkAnnouncer(ctx, announceQuestion)
 
 	ctx = withRunLogger(ctx, cfg, resume.id, job.Name)
 

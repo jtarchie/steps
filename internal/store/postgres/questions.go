@@ -76,6 +76,19 @@ func (s *Store) CloseQuestion(ctx context.Context, id int64, status store.Questi
 	return s.closeQuestion(ctx, id, status, answer, by)
 }
 
+// MarkQuestionNotified stamps when the question's on_pending was attempted.
+func (s *Store) MarkQuestionNotified(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE questions SET notified_at = $1
+		WHERE id = $2 AND EXISTS (SELECT 1 FROM runs WHERE id = questions.run_id AND pipeline_id = $3)
+	`, now(), id, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not mark question %d notified: %w", id, err)
+	}
+
+	return nil
+}
+
 func (s *Store) closeQuestion(ctx context.Context, id int64, status store.QuestionStatus, answer, by string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE questions SET status = $1, answered_at = $2, answered_by = $3, answer = $4
@@ -142,26 +155,26 @@ func (s *Store) Questions(ctx context.Context, pendingOnly bool, limit int) ([]s
 const questionColumns = `
 	SELECT q.id, q.run_id, q.job_name, q.agent_name, q.question, q.options, q.options_required,
 	       COALESCE(q.default_answer, ''), q.status, q.asked_at,
-	       q.answered_at, COALESCE(q.answered_by, ''), COALESCE(q.answer, '')
+	       q.answered_at, COALESCE(q.answered_by, ''), COALESCE(q.answer, ''), q.notified_at
 	FROM questions q JOIN runs r ON r.id = q.run_id
 `
 
 func scanQuestion(row rowScanner) (store.Question, error) {
 	var (
-		question store.Question
-		options  string
-		asked    time.Time
-		answered sql.NullTime
+		question           store.Question
+		options            string
+		asked              time.Time
+		answered, notified sql.NullTime
 	)
 
 	err := row.Scan(&question.ID, &question.RunID, &question.JobName, &question.AgentName,
 		&question.Question, &options, &question.OptionsRequired, &question.Default,
-		&question.Status, &asked, &answered, &question.AnsweredBy, &question.Answer)
+		&question.Status, &asked, &answered, &question.AnsweredBy, &question.Answer, &notified)
 	if err != nil {
 		return store.Question{}, err //nolint:wrapcheck // every caller wraps with what it was reading
 	}
 
-	question.AskedAt, question.AnsweredAt = asked.UTC(), utc(answered)
+	question.AskedAt, question.AnsweredAt, question.NotifiedAt = asked.UTC(), utc(answered), utc(notified)
 	question.Options, err = store.DecodeOptions(options)
 
 	return question, err //nolint:wrapcheck // DecodeOptions says what it was reading

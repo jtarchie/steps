@@ -1820,7 +1820,7 @@
         },
         "on_pending": {
           "$ref": "#/$defs/step",
-          "description": "Runs once when a step in this plan parks for a person (approval:), before the wait, reading the park as ((.:pending.id|kind|job|message|options|command|url|expires_at)) and STEPS_PENDING_*. A step's own on_pending replaces this one. Its failure is logged; the wait goes on. Not valid in a hook."
+          "description": "Runs once when a step in this plan parks for a person (an approval:, or an agent's ask_user question), before the wait, reading the park as ((.:pending.id|kind|job|message|options|command|url|expires_at)) and STEPS_PENDING_*. A step's own on_pending replaces this one. Its failure is logged; the wait goes on. Not valid in a hook."
         },
         "ensure": {
           "$ref": "#/$defs/step"
@@ -2239,7 +2239,7 @@
         },
         "on_pending": {
           "$ref": "#/$defs/step",
-          "description": "Runs once when this step, or one inside it, parks for a person (approval:), before the wait, reading the park as ((.:pending.*)) and STEPS_PENDING_*. Replaces the job's on_pending and any enclosing step's for this subtree: only the nearest fires. Its failure is logged; the wait goes on. Not valid on a get or in a hook."
+          "description": "Runs once when this step, or one inside it, parks for a person (an approval:, or an agent's ask_user question), before the wait, reading the park as ((.:pending.*)) and STEPS_PENDING_*. Replaces the job's on_pending and any enclosing step's for this subtree: only the nearest fires. Its failure is logged; the wait goes on. Not valid on a get or in a hook."
         },
         "ensure": {
           "$ref": "#/$defs/step"
