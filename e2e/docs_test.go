@@ -182,6 +182,10 @@ func checkDocFixtures(t *testing.T, block docs.Block, servers docServers) {
 		fixture.check(t, servers.github)
 	}
 
+	if fixture, ok := docLinearFixtures[block.LinearID()]; ok && fixture.check != nil {
+		fixture.check(t, servers.linear)
+	}
+
 	if check, ok := docSlackFixtures[block.SlackID()]; ok {
 		check(t, servers.slack)
 	}
@@ -191,6 +195,7 @@ func checkDocFixtures(t *testing.T, block docs.Block, servers docServers) {
 type docServers struct {
 	mcp    *docMCPServer
 	github *fakeGitHub
+	linear *fakeLinear
 	slack  *fakeSlackWorkspace
 }
 
@@ -253,6 +258,7 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 
 	body, mcpServer := injectDocMCPFixture(t, block, block.Body)
 	body, githubServer := injectDocGitHubFixture(t, block, body)
+	body, linearServer := injectDocLinearFixture(t, block, body)
 	body, slackWorkspace := injectDocSlackFixture(t, block, body)
 	body = injectDocRegistryFixture(t, block, body)
 
@@ -279,7 +285,7 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 		t.Fatal(err)
 	}
 
-	return path, docServers{mcp: mcpServer, github: githubServer, slack: slackWorkspace}
+	return path, docServers{mcp: mcpServer, github: githubServer, linear: linearServer, slack: slackWorkspace}
 }
 
 // pipelinePath is where a test's pipeline goes: inside dir, under a file name
@@ -696,6 +702,10 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"GitHubCommentsSource":   reflect.TypeOf(config.GitHubCommentsSource{}),
 		"GitHubIssuesSource":     reflect.TypeOf(config.GitHubIssuesSource{}),
 		"GitHubPostSource":       reflect.TypeOf(config.GitHubPostSource{}),
+		"LinearIssuesSource":     reflect.TypeOf(config.LinearIssuesSource{}),
+		"LinearPostSource":       reflect.TypeOf(config.LinearPostSource{}),
+		"LinearCommentParams":    reflect.TypeOf(config.LinearCommentParams{}),
+		"LinearUpdateParams":     reflect.TypeOf(config.LinearUpdateParams{}),
 		"GitHubPostParams":       reflect.TypeOf(config.GitHubPostParams{}),
 		"GitHubReviewParams":     reflect.TypeOf(config.GitHubReviewParams{}),
 		"GitHubReactionParams":   reflect.TypeOf(config.GitHubReactionParams{}),
@@ -705,6 +715,7 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"GitSource":              reflect.TypeOf(config.GitSource{}),
 		"GitPutParams":           reflect.TypeOf(config.GitPutParams{}),
 		"RegistryImagePutParams": reflect.TypeOf(config.RegistryImagePutParams{}),
+		"RegistryImageGetParams": reflect.TypeOf(config.RegistryImageGetParams{}),
 		"SlackMentionsSource":    reflect.TypeOf(config.SlackMentionsSource{}),
 		"SlackReplySource":       reflect.TypeOf(config.SlackReplySource{}),
 		"SlackReactionSource":    reflect.TypeOf(config.SlackReactionSource{}),
@@ -852,6 +863,9 @@ var sourceDefs = map[any]string{ //nolint:gochecknoglobals // read-only table
 	config.GitHubLabelType:     "GitHubPostSource",
 	config.GitHubIssueType:     "GitHubPostSource",
 	config.GitHubPRType:        "GitHubPostSource",
+	config.LinearIssuesType:    "LinearIssuesSource",
+	config.LinearCommentType:   "LinearPostSource",
+	config.LinearUpdateType:    "LinearPostSource",
 	"git":                      "GitSource",
 	"slack-mentions":           "SlackMentionsSource",
 	"slack-reply":              "SlackReplySource",
@@ -866,10 +880,36 @@ var githubParamDefs = map[any]string{ //nolint:gochecknoglobals // read-only tab
 	config.GitHubLabelType:     "GitHubLabelParams",
 	config.GitHubIssueType:     "GitHubIssueParams",
 	config.GitHubPRType:        "GitHubPRParams",
+	config.LinearCommentType:   "LinearCommentParams",
+	config.LinearUpdateType:    "LinearUpdateParams",
 	"git":                      "GitPutParams",
 	"slack-reply":              "SlackReplyParams",
 	"slack-reaction":           "SlackReactionParams",
 	config.RegistryImageType:   "RegistryImagePutParams",
+}
+
+// getParamDefs is the params: shape of a get from each native type that takes any.
+var getParamDefs = map[any]string{ //nolint:gochecknoglobals // read-only table
+	config.RegistryImageType: "RegistryImageGetParams",
+}
+
+// recordNativeParams records one step's params: under the shape its resource's type gives a put's, or a get's.
+func recordNativeParams(step map[string]any, types map[string]any, used map[string]map[string]bool) {
+	defs := getParamDefs
+	verb := "get"
+
+	if _, isPut := step["put"]; isPut {
+		defs, verb = githubParamDefs, "put"
+	}
+
+	name, _ := step["resource"].(string)
+	if name == "" {
+		name, _ = step[verb].(string)
+	}
+
+	if def, ok := defs[types[name]]; ok {
+		record(used, def, step["params"])
+	}
 }
 
 // collectGitHubParamKeys records the params: of every put to a github-*
@@ -893,18 +933,7 @@ func collectGitHubParamKeys(doc map[string]any, used map[string]map[string]bool)
 				continue
 			}
 
-			name, _ := step["resource"].(string)
-			if name == "" {
-				name, _ = step["put"].(string)
-			}
-
-			if _, isPut := step["put"]; !isPut {
-				name = ""
-			}
-
-			if def, publishes := githubParamDefs[types[name]]; publishes {
-				record(used, def, step["params"])
-			}
+			recordNativeParams(step, types, used)
 
 			for _, group := range nestedStepGroups(step) {
 				walk(group.steps)

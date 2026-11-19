@@ -48,6 +48,8 @@ func TestMain(m *testing.M) {
 		// The fake GitHub answers to exactly this token, so a doc example and an
 		// e2e test reach it without a t.Setenv each.
 		"GH_TOKEN": fakeGitHubToken,
+		// The fake Linear answers to exactly this key, for the same reason.
+		"LINEAR_API_KEY": fakeLinearKey,
 	} {
 		err := os.Setenv(key, value)
 		if err != nil {

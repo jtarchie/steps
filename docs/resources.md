@@ -21,7 +21,7 @@ jobs:
     run: cd repo && go build ./...
 ```
 
-`git` ships with steps, so that pipeline needs no `resource_types:` block; neither do [the GitHub types](#the-built-in-github-types), Slack's, `cron`, [`registry-image`](#the-built-in-registry-image-type), [`docker-service`](#the-built-in-docker-service-type) and [`webhook`](webhooks.md). For anything else, you write the type yourself.
+`git` ships with steps, so that pipeline needs no `resource_types:` block; neither do [the GitHub types](#the-built-in-github-types), [the Linear types](#the-built-in-linear-types), Slack's, `cron`, [`registry-image`](#the-built-in-registry-image-type), [`docker-service`](#the-built-in-docker-service-type) and [`webhook`](webhooks.md). For anything else, you write the type yourself.
 
 **A built-in type's `source:` and `params:` are closed.** steps owns every built-in's code, so it knows each key the type reads, and `steps validate` refuses the rest: a misspelled `chanels:` or a Concourse habit like `params: {depth: 1}` on a get is a load error naming the key and the ones the type does read, not a setting nobody applies. No built-in's get takes `params:`; what it fetches is set on `source:`. Values are typed as well, so `limit: "200"` is refused where `limit: 200` loads. A type you write keeps Concourse's rule, where `source:` and `params:` are the type's own business and steps passes them through unread — and so does a pipeline that declares its own type under a built-in's name, which replaces the built-in: that is the pipeline's choice to make. `webhook` is the one name that cannot be taken, since deliveries are routed to a resource by it.
 
@@ -1076,6 +1076,198 @@ A get of a `github-pr` resource is refused at load, as for every publisher. The 
 
 Marking ready is a GraphQL mutation, since REST cannot do it; the token needs the same write access to pull requests as for the rest.
 
+## The built-in Linear types
+
+Three built-ins, split the way the GitHub ones are. `linear-issues` **finds work**: it has a check and an in, and no out. `linear-comment` and `linear-update` **publish**: they have an out and nothing else, so a comment a pipeline posts never lands in the history it triggers from.
+
+steps calls Linear's GraphQL API itself: there is no `resource_types:` block, no GraphQL in the pipeline, no `curl` or `jq`. All three read the key from `LINEAR_API_KEY`; `source.token_env` names another variable, for a second identity. A personal API key (`lin_api_...`) is sent bare, as Linear expects, and any other token as an OAuth `Bearer` token. `steps validate` refuses a pipeline whose key variable is unset, before anything runs. `source.endpoint` is Linear's GraphQL URL; plain `http` is accepted only for a loopback host, so a key never travels in cleartext.
+
+Linear's limits are per user, shared by every key that user holds: 2,500 requests an hour for a personal key, 5,000 for OAuth. A `linear-issues` check at steps' default poll is about 120 requests an hour per resource, so a daemon with many Linear resources should raise `--interval` rather than spend the budget. A request Linear throttles is sent again after the wait it names, a failure it reports inside a 200 answer fails the step with Linear's own message, and a write is sent again only when it was throttled, never after a timeout, so a comment is not posted twice.
+
+### `linear-issues`: issues in a state as a trigger
+
+A team's board doubles as a queue: someone moves an issue to `Todo`, and a pipeline picks it up. `linear-issues` finds every issue in a team that matches its filters, and every filter narrows:
+
+```yaml linear=claim
+resources:
+- name: ticket
+  type: linear-issues
+  source:
+    team: ENG                          # a team key or name; required
+    states: [Todo]                     # names in that team; any of them
+    labels: [agent-ready]              # all must be on the issue
+    project: Platform                  # a name or an id
+    assignee: "@me"                    # the key's own user; quoted because @ cannot start a plain YAML value
+    token_env: LINEAR_API_KEY          # the default
+    endpoint: https://api.linear.app/graphql   # the default
+
+- name: board
+  type: linear-update
+  source:
+    token_env: LINEAR_API_KEY          # the default
+    endpoint: https://api.linear.app/graphql   # the default
+
+- name: reply
+  type: linear-comment
+  source: {}
+
+jobs:
+- name: draft
+  plan:
+  - get: ticket
+    trigger: true
+    version: every                     # one build per issue, and per move back into Todo
+  - put: claimed
+    resource: board
+    inputs: [ticket]
+    params:
+      state: In Progress               # out of the finder's set, in Linear itself
+      add_labels: [urgent]
+      remove_labels: [agent-ready]
+  - task: read
+    inputs: [ticket]
+    outputs: [notes]
+    run: |
+      echo "planning $(cat ticket/issue.identifier): $(cat ticket/issue.title), $(grep -c '^## Comment' ticket/issue.md) comment(s)" | tee notes/body.md
+    assert:
+      stdout: "planning ENG-12: Plan the cache, 2 comment(s)"
+  - put: answered
+    resource: reply
+    inputs: [ticket, notes]
+    params:
+      body_file: notes/body.md         # posted on ENG-12
+  assert:
+    execution: [ticket, claimed, read, answered]
+    outcome: succeeded
+```
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `team` | yes | a team key (`ENG`) or name. Required because state and label names are per team in Linear, and an unscoped `Todo` matches every team's |
+| `states` | no | state names in that team, any of which matches. A name the team does not have fails the check by name rather than matching nothing |
+| `state_types` | no | Linear's fixed categories (`triage`, `backlog`, `unstarted`, `started`, `completed`, `canceled`), for a pipeline that does not want to name a team's custom states. Not with `states` |
+| `labels` | no | label names that must all be on the issue, team or workspace labels, matched without regard to case |
+| `project` | no | a project name or id |
+| `assignee` | no | `@me`, or a user id. Not an email: that would put a person's identifier in pipeline YAML |
+| `token_env`, `endpoint` | no | as above |
+
+The same finder by category, for a pipeline that should work with any team's idea of "not started yet":
+
+```yaml linear=types
+resources:
+- name: ticket
+  type: linear-issues
+  source:
+    team: ENG
+    state_types: [unstarted]           # whatever this team calls its not-yet-started states
+
+jobs:
+- name: list
+  plan:
+  - get: ticket
+  - task: show
+    inputs: [ticket]
+    run: cat ticket/issue.identifier
+    assert:
+      stdout: "ENG-12"
+  assert:
+    execution: [ticket, show]
+    outcome: succeeded
+```
+
+**The version is `{identifier, entered_at}` when `states` or `state_types` is set, and `{identifier}` when neither is.** `entered_at` is when the issue last moved into one of the filter states, read from its history in the same query. That is a deliberate departure from Concourse, whose versions name a thing and nothing about it, made for the reason [`github-issues`](#github-issues-a-labeled-issue-as-a-trigger) carries `labeled_at`: in Linear the state is the request for work. So **moving an issue out of `Todo` and back asks for the work again**, which is how a person retries from Linear's own board without touching steps. Editing the title or description, or commenting, is not a new version. The check reads the last twenty history entries of each issue; one moved more often than that since it entered the state, or created straight into it, uses the time it was created instead, and comes back as a new version at most once.
+
+The check is a paginated query reported oldest first by creation, and **fails past 1,000 matching issues** rather than truncating, since a silently shortened list is a version that never builds. Narrow the source if it does.
+
+A get writes no tree, since an issue has none, only these:
+
+| file | what it holds |
+|---|---|
+| `issue.json` | the issue as Linear's API describes it: id, identifier, title, description, url, state, team, labels, project, `branchName` |
+| `issue.id`, `issue.identifier`, `issue.title`, `issue.url` | one value each |
+| `issue.branch` | the branch name Linear suggests, which links a pull request back to the issue through Linear's GitHub integration |
+| `issue.comments.json` | every comment, oldest first, threads flattened with each comment's parent kept |
+| `issue.md` | the issue to read: `# <identifier>: <title>`, its page, its description, then each comment under `## Comment, <created at>` |
+
+`issue.md` carries the discussion because a decision recorded in a comment is part of the work. Comment authors are left out of it, so a model reading it is not handed people's names it does not need; they stay in `issue.comments.json`. Images embedded in a description stay as Linear's links, which expire within minutes, so a later step cannot open them. **A get fetches the issue as it is now**, whichever version it is handed: an issue has no commit to pin it to. The get reports the issue's `url` and `title` as [facts](#facts-what-a-get-or-put-says-about-its-version).
+
+### `linear-comment` and `linear-update`: writing back
+
+Both take `token_env` and `endpoint` in `source:` and nothing else, and find which issue a put is about in its inputs: the one input whose version carries an identifier, which every `linear-issues` get's does. `params.from` picks one when several do, and `params.issue` names one outright, as an identifier such as `ENG-123`, for a put with no such input; the type finds Linear's internal id itself, so a pipeline never handles one.
+
+```yaml linear=acceptance
+resources:
+- name: ticket
+  type: linear-issues
+  source: {team: ENG, states: [Todo], labels: [agent-ready]}
+
+- name: epic
+  type: linear-issues
+  source: {team: ENG, states: [Todo]}
+
+- name: reply
+  type: linear-comment
+  source: {}
+
+- name: board
+  type: linear-update
+  source: {}
+
+jobs:
+- name: accept
+  plan:
+  - get: ticket
+  - get: epic
+  - task: write
+    outputs: [out]
+    run: echo "Shipped in 4.2" > out/body.md
+  - put: on-ticket
+    resource: reply
+    inputs: [ticket, epic, out]
+    params:
+      body_file: out/body.md
+      from: ticket                     # both gets carry an identifier, so say which
+  - put: on-release
+    resource: reply
+    inputs: [out]
+    params:
+      body_file: out/body.md
+      issue: ENG-12                    # no get at all: an identifier a release named
+  - put: started
+    resource: board
+    inputs: [ticket, epic]
+    params:
+      state: In Progress
+      from: ticket
+  - put: started-by-name
+    resource: board
+    params:
+      state: In Progress               # already there, which succeeds: the issue is as asked for
+      issue: ENG-12
+  assert:
+    execution: [ticket, epic, write, on-ticket, on-release, started, started-by-name]
+    outcome: succeeded
+```
+
+| `linear-comment` `params:` field | meaning |
+|---|---|
+| `body_file` | the comment, a path in the put's inputs. An empty file is refused |
+| `from`, `issue` | which issue, as above; not both |
+
+| `linear-update` `params:` field | meaning |
+|---|---|
+| `state` | a state name in the issue's own team; refused by name if the team has none |
+| `add_labels`, `remove_labels` | label names. **One the team and workspace do not have is refused**, not created: Linear does not create a label on use, and a typo should be a red put, not a new label |
+| `from`, `issue` | as above |
+
+A `linear-update` is one request to Linear, so a state move and a label swap land whole or not at all, and every name is looked up before anything is sent: a typo in the last label leaves the issue untouched. Moving an issue to the state it is already in, or removing a label it does not have, succeeds, because that is the issue as asked for, which a replay finds. A `linear-comment` is the opposite: nothing dedupes, and a retried put posts twice, as `github-pr-comment` does, so a pipeline that must not guards it.
+
+**`linear-update` is the durable "done".** A finder keeps reporting an issue as long as it sits in its filter's states, and only version history stops a second build, so deleting `.steps/` would build every issue again. A `linear-update` as the job's first step moves the issue out of the set in Linear itself, the argument `skip_reacted` makes on GitHub, and shows people on the board that a pipeline has it.
+
+The versions are `{issue, comment}` for a comment, and `{issue, state, add_labels, remove_labels}` for an update, with the sides it was not asked for left out. A put reports the comment's or issue's `url` as a fact. A get of either is refused at load, and so is a put to a `linear-issues` resource.
+
+**Poll, and keep [`webhook`](webhooks.md) for latency.** The `webhook` type already has a `linear` provider, so a pipeline that wants seconds rather than a poll interval can have it, but the finder polls on purpose: Linear disables a webhook it could not deliver to three times, so a laptop asleep overnight would silence it until someone re-enabled it by hand, and a delivery's version is the delivery, not the issue. The check is the truth; a delivery is a hint that it is worth running now.
+
 ## The built-in `cron` type
 
 `type: cron` mints a version when a slot of a crontab expression passes — the trigger for a nightly report, an hourly sweep, a job that should run whether or not anything else changed. Nothing is fetched: the artifact is the moment itself. A port of [govuk-pay/cron-resource](https://github.com/govuk-pay/cron-resource), kept to its rules.
@@ -1219,15 +1411,20 @@ jobs:
 
 **The version is `{digest}`**, the content the tag pointed at when the check ran. A new push to the tag is a new version; a push of the same content is not. A tag the registry does not have fails the check, naming it, rather than reading as "no versions yet", so a misspelled tag cannot hold a pipeline back in silence. A multi-platform image is one version: the digest of its index, which each machine's docker resolves to its own platform.
 
-**A get fetches no layers.** It asks the registry that the digest is still there, then writes three files, because the image is pulled by whatever runs it, by digest:
+**A get fetches no layers unless asked.** It asks the registry that the digest is still there, then writes three files, because the image is pulled by whatever runs it, by digest:
 
 | file | what it holds |
 |---|---|
 | `repository` | `source.repository` as written |
 | `tag` | the tag the check followed |
 | `digest` | the version's digest, `sha256:…` |
+| `oci/` | only with `format: oci-layout`: the whole image as an [OCI layout](https://github.com/opencontainers/image-spec/blob/main/image-layout.md), every platform of a multi-platform one, its one entry the version's digest |
 
-A get takes no `params:`. Concourse's get downloads the image as a root filesystem by default; here the step that runs it does that.
+| `params:` field | required | meaning |
+|---|---|---|
+| `format` | no | `oci-layout` downloads the image into `oci/`, for a [build to start from](#building-on-a-tracked-base-image). Unset, nothing is downloaded |
+
+Concourse's get downloads the image as a root filesystem by default; here the step that runs it does that, so `rootfs` (and `oci`, its single-platform tarball) are refused. `oci-layout` is Concourse's name and layout: a put of `oci/` to another repository pushes the same digest, which is how an image is mirrored.
 
 ### Pushing: `put`
 
@@ -1291,6 +1488,68 @@ The put's version is the pushed digest; the next build's get of `app-image` find
 | `additional_tags` | no | a file of whitespace-separated tags the image also gets, beside `source.tag` |
 
 Both paths are refused at load when they name an artifact the put does not list in its `inputs:`, and at run when one leads out of the build's tree.
+
+### Building on a tracked base image
+
+When the base image is a resource too, a new push of it is a new version: `trigger: true` on its get starts the build, and the build takes its `FROM` from the exact image that get downloaded, not from whatever the tag points at by the time BuildKit asks. The base's login is the resource's, so a private base needs nothing inside the build.
+
+```yaml registry=rebuild
+tasks:
+- name: oci-build
+  image: moby/buildkit:v0.17.3
+  privileged: true
+  caches:
+  - path: buildkit
+  run: |
+    buildctl-daemonless.sh build \
+      --frontend dockerfile.v0 --local context=src --local dockerfile=src \
+      --oci-layout base=base-image/oci \
+      --opt "context:ghcr.io/acme/base=oci-layout://base@$(cat base-image/digest)" \
+      --export-cache type=local,dest=buildkit,mode=max --import-cache type=local,src=buildkit \
+      --opt build-arg:SOURCE_DATE_EPOCH=0 \
+      --output type=oci,dest=image/image.tar,rewrite-timestamp=true
+
+resources:
+- name: base-image
+  type: registry-image
+  source:
+    repository: ghcr.io/acme/base
+    username: robot
+    password_env: REGISTRY_TOKEN
+- name: app-image
+  type: registry-image
+  source:
+    repository: ghcr.io/acme/app
+    username: robot
+    password_env: REGISTRY_TOKEN
+
+jobs:
+- name: publish
+  plan:
+  - get: base-image
+    trigger: true                      # a new base starts a rebuild
+    params:
+      format: oci-layout               # download it, every platform, into base-image/oci
+  - task: source                       # stands in for a get of the repository holding the Dockerfile
+    outputs: [src]
+    run: |
+      printf 'FROM ghcr.io/acme/base\nCOPY hello /hello\n' > src/Dockerfile
+      echo hello > src/hello
+  - task: oci-build
+    inputs: [src, base-image]
+    outputs: [image]
+  - put: app-image
+    inputs: [image]
+    params:
+      image: image/image.tar
+  assert:
+    execution: [base-image, source, oci-build, app-image]
+    outcome: succeeded
+```
+
+- **`--oci-layout base=…` and `context:<name>=oci-layout://base@<digest>`** are BuildKit's: the first names the downloaded layout, the second answers the Dockerfile's `FROM ghcr.io/acme/base` from it, so the Dockerfile stays one a plain `docker build` also builds. Concourse's oci-build-task does the same through `IMAGE_ARG_*`, which asks the Dockerfile for an `ARG`.
+- **A multi-platform base** is one layout holding every platform; a build with `--opt platform=linux/amd64,linux/arm64` takes each platform's base from it.
+- **The digest file pins it.** A get's `params:` are part of its cache key, and its version is the digest, so an unchanged base is the same get, and the build that follows reuses its cache.
 
 `tags:` is refused, as for every type that runs inside this process: check, get and put are steps' own requests, made from this machine.
 
