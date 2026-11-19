@@ -55,3 +55,24 @@ func TestAProbeRefusalCarriesTheProvidersReason(t *testing.T) {
 		t.Errorf("err = %v; want the status and the provider's reason", err)
 	}
 }
+
+// The quoted reason is stored and shown to every viewer, so the key a provider echoes back and bytes a terminal would act on stay out of it.
+func TestAProbeRefusalQuotesNoKeyAndNoControlBytes(t *testing.T) {
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"code":401,"message":"key sk-or-v1-abc123 is \u001b[31mrevoked"}}`))
+	}))
+	t.Cleanup(refusing.Close)
+
+	t.Setenv("PROBE_TEST_KEY", "sk-or-v1-abc123")
+
+	err := probeModel(context.Background(), config.ResolvedInvocation{BaseURL: refusing.URL + "/v1/", ModelName: "m", APIKeyEnv: "PROBE_TEST_KEY"}, 10*time.Second) //nolint:gosec // the name of a variable, not a credential
+	if err == nil || !strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("err = %v; want the provider's reason", err)
+	}
+
+	if strings.Contains(err.Error(), "abc123") || strings.ContainsRune(err.Error(), 0x1b) {
+		t.Errorf("err = %q; want the key masked and the escape dropped", err)
+	}
+}

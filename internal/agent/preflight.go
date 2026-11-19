@@ -24,7 +24,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jtarchie/steps/internal/agent/llmclient"
 
@@ -34,6 +36,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	"github.com/jtarchie/steps/internal/redact"
 )
 
 // transientErr marks a probe failure that WAITING could fix — a model that
@@ -526,7 +529,7 @@ func probeModel(ctx context.Context, ri config.ResolvedInvocation, timeout time.
 			// this minute — an outage, a rate limit, a cold start. The
 			// credential problems that are NOT are caught above, before any
 			// request is sent.
-			return transient(describeProbeError(probeCtx, respErr, timeout))
+			return transient(describeProbeError(probeCtx, respErr, timeout, apiKey))
 		}
 
 		slog.DebugContext(ctx, "preflight.model_ok", "model", ri.ModelName, "elapsed", time.Since(started))
@@ -541,7 +544,7 @@ func probeModel(ctx context.Context, ri config.ResolvedInvocation, timeout time.
 // on. A bare `500 Internal Server Error` reads like a transient glitch, so the
 // natural reaction is to RAISE retries — which makes it strictly worse. That
 // is exactly what happened during the investigation this feature came from.
-func describeProbeError(ctx context.Context, err error, timeout time.Duration) error {
+func describeProbeError(ctx context.Context, err error, timeout time.Duration, apiKey string) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("no response within %s", timeout)
 	}
@@ -551,7 +554,19 @@ func describeProbeError(ctx context.Context, err error, timeout time.Duration) e
 	if errors.As(err, &apiErr) && apiErr.Message != "" {
 		const most = 300
 
-		reason := []rune(apiErr.Message)
+		// The reason is stored and shown to every viewer, and a provider or proxy may echo the key it refused or bytes a terminal would act on.
+		message := redact.SecretsFrom(ctx).String(apiErr.Message)
+		if apiKey != "" {
+			message = strings.ReplaceAll(message, apiKey, "***")
+		}
+
+		reason := []rune(strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+
+			return r
+		}, message))
 		if len(reason) > most {
 			reason = append(reason[:most], '…')
 		}
