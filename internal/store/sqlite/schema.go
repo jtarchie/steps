@@ -110,7 +110,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 41
+const schemaVersion = 42
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -294,6 +294,14 @@ CREATE TABLE IF NOT EXISTS step_blobs (
     output      TEXT NOT NULL,
     digest      TEXT NOT NULL,
     PRIMARY KEY (pipeline_id, action_key, output)
+);
+
+-- The configuration (type and source) each resource's version history belongs to, as a hash. Concourse keys versions to a resource_config_scope and points the resource at a new one when its type or source changes (steps#280); this is that pointer, and a hash that differs on the next load empties the resource's history rather than letting a version from the old source answer for the new one.
+CREATE TABLE IF NOT EXISTS resource_configs (
+    pipeline_id   INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    resource_name TEXT NOT NULL,
+    config_hash   TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, resource_name)
 );
 
 CREATE TABLE IF NOT EXISTS resource_checks (

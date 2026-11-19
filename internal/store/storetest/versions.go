@@ -1213,3 +1213,122 @@ func (s suite) TestConsumedMarkRoundTrip(t *testing.T) {
 		t.Errorf("another job reports mark %d; the cursor is per job", other)
 	}
 }
+
+// TestAChangedResourceConfigStartsAFreshHistory: a resource whose type or source changed is a different resource (steps#280), as a new resource_config_scope is in Concourse, so nothing recorded against the old one may answer for it. The same configuration filed again keeps what it has, and so does a resource filed for the first time: that is a database from before configurations were filed, whose history belongs to whatever is loaded now.
+func (s suite) TestAChangedResourceConfigStartsAFreshHistory(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+
+	seedResourceHistory(t, st, "items")
+	recordN(t, st, "other", "9")
+
+	if reset := fileConfigs(t, st, map[string]string{"items": "a", "other": "z"}); len(reset) != 0 {
+		t.Fatalf("filing a configuration for the first time reset %v; it adopts the history it finds", reset)
+	}
+
+	if reset := fileConfigs(t, st, map[string]string{"items": "a", "other": "z"}); len(reset) != 0 {
+		t.Fatalf("filing the same configuration again reset %v", reset)
+	}
+
+	if versions, _ := decodedVersions(t, st, "items"); len(versions) != 2 {
+		t.Fatalf("an unchanged configuration lost its history: %v", versions)
+	}
+
+	if reset := fileConfigs(t, st, map[string]string{"items": "b", "other": "z"}); fmt.Sprint(reset) != "[items]" {
+		t.Fatalf("reset = %v, want [items]", reset)
+	}
+
+	assertHistoryForgotten(t, st, "items")
+
+	if versions, _ := decodedVersions(t, st, "other"); fmt.Sprint(versionNames(t, versions)) != "[9]" {
+		t.Errorf("a resource whose configuration did not change lost its history: %v", versions)
+	}
+}
+
+// TestResourceConfigsAreScopedToTheirPipeline: two pipelines naming a resource alike have said nothing about it being the same resource, so neither's configuration may reset the other's history.
+func (s suite) TestResourceConfigsAreScopedToTheirPipeline(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+	elsewhere := s.open(t, "elsewhere")
+
+	recordN(t, elsewhere, "items", "7")
+	fileConfigs(t, elsewhere, map[string]string{"items": "a"})
+	fileConfigs(t, st, map[string]string{"items": "a"})
+	fileConfigs(t, st, map[string]string{"items": "b"})
+
+	if versions, _ := decodedVersions(t, elsewhere, "items"); fmt.Sprint(versionNames(t, versions)) != "[7]" {
+		t.Errorf("another pipeline's resource of the same name lost its history: %v", versions)
+	}
+
+	if reset := fileConfigs(t, elsewhere, map[string]string{"items": "a"}); len(reset) != 0 {
+		t.Errorf("a pipeline read another pipeline's configuration of a same-named resource: reset %v", reset)
+	}
+
+	if reset := fileConfigs(t, st, map[string]string{"items": "b"}); len(reset) != 0 {
+		t.Errorf("a pipeline read another pipeline's configuration of a same-named resource: reset %v", reset)
+	}
+}
+
+func fileConfigs(t *testing.T, st store.Store, configs map[string]string) []string {
+	t.Helper()
+
+	reset, err := st.RecordResourceConfigs(ctxFor(t), configs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return reset
+}
+
+// seedResourceHistory gives a resource every kind of record a configuration change must take with it.
+func seedResourceHistory(t *testing.T, st store.Store, resource string) {
+	t.Helper()
+
+	ctx := ctxFor(t)
+
+	recordN(t, st, resource, "1", "2")
+
+	one, err := store.EncodeVersion(map[string]any{"n": "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, write := range []error{
+		st.RecordCheckedVersion(ctx, resource, one),
+		st.RecordCheckError(ctx, resource, "unreachable"),
+		st.RecordPassedVersion(ctx, store.Pass{JobName: "build", Resource: resource, Version: one, BuildID: "b1"}),
+		st.RecordConsumedMark(ctx, "build", resource, 2),
+	} {
+		if write != nil {
+			t.Fatal(write)
+		}
+	}
+}
+
+func assertHistoryForgotten(t *testing.T, st store.Store, resource string) {
+	t.Helper()
+
+	ctx := ctxFor(t)
+
+	if versions, _ := decodedVersions(t, st, resource); len(versions) != 0 {
+		t.Errorf("the old configuration's versions survived: %v", versions)
+	}
+
+	if _, found, _ := st.LastChecked(ctx, resource); found {
+		t.Error("the old configuration's check cursor survived; the next check would be handed a version from somewhere else")
+	}
+
+	if names := checkErrorNames(t, st); len(names) != 0 {
+		t.Errorf("the old configuration's check error survived: %v", names)
+	}
+
+	if passed, _ := st.PassedVersions(ctx, "build", 0); len(passed) != 0 {
+		t.Errorf("a pass against the old configuration survived: %v", passed)
+	}
+
+	if mark, _ := st.ConsumedMark(ctx, "build", resource); mark != 0 {
+		t.Errorf("the every: mark survived at %d; versions of the new configuration would read as built", mark)
+	}
+}

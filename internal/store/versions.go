@@ -58,6 +58,8 @@ type Versions interface {
 	// caller shows rather than by run history, which zero leaves unbounded;
 	// none named is none read.
 	VersionRuns(ctx context.Context, resourceName string, versions []VersionKey) ([]VersionRun, error)
+	// RecordResourceConfigs files the configuration each named resource is now under, by name to hash, and returns, sorted, the resources whose filed hash differed: each has lost its versions, check cursor, check error, passed: records and every: marks, as a new configuration in Concourse starts a new version history. A resource filed for the first time adopts what it has. Resources not named are left alone, as Concourse keeps a removed resource's history.
+	RecordResourceConfigs(ctx context.Context, configs map[string]string) ([]string, error)
 }
 
 // CheckedSwap moves a resource's checked version from Expected to Next.

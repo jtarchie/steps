@@ -92,6 +92,7 @@ func (d *daemon) pending(ctx context.Context) map[string]int64 {
 // servedPipeline is one pipeline plus what has to be shut down when it goes.
 type servedPipeline struct {
 	target *web.Pipeline
+	checks *trigger.Requests
 	cancel context.CancelFunc
 	loops  *sync.WaitGroup
 	// Only the process's own exit compacts; see release.
@@ -477,6 +478,7 @@ func (d *daemon) replace(existing *servedPipeline, cfg *config.Config, provider 
 	}
 
 	existing.target.SetConfig(cfg)
+	existing.checks.Set()
 	existing.target.SetPath(from)
 	existing.target.SetUnfenced(unfencedLines(d.fence, cfg))
 
@@ -551,6 +553,7 @@ func (d *daemon) start(
 
 	d.served[name] = &servedPipeline{
 		target: target,
+		checks: checks,
 		cancel: cancel,
 		loops:  loops,
 		closer: func(compact bool) {

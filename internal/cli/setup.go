@@ -7,6 +7,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -55,6 +56,13 @@ func setup(
 		_ = st.Close()
 
 		return nil, nil, nil, err
+	}
+
+	err = pipeline.AdoptResourceConfigs(context.Background(), st, cfg)
+	if err != nil {
+		_ = st.Close()
+
+		return nil, nil, nil, fmt.Errorf("pipeline %q: %w", cfg.Name, err)
 	}
 
 	provider, err := workspace.NewProvider(exec.workspace(""), exec.KeepWorkspace)

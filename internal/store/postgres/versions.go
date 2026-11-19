@@ -9,6 +9,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -342,4 +344,69 @@ func (s *Store) VersionRuns(ctx context.Context, resourceName string, versions [
 
 		return one, err
 	})
+}
+
+// RecordResourceConfigs reads each filed hash before it writes, so it takes the pipeline lock, as every read-then-write here does.
+func (s *Store) RecordResourceConfigs(ctx context.Context, configs map[string]string) ([]string, error) {
+	var reset []string
+
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		reset = nil
+
+		for _, name := range slices.Sorted(maps.Keys(configs)) {
+			changed, err := fileResourceConfig(ctx, tx, s.pipelineID, name, configs[name])
+			if err != nil {
+				return err
+			}
+
+			if changed {
+				reset = append(reset, name)
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("could not file resource configurations: %w", err)
+	}
+
+	return reset, nil
+}
+
+func fileResourceConfig(ctx context.Context, tx *sql.Tx, pipelineID int64, name, hash string) (bool, error) {
+	var filed string
+
+	err := tx.QueryRowContext(ctx,
+		`SELECT config_hash FROM resource_configs WHERE pipeline_id = $1 AND resource_name = $2`,
+		pipelineID, name).Scan(&filed)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return false, fmt.Errorf("could not read the configuration of %q: %w", name, err)
+	case filed == hash:
+		return false, nil
+	default:
+		for _, statement := range []string{
+			`DELETE FROM resource_versions WHERE pipeline_id = $1 AND resource_name = $2`,
+			`DELETE FROM resource_checks WHERE pipeline_id = $1 AND resource_name = $2`,
+			`DELETE FROM resource_check_errors WHERE pipeline_id = $1 AND resource_name = $2`,
+			`DELETE FROM job_version_cursor WHERE pipeline_id = $1 AND resource_name = $2`,
+		} {
+			_, err = tx.ExecContext(ctx, statement, pipelineID, name)
+			if err != nil {
+				return false, fmt.Errorf("could not reset the history of %q: %w", name, err)
+			}
+		}
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO resource_configs (pipeline_id, resource_name, config_hash) VALUES ($1, $2, $3)
+		ON CONFLICT (pipeline_id, resource_name) DO UPDATE SET config_hash = excluded.config_hash
+	`, pipelineID, name, hash)
+	if err != nil {
+		return false, fmt.Errorf("could not file the configuration of %q: %w", name, err)
+	}
+
+	return filed != "", nil
 }

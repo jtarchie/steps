@@ -143,6 +143,25 @@ func checkCursorFor(ctx context.Context, st store.Versions, name string) (map[st
 	return cursor, nil
 }
 
+// AdoptResourceConfigs files each resource's type and source, emptying the version history of any that changed (steps#280), as Concourse points a resource at a fresh scope when set-pipeline changes either — so the first check after a move is not handed the old source's cursor, and no run resolves a version that only ever existed there. Its callers are the ones nothing else writes history beside: a one-shot command before it runs, and a daemon's poller between its own polls, so a poll still running under the old configuration cannot write after the reset.
+func AdoptResourceConfigs(ctx context.Context, st store.Versions, cfg *config.Config) error {
+	hashes, err := cfg.ResourceConfigHashes()
+	if err != nil {
+		return err //nolint:wrapcheck // names the resource and what failed
+	}
+
+	reset, err := st.RecordResourceConfigs(ctx, hashes)
+	if err != nil {
+		return fmt.Errorf("could not record the pipeline's resource configurations: %w", err)
+	}
+
+	for _, name := range reset {
+		slog.InfoContext(ctx, "resource.history_reset", "pipeline", cfg.Name, "resource", name, "why", "its type or source changed, so versions recorded for the old one no longer apply")
+	}
+
+	return nil
+}
+
 func warnRefreshFailed(ctx context.Context, name string, err error) {
 	warnf(ctx, "could not refresh %s; building from recorded history: %v", name, err)
 	slog.WarnContext(ctx, "job.refresh_failed", "resource", name, "error", err)
