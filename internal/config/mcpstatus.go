@@ -51,6 +51,10 @@ func (s MCPServer) Target() string {
 		target += fmt.Sprintf(" (cwd: %s)", s.Cwd)
 	}
 
+	if s.Image != "" {
+		target += fmt.Sprintf(" (image: %s)", s.Image)
+	}
+
 	return redact.Command(target)
 }
 
@@ -76,6 +80,20 @@ func (s MCPServer) NotProbableHere() string {
 	return ""
 }
 
+func (s MCPServer) stdioStatus() MCPStatus {
+	// This machine's PATH says nothing about the image's, and asking the image would mean pulling it.
+	if s.Image != "" {
+		return MCPStatus{Readiness: MCPUnknown, Detail: "runs in image " + s.Image}
+	}
+
+	_, err := exec.LookPath(s.Command)
+	if err != nil {
+		return MCPStatus{Readiness: MCPMissing, Detail: fmt.Sprintf("command %q not found on PATH", s.Command)}
+	}
+
+	return MCPStatus{Readiness: MCPReady, Detail: "on PATH"}
+}
+
 // StaticStatus answers what this machine can say about the server right now without a single request: whether a stdio command is on PATH, and whether a bearer variable is set. The oauth answer is deliberately MCPUnknown rather than a guess — the credential is a login internal/mcp keeps, sealed in the state database, and this package may not import it. Whoever holds the token fills that in; see web.Authorizer.
 func (s MCPServer) StaticStatus() MCPStatus {
 	if skip := s.NotProbableHere(); skip != "" {
@@ -83,12 +101,7 @@ func (s MCPServer) StaticStatus() MCPStatus {
 	}
 
 	if s.IsStdio() {
-		_, err := exec.LookPath(s.Command)
-		if err != nil {
-			return MCPStatus{Readiness: MCPMissing, Detail: fmt.Sprintf("command %q not found on PATH", s.Command)}
-		}
-
-		return MCPStatus{Readiness: MCPReady, Detail: "on PATH"}
+		return s.stdioStatus()
 	}
 
 	switch s.Auth.Type {

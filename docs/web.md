@@ -1114,8 +1114,9 @@ tools touch no files and run no shell, until it carries a `when:` guard.
 Everything else is listed, each place named with what runs there: a task or
 agent step with no `image:` or `sandbox:` (job hooks included), a container
 with `privileged: true`, a resource whose type runs `check`/`in`/`out` on the
-host (the built-in `git` type does), a `github-prs`/`github-comments`
-resource with `checkout: git`, every stdio `mcp_servers:` entry, an
+host (the built-in `git` type does, until a `resource_types:` entry of its
+name gives it an `image:`), a `github-prs`/`github-comments` resource with
+`checkout: git` and no such image, every stdio `mcp_servers:` entry without `image:` (one that runs `docker` itself included), an
 `mcp_exports:` entry whose custom `run:` tools or exported agents have no
 `image:`, an agent whose sub-agent runs host tools under no `sandbox:` of its
 own (a step's `sandbox: true` does not reach it), a `when:` guard on a step

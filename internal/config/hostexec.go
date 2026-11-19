@@ -14,6 +14,7 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -35,12 +36,17 @@ func (c *Config) HostCommands() []HostCommand {
 	found := c.hostResources()
 
 	for _, server := range c.MCPServers {
-		if server.Command != "" {
-			found = append(found, HostCommand{
-				Name: server.Name, Where: fmt.Sprintf("mcp_servers %q", server.Name),
-				Why: "a stdio server: its command runs on the host, and an mcp server has no image:",
-			})
+		if server.Command == "" || server.Image != "" {
+			continue
 		}
+
+		why := "a stdio server: its command runs on the host; set image:"
+		// steps cannot see what a container started by hand mounts or how privileged it is, so it is no fence of steps'.
+		if filepath.Base(server.Command) == "docker" {
+			why = "a stdio server that runs docker itself: steps cannot check what that container may reach; move its image into image:"
+		}
+
+		found = append(found, HostCommand{Name: server.Name, Where: fmt.Sprintf("mcp_servers %q", server.Name), Why: why})
 	}
 
 	for _, job := range c.Jobs {
@@ -70,13 +76,13 @@ func (c *Config) hostResources() []HostCommand {
 			if resourceType.Image == "" {
 				found = append(found, HostCommand{
 					Name: resource.Name, Where: where,
-					Why:       fmt.Sprintf("type %q runs check/in/out on the host; give the type an image: (a built-in one, by copying it into resource_types: under another name)", resource.Type) + sandboxed(resourceType.Sandbox),
+					Why:       fmt.Sprintf("type %q runs check/in/out on the host; give the type an image: (a built-in one, by a resource_types: entry of its name with only image:)", resource.Type) + sandboxed(resourceType.Sandbox),
 					Sandboxed: resourceType.Sandbox,
 				})
 			}
 		case BackendGitHub:
-			if githubClonesWithGit(resourceType.Config.GitHub, resource.Source) {
-				found = append(found, HostCommand{Name: resource.Name, Where: where, Why: "checkout: git runs the git binary on the host"})
+			if resourceType.Image == "" && githubClonesWithGit(resourceType.Config.GitHub, resource.Source) {
+				found = append(found, HostCommand{Name: resource.Name, Where: where, Why: fmt.Sprintf("checkout: git runs the git binary on the host; give type %q an image: (a resource_types: entry of its name with only image:)", resource.Type)})
 			}
 		case BackendMCP, BackendExpr, BackendWebhook, BackendCron, BackendConcourse, BackendRegistry, BackendService, BackendLinear:
 		}

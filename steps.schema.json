@@ -348,6 +348,12 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "$comment": "image: alone on a built-in type's name is that built-in run in the image.",
+          "required": [
+            "image"
+          ]
         }
       ],
       "properties": {
@@ -1549,6 +1555,10 @@
         "cwd": {
           "type": "string",
           "description": "command only."
+        },
+        "image": {
+          "type": "string",
+          "description": "command only: run the command in a container from this image instead of on this machine. cwd: is then a path in the container."
         },
         "auth": {
           "type": "object",

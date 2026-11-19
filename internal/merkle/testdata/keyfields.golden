@@ -185,6 +185,7 @@
     "command": "Command",
     "cwd": "Cwd",
     "endpoint": "http://localhost:1",
+    "image": "Image",
     "name": "github",
     "scopes": [
       "Auth.Scopes[0]"

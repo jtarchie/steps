@@ -16,8 +16,7 @@
 # A get of a tag_pattern resource fetches full history and every tag, because
 # release tooling reads both; it is the one place this type is not shallow.
 #
-# Requires the `git` binary. Set image: on your own copy of this type to run
-# it in a container instead.
+# Requires the `git` binary, here or in the image a resource_types: entry named git with only image: gives it (runsBuiltinIn).
 #
 # Nothing of the operator's is read, credential or not (no global or system git config, no ssh config, agent or default identity; GIT_CONFIG_GLOBAL needs git 2.32): it was once "the operator's config unless a credential is named", and an unattended poll then reached whatever that config pointed at, such as an ssh agent that asks a person. A local uri's own .git/config is still read, the clone being what source: names. The credential is read from the environment inside the shell, never templated, so it is in no argv and no rendered command.
 

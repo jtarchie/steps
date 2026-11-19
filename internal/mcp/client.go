@@ -209,6 +209,10 @@ func Connect(ctx context.Context, pipeline string, srv config.MCPServer) (Client
 // stdio case; the fallthrough is the original Streamable HTTP path,
 // unchanged.
 func newTransport(ctx context.Context, pipeline string, srv config.MCPServer) (sdkmcp.Transport, error) {
+	if srv.IsStdio() && srv.Image != "" {
+		return imageTransport(ctx, srv)
+	}
+
 	if srv.IsStdio() {
 		return commandTransport(ctx, srv), nil
 	}

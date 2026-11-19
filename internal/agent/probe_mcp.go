@@ -77,7 +77,7 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 		return err //nolint:wrapcheck // FindMCPServer already names the server and lists the alternatives
 	}
 
-	identity := []string{"mcp", srv.Name, srv.Endpoint, srv.Command, srv.Cwd}
+	identity := []string{"mcp", srv.Name, srv.Endpoint, srv.Command, srv.Cwd, srv.Image}
 	if srv.Auth.OAuth() {
 		identity = append(identity, cfg.Name)
 	}
