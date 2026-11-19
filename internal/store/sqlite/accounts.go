@@ -253,13 +253,25 @@ func (a *Accounts) IssueToken(ctx context.Context, token store.OAuthToken) error
 		return fmt.Errorf("could not sweep ended tokens: %w", err)
 	}
 
-	_, err = a.held.db.ExecContext(ctx, `
-		INSERT INTO oauth_tokens (token_hash, kind, grant_kind, client_id, actor, pipeline, export, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, token.TokenHash, token.Kind, token.Grant.Kind, token.Grant.ClientID, token.Grant.Actor, token.Grant.Pipeline, token.Grant.Export,
-		token.CreatedAt.UTC().Format(sortableNano), token.ExpiresAt.UTC().Format(sortableNano))
+	result, err := a.held.db.ExecContext(ctx, `
+		INSERT INTO oauth_tokens (token_hash, kind, grant_kind, client_id, actor, pipeline_id, export, created_at, expires_at)
+		SELECT ?, ?, ?, ?, ?, p.id, ?, ?, ?
+		FROM (SELECT 1) LEFT JOIN pipelines p ON p.name = ? AND ? = 'export'
+		WHERE ? = 'read' OR p.id IS NOT NULL
+	`, token.TokenHash, token.Kind, token.Grant.Kind, token.Grant.ClientID, token.Grant.Actor, token.Grant.Export,
+		token.CreatedAt.UTC().Format(sortableNano), token.ExpiresAt.UTC().Format(sortableNano),
+		token.Grant.Pipeline, token.Grant.Kind, token.Grant.Kind)
 	if err != nil {
 		return fmt.Errorf("could not issue a token: %w", err)
+	}
+
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("could not issue a token: %w", err)
+	}
+
+	if inserted == 0 {
+		return fmt.Errorf("could not issue a token for pipeline %q: %w", token.Grant.Pipeline, store.ErrNoSuchPipeline)
 	}
 
 	return nil
@@ -273,8 +285,9 @@ func (a *Accounts) FindToken(ctx context.Context, tokenHash string) (store.OAuth
 	)
 
 	err := a.held.reads.QueryRowContext(ctx, `
-		SELECT token_hash, kind, grant_kind, client_id, actor, pipeline, export, created_at, expires_at FROM oauth_tokens
-		WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?
+		SELECT t.token_hash, t.kind, t.grant_kind, t.client_id, t.actor, COALESCE(p.name, ''), t.export, t.created_at, t.expires_at
+		FROM oauth_tokens t LEFT JOIN pipelines p ON p.id = t.pipeline_id
+		WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ?
 	`, tokenHash, nowNano()).Scan(&token.TokenHash, &token.Kind, &token.Grant.Kind, &token.Grant.ClientID, &token.Grant.Actor,
 		&token.Grant.Pipeline, &token.Grant.Export, &created, &expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -309,8 +322,9 @@ func (a *Accounts) RevokeToken(ctx context.Context, tokenHash string) (bool, err
 func (a *Accounts) RevokeGrant(ctx context.Context, grant store.Grant) error {
 	_, err := a.held.db.ExecContext(ctx, `
 		UPDATE oauth_tokens SET revoked_at = ?
-		WHERE grant_kind = ? AND client_id = ? AND actor = ? AND pipeline = ? AND export = ? AND revoked_at IS NULL
-	`, nowNano(), grant.Kind, grant.ClientID, grant.Actor, grant.Pipeline, grant.Export)
+		WHERE grant_kind = ? AND client_id = ? AND actor = ? AND export = ? AND revoked_at IS NULL
+		  AND pipeline_id IS (SELECT id FROM pipelines WHERE name = ?)
+	`, nowNano(), grant.Kind, grant.ClientID, grant.Actor, grant.Export, grant.Pipeline)
 	if err != nil {
 		return fmt.Errorf("could not revoke a grant: %w", err)
 	}
@@ -321,13 +335,13 @@ func (a *Accounts) RevokeGrant(ctx context.Context, grant store.Grant) error {
 // Grants are the live connections, newest first.
 func (a *Accounts) Grants(ctx context.Context, filter store.Grant) ([]store.Connection, error) {
 	return collect(ctx, a.held.reads, "connections", `
-		SELECT t.grant_kind, t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export, MIN(t.created_at)
-		FROM oauth_tokens t JOIN oauth_clients c ON c.id = t.client_id
+		SELECT t.grant_kind, t.client_id, c.name, c.redirect_uris, t.actor, COALESCE(p.name, ''), t.export, MIN(t.created_at)
+		FROM oauth_tokens t JOIN oauth_clients c ON c.id = t.client_id LEFT JOIN pipelines p ON p.id = t.pipeline_id
 		WHERE t.revoked_at IS NULL AND t.expires_at > ?
 		  AND (? = '' OR t.grant_kind = ?)
 		  AND (? = '' OR t.client_id = ?) AND (? = '' OR t.actor = ?)
-		  AND (? = '' OR t.pipeline = ?) AND (? = '' OR t.export = ?)
-		GROUP BY t.grant_kind, t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline, t.export
+		  AND (? = '' OR p.name = ?) AND (? = '' OR t.export = ?)
+		GROUP BY t.grant_kind, t.client_id, c.name, c.redirect_uris, t.actor, t.pipeline_id, p.name, t.export
 		ORDER BY MIN(t.created_at) DESC
 	`, []any{nowNano(), filter.Kind, filter.Kind, filter.ClientID, filter.ClientID, filter.Actor, filter.Actor, filter.Pipeline, filter.Pipeline, filter.Export, filter.Export},
 		func(rows *sql.Rows) (store.Connection, error) {

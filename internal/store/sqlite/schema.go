@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 42 replaced oauth_tokens.pipeline (a name) with pipeline_id REFERENCES pipelines: a grant followed a reused name onto a pipeline nobody granted, and lost a renamed one.
+//
 // 41 added approvals.notified_at and questions.notified_at, when a park's on_pending was attempted, so a restart neither announces it twice nor loses an announcement a crash cut short.
 //
 // 38 added run_placements.image_digest, what a step's image: resolved to on the machine that ran it: a tag moves, and the row otherwise could not say which bytes ran.
@@ -110,7 +112,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 42
+const schemaVersion = 43
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -1025,20 +1027,23 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     created_at    TEXT NOT NULL
 );
 -- client_id names a registered client, and deleting the client takes its
--- tokens: a client nobody can find again must not keep working.
+-- tokens: a client nobody can find again must not keep working. An export
+-- grant names its pipeline by id, so destroying the pipeline takes the grant
+-- and a rename keeps it; a read grant names none (NULL).
 CREATE TABLE IF NOT EXISTS oauth_tokens (
-    token_hash TEXT PRIMARY KEY,
-    kind       TEXT NOT NULL,
-    grant_kind TEXT NOT NULL DEFAULT 'export' CHECK (grant_kind IN ('export', 'read')),
-    client_id  TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
-    actor      TEXT NOT NULL,
-    pipeline   TEXT NOT NULL,
-    export     TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    revoked_at TEXT
+    token_hash  TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,
+    grant_kind  TEXT NOT NULL DEFAULT 'export' CHECK (grant_kind IN ('export', 'read')),
+    client_id   TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+    actor       TEXT NOT NULL,
+    pipeline_id INTEGER REFERENCES pipelines(id) ON DELETE CASCADE,
+    export      TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    revoked_at  TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(client_id, actor, pipeline, export);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(client_id, actor, pipeline_id, export);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_pipeline ON oauth_tokens(pipeline_id);
 
 -- What people did: set, trigger, approve, abort, pause and the rest
 -- (store.Activity). One log per database, trimmed by count across every

@@ -48,15 +48,26 @@ func TestAccountsConformance(t *testing.T) {
 	t.Parallel()
 	requirePostgres(t)
 
-	storetest.RunAccounts(t, func(t *testing.T) store.Accounts {
+	storetest.RunAccounts(t, func(t *testing.T) (store.Accounts, storetest.OpenFunc) {
 		t.Helper()
 
-		accounts, err := OpenAccounts(newDatabase(t))
+		rawURL := newDatabase(t)
+
+		accounts, err := OpenAccounts(rawURL)
 		if err != nil {
 			t.Fatalf("OpenAccounts: %v", err)
 		}
 
-		return accounts
+		return accounts, func(t *testing.T, pipeline string) store.Store {
+			t.Helper()
+
+			st, err := OpenStore(rawURL, pipeline)
+			if err != nil {
+				t.Fatalf("OpenStore(%q): %v", pipeline, err)
+			}
+
+			return st
+		}
 	}, func(t *testing.T, accounts store.Accounts, clientID string) {
 		t.Helper()
 

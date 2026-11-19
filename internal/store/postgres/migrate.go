@@ -57,6 +57,13 @@ CREATE UNIQUE INDEX idx_trigger_queue_pending_pin
 )`,
 	`ALTER TABLE approvals ADD COLUMN notified_at TIMESTAMPTZ;
 ALTER TABLE questions ADD COLUMN notified_at TIMESTAMPTZ`,
+	`ALTER TABLE oauth_tokens ADD COLUMN pipeline_id BIGINT REFERENCES pipelines(id) ON DELETE CASCADE;
+UPDATE oauth_tokens t SET pipeline_id = p.id FROM pipelines p WHERE p.name = t.pipeline;
+DELETE FROM oauth_tokens WHERE grant_kind = 'export' AND pipeline_id IS NULL;
+DROP INDEX idx_oauth_tokens_grant;
+ALTER TABLE oauth_tokens DROP COLUMN pipeline;
+CREATE INDEX idx_oauth_tokens_grant ON oauth_tokens(client_id, actor, pipeline_id, export);
+CREATE INDEX idx_oauth_tokens_pipeline ON oauth_tokens(pipeline_id)`,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

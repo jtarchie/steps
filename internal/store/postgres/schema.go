@@ -8,6 +8,8 @@ package postgres
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was DROP SCHEMA.
 //
+// 28 replaced oauth_tokens.pipeline with pipeline_id, as sqlite's 42 did.
+//
 // 27 added approvals.notified_at and questions.notified_at, as sqlite's 41 did.
 //
 // 24 added run_placements.image_digest, as sqlite's 38 did.
@@ -36,7 +38,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 28
+const schemaVersion = 29
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -472,18 +474,19 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     created_at    TIMESTAMPTZ NOT NULL
 );
 CREATE TABLE IF NOT EXISTS oauth_tokens (
-    token_hash TEXT PRIMARY KEY,
-    kind       TEXT NOT NULL,
-    grant_kind TEXT NOT NULL DEFAULT 'export' CHECK (grant_kind IN ('export', 'read')),
-    client_id  TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
-    actor      TEXT NOT NULL,
-    pipeline   TEXT NOT NULL,
-    export     TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL,
-    revoked_at TIMESTAMPTZ
+    token_hash  TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,
+    grant_kind  TEXT NOT NULL DEFAULT 'export' CHECK (grant_kind IN ('export', 'read')),
+    client_id   TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+    actor       TEXT NOT NULL,
+    pipeline_id BIGINT REFERENCES pipelines(id) ON DELETE CASCADE,
+    export      TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    revoked_at  TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(client_id, actor, pipeline, export);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(client_id, actor, pipeline_id, export);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_pipeline ON oauth_tokens(pipeline_id);
 
 -- See the sqlite schema: replaced at each sign-in, read by permission rules.
 CREATE TABLE IF NOT EXISTS users (

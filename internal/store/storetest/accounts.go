@@ -11,32 +11,48 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// AccountsOpenFunc opens the daemon-level accounts handle on a fresh database.
-type AccountsOpenFunc func(t *testing.T) store.Accounts
+// AccountsOpenFunc opens the daemon-level accounts handle on a fresh database, and an opener of pipeline handles on that same database: a grant names a pipeline, so a test must be able to create, rename and destroy one beside it.
+type AccountsOpenFunc func(t *testing.T) (store.Accounts, OpenFunc)
 
 // CorruptRedirectsFunc overwrites one registered client's redirect_uris column with text that is not JSON, reaching past the interface into the driver's raw database, which is the only way to model a column damaged outside this code.
 type CorruptRedirectsFunc func(t *testing.T, accounts store.Accounts, clientID string)
 
 // accountsSuite is the conformance suite for store.Accounts, found by reflection for the reason suite is.
 type accountsSuite struct {
-	open    AccountsOpenFunc
-	corrupt CorruptRedirectsFunc
+	openBoth func(t *testing.T) (store.Accounts, func(pipeline string) store.Store)
+	corrupt  CorruptRedirectsFunc
+}
+
+func (s accountsSuite) open(t *testing.T, pipelines ...string) store.Accounts {
+	t.Helper()
+
+	accounts, pipeline := s.openBoth(t)
+	for _, name := range pipelines {
+		pipeline(name)
+	}
+
+	return accounts
 }
 
 // RunAccounts runs the accounts conformance suite against one driver.
 func RunAccounts(t *testing.T, open AccountsOpenFunc, corrupt CorruptRedirectsFunc) {
 	t.Helper()
 
-	closing := func(t *testing.T) store.Accounts {
+	closing := func(t *testing.T) (store.Accounts, func(string) store.Store) {
 		t.Helper()
 
-		accounts := open(t)
+		accounts, pipelines := open(t)
 		t.Cleanup(func() { _ = accounts.Close() })
 
-		return accounts
+		return accounts, func(name string) store.Store {
+			st := pipelines(t, name)
+			t.Cleanup(func() { _ = st.Close() })
+
+			return st
+		}
 	}
 
-	value := reflect.ValueOf(&accountsSuite{open: closing, corrupt: corrupt})
+	value := reflect.ValueOf(&accountsSuite{openBoth: closing, corrupt: corrupt})
 	typ := value.Type()
 
 	for index := range typ.NumMethod() {
@@ -159,7 +175,7 @@ func (s accountsSuite) TestClientRegistrationIsBounded(t *testing.T) {
 func (s accountsSuite) TestAFullTableOfUnusedClientsStillRegisters(t *testing.T) {
 	t.Parallel()
 
-	accounts := s.open(t)
+	accounts := s.open(t, "p")
 	now := time.Now()
 	stale := now.Add(-2 * store.UnusedClientTTL)
 
@@ -193,7 +209,7 @@ func (s accountsSuite) TestAFullTableOfUnusedClientsStillRegisters(t *testing.T)
 func (s accountsSuite) TestAGrantCanBeRevokedWhole(t *testing.T) {
 	t.Parallel()
 
-	accounts := s.open(t)
+	accounts := s.open(t, "ops")
 	registerClient(t, accounts, "c")
 
 	grant := store.Grant{Kind: store.GrantExport, ClientID: "c", Actor: "github:alex", Pipeline: "ops", Export: "support"}
@@ -226,11 +242,11 @@ func (s accountsSuite) TestAGrantCanBeRevokedWhole(t *testing.T) {
 func (s accountsSuite) TestAGrantSaysItsKind(t *testing.T) {
 	t.Parallel()
 
-	accounts := s.open(t)
+	accounts := s.open(t, "ops")
 	registerClient(t, accounts, "claude")
 
 	read := store.Grant{Kind: store.GrantRead, ClientID: "claude", Actor: "github:alex"}
-	export := store.Grant{Kind: store.GrantExport, ClientID: "claude", Actor: "github:alex"}
+	export := store.Grant{Kind: store.GrantExport, ClientID: "claude", Actor: "github:alex", Pipeline: "ops", Export: "support"}
 	later := time.Now().Add(time.Hour)
 
 	for hash, g := range map[string]store.Grant{"read": read, "export": export} {
@@ -308,7 +324,7 @@ func assertTokensLive(t *testing.T, accounts store.Accounts, want map[string]boo
 func (s accountsSuite) TestAnExpiredTokenIsNotFound(t *testing.T) {
 	t.Parallel()
 
-	accounts := s.open(t)
+	accounts := s.open(t, "p")
 	registerClient(t, accounts, "c")
 
 	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "old", Kind: store.TokenAccess, Grant: store.Grant{Kind: store.GrantExport, ClientID: "c", Actor: "a", Pipeline: "p", Export: "e"}, CreatedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-time.Hour)})
@@ -333,6 +349,54 @@ func assertClients(t *testing.T, accounts store.Accounts, want map[string]bool) 
 	}
 }
 
+// TestAGrantBelongsToThePipelineNotItsName: a renamed pipeline keeps the agents it let in, and a pipeline destroyed and set again under the same name starts with none — a name is not who granted what.
+func (s accountsSuite) TestAGrantBelongsToThePipelineNotItsName(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	accounts, pipeline := s.openBoth(t)
+	registerClient(t, accounts, "claude")
+
+	ops := pipeline("ops")
+	grant := store.Grant{Kind: store.GrantExport, ClientID: "claude", Actor: "github:alex", Pipeline: "ops", Export: "support"}
+
+	err := accounts.IssueToken(ctx, store.OAuthToken{TokenHash: "t", Kind: store.TokenAccess, Grant: grant, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("IssueToken: %v", err)
+	}
+
+	err = ops.Rename(ctx, "renamed")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+
+	renamed := grant
+	renamed.Pipeline = "renamed"
+
+	token, found, err := accounts.FindToken(ctx, "t")
+	if err != nil || !found || token.Grant != renamed {
+		t.Errorf("FindToken after a rename = %+v, %v, %v; want the grant on the renamed pipeline", token, found, err)
+	}
+
+	assertConnections(t, accounts, store.Grant{Pipeline: "renamed"}, renamed)
+	assertConnections(t, accounts, store.Grant{Pipeline: "ops"})
+
+	err = pipeline("renamed").Delete(ctx)
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	pipeline("renamed")
+
+	assertTokensLive(t, accounts, map[string]bool{"t": false})
+	assertConnections(t, accounts, store.Grant{})
+
+	err = accounts.IssueToken(ctx, store.OAuthToken{TokenHash: "nowhere", Kind: store.TokenAccess, Grant: store.Grant{Kind: store.GrantExport, ClientID: "claude", Actor: "github:alex", Pipeline: "missing", Export: "support"}, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)})
+	if !errors.Is(err, store.ErrNoSuchPipeline) {
+		t.Errorf("a token for a pipeline that does not exist = %v, want ErrNoSuchPipeline", err)
+	}
+}
+
 func registerClient(t *testing.T, accounts store.Accounts, id string) {
 	t.Helper()
 
@@ -346,7 +410,7 @@ func registerClient(t *testing.T, accounts store.Accounts, id string) {
 func (s accountsSuite) TestConnectionsAreTheLiveGrants(t *testing.T) {
 	t.Parallel()
 
-	accounts := s.open(t)
+	accounts := s.open(t, "ops")
 	registerClient(t, accounts, "claude")
 
 	alex := store.Grant{Kind: store.GrantExport, ClientID: "claude", Actor: "github:alex", Pipeline: "ops", Export: "support"}
@@ -391,7 +455,7 @@ func assertConnections(t *testing.T, accounts store.Accounts, filter store.Grant
 func (s accountsSuite) TestACorruptRedirectColumnIsAnErrorNotAnEmptyList(t *testing.T) {
 	t.Parallel()
 
-	accounts := s.open(t)
+	accounts := s.open(t, "ops")
 	registerClient(t, accounts, "claude")
 
 	grant := store.Grant{Kind: store.GrantExport, ClientID: "claude", Actor: "github:alex", Pipeline: "ops", Export: "support"}

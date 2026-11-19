@@ -43,7 +43,7 @@ func TestAccountsConformance(t *testing.T) {
 
 	root := t.TempDir()
 
-	storetest.RunAccounts(t, func(t *testing.T) store.Accounts {
+	storetest.RunAccounts(t, func(t *testing.T) (store.Accounts, storetest.OpenFunc) {
 		t.Helper()
 
 		path := filepath.Join(root, strings.ReplaceAll(t.Name(), "/", "-"), "state.db")
@@ -53,7 +53,16 @@ func TestAccountsConformance(t *testing.T) {
 			t.Fatalf("OpenAccounts(%q): %v", path, err)
 		}
 
-		return accounts
+		return accounts, func(t *testing.T, pipeline string) store.Store {
+			t.Helper()
+
+			st, err := OpenStore(path, pipeline)
+			if err != nil {
+				t.Fatalf("OpenStore(%q, %q): %v", path, pipeline, err)
+			}
+
+			return st
+		}
 	}, func(t *testing.T, accounts store.Accounts, clientID string) {
 		t.Helper()
 
