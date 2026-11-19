@@ -39,7 +39,7 @@ func (p ProgressFlags) draw(ctx context.Context, out io.Writer, st store.Usage) 
 		return ctx, func() {}
 	}
 
-	live, stop := newLive(ctx, out, st)
+	ctx, live, stop := newLive(ctx, out, st)
 
 	ctx = events.WithRenderer(ctx, live.Event)
 	ctx = events.WithOutput(ctx, events.Output{Step: live.Stream, Hold: live.Hold})
@@ -47,28 +47,24 @@ func (p ProgressFlags) draw(ctx context.Context, out io.Writer, st store.Usage) 
 	return ctx, stop
 }
 
-// newLive starts a live view on out, sized to its terminal, and returns what takes it down.
-func newLive(ctx context.Context, out io.Writer, st store.Usage) (*runview.Live, func()) {
+// newLive starts a live view on out, sized to its terminal, and returns ctx with its log lines drawn above the region and what takes it down.
+func newLive(ctx context.Context, out io.Writer, st store.Usage) (context.Context, *runview.Live, func()) {
 	live := runview.NewLive(out)
 	live.Width = func() int { return terminalSize(out, 80, func(size *unix.Winsize) uint16 { return size.Col }) }
 	live.Height = func() int { return terminalSize(out, 24, func(size *unix.Winsize) uint16 { return size.Row }) }
 	live.Color = os.Getenv("NO_COLOR") == ""
 	live.Spend = func(runID string) string { return runSpend(ctx, st, runID) }
 
-	// Log records go above the region too, or the first warning a step logs tears it.
-	previous := slog.Default()
-	slog.SetDefault(slog.New(telemetry.LogHandler(events.LogHandler(tint.NewTextHandler(live.Log(), &tint.Options{
-		Level:     levelOf(ctx, previous.Handler()),
+	// Log records go above the region too, or the first warning a step logs tears it. Through ctx, not slog.SetDefault: the default is the process's, and swapping it took the lines of every invocation already running beside this one.
+	ctx = context.WithValue(ctx, logKey{}, telemetry.LogHandler(events.LogHandler(tint.NewTextHandler(live.Log(), &tint.Options{
+		Level:     levelOf(ctx, slog.Default().Handler()),
 		AddSource: true,
 		NoColor:   !live.Color,
-	})))))
+	}))))
 
 	live.Start()
 
-	return live, func() {
-		live.Stop()
-		slog.SetDefault(previous)
-	}
+	return ctx, live, live.Stop
 }
 
 func levelOf(ctx context.Context, handler slog.Handler) slog.Level {

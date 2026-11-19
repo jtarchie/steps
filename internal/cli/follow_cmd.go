@@ -69,7 +69,7 @@ func (r *RunsFollowCmd) Run(streams Streams) error {
 		sayf(out, "run %s already %s, replaying\n", run.ID, runview.Scrub(string(run.Status)))
 	}
 
-	render, stop := r.renderer(ctx, out, st)
+	ctx, render, stop := r.renderer(ctx, out, st)
 	defer stop()
 
 	last, err := followRun(ctx, st, run, func(event events.Event) { render(runview.ScrubEvent(event)) })
@@ -80,15 +80,15 @@ func (r *RunsFollowCmd) Run(streams Streams) error {
 }
 
 // renderer is the live view on a terminal and lines elsewhere; the stop it returns may be called twice.
-func (r *RunsFollowCmd) renderer(ctx context.Context, out io.Writer, st store.Usage) (func(events.Event), func()) {
+func (r *RunsFollowCmd) renderer(ctx context.Context, out io.Writer, st store.Usage) (context.Context, func(events.Event), func()) {
 	if !r.wantsLive(out) {
-		return followPlain(out), func() {}
+		return ctx, followPlain(out), func() {}
 	}
 
-	live, stop := newLive(ctx, out, st)
+	ctx, live, stop := newLive(ctx, out, st)
 
 	// A follower has no byte stream of its own: a chunk is the bytes a local run's Stream would have carried into the step's tail.
-	return func(event events.Event) {
+	return ctx, func(event events.Event) {
 		if event.Type == events.TypeStepOutputChunk {
 			_, _ = io.WriteString(live.Stream(event.StepID, event.Status == events.StreamStderr), event.Text)
 

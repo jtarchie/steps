@@ -33,9 +33,16 @@ jobs:
 
 	var runErr error
 
+	logs := captureStderr(t)
+
 	out := captureStdout(t, func() { runErr = stepsRun(t, []string{"run", path, "--job", "build", "--progress", "tty"}) })
 	if runErr == nil {
 		t.Fatal("the job should have failed on lint")
+	}
+
+	// A log line said mid-run is drawn above the region; on stderr it would tear the region it lands under.
+	if strings.Contains(logs(), "job.run") || !strings.Contains(out, "job.run") {
+		t.Errorf("the run's log lines should be drawn by the live view, not written to stderr:\nstderr:\n%s", logs())
 	}
 
 	if !strings.Contains(out, "\x1b[") {
@@ -196,4 +203,68 @@ func TestRunsFollowRefusals(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "--job") {
 		t.Errorf("run with --job: err = %v, want refused", err)
 	}
+}
+
+// TestALiveViewKeepsOtherInvocationsLogs: a live view takes the log lines of the run it draws, and only that run's. It once did so by replacing the process's slog default for its whole life, so an invocation already running beside it in the same process — a parallel test, here — had every later line drawn into a region nobody was watching. The order is the bug: each invocation reinstalls the default as it starts, so only one that started BEFORE the live view loses anything.
+func TestALiveViewKeepsOtherInvocationsLogs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	besideStarted, besideGate := filepath.Join(dir, "beside-started"), filepath.Join(dir, "beside-gate")
+	liveStarted, liveGate := filepath.Join(dir, "live-started"), filepath.Join(dir, "live-gate")
+
+	holding := func(name, started, gate string) string {
+		return writePipeline(t, t.TempDir(), `
+jobs:
+- name: `+name+`
+  plan:
+  - task: wait
+    run: "touch `+started+` && until [ -f `+gate+` ]; do sleep 0.05; done"
+`)
+	}
+
+	beside, live := holding("beside", besideStarted, besideGate), holding("live", liveStarted, liveGate)
+	besideDone, liveDone := make(chan error, 1), make(chan error, 1)
+
+	var besideLogs func() string
+
+	t.Run("beside", func(t *testing.T) {
+		besideLogs = captureStderr(t)
+
+		go func() {
+			captureStdout(t, func() { besideDone <- stepsRun(t, []string{"run", beside, "--job", "beside", "--progress", "plain"}) })
+		}()
+
+		waitForFile(t, besideStarted)
+
+		go func() {
+			captureStdout(t, func() { liveDone <- stepsRun(t, []string{"run", live, "--job", "live", "--progress", "tty"}) })
+		}()
+
+		waitForFile(t, liveStarted)
+
+		err := os.WriteFile(besideGate, nil, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = <-besideDone
+		if err != nil {
+			t.Errorf("the run beside the live view: %v", err)
+		}
+
+		if !regexp.MustCompile(`pipeline\.done .*job=beside`).MatchString(besideLogs()) {
+			t.Errorf("the invocation beside a live view lost its log lines to it:\n%s", besideLogs())
+		}
+
+		err = os.WriteFile(liveGate, nil, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = <-liveDone
+		if err != nil {
+			t.Errorf("the live run: %v", err)
+		}
+	})
 }
