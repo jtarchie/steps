@@ -688,13 +688,15 @@ func (s Step) RenderLocalVars(lookup func(LocalRef) (string, error)) (Step, erro
 	// params: is where a captured version most often belongs — it is what a
 	// put hands the resource. The literal text `((version))` used to reach the
 	// out: command and publish a release by that name.
-	rendered, err := renderValue(s.Params, func(text string) (string, error) { return RenderLocalVars(text, lookup) })
+	rendered, err := mapStringLeaves("params", s.Params, func(_, text string) (string, error) { return RenderLocalVars(text, lookup) })
 	if err != nil {
 		return s, fmt.Errorf("params: %w", err)
 	}
 
-	if params, ok := rendered.(map[string]any); ok {
-		s.Params = params
+	s.Params, _ = rendered.(map[string]any)
+	// A put's cache key carries params: even when empty, and has always been handed {} here, never null.
+	if s.Params == nil {
+		s.Params = map[string]any{}
 	}
 
 	return s, nil
@@ -705,57 +707,13 @@ func (s Step) RenderLocalVars(lookup func(LocalRef) (string, error)) (Step, erro
 func stringsInValue(value any) []string {
 	var texts []string
 
-	switch typed := value.(type) {
-	case string:
-		texts = append(texts, typed)
-	case map[string]any:
-		for _, nested := range typed {
-			texts = append(texts, stringsInValue(nested)...)
-		}
-	case []any:
-		for _, nested := range typed {
-			texts = append(texts, stringsInValue(nested)...)
-		}
-	}
+	_, _ = mapStringLeaves("", value, func(_, leaf string) (string, error) {
+		texts = append(texts, leaf)
+
+		return leaf, nil
+	})
 
 	return texts
-}
-
-// renderValue renders every string throughout a decoded YAML value, returning
-// a copy. Used for params:, which is a free-form mapping rather than a field.
-func renderValue(value any, render func(string) (string, error)) (any, error) {
-	switch typed := value.(type) {
-	case string:
-		return render(typed)
-	case map[string]any:
-		out := make(map[string]any, len(typed))
-
-		for key, nested := range typed {
-			rendered, err := renderValue(nested, render)
-			if err != nil {
-				return nil, err
-			}
-
-			out[key] = rendered
-		}
-
-		return out, nil
-	case []any:
-		out := make([]any, len(typed))
-
-		for i, nested := range typed {
-			rendered, err := renderValue(nested, render)
-			if err != nil {
-				return nil, err
-			}
-
-			out[i] = rendered
-		}
-
-		return out, nil
-	default:
-		return value, nil
-	}
 }
 
 // ParseLoadVar reads a load_var: file's bytes in format: json and yaml as
@@ -844,12 +802,7 @@ func stringKeys(value any) any {
 
 		return typed
 	case map[any]any:
-		out := make(map[string]any, len(typed))
-		for key, nested := range typed {
-			out[fmt.Sprint(key)] = stringKeys(nested)
-		}
-
-		return out
+		return stringKeys(StringKeys(typed))
 	case []any:
 		for i, nested := range typed {
 			typed[i] = stringKeys(nested)

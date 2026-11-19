@@ -18,11 +18,8 @@ import (
 // line number. Walking the tree afterwards costs one more parse per load and keeps both. Failures here are ignored: the strict decode has already
 // succeeded by this point, so a line number is a nicety, never a reason to
 // reject a valid pipeline.
-func (c *Config) stampLines(data []byte) {
-	var doc yaml.Node
-
-	err := yaml.Unmarshal(data, &doc)
-	if err != nil || len(doc.Content) == 0 {
+func (c *Config) stampLines(doc *yaml.Node) {
+	if len(doc.Content) == 0 {
 		return
 	}
 

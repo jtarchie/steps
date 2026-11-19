@@ -39,25 +39,7 @@ func strictUnmarshal(data []byte, out any) error {
 
 // decodeSource types a resource's source: map strictly, so a misspelled key is a load error rather than a setting nobody reads. The built-in Go-backed types (webhook, cron) each have a typed source; this is the one door they decode through.
 func decodeSource(raw map[string]any, out any) error {
-	allowed := yamlKeys(out)
-
-	for _, key := range slices.Sorted(maps.Keys(raw)) {
-		if !slices.Contains(allowed, key) {
-			return fmt.Errorf("source: unknown key %q%s (valid: %s)", key, suggestion(key, allowed), strings.Join(allowed, ", "))
-		}
-	}
-
-	data, err := yaml.Marshal(raw)
-	if err != nil {
-		return fmt.Errorf("source: %w", err)
-	}
-
-	err = strictUnmarshal(data, out)
-	if err != nil {
-		return fmt.Errorf("source: %w", err)
-	}
-
-	return nil
+	return decodeClosed("source", raw, out)
 }
 
 // decodeParams is decodeSource for a put's params:.
@@ -66,9 +48,27 @@ func decodeParams(raw map[string]any, out any) error {
 		raw = map[string]any{}
 	}
 
-	err := decodeSource(raw, out)
+	return decodeClosed("params", raw, out)
+}
+
+// decodeClosed decodes raw into out, refusing any key out has no field for; label is the field raw was written under.
+func decodeClosed(label string, raw map[string]any, out any) error {
+	allowed := yamlKeys(out)
+
+	for _, key := range slices.Sorted(maps.Keys(raw)) {
+		if !slices.Contains(allowed, key) {
+			return fmt.Errorf("%s: unknown key %q%s (valid: %s)", label, key, suggestion(key, allowed), strings.Join(allowed, ", "))
+		}
+	}
+
+	data, err := yaml.Marshal(raw)
 	if err != nil {
-		return errors.New(strings.Replace(err.Error(), "source:", "params:", 1))
+		return fmt.Errorf("%s: %w", label, err)
+	}
+
+	err = strictUnmarshal(data, out)
+	if err != nil {
+		return fmt.Errorf("%s: %w", label, err)
 	}
 
 	return nil

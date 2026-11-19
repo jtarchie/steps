@@ -22,14 +22,19 @@ func stringKey(key any) string {
 
 // refuseCollidingKeys refuses a mapping two of whose keys StringKeys spells alike (1.0 and "1"): yaml.v3 keeps both, and StringKeys would keep one at map-iteration random, separately for the call and its cache key.
 func refuseCollidingKeys(source []byte) error {
+	return collidingKeys(parseNode(source))
+}
+
+// parseNode is source's document node, or an empty one when source does not parse: the strict decode reports a malformed document with its line, and every walk over the node tree finds nothing in an empty one.
+func parseNode(source []byte) *yaml.Node {
 	var doc yaml.Node
 
 	err := yaml.Unmarshal(source, &doc)
 	if err != nil {
-		return nil //nolint:nilerr // the strict decode reports a malformed document with its line
+		return &yaml.Node{}
 	}
 
-	return collidingKeys(&doc)
+	return &doc
 }
 
 func collidingKeys(node *yaml.Node) error {
