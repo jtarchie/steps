@@ -1335,6 +1335,19 @@ func TestGCPLaunchVanishedInstanceFailsFast(t *testing.T) {
 	}
 }
 
+// A step already aborted must not read a RUNNING answer as an acquisition its caller will go on to use.
+func TestGCEWaitForRunningRefusesACancelledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := gceWaitForRunning(ctx, &fakeGCE{}, Worker{URL: "gcp://launch/t"}, "p", "z", "steps-1", "")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("gceWaitForRunning = %v, want the abort even though the instance reads RUNNING", err)
+	}
+}
+
 // TestGCPLaunchGracefulShutdownIsNeverComing pins PENDING_STOP in the dead
 // list: a spot template with a graceful-shutdown window parks a preempted
 // machine there for minutes, and reading it as still-booting spends the

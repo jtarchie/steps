@@ -171,16 +171,7 @@ func (r *Registry) take(scope *Leases, worker Worker) (*entry, *waiter, bool) {
 	}
 
 	if scope.rides {
-		held := p.warmest(false)
-		warm := held != nil && held.refs == 0
-
-		if held == nil {
-			held = r.member(p, worker)
-		}
-
-		r.count(held, worker, nil)
-
-		return held, nil, warm
+		return r.takeRide(p, scope, worker)
 	}
 
 	reserved := p.takeReserved(scope)
@@ -195,15 +186,38 @@ func (r *Registry) take(scope *Leases, worker Worker) (*entry, *waiter, bool) {
 		if reserved || p.room() {
 			held := r.member(p, worker)
 			r.count(held, worker, scope)
+			r.ride(p)
 
 			return held, nil, false
 		}
 	}
 
+	return nil, p.enqueue(scope, worker), false
+}
+
+// takeRide counts a check toward any machine of the pool, or queues it when there is none and every place is taken; the caller holds r.mu.
+func (r *Registry) takeRide(p *pool, scope *Leases, worker Worker) (*entry, *waiter, bool) {
+	held := p.warmest(false)
+	warm := held != nil && held.refs == 0
+
+	if held == nil {
+		if !p.room() {
+			return nil, p.enqueue(scope, worker), false
+		}
+
+		held = r.member(p, worker)
+	}
+
+	r.count(held, worker, nil)
+
+	return held, nil, warm
+}
+
+func (p *pool) enqueue(scope *Leases, worker Worker) *waiter {
 	queued := &waiter{pool: p, scope: scope, worker: worker, got: make(chan *entry, 1)}
 	p.waiters = append(p.waiters, queued)
 
-	return nil, queued, false
+	return queued
 }
 
 // takeReserved spends a place kept for scope, reporting whether there was one.
@@ -256,14 +270,18 @@ func (r *Registry) share(held *entry, worker Worker, scope *Leases) bool {
 		return false
 	}
 
-	job := scope
-	if scope.rides {
-		job = nil
-	}
-
-	r.count(held, worker, job)
+	r.count(held, worker, scope.job())
 
 	return true
+}
+
+// job is the scope a hold counts toward as a job, or nil for a check's.
+func (l *Leases) job() *Leases {
+	if l.rides {
+		return nil
+	}
+
+	return l
 }
 
 // leave takes a waiter out of its queue, or answers the machine it was handed in the meantime.
@@ -314,7 +332,13 @@ func (r *Registry) leavePool(held *entry) {
 
 // serve hands free machines, then room for new ones, to waiters in the order they came; the caller holds r.mu. A closed registry serves nobody: every scope was cancelled before Close.
 func (r *Registry) serve(p *pool) {
-	for len(p.waiters) > 0 && !r.closed {
+	for !r.closed {
+		r.ride(p)
+
+		if len(p.waiters) == 0 {
+			return
+		}
+
 		next := p.waiters[0]
 
 		held := p.warmest(true)
@@ -327,9 +351,28 @@ func (r *Registry) serve(p *pool) {
 		}
 
 		p.waiters = p.waiters[1:]
-		r.count(held, next.worker, next.scope)
+		r.count(held, next.worker, next.scope.job())
 		next.got <- held
 	}
+}
+
+// ride hands every queued check the warmest machine, busy or not, out of turn: a check waits only while the pool has no machine at all; the caller holds r.mu.
+func (r *Registry) ride(p *pool) {
+	held := p.warmest(false)
+	if held == nil || r.closed {
+		return
+	}
+
+	p.waiters = slices.DeleteFunc(p.waiters, func(queued *waiter) bool {
+		if !queued.scope.rides {
+			return false
+		}
+
+		r.count(held, queued.worker, nil)
+		queued.got <- held
+
+		return true
+	})
 }
 
 // reserveFor keeps the place of the job holding a pool machine that is being retired; the caller holds r.mu.

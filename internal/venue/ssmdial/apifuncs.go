@@ -12,6 +12,7 @@ type apiFuncs struct {
 	sendCommand  func(context.Context, *ssm.SendCommandInput, ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)
 	invocation   func(context.Context, *ssm.GetCommandInvocationInput, ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error)
 	describe     func(context.Context, *ssm.DescribeInstanceInformationInput, ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error)
+	terminate    func(context.Context, *ssm.TerminateSessionInput, ...func(*ssm.Options)) (*ssm.TerminateSessionOutput, error)
 }
 
 func newAPIFuncs(client *ssm.Client) apiFuncs {
@@ -20,6 +21,7 @@ func newAPIFuncs(client *ssm.Client) apiFuncs {
 		sendCommand:  client.SendCommand,
 		invocation:   client.GetCommandInvocation,
 		describe:     client.DescribeInstanceInformation,
+		terminate:    client.TerminateSession,
 	}
 }
 
@@ -37,4 +39,8 @@ func (f apiFuncs) GetCommandInvocation(ctx context.Context, in *ssm.GetCommandIn
 
 func (f apiFuncs) DescribeInstanceInformation(ctx context.Context, in *ssm.DescribeInstanceInformationInput, opts ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error) {
 	return f.describe(ctx, in, opts...)
+}
+
+func (f apiFuncs) TerminateSession(ctx context.Context, in *ssm.TerminateSessionInput, opts ...func(*ssm.Options)) (*ssm.TerminateSessionOutput, error) {
+	return f.terminate(ctx, in, opts...)
 }

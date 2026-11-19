@@ -33,7 +33,11 @@ type API interface {
 	SendCommand(ctx context.Context, in *ssm.SendCommandInput, opts ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)
 	GetCommandInvocation(ctx context.Context, in *ssm.GetCommandInvocationInput, opts ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error)
 	DescribeInstanceInformation(ctx context.Context, in *ssm.DescribeInstanceInformationInput, opts ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error)
+	TerminateSession(ctx context.Context, in *ssm.TerminateSessionInput, opts ...func(*ssm.Options)) (*ssm.TerminateSessionOutput, error)
 }
+
+// terminateBound caps giving back a session whose stream never opened.
+const terminateBound = 10 * time.Second
 
 // NewAPI builds the real client.
 func NewAPI(cfg aws.Config) API { return newAPIFuncs(ssm.NewFromConfig(cfg)) }
@@ -59,6 +63,12 @@ func Forward(ctx context.Context, api API, instance string, port int) (*Channel,
 
 	channel, err := Open(ctx, *out.StreamUrl, *out.TokenValue)
 	if err != nil {
+		// Best effort: an orphan counts against the account's session limit until SSM times it out, and the likeliest cause here is ctx being cancelled.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminateBound)
+		defer cancel()
+
+		_, _ = api.TerminateSession(cleanup, &ssm.TerminateSessionInput{SessionId: out.SessionId})
+
 		return nil, err
 	}
 

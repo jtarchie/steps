@@ -153,6 +153,12 @@ func (f *fakeSSM) StartSession(
 	return nil, errNotForwardedHere
 }
 
+func (f *fakeSSM) TerminateSession(
+	_ context.Context, _ *ssm.TerminateSessionInput, _ ...func(*ssm.Options),
+) (*ssm.TerminateSessionOutput, error) {
+	return nil, errNotForwardedHere
+}
+
 // errNotForwardedHere marks the seam these tests deliberately do not cross.
 var errNotForwardedHere = errors.New("StartSession is seamed out in venue tests; see ssmForward")
 

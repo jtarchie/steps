@@ -19,7 +19,7 @@ func (s *bareSession) cachePairs() [][3]string {
 	pairs := make([][3]string, 0, len(rels))
 
 	for _, rel := range rels {
-		pairs = append(pairs, [3]string{s.root() + "/steps-task-caches/" + s.spec.Caches[rel], shellQuote(path.Join(s.dir, rel)), s.linkedAbove(rel)})
+		pairs = append(pairs, [3]string{s.root() + "/steps-task-caches/" + shellQuote(s.spec.Caches[rel]), shellQuote(path.Join(s.dir, rel)), s.linkedAbove(rel)})
 	}
 
 	return pairs

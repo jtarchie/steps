@@ -17,6 +17,16 @@ type stopCtxEC2 struct {
 
 	cmu      sync.Mutex
 	stopErrs []error
+	// abort cancels the caller mid-start, the shape of an accepted start whose answer never arrives.
+	abort func()
+}
+
+func (s *stopCtxEC2) StartInstances(ctx context.Context, in *ec2.StartInstancesInput, opts ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error) {
+	if s.abort != nil {
+		s.abort()
+	}
+
+	return s.fakeEC2.StartInstances(ctx, in, opts...)
 }
 
 func (s *stopCtxEC2) StopInstances(ctx context.Context, in *ec2.StopInstancesInput, opts ...func(*ec2.Options)) (*ec2.StopInstancesOutput, error) {
@@ -42,20 +52,20 @@ func TestAnUncertainStartIsStoppedAndARefusedOneIsNot(t *testing.T) {
 		"refused":       {err: &smithy.GenericAPIError{Code: "UnauthorizedOperation", Message: "no", Fault: smithy.FaultClient}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			fake := &stopCtxEC2{fakeEC2: &fakeEC2{startErr: tc.err}}
 			shrinkAcquireWaits(t)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			fake := &stopCtxEC2{fakeEC2: &fakeEC2{startErr: tc.err}}
+			if tc.cancel {
+				fake.abort = cancel
+			}
 
 			previous := ec2For
 			ec2For = func(context.Context, Worker) (ec2API, error) { return fake, nil }
 
 			t.Cleanup(func() { ec2For = previous })
-
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			if tc.cancel {
-				cancel()
-			}
 
 			_, err := NewRegistry(testOwner).Leases(boxWorker(t, "aws://stopped/"+instance)).Resolve(ctx, "box")
 			if err == nil {

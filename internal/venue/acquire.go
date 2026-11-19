@@ -164,6 +164,11 @@ func pollUntil(ctx context.Context, timeout, every time.Duration, step func(cont
 	defer ticker.Stop()
 
 	for {
+		// Before the step: a caller aborted already must not take a success read under it as its own.
+		if deadline.Err() != nil {
+			return pollTimeoutError{cause: deadline.Err()}
+		}
+
 		done, err := step(deadline)
 		if done || err != nil {
 			return err
