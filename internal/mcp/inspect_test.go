@@ -17,8 +17,7 @@ const inspectEndpoint = "https://tracker.example/mcp"
 
 // What a page is allowed to say about a saved credential. The checks are the ones a RUN makes, so the two cannot disagree about whether a server works — only about the wording, because a run's error names the login command to type and a page has a button for it.
 func TestInspectTokenReadsTheFileAndNothingElse(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
-	UseVault(fileVault{})
+	useConfigDir(t)
 
 	srv := config.MCPServer{Name: "tracker", Endpoint: inspectEndpoint, Auth: config.MCPServerAuth{Type: "oauth"}}
 

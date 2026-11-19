@@ -180,7 +180,7 @@ func TestStderrLoggerLogsLinesAtDebug(t *testing.T) {
 
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	w := &stderrLogger{server: "gopls"}
+	w := &stderrLogger{ctx: t.Context(), server: "gopls"}
 
 	_, err := w.Write([]byte("boom\npartial"))
 	if err != nil {
@@ -214,6 +214,41 @@ func TestStderrLoggerLogsLinesAtDebug(t *testing.T) {
 	}
 }
 
+type invocationKey struct{}
+
+// invocationHandler keeps the invocation each record's context named, which is how slog routes a line to its invocation's stderr.
+type invocationHandler struct {
+	slog.Handler
+	seen *[]any
+}
+
+func (h invocationHandler) Handle(ctx context.Context, _ slog.Record) error {
+	*h.seen = append(*h.seen, ctx.Value(invocationKey{}))
+
+	return nil
+}
+
+func TestStderrLoggerLogsUnderItsServersContext(t *testing.T) {
+	// Not t.Parallel(): mutates slog's default logger.
+	var seen []any
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(invocationHandler{Handler: slog.NewTextHandler(&bytes.Buffer{}, &slog.HandlerOptions{Level: slog.LevelDebug}), seen: &seen}))
+
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	w := &stderrLogger{ctx: context.WithValue(t.Context(), invocationKey{}, "run-1"), server: "gopls"}
+
+	_, err := w.Write([]byte("line\n" + strings.Repeat("x", stderrLoggerMaxLine+1)))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if !slices.Equal(seen, []any{"run-1", "run-1"}) {
+		t.Errorf("records were logged under invocations %v, want both under the server's own", seen)
+	}
+}
+
 func TestStderrLoggerSilentAboveDebug(t *testing.T) {
 	// Not t.Parallel(): mutates slog's default logger.
 	var buf bytes.Buffer
@@ -223,7 +258,7 @@ func TestStderrLoggerSilentAboveDebug(t *testing.T) {
 
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	w := &stderrLogger{server: "gopls"}
+	w := &stderrLogger{ctx: t.Context(), server: "gopls"}
 
 	_, err := w.Write([]byte("should not appear\n"))
 	if err != nil {

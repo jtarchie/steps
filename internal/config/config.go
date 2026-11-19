@@ -71,7 +71,7 @@ func parseSource(source []byte, name string, label string, fsys Files) (*Config,
 
 	var cfg Config
 
-	err := refuseWorkspaceBlock(source)
+	err := errors.Join(refuseWorkspaceBlock(source), refuseCollidingKeys(source))
 	if err != nil {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", label, err)
 	}

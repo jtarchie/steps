@@ -380,7 +380,11 @@ func (s *sharedToken) token(ctx context.Context) (*oauth2.Token, error) {
 		Scopes:       s.file.Scopes,
 	}
 
-	tok, err := cfg.TokenSource(ctx, s.file.token()).Token()
+	// Not under ctx: a rotating provider spends the old refresh token on receipt, so a cancel before its answer is read loses the only valid one.
+	refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshBound)
+	defer cancel()
+
+	tok, err := cfg.TokenSource(refreshCtx, s.file.token()).Token()
 	if err != nil {
 		return nil, fmt.Errorf("refresh access token: %w", classifyRefreshError(err))
 	}
@@ -449,6 +453,9 @@ func classifyRefreshError(err error) error {
 
 // persistBound caps the write-back, which runs under its own context: a refresh's caller going away right after is exactly when a rotated refresh token must still land.
 const persistBound = 10 * time.Second
+
+// refreshBound caps a refresh, which runs under its own context for the reason persistBound's write-back does.
+const refreshBound = 30 * time.Second
 
 func (s *sharedToken) persist(ctx context.Context, tok *oauth2.Token) {
 	updated := *s.file

@@ -2,11 +2,15 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/oauth2"
 
@@ -118,6 +122,36 @@ func TestARotatedTokenIsSavedAfterItsCallerHasGone(t *testing.T) {
 
 	if got := vault.Get(testPipeline, "tracker"); got == nil || got.RefreshToken != "rotated" {
 		t.Errorf("the vault holds %+v after a refresh whose caller was cancelled, want the rotated refresh token", got)
+	}
+}
+
+// The provider has rotated the refresh token by the time its answer is on the wire, so a caller leaving mid-refresh must not drop it; not t.Parallel(): the vault is process state.
+func TestARefreshItsCallerAbandonsStillSavesTheRotation(t *testing.T) {
+	useConfigDir(t)
+
+	vault := &refusingVault{}
+	useVault(t, vault)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		cancel()
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "new", "refresh_token": "rotated", "token_type": "Bearer", "expires_in": 3600})
+	}))
+	t.Cleanup(ts.Close)
+
+	shared := &sharedToken{pipeline: testPipeline, server: "tracker", file: &TokenFile{
+		Endpoint: inspectEndpoint, ClientID: "client-id", TokenURL: ts.URL,
+		AccessToken: "old", RefreshToken: "spent", Expiry: time.Now().Add(-time.Hour),
+	}}
+
+	_, _ = shared.token(ctx)
+
+	if got := vault.Get(testPipeline, "tracker"); got == nil || got.RefreshToken != "rotated" {
+		t.Errorf("the vault holds %+v after a refresh whose caller left mid-flight, want the rotated refresh token", got)
 	}
 }
 

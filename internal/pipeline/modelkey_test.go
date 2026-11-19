@@ -15,6 +15,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/secret"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // bearerRecorder answers every request as a model would and keeps the credential each one carried.
@@ -153,5 +154,75 @@ func TestAModelProbeIsNotSharedAcrossPipelinesWithSecretBackedKeys(t *testing.T)
 	problems = PreflightPipeline(WithPollSecrets(vaultSources(t, map[string]string{"gamma/job-/model_key": "key-of-pipeline-gamma"}), "gamma", time.Minute), keyedPipeline(t, "gamma", model.URL), nil)
 	if len(problems) != 0 {
 		t.Errorf("preflight after the key appeared = %v, want the lookup retried rather than its failure cached", problems)
+	}
+}
+
+func jobScopedMCPPipeline(t *testing.T, model, mcp string) *config.Config {
+	t.Helper()
+
+	cfg, err := config.Parse(fmt.Appendf(nil, `
+mcp_servers:
+- name: tracker
+  endpoint: %s/mcp
+  auth:
+    type: bearer
+    api_key_env: TRACKER_TOKEN
+    secrets:
+      TRACKER_TOKEN: ((ci:tracker_token))
+agents:
+- name: reader
+  source:
+    endpoint: %s/v1/
+    model: m
+    api_key_env: MODEL_KEY
+    secrets:
+      MODEL_KEY: ((ci:model_key))
+  tools:
+  - mcp: tracker
+    tool: read_items
+jobs:
+- name: good
+  plan:
+  - agent: reader
+    messages: [hi]
+- name: bad
+  plan:
+  - agent: reader
+    messages: [hi]
+`, mcp, model), "alpha", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return cfg
+}
+
+// A lookup path naming the job resolves one server's token per job, so one job's probe verdict must not answer for another's.
+func TestAnMCPProbeIsNotSharedAcrossJobsWithSecretBackedTokens(t *testing.T) {
+	ResetPreflightCache()
+	t.Cleanup(ResetPreflightCache)
+
+	model := newBearerRecorder(t)
+	server := newBearerRecorder(t)
+	ctx := WithProbeSecrets(vaultSources(t, map[string]string{
+		"alpha/job-good/model_key":     "model-key",
+		"alpha/job-bad/model_key":      "model-key",
+		"alpha/job-good/tracker_token": "token-of-good",
+		"alpha/job-bad/tracker_token":  "token-of-bad",
+	}), "alpha")
+	cfg := jobScopedMCPPipeline(t, model.URL, server.URL)
+
+	for _, name := range []string{"bad", "good"} {
+		job, err := cfg.FindJob(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		Preflight(shell.WithBuildMetadata(ctx, shell.BuildMetadata{PipelineName: "alpha", JobName: name}), cfg, job)
+	}
+
+	seen := server.seen()
+	if !slices.Contains(seen, "Bearer token-of-bad") || !slices.Contains(seen, "Bearer token-of-good") {
+		t.Errorf("the server was shown %q, want each job's own token rather than the second answered from the first's cached verdict", seen)
 	}
 }
