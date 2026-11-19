@@ -29,6 +29,8 @@ func (c *Config) nativeType(typeName string) string {
 	switch resourceType.Config.Backend() {
 	case BackendGitHub:
 		return resourceType.Config.GitHub
+	case BackendLinear:
+		return resourceType.Config.Linear
 	case BackendWebhook, BackendCron, BackendRegistry, BackendService:
 		// goBackedTypes, above.
 	case BackendConcourse:

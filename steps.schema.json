@@ -111,6 +111,18 @@
       "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-pr"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubPostSource"}}}}}}}
     },
     {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "linear-issues"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "linear-issues"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/linearIssuesSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "linear-comment"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "linear-comment"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/linearPostSource"}}}}}}}
+    },
+    {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "linear-update"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "linear-update"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/linearPostSource"}}}}}}}
+    },
+    {
       "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "registry-image"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
       "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "registry-image"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/registryImageSource"}}}}}}}
     },
@@ -799,6 +811,66 @@
         "endpoint": {
           "type": "string",
           "description": "The REST API base, https://api.github.com when unset; https://<host>/api/v3 for GitHub Enterprise Server."
+        }
+      }
+    },
+    "linearIssuesSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["team"],
+      "properties": {
+        "team": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A team key (ENG) or name. Required: state and label names are per team in Linear, so a filter with no team would match every team's."
+        },
+        "states": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "State names in the team, any of which matches. A name the team does not have fails the check by name. Set, the version also carries when the issue last moved into one of them, so moving it out and back asks for the work again."
+        },
+        "state_types": {
+          "type": "array",
+          "items": { "enum": ["triage", "backlog", "unstarted", "started", "completed", "canceled"] },
+          "description": "Linear's fixed state categories, for a pipeline that does not want to name a team's custom states. Not with states."
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Label names that must all be on the issue, team or workspace labels."
+        },
+        "project": {
+          "type": "string",
+          "description": "A project name or id."
+        },
+        "assignee": {
+          "type": "string",
+          "pattern": "^(@me|[A-Za-z0-9-]+)$",
+          "description": "@me, the key's own user, or a user id. Not an email: that puts a person identifier in pipeline YAML."
+        },
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the API key, LINEAR_API_KEY when unset. The variable NAME, never the key; `steps validate` refuses the pipeline while it is unset. A personal key (lin_api_...) is sent bare, any other token as an OAuth Bearer token."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "The GraphQL URL, https://api.linear.app/graphql when unset; plain http only for a loopback host."
+        }
+      }
+    },
+    "linearPostSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the API key, LINEAR_API_KEY when unset. The variable NAME, never the key; `steps validate` refuses the pipeline while it is unset."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "The GraphQL URL, https://api.linear.app/graphql when unset; plain http only for a loopback host."
         }
       }
     },

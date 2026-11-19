@@ -175,7 +175,7 @@ func ReadBuiltinResourceType(name string) (ResourceType, error) {
 // another is not a resource type anyone meant to write.
 func (c *Config) registerBuiltinResourceTypes() {
 	// A declared type of a Go-backed name replaces the built-in, as a declared git does: the pipeline's choice. A declared webhook stays too, but to be refused (validateWebhookResources): deliveries are routed to it by name, so replacing it would make the name mean two things.
-	goBacked := make([]ResourceType, 0, 4+len(GitHubTypes()))
+	goBacked := make([]ResourceType, 0, 4+len(GitHubTypes())+len(LinearTypes()))
 	goBacked = append(goBacked,
 		ResourceType{Name: WebhookType, Config: ResourceTypeConfig{Webhook: true}},
 		ResourceType{Name: CronType, Config: ResourceTypeConfig{Cron: true}},
@@ -185,6 +185,10 @@ func (c *Config) registerBuiltinResourceTypes() {
 
 	for _, name := range GitHubTypes() {
 		goBacked = append(goBacked, ResourceType{Name: name, Config: ResourceTypeConfig{GitHub: name}})
+	}
+
+	for _, name := range LinearTypes() {
+		goBacked = append(goBacked, ResourceType{Name: name, Config: ResourceTypeConfig{Linear: name}})
 	}
 
 	for _, resourceType := range goBacked {

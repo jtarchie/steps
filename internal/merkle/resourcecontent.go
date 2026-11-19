@@ -45,6 +45,7 @@ func withResourceTypeEnv(cfg *config.Config, resourceType config.ResourceType, e
 
 	withExprResourceStage(resourceType, stage, content)
 	withGitHubKind(resourceType, content)
+	withLinearKind(resourceType, content)
 	withRegistryKind(resourceType, content)
 
 	return withMCPResourceStage(cfg, resourceType, stage, content)
@@ -135,6 +136,13 @@ func withExprResourceStage(resourceType config.ResourceType, stage string, conte
 func withGitHubKind(resourceType config.ResourceType, content map[string]any) {
 	if resourceType.Config.GitHub != "" {
 		content["github"] = resourceType.Config.GitHub
+	}
+}
+
+// withLinearKind is withGitHubKind for the linear-* types: three types share one backend, so without it a linear-issues get and a linear-comment of the same source would differ only by version.
+func withLinearKind(resourceType config.ResourceType, content map[string]any) {
+	if resourceType.Config.Linear != "" {
+		content["linear"] = resourceType.Config.Linear
 	}
 }
 
