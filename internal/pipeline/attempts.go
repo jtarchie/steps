@@ -44,6 +44,6 @@ func retryWithTimeout(ctx context.Context, attempts *int, timeoutStr string, mar
 		// On this step's own wall clock expiring, stop (the same work against
 		// the same budget would just expire again) and classify it a FAILURE,
 		// per Concourse: the step was given a budget and said no.
-		return retry.StopOnDeadline(ctx, attemptCtx, outcome.FailOnDeadline(ctx, attemptCtx, fn(attemptCtx)))
+		return retry.StopOnDeadlineAs(ctx, attemptCtx, fn(attemptCtx), outcome.Fail)
 	})
 }

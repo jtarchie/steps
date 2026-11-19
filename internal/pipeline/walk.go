@@ -566,32 +566,38 @@ func dispatchContainerKind(
 	ctx context.Context, r stepRunner, kind config.StepKind, i int, step config.Step,
 	skippable map[string]bool, parentHash string,
 ) (stepResult, error) {
+	// ContainerNode reads any other kind as in_parallel: and would dereference its missing block.
+	if kind == config.StepKindGet {
+		return stepResult{}, unrecognizedStep(i)
+	}
+
+	node, err := merkle.ContainerNode(r.cfg, step, kind, i, parentHash)
+	if err != nil {
+		return stepResult{}, err //nolint:wrapcheck // ContainerNode already names the step and its kind
+	}
+
 	// A block whose branches are all cacheable is a chain node like a task,
 	// and a chain through it that already succeeded is skipped from here.
-	if len(skippable) > 0 {
-		node, err := merkle.ContainerNode(r.cfg, step, kind, i, parentHash)
-		if err != nil {
-			return stepResult{}, fmt.Errorf("step %d (%s): %w", i, kind, err)
-		}
+	if skippable[node.Hash] {
+		slog.InfoContext(ctx, "job.skip", "kind", kind, "reason", "cached", "hash", node.Hash)
 
-		if skippable[node.Hash] {
-			slog.InfoContext(ctx, "job.skip", "kind", kind, "reason", "cached", "hash", node.Hash)
-
-			return stepResult{hash: parentHash, nodeHash: node.Hash, disposition: stepChainSkipped}, nil
-		}
+		return stepResult{hash: parentHash, nodeHash: node.Hash, disposition: stepChainSkipped}, nil
 	}
+
+	// The plan's node leaves most blocks unnamed; the recorded one names the step as executed.
+	node.Resource = executedStepName(step)
 
 	switch kind { //nolint:exhaustive // the leaf kinds are handled by dispatchByKind; default catches config.StepKindGet, which never reaches here
 	case config.StepKindTry:
-		return runTryStep(ctx, r, i, step, parentHash)
+		return runTryStep(ctx, r, i, step, node)
 	case config.StepKindInParallel:
-		return runParallelStep(ctx, r, i, step, parentHash)
+		return runParallelStep(ctx, r, i, step, node)
 	case config.StepKindDo:
-		return runDoStep(ctx, r, i, step, parentHash)
+		return runDoStep(ctx, r, i, step, node)
 	case config.StepKindRace:
-		return runRaceStep(ctx, r, i, step, parentHash)
+		return runRaceStep(ctx, r, i, step, node)
 	case config.StepKindEnsemble:
-		return runEnsembleStep(ctx, r, i, step, parentHash)
+		return runEnsembleStep(ctx, r, i, step, node)
 	default: // config.StepKindGet — dispatchNonGetStep is only called for non-get steps
 		return stepResult{}, unrecognizedStep(i)
 	}

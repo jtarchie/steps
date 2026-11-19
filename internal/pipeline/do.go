@@ -4,7 +4,6 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -25,16 +24,8 @@ import (
 // matrix asks "which of these combinations work"; a do: block is one piece of
 // work spelled in several steps, and running the deploy after the migration
 // failed is not a partial answer, it is a worse outcome.
-func runDoStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
-	content, err := merkle.DoNodeContent(r.cfg, step)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (do): %w", i, err)
-	}
-
-	hash, err := merkle.HashNode(merkle.NodeKindDo, content, parentHash)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (do): %w", i, err)
-	}
+func runDoStep(ctx context.Context, r stepRunner, i int, step config.Step, node merkle.Node) (stepResult, error) {
+	hash := node.Hash
 
 	// Children are dispatched against the BLOCK's hash as their parent, so the
 	// chain reads do -> child -> child rather than every child hanging off the
@@ -46,10 +37,6 @@ func runDoStep(ctx context.Context, r stepRunner, i int, step config.Step, paren
 	blockErr := runDoChildren(ctx, r, i, step, childParent)
 
 	// Recorded like every other block's, so the row's hash names a node.
-	node := merkle.Node{
-		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindDo,
-		StepIndex: i, Resource: executedStepName(step), Content: content,
-	}
 	recordBlock(ctx, r, node, nil, blockErr)
 
 	return settled(hash, blockErr), blockErr

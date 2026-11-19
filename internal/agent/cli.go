@@ -215,7 +215,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			return retry.Stop(attemptErr)
 		}
 
-		return retry.StopOnDeadline(ctx, attemptCtx, outcome.FailOnDeadline(ctx, attemptCtx, attemptErr))
+		return retry.StopOnDeadlineAs(ctx, attemptCtx, attemptErr, outcome.Fail)
 	}
 
 	runErr := runCLIMessages(ctx, prepared, state, &nudges, &spent, &sent, attempts)

@@ -37,17 +37,8 @@ type branchResult struct {
 // counts. That distinction is the defect this step shipped with the first time
 // it was written: with fail_fast: false a child failure was swallowed and a job
 // containing a failing parallel step reported PASS.
-func runParallelStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
-	content, err := merkle.ParallelNodeContent(r.cfg, step)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
-	}
-
-	hash, err := merkle.HashNode(merkle.NodeKindParallel, content, parentHash)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (in_parallel): %w", i, err)
-	}
-
+func runParallelStep(ctx context.Context, r stepRunner, i int, step config.Step, node merkle.Node) (stepResult, error) {
+	hash := node.Hash
 	branches := step.InParallel.Steps
 
 	slog.DebugContext(ctx, "job.step", "job", r.jobName, "index", i, "kind", "in_parallel", "branches", len(branches))
@@ -55,10 +46,6 @@ func runParallelStep(ctx context.Context, r stepRunner, i int, step config.Step,
 	results := runBranches(ctx, r, i, step, hash)
 	blockErr := combineBranchErrors(ctx, results)
 
-	node := merkle.Node{
-		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindParallel,
-		StepIndex: i, Resource: executedStepName(step), Content: content,
-	}
 	recordBlock(ctx, r, node, nil, blockErr)
 
 	return settled(hash, blockErr), blockErr
@@ -210,17 +197,8 @@ func (l *limiter) release() {
 // Losing branches are cancelled, which stops only FUTURE work: a loser that
 // already had a real-world side effect keeps it. That is why race: requires
 // workspace isolation and is documented as safe for read/generate-only agents.
-func runRaceStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
-	content, err := merkle.RaceNodeContent(r.cfg, step)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (race): %w", i, err)
-	}
-
-	hash, err := merkle.HashNode(merkle.NodeKindRace, content, parentHash)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (race): %w", i, err)
-	}
-
+func runRaceStep(ctx context.Context, r stepRunner, i int, step config.Step, node merkle.Node) (stepResult, error) {
+	hash := node.Hash
 	branches := step.Race.Steps
 
 	slog.DebugContext(ctx, "job.step", "job", r.jobName, "index", i, "kind", "race", "branches", len(branches))
@@ -228,10 +206,6 @@ func runRaceStep(ctx context.Context, r stepRunner, i int, step config.Step, par
 	winner, results := raceBranches(ctx, r, i, branches, hash)
 	raceErr := raceOutcome(ctx, winner, results)
 
-	node := merkle.Node{
-		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindRace,
-		StepIndex: i, Resource: executedStepName(step), Content: content,
-	}
 	recordBlock(ctx, r, node, nil, raceErr)
 
 	return settled(hash, raceErr), raceErr

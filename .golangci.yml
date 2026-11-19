@@ -736,8 +736,6 @@ linters:
             - "**/internal/workspace/**"
           allow:
             - "$gostd"
-            # events: a step's machinery tells the run what it did (a note), and writes human-facing bytes where the renderer says (Stdout/Stderr).
-            - "github.com/jtarchie/steps/internal/events"
             - "golang.org/x/sys/unix"
             - "github.com/jtarchie/steps/internal/config"
             # treedigest: an artifact here is named exactly as a worker names the tree it holds, so a step's input digests alike wherever it lives.
