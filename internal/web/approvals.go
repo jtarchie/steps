@@ -24,7 +24,7 @@ type decisionKind[T any] struct {
 	// pending is the status of a row still waiting on a person; closed are the others.
 	pending string
 	closed  []string
-	find    func(ctx context.Context, job, text string, statuses []string, before int64, limit int) ([]T, error)
+	find    func(ctx context.Context, id int64, job, text string, statuses []string, before int64, limit int) ([]T, error)
 	id      func(T) int64
 }
 
@@ -48,6 +48,8 @@ func decisionPage[T any](s *Server, c *echo.Context, kind decisionKind[T]) error
 	list := newList("/p/"+pipeline.Slug+"/"+kind.section, query, loc.text(kind.hint), loc.text(kind.label))
 	job := list.facet(loc, "job", pipeline.Config().JobNames(), identity)
 	status := list.facet(loc, "status", append([]string{kind.pending}, kind.closed...), func(v string) string { return loc.word("status", v) })
+	// The one row an on_pending notice links to; a chip of its own so the reader can widen back out.
+	id, _ := strconv.ParseInt(list.facet(loc, "id", nil, identity), 10, 64)
 	list.searched()
 
 	before, _ := strconv.ParseInt(query.Get("before"), 10, 64)
@@ -58,7 +60,7 @@ func decisionPage[T any](s *Server, c *echo.Context, kind decisionKind[T]) error
 	if before == 0 && (status == "" || status == kind.pending) {
 		var err error
 
-		pending, err = kind.find(ctx, job, list.Text, []string{kind.pending}, 0, 0)
+		pending, err = kind.find(ctx, id, job, list.Text, []string{kind.pending}, 0, 0)
 		if err != nil {
 			return fmt.Errorf("web: %w", err)
 		}
@@ -74,7 +76,7 @@ func decisionPage[T any](s *Server, c *echo.Context, kind decisionKind[T]) error
 
 		var err error
 
-		history, err = kind.find(ctx, job, list.Text, decided, before, decisionsPage+1)
+		history, err = kind.find(ctx, id, job, list.Text, decided, before, decisionsPage+1)
 		if err != nil {
 			return fmt.Errorf("web: %w", err)
 		}
@@ -101,8 +103,8 @@ func (s *Server) handleApprovals(c *echo.Context) error {
 		section: "approvals", hint: "approvals.search.hint", label: "approvals.search.label",
 		pending: string(store.ApprovalPending),
 		closed:  []string{string(store.ApprovalApproved), string(store.ApprovalRejected), string(store.ApprovalExpired)},
-		find: func(ctx context.Context, job, text string, statuses []string, before int64, limit int) ([]store.Approval, error) {
-			return pipeline.Store.FindApprovals(ctx, store.ApprovalQuery{Job: job, Text: text, Statuses: typed[store.ApprovalStatus](statuses), Before: before, Limit: limit})
+		find: func(ctx context.Context, id int64, job, text string, statuses []string, before int64, limit int) ([]store.Approval, error) {
+			return pipeline.Store.FindApprovals(ctx, store.ApprovalQuery{ID: id, Job: job, Text: text, Statuses: typed[store.ApprovalStatus](statuses), Before: before, Limit: limit})
 		},
 		id: func(a store.Approval) int64 { return a.ID },
 	})
@@ -115,8 +117,8 @@ func (s *Server) handleQuestions(c *echo.Context) error {
 		section: "questions", hint: "questions.search.hint", label: "questions.search.label",
 		pending: string(store.QuestionPending),
 		closed:  []string{string(store.QuestionAnswered), string(store.QuestionExpired), string(store.QuestionAborted)},
-		find: func(ctx context.Context, job, text string, statuses []string, before int64, limit int) ([]store.Question, error) {
-			return pipeline.Store.FindQuestions(ctx, store.QuestionQuery{Job: job, Text: text, Statuses: typed[store.QuestionStatus](statuses), Before: before, Limit: limit})
+		find: func(ctx context.Context, id int64, job, text string, statuses []string, before int64, limit int) ([]store.Question, error) {
+			return pipeline.Store.FindQuestions(ctx, store.QuestionQuery{ID: id, Job: job, Text: text, Statuses: typed[store.QuestionStatus](statuses), Before: before, Limit: limit})
 		},
 		id: func(q store.Question) int64 { return q.ID },
 	})

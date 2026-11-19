@@ -192,7 +192,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	// the machinery said no before any step could.
 	runErr := preflight(ctx, cfg, job)
 	if runErr == nil {
-		runErr = runJobPlan(ctx, runner, job, opts, skipCache)
+		runErr = runJobPlan(withPendingHook(ctx, runner.scope(fmt.Sprintf("job %q", job.Name)), job.Hooks.OnPending), runner, job, opts, skipCache)
 	}
 
 	finalErr := runHooks(ctx, runner.scope(fmt.Sprintf("job %q", job.Name)), job.Hooks, runErr)

@@ -14,6 +14,19 @@ import (
 
 // docSlackFixtures maps a slack=<id> fence to its assertion on what the workspace received.
 var docSlackFixtures = map[string]func(t *testing.T, workspace *fakeSlackWorkspace){ //nolint:gochecknoglobals // read-only fixture table, like docGitHubFixtures
+	"pending-dm": func(t *testing.T, workspace *fakeSlackWorkspace) {
+		t.Helper()
+
+		posted := workspace.postedMessages()
+		if len(posted) != 1 {
+			t.Fatalf("posted %v, want one DM: publish's park, and nothing from deploy's job-level on_pending", posted)
+		}
+
+		text, _ := posted[0]["text"].(string)
+		if posted[0]["channel"] != "U024BE7LH" || !strings.HasPrefix(text, "publish is waiting on approval ") || !strings.Contains(text, ": Publish the release? | steps approvals approve ") {
+			t.Errorf("posted %v, want publish's park with its message and the command that answers it", posted[0])
+		}
+	},
 	"hook-dm": func(t *testing.T, workspace *fakeSlackWorkspace) {
 		t.Helper()
 

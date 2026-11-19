@@ -406,8 +406,16 @@ func (f *varFlow) branches(label string, step *Step, before, after varSet) (varS
 func (f *varFlow) hooks(hooks Hooks, before, after varSet, label func(name string) string) error {
 	return hooks.Each(func(name string, hook *Step) error {
 		seen := before
-		if name == "on_success" {
+
+		switch name {
+		case "on_success":
 			seen = after
+		case "on_pending":
+			if before[PendingCapture] {
+				return fmt.Errorf("%s: a capture named %q would be hidden by the park's ((.:%s.*)) here; rename it", label(name), PendingCapture, PendingCapture)
+			}
+
+			seen = before.with(PendingCapture)
 		}
 
 		_, err := f.check(label(name), hook, seen)
@@ -577,6 +585,15 @@ func (f *varFlow) checkLocalRefs(label, field, text string, produced varSet) err
 	}
 
 	for _, ref := range LocalRefs(text) {
+		if ref.Root == PendingCapture {
+			err := checkPendingRef(label, field, ref, produced)
+			if err != nil {
+				return err
+			}
+
+			continue
+		}
+
 		switch {
 		case produced[ref.Root]:
 			continue

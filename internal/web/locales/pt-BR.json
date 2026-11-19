@@ -228,6 +228,7 @@
  "filter.type": "tipo",
  "filter.what": "alvo",
  "filter.job": "trabalho",
+ "filter.id": "id",
  "filter.text": "contendo",
  "follow.back": "voltar a %[1]s",
  "follow.blocking": "bloqueando: ",

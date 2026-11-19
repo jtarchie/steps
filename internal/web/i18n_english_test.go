@@ -9,6 +9,7 @@ import (
 var sameAsEnglish = map[string][]string{
 	"tab.mcp": {"ja", "zh-CN", "es", "pt-BR"}, "tool.mcp": {"ja", "zh-CN", "es", "pt-BR"}, "dials.tokens": {"ja", "zh-CN", "es", "pt-BR"}, "step.tokens": {"ja", "zh-CN", "es", "pt-BR"},
 	"actor.webhook":   {"ja", "es", "pt-BR"},
+	"filter.id":       {"es", "pt-BR"},
 	"filter.pipeline": {"es", "pt-BR"}, "nav.pipeline": {"es", "pt-BR"}, "nav.pipelines": {"es", "pt-BR"}, "nav.pipelines.label": {"es", "pt-BR"},
 	"overview.count": {"es", "pt-BR"}, "overview.keys.pipelines": {"es", "pt-BR"}, "th.pipeline": {"es", "pt-BR"},
 	"node.error": {"es"}, "overview.manual": {"es", "pt-BR"}, "json.array": {"es", "pt-BR"}, "json.items.one": {"pt-BR"}, "th.status": {"pt-BR"},

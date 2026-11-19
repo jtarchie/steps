@@ -8,6 +8,8 @@ package postgres
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was DROP SCHEMA.
 //
+// 27 added approvals.notified_at and questions.notified_at, as sqlite's 41 did.
+//
 // 24 added run_placements.image_digest, as sqlite's 38 did.
 //
 // 23 added trigger_queue.pin, as sqlite's 37 did.
@@ -34,7 +36,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 26
+const schemaVersion = 27
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -282,7 +284,8 @@ CREATE TABLE IF NOT EXISTS approvals (
     decided_by   TEXT,
     reason       TEXT,
     run_id       TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    step_key     TEXT NOT NULL DEFAULT ''
+    step_key     TEXT NOT NULL DEFAULT '',
+    notified_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_pipeline ON approvals(pipeline_id);
 CREATE INDEX IF NOT EXISTS idx_approvals_run ON approvals(run_id);
@@ -323,7 +326,8 @@ CREATE TABLE IF NOT EXISTS questions (
     asked_at        TIMESTAMPTZ NOT NULL,
     answered_at     TIMESTAMPTZ,
     answered_by     TEXT,
-    answer          TEXT
+    answer          TEXT,
+    notified_at     TIMESTAMPTZ
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_memo ON questions(run_id, memo_key);
 CREATE INDEX IF NOT EXISTS idx_questions_pending ON questions(status, id);

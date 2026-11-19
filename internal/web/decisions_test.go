@@ -62,6 +62,49 @@ func TestTheApprovalsHistoryPages(t *testing.T) {
 	}
 }
 
+// TestADecisionPageNarrowsToTheIDANoticeLinksTo: ?id= is what an on_pending's pending.url opens, waiting or decided.
+func TestADecisionPageNarrowsToTheIDANoticeLinksTo(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	request := func(message string) int64 {
+		t.Helper()
+
+		id, err := pipeline.Store.RequestApproval(ctx, "deploy", message)
+		if err != nil {
+			t.Fatalf("RequestApproval: %v", err)
+		}
+
+		return id
+	}
+
+	decided := request("ship the old one?")
+	waiting := request("ship this one?")
+	request("ship another?")
+
+	err := pipeline.Store.DecideApproval(ctx, decided, store.ApprovalApproved, "alice", "")
+	if err != nil {
+		t.Fatalf("DecideApproval: %v", err)
+	}
+
+	for id, want := range map[int64]string{waiting: "ship this one?", decided: "ship the old one?"} {
+		path := fmt.Sprintf("/p/demo/approvals?id=%d", id)
+
+		_, body := get(t, server, path)
+		if !strings.Contains(body, want) {
+			t.Errorf("%s is missing %q", path, want)
+		}
+
+		for _, other := range []string{"ship the old one?", "ship this one?", "ship another?"} {
+			if other != want && strings.Contains(body, other) {
+				t.Errorf("%s still shows %q", path, other)
+			}
+		}
+	}
+}
+
 // TestTheQuestionsPageNarrows: the chips and the box narrow both what waits and what was answered.
 func TestTheQuestionsPageNarrows(t *testing.T) {
 	t.Parallel()

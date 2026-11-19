@@ -24,6 +24,8 @@ type Approvals interface {
 	RequestApprovalFor(ctx context.Context, runID, stepKey, jobName, message string) (int64, error)
 	DecideApproval(ctx context.Context, id int64, status ApprovalStatus, by, reason string) error
 	ApprovalStatus(ctx context.Context, id int64) (Approval, error)
+	// MarkApprovalNotified records that the approval's on_pending was attempted, so a resumed wait does not announce it again.
+	MarkApprovalNotified(ctx context.Context, id int64) error
 	// Approvals is the audit trail newest first, capped by limit (zero means
 	// no limit). pendingOnly lists only what is still waiting, OLDEST first —
 	// the order to work through them in — and its callers pass zero, because
@@ -35,6 +37,8 @@ type Approvals interface {
 
 // ApprovalQuery narrows FindApprovals. Every field is optional; the zero value is the whole trail with no limit.
 type ApprovalQuery struct {
+	// ID keeps the one approval with this id: what an on_pending notice links to.
+	ID  int64
 	Job string
 	// Text keeps approvals whose message, reason, decider, run id, job or status holds it, ignoring case.
 	Text string
@@ -77,4 +81,6 @@ type Approval struct {
 	DecidedAt time.Time
 	DecidedBy string
 	Reason    string
+	// NotifiedAt is when its on_pending was attempted; zero while nothing has announced it.
+	NotifiedAt time.Time
 }

@@ -228,6 +228,7 @@
  "filter.type": "type",
  "filter.what": "what",
  "filter.job": "job",
+ "filter.id": "id",
  "filter.text": "matching",
  "follow.back": "back to %[1]s",
  "follow.blocking": "blocking: ",

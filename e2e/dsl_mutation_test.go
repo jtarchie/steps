@@ -163,6 +163,8 @@ var stepOperators = []stepOperator{
 	{tag: "on_failure", apply: deleteKey("on_failure")},
 	{tag: "on_error", apply: deleteKey("on_error")},
 	{tag: "ensure", apply: deleteKey("ensure")},
+	// Without the step's own, the job's announces the park instead: another name in the log.
+	{tag: "on_pending", apply: deleteKey("on_pending")},
 }
 
 // TestDSLMutation breaks each config.Step field once and requires the corpus

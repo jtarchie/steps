@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
@@ -201,6 +202,7 @@ func restartKeepsTheApproval(t *testing.T, agents, before string) {
 
 	dir := t.TempDir()
 	done := filepath.Join(dir, "done")
+	notice := filepath.Join(dir, "notice")
 
 	path := writePipeline(t, dir, `
 defaults:
@@ -209,6 +211,9 @@ defaults:
 jobs:
 - name: deploy
   interruptible: true
+  on_pending:
+    task: notify
+    run: echo "((.:pending.url))" >> `+notice+`
   plan:`+before+`
   - approval:
       message: ship it?
@@ -226,6 +231,9 @@ jobs:
 	served.trigger(t, name, "deploy")
 
 	original := waitForPendingApproval(t, served.state, name)
+
+	// Announced before the restart, so the resumed wait must not announce it again.
+	waitForFile(t, notice)
 
 	served.stop(t)
 
@@ -249,6 +257,12 @@ jobs:
 
 	if all := listApprovals(t, served.state, name); len(all) != 1 || all[0].ID != original || all[0].Status != "approved" {
 		t.Errorf("approvals = %+v, want only the original, approved: the restart asked again", all)
+	}
+
+	assertLineCount(t, notice, 1)
+
+	if link := strings.TrimSpace(readFileString(t, notice)); !strings.HasPrefix(link, "http") || !strings.HasSuffix(link, "/p/"+name+"/approvals?id="+strconv.FormatInt(original, 10)) {
+		t.Errorf("pending.url = %q, want the daemon's link to approval %d", link, original)
 	}
 }
 

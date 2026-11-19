@@ -37,6 +37,8 @@ type Questions interface {
 
 // QuestionQuery narrows FindQuestions as ApprovalQuery narrows FindApprovals.
 type QuestionQuery struct {
+	// ID keeps the one question with this id: what an on_pending notice links to.
+	ID  int64
 	Job string
 	// Text keeps questions whose question, answer, answerer, agent, run id, job or status holds it, ignoring case.
 	Text     string

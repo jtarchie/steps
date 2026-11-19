@@ -226,6 +226,11 @@ func (s *Store) scanQuestion(row rowScanner) (store.Question, error) {
 func (s *Store) FindQuestions(ctx context.Context, query store.QuestionQuery) ([]store.Question, error) {
 	filter, args := "", []any{s.pipelineID}
 
+	if query.ID > 0 {
+		filter += ` AND q.id = ?`
+		args = append(args, query.ID)
+	}
+
 	if query.Job != "" {
 		filter += ` AND q.job_name = ?`
 		args = append(args, query.Job)

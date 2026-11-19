@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strings"
 
@@ -67,13 +68,8 @@ func BuildEnv(ctx context.Context) map[string]string {
 	}
 
 	// Per exec, never create-time: dockerd persists a container's create-time Env to config.v2.json and the container is kept for postmortem, while an exec's lives only in memory.
-	for name, value := range secretEnvFrom(ctx) {
-		if env == nil {
-			env = map[string]string{}
-		}
-
-		env[name] = value
-	}
+	env = mergeEnv(env, secretEnvFrom(ctx))
+	env = mergeEnv(env, pendingEnvFrom(ctx))
 
 	// Not in buildEnvNames, so env: may still name it (config refuses those) and is overridden only while tracing, where the trace a command continues has to be its step's.
 	if parent := events.Traceparent(ctx); parent != "" {
@@ -99,6 +95,33 @@ func buildEnvPairs(ctx context.Context) []string {
 	slices.Sort(pairs)
 
 	return pairs
+}
+
+func mergeEnv(env, more map[string]string) map[string]string {
+	if len(more) == 0 {
+		return env
+	}
+
+	if env == nil {
+		env = make(map[string]string, len(more))
+	}
+
+	maps.Copy(env, more)
+
+	return env
+}
+
+type pendingEnvKey struct{}
+
+// WithPendingEnv carries an on_pending park's STEPS_PENDING_* to every command made under the context; config refuses those names in env:.
+func WithPendingEnv(ctx context.Context, env map[string]string) context.Context {
+	return context.WithValue(ctx, pendingEnvKey{}, env)
+}
+
+func pendingEnvFrom(ctx context.Context) map[string]string {
+	env, _ := ctx.Value(pendingEnvKey{}).(map[string]string)
+
+	return env
 }
 
 type secretEnvKey struct{}

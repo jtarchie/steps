@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 41 added approvals.notified_at and questions.notified_at, when a park's on_pending was attempted, so a restart neither announces it twice nor loses an announcement a crash cut short.
+//
 // 38 added run_placements.image_digest, what a step's image: resolved to on the machine that ran it: a tag moves, and the row otherwise could not say which bytes ran.
 //
 // 37 added trigger_queue.pin, the version fields a person pinned a queued trigger to (steps runs trigger --pin); the ordinary pending index now leaves such a row out, so an older file would merge it into the job's ordinary row.
@@ -108,7 +110,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 40
+const schemaVersion = 41
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -627,7 +629,8 @@ CREATE TABLE IF NOT EXISTS approvals (
     -- row is the audit trail of a decision, and retention reaping the run must
     -- not take the record that somebody allowed a deploy.
     run_id       TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    step_key     TEXT NOT NULL DEFAULT ''
+    step_key     TEXT NOT NULL DEFAULT '',
+    notified_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_pipeline ON approvals(pipeline_id);
 CREATE INDEX IF NOT EXISTS idx_approvals_run ON approvals(run_id);
@@ -699,7 +702,8 @@ CREATE TABLE IF NOT EXISTS questions (
     asked_at        TEXT NOT NULL,
     answered_at     TEXT,
     answered_by     TEXT,
-    answer          TEXT
+    answer          TEXT,
+    notified_at     TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_memo ON questions(run_id, memo_key);
 -- The waiting-on-a-person listing, which both the CLI and the web UI poll.

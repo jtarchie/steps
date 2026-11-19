@@ -222,6 +222,7 @@
  "filter.type": "类型",
  "filter.what": "对象",
  "filter.job": "作业",
+ "filter.id": "ID",
  "filter.text": "匹配",
  "follow.back": "返回 %[1]s",
  "follow.blocking": "阻塞：",

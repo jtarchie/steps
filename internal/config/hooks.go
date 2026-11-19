@@ -19,15 +19,17 @@ type Hooks struct {
 	OnError   *Step `yaml:"on_error,omitempty"`
 	OnAbort   *Step `yaml:"on_abort,omitempty"`
 	Ensure    *Step `yaml:"ensure,omitempty"`
+	// OnPending runs when a request is newly parked for a person, before the wait, reading the park as ((.:pending.*)). Unlike the others it fires mid-step and only the nearest enclosing one fires: both firing would send every notice twice.
+	OnPending *Step `yaml:"on_pending,omitempty"`
 }
 
 // Empty reports whether no hook is set.
 func (h Hooks) Empty() bool {
-	return h.OnSuccess == nil && h.OnFailure == nil && h.OnError == nil && h.OnAbort == nil && h.Ensure == nil
+	return h.OnSuccess == nil && h.OnFailure == nil && h.OnError == nil && h.OnAbort == nil && h.Ensure == nil && h.OnPending == nil
 }
 
 // Each calls fn for every non-nil hook, in a fixed order (on_success,
-// on_failure, on_error, on_abort, ensure), passing the hook's YAML name.
+// on_failure, on_error, on_abort, ensure, on_pending), passing the hook's YAML name.
 func (h Hooks) Each(fn func(name string, step *Step) error) error {
 	pairs := []struct {
 		name string
@@ -38,6 +40,7 @@ func (h Hooks) Each(fn func(name string, step *Step) error) error {
 		{"on_error", h.OnError},
 		{"on_abort", h.OnAbort},
 		{"ensure", h.Ensure},
+		{"on_pending", h.OnPending},
 	}
 
 	for _, p := range pairs {
@@ -64,13 +67,17 @@ func (h Hooks) Each(fn func(name string, step *Step) error) error {
 func (c *Config) validateHooks() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
-			return validateHookTree(label, step.Hooks, false)
+			if step.Get != "" && step.Hooks.OnPending != nil {
+				return fmt.Errorf("%s: on_pending is not valid on a get; a get never waits on a person, so there is nothing to announce", label)
+			}
+
+			return c.validateHookTree(label, step.Hooks, false)
 		})
 		if err != nil {
 			return err
 		}
 
-		err = validateHookTree(fmt.Sprintf("job %q", job.Name), job.Hooks, true)
+		err = c.validateHookTree(fmt.Sprintf("job %q", job.Name), job.Hooks, true)
 		if err != nil {
 			return err
 		}
@@ -83,7 +90,7 @@ func (c *Config) validateHooks() error {
 // and noArtifacts — true for a job-level hook — on the body itself and the
 // hooks it carries, recursively. What a block or try: in the body contains
 // declares its own artifacts, as the step a job-level try: wraps always has.
-func validateHookTree(parentLabel string, hooks Hooks, noArtifacts bool) error {
+func (c *Config) validateHookTree(parentLabel string, hooks Hooks, noArtifacts bool) error {
 	return hooks.Each(func(name string, body *Step) error {
 		label := fmt.Sprintf("%s (%s hook)", parentLabel, name)
 
@@ -93,6 +100,10 @@ func validateHookTree(parentLabel string, hooks Hooks, noArtifacts bool) error {
 
 		err := visitStepTree(label, body, func(label string, step *Step) error {
 			err := hookBodyRefusal(step)
+			if err == nil && name == "on_pending" {
+				err = c.parkRefusal(step)
+			}
+
 			if err != nil {
 				return fmt.Errorf("%s: %w", label, err)
 			}
@@ -103,17 +114,34 @@ func validateHookTree(parentLabel string, hooks Hooks, noArtifacts bool) error {
 			return err
 		}
 
-		return validateHookTree(label, body.Hooks, noArtifacts)
+		return c.validateHookTree(label, body.Hooks, noArtifacts)
 	})
 }
 
-// hookBodyRefusal refuses the kinds a hook body may not hold at any depth.
-// Everything else runs (internal/pipeline runHookStep), so a hook that loads
-// is a hook that runs.
+// parkRefusal refuses an agent granted ask_user in an on_pending body: a park cannot park.
+func (c *Config) parkRefusal(step *Step) error {
+	if step.Agent == "" {
+		return nil
+	}
+
+	// An agent that does not resolve is another validator's to report.
+	invocation, err := c.ResolveAgentInvocation(*step)
+	if err == nil && GrantsAskUser(invocation.ToolSpecs) {
+		return fmt.Errorf("agent %q is granted %s, which is not valid in an on_pending body; a park cannot park", step.Agent, AskUserBuiltinName)
+	}
+
+	return nil
+}
+
+// hookBodyRefusal refuses what a hook body may not hold at any depth; everything else runs (internal/pipeline runHookStep), so a hook that loads is a hook that runs.
 func hookBodyRefusal(step *Step) error {
 	kind, ok := step.Kind()
 	if !ok {
 		return errors.New("unrecognized hook step (must name a step kind such as task, put, agent or do)")
+	}
+
+	if step.Hooks.OnPending != nil {
+		return errors.New("on_pending is not valid inside a hook; a hook never waits on a person, so it has nothing to announce")
 	}
 
 	switch kind { //nolint:exhaustive // default admits every kind the runner executes

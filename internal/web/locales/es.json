@@ -228,6 +228,7 @@
  "filter.type": "tipo",
  "filter.what": "qué",
  "filter.job": "trabajo",
+ "filter.id": "id",
  "filter.text": "coincide con",
  "follow.back": "volver a %[1]s",
  "follow.blocking": "bloquea: ",

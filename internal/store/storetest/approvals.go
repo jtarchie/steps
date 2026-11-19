@@ -280,6 +280,67 @@ func (s suite) TestAResumedStepKeepsItsApproval(t *testing.T) {
 	}
 }
 
+// TestAnApprovalRemembersItWasAnnounced: a resumed wait reads notified_at to stay quiet.
+func (s suite) TestAnApprovalRemembersItWasAnnounced(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	id, err := st.RequestApproval(ctx, "deploy", "ship it?")
+	if err != nil {
+		t.Fatalf("RequestApproval: %v", err)
+	}
+
+	other, err := st.RequestApproval(ctx, "deploy", "ship the other?")
+	if err != nil {
+		t.Fatalf("RequestApproval: %v", err)
+	}
+
+	row, err := st.ApprovalStatus(ctx, id)
+	if err != nil || !row.NotifiedAt.IsZero() {
+		t.Fatalf("a fresh approval reads notified at %v (%v), want never", row.NotifiedAt, err)
+	}
+
+	err = st.MarkApprovalNotified(ctx, id)
+	if err != nil {
+		t.Fatalf("MarkApprovalNotified: %v", err)
+	}
+
+	row, _ = st.ApprovalStatus(ctx, id)
+	if time.Since(row.NotifiedAt) > time.Minute {
+		t.Errorf("an announced approval reads notified at %v, want now", row.NotifiedAt)
+	}
+
+	if untouched, _ := st.ApprovalStatus(ctx, other); !untouched.NotifiedAt.IsZero() {
+		t.Errorf("marking %d marked %d too", id, other)
+	}
+}
+
+// TestFindApprovalsNarrowsToOneID: an on_pending notice's link opens the trail at the one approval it announced.
+func (s suite) TestFindApprovalsNarrowsToOneID(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	ids := make([]int64, 0, 2)
+
+	for _, message := range []string{"ship it?", "ship the other?"} {
+		id, err := st.RequestApproval(ctx, "deploy", message)
+		if err != nil {
+			t.Fatalf("RequestApproval: %v", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	found, err := st.FindApprovals(ctx, store.ApprovalQuery{ID: ids[1]})
+	if err != nil || len(found) != 1 || found[0].ID != ids[1] {
+		t.Errorf("FindApprovals(ID: %d) = %+v (%v), want that one approval alone", ids[1], found, err)
+	}
+}
+
 // TestAnApprovalNamesItsRun: a run page offers the approvals its run is parked on, found by the run each one names; one asked with no run names none.
 func (s suite) TestAnApprovalNamesItsRun(t *testing.T) {
 	t.Parallel()

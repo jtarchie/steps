@@ -80,7 +80,7 @@ func (s *Store) DecideApproval(ctx context.Context, id int64, status store.Appro
 }
 
 const approvalColumns = `id, COALESCE(run_id, ''), job_name, message, status, requested_at, decided_at,
-		       COALESCE(decided_by, ''), COALESCE(reason, '')`
+		       COALESCE(decided_by, ''), COALESCE(reason, ''), notified_at`
 
 // scanApproval keeps whole seconds, the resolution the sqlite driver stores
 // this table's timestamps at.
@@ -89,15 +89,27 @@ func scanApproval(row rowScanner) (store.Approval, error) {
 		approval  store.Approval
 		requested time.Time
 		decided   sql.NullTime
+		notified  sql.NullTime
 	)
 
 	err := row.Scan(&approval.ID, &approval.RunID, &approval.JobName, &approval.Message, &approval.Status,
-		&requested, &decided, &approval.DecidedBy, &approval.Reason)
+		&requested, &decided, &approval.DecidedBy, &approval.Reason, &notified)
 
 	approval.RequestedAt = requested.UTC().Truncate(time.Second)
 	approval.DecidedAt = utc(decided).Truncate(time.Second)
+	approval.NotifiedAt = utc(notified).Truncate(time.Second)
 
 	return approval, err //nolint:wrapcheck // every caller names what it was reading
+}
+
+// MarkApprovalNotified stamps when the approval's on_pending was attempted.
+func (s *Store) MarkApprovalNotified(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE approvals SET notified_at = $1 WHERE id = $2 AND pipeline_id = $3`, now(), id, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not mark approval %d notified: %w", id, err)
+	}
+
+	return nil
 }
 
 // ApprovalStatus reads one approval's current state.
@@ -131,6 +143,11 @@ func (s *Store) Approvals(ctx context.Context, pendingOnly bool, limit int) ([]s
 // FindApprovals is the trail narrowed and paged, newest first.
 func (s *Store) FindApprovals(ctx context.Context, query store.ApprovalQuery) ([]store.Approval, error) {
 	filter, args := byJob(query.Job, []any{s.pipelineID})
+
+	if query.ID > 0 {
+		filter += ` AND id = ` + next(args)
+		args = append(args, query.ID)
+	}
 
 	if len(query.Statuses) > 0 {
 		filter += ` AND status = ANY(` + next(args) + `)`

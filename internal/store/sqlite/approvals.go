@@ -80,11 +80,21 @@ func (s *Store) DecideApproval(ctx context.Context, id int64, status store.Appro
 	return nil
 }
 
+// MarkApprovalNotified stamps when the approval's on_pending was attempted.
+func (s *Store) MarkApprovalNotified(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE approvals SET notified_at = ? WHERE id = ? AND pipeline_id = ?`, now(), id, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not mark approval %d notified: %w", id, err)
+	}
+
+	return nil
+}
+
 // ApprovalStatus reads one approval's current state.
 func (s *Store) ApprovalStatus(ctx context.Context, id int64) (store.Approval, error) {
 	approval, err := scanApproval(s.reads.QueryRowContext(ctx, `
 		SELECT id, COALESCE(run_id, ''), job_name, message, status, requested_at,
-		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
+		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, ''), COALESCE(notified_at, '')
 		FROM approvals WHERE id = ? AND pipeline_id = ?
 	`, id, s.pipelineID))
 	if err != nil {
@@ -110,7 +120,7 @@ func (s *Store) Approvals(ctx context.Context, pendingOnly bool, limit int) ([]s
 
 	return collect(ctx, s.reads, what, `
 		SELECT id, COALESCE(run_id, ''), job_name, message, status, requested_at,
-		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
+		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, ''), COALESCE(notified_at, '')
 		FROM approvals WHERE pipeline_id = ? `+where+`
 		ORDER BY `+order+` LIMIT ?
 	`, []any{s.pipelineID, rowLimit(limit)}, func(rows *sql.Rows) (store.Approval, error) {
@@ -120,13 +130,13 @@ func (s *Store) Approvals(ctx context.Context, pendingOnly bool, limit int) ([]s
 
 func scanApproval(row rowScanner) (store.Approval, error) {
 	var (
-		approval           store.Approval
-		requested, decided string
+		approval                     store.Approval
+		requested, decided, notified string
 	)
 
 	err := row.Scan(&approval.ID, &approval.RunID, &approval.JobName, &approval.Message, &approval.Status,
-		&requested, &decided, &approval.DecidedBy, &approval.Reason)
-	approval.RequestedAt, approval.DecidedAt = parseTimestamp(requested), parseTimestamp(decided)
+		&requested, &decided, &approval.DecidedBy, &approval.Reason, &notified)
+	approval.RequestedAt, approval.DecidedAt, approval.NotifiedAt = parseTimestamp(requested), parseTimestamp(decided), parseTimestamp(notified)
 
 	return approval, err //nolint:wrapcheck // every caller names what it was reading
 }
@@ -134,6 +144,11 @@ func scanApproval(row rowScanner) (store.Approval, error) {
 // FindApprovals is the trail narrowed and paged, newest first.
 func (s *Store) FindApprovals(ctx context.Context, query store.ApprovalQuery) ([]store.Approval, error) {
 	filter, args := byJob(query.Job, []any{s.pipelineID})
+
+	if query.ID > 0 {
+		filter += ` AND id = ?`
+		args = append(args, query.ID)
+	}
 
 	if len(query.Statuses) > 0 {
 		filter += ` AND status IN (SELECT value FROM json_each(?))`
@@ -155,7 +170,7 @@ func (s *Store) FindApprovals(ctx context.Context, query store.ApprovalQuery) ([
 
 	return collect(ctx, s.reads, "approvals", `
 		SELECT id, COALESCE(run_id, ''), job_name, message, status, requested_at,
-		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
+		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, ''), COALESCE(notified_at, '')
 		FROM approvals WHERE pipeline_id = ?`+filter+`
 		ORDER BY id DESC LIMIT ?
 	`, append(args, rowLimit(query.Limit)), func(rows *sql.Rows) (store.Approval, error) {

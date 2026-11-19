@@ -358,6 +358,8 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	// step is about to have.
 	ctx = events.WithStepID(ctx, mark.id)
 
+	ctx = withPendingHook(ctx, r.scope(stepLabel(i, step)), step.Hooks.OnPending)
+
 	res, err := dispatchNonGetStep(ctx, r, i, step, skippable, parentHash)
 
 	// A step whose outputs were reused counts as executed, even though no

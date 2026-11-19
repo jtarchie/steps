@@ -70,6 +70,8 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 	slog.WarnContext(ctx, "job.approval_pending",
 		"job", r.jobName, "approval", id, "message", step.Approval.Message, "timeout", timeout.String())
 
+	announceApproval(ctx, r.st, id, step.Approval.Message, timeout)
+
 	decision, err := awaitApproval(ctx, r.st, id, timeout)
 
 	node := merkle.Node{

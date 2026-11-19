@@ -12,7 +12,7 @@ On a failing step with both a hook and a route: the hook fires first (react), th
 
 ## Hooks (`on_success`/`on_failure`/`on_error`/`on_abort`/`ensure`)
 
-Any plan step, or the whole job, can carry hooks. A hook is itself a full step — any kind but `get`, `load_var:` or `approval:`, blocks and `across:` included — so it can `run:` a command, `put:` a resource, invoke an `agent:`, or do several of those in a `do:` or `in_parallel:`, and may recursively carry its own hooks.
+Any plan step, or the whole job, can carry hooks. A hook is itself a full step — any kind but `get`, `load_var:` or `approval:`, blocks and `across:` included — so it can `run:` a command, `put:` a resource, invoke an `agent:`, or do several of those in a `do:` or `in_parallel:`, and may recursively carry its own hooks. A sixth hook, `on_pending`, fires when a run starts waiting on a person rather than on an outcome; it has [its own section](#telling-someone-on_pending).
 
 ```yaml
 jobs:
@@ -932,4 +932,69 @@ Stated deliberately rather than left to be discovered. Who decided is recorded, 
 - **A decision cannot be overwritten.** Deciding an already-decided approval is an error; the record is a record.
 - **A restart keeps the approval a run is waiting on.** A daemon that restarts while a run waits on an `approval:` resumes the run onto the approval it already made — the same id, so whoever was shown it can still decide it — instead of asking again. The wait is measured from when it was first asked, so a restart does not give a person a fresh `timeout:`. A decision made while the daemon was down is found when the run resumes. A rejected or expired approval is not carried over: if the step is retried, a person is asked afresh.
 - **Nothing about an approval is cacheable.** A cached "they said yes once" must never stand in for asking again.
-- **Notification is the missing half, and it is not built in.** Today the step prints the message and the exact command to answer it, and logs `job.approval_pending` — put a `put:` to Slack or email in the step *before* the approval to actually reach someone.
+- **Telling someone is `on_pending`'s job**, below. The step also prints the message and the exact command to answer it, and logs `job.approval_pending`.
+
+### Telling someone: `on_pending`
+
+A parked approval is seen only by someone watching `steps web` or the terminal. `on_pending` is a hook that runs once, when the approval starts waiting, so the pipeline can tell somebody who is not looking — through any resource you `put:` to, or any task or agent. On the job it covers every park in the plan; on a step or a block it covers that step and everything inside it. Here both approvals expire, because nobody answers in one second:
+
+```yaml slack=pending-dm
+resources:
+- name: operator-dm
+  type: slack-reply
+  source:
+    channel: U024BE7LH          # a user id DMs
+
+jobs:
+- name: publish
+  on_pending:                   # every park in this plan
+    put: tell
+    resource: operator-dm
+    params: {text: "((.:pending.job)) is waiting on approval ((.:pending.id)): ((.:pending.message)) | ((.:pending.command))"}
+  plan:
+  - approval:
+      message: "Publish the release?"
+      timeout: 1s               # short so this page can run it; a real gate waits hours
+  assert:
+    execution: [tell]
+    outcome: failed             # expired: nobody answered
+
+- name: deploy
+  on_pending:
+    put: tell
+    resource: operator-dm
+    params: {text: "never sent: the step's own on_pending replaces this one"}
+  plan:
+  - approval:
+      message: "Deploy to production?"
+      timeout: 1s
+    on_pending:                 # the nearest one wins
+      task: page
+      run: echo "paging on-call about approval ((.:pending.id)), $STEPS_PENDING_MESSAGE, until ((.:pending.expires_at))"
+  assert:
+    execution: [page]
+    outcome: failed
+
+assert:
+  execution: [publish, deploy]
+```
+
+What the hook reads, as `((.:pending.<field>))` and, in any command it runs, as `STEPS_PENDING_<FIELD>`:
+
+| field | what it is |
+|---|---|
+| `id` | the approval's id |
+| `kind` | `approval` |
+| `job` | the job that is waiting |
+| `message` | the approval's `message:` |
+| `options` | the choices offered, as a JSON list; empty for an approval |
+| `command` | the exact `steps approvals approve <id> -p <pipeline> …` that answers it |
+| `url` | the approvals page narrowed to this one (`/p/<pipeline>/approvals?id=<id>`) under `steps web`; empty under `steps run`, which has no address to link to |
+| `expires_at` | when it expires unanswered, RFC 3339 in UTC |
+
+- **The nearest one fires, and only it.** A step's `on_pending` replaces its job's and any enclosing block's for that step. This is the one place hooks differ from the others, where a step's `on_failure` and its job's both fire: both firing here would send every notice twice.
+- **Once per park, before the wait.** A daemon that restarts while a run waits resumes onto the same approval and does not announce it again; the store records when it was announced (`notified_at`). An approval decided while nobody watched is not announced on resume.
+- **Its failure does not change the wait.** A failing `on_pending` is logged and noted on the run, and the run keeps waiting; the approval's outcome is the approval's own. Its outcome hooks (`on_success`, `on_failure`, `on_abort`) already say what was decided, so there is no hook for "resolved".
+- **`message` and `options` are refused in `run:`** (and `image:`, `dir:`, `file:`) at load: a captured value is substituted into a command as text, and once a model's question can be announced the same way that text could carry a shell command. Read `$STEPS_PENDING_MESSAGE` in a command, as `page` does, or pass it in `params:` or `messages:`, which are data. The other fields are steps' own and are allowed anywhere.
+- **A park cannot park.** The body takes any hook body but `approval:` and an agent granted `ask_user`, and `on_pending` is not valid inside another hook, or on a `get`, neither of which ever waits on a person. `((.:pending.*))` exists only inside the body, so a capture named `pending` is refused where it would be hidden.
+- **Never cached**, like every hook; it is folded into the step's hash like the others.

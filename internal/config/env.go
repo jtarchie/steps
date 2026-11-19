@@ -113,7 +113,7 @@ func checkEnvName(context, name string) error {
 		return fmt.Errorf("%s: env entry %q must be a variable NAME, not a KEY=VALUE pair — the value is read from the environment at run time (a literal would be hashed into state.db in cleartext)", context, name)
 	}
 
-	if slices.Contains(reservedEnvNames, name) {
+	if slices.Contains(reservedEnvNames, name) || strings.HasPrefix(name, "STEPS_PENDING_") {
 		return fmt.Errorf("%s: env entry %q is set by steps for every step (build metadata) — drop it from the env list", context, name)
 	}
 

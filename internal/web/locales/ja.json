@@ -222,6 +222,7 @@
  "filter.type": "種類",
  "filter.what": "対象",
  "filter.job": "ジョブ",
+ "filter.id": "ID",
  "filter.text": "一致",
  "follow.back": "%[1]s に戻る",
  "follow.blocking": "ブロック中: ",

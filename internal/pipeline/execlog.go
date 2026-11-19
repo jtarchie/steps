@@ -68,7 +68,8 @@ func recordStepExecution(ctx context.Context, step config.Step) {
 	// not completion order (see runBranches), so assert.execution stays a
 	// deterministic thing to write.
 	// An across: block records nothing of its own; its cells record themselves.
-	if step.InParallel != nil || step.Race != nil || step.Ensemble != nil || step.Do != nil || len(step.Across) > 0 {
+	// An approval has no name to record: a bare "" in assert.execution is unwritable as a fixture.
+	if step.InParallel != nil || step.Race != nil || step.Ensemble != nil || step.Do != nil || len(step.Across) > 0 || step.Approval != nil {
 		return
 	}
 
