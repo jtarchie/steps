@@ -336,12 +336,10 @@ func observeDeliveries(ctx context.Context, st PollStore, name string) (observed
 		return observedResource{}, false, fmt.Errorf("webhook resource %q: %w", name, err)
 	}
 
-	versions, err := st.ResourceVersionsJSON(ctx, name)
-	if err != nil || len(versions) == 0 {
+	latest, delivered, err := st.NewestVersion(ctx, name)
+	if err != nil || !delivered {
 		return observedResource{}, false, err //nolint:wrapcheck // the store names the resource
 	}
-
-	latest := versions[len(versions)-1]
 
 	version, err := store.DecodeVersion(latest)
 	if err != nil {

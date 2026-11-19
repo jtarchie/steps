@@ -1015,6 +1015,8 @@ commit def456 → deploy  ok
     r1 + c2  ->  released  # green together in build 2
   ```
 
+  The job builds the newest such set, `steps run` included: per upstream job one green build holding every resource that job constrains, the jobs agreeing on any resource they share (Concourse's group resolver). A build is newer by its versions' discovery order rather than by when it finished, so a rerun of an old build does not jump ahead of a newer version. With no set green together the get fails, rather than building a pair nothing tested. A `version: every` get still walks its green versions one at a time.
+- **Only a `trigger: true` get starts a job.** Upstream going green releases a job when one of its `trigger: true` gets has a version the job has not yet built green; a newer version on a `passed:` get without `trigger:` is fetched by the next build but starts none. A job whose gets are all `passed:` without `trigger: true` runs only when someone triggers it — as in Concourse.
 - **A held-back job is not a lost trigger.** The version stays current, so the next poll after the upstream job goes green enqueues it.
 - **Load-time checks.** `passed:` is get-only, may not name its own job, and may not name a job that neither gets nor puts the same resource — that last one would be a deadlock spelled as a typo. A `put:` only in a job-level `on_failure`/`on_error`/`on_abort` hook does not count: those run only when the build is not green, so nothing they publish can pass.
 

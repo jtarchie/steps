@@ -42,6 +42,10 @@ type Versions interface {
 	RecordPassedVersions(ctx context.Context, passes []Pass) error
 	PassedVersions(ctx context.Context, jobName string, limit int) ([]PassedVersion, error)
 	HasPassedVersionSet(ctx context.Context, jobName string, want map[string]VersionKey) (bool, error)
+	// PassedSet is the newest versions that satisfy every passed: constraint, resource to the upstream jobs it names, at once: per upstream job one green build holding every resource it constrains, the jobs agreeing on any resource they share (see ResolvePassedSet). A build is newer by the discovery order of its versions, so a rerun of an old build does not jump ahead. found is false when no build combination satisfies them all; no constraints are vacuously found.
+	PassedSet(ctx context.Context, constraints map[string][]string) (map[string]VersionKey, bool, error)
+	// NewestVersion is the newest version a check filed for the resource — what a get with no gate resolves "latest" to.
+	NewestVersion(ctx context.Context, resourceName string) (VersionKey, bool, error)
 	ConsumedMark(ctx context.Context, jobName, resourceName string) (int64, error)
 	RecordConsumedMark(ctx context.Context, jobName, resourceName string, order int64) error
 	RecordRunInput(ctx context.Context, runID string, input RunInput) error

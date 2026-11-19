@@ -494,7 +494,7 @@ func resolveJobInputs(
 	// Scoped to this one invocation (never shared across concurrent ones —
 	// see resource.NewCache) and threaded into both plan-time and run-time
 	// get resolution, so a get's check runs at most once per job run.
-	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.get))
+	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.resolvable))
 
 	// One set per unconsumed step of the widest every-get, each binding EVERY
 	// get's version — the lockstep pairing per-get recursion cannot express.
