@@ -577,8 +577,11 @@ func hostKeysFromAttributes(worker Worker, attributes map[string]string) (ssh.Ho
 	}, algorithms, nil
 }
 
-// gcpReady remembers instances whose docker this process has already waited for.
-var gcpReady sync.Map //nolint:gochecknoglobals // per-process memory of a once-per-instance wait
+// gcpReady remembers instances whose docker this process has already waited for, until a park or delete ends that boot.
+var gcpReady sync.Map //nolint:gochecknoglobals // per-process memory of a once-per-boot wait
+
+// gcpReadyKey is gcpInstalled's key: an instance name is unique only within its project and zone.
+func gcpReadyKey(project, zone, name string) string { return project + "/" + zone + "/" + name }
 
 // gcpReadyScript waits for the startup script's docker and, where the guest agent made the account before the docker group existed, joins it with the passwordless sudo the agent grants; "regroup" asks for a fresh login, the only thing that picks a new group up.
 const gcpReadyScript = `i=0; until docker info >/dev/null 2>&1; do
@@ -589,30 +592,33 @@ docker info >/dev/null 2>&1 && echo ready`
 
 // gcpDockerClient is gcpSSHClient for a docker+ session: a machine just launched is still installing docker when its sshd first answers.
 func gcpDockerClient(ctx context.Context, worker Worker) (*ssh.Client, error) {
+	project, zone, err := gcpLocation(ctx, worker)
+	if err != nil {
+		return nil, err
+	}
+
 	client, err := gcpSSHClient(ctx, worker)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, ready := gcpReady.Load(worker.Instance); ready {
+	key := gcpReadyKey(project, zone, worker.Instance)
+	if _, ready := gcpReady.Load(key); ready {
 		return client, nil
 	}
 
-	session, err := client.NewSession()
-	if err != nil {
+	out, err := sessionOutput(ctx, client, gcpReadyScript, false)
+	if ctx.Err() != nil {
 		_ = client.Close()
 
-		return nil, fmt.Errorf("worker %q: %w", worker.URL, err)
+		return nil, fmt.Errorf("waiting for docker on %s for %q: %w", worker.Instance, worker.URL, err)
 	}
 
-	out, _ := session.Output(gcpReadyScript)
-	_ = session.Close()
-
-	regroup := strings.Contains(string(out), "regroup")
+	regroup := strings.Contains(out, "regroup")
 
 	// Remembered only once docker answered: a wait that ran out is waited again by the next step, rather than skipped for the life of the process.
-	if regroup || strings.Contains(string(out), "ready") {
-		gcpReady.Store(worker.Instance, true)
+	if regroup || strings.Contains(out, "ready") {
+		gcpReady.Store(key, true)
 	}
 
 	if !regroup {

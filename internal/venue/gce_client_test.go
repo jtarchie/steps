@@ -8,6 +8,7 @@ package venue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -130,7 +131,7 @@ func TestZoneOperationOutcomeBoundaries(t *testing.T) {
 			t.Parallel()
 
 			err := zoneOperationOutcome(&tc.op)
-			if (err != nil) != tc.failed {
+			if (err != nil) != tc.failed || (tc.failed && !errors.Is(err, errGCEOperationFailed)) {
 				t.Errorf("zoneOperationOutcome = %v, want failed=%v", err, tc.failed)
 			}
 		})

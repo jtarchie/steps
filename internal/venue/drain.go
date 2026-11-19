@@ -66,12 +66,12 @@ func (s *plusSession) watchDrain() {
 		defer func() { _ = stdin.Close() }()
 		defer func() { _ = session.Close() }()
 
-		out, runErr := session.Output(s.drainScript)
+		out, runErr := cappedOutput(session, s.drainScript, false)
 		if runErr != nil {
 			return
 		}
 
-		if reason := strings.TrimSpace(string(out)); reason != "" {
+		if reason := strings.TrimSpace(out); reason != "" {
 			s.drain.Store(&reason)
 		}
 	}()
