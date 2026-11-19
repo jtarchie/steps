@@ -134,6 +134,13 @@ func (c *Config) validateExportImageValues() error {
 		}
 	}
 
+	for i := range c.MCPServers {
+		err := checkImageValue(fmt.Sprintf("mcp_servers %q", c.MCPServers[i].Name), c.MCPServers[i].Image)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -196,7 +203,7 @@ func (c *Config) validateFixAgentImages() error {
 	return nil
 }
 
-// UsesImages reports whether any resource_type, agent, task, or step sets
+// UsesImages reports whether any resource_type, mcp server, agent, task, or step sets
 // image: — used to fail fast (before any step runs) when docker isn't
 // available but the pipeline needs it.
 func (c *Config) UsesImages() bool {

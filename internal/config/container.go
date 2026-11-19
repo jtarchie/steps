@@ -137,6 +137,16 @@ func (c *Config) visitTypeAndExportSettings(fn func(context string, settings con
 		}
 	}
 
+	// A stdio server's image: runs on this machine's daemon whatever step grants it, so it is pre-pulled and checked like any other.
+	for i := range c.MCPServers {
+		server := c.MCPServers[i]
+
+		err := fn(fmt.Sprintf("mcp_servers %q", server.Name), containerSettings{Image: server.Image}.from("mcp_server", server.Name))
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

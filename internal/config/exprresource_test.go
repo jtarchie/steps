@@ -139,7 +139,7 @@ jobs:
 }
 
 // TestExprSyntaxErrorIsNotALoadError states the seam out loud. internal/config
-// depends on nothing internal and on no third-party code but the YAML parser,
+// depends on no internal package but redact and on no third-party code but the YAML parser,
 // which is what lets every other package share these types without inheriting
 // an expression engine. So an unparsable expression LOADS, and is caught by
 // `steps validate` and preflight instead (resource.CompileExprPrograms).

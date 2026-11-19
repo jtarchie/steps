@@ -129,7 +129,7 @@ func parseSource(source []byte, name string, label string, fsys Files) (*Config,
 }
 
 // validate checks schema-level invariants that the YAML decoder can't express
-// on its own — in particular everything around workspace:/inputs:/outputs:,
+// on its own — in particular everything around inputs:/outputs:,
 // so a misconfigured pipeline fails at load time rather than mid-build.
 //
 // Every check runs and their errors are joined, rather than returning at the

@@ -29,6 +29,27 @@ func TestImagesCollectsEveryDistinctImage(t *testing.T) {
 	}
 }
 
+// An MCP server is the only container here: missed, docker fails mid-step instead of at the start, the orphan sweep skips the run, and the pull lands inside the agent step's timeout.
+func TestImagesIncludesAnMCPServersImage(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		MCPServers: []MCPServer{{Name: "lsp", Command: "gopls", Image: "golang:1.26"}, {Name: "host", Command: "gopls"}},
+		Agents:     []Agent{{Name: "a"}},
+		Jobs:       []Job{{Name: "j", Plan: []Step{{Agent: "a"}}}},
+	}
+
+	if got := cfg.Images(); strings.Join(got, ",") != "golang:1.26" {
+		t.Errorf("Images() = %v, want [golang:1.26]", got)
+	}
+
+	if !cfg.UsesImages() {
+		t.Error("UsesImages() = false for a pipeline whose mcp server runs in an image")
+	}
+
+	wantLoadError(t, writeConfig(t, "mcp_servers:\n- {name: lsp, command: gopls, image: '-v'}\n"), `mcp_servers "lsp": image "-v" must not start with '-'`)
+}
+
 // TestImagesIsEmptyForAHostOnlyPipeline is what keeps a pipeline that never
 // containerizes from touching docker at all.
 func TestImagesIsEmptyForAHostOnlyPipeline(t *testing.T) {
@@ -425,6 +446,16 @@ jobs:
   plan:
   - get: toolchain
 `, `agent "a": image "toolchain" names a resource or get`},
+		"an mcp_servers: entry": {`
+mcp_servers:
+- name: lsp
+  command: gopls
+  image: toolchain
+jobs:
+- name: j
+  plan:
+  - get: toolchain
+`, `mcp_servers "lsp": image "toolchain" names a resource or get`},
 		"a tasks: entry named after a get alias": {`
 tasks:
 - name: build

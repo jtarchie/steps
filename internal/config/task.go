@@ -113,7 +113,7 @@ type FixSpec struct {
 }
 
 // UnmarshalYAML decodes a FixSpec from either a scalar (agent name) or a
-// mapping ({agent, prompt, message_files, dir, tools, attempts, timeout}) YAML
+// mapping ({agent, messages, message_files, dir, tools, attempts, timeout}) YAML
 // node.
 func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
@@ -146,7 +146,7 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 
 		return nil
 	default:
-		return fmt.Errorf("task fix at line %d must be an agent name or a {agent, prompt, ...} mapping", value.Line)
+		return fmt.Errorf("task fix at line %d must be an agent name or a {agent, messages, ...} mapping", value.Line)
 	}
 }
 

@@ -75,9 +75,13 @@ func (c *Config) validateJobTimeouts() error {
 func (c *Config) validateTaskTimeouts() error {
 	for _, task := range c.Tasks {
 		if task.Timeout != "" {
-			_, err := ParseTimeout(task.Timeout)
+			d, err := ParseTimeout(task.Timeout)
 			if err != nil {
 				return fmt.Errorf("task %q: %w", task.Name, err)
+			}
+
+			if d == 0 {
+				return fmt.Errorf("task %q: timeout must be a positive duration (omit it entirely for no deadline)", task.Name)
 			}
 		}
 

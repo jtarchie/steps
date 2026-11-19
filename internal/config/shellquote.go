@@ -29,7 +29,7 @@ var (
 )
 
 // shellQuote is internal/template's shellquote — leatherman's Quote for a
-// single word — ported because config may import nothing but the standard
+// single word — ported because config may import nothing but redact, the standard
 // library and yaml. TestShellQuoteMatchesLeatherman holds the two together.
 //
 // A word containing '=' is quoted even when otherwise safe: as the first word

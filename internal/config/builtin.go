@@ -203,10 +203,20 @@ func (c *Config) registerGoBackedTypes() {
 		switch {
 		case index < 0:
 			c.ResourceTypes = append(c.ResourceTypes, resourceType)
-		case clonesWithGit(resourceType.Name) && runsBuiltinIn(c.ResourceTypes[index]):
+		case runsBuiltinIn(c.ResourceTypes[index]):
+			// Kept the built-in even where the image cannot apply, so validateBuiltinImage refuses it by name rather than a zero config loading as an empty shell type.
 			c.ResourceTypes[index].Config = resourceType.Config
 		}
 	}
+}
+
+// validateBuiltinImage refuses image: on a Go-backed type with no command to run in it, as expr: refuses it for the slack-* types.
+func validateBuiltinImage(rt ResourceType) error {
+	if rt.Image == "" || clonesWithGit(rt.Name) {
+		return nil
+	}
+
+	return fmt.Errorf("resource_type %q: image: cannot apply to %s, which steps runs in this process with no command to put in an image; drop it", rt.Name, rt.Name)
 }
 
 func (c *Config) registerYAMLTypes() {
