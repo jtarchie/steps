@@ -17,7 +17,7 @@ type docLinearFixture struct {
 
 func docLinearIssue() fakeLinearIssue {
 	return fakeLinearIssue{
-		Identifier: "ENG-12", Title: "Plan the cache", Description: "It should key on content.", Branch: "eng-12-plan-the-cache",
+		Identifier: "ENG-12", Title: "Plan the cache", Description: "It should key on content.", Branch: "eng-12-plan-the-cache", Project: "pj-plat",
 		Labels: []string{"lb-ready"},
 		Comments: []fakeLinearComment{
 			{ID: "c1", Body: "Use the digest.", CreatedAt: "2026-10-01T09:30:00.000Z", Author: "Bob Builder"},

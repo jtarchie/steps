@@ -53,7 +53,10 @@ func newLive(ctx context.Context, out io.Writer, st store.Usage) (context.Contex
 	live.Width = func() int { return terminalSize(out, 80, func(size *unix.Winsize) uint16 { return size.Col }) }
 	live.Height = func() int { return terminalSize(out, 24, func(size *unix.Winsize) uint16 { return size.Row }) }
 	live.Color = os.Getenv("NO_COLOR") == ""
-	live.Spend = func(runID string) string { return runSpend(ctx, st, runID) }
+	// A daemon followed over HTTP serves no spend; nil leaves the header without it.
+	if st != nil {
+		live.Spend = func(runID string) string { return runSpend(ctx, st, runID) }
+	}
 
 	// Log records go above the region too, or the first warning a step logs tears it. Through ctx, not slog.SetDefault: the default is the process's, and swapping it took the lines of every invocation already running beside this one.
 	ctx = context.WithValue(ctx, logKey{}, telemetry.LogHandler(events.LogHandler(tint.NewTextHandler(live.Log(), &tint.Options{

@@ -16,6 +16,12 @@ import (
 //
 //nolint:contextcheck // as restore: the validation reads the daemon's context on purpose, and opening a store takes none
 func (d *daemon) Rename(ctx context.Context, from, to string) error {
+	for _, name := range []string{from, to} {
+		if isOneOff(name) {
+			return errOneOffName(name)
+		}
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 

@@ -215,6 +215,22 @@ type Manager interface {
 	Set(ctx context.Context, name string, req SetRequest) (SetResult, error)
 	Destroy(ctx context.Context, name string) error
 	Rename(ctx context.Context, from, to string) error
+	// OneOff serves a configuration under a pipeline it names itself, queues one job of it, and forgets the pipeline once that run is over: `steps run --target`.
+	OneOff(ctx context.Context, req OneOffRequest) (OneOffResult, error)
+}
+
+// OneOffRequest is a set with no name and no compare-and-set, since the pipeline is new by construction, plus the job to run.
+type OneOffRequest struct {
+	Source   string            `json:"source"`
+	Includes map[string][]byte `json:"includes,omitempty"`
+	From     string            `json:"from,omitempty"`
+	Job      string            `json:"job"`
+}
+
+// OneOffResult names the pipeline the daemon chose, which is where the run is read from.
+type OneOffResult struct {
+	Pipeline string `json:"pipeline"`
+	Job      string `json:"job"`
 }
 
 // SetRequest is one upload: the substituted YAML, the files it includes, and the revision the sender believed it was replacing.
@@ -467,6 +483,10 @@ func (s *Server) routes() error {
 	api := e.Group("/api", refuseBrowsers, middleware.BodyLimit(maxUploadSize))
 	api.GET("/pipelines", s.handleAPIList)
 	api.GET("/pipelines/:pipeline", s.handleAPIGet)
+	api.POST(strings.TrimPrefix(oneOffPath, "/api"), s.handleAPIOneOff)
+	api.GET("/pipelines/:pipeline/runs", s.handleAPIRuns)
+	api.GET("/pipelines/:pipeline/runs/:run", s.handleAPIRun)
+	api.GET("/pipelines/:pipeline/runs/:run/events", s.handleAPIRunEvents)
 	api.PUT("/pipelines/:pipeline", s.handleAPISet)
 	api.DELETE("/pipelines/:pipeline", s.handleAPIDestroy)
 	api.POST("/pipelines/:pipeline/pause", s.handleAPIPause)

@@ -296,6 +296,10 @@ func mcpServerContent(cfg *config.Config, name string) (map[string]any, error) {
 		content["cwd"] = srv.Cwd
 	}
 
+	if srv.Image != "" {
+		content["image"] = srv.Image
+	}
+
 	return content, nil
 }
 

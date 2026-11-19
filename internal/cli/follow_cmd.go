@@ -14,14 +14,14 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// RunsFollowCmd attaches the live view to a run some other process is executing — a daemon's, or a `steps run` in another terminal — by polling what it records, the way fly watch attaches to a build.
-//
-// ponytail: reads the state database, so it cannot follow a daemon on another host; a JSON event stream under /api/pipelines/:p/runs/:run/events is the upgrade.
+// RunsFollowCmd attaches the live view to a run some other process is executing — a daemon's, or a `steps run` in another terminal — by polling what it records, the way fly watch attaches to a build: the state file, or with --target the daemon's API, so a daemon on another host is followed the same way.
 type RunsFollowCmd struct {
 	ReadFlags     `embed:""`
 	ProgressFlags `embed:""`
 	RunID         string `arg:""                                   help:"the run to follow (default: the newest)" optional:""`
 	Job           string `help:"follow the newest run of this job"`
+	// No STEPS_TARGET: that names the daemon the control verbs talk to, and read from the environment it would quietly move every follow off the state file.
+	Target string `help:"follow the run on this steps web daemon rather than in a state file, optionally http://user:password@host" name:"target"`
 }
 
 //nolint:gochecknoglobals // a test seam: tests shrink it, the way web's liveBatch is shrunk
@@ -42,6 +42,10 @@ func (r *RunsFollowCmd) Run(streams Streams) error {
 
 	if r.RunID != "" && r.Job != "" {
 		return errors.New("--job does not apply to a named run; a run belongs to one job already")
+	}
+
+	if r.Target != "" {
+		return r.followRemote(streams)
 	}
 
 	// An error, not the list views' empty answer: follow's exit status is the run's, and `follow --job deploi && promote` must not promote.
@@ -69,19 +73,71 @@ func (r *RunsFollowCmd) Run(streams Streams) error {
 		sayf(out, "run %s already %s, replaying\n", run.ID, runview.Scrub(string(run.Status)))
 	}
 
-	ctx, render, stop := r.renderer(ctx, out, st)
+	return watch(ctx, out, r.ProgressFlags, st, st, run, func(last store.RunRow) {
+		sayf(out, "detached: %s is still running — steps runs follow -p %s %s%s\n", last.ID, r.Pipeline, last.ID, dbNote(r.DB, st))
+	})
+}
+
+// followRemote is Run against a daemon's API.
+func (r *RunsFollowCmd) followRemote(streams Streams) error {
+	out := streams.Out
+
+	if r.DB != "" {
+		return errors.New("--db and --target name two places to follow from; give one")
+	}
+
+	name, err := namedPipeline(r.Pipeline, "runs follow --target")
+	if err != nil {
+		return err
+	}
+
+	client := newDaemonClient(r.Target)
+	remote := remoteRuns{client: client, pipeline: name}
+
+	ctx, cancel := streams.cancellable()
+	defer cancel()
+
+	run, err := remote.target(ctx, r.RunID, r.Job)
+	if err != nil {
+		return err
+	}
+
+	sayf(out, "following %s · %s · %s on %s\n", run.ID, runview.Scrub(run.JobName), runview.Scrub(string(run.Status)), client.target)
+
+	return watch(ctx, out, r.ProgressFlags, nil, remote, run, func(last store.RunRow) {
+		sayf(out, "detached: %s is still running — steps runs follow --target %s -p %s %s\n", last.ID, client.target, name, last.ID)
+	})
+}
+
+// watch follows run to its end and is the command's result: a detach says how to come back, anything else is how the run came out. usage may be nil.
+func watch(
+	ctx context.Context, out io.Writer, progress ProgressFlags, usage store.Usage, st followStore, run store.RunRow, detached func(store.RunRow),
+) error {
+	ctx, render, stop := progress.followRenderer(ctx, out, usage)
 	defer stop()
 
 	last, err := followRun(ctx, st, run, func(event events.Event) { render(runview.ScrubEvent(event)) })
 
 	stop()
 
-	return r.ended(out, last, err, st)
+	if errors.Is(err, context.Canceled) {
+		if last.Status == store.RunRunning {
+			detached(last)
+		}
+
+		return fmt.Errorf("detached from run %s: %w", last.ID, err)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	return followedOutcome(last)
 }
 
-// renderer is the live view on a terminal and lines elsewhere; the stop it returns may be called twice.
-func (r *RunsFollowCmd) renderer(ctx context.Context, out io.Writer, st store.Usage) (context.Context, func(events.Event), func()) {
-	if !r.wantsLive(out) {
+// followRenderer is the live view on a terminal and lines elsewhere; the stop it returns may be called twice.
+func (p ProgressFlags) followRenderer(ctx context.Context, out io.Writer, st store.Usage) (context.Context, func(events.Event), func()) {
+	if !p.wantsLive(out) {
 		return ctx, followPlain(out), func() {}
 	}
 
@@ -97,23 +153,6 @@ func (r *RunsFollowCmd) renderer(ctx context.Context, out io.Writer, st store.Us
 
 		live.Event(event)
 	}, sync.OnceFunc(stop)
-}
-
-// ended is the command's result: a detach says how to come back, anything else is how the run came out.
-func (r *RunsFollowCmd) ended(out io.Writer, last store.RunRow, err error, st store.Meta) error {
-	if errors.Is(err, context.Canceled) {
-		if last.Status == store.RunRunning {
-			sayf(out, "detached: %s is still running — steps runs follow -p %s %s%s\n", last.ID, r.Pipeline, last.ID, dbNote(r.DB, st))
-		}
-
-		return fmt.Errorf("detached from run %s: %w", last.ID, err)
-	}
-
-	if err != nil {
-		return err
-	}
-
-	return followedOutcome(last)
 }
 
 // target is the run named, or the newest — of --job when given.
@@ -158,9 +197,10 @@ func followedOutcome(run store.RunRow) error {
 	}
 }
 
+// followStore is the two reads a follower makes, which a state file and a daemon's API both answer.
 type followStore interface {
-	store.Events
-	store.Runs
+	FindRunRow(ctx context.Context, id string) (store.RunRow, bool, error)
+	RunEvents(ctx context.Context, runID string, afterSeq int64, limit int) ([]store.RunEventRow, error)
 }
 
 // followRun renders a run's recorded events from the first until the run is over, and returns its last row.

@@ -482,7 +482,7 @@ func listServerToolsCached(ctx context.Context, cfg *config.Config, srv *config.
 	// `npx server --repo a` and `--repo b` expose different tools. An oauth
 	// server adds the pipeline, whose login is the credential it connects
 	// with (its saved login): one pipeline's login must not vouch for another's.
-	identity := []string{srv.Name, srv.Endpoint, srv.Command, srv.Cwd}
+	identity := []string{srv.Name, srv.Endpoint, srv.Command, srv.Cwd, srv.Image}
 	if srv.Auth.OAuth() {
 		identity = append(identity, cfg.Name)
 	}

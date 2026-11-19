@@ -44,6 +44,39 @@ type gitClone struct {
 	base          string
 	ahead, behind int
 	dir           string
+	// image and runner are the type's image: and the container the clone's commands run in; nil runs git on this machine.
+	image  string
+	runner shell.Runner
+}
+
+type gitImageKey struct{}
+
+// withGitImage has checkout: git's clone run in the type's image (#263), as its other built-ins' commands do.
+func withGitImage(ctx context.Context, rt config.ResourceType, resource config.Resource) context.Context {
+	if rt.Image == "" {
+		return ctx
+	}
+
+	return context.WithValue(ctx, gitImageKey{}, runnerSpec(rt, resource.Env))
+}
+
+// inImage is c with its container started when ctx asked for one; the returned func gives it back.
+func (c gitClone) inImage(ctx context.Context) (gitClone, func(), error) {
+	spec, ok := ctx.Value(gitImageKey{}).(shell.RunnerSpec)
+	if !ok {
+		return c, func() {}, nil
+	}
+
+	spec.Cwd, spec.Workdir, spec.FetchAll, spec.EnvValues = c.dir, shell.GetDir, true, c.gitEnv()
+
+	runner, err := newRunner(ctx, spec)
+	if err != nil {
+		return c, nil, fmt.Errorf("checkout: git in image %q: %w", spec.Image, err)
+	}
+
+	c.image, c.runner = spec.Image, runner
+
+	return c, func() { shell.CloseRunner(runner, "checkout: git") }, nil
 }
 
 // checkoutGit makes c.dir a repository at c.sha, detached, with origin/<base>
@@ -61,6 +94,13 @@ func checkoutGit(ctx context.Context, c gitClone) error {
 
 	ctx, cancel := context.WithTimeout(ctx, githubFetchTimeout)
 	defer cancel()
+
+	c, release, err := c.inImage(ctx)
+	if err != nil {
+		return err
+	}
+
+	defer release()
 
 	err = c.fetch(ctx)
 	if err != nil {
@@ -153,6 +193,10 @@ func checkCloneURL(raw string) error {
 
 // git runs one git command in the clone, its stderr in the error.
 func (c gitClone) git(ctx context.Context, args ...string) error {
+	if c.runner != nil {
+		return c.gitInImage(ctx, args)
+	}
+
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // the arguments are fixed flags, refs built from a decimal number and GitHub's base branch, and a commit held to commitID
 	cmd.Dir = c.dir
 	cmd.Env = c.environ()
@@ -173,8 +217,39 @@ func (c gitClone) git(ctx context.Context, args ...string) error {
 	return nil
 }
 
-// environ is the host baseline with everything of the operator's git turned off and the one header on.
+func (c gitClone) gitInImage(ctx context.Context, args []string) error {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+	}
+
+	res, err := c.runner.Exec(ctx, shell.Command{Script: "git " + strings.Join(quoted, " "), Capture: true, ExitAsData: true})
+
+	switch {
+	case err != nil:
+		return fmt.Errorf("git %s in image %q: %w", strings.Join(args, " "), c.image, err)
+	case res.Code == 127:
+		return fmt.Errorf("checkout: git needs the git binary in image %q", c.image)
+	case res.Code != 0:
+		return fmt.Errorf("git %s: exit status %d: %s", strings.Join(args, " "), res.Code, strings.TrimSpace(res.Stderr))
+	}
+
+	return nil
+}
+
+// environ is the host baseline with gitEnv on.
 func (c gitClone) environ() []string {
+	env := shell.HostEnv()
+
+	for name, value := range c.gitEnv() {
+		env = append(env, name+"="+value)
+	}
+
+	return env
+}
+
+// gitEnv turns everything of the operator's git off and the one header on.
+func (c gitClone) gitEnv() map[string]string {
 	header := "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+c.token))
 	config := [][2]string{
 		// Empty clears any helper a config could still name.
@@ -188,12 +263,13 @@ func (c gitClone) environ() []string {
 		{"advice.detachedHead", "false"},
 	}
 
-	env := append(shell.HostEnv(),
-		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0",
-		"GIT_ALLOW_PROTOCOL=http:https", "GIT_CONFIG_COUNT="+strconv.Itoa(len(config)))
+	env := map[string]string{
+		"GIT_CONFIG_GLOBAL": os.DevNull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
+		"GIT_ALLOW_PROTOCOL": "http:https", "GIT_CONFIG_COUNT": strconv.Itoa(len(config)),
+	}
 
 	for i, kv := range config {
-		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
+		env[fmt.Sprintf("GIT_CONFIG_KEY_%d", i)], env[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i)] = kv[0], kv[1]
 	}
 
 	return env

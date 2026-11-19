@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 )
 
@@ -174,7 +175,12 @@ func ReadBuiltinResourceType(name string) (ResourceType, error) {
 // set of command templates, and half of one command paired with half of
 // another is not a resource type anyone meant to write.
 func (c *Config) registerBuiltinResourceTypes() {
-	// A declared type of a Go-backed name replaces the built-in, as a declared git does: the pipeline's choice. A declared webhook stays too, but to be refused (validateWebhookResources): deliveries are routed to it by name, so replacing it would make the name mean two things.
+	c.registerGoBackedTypes()
+	c.registerYAMLTypes()
+}
+
+// registerGoBackedTypes: a declared type of a Go-backed name replaces the built-in, as a declared git does: the pipeline's choice. A declared webhook stays too, but to be refused (validateWebhookResources): deliveries are routed to it by name, so replacing it would make the name mean two things.
+func (c *Config) registerGoBackedTypes() {
 	goBacked := make([]ResourceType, 0, 4+len(GitHubTypes())+len(LinearTypes()))
 	goBacked = append(goBacked,
 		ResourceType{Name: WebhookType, Config: ResourceTypeConfig{Webhook: true}},
@@ -192,11 +198,18 @@ func (c *Config) registerBuiltinResourceTypes() {
 	}
 
 	for _, resourceType := range goBacked {
-		if c.findResourceTypeIndex(resourceType.Name) < 0 {
+		index := c.findResourceTypeIndex(resourceType.Name)
+
+		switch {
+		case index < 0:
 			c.ResourceTypes = append(c.ResourceTypes, resourceType)
+		case clonesWithGit(resourceType.Name) && runsBuiltinIn(c.ResourceTypes[index]):
+			c.ResourceTypes[index].Config = resourceType.Config
 		}
 	}
+}
 
+func (c *Config) registerYAMLTypes() {
 	builtinNames, err := ListBuiltinResourceTypeNames()
 	if err != nil {
 		slog.Warn("builtin.resource_types.list", "error", err)
@@ -205,7 +218,8 @@ func (c *Config) registerBuiltinResourceTypes() {
 	}
 
 	for _, name := range builtinNames {
-		if c.findResourceTypeIndex(name) >= 0 {
+		index := c.findResourceTypeIndex(name)
+		if index >= 0 && !runsBuiltinIn(c.ResourceTypes[index]) {
 			slog.Debug("builtin.resource_types.shadowed", "name", name)
 
 			continue
@@ -218,10 +232,27 @@ func (c *Config) registerBuiltinResourceTypes() {
 			continue
 		}
 
+		if index >= 0 {
+			declared := &c.ResourceTypes[index]
+			declared.Config, declared.Env = resourceType.Config, UnionEnv(resourceType.Env, declared.Env)
+
+			continue
+		}
+
 		resourceType.Name = name
 		c.ResourceTypes = append(c.ResourceTypes, resourceType)
 		slog.Debug("builtin.resource_types.register", "name", name)
 	}
+}
+
+// runsBuiltinIn reports a declared type that is the built-in of its name run in its image (#263): image: and no commands or Concourse spelling of its own. Concourse runs every type, git included, in an image; steps' built-ins are commands, so the image is where they run.
+func runsBuiltinIn(declared ResourceType) bool {
+	return declared.Image != "" && declared.Type == "" && reflect.ValueOf(declared.Config).IsZero()
+}
+
+// clonesWithGit is a Go-backed type that runs a command at all: checkout: git's clone. The others run nothing to put in an image.
+func clonesWithGit(name string) bool {
+	return name == GitHubPRsType || name == GitHubCommentsType
 }
 
 // WebhookType is the built-in type whose versions are deliveries; it is Go rather than YAML because it has no command to run. CronType (cron.go) is the other.

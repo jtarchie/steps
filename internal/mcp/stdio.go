@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os/exec"
 	"time"
@@ -56,6 +57,18 @@ func commandTransport(ctx context.Context, srv config.MCPServer) *sdkmcp.Command
 	slog.DebugContext(ctx, "mcp.stdio.spawn", "server", srv.Name, "command", redact.Command(srv.Command), "args", args, "cwd", srv.Cwd)
 
 	return &sdkmcp.CommandTransport{Command: cmd}
+}
+
+// imageTransport is commandTransport's command run in srv.Image (#263): the container sees the image's own environment, as a containerized task does.
+func imageTransport(ctx context.Context, srv config.MCPServer) (sdkmcp.Transport, error) {
+	slog.DebugContext(ctx, "mcp.stdio.spawn", "server", srv.Name, "image", srv.Image, "command", redact.Command(srv.Command), "cwd", srv.Cwd)
+
+	attached, err := shell.Attach(ctx, shell.RunnerSpec{Image: srv.Image}, append([]string{srv.Command}, srv.Args...), srv.Cwd, &stderrLogger{server: srv.Name})
+	if err != nil {
+		return nil, fmt.Errorf("mcp: server %q: %w", srv.Name, err)
+	}
+
+	return &sdkmcp.IOTransport{Reader: attached.Stdout, Writer: attached.Stdin}, nil
 }
 
 // stderrLoggerMaxLine caps a stderrLogger's partial-line buffer so a server
