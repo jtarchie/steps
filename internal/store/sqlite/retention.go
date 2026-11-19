@@ -201,7 +201,12 @@ func pruneRunRows(
 		      SELECT run_id FROM trigger_queue
 		      WHERE pipeline_id = ? AND status = 'pending' AND run_id IS NOT NULL
 		  )
-	`, pipelineID, jobName, keepRunID, pipelineID, jobName, limit, pipelineID)
+		  -- A run a pending retry names: reaped, rerun_of's CASCADE takes the retry with it.
+		  AND id NOT IN (
+		      SELECT rerun_of FROM trigger_queue
+		      WHERE pipeline_id = ? AND status = 'pending' AND rerun_of IS NOT NULL
+		  )
+	`, pipelineID, jobName, keepRunID, pipelineID, jobName, limit, pipelineID, pipelineID)
 	if err != nil {
 		return false, fmt.Errorf("could not prune runs of %q: %w", jobName, err)
 	}
