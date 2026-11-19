@@ -547,6 +547,21 @@ func TestGCPReadinessIsForgottenWhenTheMachineIsGivenBack(t *testing.T) {
 	}
 }
 
+// The literal keys the cache tests seed and probe are only meaningful while they are the spelling the code uses.
+func TestGCEInstanceKeyIsProjectZoneName(t *testing.T) {
+	t.Parallel()
+
+	const want = "test-project/us-central1-a/half-ttl"
+
+	if got := gceInstanceOf("test-project", "us-central1-a", Worker{Instance: "half-ttl"}).key(); got != want {
+		t.Errorf("gceInstanceOf(...).key() = %q, want %q", got, want)
+	}
+
+	if got := gcpReadyKey("test-project", "us-central1-a", "half-ttl"); got != want {
+		t.Errorf("gcpReadyKey = %q, want %q", got, want)
+	}
+}
+
 // Reuse stops at half the TTL: a key installed longer ago than that could expire on the guest mid-session.
 func TestGCPReinstallsAKeyPastHalfItsTTL(t *testing.T) {
 	fake := &fakeGCE{}

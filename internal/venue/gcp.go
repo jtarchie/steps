@@ -303,7 +303,7 @@ func gcpConnect(ctx context.Context, api gceAPI, worker Worker, project, zone st
 	authRefused := false
 	forgetInstall := func() {
 		if authRefused {
-			gcpInstalled.Delete(project + "/" + zone + "/" + worker.Instance)
+			gcpInstalled.Delete(gceInstanceOf(project, zone, worker).key())
 		}
 	}
 
@@ -437,7 +437,7 @@ func gcpEnsureKey(ctx context.Context, api gceAPI, worker Worker, project, zone 
 		return nil, err
 	}
 
-	cacheKey := project + "/" + zone + "/" + worker.Instance
+	cacheKey := gceInstanceOf(project, zone, worker).key()
 	if at, ok := gcpInstalled.Load(cacheKey); ok {
 		// Reinstalled at half the TTL, so no dial ever presents a key the
 		// guest agent is about to expire.
@@ -580,8 +580,20 @@ func hostKeysFromAttributes(worker Worker, attributes map[string]string) (ssh.Ho
 // gcpReady remembers instances whose docker this process has already waited for, until a park or delete ends that boot.
 var gcpReady sync.Map //nolint:gochecknoglobals // per-process memory of a once-per-boot wait
 
-// gcpReadyKey is gcpInstalled's key: an instance name is unique only within its project and zone.
-func gcpReadyKey(project, zone, name string) string { return project + "/" + zone + "/" + name }
+// gceInstance is one instance's identity: a name is unique only within its project and zone.
+type gceInstance struct{ project, zone, name string }
+
+func gceInstanceOf(project, zone string, worker Worker) gceInstance {
+	return gceInstance{project: project, zone: zone, name: worker.Instance}
+}
+
+// key spells project/zone/name, byte-identical to the keys gcpInstalled and gcpReady held before this type.
+func (i gceInstance) key() string { return i.project + "/" + i.zone + "/" + i.name }
+
+// gcpReadyKey keys an instance known only by name, as a launch or park is.
+func gcpReadyKey(project, zone, name string) string {
+	return gceInstance{project: project, zone: zone, name: name}.key()
+}
 
 // gcpReadyScript waits for the startup script's docker and, where the guest agent made the account before the docker group existed, joins it with the passwordless sudo the agent grants; "regroup" asks for a fresh login, the only thing that picks a new group up.
 const gcpReadyScript = `i=0; until docker info >/dev/null 2>&1; do
@@ -602,7 +614,7 @@ func gcpDockerClient(ctx context.Context, worker Worker) (*ssh.Client, error) {
 		return nil, err
 	}
 
-	key := gcpReadyKey(project, zone, worker.Instance)
+	key := gceInstanceOf(project, zone, worker).key()
 	if _, ready := gcpReady.Load(key); ready {
 		return client, nil
 	}
