@@ -653,12 +653,12 @@ func affectedJobs(
 				continue
 			}
 
-			ready, err := jobReadyFor(ctx, st, job)
+			due, err := jobDue(ctx, st, job)
 			if err != nil {
 				return nil, err
 			}
 
-			if !ready {
+			if !due {
 				continue
 			}
 
@@ -679,13 +679,7 @@ func affectedJobs(
 // all passed: without trigger: is started by a person, never by its upstream
 // going green.
 //
-// The guard against enqueueing the same work forever is the job's OWN passed
-// record, over its trigger inputs only: once it succeeds against them it has
-// recorded them, so a newer version arriving on a passed:-only input does not
-// release it again. A job that keeps failing is re-attempted one at a time
-// (the queue holds at most one pending row per job) until the circuit breaker
-// pauses it, which is what the breaker is for — Concourse would wait for a new
-// trigger version instead.
+// The guard against releasing the same work forever is the job's own builds of its trigger inputs, passed or failed (see jobAlreadyRanThese): a failing job waits for a new trigger version or a person, as in Concourse, rather than running every poll until a breaker holds it.
 func releaseConstrainedJobs(
 	ctx context.Context, cfg *config.Config, st PollStore, alreadyEnqueued []string,
 ) ([]string, error) {
@@ -698,21 +692,12 @@ func releaseConstrainedJobs(
 			continue
 		}
 
-		set, ready, err := passedSetFor(ctx, st, job)
+		due, err := jobDue(ctx, st, job)
 		if err != nil {
 			return nil, err
 		}
 
-		if !ready {
-			continue
-		}
-
-		done, err := jobAlreadyRanThese(ctx, st, job, set)
-		if err != nil {
-			return nil, err
-		}
-
-		if done {
+		if !due {
 			continue
 		}
 
@@ -727,14 +712,25 @@ func releaseConstrainedJobs(
 	return released, nil
 }
 
-// jobAlreadyRanThese reports whether the job has itself already succeeded
-// against each version its trigger: true gets would build — the gated ones
-// from the set that passed upstream together, the rest at their newest — the
-// fact that stops a released job being released again on the next poll. Each
-// on its own, as Concourse's IsFirstOccurrence asks per input. A trigger input
-// with no version at all holds the job: there is nothing to build it with. A
-// job with no trigger: true get asks about nothing, which it has vacuously
-// run: only a person starts it.
+// jobDue reports whether a poll should start a job: its passed: gates hold, and a gated job has no queued or claimed build still to take its versions and some trigger input no build of it has used. A check's new version asks it as the release does, or a version upstream has not yet passed rebuilds the gated set the job already used.
+func jobDue(ctx context.Context, st PollStore, job *config.Job) (bool, error) {
+	set, ready, err := passedSetFor(ctx, st, job)
+	if err != nil || !ready || len(job.PassedConstraints()) == 0 {
+		return ready, err
+	}
+
+	// Holding is safe because a gated job is judged again every poll by releaseConstrainedJobs.
+	pending, err := st.QueuedWithoutInputs(ctx, job.Name)
+	if err != nil || pending {
+		return false, err //nolint:wrapcheck // the store names the job
+	}
+
+	done, err := jobAlreadyRanThese(ctx, st, job, set)
+
+	return !done, err
+}
+
+// jobAlreadyRanThese reports whether a build of the job, however it ended, already took each version its trigger: true gets would build (gated ones from the set that passed together, the rest at their newest), each on its own: Concourse's IsFirstOccurrence asks per input over build_resource_config_version_inputs and filters on no status. A trigger input with no version holds the job, having nothing to build with; a job with no trigger: true get has vacuously run, since only a person starts it.
 func jobAlreadyRanThese(ctx context.Context, st PollStore, job *config.Job, set map[string]store.VersionKey) (bool, error) {
 	for _, input := range job.Inputs() {
 		if !input.Trigger {
@@ -755,12 +751,12 @@ func jobAlreadyRanThese(ctx context.Context, st PollStore, job *config.Job, set 
 			return true, nil
 		}
 
-		ran, err := st.HasPassedVersionSet(ctx, job.Name, map[string]store.VersionKey{input.Resource: version})
+		runs, err := st.VersionRuns(ctx, input.Resource, []store.VersionKey{version})
 		if err != nil {
 			return false, fmt.Errorf("trigger input %q of job %q: %w", input.Resource, job.Name, err)
 		}
 
-		if !ran {
+		if !slices.ContainsFunc(runs, func(run store.VersionRun) bool { return run.Run.JobName == job.Name }) {
 			return false, nil
 		}
 	}

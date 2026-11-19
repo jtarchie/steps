@@ -485,6 +485,62 @@ func (s suite) TestStoreEnqueueJobDedupsOnlyWhilePending(t *testing.T) {
 	mustEnqueueJob(t, st, "build", "resource-c")
 }
 
+// TestQueuedWithoutInputsIsABuildYetToTakeItsVersions: a queued or claimed row is Concourse's pending build until its run records the versions it was created with, so a trigger asking in that window must hear yes — and no once they are recorded or the row has ended.
+func (s suite) TestQueuedWithoutInputsIsABuildYetToTakeItsVersions(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+	other := s.open(t, "other")
+
+	assertClaimed := func(handle store.Store, job string, want bool, when string) {
+		t.Helper()
+
+		got, err := handle.QueuedWithoutInputs(ctx, job)
+		if err != nil || got != want {
+			t.Fatalf("%s: QueuedWithoutInputs(%q) = %v, %v; want %v", when, job, got, err, want)
+		}
+	}
+
+	mustEnqueueJob(t, st, "build", "trigger")
+	assertClaimed(st, "build", true, "queued, not claimed")
+
+	id, _ := mustClaimJob(t, st, "build")
+	assertClaimed(st, "build", true, "claimed, no run yet")
+	assertClaimed(st, "deploy", false, "another job")
+	assertClaimed(other, "build", false, "another pipeline")
+
+	err := st.StartRun(ctx, store.NewRun{ID: "r1", JobName: "build", Workspace: "/tmp/ws", QueueID: id})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	assertClaimed(st, "build", true, "run started, nothing recorded")
+
+	err = st.RecordRunInput(ctx, "r1", store.RunInput{Input: "repo", Resource: "repo", Version: `{"ref":"a"}`})
+	if err != nil {
+		t.Fatalf("RecordRunInput: %v", err)
+	}
+
+	assertClaimed(st, "build", false, "its versions recorded")
+
+	err = st.CompleteJob(ctx, id, store.QueueSucceeded, nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	mustEnqueueJob(t, st, "build", "trigger")
+	id, _ = mustClaimJob(t, st, "build")
+	assertClaimed(st, "build", true, "a second claim")
+
+	err = st.CompleteJob(ctx, id, store.QueueFailed, nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	assertClaimed(st, "build", false, "the claim ended having taken nothing")
+}
+
 // TestStoreClaimSerializesSameJob asserts a pending row for a job that is
 // already running is not claimable until the running build finishes — builds
 // of one job never run concurrently, even with multiple workers.
