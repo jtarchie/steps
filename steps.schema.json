@@ -2307,7 +2307,7 @@
     "assert": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Position decides which fields are legal: execution on a job/pipeline, outcome on a job, stdout/code/files on a task step, stdout/verdict/tool_calls/files on an agent step.",
+      "description": "Position decides which fields are legal: execution on a job/pipeline, outcome on a job, stdout/code/files/shape on a task step, stdout/verdict/tool_calls/files/shape on an agent step.",
       "properties": {
         "execution": {
           "type": "array",
@@ -2361,9 +2361,16 @@
           },
           "description": "Task/agent steps only. Every listed path must exist as a non-empty file among the step's outputs when it finishes -- checks what the step WROTE, not just what it said. Artifact-relative: the first path segment must name one of the step's outputs:."
         },
+        "shape": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Task/agent steps only. Map from an artifact-relative path (same rule as files:) to the STRUCTURE its JSON must have -- a scalar kind (string/number/boolean/object/array) or array<KIND> for one of them. Catches a file that exists but is the wrong shape, which files: waves through. Structural only, so it stays a nudgeable obligation."
+        },
         "nudge": {
           "type": "boolean",
-          "description": "Agent steps only. Tell the model which files/tool_calls it still owes at the moment it tries to stop (up to five times), and refuse a verdict over the same gap. Opt-in: without it the assert is a silent post-hoc check. Not valid alongside stdout/verdict, which name a conclusion rather than an obligation."
+          "description": "Agent steps only. Tell the model which files/shape/tool_calls it still owes at the moment it tries to stop (up to five times), and refuse a verdict over the same gap. Opt-in: without it the assert is a silent post-hoc check. Not valid alongside stdout/verdict, which name a conclusion rather than an obligation."
         }
       }
     },

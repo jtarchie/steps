@@ -52,6 +52,12 @@ func assertAgentResponse(assert *config.Assert, res conversationResult, dir stri
 		return outcome.Fail(withNudgeHint(err, assert.Nudge))
 	}
 
+	err = config.AssertShapeMismatch(assert.Shape, dir)
+	if err != nil {
+		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
+		return outcome.Fail(withNudgeHint(err, assert.Nudge))
+	}
+
 	return nil
 }
 
@@ -219,6 +225,7 @@ func (e stepExpectation) owed(trajectory []recordedToolCall) (unmet []string, me
 	}
 
 	files := e.files.unmet()
+	shape := e.files.shapeUnmet()
 
 	var calls []string
 
@@ -226,7 +233,7 @@ func (e stepExpectation) owed(trajectory []recordedToolCall) (unmet []string, me
 		calls = append(calls, expected.Name)
 	}
 
-	if len(files) == 0 && len(calls) == 0 {
+	if len(files) == 0 && len(shape) == 0 && len(calls) == 0 {
 		return nil, ""
 	}
 
@@ -236,11 +243,20 @@ func (e stepExpectation) owed(trajectory []recordedToolCall) (unmet []string, me
 		parts = append(parts, e.files.nudge(files))
 	}
 
-	if len(calls) > 0 {
-		parts = append(parts, assertToolCallsNudge(calls, len(files) > 0))
+	if len(shape) > 0 {
+		parts = append(parts, e.files.shapeNudge(shape, len(files) > 0))
 	}
 
-	return append(files, calls...), strings.Join(parts, " ")
+	if len(calls) > 0 {
+		parts = append(parts, assertToolCallsNudge(calls, len(files) > 0 || len(shape) > 0))
+	}
+
+	owedAll := make([]string, 0, len(files)+len(shape)+len(calls))
+	owedAll = append(owedAll, files...)
+	owedAll = append(owedAll, shape...)
+	owedAll = append(owedAll, calls...)
+
+	return owedAll, strings.Join(parts, " ")
 }
 
 // bringHomeWith names how the files check reaches a container's deferred writes.
@@ -257,6 +273,11 @@ func (e stepExpectation) mismatch(trajectory []recordedToolCall) error {
 	}
 
 	err := e.files.mismatch()
+	if err != nil {
+		return err
+	}
+
+	err = e.files.shapeMismatch()
 	if err != nil {
 		return err
 	}
@@ -300,7 +321,9 @@ func assertToolCallsNudge(remaining []string, alsoFiles bool) string {
 // somewhere else — so the nudge has to say what the paths are rooted in
 // rather than send it to write the same file twice in the wrong place.
 type assertFilesExpectation struct {
-	files    []string
+	files []string
+	// shape is assert.shape: checked on the same files, in the same dir, so it rides the same expectation rather than duplicating dir/home/agentDir.
+	shape    map[string]string
 	dir      string
 	agentDir string
 	// home brings a container's deferred writes here before dir is read; shared by every copy, since the verdict tool holds one made before the container existed.
@@ -324,11 +347,11 @@ func (h *homeward) fetch() error {
 // the right answer for a step that declares none — unmet() is empty, so every
 // caller's check is a no-op without any of them testing for it.
 func newAssertFilesExpectation(assert *config.Assert, dir, agentDir string) assertFilesExpectation {
-	if assert == nil || len(assert.Files) == 0 {
+	if assert == nil || (len(assert.Files) == 0 && len(assert.Shape) == 0) {
 		return assertFilesExpectation{}
 	}
 
-	return assertFilesExpectation{files: assert.Files, dir: dir, agentDir: agentDir, home: &homeward{}}
+	return assertFilesExpectation{files: assert.Files, shape: assert.Shape, dir: dir, agentDir: agentDir, home: &homeward{}}
 }
 
 // unmet reports the entries not satisfied right now — nothing when the step
@@ -409,6 +432,51 @@ func (e assertFilesExpectation) whereToWrite() string {
 
 	return fmt.Sprintf("Your working directory is not what those paths are relative to — from where you are, write them as: %s.",
 		strings.Join(relative, ", "))
+}
+
+// shapeUnmet reports the assert.shape: entries not satisfied right now — the
+// same early check assertAgentResponse makes post-hoc, asked while the model
+// can still rewrite the file. A file can pass files: (it exists, non-empty)
+// and fail here, which is the whole reason shape exists.
+func (e assertFilesExpectation) shapeUnmet() []string {
+	if len(e.shape) == 0 {
+		return nil
+	}
+
+	_ = e.home.fetch() // a failed fetch is the step's own to report; here it risks one needless nudge.
+
+	return config.AssertShapeMismatches(e.shape, e.dir)
+}
+
+// shapeMismatch is the unmet shape contract as the post-hoc error, or nil when
+// every declared file is the right shape. Shared with assertAgentResponse so
+// an operator reads the same sentence whichever path reached the failure.
+func (e assertFilesExpectation) shapeMismatch() error {
+	if len(e.shape) == 0 {
+		return nil
+	}
+
+	if e.home.fetch() != nil {
+		return nil //nolint:nilerr // a failed fetch is the step's to report, not this shape check's
+	}
+
+	//nolint:wrapcheck // the config package owns this message; rewording it here is the bug
+	return config.AssertShapeMismatch(e.shape, e.dir)
+}
+
+// shapeNudge is what the model is told about a file that is present but the
+// wrong shape: the mismatches, and WHY. A later step reads the file as that
+// exact structure, so a close-but-wrong one (an object where a bare array was
+// owed) strands the run the same way a missing file would — and like the files
+// nudge, naming the reason is the correction.
+func (e assertFilesExpectation) shapeNudge(unmet []string, alsoFiles bool) string {
+	opening := "This step declared the SHAPE its JSON output must have, and it does not match"
+	if alsoFiles {
+		opening = "This step also declared the SHAPE its JSON output must have, and it does not match"
+	}
+
+	return fmt.Sprintf("%s: %s. A later step reads these files as that exact shape, so a close-but-wrong structure strands the run the same way a missing file would. Rewrite them in the declared shape, then finish.",
+		opening, strings.Join(unmet, "; "))
 }
 
 // assertFilesNudge is what a model trying to finish without its declared

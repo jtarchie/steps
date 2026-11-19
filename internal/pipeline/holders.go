@@ -25,7 +25,7 @@ func deferrable(step config.Step, rt config.ResolvedTask) bool {
 		return false
 	}
 
-	return rt.Assert == nil || len(rt.Assert.Files) == 0
+	return rt.Assert == nil || (len(rt.Assert.Files) == 0 && len(rt.Assert.Shape) == 0)
 }
 
 // holdRemoteOutputs records each output the worker kept as an artifact held

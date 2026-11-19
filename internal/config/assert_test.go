@@ -119,7 +119,7 @@ jobs:
     inputs: []
     run: "true"
 `,
-			want: "stdout/code/verdict/files/nudge are only valid on task/agent step asserts",
+			want: "stdout/code/verdict/files/shape/nudge are only valid on task/agent step asserts",
 		},
 		{
 			name: "job assert with code",
@@ -133,7 +133,7 @@ jobs:
   assert:
     code: 0
 `,
-			want: "stdout/code/verdict/files/nudge are only valid on task/agent step asserts",
+			want: "stdout/code/verdict/files/shape/nudge are only valid on task/agent step asserts",
 		},
 		{
 			name: "step assert with execution",
@@ -335,7 +335,7 @@ jobs:
     execution: [work]
     nudge: true
 `,
-			want: "stdout/code/verdict/files/nudge are only valid on task/agent step asserts",
+			want: "stdout/code/verdict/files/shape/nudge are only valid on task/agent step asserts",
 		},
 	}
 

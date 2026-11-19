@@ -318,3 +318,29 @@ func TestAssertAgentResponseHintsAtNudgeOnlyWhenOff(t *testing.T) {
 		t.Errorf("tool_calls without the flag: %v, want the hint", procedure)
 	}
 }
+
+// TestOwedShapeIsNudged pins the gap assert.files cannot see: a file that is
+// present and non-empty but the WRONG JSON shape is owed and nudged, and
+// rewriting it in the declared shape clears it.
+func TestOwedShapeIsNudged(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	expect := newStepExpectation(&config.Assert{
+		Shape: map[string]string{"units/index.json": "array<string>"},
+		Nudge: true,
+	}, dir, dir)
+
+	writeShapeFile(t, dir, "units/index.json", `{"intents":["a"]}`)
+
+	unmet, message := expect.owed(nil)
+	if len(unmet) != 1 || !strings.Contains(message, "SHAPE") || !strings.Contains(message, "is not array<string>") {
+		t.Errorf("wrong-shape file not nudged: unmet=%v message=%q", unmet, message)
+	}
+
+	writeShapeFile(t, dir, "units/index.json", `["a","b"]`)
+
+	if unmet, message := expect.owed(nil); len(unmet) != 0 || message != "" {
+		t.Errorf("shape fixed, still owed: %v %q", unmet, message)
+	}
+}

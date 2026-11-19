@@ -59,6 +59,15 @@ type Assert struct {
 	// path is artifact-relative (ValidateArtifactPath), and its first
 	// component must name one of the step's declared outputs:.
 	Files []string `yaml:"files,omitempty"`
+	// Shape, on a task or agent step, asserts the STRUCTURE of a JSON output:
+	// a map from an artifact-relative path (same rule as Files) to a shape
+	// expr — a scalar kind (string/number/boolean/object/array) or array<KIND>
+	// for one of them. It is what Files cannot say: a file can exist, be
+	// non-empty, and still be the wrong shape (an object where a bare array of
+	// ids was owed), which sails past files: and only a downstream consumer
+	// catches. Structural only, never a value, so under nudge: it stays an
+	// obligation a model is told about rather than a conclusion it is handed.
+	Shape map[string]string `yaml:"shape,omitempty"`
 	// Nudge, on an agent step, opts the step into being TOLD about an unmet
 	// files:/tool_calls: entry while the model can still act on it — a
 	// message at the moment it tries to stop, up to a fixed allowance — and
@@ -126,6 +135,11 @@ func (c *Config) validateAsserts() error {
 			}
 
 			stepErr = c.validateAssertFiles(label, step)
+			if stepErr != nil {
+				return stepErr
+			}
+
+			stepErr = c.validateAssertShape(label, step)
 			if stepErr != nil {
 				return stepErr
 			}
@@ -262,8 +276,8 @@ func validateAssertOutcome(label, outcome string) error {
 // requireExecutionOnly rejects an execution-level assert (Config/Job) that
 // carries the step-only stdout:/code:/files: fields.
 func requireExecutionOnly(label string, assert *Assert) error {
-	if assert.Stdout != nil || assert.Code != nil || assert.Verdict != nil || len(assert.Files) > 0 || assert.Nudge {
-		return fmt.Errorf("%s: stdout/code/verdict/files/nudge are only valid on task/agent step asserts, not an execution assert", label)
+	if assert.Stdout != nil || assert.Code != nil || assert.Verdict != nil || len(assert.Files) > 0 || len(assert.Shape) > 0 || assert.Nudge {
+		return fmt.Errorf("%s: stdout/code/verdict/files/shape/nudge are only valid on task/agent step asserts, not an execution assert", label)
 	}
 
 	return nil
@@ -284,8 +298,8 @@ func validateAssertNudge(label string, assert *Assert) error {
 		return fmt.Errorf("%s: assert.nudge is not valid alongside stdout/verdict — a nudge may name an unmet obligation (files, tool_calls), never the conclusion the assert is waiting for, or the model is handed the answer and the assert proves nothing", label)
 	}
 
-	if len(assert.Files) == 0 && len(assert.ToolCalls) == 0 {
-		return fmt.Errorf("%s: assert.nudge names nothing to nudge about; it needs files or tool_calls", label)
+	if len(assert.Files) == 0 && len(assert.ToolCalls) == 0 && len(assert.Shape) == 0 {
+		return fmt.Errorf("%s: assert.nudge names nothing to nudge about; it needs files, shape, or tool_calls", label)
 	}
 
 	return nil
@@ -525,6 +539,95 @@ func checkAssertFilePaths(label string, files, outputs []string) error {
 			return fmt.Errorf("%s: assert.files[%d] %q names the whole %q output, which is a directory — name a file inside it (%s/...)",
 				label, i, path, name, name)
 		}
+	}
+
+	return nil
+}
+
+// validateAssertShape rejects an assert.shape entry whose path is not a file
+// under the step's own outputs: — the same rule as assert.files, since a shape
+// is asserted on the same written file — or whose value is not a shape
+// ValidShapeExpr understands. Both are load errors: a misnamed path or an
+// unknown kind could never match on any run, against any output.
+// requireOutputCapturingKind rejects an assert.shape on anything but a task or
+// agent step — the only kinds that capture outputs: a shape to check.
+func requireOutputCapturingKind(label string, step *Step) error {
+	kind, ok := step.Kind()
+	if !ok {
+		return fmt.Errorf("%s: assert.shape needs a task or agent step; this step's kind is unrecognized", label)
+	}
+
+	if kind != StepKindTask && kind != StepKindAgent {
+		return fmt.Errorf("%s: assert.shape is only valid on a task or agent step, not %s — nothing else captures outputs to check", label, kind)
+	}
+
+	return nil
+}
+
+func (c *Config) validateAssertShape(label string, step *Step) error {
+	if step.Assert == nil || len(step.Assert.Shape) == 0 {
+		return nil
+	}
+
+	err := requireOutputCapturingKind(label, step)
+	if err != nil {
+		return err
+	}
+
+	outputs, err := c.stepOutputs(*step)
+	if err != nil {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+
+	declared := make(map[string]bool, len(outputs))
+	for _, name := range outputs {
+		declared[name] = true
+	}
+
+	paths := make([]string, 0, len(step.Assert.Shape))
+	for path := range step.Assert.Shape {
+		paths = append(paths, path)
+	}
+
+	sort.Strings(paths)
+
+	for _, path := range paths {
+		err := checkAssertShapePath(label, path, declared, outputs)
+		if err != nil {
+			return err
+		}
+
+		err = ValidShapeExpr(step.Assert.Shape[path])
+		if err != nil {
+			return fmt.Errorf("%s: assert.shape[%q]: %w", label, path, err)
+		}
+	}
+
+	return nil
+}
+
+// checkAssertShapePath holds one assert.shape key to the same artifact-path
+// rule assert.files uses: non-empty, artifact-relative, first component a
+// declared output, and a file inside it rather than the output directory.
+func checkAssertShapePath(label, path string, declared map[string]bool, outputs []string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("%s: assert.shape key must not be empty", label)
+	}
+
+	err := ValidateArtifactPath(path)
+	if err != nil {
+		return fmt.Errorf("%s: assert.shape[%q]: %w", label, path, err)
+	}
+
+	name, rest, hasRest := strings.Cut(path, "/")
+	if !declared[name] {
+		return fmt.Errorf("%s: assert.shape[%q] names artifact %q, which is not one of this step's outputs (%s)",
+			label, path, name, strings.Join(outputs, ", "))
+	}
+
+	if !hasRest || strings.TrimSpace(rest) == "" {
+		return fmt.Errorf("%s: assert.shape[%q] names the whole %q output, which is a directory — name a file inside it (%s/...)",
+			label, path, name, name)
 	}
 
 	return nil
