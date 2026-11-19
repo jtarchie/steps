@@ -54,13 +54,8 @@ type Store struct {
 	path       string
 	pipeline   string
 	pipelineID int64
-	// readOnly marks a handle obtained by RESOLVING a pipeline rather than
-	// registering one (OpenExisting). It changes nothing about what the ~60
-	// methods can do — Go cannot enforce that — and everything about Close,
-	// which otherwise compacts and checkpoints the file. A command whose whole
-	// contract is that it only asks must not change the bytes on disk, and
-	// must not take the write lock a live daemon is using.
-	readOnly bool
+	// skipsCompaction marks an OpenExisting handle: it still writes (approve, answer, release), but its Close must not compact or checkpoint the file under a live daemon's write lock, nor touch a file whose write bit is off when it only read.
+	skipsCompaction bool
 }
 
 // OpenStore opens (creating if necessary) the sqlite database at path, applies
@@ -87,10 +82,7 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 
 	id, err := initDB(context.Background(), held.db, path, pipelineName)
 	if err != nil {
-		if held.release() {
-			_ = held.reads.Close()
-			_ = held.db.Close()
-		}
+		_ = held.drop()
 
 		return nil, err
 	}
@@ -170,6 +162,7 @@ func initSchema(ctx context.Context, tx *sql.Tx, path string) error {
 // executor is what a query needs from either a connection or a transaction.
 type executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
@@ -267,8 +260,10 @@ var readPoolSize = max(4, runtime.GOMAXPROCS(0))
 // per CONNECTION and this pool is one per core: a page that misses is a pread
 // the OS page cache answers, where the default held up to readPoolSize copies
 // of it in this process's heap.
+//
+// query_only turns a write that strayed onto this pool into an error rather than a second writer racing the one connection db is.
 func openReadPool(path string) (*sql.DB, error) {
-	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=cache_size(-512)", readPoolSize)
+	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=cache_size(-512)&_pragma=query_only(1)", readPoolSize)
 }
 
 // openReadOnlyDB opens an existing file for a reader.
@@ -389,7 +384,7 @@ func (s *Store) Close() error {
 	// pages, the other rewrites the log — so a `steps runs` that ran them
 	// changed the file it was only asked to read, took the write lock a live
 	// daemon holds, and failed outright on a file with the write bit off.
-	if s.readOnly {
+	if s.skipsCompaction {
 		return s.Release()
 	}
 

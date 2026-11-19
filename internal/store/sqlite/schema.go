@@ -982,15 +982,6 @@ CREATE INDEX IF NOT EXISTS idx_run_placements_run ON run_placements(run_id, step
 -- node_hash is its last column, not a prefix.
 CREATE INDEX IF NOT EXISTS idx_run_placements_node ON run_placements(pipeline_id, node_hash);
 
--- Full agent conversation transcripts, one row per agent node, kept OUT of
--- nodes.result deliberately: result rides along on every node listing (the
--- CLI's node table, the web UI's node and run pages) and must stay bounded,
--- while a transcript is read on demand ("what did this step actually say and
--- do"). Same hash key as nodes; replaces on re-record like nodes does.
---
--- The largest single value the schema stores, and the one whose bound was
--- missing: internal/agent caps a single tool RESULT, but a conversation has
--- unboundedly many turns, so the row itself needs store.MaxTranscriptBytes.
 -- A browser signed in to the daemon (store.Accounts). Daemon-level, so no
 -- pipeline: a session is somebody's standing with the daemon. The token is
 -- never stored, only its digest, so a copy of this file signs nobody in.
@@ -1066,6 +1057,15 @@ CREATE TABLE IF NOT EXISTS activity (
 -- The SET NULL child key: without it every pipeline destroyed scans the log.
 CREATE INDEX IF NOT EXISTS idx_activity_pipeline ON activity(pipeline_id);
 
+-- Full agent conversation transcripts, one row per agent node, kept OUT of
+-- nodes.result deliberately: result rides along on every node listing (the
+-- CLI's node table, the web UI's node and run pages) and must stay bounded,
+-- while a transcript is read on demand ("what did this step actually say and
+-- do"). Same hash key as nodes; replaces on re-record like nodes does.
+--
+-- The largest single value the schema stores, and the one whose bound was
+-- missing: internal/agent caps a single tool RESULT, but a conversation has
+-- unboundedly many turns, so the row itself needs store.MaxTranscriptBytes.
 CREATE TABLE IF NOT EXISTS node_transcripts (
     pipeline_id INTEGER NOT NULL,
     hash       TEXT NOT NULL,

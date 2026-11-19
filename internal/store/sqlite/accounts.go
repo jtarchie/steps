@@ -58,10 +58,7 @@ func OpenAccounts(path string) (*Accounts, error) {
 		return tx.Commit()
 	}()
 	if err != nil {
-		if held.release() {
-			_ = held.reads.Close()
-			_ = held.db.Close()
-		}
+		_ = held.drop()
 
 		return nil, fmt.Errorf("could not open accounts in %q: %w", path, err)
 	}
@@ -75,11 +72,7 @@ func (a *Accounts) Close() error {
 		return nil
 	}
 
-	if a.held.release() {
-		return errors.Join(a.held.reads.Close(), a.held.db.Close())
-	}
-
-	return nil
+	return a.held.drop()
 }
 
 // CreateSession records a signed-in browser by its token's digest, and sweeps sessions that ended, which is the table's only bound: what is left is one row per browser still signed in.

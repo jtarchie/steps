@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -85,4 +86,12 @@ func (p *pools) release() bool {
 	delete(poolsByFile, p.key)
 
 	return true
+}
+
+func (p *pools) drop() error {
+	if !p.release() {
+		return nil
+	}
+
+	return errors.Join(p.reads.Close(), p.db.Close())
 }

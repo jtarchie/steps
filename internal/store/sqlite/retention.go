@@ -95,7 +95,7 @@ func (s *Store) pruneRuns(ctx context.Context, jobName string, limit int, keepRu
 		return err
 	}
 
-	prunedNodes, err := pruneNodes(ctx, tx, s.pipelineID, jobName, limit*store.NodesPerRetainedRun)
+	freedContent, err := pruneNodes(ctx, tx, s.pipelineID, jobName, limit*store.NodesPerRetainedRun)
 	if err != nil {
 		return err
 	}
@@ -105,12 +105,12 @@ func (s *Store) pruneRuns(ctx context.Context, jobName string, limit int, keepRu
 		return err
 	}
 
-	prunedRevisions, err := sweepAfterPrune(ctx, tx, s.pipelineID, prunedNodes)
+	prunedRevisions, err := sweepAfterPrune(ctx, tx, s.pipelineID, freedContent)
 	if err != nil {
 		return err
 	}
 
-	if nothingSwept(deleted, prunedNodes, prunedChains, prunedRevisions) {
+	if nothingSwept(deleted, len(freedContent) > 0, prunedChains, prunedRevisions) {
 		return nil
 	}
 
@@ -137,8 +137,8 @@ func nothingSwept(deletedRuns, prunedNodes, prunedChains, prunedRevisions bool) 
 // whether the revision sweep deleted anything, which its caller needs in
 // order to decide there is a transaction worth committing — a sweep whose
 // deletion was rolled back for want of a commit is a table that never shrinks.
-func sweepAfterPrune(ctx context.Context, tx *sql.Tx, pipelineID int64, prunedNodes bool) (bool, error) {
-	err := sweepAfterNodePrune(ctx, tx, pipelineID, prunedNodes)
+func sweepAfterPrune(ctx context.Context, tx *sql.Tx, pipelineID int64, freedContent []string) (bool, error) {
+	err := sweepAfterNodePrune(ctx, tx, pipelineID, freedContent)
 	if err != nil {
 		return false, err
 	}
@@ -151,15 +151,9 @@ func sweepAfterPrune(ctx context.Context, tx *sql.Tx, pipelineID int64, prunedNo
 	return pruneRevisions(ctx, tx, pipelineID)
 }
 
-// sweepAfterNodePrune runs the two whole-table passes that only make sense once
-// nodes have actually been deleted.
-//
-// Guarded rather than unconditional because the common case by far is a job with
-// fewer runs than its cap, and every build of it would otherwise take the
-// exclusive write lock (the DSN opens transactions IMMEDIATE) to rewrite nothing
-// while a `steps web` on the same file waits.
-func sweepAfterNodePrune(ctx context.Context, tx *sql.Tx, pipelineID int64, prunedNodes bool) error {
-	if !prunedNodes {
+// sweepAfterNodePrune is guarded because the common build is a job under its cap, which would otherwise pay a scan of the pipeline's nodes and a content sweep to change nothing (the write lock is already held: pruneRuns' transaction began IMMEDIATE).
+func sweepAfterNodePrune(ctx context.Context, tx *sql.Tx, pipelineID int64, freedContent []string) error {
+	if len(freedContent) == 0 {
 		return nil
 	}
 
@@ -168,7 +162,7 @@ func sweepAfterNodePrune(ctx context.Context, tx *sql.Tx, pipelineID int64, prun
 		return err
 	}
 
-	return pruneNodeContent(ctx, tx)
+	return pruneFreedContent(ctx, tx, freedContent)
 }
 
 // pruneRunRows deletes a job's runs past the cap, keeping the newest and
@@ -219,8 +213,7 @@ func pruneRunRows(
 	return affected > 0, nil
 }
 
-// pruneNodes bounds a job's merkle cache to keep entries, keeping the most
-// recently inserted, and reports whether any went.
+// pruneNodes bounds a job's merkle cache to keep entries, keeping the most recently inserted, and returns the content hashes of the nodes that went: the only node_content rows the sweep after it has reason to look at.
 //
 // rowid is insertion order — exact, monotonic, and needing no parsing. It
 // replaced a created_at comparison that had two problems: nodes are stamped to
@@ -249,10 +242,9 @@ func pruneRunRows(
 // agent spent is looking for. What those two tables hold is HISTORY, bounded by
 // the run cap; letting the CACHE's cap reach them made two bounds out of one.
 //
-// Both clauses are questions about SURVIVING runs only because pruneRunRows has
-// already run: a deleted run's placements and usage rows cascaded away with it.
-func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, keep int) (bool, error) {
-	result, err := tx.ExecContext(ctx, `
+// All three clauses are questions about SURVIVING runs only because pruneRunRows has already run: a deleted run's events, placements and usage rows cascaded away with it.
+func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, keep int) ([]string, error) {
+	freed, err := collect(ctx, tx, "the pruned nodes of "+jobName, `
 		DELETE FROM nodes
 		WHERE rowid IN (
 		      SELECT rowid FROM nodes WHERE pipeline_id = ? AND job_name = ?
@@ -273,17 +265,13 @@ func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName strin
 		      SELECT 1 FROM agent_usage u
 		      WHERE u.pipeline_id = nodes.pipeline_id AND u.node_hash = nodes.hash
 		  )
-	`, pipelineID, jobName, keep)
+		RETURNING content_hash
+	`, []any{pipelineID, jobName, keep}, scanString)
 	if err != nil {
-		return false, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
+		return nil, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
 	}
 
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
-	}
-
-	return affected > 0, nil
+	return freed, nil
 }
 
 // clearDanglingParents nulls a parent link that names no node.
@@ -366,11 +354,27 @@ func pruneJobRuns(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName str
 // anti-join must therefore stay pipeline-blind; narrowing it to this pipeline's
 // nodes would delete rows another pipeline still points at, which the RESTRICT
 // on that reference would turn into a failed prune.
+//
+// The whole table is Delete's sweep, because its cascade removed nodes this transaction never saw; a prune knows what it freed (pruneFreedContent).
 func pruneNodeContent(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `
 		DELETE FROM node_content
 		WHERE content_hash NOT IN (SELECT content_hash FROM nodes)
 	`)
+	if err != nil {
+		return fmt.Errorf("could not prune interned node content: %w", err)
+	}
+
+	return nil
+}
+
+// pruneFreedContent is pruneNodeContent narrowed to the content of the nodes this transaction just deleted, so a build that reaps a node no longer scans every pipeline's content; the anti-join stays pipeline-blind for pruneNodeContent's reason.
+func pruneFreedContent(ctx context.Context, tx *sql.Tx, freed []string) error {
+	_, err := tx.ExecContext(ctx, `
+		DELETE FROM node_content
+		WHERE content_hash IN (SELECT value FROM json_each(?))
+		  AND NOT EXISTS (SELECT 1 FROM nodes n WHERE n.content_hash = node_content.content_hash)
+	`, jsonList(freed))
 	if err != nil {
 		return fmt.Errorf("could not prune interned node content: %w", err)
 	}

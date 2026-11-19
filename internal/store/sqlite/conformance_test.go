@@ -77,3 +77,53 @@ func TestAccountsConformance(t *testing.T) {
 		}
 	})
 }
+
+// TestContentSweepConformance runs the narrowed node_content sweep's conformance test against this driver.
+func TestContentSweepConformance(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.db")
+
+	raw := func(t *testing.T, st store.Store) *Store {
+		t.Helper()
+
+		sqliteStore, ok := st.(*Store)
+		if !ok {
+			t.Fatalf("store is %T, want *Store", st)
+		}
+
+		return sqliteStore
+	}
+
+	storetest.RunContentSweep(t, func(t *testing.T, pipeline string) store.Store {
+		t.Helper()
+
+		st, err := OpenStore(path, pipeline)
+		if err != nil {
+			t.Fatalf("OpenStore(%q, %q): %v", path, pipeline, err)
+		}
+
+		return st
+	}, storetest.ContentProbe{
+		Plant: func(t *testing.T, st store.Store, contentHash string) {
+			t.Helper()
+
+			_, err := raw(t, st).db.ExecContext(t.Context(), `INSERT INTO node_content (content_hash, content) VALUES (?, '{}')`, contentHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+		},
+		Rows: func(t *testing.T, st store.Store, contentHash string) int {
+			t.Helper()
+
+			var count int
+
+			err := raw(t, st).db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM node_content WHERE content_hash = ?`, contentHash).Scan(&count)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			return count
+		},
+	})
+}
