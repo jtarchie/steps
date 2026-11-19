@@ -70,6 +70,30 @@ func TestAssertMismatch(t *testing.T) {
 	}
 }
 
+// TestAssertMismatchChecksShape is the task path's shape judge: a present, non-empty output in the wrong JSON structure fails the task.
+func TestAssertMismatchChecksShape(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	err := os.MkdirAll(filepath.Join(dir, "units"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "units", "index.json"), []byte(`{"intents":["a"]}`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert := config.Assert{Shape: map[string]string{"units/index.json": "array<string>"}}
+
+	err = assertMismatch(&assert, "", 0, dir)
+	if err == nil || !strings.Contains(err.Error(), "is not array<string>") {
+		t.Errorf("wrong-shape output passed: %v", err)
+	}
+}
+
 func TestAssertFilesMismatch(t *testing.T) {
 	t.Parallel()
 

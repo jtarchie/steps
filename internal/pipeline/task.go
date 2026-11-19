@@ -466,7 +466,7 @@ func runCaptured(ctx context.Context, runner shell.Runner, rt config.ResolvedTas
 
 // assertMismatch returns a reason when captured stdout/exit code/output files
 // don't satisfy assert, or nil when they match. Code is exact; Stdout is a
-// substring test; Files is checked against workspaceDir.
+// substring test; Files and Shape are checked against workspaceDir.
 func assertMismatch(assert *config.Assert, stdout string, exitCode int, workspaceDir string) error {
 	if assert.Code != nil && *assert.Code != exitCode {
 		return fmt.Errorf("assert.code: want %d, got %d", *assert.Code, exitCode)
@@ -476,8 +476,14 @@ func assertMismatch(assert *config.Assert, stdout string, exitCode int, workspac
 		return fmt.Errorf("assert.stdout: output does not contain %q", *assert.Stdout)
 	}
 
-	//nolint:wrapcheck // the message is already an assert.* mismatch reason; wrapping would only repeat the field name
-	return config.AssertFilesMismatch(assert.Files, workspaceDir)
+	err := config.AssertFilesMismatch(assert.Files, workspaceDir)
+	if err != nil {
+		//nolint:wrapcheck // the message is already an assert.* mismatch reason; wrapping would only repeat the field name
+		return err
+	}
+
+	//nolint:wrapcheck // same: AssertShapeMismatch already phrases the reason as an assert.shape mismatch
+	return config.AssertShapeMismatch(assert.Shape, workspaceDir)
 }
 
 // taskFailureOutput formats a failed run's verdict, exit code and streams

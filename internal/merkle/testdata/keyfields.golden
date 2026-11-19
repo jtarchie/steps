@@ -156,6 +156,9 @@
       "Files[0]"
     ],
     "nudge": true,
+    "shape": {
+      "Shape.key": "Shape.value"
+    },
     "stdout": "Stdout",
     "tool_calls": [
       {

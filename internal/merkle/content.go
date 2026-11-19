@@ -314,6 +314,13 @@ func assertContent(a *config.Assert) map[string]any {
 		content["files"] = config.StableStrings(a.Files)
 	}
 
+	// shape folds in like files: it changes the step's success criteria, so a
+	// run that added it must not reuse a cache entry from before. The map hashes
+	// deterministically because json.Marshal sorts its keys (see HashNode).
+	if len(a.Shape) > 0 {
+		content["shape"] = a.Shape
+	}
+
 	// tool_calls folds in only when set, like every other assert field: it
 	// changes the step's success criteria, so it must bust the cache, but an
 	// assert without it hashes exactly as before this field existed. Each
