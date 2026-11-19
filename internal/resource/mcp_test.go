@@ -462,9 +462,9 @@ func TestCheckVersionsMCPArgsTemplateSeesVersion(t *testing.T) {
 		"since": `{{ index .version "ts" | default "0" }}`,
 	}
 
-	cursor, err := ParseVersionJSON(`{"ts": 1699887654.001200}`)
+	cursor, err := DecodeVersion([]byte(`{"ts": 1699887654.001200}`))
 	if err != nil {
-		t.Fatalf("ParseVersionJSON: %v", err)
+		t.Fatalf("DecodeVersion: %v", err)
 	}
 
 	versions, err := CheckVersions(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}, Version: cursor})
@@ -517,7 +517,7 @@ func TestCheckVersionsMCPArgsTemplate(t *testing.T) {
 	// A non-string leaf is the tool's own type, not a string: `limit: 20`
 	// must arrive as a number. Asserted on the JSON spelling rather than the
 	// Go type, because versions are decoded with UseNumber (so an id wider
-	// than float64 keeps its digits — see decodeMapSlice) and a number is
+	// than float64 keeps its digits — see DecodeVersions) and a number is
 	// therefore a json.Number here, not a float64. What matters is that it
 	// goes out as 20 and not "20".
 	limit, err := json.Marshal(sent["limit"])

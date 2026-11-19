@@ -898,7 +898,7 @@ func recordedVersion(
 
 	encoded = last.Version
 
-	version, err = rsrc.ParseVersionJSON(string(encoded))
+	version, err = store.DecodeVersion(encoded)
 	if err != nil {
 		return "", nil, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}

@@ -135,7 +135,7 @@ func checkCursorFor(ctx context.Context, st store.Versions, name string) (map[st
 		return nil, nil //nolint:nilnil // absence is the meaning
 	}
 
-	cursor, err := rsrc.ParseVersionJSON(string(last.Version))
+	cursor, err := store.DecodeVersion(last.Version)
 	if err != nil {
 		return nil, fmt.Errorf("reading the check cursor for %q: %w", name, err)
 	}

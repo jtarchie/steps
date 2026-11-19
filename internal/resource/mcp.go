@@ -1,7 +1,6 @@
 package resource
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -173,7 +172,7 @@ func exactNumberData(data map[string]any) map[string]any {
 func exactNumbers(value any) any {
 	switch typed := value.(type) {
 	case json.Number:
-		// Already exact (decodeMapSlice read it with UseNumber). Returned
+		// Already exact (DecodeVersions read it with UseNumber). Returned
 		// as-is so its digits survive verbatim rather than being routed
 		// through float64 by the case below.
 		return typed
@@ -275,42 +274,13 @@ func firstParsableArray(content []sdkmcp.Content) ([]map[string]any, bool) {
 			continue
 		}
 
-		versions, err := decodeMapSlice([]byte(tc.Text))
+		versions, err := DecodeVersions([]byte(tc.Text))
 		if err == nil {
 			return versions, true
 		}
 	}
 
 	return nil, false
-}
-
-// decodeMapSlice parses a JSON array of objects with UseNumber, so an integer
-// wider than float64's 53 bits of mantissa keeps its exact digits.
-//
-// This is what makes exactNumbers' promise true rather than merely tidy. A
-// plain json.Unmarshal turns a Discord/Twitter-style snowflake id like
-// 1234567890123456789 into a float64 that cannot represent it, and every
-// later step — including exactNumbers — can only reformat the value it was
-// already given, so the tool receives a valid-looking but WRONG id. Reading
-// the digits as json.Number keeps them intact end to end.
-//
-// Note the limit of the fix: a tool answering with structuredContent rather
-// than a text block is decoded into `any` by the SDK itself before it reaches
-// this package, so its numbers are float64 by then and nothing here can
-// recover them. A tool with large ids should return them as JSON strings, or
-// as a text content block.
-func decodeMapSlice(data []byte) ([]map[string]any, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-
-	var versions []map[string]any
-
-	err := decoder.Decode(&versions)
-	if err != nil {
-		return nil, fmt.Errorf("not a JSON array of objects: %w", err)
-	}
-
-	return versions, nil
 }
 
 // convertToMapSlice round-trips sc through JSON to normalize it into
@@ -323,7 +293,7 @@ func convertToMapSlice(sc any) ([]map[string]any, error) {
 		return nil, fmt.Errorf("could not marshal structured content: %w", err)
 	}
 
-	versions, err := decodeMapSlice(data)
+	versions, err := DecodeVersions(data)
 	if err != nil {
 		return nil, fmt.Errorf("structured content is not a JSON array of objects: %w", err)
 	}
@@ -686,7 +656,7 @@ func firstParsableObject(content []sdkmcp.Content) (map[string]any, bool) {
 			continue
 		}
 
-		obj, err := decodeOutVersion([]byte(tc.Text))
+		obj, err := DecodeVersion([]byte(tc.Text))
 		if err == nil {
 			return obj, true
 		}
@@ -701,7 +671,7 @@ func convertToMap(v any) (map[string]any, error) {
 		return nil, fmt.Errorf("could not marshal: %w", err)
 	}
 
-	obj, err := decodeOutVersion(data)
+	obj, err := DecodeVersion(data)
 	if err != nil {
 		return nil, fmt.Errorf("not a JSON object: %w", err)
 	}
