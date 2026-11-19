@@ -78,8 +78,9 @@ func (s *Store) EnqueueResumeJob(ctx context.Context, jobName, reason, runID, by
 		WHERE NOT EXISTS (
 		    SELECT 1 FROM trigger_queue AS q
 		    WHERE q.pipeline_id = ? AND q.run_id = ?
-		      AND (q.status = 'pending' OR (q.status = 'running' AND q.started_at > (
-		          SELECT r.finished_at FROM runs AS r WHERE r.id = q.run_id AND r.pipeline_id = q.pipeline_id
+		      AND (q.status = 'pending' OR (q.status = 'running' AND EXISTS (
+		          SELECT 1 FROM runs AS r WHERE r.id = q.run_id AND r.pipeline_id = q.pipeline_id
+		            AND (r.finished_at IS NULL OR q.started_at > r.finished_at)
 		      )))
 		)
 	`, s.pipelineID, jobName, reason, by, runID, nowNano(), s.pipelineID, runID)

@@ -779,6 +779,11 @@ func resumeAsked(
 			return ctx, provider, "", fmt.Errorf("scheduler: run %s: %w", runID, err)
 		}
 
+		// A second press can slip in while the first continues the run; once that run succeeds there is nothing left to resume, and continuing it would build it again.
+		if found && run.Status == store.RunSucceeded {
+			return ctx, provider, "", fmt.Errorf("scheduler: run %s already succeeded: %w", runID, ErrNotResumable)
+		}
+
 		asked = found && run.Status == store.RunFailed
 	}
 

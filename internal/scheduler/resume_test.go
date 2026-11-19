@@ -111,6 +111,54 @@ jobs:
 	requireNotHeld(t, st, "a refused resume ran nothing for the breaker to count")
 }
 
+// A resume row whose run succeeded is a second press that slipped in while the first was continuing it; claiming it must not put a finished run back to running and build it again.
+func TestAResumeOfASucceededRunIsRefused(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tally := filepath.Join(dir, "tally")
+
+	runner, target, st := drainable(t, dir, `
+jobs:
+  - name: build
+    plan:
+      - task: first
+        inputs: []
+        run: echo first >> `+tally+`
+`)
+
+	ctx := context.Background()
+
+	interruptRun(t, st, "DONE0001", dir)
+
+	err := st.FinishRun(ctx, "DONE0001", store.RunSucceeded)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = st.CompleteJob(ctx, 1, store.QueueSucceeded, nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	err = st.EnqueueResumeJob(ctx, "build", "resume (web)", "DONE0001", "")
+	if err != nil {
+		t.Fatalf("EnqueueResumeJob: %v", err)
+	}
+
+	runner.DrainOne(ctx, target)
+
+	_, err = os.Stat(tally)
+	if !os.IsNotExist(err) {
+		t.Errorf("a step ran (%v): a succeeded run was built again", err)
+	}
+
+	runs, err := st.ListRuns(ctx, "build", 0)
+	if err != nil || len(runs) != 1 || runs[0].Status != store.RunSucceeded {
+		t.Errorf("runs = %+v (%v), want the one run, still succeeded", runs, err)
+	}
+}
+
 type unreadableRuns struct{ store.Store }
 
 func (unreadableRuns) FindRunRow(context.Context, string) (store.RunRow, bool, error) {

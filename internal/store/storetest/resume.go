@@ -361,6 +361,49 @@ func (s suite) TestAPersonsResumeIsNotQueuedAgainWhileItsClaimStarts(t *testing.
 	}
 }
 
+// Once the claim reaches ResumeRun the run is back in flight with no finished_at; a press read as failed just before must still not queue a second resume, which would re-run the run after it succeeds.
+func (s suite) TestAPersonsResumeIsNotQueuedAgainOnceTheRunIsBackInFlight(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	startClaimedRun(t, st, "INFLIGHT")
+
+	err := st.FinishRun(ctx, "INFLIGHT", store.RunFailed)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = st.SyncJobLimits(ctx, nil, map[string]int{"build": 10})
+	if err != nil {
+		t.Fatalf("SyncJobLimits: %v", err)
+	}
+
+	err = st.EnqueueResumeJob(ctx, "build", "resume (web)", "INFLIGHT", "")
+	if err != nil {
+		t.Fatalf("EnqueueResumeJob: %v", err)
+	}
+
+	if got := claimResume(t, st); got != "INFLIGHT" {
+		t.Fatalf("claim resumed %q, want INFLIGHT", got)
+	}
+
+	err = st.ResumeRun(ctx, "INFLIGHT", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("ResumeRun: %v", err)
+	}
+
+	err = st.EnqueueResumeJob(ctx, "build", "resume (web)", "INFLIGHT", "")
+	if err != nil {
+		t.Fatalf("EnqueueResumeJob: %v", err)
+	}
+
+	if resumed := claimEveryResume(t, st); len(resumed) != 0 {
+		t.Errorf("claims resumed %q while the run was back in flight, want none", resumed)
+	}
+}
+
 // claimEveryResume claims until the queue is empty and reports the runs the claims resume.
 func claimEveryResume(t *testing.T, st store.Store) []string {
 	t.Helper()
