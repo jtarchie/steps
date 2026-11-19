@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -159,6 +160,55 @@ func TestEndToEndLinearUpdateRefusesWhatLinearDoesNotHave(t *testing.T) {
 	}
 }
 
+// TestEndToEndLinearIssuesProjectIsRefusedByName: a project resolves as states and labels do, by name without regard to case or by id, and one the team does not have fails the check by name rather than matching nothing.
+func TestEndToEndLinearIssuesProjectIsRefusedByName(t *testing.T) {
+	t.Parallel()
+
+	for project, want := range map[string]string{
+		"Platform":   "",
+		"platform":   "",
+		"pj-plat":    "",
+		"Platforms":  `source.project: team ENG has no project named "Platforms"`,
+		"Mobile App": `source.project: team ENG has no project named "Mobile App"`,
+	} {
+		t.Run(project, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newFakeLinear(t)
+			fake.add(fakeLinearIssue{Identifier: "ENG-12", Title: "In the project", Project: "pj-plat"})
+			fake.add(fakeLinearIssue{Identifier: "ENG-13", Title: "Elsewhere", Project: "pj-web", CreatedAt: "2026-10-02T09:00:00.000Z"})
+
+			path := writePipeline(t, t.TempDir(), `
+resources:
+- name: ticket
+  type: linear-issues
+  source:
+    team: ENG
+    project: `+project+`
+    endpoint: `+fake.URL()+`
+jobs:
+- name: draft
+  plan:
+  - get: ticket
+  - task: read
+    inputs: [ticket]
+    run: cat ticket/issue.identifier
+    assert:
+      stdout: ENG-12
+`)
+
+			err := stepsRun(t, []string{"run", path, "--job", "draft"})
+
+			switch {
+			case want == "" && err != nil:
+				t.Fatalf("run = %v, want ENG-12, the one issue in the project", err)
+			case want != "" && (err == nil || !strings.Contains(err.Error(), want)):
+				t.Fatalf("run = %v, want it to say %q", err, want)
+			}
+		})
+	}
+}
+
 // TestEndToEndLinearCommentByIdentifier: a put with no linear-issues get, as an acceptance job reading its issue from a release, names the issue with params.issue, resolved to Linear's uuid by the type.
 func TestEndToEndLinearCommentByIdentifier(t *testing.T) {
 	t.Parallel()
@@ -265,4 +315,26 @@ func TestWatchLinearIssuesBuildOncePerIssueAndOncePerMoveBack(t *testing.T) {
 	if team, _ := filter["team"].(map[string]any); team["id"] == nil {
 		t.Errorf("filter = %v, want it scoped to the team by id", filter)
 	}
+}
+
+// TestWatchLinearIssuesRetryOnALongHistory: an issue with more history than the check reads, here label edits, still builds again when moved out of Todo and back. The fake answers history as Linear's schema documents it, so a check that read the oldest entries would see only the first move into Todo and never the retry.
+func TestWatchLinearIssuesRetryOnALongHistory(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeLinear(t)
+	fake.add(fakeLinearIssue{Identifier: "ENG-9", Title: "Long-lived", State: "st-backlog"})
+	fake.move("ENG-9", "st-todo", "2026-10-01T10:00:00.000Z")
+
+	for minute := range 30 {
+		fake.relabel("ENG-9", fmt.Sprintf("2026-10-02T09:%02d:00.000Z", minute))
+	}
+
+	fixture := newWatchFixture(t, strings.ReplaceAll(linearWatchPipeline, "ENDPOINT", fake.URL()))
+	fixture.resources = []string{"ticket"}
+	fixture.coldStart(t)
+
+	fake.move("ENG-9", "st-prog", "2026-10-03T09:00:00.000Z")
+	fake.move("ENG-9", "st-todo", "2026-10-03T10:00:00.000Z")
+	fixture.watch(t)
+	fixture.assertDid(t, "ENG-9")
 }

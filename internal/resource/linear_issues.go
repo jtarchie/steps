@@ -16,7 +16,7 @@ import (
 const (
 	linearPageSize   = 100
 	linearIssueLimit = 1000
-	// linearHistoryDepth is how many history entries each issue's check reads to find when it last entered a filter state.
+	// linearHistoryDepth is how many history entries each issue's check reads to find when it last entered a filter state: the newest ones, since Linear's schema documents history(first:, orderBy: createdAt) as newest first and history(last:) as the oldest.
 	linearHistoryDepth = 20
 )
 
@@ -41,10 +41,17 @@ const linearLabelsQuery = `query($team: ID!, $first: Int!, $after: String) {
   }
 }`
 
+// linearProjectsQuery is the projects of a team a source's project names, by id or by name without regard to case, as states and labels match; first: 2 is enough to tell one from several.
+const linearProjectsQuery = `query($team: ID!, $id: ID!, $name: String!) {
+  projects(filter: {accessibleTeams: {some: {id: {eq: $team}}}, or: [{id: {eq: $id}}, {name: {eqIgnoreCase: $name}}]}, first: 2) {
+    nodes { id name }
+  }
+}`
+
 const linearIssuesQuery = `query($filter: IssueFilter, $first: Int!, $after: String, $history: Int!, $withHistory: Boolean!) {
   issues(filter: $filter, first: $first, after: $after) {
     pageInfo { hasNextPage endCursor }
-    nodes { identifier createdAt history(first: $history) @include(if: $withHistory) { nodes { createdAt toState { id type } } } }
+    nodes { identifier createdAt history(first: $history, orderBy: createdAt) @include(if: $withHistory) { nodes { createdAt toState { id type } } } }
   }
 }`
 
@@ -143,6 +150,31 @@ func (c *linearClient) labelsOf(ctx context.Context, teamID string) ([]linearLab
 	}
 }
 
+// projectID resolves a project name or id to the one project of team it names, refusing one the team does not have by name rather than matching nothing.
+func (c *linearClient) projectID(ctx context.Context, team linearTeam, project string) (string, error) {
+	var answer struct {
+		Projects struct {
+			Nodes []struct {
+				ID string `json:"id"`
+			} `json:"nodes"`
+		} `json:"projects"`
+	}
+
+	err := c.query(ctx, linearProjectsQuery, map[string]any{"team": team.ID, "id": project, "name": project}, &answer)
+	if err != nil {
+		return "", err
+	}
+
+	switch len(answer.Projects.Nodes) {
+	case 1:
+		return answer.Projects.Nodes[0].ID, nil
+	case 0:
+		return "", fmt.Errorf("source.project: team %s has no project named %q", team.Key, project)
+	default:
+		return "", fmt.Errorf("source.project: %q names more than one of team %s's projects; use its id", project, team.Key)
+	}
+}
+
 // stateIDs resolves state names in team to ids, refusing a name the team does not have by name rather than matching nothing.
 func stateIDs(team linearTeam, names []string) ([]string, error) {
 	ids := make([]string, 0, len(names))
@@ -185,7 +217,7 @@ func labelIDs(field string, labels []linearLabel, names []string) ([]string, err
 }
 
 // linearFilter is the IssueFilter for a source, its names already resolved.
-func linearFilter(source config.LinearIssuesSource, team linearTeam, stateIDs, labelIDs []string) map[string]any {
+func linearFilter(source config.LinearIssuesSource, team linearTeam, stateIDs, labelIDs []string, projectID string) map[string]any {
 	filter := map[string]any{"team": map[string]any{"id": map[string]any{"eq": team.ID}}}
 
 	switch {
@@ -204,8 +236,8 @@ func linearFilter(source config.LinearIssuesSource, team linearTeam, stateIDs, l
 		filter["and"] = all
 	}
 
-	if source.Project != "" {
-		filter["project"] = map[string]any{"or": []map[string]any{{"id": map[string]any{"eq": source.Project}}, {"name": map[string]any{"eq": source.Project}}}}
+	if projectID != "" {
+		filter["project"] = map[string]any{"id": map[string]any{"eq": projectID}}
 	}
 
 	switch source.Assignee {
@@ -245,7 +277,16 @@ func (c *linearClient) sourceFilter(ctx context.Context, source config.LinearIss
 		}
 	}
 
-	return linearFilter(source, team, states, labels), states, nil
+	var project string
+
+	if source.Project != "" {
+		project, err = c.projectID(ctx, team, source.Project)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return linearFilter(source, team, states, labels, project), states, nil
 }
 
 type linearIssueNode struct {

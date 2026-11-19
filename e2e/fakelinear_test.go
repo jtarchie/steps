@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,11 +25,14 @@ type fakeLinearComment struct {
 
 type fakeLinearEntry struct {
 	CreatedAt string
-	ToState   string // a state id
+	ToState   string // a state id; empty for a change that moved no state
 }
+
+type fakeLinearProject struct{ Name, Team string }
 
 type fakeLinearIssue struct {
 	Identifier, Title, Description, Team, State, Branch string
+	Project                                             string   // a project id
 	Labels                                              []string // label ids
 	CreatedAt                                           string
 	History                                             []fakeLinearEntry
@@ -41,6 +46,7 @@ type fakeLinear struct {
 	mu       sync.Mutex
 	states   []fakeLinearState
 	labels   map[string]string // id → name; "team" scope is the one team, workspace labels start ws-
+	projects map[string]fakeLinearProject
 	issues   []*fakeLinearIssue
 	posted   []string // "<identifier>: <body>"
 	updates  []map[string]any
@@ -60,6 +66,9 @@ func newFakeLinear(t *testing.T) *fakeLinear {
 			{"st-prog", "In Progress", "started"}, {"st-done", "Done", "completed"},
 		},
 		labels: map[string]string{"lb-ready": "agent-ready", "lb-bug": "bug", "ws-urgent": "urgent"},
+		projects: map[string]fakeLinearProject{
+			"pj-plat": {"Platform", "tm-eng"}, "pj-web": {"Web", "tm-eng"}, "pj-mobile": {"Mobile App", "tm-other"},
+		},
 		nextID: 100,
 	}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.serve))
@@ -94,6 +103,13 @@ func (f *fakeLinear) move(identifier, state, at string) {
 	f.edit(identifier, func(issue *fakeLinearIssue) {
 		issue.State = state
 		issue.History = append(issue.History, fakeLinearEntry{CreatedAt: at, ToState: state})
+	})
+}
+
+// relabel records a history entry that moves no state, as adding a label does, at the time given.
+func (f *fakeLinear) relabel(identifier, at string) {
+	f.edit(identifier, func(issue *fakeLinearIssue) {
+		issue.History = append(issue.History, fakeLinearEntry{CreatedAt: at})
 	})
 }
 
@@ -243,10 +259,12 @@ func (f *fakeLinear) answer(query string, vars map[string]any) (map[string]any, 
 		return f.updateIssue(vars)
 	case strings.Contains(query, "teams(filter"):
 		return f.teams(vars), ""
+	case strings.Contains(query, "projects(filter"):
+		return f.projectNodes(query, vars), ""
 	case strings.Contains(query, "issueLabels("):
 		return f.labelNodes(), ""
 	case strings.Contains(query, "issues(filter"):
-		return f.listIssues(vars), ""
+		return f.listIssues(query, vars)
 	case strings.Contains(query, "comments(first"):
 		return f.commentsOf(vars), ""
 	case strings.Contains(query, "branchName"):
@@ -288,6 +306,29 @@ func (f *fakeLinear) labelNodes() map[string]any {
 	return map[string]any{"issueLabels": map[string]any{"nodes": nodes}}
 }
 
+// projectNodes answers the project lookup the finder sends, honoring the two clauses a wrong query would lose: the scope to the team, and the name compared with or without regard to case.
+func (f *fakeLinear) projectNodes(query string, vars map[string]any) map[string]any {
+	team, _ := vars["team"].(string)
+	id, _ := vars["id"].(string)
+	name, _ := vars["name"].(string)
+	scoped := strings.Contains(query, "accessibleTeams: {some: {id: {eq: $team}}}")
+	sameName := func(a, b string) bool { return a == b }
+
+	if strings.Contains(query, "name: {eqIgnoreCase: $name}") {
+		sameName = strings.EqualFold
+	}
+
+	nodes := []map[string]any{}
+
+	for pid, project := range f.projects {
+		if (!scoped || project.Team == team) && (pid == id || sameName(project.Name, name)) {
+			nodes = append(nodes, map[string]any{"id": pid, "name": project.Name})
+		}
+	}
+
+	return map[string]any{"projects": map[string]any{"nodes": nodes}}
+}
+
 func (f *fakeLinear) stateByID(id string) fakeLinearState {
 	for _, state := range f.states {
 		if state.ID == id {
@@ -298,7 +339,7 @@ func (f *fakeLinear) stateByID(id string) fakeLinearState {
 	return fakeLinearState{}
 }
 
-// matches applies the filter the finder sends: the team, a state by id or type, every label of the and: list.
+// matches applies the filter the finder sends: the team, a state by id or type, a project by id, every label of the and: list.
 func (f *fakeLinear) matches(issue *fakeLinearIssue, filter map[string]any) bool {
 	if team, _ := filter["team"].(map[string]any); team != nil && eqOf(team["id"]) != issue.Team {
 		return false
@@ -314,15 +355,17 @@ func (f *fakeLinear) matches(issue *fakeLinearIssue, filter map[string]any) bool
 		}
 	}
 
-	all, _ := filter["and"].([]any)
-	for _, clause := range all {
-		wanted := eqOf(clause.(map[string]any)["labels"].(map[string]any)["some"].(map[string]any)["id"])
-		if !slices.Contains(issue.Labels, wanted) {
-			return false
-		}
+	if project, _ := filter["project"].(map[string]any); project != nil && eqOf(project["id"]) != issue.Project {
+		return false
 	}
 
-	return true
+	all, _ := filter["and"].([]any)
+
+	return !slices.ContainsFunc(all, func(clause any) bool {
+		wanted := eqOf(clause.(map[string]any)["labels"].(map[string]any)["some"].(map[string]any)["id"])
+
+		return !slices.Contains(issue.Labels, wanted)
+	})
 }
 
 func eqOf(node any) string {
@@ -348,10 +391,14 @@ func inOf(node any) ([]string, bool) {
 	return out, true
 }
 
-func (f *fakeLinear) listIssues(vars map[string]any) map[string]any {
+func (f *fakeLinear) listIssues(query string, vars map[string]any) (map[string]any, string) {
 	filter, _ := vars["filter"].(map[string]any)
-	depth, _ := vars["history"].(float64)
 	withHistory, _ := vars["withHistory"].(bool)
+
+	window, problem := historyWindow(query, vars)
+	if problem != "" {
+		return nil, problem
+	}
 
 	nodes := []map[string]any{}
 
@@ -364,9 +411,14 @@ func (f *fakeLinear) listIssues(vars map[string]any) map[string]any {
 
 		history := []map[string]any{}
 
-		for j := len(issue.History) - 1; j >= 0 && float64(len(history)) < depth; j-- {
-			state := f.stateByID(issue.History[j].ToState)
-			history = append(history, map[string]any{"createdAt": issue.History[j].CreatedAt, "toState": map[string]any{"id": state.ID, "type": state.Type}})
+		for _, entry := range window(issue.History) {
+			node := map[string]any{"createdAt": entry.CreatedAt, "toState": nil}
+			if entry.ToState != "" {
+				state := f.stateByID(entry.ToState)
+				node["toState"] = map[string]any{"id": state.ID, "type": state.Type}
+			}
+
+			history = append(history, node)
 		}
 
 		node := map[string]any{"identifier": issue.Identifier, "createdAt": issue.CreatedAt}
@@ -377,7 +429,57 @@ func (f *fakeLinear) listIssues(vars map[string]any) map[string]any {
 		nodes = append(nodes, node)
 	}
 
-	return map[string]any{"issues": map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}, "nodes": nodes}}
+	return map[string]any{"issues": map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}, "nodes": nodes}}, ""
+}
+
+var historyArgs = regexp.MustCompile(`history\(([^)]*)\)`)
+
+// historyWindow is which entries an issue's history(...) answers, as Linear's schema documents the connection: ordered by createdAt unless orderBy says otherwise, newest first with first (50 when neither is given), oldest first with last. Entries are kept oldest first, the order they happened.
+func historyWindow(query string, vars map[string]any) (func([]fakeLinearEntry) []fakeLinearEntry, string) {
+	args := map[string]string{}
+
+	if match := historyArgs.FindStringSubmatch(query); match != nil {
+		for arg := range strings.SplitSeq(match[1], ",") {
+			name, value, _ := strings.Cut(arg, ":")
+			args[strings.TrimSpace(name)] = strings.TrimSpace(value)
+		}
+	}
+
+	if order := args["orderBy"]; order != "" && order != "createdAt" {
+		return nil, "fake Linear: history ordered by " + order + " is not modelled"
+	}
+
+	count := func(value string) int {
+		if name, ok := strings.CutPrefix(value, "$"); ok {
+			n, _ := vars[name].(float64)
+
+			return int(n)
+		}
+
+		n, _ := strconv.Atoi(value)
+
+		return n
+	}
+
+	if last, ok := args["last"]; ok {
+		n := count(last)
+
+		return func(entries []fakeLinearEntry) []fakeLinearEntry {
+			return entries[:min(n, len(entries))]
+		}, ""
+	}
+
+	n := 50
+	if first, ok := args["first"]; ok {
+		n = count(first)
+	}
+
+	return func(entries []fakeLinearEntry) []fakeLinearEntry {
+		newest := slices.Clone(entries[max(0, len(entries)-n):])
+		slices.Reverse(newest)
+
+		return newest
+	}, ""
 }
 
 func (f *fakeLinear) find(vars map[string]any) *fakeLinearIssue {

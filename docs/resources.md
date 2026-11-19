@@ -1185,7 +1185,7 @@ jobs:
 | `states` | no | state names in that team, any of which matches. A name the team does not have fails the check by name rather than matching nothing |
 | `state_types` | no | Linear's fixed categories (`triage`, `backlog`, `unstarted`, `started`, `completed`, `canceled`), for a pipeline that does not want to name a team's custom states. Not with `states` |
 | `labels` | no | label names that must all be on the issue, team or workspace labels, matched without regard to case |
-| `project` | no | a project name or id |
+| `project` | no | a project of that team, by name (matched without regard to case) or id. One the team does not have fails the check by name rather than matching nothing |
 | `assignee` | no | `@me`, or a user id. Not an email: that would put a person's identifier in pipeline YAML |
 | `token_env`, `endpoint` | no | as above |
 
@@ -1213,7 +1213,7 @@ jobs:
     outcome: succeeded
 ```
 
-**The version is `{identifier, entered_at}` when `states` or `state_types` is set, and `{identifier}` when neither is.** `entered_at` is when the issue last moved into one of the filter states, read from its history in the same query. That is a deliberate departure from Concourse, whose versions name a thing and nothing about it, made for the reason [`github-issues`](#github-issues-a-labeled-issue-as-a-trigger) carries `labeled_at`: in Linear the state is the request for work. So **moving an issue out of `Todo` and back asks for the work again**, which is how a person retries from Linear's own board without touching steps. Editing the title or description, or commenting, is not a new version. The check reads the last twenty history entries of each issue; one moved more often than that since it entered the state, or created straight into it, uses the time it was created instead, and comes back as a new version at most once.
+**The version is `{identifier, entered_at}` when `states` or `state_types` is set, and `{identifier}` when neither is.** `entered_at` is when the issue last moved into one of the filter states, read from its history in the same query. That is a deliberate departure from Concourse, whose versions name a thing and nothing about it, made for the reason [`github-issues`](#github-issues-a-labeled-issue-as-a-trigger) carries `labeled_at`: in Linear the state is the request for work. So **moving an issue out of `Todo` and back asks for the work again**, which is how a person retries from Linear's own board without touching steps. Editing the title or description, or commenting, is not a new version. The check reads the newest twenty history entries of each issue; one with more history than that since it entered the state (a label edit is an entry too), or created straight into it, uses the time it was created instead, and comes back as a new version at most once.
 
 The check is a paginated query reported oldest first by creation, and **fails past 1,000 matching issues** rather than truncating, since a silently shortened list is a version that never builds. Narrow the source if it does.
 
