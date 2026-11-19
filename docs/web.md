@@ -656,6 +656,24 @@ steps runs resume  -p app 46UMHVPYRA6YHB7M           # continue a failed run fro
 
 Follow what you queued with `steps runs follow -p app --job build`.
 
+### A one-off from a file
+
+`steps run` with **`--target`** hands a job from a pipeline file to a daemon instead of running it here, like Concourse's `fly execute`, and follows it from your terminal:
+
+```bash
+steps run ci.yml --job build --target http://127.0.0.1:8088
+steps run ci.yml --job build --target http://alex:$(cat .steps/web-password)@ci.example.com:8088
+```
+
+- The daemon validates the file as a set would, on its own machine, and serves it under a pipeline it names itself (`one-off.<random>`), so a one-off can never replace a pipeline you set. That pipeline is not polled: only the job you named runs, never what a `trigger: true` resource would start.
+- The run is the daemon's — its workers, its logins, its history and its run page, which the terminal prints a link to. Ctrl-C detaches and the run goes on; the detach line names the `steps runs follow --target` that reattaches.
+- Ten minutes after its last run finishes, the daemon forgets the one-off pipeline and everything it recorded. A restart in between resumes its run and still forgets it after.
+- It needs the **admin** role, because it is arbitrary commands on the daemon's machine — what a set is. Names starting `one-off.` are the daemon's own: a set or rename onto one is refused.
+- Only the file and its `run_file:` includes travel. A `get` of a path on your machine (`uri: /Users/...`) cannot run on a daemon on another host. `--resume`, `--replay`, `--rerun`, `--pin`, `--force` and `--db` do not apply.
+- `--target` is read from the flag only, never from `STEPS_TARGET`: exported for the control verbs, it would quietly send every local run away.
+
+**`steps runs follow --target <daemon> -p <name> [run]`** follows a run through the daemon's API rather than the state file, which is how a daemon on another host is followed. It reads one page of events at a time, and each page asks the daemon's access rules again — a pipeline's `access:` hides those reads exactly as it hides its pages.
+
 ## Aborting a run
 
 Stopping one run leaves the daemon and every other run alone:
@@ -841,7 +859,8 @@ They read the database directly rather than going through the daemon, so they
 work against a stopped one — and they take `--db` when it is not the default.
 `steps run`, `steps test`, `steps validate` and `steps plan` still take a file
 path and still default to `.steps/<filename>.db` beside it: those are the local
-commands, and a local command has a file.
+commands, and a local command has a file. (`steps run --target` sends that file
+to a daemon instead; see [A one-off from a file](#a-one-off-from-a-file).)
 
 Run ids stay globally unique, but `--resume` and `--replay` still refuse an id
 belonging to a different pipeline in the same file: continuing another

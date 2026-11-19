@@ -46,6 +46,12 @@ func (f *fakeManager) Rename(_ context.Context, from, to string) error {
 	return f.otherErr
 }
 
+func (f *fakeManager) OneOff(_ context.Context, req OneOffRequest) (OneOffResult, error) {
+	f.set = append(f.set, "one-off:"+req.Job)
+
+	return OneOffResult{Pipeline: "one-off.x", Job: req.Job}, f.setErr
+}
+
 // managedServer is a daemon as it starts: a manager attached, nothing served.
 func managedServer(t *testing.T) (*Server, *fakeManager) {
 	t.Helper()

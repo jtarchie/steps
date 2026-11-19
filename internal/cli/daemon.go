@@ -50,6 +50,10 @@ type daemon struct {
 	spared []string
 	// releaseWorkers gives back what the shared registry still keeps warm; Close runs it after every loop that could hold a machine is gone.
 	releaseWorkers func()
+	// oneOffGrace is how long a finished one-off stays served, so a terminal that dropped can reconnect and a browser can read the end; a field so a test can shorten it.
+	oneOffGrace time.Duration
+	// reaping is every one-off destroy in flight, which runs outside the loops it tears down; Close waits for them.
+	reaping sync.WaitGroup
 	// Embedded so the daemon IS a web.Authorizer, which is how the server finds one; see daemon_login.go and daemon_mcp.go.
 	*logins
 	*probes
@@ -123,6 +127,7 @@ func newDaemon(
 		served:         map[string]*servedPipeline{},
 		swept:          map[string]bool{},
 		releaseWorkers: releaseWorkers,
+		oneOffGrace:    10 * time.Minute,
 		logins:         newLogins(base),
 		probes:         newProbes(base),
 	}
@@ -274,6 +279,10 @@ func (d *daemon) restoreLocked(ctx context.Context, name, from string) error {
 //
 //nolint:contextcheck // as restore: the validation reads the daemon's context on purpose, and opening a store takes none
 func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.SetResult, error) {
+	if isOneOff(name) {
+		return web.SetResult{}, errOneOffName(name)
+	}
+
 	// Before the lock: validation reads no served state, and a slow one must not stall every other verb.
 	cfg, err := d.accept(name, req.Source, convertIncludes[string](req.Includes))
 	if err != nil {
@@ -537,17 +546,26 @@ func (d *daemon) start(
 		d.runner.DrainPipeline(loopCtx, target.Pipeline)
 	}()
 
-	go func() {
-		defer loops.Done()
+	if isOneOff(name) {
+		// No poll: a one-off runs the job it was handed, never what its resources would trigger.
+		go func() {
+			defer loops.Done()
 
-		// The METHOD, not its result: a later set swaps the configuration under this loop, and a value would pin it to whatever was set first.
-		pollCtx := d.checks.Context(outsideRuns)
+			d.reapWhenDone(loopCtx, st, name)
+		}()
+	} else {
+		go func() {
+			defer loops.Done()
 
-		pollErr := trigger.Poll(pollCtx, target.Config, st, d.interval, checks)
-		if pollErr != nil {
-			slog.ErrorContext(loopCtx, "web.poll_stopped", "pipeline", name, "error", pollErr)
-		}
-	}()
+			// The METHOD, not its result: a later set swaps the configuration under this loop, and a value would pin it to whatever was set first.
+			pollCtx := d.checks.Context(outsideRuns)
+
+			pollErr := trigger.Poll(pollCtx, target.Config, st, d.interval, checks)
+			if pollErr != nil {
+				slog.ErrorContext(loopCtx, "web.poll_stopped", "pipeline", name, "error", pollErr)
+			}
+		}()
+	}
 
 	d.served[name] = &servedPipeline{
 		target: target,
@@ -583,6 +601,11 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	return d.destroyLocked(ctx, name)
+}
+
+// destroyLocked is Destroy under a d.mu the caller already holds.
+func (d *daemon) destroyLocked(ctx context.Context, name string) error {
 	if _, broken := d.server.BrokenReason(name); broken {
 		return d.destroyBroken(ctx, name)
 	}
@@ -682,6 +705,13 @@ func (d *daemon) detach(name string) (*servedPipeline, error) {
 
 // Close stops every pipeline's loops and releases what they held.
 func (d *daemon) Close() {
+	d.closeServed()
+
+	// After the lock is let go, since a reap waits on it; one that gets it now finds nothing served and does nothing.
+	d.reaping.Wait()
+}
+
+func (d *daemon) closeServed() {
 	// First, and outside the verbs' lock: a login waits on a browser, not on a pipeline, and its goroutine has to be gone before the process is.
 	d.stop()
 	d.stopProbes()

@@ -1,13 +1,27 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"regexp"
 	"testing"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/jtarchie/steps/internal/events"
 )
+
+// A daemon followed over HTTP has no spend to read, so the live view it draws must finish an agent step without asking for one.
+func TestALiveViewWithNoSpendFinishesAnAgentStep(t *testing.T) {
+	t.Parallel()
+
+	_, live, stop := newLive(t.Context(), &bytes.Buffer{}, nil)
+	defer stop()
+
+	live.Event(events.Event{Type: events.TypeStepStarted, RunID: "R", StepID: 1, StepKind: "agent", StepName: "review"})
+	live.Event(events.Event{Type: events.TypeStepFinished, RunID: "R", StepID: 1, StepKind: "agent", StepName: "review", Status: "succeeded"})
+}
 
 // TestProgressAutoIsPlainOffATerminal: go test's stdout is not a terminal, which is exactly the case auto exists for — a pipe, a CI log, an agent calling steps must get lines, never cursor movement. The explicit modes win either way.
 func TestProgressAutoIsPlainOffATerminal(t *testing.T) {

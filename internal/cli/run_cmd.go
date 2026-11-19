@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/web"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -33,6 +35,65 @@ type RunCmd struct {
 	Replay        string            `help:"fork a recorded run and re-run it from --from onward"                                                                    name:"replay"`
 	From          string            `help:"with --replay, the step name to re-run from"                                                                             name:"from"`
 	Rerun         string            `help:"run a recorded run again against the versions it was created with"                                                       name:"rerun"`
+	// No STEPS_TARGET: an operator who keeps one exported for the control verbs would have every local run silently leave the machine.
+	Target string `help:"run the job on this steps web daemon instead of here, and follow it; optionally http://user:password@host" name:"target"`
+}
+
+// runOnDaemon hands the job to a daemon as a one-off and follows it there, so the run has the daemon's record, workers and page whether the daemon is on this machine or another.
+func (r *RunCmd) runOnDaemon(streams Streams) error {
+	out := streams.Out
+
+	for flag, given := range map[string]bool{
+		"--resume": r.Resume != "", "--replay": r.Replay != "", "--rerun": r.Rerun != "",
+		"--pin": len(r.Pin) > 0, "--force": r.Force, "--db": r.DB != "",
+	} {
+		if given {
+			return fmt.Errorf("%s does not apply with --target: a one-off is a new run on the daemon, recorded there", flag)
+		}
+	}
+
+	cfg, err := r.Load(r.Path, resolvePipelineName(r.Path, r.Name))
+	if err != nil {
+		return err
+	}
+
+	job, err := selectJob(cfg, r.Job)
+	if err != nil {
+		return err
+	}
+
+	from, err := filepath.Abs(r.Path)
+	if err != nil {
+		from = r.Path
+	}
+
+	client := newDaemonClient(r.Target)
+
+	created, err := client.oneOff(web.OneOffRequest{
+		Source:   cfg.Revision.Source,
+		Includes: convertIncludes[[]byte](cfg.Revision.Includes),
+		From:     from,
+		Job:      job.Name,
+	})
+	if err != nil {
+		return err
+	}
+
+	remote := remoteRuns{client: client, pipeline: created.Pipeline}
+
+	ctx, cancel := streams.cancellable()
+	defer cancel()
+
+	run, err := remote.started(ctx, job.Name)
+	if err != nil {
+		return err
+	}
+
+	sayf(out, "running %s on %s: %s/p/%s/runs/%s\n", job.Name, client.target, client.target, created.Pipeline, run.ID)
+
+	return watch(ctx, out, r.ProgressFlags, nil, remote, run, func(last store.RunRow) {
+		sayf(out, "detached: %s goes on running on the daemon — steps runs follow --target %s -p %s %s\n", last.ID, client.target, created.Pipeline, last.ID)
+	})
 }
 
 // applyContinuation handles the flags that point this invocation at a previous
@@ -110,6 +171,14 @@ func (r *RunCmd) applyReplay(
 // Run loads the pipeline, selects a job, and runs it once via
 // pipeline.RunJob.
 func (r *RunCmd) Run(streams Streams) error {
+	if r.Target != "" {
+		return r.runOnDaemon(streams)
+	}
+
+	return r.runHere(streams)
+}
+
+func (r *RunCmd) runHere(streams Streams) error {
 	cfg, err := r.Load(r.Path, resolvePipelineName(r.Path, r.Name))
 	if err != nil {
 		return err

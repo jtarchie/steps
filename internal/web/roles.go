@@ -190,7 +190,7 @@ func neededRole(c *echo.Context) Role {
 	}
 
 	switch c.Path() {
-	case "/activity", pauseAllPath, unpauseAllPath:
+	case "/activity", pauseAllPath, unpauseAllPath, oneOffPath:
 		return RoleAdmin
 	}
 

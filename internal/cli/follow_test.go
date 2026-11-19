@@ -137,14 +137,14 @@ func await(t *testing.T, done <-chan followed) followed {
 
 // trailingNote lands the note the moment the drain that carried job_finished returns, which is the latest the one empty poll after it is there to catch.
 type trailingNote struct {
-	followStore
+	*sqlite.Store
 
 	t    *testing.T
 	once sync.Once
 }
 
 func (n *trailingNote) RunEvents(ctx context.Context, runID string, after int64, limit int) ([]store.RunEventRow, error) {
-	rows, err := n.followStore.RunEvents(ctx, runID, after, limit)
+	rows, err := n.Store.RunEvents(ctx, runID, after, limit)
 
 	for _, row := range rows {
 		if row.Type == events.TypeJobFinished {
@@ -169,7 +169,7 @@ func TestFollowRunSeesTheRunOutIncludingItsTrailingNotes(t *testing.T) {
 	appendEvents(t, st, events.TypeJobStarted, events.TypeStepStarted)
 
 	rec := &recorder{}
-	done := startFollow(t.Context(), t, &trailingNote{followStore: st, t: t}, rec)
+	done := startFollow(t.Context(), t, &trailingNote{Store: st, t: t}, rec)
 	rec.waitFor(t, 2)
 
 	appendEvents(t, st, events.TypeStepFinished)

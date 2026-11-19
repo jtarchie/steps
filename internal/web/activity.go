@@ -129,6 +129,7 @@ var notRecorded = map[string]string{ //nolint:gosec // route keys and reasons, n
 	"POST /oauth/authorize":             "recorded by handleConsent itself, which knows the export the consent named — this route carries no pipeline in its path; a read consent names none, and the daemon's log line web.mcp_read_authorized records it",
 	"POST " + pauseAllPath:              "recorded by setAllPausedFromPage itself, against every pipeline it paused — this route carries none in its path",
 	"POST " + unpauseAllPath:            "as POST /pause-all",
+	"POST " + oneOffPath:                "the run it queues records who started it, and the pipeline an entry would be written through is the one-off's own, forgotten with it once the run is over",
 	"POST /p/:pipeline/hooks/:resource": "a webhook delivery is automatic: the run it starts already says webhook: <resource>",
 }
 
