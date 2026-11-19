@@ -1,9 +1,60 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
+
+// A declared built-in name with only image: is the built-in run there, still native (its source: is still checked); with commands of its own it replaces the built-in, as before.
+func TestABuiltinTypeGivenAnImageIsTheBuiltinRunThere(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]byte(`
+resource_types:
+- name: git
+  image: alpine/git
+  env: [EXTRA]
+- name: github-comments
+  image: alpine/git
+- name: cron
+  image: alpine:3
+  config: {check: "true"}
+`), "image", nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	for name, want := range map[string]string{"git": gitType, "github-comments": GitHubCommentsType, "cron": ""} {
+		if got := cfg.nativeType(name); got != want {
+			t.Errorf("nativeType(%q) = %q, want %q", name, got, want)
+		}
+	}
+
+	git, _ := cfg.FindResourceType("git")
+	if git.Image != "alpine/git" || !slices.Equal(git.Env, []string{"EXTRA"}) {
+		t.Errorf("git = image %q env %q, want alpine/git and EXTRA", git.Image, git.Env)
+	}
+
+	// The slack-* built-ins evaluate in this process, so an image is refused rather than ignored.
+	_, err = Parse([]byte("resource_types:\n- {name: slack-reply, image: alpine:3}\n"), "image", nil)
+	if err == nil || !strings.Contains(err.Error(), "image: cannot apply") {
+		t.Errorf("slack-reply given an image = %v, want it refused as having nothing to run there", err)
+	}
+
+	_, err = Parse([]byte(`
+resource_types:
+- name: git
+  image: alpine/git
+resources:
+- name: repo
+  type: git
+  source: {uri: https://example.com/a.git, fecth: true}
+`), "image", nil)
+	if err == nil || !strings.Contains(err.Error(), "fecth") {
+		t.Errorf("a typo in a built-in-in-an-image's source loaded: %v", err)
+	}
+}
 
 // A user entry for a built-in name supplies what it sets and inherits the
 // rest. Built-in profiles carry no source: — only the user knows which model

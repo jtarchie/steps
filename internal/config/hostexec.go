@@ -70,13 +70,13 @@ func (c *Config) hostResources() []HostCommand {
 			if resourceType.Image == "" {
 				found = append(found, HostCommand{
 					Name: resource.Name, Where: where,
-					Why:       fmt.Sprintf("type %q runs check/in/out on the host; give the type an image: (a built-in one, by copying it into resource_types: under another name)", resource.Type) + sandboxed(resourceType.Sandbox),
+					Why:       fmt.Sprintf("type %q runs check/in/out on the host; give the type an image: (a built-in one, by a resource_types: entry of its name with only image:)", resource.Type) + sandboxed(resourceType.Sandbox),
 					Sandboxed: resourceType.Sandbox,
 				})
 			}
 		case BackendGitHub:
-			if githubClonesWithGit(resourceType.Config.GitHub, resource.Source) {
-				found = append(found, HostCommand{Name: resource.Name, Where: where, Why: "checkout: git runs the git binary on the host"})
+			if resourceType.Image == "" && githubClonesWithGit(resourceType.Config.GitHub, resource.Source) {
+				found = append(found, HostCommand{Name: resource.Name, Where: where, Why: fmt.Sprintf("checkout: git runs the git binary on the host; give type %q an image: (a resource_types: entry of its name with only image:)", resource.Type)})
 			}
 		case BackendMCP, BackendExpr, BackendWebhook, BackendCron, BackendConcourse, BackendRegistry, BackendService, BackendLinear:
 		}

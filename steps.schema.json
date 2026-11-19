@@ -348,6 +348,12 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "$comment": "image: alone on a built-in type's name is that built-in run in the image.",
+          "required": [
+            "image"
+          ]
         }
       ],
       "properties": {

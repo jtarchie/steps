@@ -91,7 +91,7 @@ func (githubBackend) in(ctx context.Context, c Call) error {
 		return fmt.Errorf("in %q: a %s resource only publishes, so there is nothing to fetch", rt.Name, rt.Config.GitHub)
 	}
 
-	err := stage(ctx, c.Resource.Source, c.Version, c.Dir)
+	err := stage(withGitImage(ctx, rt, c.Resource), c.Resource.Source, c.Version, c.Dir)
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
