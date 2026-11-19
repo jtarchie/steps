@@ -16,8 +16,8 @@ import (
 // read-only server, and nil is what read-only means here.
 type stubRunner struct{}
 
-func (stubRunner) Enqueue(context.Context, *scheduler.Pipeline, string, string, bool) (int64, error) {
-	return 1, nil
+func (stubRunner) Enqueue(context.Context, *scheduler.Pipeline, string, string, bool) error {
+	return nil
 }
 
 func (stubRunner) Abort(*scheduler.Pipeline, string) bool { return false }

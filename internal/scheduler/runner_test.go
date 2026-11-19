@@ -353,7 +353,7 @@ jobs:
 			}
 		}
 
-		_, err := runner.Enqueue(ctx, target, "build", "test", true)
+		err := runner.Enqueue(ctx, target, "build", "test", true)
 		if err != nil {
 			t.Fatalf("Enqueue: %v", err)
 		}
@@ -898,7 +898,7 @@ jobs:
 		t.Fatalf("RecordJobOutcome: %v", err)
 	}
 
-	_, err = runner.Enqueue(ctx, target, "build", "trigger, no cache (web)", true)
+	err = runner.Enqueue(ctx, target, "build", "trigger, no cache (web)", true)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -945,7 +945,7 @@ jobs:
 		t.Fatalf("EnqueuePinned: %v", err)
 	}
 
-	_, err = runner.Enqueue(ctx, target, "build", "trigger, no cache (cli)", true)
+	err = runner.Enqueue(ctx, target, "build", "trigger, no cache (cli)", true)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}

@@ -109,7 +109,7 @@ func (s *Server) queueTrigger(ctx context.Context, pipeline *Pipeline, name, fro
 		reason = "trigger, no cache (" + from + ")"
 	}
 
-	_, err = s.runner.Enqueue(ctx, pipeline.Pipeline, name, reason, force)
+	err = s.runner.Enqueue(ctx, pipeline.Pipeline, name, reason, force)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

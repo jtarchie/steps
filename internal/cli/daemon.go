@@ -219,7 +219,7 @@ func interruptedTrees(ctx context.Context, state State, rows []store.PipelineRow
 	var trees []string
 
 	for _, row := range rows {
-		st, err := openState(state, row.Name)
+		st, err := openExistingState(state, row.Name)
 		if err != nil {
 			slog.WarnContext(ctx, "web.interrupted_unread", "pipeline", row.Name, "error", err)
 
@@ -370,9 +370,19 @@ func (d *daemon) stateFor(name string, existing *servedPipeline) (store.Store, e
 		return existing.target.Store, nil
 	}
 
-	st, err := openState(d.state, name)
+	st, err := d.openStore(name)
 	if err != nil {
 		return nil, fmt.Errorf("could not open state for %q: %w", name, err)
+	}
+
+	return st, nil
+}
+
+// openStore is every handle the daemon opens, so a fault a test installs through wrapStore is under all of them.
+func (d *daemon) openStore(name string) (store.Store, error) {
+	st, err := openState(d.state, name)
+	if err != nil {
+		return nil, err
 	}
 
 	if d.wrapStore != nil {
@@ -670,7 +680,7 @@ func (d *daemon) destroyLocked(ctx context.Context, name string) error {
 //
 //nolint:contextcheck // opening a store takes none
 func (d *daemon) destroyBroken(ctx context.Context, name string) error {
-	st, err := openState(d.state, name)
+	st, err := d.openStore(name)
 	if err != nil {
 		return fmt.Errorf("could not destroy %q: %w", name, err)
 	}
@@ -708,9 +718,6 @@ func (d *daemon) forgetPipeline(ctx context.Context, name, loginsOf string) erro
 
 	return nil
 }
-
-// runningListed caps how many runs a refusal names, so a pipeline with a wide in_parallel of jobs still gets a readable one.
-const runningListed = 5
 
 // detach waits for the loops before returning, so nothing is still reading a handle its caller is about to close.
 func (d *daemon) detach(name string) (*servedPipeline, error) {

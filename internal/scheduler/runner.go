@@ -251,7 +251,7 @@ func (r *LocalRunner) RemoveProvider(slug string) { r.providers.remove(slug) }
 func (r *LocalRunner) Close() { r.providers.Close() }
 
 // Enqueue puts a person's trigger on the pipeline's queue.
-func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, reason string, force bool) (int64, error) {
+func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, reason string, force bool) error {
 	// Before the enqueue: set after, a worker claiming the row in between ran it cached and left the flag to force the job's next poll. Two forced requests collapse into one forced run, which is what a double-click meant.
 	if force {
 		r.mu.Lock()
@@ -265,10 +265,10 @@ func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, re
 			r.takeForce(target.Slug, jobName)
 		}
 
-		return 0, fmt.Errorf("scheduler: %w", err)
+		return fmt.Errorf("scheduler: %w", err)
 	}
 
-	return 0, nil
+	return nil
 }
 
 // requestPin is the daemon's own --pin with one request's pin laid over it: the request is the narrower word.

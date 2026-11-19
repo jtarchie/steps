@@ -269,8 +269,8 @@ var ErrNoSuchPipeline = errors.New("no such pipeline")
 // Implemented by scheduler.LocalRunner, which internal/cli installs; an interface so the
 // HTTP layer can be tested without starting real jobs.
 type Runner interface {
-	// Enqueue queues a person's trigger of a job, returning the queue row id.
-	Enqueue(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason string, force bool) (int64, error)
+	// Enqueue queues a person's trigger of a job.
+	Enqueue(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason string, force bool) error
 	// EnqueueRerun queues a retry of a recorded run.
 	EnqueueRerun(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason, runID string) error
 	// EnqueueResume queues a person's resume of a failed run, which continues that run from the step that failed; scheduler.ErrNotResumable when ResumePoint would not offer one.

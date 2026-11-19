@@ -57,7 +57,7 @@ jobs:
 	racing.drain = func() { runner.DrainOne(ctx, target) }
 	target.Store = racing
 
-	_, err := runner.Enqueue(ctx, target, "build", "trigger, no cache (web)", true)
+	err := runner.Enqueue(ctx, target, "build", "trigger, no cache (web)", true)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -99,7 +99,7 @@ jobs:
 
 	target.Store = &claimsMidEnqueue{Store: st, fail: errors.New("database is locked")}
 
-	_, err := runner.Enqueue(ctx, target, "build", "trigger, no cache (web)", true)
+	err := runner.Enqueue(ctx, target, "build", "trigger, no cache (web)", true)
 	if err == nil {
 		t.Fatal("Enqueue reported success for a row the store refused")
 	}

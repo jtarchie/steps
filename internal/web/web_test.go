@@ -633,11 +633,11 @@ type enqueueRecorder struct {
 	forced  []bool
 }
 
-func (r *enqueueRecorder) Enqueue(_ context.Context, _ *scheduler.Pipeline, _, reason string, force bool) (int64, error) {
+func (r *enqueueRecorder) Enqueue(_ context.Context, _ *scheduler.Pipeline, _, reason string, force bool) error {
 	r.reasons = append(r.reasons, reason)
 	r.forced = append(r.forced, force)
 
-	return 1, nil
+	return nil
 }
 
 // TestTriggerForcesOnlyWhenAsked: a forced build ignores the cache, so a plain click that forced would re-bill every agent for work that did not change.

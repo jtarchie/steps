@@ -74,7 +74,7 @@ func (p *PipelineSetCmd) Run(streams Streams) error {
 
 	// The parsed config's own source, not a second read: two reads of one path have no ordering between them, so an editor saving in the window uploads bytes nobody validated.
 
-	return p.upload(out, name, cfg.Revision.Source, cfg.Revision.Includes)
+	return p.upload(streams.In, out, name, cfg.Revision.Source, cfg.Revision.Includes)
 }
 
 // namedPipeline refuses a name before it is concatenated into a URL: "#" truncates the path into a fragment nobody sends and "?" into a query, so `-p prod#old` asked the daemon about `prod` — which for destroy is the wrong pipeline, irrecoverably.
@@ -93,7 +93,7 @@ func namedPipeline(name, verb string) (string, error) {
 
 // upload is the half that talks to the daemon: read what it serves, diff,
 // ask, and send the sha that diff was against.
-func (p *PipelineSetCmd) upload(out io.Writer, name, source string, includes map[string]string) error {
+func (p *PipelineSetCmd) upload(in io.Reader, out io.Writer, name, source string, includes map[string]string) error {
 	client, err := newDaemonClient(p.Target)
 	if err != nil {
 		return err
@@ -115,7 +115,7 @@ func (p *PipelineSetCmd) upload(out io.Writer, name, source string, includes map
 		return nil
 	}
 
-	err = p.confirm(out, name, current, source, includes)
+	err = p.confirmFrom(in, out, name, current, source, includes)
 	if err != nil {
 		return err
 	}
@@ -153,8 +153,8 @@ func setVerb(result web.SetResult) string {
 	}
 }
 
-// confirm shows what would change and asks, unless told not to.
-func (p *PipelineSetCmd) confirm(out io.Writer,
+// confirmFrom shows what would change and asks, unless told not to.
+func (p *PipelineSetCmd) confirmFrom(in io.Reader, out io.Writer,
 	name string, current Held, source string, includes map[string]string,
 ) error {
 	if p.NonInteractive {
@@ -173,7 +173,7 @@ func (p *PipelineSetCmd) confirm(out io.Writer,
 		_, _ = fmt.Fprint(out, diffIncludes(convertIncludes[string](current.Config.Includes), includes))
 	}
 
-	return ask(out, "apply configuration?", "not applied")
+	return askFrom(in, out, "apply configuration?", "not applied")
 }
 
 // The includes are as much of a deploy as the YAML is — a run_file: decides what a step executes — so an edit that only moved one of them was shown a pipeline reported as unchanged, and confirmed on that.
@@ -209,13 +209,18 @@ func convertIncludes[To, From ~string | ~[]byte](includes map[string]From) map[s
 	return converted
 }
 
-// ask is the one confirmation both destructive verbs read, so a closed stdin is a no rather than a crash in one of them and a crash in the other.
-func ask(out io.Writer, question, refusal string) error {
+// askFrom is the one confirmation both destructive verbs read, so a closed stdin is a no rather than a crash in one of them and a crash in the other.
+func askFrom(in io.Reader, out io.Writer, question, refusal string) error {
 	_, _ = fmt.Fprint(out, question+" [y/N] ")
+
+	// An invocation handed no stdin is one with nobody to answer, which is a closed stdin.
+	if in == nil {
+		return errors.New(refusal)
+	}
 
 	var answer string
 
-	_, err := fmt.Scanln(&answer)
+	_, err := fmt.Fscanln(in, &answer)
 	if err != nil && !errors.Is(err, io.EOF) {
 		answer = ""
 	}
@@ -382,7 +387,7 @@ func (p *PipelineDestroyCmd) Run(streams Streams) error {
 
 	// Asked because it is not recoverable: history, versions and the merkle cache go with the row, and nothing here is a soft delete.
 	if !p.NonInteractive {
-		err = ask(out, "destroy "+name+", everything recorded under it, and its mcp logins?", "not destroyed")
+		err = askFrom(streams.In, out, "destroy "+name+", everything recorded under it, and its mcp logins?", "not destroyed")
 		if err != nil {
 			return err
 		}

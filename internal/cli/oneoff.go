@@ -77,7 +77,7 @@ func (d *daemon) OneOff(ctx context.Context, req web.OneOffRequest) (web.OneOffR
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
 	defer cancel()
 
-	_, err = d.runner.Enqueue(writeCtx, served.target.Pipeline, req.Job, "one-off", false)
+	err = d.runner.Enqueue(writeCtx, served.target.Pipeline, req.Job, "one-off", false)
 	if err != nil {
 		return web.OneOffResult{}, errors.Join(fmt.Errorf("could not queue %s: %w", req.Job, err), d.destroyLocked(writeCtx, name))
 	}
