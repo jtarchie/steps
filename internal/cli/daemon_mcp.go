@@ -11,6 +11,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	"github.com/jtarchie/steps/internal/mcpstatus"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -90,7 +91,7 @@ func probeKey(pipeline *web.Pipeline, server string) string {
 
 // probeFingerprint is the configuration an answer describes, and what invalidates it when a `steps pipeline set` moves the endpoint: the old answer describes a server this pipeline no longer has, and a stale "✓ 7 tools" against a moved endpoint is worse than no answer. It needs no hook on set, rename or destroy — a changed configuration simply misses. Built from the raw fields rather than Target(), which masks credentials: a rotated token in an arg is a different server to dial.
 func probeFingerprint(srv *config.MCPServer) string {
-	return strings.Join(append([]string{srv.Endpoint, srv.Command, srv.Cwd, srv.Image}, srv.Args...), "\x00") + "\x00" + srv.AuthLabel() + "\x00" + srv.Auth.TokenSecret()
+	return strings.Join(append([]string{srv.Endpoint, srv.Command, srv.Cwd, srv.Image}, srv.Args...), "\x00") + "\x00" + mcpstatus.AuthLabel(*srv) + "\x00" + srv.Auth.TokenSecret()
 }
 
 // probeWorthMaking resolves the server a Test names and refuses the two kinds this daemon will not dial: one it cannot honestly reach from here, and one there is nothing to connect with.
@@ -211,7 +212,7 @@ func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
 		result := web.MCPProbe{At: time.Now()}
 
 		if probeErr != nil {
-			result.Detail = config.MCPStatusReason(server, probeErr)
+			result.Detail = mcpstatus.Reason(server, probeErr)
 		} else {
 			result.OK = true
 			result.Detail = fmt.Sprintf("%d %s", len(tools), pluralize(len(tools), "tool"))

@@ -160,6 +160,8 @@ linters:
             # into resource/agent territory, which pipeline.RunJob still
             # exclusively orchestrates.
             - "github.com/jtarchie/steps/internal/mcp"
+            # mcpstatus: `steps mcp list` draws the same cells the web UI's mcp tab does.
+            - "github.com/jtarchie/steps/internal/mcpstatus"
             - "github.com/jtarchie/steps/internal/store"
             # cli is where a driver is CHOSEN: it turns the state flag into an
             # open sqlite or postgres database (db.go) and hands the
@@ -369,15 +371,20 @@ linters:
             # goleak is test-only: goleak_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
-        # redact masks URL credentials in text that leaves the process. A
-        # stdlib-only leaf rather than part of shell, because config — which
-        # imports nothing internal but this — renders an mcp server's argv for
-        # a page and needs the same rule shell applies to an error.
+        # redact masks URL credentials in text that leaves the process; a stdlib-only leaf rather than part of shell, because mcpstatus renders an mcp server's argv for a page and needs the same rule shell applies to an error.
         Redact:
           files:
             - "**/internal/redact/**"
           allow:
             - "$gostd"
+        # mcpstatus is how an mcp server is described to a reader, shared by both front ends (web cannot import cli); redact masks a token pasted into args: before the page draws it.
+        MCPStatus:
+          files:
+            - "**/internal/mcpstatus/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/redact"
         # secret runs a deployment's secret source commands; shell only for Start (session + group kill), template for the path, expr for when:/missing:.
         Secret:
           files:
@@ -547,8 +554,6 @@ linters:
           allow:
             - "$gostd"
             - "gopkg.in/yaml.v3"
-            # redact: MCPServer.Target is drawn on the web UI and must not show a token pasted into args:.
-            - "github.com/jtarchie/steps/internal/redact"
             # test-only (ConfigShellquoteTestOnly): shellquote_test.go holds
             # across:'s ported shellquote to the one internal/template calls.
             - "github.com/frioux/leatherman/pkg/shellquote"
@@ -1043,6 +1048,8 @@ linters:
             - "github.com/jtarchie/steps/internal/runview"
             # mcpread is the read-only MCP server web mounts at /mcp, answering its tools through a Source web implements as the person the request is from.
             - "github.com/jtarchie/steps/internal/mcpread"
+            # mcpstatus: the mcp tab draws the same cells `steps mcp list` does.
+            - "github.com/jtarchie/steps/internal/mcpstatus"
             # the go-sdk is test-only here: a page test connects a real MCP client to /mcp.
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             # scheduler for its Pipeline handle, which web.Pipeline embeds and

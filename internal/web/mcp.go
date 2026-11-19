@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/mcpstatus"
 )
 
 // mcpAuthorizeBound is how long Connect waits for the authorization URL before sending the reader back to the tab empty-handed. Discovery and dynamic registration are two round trips to the provider, so it is not instant; a provider that is simply down must not hold a request open either. The tab shows the pending login and links the URL the moment it lands, so the bound costs a reader nothing but a page they were going to see anyway.
@@ -128,9 +129,9 @@ func markFor(readiness config.MCPReadiness) string {
 
 // mcpMetaLine is transport, credential and target on one line — everything the three columns before it said, in the order a reader asks it: what kind of server, what it authenticates with, and where it is. An auth of "none" is left out rather than printed, since "none" is the absence of a fact and reads as one.
 func mcpMetaLine(server config.MCPServer) string {
-	parts := []string{server.Transport()}
+	parts := []string{mcpstatus.Transport(server)}
 
-	if auth := server.AuthLabel(); auth != config.MCPAuthNone {
+	if auth := mcpstatus.AuthLabel(server); auth != config.MCPAuthNone {
 		parts = append(parts, auth)
 	}
 
@@ -139,7 +140,7 @@ func mcpMetaLine(server config.MCPServer) string {
 
 // compactTarget drops the scheme from an endpoint, which is the one part of a URL that is the same on every row and never what somebody is checking. The whole target stays on the element's title, so nothing is actually hidden.
 func compactTarget(server config.MCPServer) string {
-	target := server.Target()
+	target := mcpstatus.Target(server)
 	if server.IsStdio() {
 		return target
 	}
@@ -175,8 +176,8 @@ func (s *Server) handleMCP(c *echo.Context) error {
 	var transports, auths []string
 
 	for _, server := range servers {
-		if !slices.Contains(transports, server.Transport()) {
-			transports = append(transports, server.Transport())
+		if !slices.Contains(transports, mcpstatus.Transport(server)) {
+			transports = append(transports, mcpstatus.Transport(server))
 		}
 
 		if !slices.Contains(auths, mcpAuthOf(server)) {
@@ -232,14 +233,14 @@ func (s *Server) mcpRowFor(pipeline *Pipeline, server config.MCPServer) mcpRow {
 
 	row := mcpRow{
 		Name:   server.Name,
-		UsedBy: pipeline.Config().MCPUsers(server.Name),
+		UsedBy: mcpstatus.Users(pipeline.Config(), server.Name),
 		OAuth:  server.Auth.OAuth(),
 		Status: status.Detail,
 		Mark:   markFor(status.Readiness),
 		Meta:   mcpMetaLine(server),
-		Target: server.Target(),
+		Target: mcpstatus.Target(server),
 
-		Transport: server.Transport(),
+		Transport: mcpstatus.Transport(server),
 		Auth:      mcpAuthOf(server),
 		Users:     mcpUsersOf(pipeline.Config(), pipeline.Slug, server.Name),
 	}

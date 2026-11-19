@@ -16,6 +16,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
+	"github.com/jtarchie/steps/internal/mcpstatus"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/web"
 )
@@ -110,7 +111,7 @@ func (m *MCPListCmd) Run(streams Streams) error {
 
 	for i, srv := range cfg.MCPServers {
 		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s",
-			srv.Name, srv.Transport(), srv.Target(), srv.AuthLabel(), cfg.MCPUsers(srv.Name), statuses[i])
+			srv.Name, mcpstatus.Transport(srv), mcpstatus.Target(srv), mcpstatus.AuthLabel(srv), mcpstatus.Users(cfg, srv.Name), statuses[i])
 
 		_, _ = fmt.Fprintln(writer, row)
 	}
@@ -188,7 +189,7 @@ func probeMCPServers(ctx context.Context, cfg *config.Config, statuses []string)
 
 			tools, err := stepsmcp.ListServerTools(probeCtx, cfg.Name, srv)
 			if err != nil {
-				statuses[i] = "✗ " + elideMiddle(config.MCPStatusReason(srv.Name, err))
+				statuses[i] = "✗ " + elideMiddle(mcpstatus.Reason(srv.Name, err))
 
 				return
 			}

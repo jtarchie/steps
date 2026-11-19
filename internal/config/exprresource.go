@@ -41,7 +41,7 @@ type ExprResourceConfig struct {
 // implement something, and it must not ask for a container it cannot have.
 //
 // What it deliberately does NOT check is whether the expressions COMPILE.
-// This package depends on no internal package but the redact leaf and on no third-party code but the
+// This package depends on nothing internal and on no third-party code but the
 // YAML parser (enforced by depguard's Config rule), which is what lets every
 // other package agree on these types without inheriting an engine. So a
 // syntax error is a validate-time fact rather than a load-time one — see

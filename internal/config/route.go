@@ -103,7 +103,7 @@ func (s Step) DisplayName() string {
 
 // stepName is the name a step is referenced by as a to: jump target: whichever
 // of task/put/agent is set. Duplicated (not shared with internal/pipeline's
-// executedStepName) because internal/config imports no internal package but the redact leaf.
+// executedStepName) because internal/config depends on nothing internal.
 func stepName(step Step) string {
 	// A computed Label is the step's identity when it has one — see Step.Label.
 	// It wins over the kind fields below precisely because those are also

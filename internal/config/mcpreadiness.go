@@ -1,15 +1,12 @@
 package config
 
-// How an mcp_servers: entry is DESCRIBED, and what can be said about it without asking it anything. Both front ends render this — `steps mcp list` as a table, the web UI's mcp tab as a page — and it lives here because it used to live in internal/cli, which internal/web cannot import: two front ends over one concept had no way to share a vocabulary, so they would have drifted into two.
+// What can be said about an mcp_servers: entry without asking it anything. It lives here, not in internal/mcpstatus with the rest of the front ends' vocabulary, because CheckEnvironment refuses on the same answer the status cell prints.
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
-
-	"github.com/jtarchie/steps/internal/redact"
 )
 
 // MCPReadiness is what is knowable about a server with no request made, and the reason a status cell says what it says.
@@ -29,46 +26,6 @@ type MCPStatus struct {
 	Readiness MCPReadiness
 	// Detail is the whole cell, written for somebody who has to act on it — `$GITHUB_PAT is not set`, not `false`.
 	Detail string
-}
-
-// Transport names which of the two shapes this server is.
-func (s MCPServer) Transport() string {
-	if s.IsStdio() {
-		return "stdio"
-	}
-
-	return "http"
-}
-
-// Target renders what the server actually is, for a reader: the endpoint for HTTP, the argv (plus any pinned working directory) for stdio. URL credentials are masked, because argv pasted from vendor docs carries tokens as userinfo and this string is drawn on a page every viewer of the daemon can read; nothing spawns from it.
-func (s MCPServer) Target() string {
-	if !s.IsStdio() {
-		return redact.Command(s.Endpoint)
-	}
-
-	target := strings.Join(append([]string{s.Command}, s.Args...), " ")
-	if s.Cwd != "" {
-		target += fmt.Sprintf(" (cwd: %s)", s.Cwd)
-	}
-
-	if s.Image != "" {
-		target += fmt.Sprintf(" (image: %s)", s.Image)
-	}
-
-	return redact.Command(target)
-}
-
-// AuthLabel names the auth type and, for bearer, the environment variable the credential is read from — the thing to go check when it is the credential that is missing. Never the value.
-func (s MCPServer) AuthLabel() string {
-	if s.Auth.None() {
-		return MCPAuthNone
-	}
-
-	if s.Auth.APIKeyEnv != "" {
-		return s.Auth.Type + " $" + s.Auth.APIKeyEnv
-	}
-
-	return s.Auth.Type
 }
 
 // NotProbableHere reports the status for a server that cannot honestly be probed from outside a run, or "" for one that can. A relative cwd: is resolved against the working directory of the agent step whose tools are being built (WithResolvedMCPCwd) — a build workspace that exists only during a run, so spawning it from wherever the operator happens to be would chdir somewhere else entirely and report a server that works perfectly in a run as broken.
@@ -134,30 +91,4 @@ func unsetEnvDetail(name string) string {
 	}
 
 	return ""
-}
-
-// MCPStatusReason renders a probe failure as a status cell, dropping the copies of the server's name the error carries — the row already names it — because the actionable part of these messages ("run `steps mcp login` …", "$TOKEN is not set") is at the END.
-func MCPStatusReason(name string, err error) string {
-	reason, _, _ := strings.Cut(err.Error(), "\n")
-
-	for _, noise := range []string{
-		"mcp: ",
-		fmt.Sprintf("connect to %q: ", name),
-		fmt.Sprintf("mcp server %q: ", name),
-		fmt.Sprintf("mcp server %q ", name),
-	} {
-		reason = strings.TrimPrefix(reason, noise)
-	}
-
-	return reason
-}
-
-// MCPUsers is the "used by" cell: every agent, task fix and resource type that depends on this server, or a phrase saying nothing does.
-func (c *Config) MCPUsers(name string) string {
-	users := c.MCPServerUsers(name)
-	if len(users) == 0 {
-		return "(unused)"
-	}
-
-	return strings.Join(users, ", ")
 }

@@ -13,6 +13,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/mcpstatus"
 )
 
 // mcpCLIFixtureServer builds an httptest.Server exposing one no-op "ping"
@@ -317,12 +318,12 @@ jobs:
 	}
 }
 
-// What this command still owns of a status cell: fitting one into a column. The vocabulary itself moved to internal/config, where the web UI can read the same words — see its mcpstatus_test.go.
+// What this command still owns of a status cell: fitting one into a column. The vocabulary itself lives in internal/mcpstatus, where the web UI can read the same words.
 func TestMCPListFitsAReasonToItsColumn(t *testing.T) {
 	t.Parallel()
 
 	// How it went is the last few words of a dial error, so a reason too long for the column loses its middle, never its tail.
-	long := elideMiddle(config.MCPStatusReason("test", errors.New(
+	long := elideMiddle(mcpstatus.Reason("test", errors.New(
 		`mcp: connect to "test": Post "https://api.githubcopilot.com/mcp/": dial tcp 140.82.113.22:443: connect: connection refused`)))
 
 	if !strings.HasSuffix(long, "connection refused") {

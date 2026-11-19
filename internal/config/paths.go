@@ -18,7 +18,7 @@ import (
 // It is the one lexical confinement predicate: internal/agent's file tools
 // and context_paths: ask it at run time, and load asks it of a
 // workspace-relative path ("." for the step root), which is why it lives here
-// rather than beside the tools: this package imports no internal package but the redact leaf, so the
+// rather than beside the tools: this package imports nothing internal, so the
 // run can call load's answer but not the other way round. Lexical only;
 // symlinks are the caller's.
 //
