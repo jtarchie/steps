@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"archive/tar"
+	"bytes"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -21,8 +23,10 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
 	"github.com/jtarchie/steps/internal/cli"
 )
@@ -101,6 +105,123 @@ func (f *fakeRegistry) seed(t *testing.T, ref string, auth authn.Authenticator) 
 	}
 
 	return digest.String()
+}
+
+// seedIndex pushes a random multi-platform index to ref, returning its digest.
+func (f *fakeRegistry) seedIndex(t *testing.T, ref string, auth authn.Authenticator) string {
+	t.Helper()
+
+	index, err := random.Index(64, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tag, err := name.NewTag(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = remote.WriteIndex(tag, index, remote.WithAuth(auth))
+	if err != nil {
+		t.Fatalf("seed %s: %v", ref, err)
+	}
+
+	digest, err := index.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return digest.String()
+}
+
+// seedBase pushes an index holding one linux image for this machine's architecture, BuildKit's platform for a build here, whose one layer is baseMarker.
+func (f *fakeRegistry) seedBase(t *testing.T, ref string, auth authn.Authenticator) {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	writer := tar.NewWriter(&buf)
+	content := []byte("from the tracked base\n")
+
+	err := writer.WriteHeader(&tar.Header{Name: baseMarker, Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg})
+	if err == nil {
+		_, err = writer.Write(content)
+	}
+
+	if err == nil {
+		err = writer.Close()
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	layer, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(buf.Bytes())), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	platform := v1.Platform{OS: "linux", Architecture: runtime.GOARCH}
+
+	// The config first: AppendLayers fills its rootfs diff_ids, which BuildKit checks against the manifest.
+	image, err := mutate.ConfigFile(empty.Image, &v1.ConfigFile{OS: platform.OS, Architecture: platform.Architecture, RootFS: v1.RootFS{Type: "layers"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	image, err = mutate.AppendLayers(image, layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	index := mutate.AppendManifests(empty.Index, mutate.IndexAddendum{Add: image, Descriptor: v1.Descriptor{Platform: &platform}})
+
+	tag, err := name.NewTag(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = remote.WriteIndex(tag, index, remote.WithAuth(auth))
+	if err != nil {
+		t.Fatalf("seed %s: %v", ref, err)
+	}
+}
+
+// hasFile reports whether any layer of the image ref names (an index's first image) holds path.
+func (f *fakeRegistry) hasFile(t *testing.T, ref, path string, auth authn.Authenticator) bool {
+	t.Helper()
+
+	parsed, err := name.ParseReference(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	image, err := remote.Image(parsed, remote.WithAuth(auth), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: runtime.GOARCH}))
+	if err != nil {
+		t.Fatalf("%s: %v", ref, err)
+	}
+
+	reader := mutate.Extract(image)
+	defer func() { _ = reader.Close() }()
+
+	files := tar.NewReader(reader)
+
+	for {
+		header, err := files.Next()
+		if errors.Is(err, io.EOF) {
+			return false
+		}
+
+		if err != nil {
+			t.Fatalf("%s: %v", ref, err)
+		}
+
+		if strings.TrimPrefix(header.Name, "/") == path {
+			return true
+		}
+	}
 }
 
 // ociLayout writes an OCI layout holding one image, or one multi-platform index, and returns its directory and that top-level digest.
@@ -406,9 +527,13 @@ func TestValidateRefusesRegistryImageMistakes(t *testing.T) {
 			pipeline: "resources:\n- name: app\n  type: registry-image\n  source: {repository: ghcr.io/o/app, password: hunter2}\n",
 			want:     `unknown key "password"`,
 		},
-		"get params": {
+		"get format rootfs": {
 			pipeline: "resources:\n- name: app\n  type: registry-image\n  source: {repository: ghcr.io/o/app}\njobs:\n- name: j\n  plan:\n  - get: app\n    params: {format: rootfs}\n",
-			want:     "a registry-image get takes no params",
+			want:     `params.format "rootfs": a registry-image get writes oci-layout or nothing`,
+		},
+		"get unknown param": {
+			pipeline: "resources:\n- name: app\n  type: registry-image\n  source: {repository: ghcr.io/o/app}\njobs:\n- name: j\n  plan:\n  - get: app\n    params: {skip_download: true}\n",
+			want:     `unknown key "skip_download"`,
 		},
 		"put outside inputs": {
 			pipeline: "resources:\n- name: app\n  type: registry-image\n  source: {repository: ghcr.io/o/app}\njobs:\n- name: j\n  plan:\n  - put: app\n    inputs: [built]\n    params: {image: other/image.tar}\n",
@@ -437,6 +562,67 @@ func TestValidateRefusesRegistryImageMistakes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestEndToEndRegistryImageGetWritesAnOCILayout: format: oci-layout fetches the whole image, every platform, so a build can take it as its base without reaching the registry; a put of that layout to another repository pushes the same digest, which is the proof nothing was lost or rewritten.
+func TestEndToEndRegistryImageGetWritesAnOCILayout(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeRegistry(t, "", "")
+	want := fake.seedIndex(t, fake.repo("team/base")+":latest", authn.Anonymous)
+
+	path := writePipeline(t, t.TempDir(), `
+resources:
+- name: base
+  type: registry-image
+  source: {repository: `+fake.repo("team/base")+`}
+- name: mirror
+  type: registry-image
+  source: {repository: `+fake.repo("team/mirror")+`}
+jobs:
+- name: copy
+  plan:
+  - get: base
+    params: {format: oci-layout}
+  - task: show
+    inputs: [base]
+    run: cat base/digest && test -f base/oci/oci-layout && echo " layout"
+    assert:
+      stdout: "`+want+` layout"
+  - put: mirror
+    inputs: [base]
+    params: {image: base/oci}
+`)
+	mustRun(t, "run", path, "--job", "copy")
+
+	if got := fake.digestOf(t, fake.repo("team/mirror")+":latest", authn.Anonymous); got != want {
+		t.Errorf("mirror:latest = %s, want the fetched index %s", got, want)
+	}
+}
+
+// TestEndToEndRegistryImageGetWritesNoLayoutUnasked: without format:, a get stays what it was, three small files, so a step that only runs the image does not download it twice.
+func TestEndToEndRegistryImageGetWritesNoLayoutUnasked(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeRegistry(t, "", "")
+	fake.seed(t, fake.repo("team/app")+":latest", authn.Anonymous)
+
+	path := writePipeline(t, t.TempDir(), `
+resources:
+- name: app
+  type: registry-image
+  source: {repository: `+fake.repo("team/app")+`}
+jobs:
+- name: j
+  plan:
+  - get: app
+  - task: show
+    inputs: [app]
+    run: ls app | tr '\n' ' '
+    assert:
+      stdout: "digest repository tag "
+`)
+	mustRun(t, "run", path, "--job", "j")
 }
 
 // TestEndToEndRegistryImageGetOfAGoneDigestFails: a get asks the registry for the digest it names, so an image deleted since its check fails at the get, naming it, rather than as a step that cannot pull.
