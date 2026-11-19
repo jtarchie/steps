@@ -180,7 +180,16 @@ func checkShape(spec Source) error {
 		return fmt.Errorf("timeout: %s is negative", spec.Timeout)
 	}
 
-	// A path is built from names a pipeline author chooses, so a command that drops it in unquoted is a shell injection on the daemon; a sentinel holding a quote shows whether it was quoted.
+	// A path is built from names a pipeline author chooses (job names have no character rule), so a command where the shell reads it as syntax is an injection on the daemon.
+	for _, hit := range template.UnquotedRefs(spec.Command, "path") {
+		return fmt.Errorf("command: %s prints the path into the shell unquoted; write {{ .path | shellquote }}, or a job or resource name runs as shell on the daemon", hit)
+	}
+
+	for _, hit := range template.QuotedRefs(spec.Command, "path") {
+		return fmt.Errorf("command: %s is not a bare word the shell reads once: it sits inside quotes of its own, or the command uses a heredoc, backticks, $'…', eval or sh -c, where shellquote's quoting no longer holds (\"$(id)\" still runs); write {{ .path | shellquote }} as a bare word and keep those out of the command", hit)
+	}
+
+	// Backstop for spellings the scan cannot trace to .path, such as {{ index . "path" }}.
 	rendered, err := template.Render(spec.Command, map[string]any{"path": unquotedSentinel})
 	if err != nil {
 		return fmt.Errorf("command: %w", err)
