@@ -177,6 +177,13 @@
   });
 })();
 </script>
+{{else}}
+<script>
+// A resumed run goes back in flight on the page that drew it finished, which has no stream; the strip's poll is what notices, and the reload is what opens one.
+document.addEventListener('htmx:after:swap', function () {
+  if (document.querySelector('#run-strip [aria-current="page"].st-running')) window.location.reload();
+});
+</script>
 {{end}}
 <script>
 // The run on the page can be an old one, off the strip's right edge. Scroll

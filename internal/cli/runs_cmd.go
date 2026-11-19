@@ -34,7 +34,7 @@ import (
 // command that distinction was a runtime table of which combinations to
 // refuse; as subcommands it is the grammar, and kong enforces it.
 type RunsCmd struct {
-	List    RunsListCmd    `cmd:"" default:"withargs"                                                                                   help:"runs, newest first"`
+	List    RunsListCmd    `cmd:"" default:"withargs"                                                                                     help:"runs, newest first"`
 	Steps   RunsStepsCmd   `cmd:"" help:"individual steps, with what each one recorded"`
 	Queue   RunsQueueCmd   `cmd:"" help:"what the trigger loop has queued"`
 	Cost    RunsCostCmd    `cmd:"" help:"what a pipeline's agent steps spent"`
@@ -42,6 +42,7 @@ type RunsCmd struct {
 	Output  RunsOutputCmd  `cmd:"" help:"what a step printed, whole; with no step, the steps that printed"`
 	Trigger RunsTriggerCmd `cmd:"" help:"queue a run of a job on a steps web daemon, optionally pinned to a version"`
 	Retry   RunsRetryCmd   `cmd:"" help:"queue a retry of a recorded run on a steps web daemon, against the versions it was built with"`
+	Resume  RunsResumeCmd  `cmd:"" help:"continue a failed run on a steps web daemon from the step that failed, keeping what it finished"`
 	Abort   RunsAbortCmd   `cmd:"" help:"stop a run on a steps web daemon, or drop a queued one"`
 	Follow  RunsFollowCmd  `cmd:"" help:"watch a run to its end: live on a terminal, lines elsewhere"`
 }
@@ -253,6 +254,31 @@ func (r *RunsRetryCmd) Run(streams Streams) error {
 	}
 
 	sayf(out, "queued: a retry of %s on %s\n", r.RunID, name)
+
+	return nil
+}
+
+// RunsResumeCmd is the web page's Resume button from a terminal.
+type RunsResumeCmd struct {
+	TargetFlags      `embed:""`
+	PipelineNameFlag `embed:""`
+	RunID            string `arg:""   help:"the failed run to continue"`
+}
+
+// Run queues the resume on the daemon.
+func (r *RunsResumeCmd) Run(streams Streams) error {
+	name, err := namedPipeline(r.Pipeline, "runs resume")
+	if err != nil {
+		return err
+	}
+
+	err = newDaemonClient(r.Target).post("/api/pipelines/"+name+"/runs/"+url.PathEscape(r.RunID)+"/resume", http.StatusAccepted)
+	if err != nil {
+		return err
+	}
+
+	// Not "follow it now": until the claim puts the run back in flight it reads failed, and follow would replay the old attempt and exit failed.
+	sayf(streams.Out, "queued: a resume of %s on %s, from the step that failed; it reads failed until the daemon starts it, then steps runs follow -p %s %s watches it\n", r.RunID, name, name, r.RunID)
 
 	return nil
 }

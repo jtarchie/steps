@@ -257,6 +257,10 @@ type Runner interface {
 	Enqueue(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason string, force bool) (int64, error)
 	// EnqueueRerun queues a retry of a recorded run.
 	EnqueueRerun(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason, runID string) error
+	// EnqueueResume queues a person's resume of a failed run, which continues that run from the step that failed; scheduler.ErrNotResumable when ResumePoint would not offer one.
+	EnqueueResume(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason, runID string) error
+	// ResumePoint is where a resume of a run would pick up, ok false when it would gain nothing or be refused.
+	ResumePoint(ctx context.Context, pipeline *scheduler.Pipeline, runID string) (scheduler.ResumeAt, bool)
 	// EnqueuePinned queues a person's trigger of a job pinned to the version fields named.
 	EnqueuePinned(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason string, pin map[string]string) error
 	// Abort cancels a run this process is executing, and reports false when it is not running here.
@@ -440,6 +444,7 @@ func (s *Server) routes() error {
 
 	group.POST("/jobs/:job/trigger", s.handleTrigger)
 	group.POST("/runs/:run/rerun", s.handleRerun)
+	group.POST("/runs/:run/resume", s.handleResume)
 	group.POST("/approvals/:id", s.handleDecideApproval)
 	group.POST("/questions/:id", s.handleAnswerQuestion)
 	group.POST("/jobs/:job/release", s.handleRelease)
@@ -469,6 +474,7 @@ func (s *Server) routes() error {
 	api.POST("/pipelines/:pipeline/rename", s.handleAPIRename)
 	api.POST("/pipelines/:pipeline/jobs/:job/trigger", s.handleAPITrigger)
 	api.POST("/pipelines/:pipeline/runs/:run/rerun", s.handleAPIRerun)
+	api.POST("/pipelines/:pipeline/runs/:run/resume", s.handleAPIResume)
 	api.POST("/pipelines/:pipeline/runs/:run/abort", s.handleAPIAbortRun)
 	api.POST("/pipelines/:pipeline/jobs/:job/queued/abort", s.handleAPIAbortQueued)
 	api.POST("/pipelines/:pipeline/mcp/:server/login", s.handleAPIStartLogin)

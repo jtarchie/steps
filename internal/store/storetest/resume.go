@@ -288,3 +288,103 @@ func claimAfterCompleting(t *testing.T, st store.Store) string {
 
 	return claimResume(t, st)
 }
+
+func (s suite) TestAPersonsResumeOfAFailedRunIsQueuedOnce(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	startClaimedRun(t, st, "FAILED01")
+
+	err := st.FinishRun(ctx, "FAILED01", store.RunFailed)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	mustEnqueueJob(t, st, "build", "a newer version")
+
+	for range 2 {
+		err = st.EnqueueResumeJob(ctx, "build", "resume (web)", "FAILED01", "local:ops")
+		if err != nil {
+			t.Fatalf("EnqueueResumeJob: %v", err)
+		}
+	}
+
+	// Room for every row: a cap would stop the claims and hide a duplicate.
+	err = st.SyncJobLimits(ctx, nil, map[string]int{"build": 10})
+	if err != nil {
+		t.Fatalf("SyncJobLimits: %v", err)
+	}
+
+	resumed := claimEveryResume(t, st)
+	if len(resumed) != 1 || resumed[0] != "FAILED01" {
+		t.Errorf("claims resumed %q, want FAILED01 once: asking twice is one row, and the ordinary trigger beside it is not one", resumed)
+	}
+}
+
+// A claimed resume reads failed until it reaches ResumeRun (images, leases), and the page still offers Resume; a press then must not queue a second resume of the same run.
+func (s suite) TestAPersonsResumeIsNotQueuedAgainWhileItsClaimStarts(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	startClaimedRun(t, st, "CLAIMED1")
+
+	err := st.FinishRun(ctx, "CLAIMED1", store.RunFailed)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = st.SyncJobLimits(ctx, nil, map[string]int{"build": 10})
+	if err != nil {
+		t.Fatalf("SyncJobLimits: %v", err)
+	}
+
+	err = st.EnqueueResumeJob(ctx, "build", "resume (web)", "CLAIMED1", "")
+	if err != nil {
+		t.Fatalf("EnqueueResumeJob: %v", err)
+	}
+
+	if got := claimResume(t, st); got != "CLAIMED1" {
+		t.Fatalf("claim resumed %q, want CLAIMED1", got)
+	}
+
+	err = st.EnqueueResumeJob(ctx, "build", "resume (web)", "CLAIMED1", "")
+	if err != nil {
+		t.Fatalf("EnqueueResumeJob: %v", err)
+	}
+
+	if resumed := claimEveryResume(t, st); len(resumed) != 0 {
+		t.Errorf("claims resumed %q while the first resume of the run was starting, want none", resumed)
+	}
+}
+
+// claimEveryResume claims until the queue is empty and reports the runs the claims resume.
+func claimEveryResume(t *testing.T, st store.Store) []string {
+	t.Helper()
+
+	var resumed []string
+
+	for {
+		claim, found, err := st.ClaimNextJob(ctxFor(t))
+		if err != nil {
+			t.Fatalf("ClaimNextJob: %v", err)
+		}
+
+		if !found {
+			return resumed
+		}
+
+		if claim.Resume == "" {
+			continue
+		}
+
+		if !claim.Manual {
+			t.Errorf("the resume row is not manual: the breaker would hold back a person's resume")
+		}
+
+		resumed = append(resumed, claim.Resume)
+	}
+}

@@ -144,6 +144,16 @@ func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *con
 	done := foldRunSteps(steps)
 	build := triggeredBuild(runID)
 
+	err = refuseMovedSteps(runID, steps, build, remainderSteps(job))
+	if err != nil {
+		return false, err
+	}
+
+	err = refuseLostInputs(ctx, st, runID, inputs, done, job)
+	if err != nil {
+		return false, err
+	}
+
 	if len(inputs) > 0 && buildFinished(done, build, remainderSteps(job)) {
 		if state := resumeFrom(ctx); state != nil {
 			state.refetch = true
@@ -169,6 +179,13 @@ func remainderSteps(job *config.Job) []config.Step {
 
 // buildFinished reports whether the passes recorded for build walk off the end of steps when replayed the way the walk replays them: each pass routes on the outcome it recorded, so a to: jump that left a step unvisited does not read as unfinished work. A get records nothing and is stepped over.
 func buildFinished(done map[doneKey]doneStep, build string, steps []config.Step) bool {
+	_, unfinished := firstUnfinished(done, build, steps)
+
+	return !unfinished
+}
+
+// firstUnfinished is the step a resume of build would run first: the walk buildFinished describes, stopped at the first pass nothing recorded.
+func firstUnfinished(done map[doneKey]doneStep, build string, steps []config.Step) (int, bool) {
 	passes := map[int]int{}
 
 	for i := 0; i >= 0 && i < len(steps); {
@@ -183,13 +200,61 @@ func buildFinished(done map[doneKey]doneStep, build string, steps []config.Step)
 
 		finished, ok := done[doneKey{build, i, passes[i]}]
 		if !ok {
-			return false
+			return i, true
 		}
 
 		i = replayedNext(steps, i, step, finished.outcome)
 	}
 
-	return true
+	return 0, false
+}
+
+func keptIn(steps []store.RunStep, build string) int {
+	kept := 0
+
+	for _, step := range steps {
+		if step.BuildID == build {
+			kept++
+		}
+	}
+
+	return kept
+}
+
+// ResumePoint is what a resume of a failed run would do, for a person deciding whether to press it: the step it picks up at, and how many finished passes it keeps. ok is false when a resume would gain nothing (no finished step to keep, or nothing left unfinished in the build) or would be refused: CheckResumable's answer for a build with work left, read once because a failed run's page asks on every poll.
+func ResumePoint(ctx context.Context, st store.Runs, run store.RunRow, job *config.Job) (string, int, bool) {
+	if run.Status != store.RunFailed || run.Workspace == "" {
+		return "", 0, false
+	}
+
+	steps, err := st.CompletedRunSteps(ctx, run.ID)
+	if err != nil {
+		return "", 0, false
+	}
+
+	build := triggeredBuild(run.ID)
+
+	kept := keptIn(steps, build)
+	if kept == 0 {
+		return "", 0, false
+	}
+
+	plan := remainderSteps(job)
+	if refuseMovedSteps(run.ID, steps, build, plan) != nil {
+		return "", 0, false
+	}
+
+	at, unfinished := firstUnfinished(foldRunSteps(steps), build, plan)
+	if !unfinished || at >= len(plan) {
+		return "", 0, false
+	}
+
+	_, err = os.Stat(run.Workspace)
+	if err != nil {
+		return "", 0, false
+	}
+
+	return plan[at].DisplayName(), kept, true
 }
 
 // replayedNext is where the walk went after step i produced outcome, by the plan's routes: i+1 unless outcome names a target.
@@ -212,6 +277,42 @@ func replayedNext(steps []config.Step, i int, step config.Step, outcome string) 
 	}
 
 	return i + 1
+}
+
+// refuseLostInputs refuses, before the run is put back in flight, the resume resumeInputSets would refuse after: a build that kept steps but recorded no inputs, or one whose recorded version history has since pruned.
+func refuseLostInputs(ctx context.Context, st store.Versions, runID string, inputs []store.RunInput, done map[doneKey]doneStep, job *config.Job) error {
+	if len(inputs) == 0 {
+		return refuseUnrecordedBuild(&resumeState{id: runID, done: done})
+	}
+
+	history, err := loadResourceHistory(ctx, st, job)
+	if err != nil {
+		return fmt.Errorf("could not read the history run %q resumes against: %w", runID, err)
+	}
+
+	_, err = recordedInputSet(runID, inputs, history)
+
+	return err
+}
+
+// refuseMovedSteps refuses a resume whose finished steps no longer sit where the plan puts them: the replay skips by position, so a step inserted before them would be credited as done without running. An edit that leaves them in place, like a fix to the step that failed, resumes.
+func refuseMovedSteps(runID string, steps []store.RunStep, build string, plan []config.Step) error {
+	for _, step := range steps {
+		if step.BuildID != build || step.Name == "" {
+			continue
+		}
+
+		now := ""
+		if step.Index < len(plan) {
+			now = executedStepName(plan[step.Index])
+		}
+
+		if now != step.Name {
+			return fmt.Errorf("cannot resume run %q: the step it finished at position %d was %q and the pipeline now has %q there — start a new run", runID, step.Index, step.Name, now)
+		}
+	}
+
+	return nil
 }
 
 // refuseMissingWorkspace refuses a resume that would keep artifacts from a

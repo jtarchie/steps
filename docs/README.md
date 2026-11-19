@@ -70,7 +70,9 @@ steps runs follow -p <name> [run]
 steps runs trigger -p <name> <job>
                             queue a run on a daemon (--pin field=value
                             for one version; runs retry <run> re-queues
-                            a past run against the versions it built)
+                            a past run against the versions it built;
+                            runs resume <run> continues a failed one from
+                            the step that failed)
 steps runs abort -p <name> <run>
                             stop a run on a daemon (--queued <job> drops
                             a queued one instead)
@@ -126,6 +128,8 @@ steps: error: job "self-build": preflight failed, no steps were run:
   agent "coder": model "deepseek-v4-flash": no response within 30s
     (other models on this endpoint responded — the model itself looks unavailable, not the endpoint or the key)
 ```
+
+A provider that refuses the probe is quoted, not just its status: OpenRouter answers an exhausted key with a bare `403 Forbidden`, and its body is what says `Key limit exceeded`. Only the probe's refusal is quoted, because only the probe's request is known to hold nothing private (it says `hi`); a step's own refusal keeps to the status.
 
 Tuning, all optional:
 
