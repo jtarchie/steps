@@ -400,7 +400,7 @@ func (e assertFilesExpectation) nudge(unmet []string) string {
 		return text
 	}
 
-	return text + " " + e.whereToWrite()
+	return text + " " + e.whereToWrite(e.files)
 }
 
 // rootFromAgentDir spells the step's directory from where the model works, never as a path on this machine: a containerized agent has no such path, and one on the host learns nothing from the operator's layout.
@@ -418,10 +418,10 @@ func (e assertFilesExpectation) rootFromAgentDir() string {
 // chances. It is told where the paths are rooted instead — a shell command
 // can still get there, and if nothing can, the step is misconfigured and the
 // failure should read like one.
-func (e assertFilesExpectation) whereToWrite() string {
-	relative := make([]string, 0, len(e.files))
+func (e assertFilesExpectation) whereToWrite(paths []string) string {
+	relative := make([]string, 0, len(paths))
 
-	for _, file := range e.files {
+	for _, file := range paths {
 		rel, err := filepath.Rel(e.agentDir, filepath.Join(e.dir, file))
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return fmt.Sprintf("Those paths are relative to %s (from your working directory), which is not your working directory.", e.rootFromAgentDir())
@@ -475,8 +475,20 @@ func (e assertFilesExpectation) shapeNudge(unmet []string, alsoFiles bool) strin
 		opening = "This step also declared the SHAPE its JSON output must have, and it does not match"
 	}
 
-	return fmt.Sprintf("%s: %s. A later step reads these files as that exact shape, so a close-but-wrong structure strands the run the same way a missing file would. Rewrite them in the declared shape, then finish.",
+	text := fmt.Sprintf("%s: %s. A later step reads these files as that exact shape, so a close-but-wrong structure strands the run the same way a missing file would. Rewrite them in the declared shape, then finish.",
 		opening, strings.Join(unmet, "; "))
+	if e.agentDir == "" || e.agentDir == e.dir {
+		return text
+	}
+
+	paths := make([]string, 0, len(e.shape))
+	for path := range e.shape {
+		paths = append(paths, path)
+	}
+
+	sort.Strings(paths)
+
+	return text + " " + e.whereToWrite(paths)
 }
 
 // assertFilesNudge is what a model trying to finish without its declared

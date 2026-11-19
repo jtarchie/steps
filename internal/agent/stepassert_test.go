@@ -6,6 +6,7 @@ package agent
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -331,16 +332,76 @@ func TestOwedShapeIsNudged(t *testing.T) {
 		Nudge: true,
 	}, dir, dir)
 
-	writeShapeFile(t, dir, "units/index.json", `{"intents":["a"]}`)
+	writeShapeFile(t, dir, `{"intents":["a"]}`)
 
 	unmet, message := expect.owed(nil)
 	if len(unmet) != 1 || !strings.Contains(message, "SHAPE") || !strings.Contains(message, "is not array<string>") {
 		t.Errorf("wrong-shape file not nudged: unmet=%v message=%q", unmet, message)
 	}
 
-	writeShapeFile(t, dir, "units/index.json", `["a","b"]`)
+	writeShapeFile(t, dir, `["a","b"]`)
 
 	if unmet, message := expect.owed(nil); len(unmet) != 0 || message != "" {
 		t.Errorf("shape fixed, still owed: %v %q", unmet, message)
+	}
+}
+
+// TestShapeFailsThePostHocCheck is the agent's shape judge with no nudge: a present, non-empty file in the wrong structure fails the step, and the right structure passes it.
+func TestShapeFailsThePostHocCheck(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	assert := &config.Assert{Shape: map[string]string{"units/index.json": "array<string>"}}
+
+	writeShapeFile(t, dir, `{"intents":["a"]}`)
+
+	err := assertAgentResponse(assert, conversationResult{}, dir)
+	if err == nil || !strings.Contains(err.Error(), "units/index.json is not array<string>") {
+		t.Errorf("wrong-shape file passed the post-hoc check: %v", err)
+	}
+
+	writeShapeFile(t, dir, `["a"]`)
+
+	err = assertAgentResponse(assert, conversationResult{}, dir)
+	if err != nil {
+		t.Errorf("right-shape file failed: %v", err)
+	}
+}
+
+// TestShapeMismatchRefusesTheVerdict pins the verdict gate: under nudge, a model may not call its verdict while a declared file is the wrong shape.
+func TestShapeMismatchRefusesTheVerdict(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	expect := newStepExpectation(&config.Assert{
+		Shape: map[string]string{"units/index.json": "array<string>"},
+		Nudge: true,
+	}, dir, dir)
+
+	writeShapeFile(t, dir, `{"intents":["a"]}`)
+
+	err := expect.mismatch(nil)
+	if err == nil || !strings.Contains(err.Error(), "is not array<string>") {
+		t.Errorf("wrong shape did not refuse the verdict: %v", err)
+	}
+}
+
+// TestShapeNudgeSpeaksTheModelsOwnPaths is TestNudgeSpeaksTheModelsOwnPaths for shape: under dir:, a nudge naming the space-relative path sends the model to rewrite a file one directory too deep.
+func TestShapeNudgeSpeaksTheModelsOwnPaths(t *testing.T) {
+	t.Parallel()
+
+	space := t.TempDir()
+	agentDir := filepath.Join(space, "units")
+
+	expect := newStepExpectation(&config.Assert{
+		Shape: map[string]string{"units/index.json": "array<string>"},
+		Nudge: true,
+	}, space, agentDir)
+
+	writeShapeFile(t, space, `{"intents":["a"]}`)
+
+	_, message := expect.owed(nil)
+	if !strings.Contains(message, "write them as: index.json") {
+		t.Errorf("shape nudge does not translate the path into the model's own frame: %q", message)
 	}
 }

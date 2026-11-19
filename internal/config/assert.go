@@ -544,11 +544,6 @@ func checkAssertFilePaths(label string, files, outputs []string) error {
 	return nil
 }
 
-// validateAssertShape rejects an assert.shape entry whose path is not a file
-// under the step's own outputs: — the same rule as assert.files, since a shape
-// is asserted on the same written file — or whose value is not a shape
-// ValidShapeExpr understands. Both are load errors: a misnamed path or an
-// unknown kind could never match on any run, against any output.
 // requireOutputCapturingKind rejects an assert.shape on anything but a task or
 // agent step — the only kinds that capture outputs: a shape to check.
 func requireOutputCapturingKind(label string, step *Step) error {
@@ -564,6 +559,11 @@ func requireOutputCapturingKind(label string, step *Step) error {
 	return nil
 }
 
+// validateAssertShape rejects an assert.shape entry whose path is not a file
+// under the step's own outputs: — the same rule as assert.files, since a shape
+// is asserted on the same written file — or whose value is not a shape
+// ValidShapeExpr understands. Both are load errors: a misnamed path or an
+// unknown kind could never match on any run, against any output.
 func (c *Config) validateAssertShape(label string, step *Step) error {
 	if step.Assert == nil || len(step.Assert.Shape) == 0 {
 		return nil

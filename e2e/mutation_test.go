@@ -355,6 +355,9 @@ func mutateField(assert map[string]any, step map[string]any, field string) bool 
 			return path + "." + mutantMarker
 		})
 
+	case "shape":
+		return mutateShape(assert)
+
 	case "tool_calls":
 		return mutateToolCalls(assert)
 
@@ -374,6 +377,29 @@ func mutateField(assert map[string]any, step map[string]any, field string) bool 
 	default:
 		return false
 	}
+}
+
+// mutateShape swaps the first declared path's kind for one its JSON cannot be, still a valid expression so the mutant loads.
+func mutateShape(assert map[string]any) bool {
+	shape, ok := assert["shape"].(map[string]any)
+	if !ok || len(shape) == 0 {
+		return false
+	}
+
+	paths := make([]string, 0, len(shape))
+	for path := range shape {
+		paths = append(paths, path)
+	}
+
+	sort.Strings(paths)
+
+	if shape[paths[0]] == "object" {
+		shape[paths[0]] = "array"
+	} else {
+		shape[paths[0]] = "object"
+	}
+
+	return true
 }
 
 // mutateFirstOfList replaces a list's first entry with the marker.

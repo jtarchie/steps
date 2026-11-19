@@ -358,12 +358,12 @@ func TestNudgeAdmitsAPathTheModelCannotReach(t *testing.T) {
 	}
 }
 
-// writeShapeFile writes exact JSON content at rel, for assert.shape tests that
+// writeShapeFile writes exact JSON content at units/index.json, for assert.shape tests that
 // need a specific structure rather than writeExpectedFile's placeholder.
-func writeShapeFile(t *testing.T, dir, rel, body string) {
+func writeShapeFile(t *testing.T, dir, body string) {
 	t.Helper()
 
-	path := filepath.Join(dir, rel)
+	path := filepath.Join(dir, "units", "index.json")
 
 	err := os.MkdirAll(filepath.Dir(path), 0o750)
 	if err != nil {
