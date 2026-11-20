@@ -38,7 +38,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 30
+const schemaVersion = 31
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS pipelines (
     path TEXT NOT NULL,
     current_revision_id BIGINT,
     paused_at TIMESTAMPTZ,
-    set_at    TIMESTAMPTZ
+    set_at    TIMESTAMPTZ,
+    one_off   BOOLEAN NOT NULL DEFAULT false
 );
 
 CREATE TABLE IF NOT EXISTS identity (

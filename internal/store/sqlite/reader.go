@@ -209,14 +209,14 @@ func (r *Reader) Close() error {
 // a bug even when nothing changed.
 func (r *Reader) Pipelines(ctx context.Context) ([]store.PipelineRow, error) {
 	return collect(ctx, r.db, "pipelines", `
-		SELECT p.name, p.path, COALESCE(v.sha, ''), p.paused_at IS NOT NULL
+		SELECT p.name, p.path, COALESCE(v.sha, ''), p.paused_at IS NOT NULL, p.one_off
 		FROM pipelines p
 		LEFT JOIN pipeline_revisions v ON v.id = p.current_revision_id
 		ORDER BY p.name
 	`, nil, func(rows *sql.Rows) (store.PipelineRow, error) {
 		var row store.PipelineRow
 
-		err := rows.Scan(&row.Name, &row.Path, &row.CurrentSHA, &row.Paused)
+		err := rows.Scan(&row.Name, &row.Path, &row.CurrentSHA, &row.Paused, &row.OneOff)
 
 		return row, err //nolint:wrapcheck // collect wraps it with the query's own context
 	})

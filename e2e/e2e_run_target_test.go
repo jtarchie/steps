@@ -350,3 +350,111 @@ func TestRunTargetIgnoresEnvironmentDefaults(t *testing.T) {
 		t.Errorf("steps run --target with STEPS_KEEP_WORKSPACE and STEPS_WORKSPACE_ROOT exported = %v, want it sent and refused only by the unreachable daemon", err)
 	}
 }
+
+// A finished one-off keeps its page, transcript and steps runs entry until --one-off-history newer ones have finished, across a restart, which serves it unpolled because the state database says it is a one-off.
+func TestRunTargetKeepsTheLastFinishedOneOffs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	state := filepath.Join(dir, "daemon.db")
+	polled := filepath.Join(dir, "polled")
+
+	path := writePipeline(t, dir, `
+resource_types:
+- name: counter
+  config:
+    check: echo '[{"n":"one"}]'
+    in: "true"
+
+resources:
+- name: ticks
+  type: counter
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo kept-on-the-daemon
+- name: auto
+  plan:
+  - get: ticks
+    trigger: true
+  - task: note
+    run: touch `+polled+`
+`)
+
+	served := startWeb(t, "--db", state, "--interval", "50ms", "--one-off-history", "1")
+	defer served.stopIfRunning(t)
+
+	first := runTargetPage(t, path, served)
+
+	// Several reap polls, and the one-off still alone under its bound.
+	time.Sleep(3 * time.Second)
+
+	assertOneOffKept(t, served, state, first)
+
+	served.stop(t)
+
+	served = startWeb(t, "--db", state, "--interval", "50ms", "--one-off-history", "1")
+	defer served.stopIfRunning(t)
+
+	assertOneOffKept(t, served, state, first)
+
+	second := runTargetPage(t, path, served)
+
+	deadline := time.Now().Add(30 * time.Second)
+	for code, _ := served.get(t, first); code != http.StatusNotFound; code, _ = served.get(t, first) {
+		if time.Now().After(deadline) {
+			t.Fatalf("GET %s = %d after a newer one-off finished past --one-off-history 1, want it gone", first, code)
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	assertOneOffKept(t, served, state, second)
+
+	if fileExists(polled) {
+		t.Error("a restored one-off was polled, and its trigger: true job ran")
+	}
+}
+
+// runTargetPage runs build as a one-off and answers its run's page on the daemon.
+func runTargetPage(t *testing.T, path string, served *webProcess) string {
+	t.Helper()
+
+	var err error
+
+	out := captureStdout(t, func() {
+		err = stepsRun(t, []string{"run", path, "--job", "build", "--target", served.target(), "--progress", "plain"})
+	})
+	if err != nil {
+		t.Fatalf("steps run --target: %v\n%s", err, out)
+	}
+
+	page := regexp.MustCompile(`/p/[^/\s]+/runs/[A-Za-z0-9]+`).FindString(out)
+	if page == "" {
+		t.Fatalf("the terminal never named the run's page on the daemon:\n%s", out)
+	}
+
+	return page
+}
+
+func assertOneOffKept(t *testing.T, served *webProcess, state, page string) {
+	t.Helper()
+
+	if code, body := served.get(t, page); code != http.StatusOK || !strings.Contains(body, "kept-on-the-daemon") {
+		t.Errorf("GET %s = %d, want the finished one-off's run still served with its transcript", page, code)
+	}
+
+	pipelineName := strings.Split(page, "/")[2]
+
+	var err error
+
+	out := captureStdout(t, func() {
+		err = stepsRun(t, []string{"runs", "-p", pipelineName, "--db", state})
+	})
+	if err != nil || !strings.Contains(out, "succeeded") {
+		t.Errorf("steps runs -p %s = %v, want its finished run listed:\n%s", pipelineName, err, out)
+	}
+}

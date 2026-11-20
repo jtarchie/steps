@@ -122,7 +122,7 @@ func (r remoteRuns) target(ctx context.Context, runID, job string) (store.RunRow
 	return run, nil
 }
 
-// started waits for the one-off's run to exist: a run is named when the daemon claims its queue row, not when it is queued, and a one-off pipeline holds only that one job's runs, so its first is ours. ponytail: waits until the daemon reaps a one-off that never started a run (its grace), with Ctrl-C to leave sooner; a queue-row read on the API is the upgrade.
+// started waits for the one-off's run to exist: a run is named when the daemon claims its queue row, not when it is queued, and a one-off pipeline holds only that one job's runs, so its first is ours. ponytail: a one-off whose queued run was aborted before it started is waited on until it falls out of the daemon's --one-off-history, with Ctrl-C to leave sooner; a queue-row read on the API is the upgrade.
 func (r remoteRuns) started(ctx context.Context, job string) (store.RunRow, error) {
 	for {
 		run, found, err := r.newest(ctx, job)

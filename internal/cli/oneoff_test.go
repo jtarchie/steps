@@ -18,20 +18,27 @@ import (
 	"github.com/jtarchie/steps/internal/web"
 )
 
-// Not t.Parallel(), here and below: a reap is a destroy, which forgets mcp logins in the process environment.
-func TestAOneOffIsForgottenOnceItsRunIsOverAndTheGraceHasPassed(t *testing.T) {
+// Not t.Parallel(), here and below: a trim is a destroy, which forgets mcp logins in the process environment.
+func TestTheOldestFinishedOneOffIsForgottenPastTheHistory(t *testing.T) {
 	isolateLogins(t)
 
 	held := servingDaemon(t)
-	held.oneOffGrace = 0
+	held.oneOffHistory = 1
 	gate := filepath.Join(t.TempDir(), "gate")
 
-	created := oneOff(t, held, onRoot("while [ ! -e "+strconv.Quote(gate)+" ]; do sleep 0.02; done"))
+	running := oneOff(t, held, gated(gate))
+	waitRunning(t, held, running.Pipeline)
+
+	quick := oneOff(t, held, onRoot("echo hi"))
+
+	if status := finishedRun(t, held, quick.Pipeline); status != "succeeded" {
+		t.Fatalf("the quick one-off's run %s, want succeeded", status)
+	}
 
 	time.Sleep(3 * oneOffPoll)
 
-	if held.server.Lookup(created.Pipeline) == nil {
-		t.Fatal("a one-off was reaped while its run was still going")
+	if held.server.Lookup(running.Pipeline) == nil || held.server.Lookup(quick.Pipeline) == nil {
+		t.Fatal("a one-off was forgotten while only one had finished, under a history of one")
 	}
 
 	err := os.WriteFile(gate, nil, 0o600)
@@ -39,56 +46,33 @@ func TestAOneOffIsForgottenOnceItsRunIsOverAndTheGraceHasPassed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if status := finishedRun(t, held, created.Pipeline); status != "succeeded" {
-		t.Fatalf("the one-off's run %s, want succeeded", status)
-	}
-
-	waitUnserved(t, held, created.Pipeline)
+	waitUnserved(t, held, quick.Pipeline)
 	// Unserved is the destroy's first step, and its rows go after the loops end.
 	held.reaping.Wait()
 
-	if slices.Contains(pipelineNames(t, string(held.state)), created.Pipeline) {
-		t.Errorf("the reaped one-off %s is still in the state database", created.Pipeline)
+	if slices.Contains(pipelineNames(t, string(held.state)), quick.Pipeline) {
+		t.Errorf("the forgotten one-off %s is still in the state database", quick.Pipeline)
+	}
+
+	if held.server.Lookup(running.Pipeline) == nil {
+		t.Error("the one-off that finished last was forgotten instead of the one that finished first")
 	}
 }
 
-// The grace is what lets a dropped terminal reconnect and a browser read the end, so a finished one-off is served through it.
-func TestAFinishedOneOffIsServedThroughItsGrace(t *testing.T) {
-	isolateLogins(t)
-
-	held := servingDaemon(t)
-	held.oneOffGrace = time.Hour
-
-	created := oneOff(t, held, onRoot("echo hi"))
-
-	if status := finishedRun(t, held, created.Pipeline); status != "succeeded" {
-		t.Fatalf("the one-off's run %s, want succeeded", status)
-	}
-
-	time.Sleep(3 * oneOffPoll)
-
-	if held.server.Lookup(created.Pipeline) == nil {
-		t.Error("a one-off was reaped inside its grace")
-	}
-}
-
-// A restart reads a one-off back from its name alone: restored, its interrupted run finished, and then reaped like any other.
-func TestARestartedDaemonStillReapsAOneOff(t *testing.T) {
+// A restart reads a one-off back from its column: restored unpolled, its interrupted run resumed and never counted while it runs, and the bound applied once it ends.
+func TestARestartedDaemonKeepsTheBoundOverItsOneOffs(t *testing.T) {
 	isolateLogins(t)
 
 	held := servingDaemon(t)
 	gate := filepath.Join(t.TempDir(), "gate")
 
-	created := oneOff(t, held, onRoot("while [ ! -e "+strconv.Quote(gate)+" ]; do sleep 0.02; done"))
-
-	deadline := time.Now().Add(30 * time.Second)
-	for len(held.runner.Running(created.Pipeline)) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the one-off never started")
-		}
-
-		time.Sleep(10 * time.Millisecond)
+	done := oneOff(t, held, onRoot("echo hi"))
+	if status := finishedRun(t, held, done.Pipeline); status != "succeeded" {
+		t.Fatalf("the finished one-off's run %s, want succeeded", status)
 	}
+
+	interrupted := oneOff(t, held, gated(gate))
+	waitRunning(t, held, interrupted.Pipeline)
 
 	held.Close()
 
@@ -100,7 +84,7 @@ func TestARestartedDaemonStillReapsAOneOff(t *testing.T) {
 	}
 
 	restarted := newDaemon(t.Context(), server, local, held.state, held.exec, HistoryFlags{}, time.Hour)
-	restarted.oneOffGrace = 0
+	restarted.oneOffHistory = 1
 	t.Cleanup(restarted.Close)
 
 	err = restarted.load(t.Context())
@@ -108,8 +92,11 @@ func TestARestartedDaemonStillReapsAOneOff(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 
-	if server.Lookup(created.Pipeline) == nil {
-		t.Fatal("a restart did not serve the interrupted one-off")
+	waitRunning(t, restarted, interrupted.Pipeline)
+	time.Sleep(3 * oneOffPoll)
+
+	if server.Lookup(done.Pipeline) == nil {
+		t.Fatal("a restart forgot the one finished one-off while the other still ran")
 	}
 
 	err = os.WriteFile(gate, nil, 0o600)
@@ -117,15 +104,24 @@ func TestARestartedDaemonStillReapsAOneOff(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	waitUnserved(t, restarted, created.Pipeline)
+	waitUnserved(t, restarted, done.Pipeline)
+
+	if server.Lookup(interrupted.Pipeline) == nil {
+		t.Error("the resumed one-off, the newest to finish, was forgotten")
+	}
 }
 
-// A failed queue whose undo cannot delete leaves a one-off served with nothing queued, as a crash between the record and the queue does for a restart; it is reaped all the same.
-func TestAOneOffWithNothingQueuedIsStillReaped(t *testing.T) {
+// A failed queue whose undo cannot delete leaves a one-off served with nothing queued, as a crash between the record and the queue does for a restart; it counts as the oldest finished, and goes first.
+func TestAOneOffWithNothingQueuedIsForgottenFirst(t *testing.T) {
 	isolateLogins(t)
 
 	held := servingDaemon(t)
-	held.oneOffGrace = 0
+	held.oneOffHistory = 1
+
+	kept := oneOff(t, held, onRoot("true"))
+	if status := finishedRun(t, held, kept.Pipeline); status != "succeeded" {
+		t.Fatalf("the one-off's run %s, want succeeded", status)
+	}
 
 	var faulty atomic.Bool
 	faulty.Store(true)
@@ -141,11 +137,12 @@ func TestAOneOffWithNothingQueuedIsStillReaped(t *testing.T) {
 	}
 
 	held.mu.Lock()
-	names := slices.Collect(maps.Keys(held.served))
+	names := slices.DeleteFunc(slices.Collect(maps.Keys(held.served)), func(name string) bool { return name == kept.Pipeline })
+	restoredOneOff := len(names) == 1 && held.served[names[0]].oneOff
 	held.mu.Unlock()
 
-	if len(names) != 1 || !isOneOff(names[0]) {
-		t.Fatalf("served %v, want the one-off the failed undo restored", names)
+	if !restoredOneOff {
+		t.Fatalf("served %v besides %s, want the one-off the failed undo restored, still a one-off", names, kept.Pipeline)
 	}
 
 	faulty.Store(false)
@@ -153,7 +150,30 @@ func TestAOneOffWithNothingQueuedIsStillReaped(t *testing.T) {
 	select {
 	case <-deleted:
 	case <-time.After(30 * time.Second):
-		t.Fatalf("%s, served with nothing queued, was never reaped", names[0])
+		t.Fatalf("%s, served with nothing queued, was never forgotten", names[0])
+	}
+
+	held.reaping.Wait()
+
+	if held.server.Lookup(kept.Pipeline) == nil {
+		t.Error("the one-off that ran was forgotten instead of the one with nothing queued")
+	}
+}
+
+func gated(gate string) string {
+	return onRoot("while [ ! -e " + strconv.Quote(gate) + " ]; do sleep 0.02; done")
+}
+
+func waitRunning(t *testing.T, held *daemon, name string) {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for len(held.runner.Running(name)) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never started", name)
+		}
+
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -187,7 +207,7 @@ func (s neverQueued) Delete(ctx context.Context) error {
 	return err //nolint:wrapcheck // test double
 }
 
-// The prefix is how a restart knows a one-off, so nothing else may take it on.
+// The prefix keeps a minted name from ever being one somebody set, so nothing else may take it on.
 func TestTheOneOffPrefixIsTheDaemonsOwn(t *testing.T) {
 	isolateLogins(t)
 

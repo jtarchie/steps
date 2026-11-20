@@ -57,6 +57,7 @@ type WebCmd struct {
 	BasicAuthPassword string   `env:"STEPS_BASIC_AUTH_PASSWORD"                                                                                                                                                         help:"the password that goes with it"                                                          name:"basic-auth-password"`
 	LocalUser         []string `help:"a local account as name:bcrypt-hash, the line htpasswd -nbB writes (repeatable)"                                                                                                  name:"local-user"                                                                              placeholder:"NAME:HASH"`
 	ActivityHistory   int      `default:"10000"                                                                                                                                                                         help:"how many entries the activity log keeps, across every pipeline (0 is no limit)"          name:"activity-history"`
+	OneOffHistory     int      `default:"10"                                                                                                                                                                            help:"how many finished steps run --target one-offs stay served (0 is no limit)"               name:"one-off-history"`
 	Role              []string `help:"who may do what, as role=rule: viewer, operator or admin, and an expression over Provider, UserID, ID, Email, Organizations and Groups (repeatable; with any, admin is required)" name:"role"                                                                                    placeholder:"ROLE=RULE"`
 	MCPAccess         string   `help:"who may connect an agent to read this daemon at /mcp, as a rule in --role's language (default: anyone with the viewer role)"                                                      name:"mcp-access"                                                                              placeholder:"RULE"`
 	GitHubClientID    string   `help:"sign people in with GitHub: the OAuth app's client id"                                                                                                                            name:"github-client-id"                                                                        placeholder:"ID"`
@@ -426,6 +427,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 
 	held := newDaemon(ctx, server, local, state, w.ExecFlags, w.HistoryFlags, w.Interval)
 	held.fence = w.Fence
+	held.oneOffHistory = w.OneOffHistory
 	defer held.Close()
 
 	// Deferred after Close, so it stops first: a collection must never read a store Close has shut.

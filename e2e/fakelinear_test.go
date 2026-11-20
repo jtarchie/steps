@@ -25,6 +25,7 @@ type fakeLinearComment struct {
 
 type fakeLinearEntry struct {
 	CreatedAt string
+	FromState string // a state id; empty for the entry that created the issue, or a change that moved no state
 	ToState   string // a state id; empty for a change that moved no state
 }
 
@@ -62,7 +63,7 @@ func newFakeLinear(t *testing.T) *fakeLinear {
 	fake := &fakeLinear{
 		t: t,
 		states: []fakeLinearState{
-			{"st-backlog", "Backlog", "backlog"}, {"st-todo", "Todo", "unstarted"},
+			{"st-backlog", "Backlog", "backlog"}, {"st-todo", "Todo", "unstarted"}, {"st-ready", "Ready", "unstarted"},
 			{"st-prog", "In Progress", "started"}, {"st-done", "Done", "completed"},
 		},
 		labels: map[string]string{"lb-ready": "agent-ready", "lb-bug": "bug", "ws-urgent": "urgent"},
@@ -101,8 +102,8 @@ func (f *fakeLinear) add(issue fakeLinearIssue) {
 // move puts an issue in a state, as a person dragging it on the board does: one history entry, at the time given.
 func (f *fakeLinear) move(identifier, state, at string) {
 	f.edit(identifier, func(issue *fakeLinearIssue) {
+		issue.History = append(issue.History, fakeLinearEntry{CreatedAt: at, FromState: issue.State, ToState: state})
 		issue.State = state
-		issue.History = append(issue.History, fakeLinearEntry{CreatedAt: at, ToState: state})
 	})
 }
 
@@ -412,10 +413,19 @@ func (f *fakeLinear) listIssues(query string, vars map[string]any) (map[string]a
 		history := []map[string]any{}
 
 		for _, entry := range window(issue.History) {
-			node := map[string]any{"createdAt": entry.CreatedAt, "toState": nil}
-			if entry.ToState != "" {
-				state := f.stateByID(entry.ToState)
-				node["toState"] = map[string]any{"id": state.ID, "type": state.Type}
+			node := map[string]any{"createdAt": entry.CreatedAt}
+
+			// Only the fields the query selects, as GraphQL answers: a check that never asks for fromState must not be handed it.
+			for field, id := range map[string]string{"fromState": entry.FromState, "toState": entry.ToState} {
+				if !strings.Contains(query, field+" {") {
+					continue
+				}
+
+				node[field] = nil
+				if id != "" {
+					state := f.stateByID(id)
+					node[field] = map[string]any{"id": state.ID, "type": state.Type}
+				}
 			}
 
 			history = append(history, node)
@@ -578,8 +588,8 @@ func (f *fakeLinear) updateIssue(vars map[string]any) (map[string]any, string) {
 	f.updates = append(f.updates, input)
 
 	if state, ok := input["stateId"].(string); ok && state != issue.State {
+		issue.History = append(issue.History, fakeLinearEntry{CreatedAt: "2026-10-05T09:00:00.000Z", FromState: issue.State, ToState: state})
 		issue.State = state
-		issue.History = append(issue.History, fakeLinearEntry{CreatedAt: "2026-10-05T09:00:00.000Z", ToState: state})
 	}
 
 	if removed, ok := input["removedLabelIds"].([]any); ok {

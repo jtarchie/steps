@@ -29,6 +29,16 @@ func (s *Store) Unpause(ctx context.Context) error {
 	return nil
 }
 
+// MarkOneOff flags the pipeline as a daemon's one-off.
+func (s *Store) MarkOneOff(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE pipelines SET one_off = 1 WHERE id = ?`, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not mark pipeline %q a one-off: %w", s.pipeline, err)
+	}
+
+	return nil
+}
+
 // Paused reports whether the pipeline admits nothing: its own breaker, or PauseAll's.
 func (s *Store) Paused(ctx context.Context) (bool, error) {
 	var paused bool

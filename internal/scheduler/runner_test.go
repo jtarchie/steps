@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -713,6 +714,10 @@ func TestInterruptedAsksTheDrain(t *testing.T) {
 
 	if interrupted(t.Context(), fmt.Errorf("step: %w", context.Canceled)) {
 		t.Error("a cancellation with the drain still live read as this process cutting the run short")
+	}
+
+	if interrupted(t.Context(), fmt.Errorf("record: %w", sql.ErrTxDone)) {
+		t.Error("a finished transaction with the drain still live read as this process cutting the run short")
 	}
 
 	ended, end := context.WithCancel(t.Context())

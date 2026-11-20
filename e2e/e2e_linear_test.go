@@ -338,3 +338,26 @@ func TestWatchLinearIssuesRetryOnALongHistory(t *testing.T) {
 	fixture.watch(t)
 	fixture.assertDid(t, "ENG-9")
 }
+
+// TestWatchLinearIssuesMoveBetweenWatchedStatesIsNoRetry: with Todo and Ready both watched, Todo to Ready keeps the issue inside the set, so it is no new version; leaving the set and coming back still is.
+func TestWatchLinearIssuesMoveBetweenWatchedStatesIsNoRetry(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeLinear(t)
+	fake.add(fakeLinearIssue{Identifier: "ENG-1", Title: "First", CreatedAt: "2026-10-01T09:00:00.000Z"})
+
+	pipeline := strings.ReplaceAll(linearWatchPipeline, "states: [Todo]", "states: [Todo, Ready]")
+	fixture := newWatchFixture(t, strings.ReplaceAll(pipeline, "ENDPOINT", fake.URL()))
+	fixture.resources = []string{"ticket"}
+	fixture.coldStart(t)
+
+	fake.move("ENG-1", "st-ready", "2026-10-02T09:00:00.000Z")
+	fake.add(fakeLinearIssue{Identifier: "ENG-2", Title: "Second", CreatedAt: "2026-10-02T10:00:00.000Z"})
+	fixture.watch(t)
+	fixture.assertDid(t, "ENG-2")
+
+	fake.move("ENG-1", "st-prog", "2026-10-03T09:00:00.000Z")
+	fake.move("ENG-1", "st-todo", "2026-10-03T10:00:00.000Z")
+	fixture.watch(t)
+	fixture.assertDid(t, "ENG-2", "ENG-1")
+}
