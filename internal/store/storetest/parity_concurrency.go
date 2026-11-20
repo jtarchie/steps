@@ -3,6 +3,7 @@ package storetest
 import (
 	"fmt"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -73,6 +74,65 @@ func (s suite) TestConcurrentCacheEntryRecordsLeaveOneEntry(t *testing.T) {
 
 		if len(got) != 2 || got["out"] != got["logs"] {
 			t.Errorf("round %d: %s = %v, want one writer's whole entry", round, key, got)
+		}
+	}
+}
+
+// TestConcurrentCacheEntryRecordsHonourTheCapAndReleaseEveryTree: writers of different keys share one prune, and one that cannot see another's uncommitted entry neither prunes it under the cap nor counts its tree among those it releases, so the index outgrows its bound and a pruned tree is never named for removal.
+func (s suite) TestConcurrentCacheEntryRecordsHonourTheCapAndReleaseEveryTree(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	handles := []store.Store{s.open(t, "test"), s.open(t, "test")}
+
+	const keep = 3
+
+	var (
+		mu       sync.Mutex
+		released = map[string]bool{}
+	)
+
+	for round := range 10 {
+		concurrently(crowd, handles, func(st store.Store, i int) {
+			tree := fmt.Sprintf("r%d-%d", round, i)
+
+			gone, err := st.RecordCacheEntry(ctx, store.CacheResource, tree, map[string]store.CachedTree{"tree": {Digest: tree}}, keep)
+			if err != nil {
+				t.Errorf("RecordCacheEntry: %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			for _, digest := range gone {
+				released[digest] = true
+			}
+		})
+
+		named := 0
+
+		for i := range crowd {
+			tree := fmt.Sprintf("r%d-%d", round, i)
+
+			got, err := handles[0].CacheEntry(ctx, store.CacheResource, tree)
+			if err != nil {
+				t.Fatalf("CacheEntry: %v", err)
+			}
+
+			switch {
+			case len(got) > 0:
+				named++
+
+				if released[tree] {
+					t.Errorf("round %d: %s was released while an entry still names it", round, tree)
+				}
+			case !released[tree]:
+				t.Errorf("round %d: %s left the index and was never released, so nothing removes its tree", round, tree)
+			}
+		}
+
+		if named != keep {
+			t.Errorf("round %d: %d entries kept under a cap of %d", round, named, keep)
 		}
 	}
 }
