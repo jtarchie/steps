@@ -51,7 +51,7 @@ const linearProjectsQuery = `query($team: ID!, $id: ID!, $name: String!) {
 const linearIssuesQuery = `query($filter: IssueFilter, $first: Int!, $after: String, $history: Int!, $withHistory: Boolean!) {
   issues(filter: $filter, first: $first, after: $after) {
     pageInfo { hasNextPage endCursor }
-    nodes { identifier createdAt history(first: $history, orderBy: createdAt) @include(if: $withHistory) { nodes { createdAt toState { id type } } } }
+    nodes { identifier createdAt history(first: $history, orderBy: createdAt) @include(if: $withHistory) { nodes { createdAt fromState { id type } toState { id type } } } }
   }
 }`
 
@@ -293,11 +293,14 @@ type linearIssueNode struct {
 	Identifier string `json:"identifier"`
 	CreatedAt  string `json:"createdAt"`
 	History    struct {
-		Nodes []struct {
-			CreatedAt string       `json:"createdAt"`
-			ToState   *linearState `json:"toState"`
-		} `json:"nodes"`
+		Nodes []linearHistoryEntry `json:"nodes"`
 	} `json:"history"`
+}
+
+type linearHistoryEntry struct {
+	CreatedAt string       `json:"createdAt"`
+	FromState *linearState `json:"fromState"`
+	ToState   *linearState `json:"toState"`
 }
 
 func linearIssuesCheck(ctx context.Context, raw map[string]any) ([]map[string]any, error) {
@@ -376,19 +379,17 @@ func (c *linearClient) issues(ctx context.Context, filter map[string]any, withHi
 	}
 }
 
-// enteredAt is when the issue last moved into a filter state: the latest history entry whose destination matches. An issue with none in the entries read (created straight into the state, or moved there more than linearHistoryDepth changes ago) falls back to when it was created, which is stable, so it comes back as a new version at most once.
+// enteredAt is when the issue last moved into the filter set from outside it: the latest history entry whose destination is a filter state and whose origin is not, so Todo to Ready under states: [Todo, Ready] is no new version. A null origin (the entry that created the issue, or a state no longer readable) counts as outside. An issue with no such entry in those read (created straight into the set, or moved there more than linearHistoryDepth changes ago) falls back to when it was created, which is stable, so it comes back as a new version at most once.
 func enteredAt(node linearIssueNode, stateIDs, stateTypes []string) string {
+	watched := func(state *linearState) bool {
+		return state != nil && (slices.Contains(stateIDs, state.ID) || slices.Contains(stateTypes, state.Type))
+	}
+
 	latest := ""
 
 	for _, entry := range node.History.Nodes {
-		if entry.ToState == nil {
-			continue
-		}
-
-		matches := slices.Contains(stateIDs, entry.ToState.ID) || slices.Contains(stateTypes, entry.ToState.Type)
-
 		// Linear writes every createdAt as UTC in one format, so the strings sort as the moments do.
-		if matches && entry.CreatedAt > latest {
+		if watched(entry.ToState) && !watched(entry.FromState) && entry.CreatedAt > latest {
 			latest = entry.CreatedAt
 		}
 	}

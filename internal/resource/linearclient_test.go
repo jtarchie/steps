@@ -126,11 +126,11 @@ func TestLinearEnteredAtIsTheLatestMoveIntoAFilterState(t *testing.T) {
 
 	node := linearIssueNode{CreatedAt: "2026-10-01T09:00:00.000Z"}
 
+	from := &linearState{ID: "backlog", Type: "backlog"}
+
 	push := func(at, state, kind string) {
-		node.History.Nodes = append(node.History.Nodes, struct {
-			CreatedAt string       `json:"createdAt"`
-			ToState   *linearState `json:"toState"`
-		}{CreatedAt: at, ToState: &linearState{ID: state, Type: kind}})
+		node.History.Nodes = append(node.History.Nodes, linearHistoryEntry{CreatedAt: at, FromState: from, ToState: &linearState{ID: state, Type: kind}})
+		from = &linearState{ID: state, Type: kind}
 	}
 
 	if got := enteredAt(node, []string{"todo"}, nil); got != node.CreatedAt {
@@ -148,6 +148,24 @@ func TestLinearEnteredAtIsTheLatestMoveIntoAFilterState(t *testing.T) {
 
 	if got := enteredAt(node, nil, []string{"started"}); got != "2026-10-05T00:00:00.000Z" {
 		t.Errorf("by type: %q, want the last move into a started state", got)
+	}
+
+	push("2026-10-06T00:00:00.000Z", "review", "started")
+	node.History.Nodes = append(node.History.Nodes, linearHistoryEntry{CreatedAt: "2026-10-07T00:00:00.000Z"})
+
+	if got := enteredAt(node, nil, []string{"started"}); got != "2026-10-05T00:00:00.000Z" {
+		t.Errorf("between two started states: %q, want the move in from outside, not the move within", got)
+	}
+
+	if got := enteredAt(node, []string{"prog", "review"}, nil); got != "2026-10-05T00:00:00.000Z" {
+		t.Errorf("between two named states: %q, want the move in from outside, not the move within", got)
+	}
+
+	created := linearIssueNode{CreatedAt: "2026-10-01T09:00:00.000Z"}
+	created.History.Nodes = []linearHistoryEntry{{CreatedAt: "2026-10-01T09:00:01.000Z", ToState: &linearState{ID: "todo", Type: "unstarted"}}}
+
+	if got := enteredAt(created, []string{"todo"}, nil); got != "2026-10-01T09:00:01.000Z" {
+		t.Errorf("no origin: %q, want it counted as entering from outside", got)
 	}
 }
 
