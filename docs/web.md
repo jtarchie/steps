@@ -671,7 +671,7 @@ steps run ci.yml --job build --target http://alex:$(cat .steps/web-password)@ci.
 
 - The daemon validates the file as a set would, on its own machine, and serves it under a pipeline it names itself (`one-off.<random>`), so a one-off can never replace a pipeline you set. That pipeline is not polled: only the job you named runs, never what a `trigger: true` resource would start.
 - The run is the daemon's — its workers, its logins, its history and its run page, which the terminal prints a link to. Ctrl-C detaches and the run goes on; the detach line names the `steps runs follow --target` that reattaches.
-- Ten minutes after its last run finishes, the daemon forgets the one-off pipeline and everything it recorded. A restart in between resumes its run and still forgets it after.
+- The daemon keeps the last **`--one-off-history`** finished one-offs (default 10) — each one's run page, transcript and `steps runs -p one-off.<random>` entry. Once a newer one-off finishes past that count, the oldest finished one is no longer served and everything it recorded is deleted. A one-off still running is never counted or forgotten, and one retried from its page counts as finished when the retry does. `0` keeps every one. A restart serves the kept one-offs again, still unpolled, and resumes any interrupted run. (Concourse keeps `fly execute` builds forever, since its build-log retention only trims job builds; here a one-off is a whole pipeline in the list, so it is bounded.)
 - It needs the **admin** role, because it is arbitrary commands on the daemon's machine — what a set is. Names starting `one-off.` are the daemon's own: a set or rename onto one is refused.
 - Only the file and its `run_file:` includes travel. A `get` of a path on your machine (`uri: /Users/...`) cannot run on a daemon on another host. `--resume`, `--replay`, `--rerun`, `--pin`, `--force` and `--db` do not apply.
 - `--target` is read from the flag only, never from `STEPS_TARGET`: exported for the control verbs, it would quietly send every local run away.
@@ -1130,7 +1130,8 @@ name gives it an `image:`), a `github-prs`/`github-comments` resource with
 own (a step's `sandbox: true` does not reach it), a `when:` guard on a step
 with no host command of its own (a block, `approval:`, `load_var:`, an agent
 whose tools touch nothing, a `put:` of a built-in type), which runs on this
-machine, and a CLI agent with `settings: project`, whose repository hooks run
+machine unless a block around it, or the block itself, says
+[`sandbox: true`](infra.md#on-a-block), and a CLI agent with `settings: project`, whose repository hooks run
 on this machine whatever fences its tools.
 
 Because the policy lives in the daemon's config file, a pipeline cannot loosen
@@ -1190,6 +1191,10 @@ lists).
 --activity-history
                  how many entries the activity log keeps across every pipeline
                  (default 10000, 0 is no limit; see Activity)
+--one-off-history
+                 how many finished steps run --target one-offs stay served
+                 with their runs (default 10, 0 is no limit; see A one-off
+                 from a file)
 --allowed-host   refuse any request whose Host is not this name (repeatable;
                  loopback names always pass; implied on a loopback --listen;
                  env STEPS_ALLOWED_HOSTS, comma-separated; see Security)

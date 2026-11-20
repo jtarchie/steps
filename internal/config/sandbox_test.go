@@ -136,3 +136,51 @@ func TestResolvedSandboxReachesTheRunner(t *testing.T) {
 		t.Errorf("ResolveAgentInvocation = %+v, %v: want Sandbox from the agents: entry", ri.Sandbox, err)
 	}
 }
+
+// A block's fence reaches only what runs here outside an image, so a contained or placed step inside it loads as it was rather than as a fence nothing can keep.
+func TestBlockSandboxLeavesImagesAndPlacedStepsAlone(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]byte(`
+tasks:
+- name: boxed
+  image: alpine:3
+  run: "true"
+
+jobs:
+- name: build
+  plan:
+  - do:
+    - task: here
+      run: "true"
+    - task: boxed
+    - task: placed
+      tags: [gpu]
+      run: "true"
+    - do:
+      - task: deep
+        run: "true"
+      tags: [gpu]
+    sandbox: true
+`), "block", nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	children := cfg.Jobs[0].Plan[0].Do
+
+	for i, want := range map[int]bool{0: true, 1: false, 2: false} {
+		rt, err := cfg.ResolveTask(children[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if rt.Sandbox != want {
+			t.Errorf("task %q: sandbox = %v, want %v", children[i].Task, rt.Sandbox, want)
+		}
+	}
+
+	if deep := children[3].Do[0]; deep.Sandboxed() {
+		t.Error("a step a nested block places on a worker was fenced on this machine")
+	}
+}

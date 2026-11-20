@@ -165,20 +165,27 @@ func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec,
 	case config.StepKindTry:
 		return resolveStepRuntime(cfg, *step.Try)
 	case config.StepKindPut:
-		resource, err := cfg.FindResource(step.PutResourceName())
-		if err != nil {
-			return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve put: %w", err)
-		}
-
-		resourceType, err := cfg.FindResourceType(resource.Type)
-		if err != nil {
-			return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve put: %w", err)
-		}
-
-		return withIsolation(shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env, Workdir: shell.PutDir}, resourceType.Isolation()),
-			guardInputs{inputs: step.InputNames(), all: step.InputsAll()}, nil
+		return putGuardRuntime(cfg, step)
 	default:
 		// A load_var: reads its file from exactly its declared inputs (runLoadVarStep's TaskSpace); returning none handed its guard an empty directory and a permanent false (#262).
-		return shell.RunnerSpec{}, guardInputs{inputs: step.InputNames()}, nil
+		return shell.RunnerSpec{Sandbox: step.Sandboxed()}, guardInputs{inputs: step.InputNames()}, nil
 	}
+}
+
+// putGuardRuntime is a put's guard runtime: its resource type's, plus a block's sandbox: true (config.fenceBlocks), which reaches the guard and never the out.
+func putGuardRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec, guardInputs, error) {
+	resource, err := cfg.FindResource(step.PutResourceName())
+	if err != nil {
+		return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve put: %w", err)
+	}
+
+	resourceType, err := cfg.FindResourceType(resource.Type)
+	if err != nil {
+		return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve put: %w", err)
+	}
+
+	spec := withIsolation(shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env, Workdir: shell.PutDir}, resourceType.Isolation())
+	spec.Sandbox = spec.Sandbox || step.Sandboxed()
+
+	return spec, guardInputs{inputs: step.InputNames(), all: step.InputsAll()}, nil
 }

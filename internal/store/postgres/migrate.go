@@ -86,6 +86,8 @@ INSERT INTO cache_entries (kind, key, used_at)
 INSERT INTO cache_entry_trees (kind, key, name, digest)
     SELECT DISTINCT ON (action_key, output) 'step', action_key, output, digest FROM step_blobs ORDER BY action_key, output, seq DESC;
 DROP TABLE step_blobs`,
+	`ALTER TABLE pipelines ADD COLUMN one_off BOOLEAN NOT NULL DEFAULT false;
+UPDATE pipelines SET one_off = true WHERE name ~ '^one-off\.[a-z2-7]{12}$'`,
 	`ALTER TABLE questions ADD COLUMN step_key TEXT NOT NULL DEFAULT '';
 DROP INDEX idx_questions_memo;
 CREATE UNIQUE INDEX idx_questions_memo ON questions(run_id, memo_key) WHERE step_key = '';

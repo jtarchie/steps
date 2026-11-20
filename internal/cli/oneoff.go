@@ -1,6 +1,6 @@
 package cli
 
-// The daemon's half of `steps run --target` (#283): a one-off is a pipeline the daemon names, serves without a poll, queues one job of, and forgets once nothing is left to run and a grace has passed.
+// The daemon's half of `steps run --target` (#283): a one-off is a pipeline the daemon names, marks, serves without a poll, queues one job of, and forgets once --one-off-history newer one-offs have finished.
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,10 +16,10 @@ import (
 	"github.com/jtarchie/steps/internal/web"
 )
 
-// ponytail: oneOffPrefix marks a one-off, which a restart restores unpolled and reaps; a name, not a column — a pipeline somebody set under this prefix before it was reserved would be read as a one-off and reaped; a pipelines.one_off column (a schema step in both drivers) is the upgrade.
+// oneOffPrefix is reserved so a name the daemon mints is never one somebody set; the pipelines.one_off column, not the name, is what a restart reads.
 const oneOffPrefix = "one-off."
 
-// oneOffPoll is how often a one-off's queue is asked whether it is done.
+// oneOffPoll is how often a one-off's queue is asked whether it has settled.
 const oneOffPoll = time.Second
 
 func isOneOff(name string) bool { return strings.HasPrefix(name, oneOffPrefix) }
@@ -58,7 +59,11 @@ func (d *daemon) OneOff(ctx context.Context, req web.OneOffRequest) (web.OneOffR
 		return web.OneOffResult{}, err
 	}
 
-	err = d.record(ctx, st, cfg, web.SetRequest{From: req.From})
+	err = d.markOneOff(ctx, st)
+	if err == nil {
+		err = d.record(ctx, st, cfg, web.SetRequest{From: req.From})
+	}
+
 	if err != nil {
 		closeProvider(provider)
 		release(st)
@@ -66,7 +71,7 @@ func (d *daemon) OneOff(ctx context.Context, req web.OneOffRequest) (web.OneOffR
 		return web.OneOffResult{}, err
 	}
 
-	d.start(name, cfg, st, provider, req.From)
+	d.start(name, cfg, st, provider, req.From, true)
 
 	served, ok := d.served[name]
 	if !ok {
@@ -87,12 +92,12 @@ func (d *daemon) OneOff(ctx context.Context, req web.OneOffRequest) (web.OneOffR
 	return web.OneOffResult{Pipeline: name, Job: req.Job}, nil
 }
 
-// reapWhenDone forgets a one-off once its queue has been settled for the grace. The destroy runs outside this loop because it waits for the loops to end.
-func (d *daemon) reapWhenDone(ctx context.Context, st store.Queue, name string) {
+// trimWhenSettled asks for a trim each time the one-off's queue settles: the first is its own run finishing, a later one a retry from its page. The trim runs outside this loop because a destroy waits for the loops to end.
+func (d *daemon) trimWhenSettled(ctx context.Context, st store.Queue) {
 	ticker := time.NewTicker(oneOffPoll)
 	defer ticker.Stop()
 
-	var settledAt time.Time
+	settled := false
 
 	for {
 		select {
@@ -101,37 +106,75 @@ func (d *daemon) reapWhenDone(ctx context.Context, st store.Queue, name string) 
 		case <-ticker.C:
 		}
 
-		// Re-armed by anything queued meanwhile — a person pressing retry on the one-off's page — so the grace counts from the last run.
-		if !queueSettled(ctx, st) {
-			settledAt = time.Time{}
+		now := queueSettled(ctx, st)
+		if now && !settled {
+			d.reaping.Add(1)
 
-			continue
+			go func() {
+				defer d.reaping.Done()
+
+				d.trimOneOffs(context.WithoutCancel(ctx))
+			}()
 		}
 
-		if settledAt.IsZero() {
-			settledAt = time.Now()
-		}
-
-		if time.Since(settledAt) < d.oneOffGrace {
-			continue
-		}
-
-		d.reaping.Add(1)
-
-		go func() {
-			defer d.reaping.Done()
-
-			err := d.Destroy(context.WithoutCancel(ctx), name)
-			if err != nil && !errors.Is(err, web.ErrNoSuchPipeline) {
-				slog.ErrorContext(ctx, "web.one_off.unreaped", "pipeline", name, "error", err)
-			}
-		}()
-
-		return
+		settled = now
 	}
 }
 
-// queueSettled is a queue holding nothing waiting or running: a restart's interrupted run reads pending again, so it is resumed before it is reaped. An empty one is settled too, so the grace counts from the start: the revision is durable before the job is queued, and a crash or a failed queue in between leaves a one-off with nothing to run that every restart would serve again.
+// finishedOneOff is a served one-off with nothing waiting or running, and when its newest run ended.
+type finishedOneOff struct {
+	name string
+	at   time.Time
+}
+
+// trimOneOffs forgets the finished one-offs past the newest oneOffHistory, oldest first, as run_history trims a job's runs: a one-off still running is never counted nor reaped.
+func (d *daemon) trimOneOffs(ctx context.Context) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.oneOffHistory <= 0 {
+		return
+	}
+
+	var finished []finishedOneOff
+
+	for name, served := range d.served {
+		if !served.oneOff || !queueSettled(ctx, served.target.Store) {
+			continue
+		}
+
+		finished = append(finished, finishedOneOff{name: name, at: newestFinish(ctx, served.target.Store)})
+	}
+
+	if len(finished) <= d.oneOffHistory {
+		return
+	}
+
+	slices.SortFunc(finished, func(a, b finishedOneOff) int { return b.at.Compare(a.at) })
+
+	for _, gone := range finished[d.oneOffHistory:] {
+		err := d.destroyLocked(ctx, gone.name)
+		if err != nil && !errors.Is(err, web.ErrNoSuchPipeline) {
+			slog.ErrorContext(ctx, "web.one_off.unreaped", "pipeline", gone.name, "error", err)
+
+			continue
+		}
+
+		slog.InfoContext(ctx, "web.one_off.reaped", "pipeline", gone.name, "kept", d.oneOffHistory)
+	}
+}
+
+// newestFinish is when the one-off's newest run ended; one with no run, a crash between its record and its queue, is the oldest there is.
+func newestFinish(ctx context.Context, st store.Runs) time.Time {
+	runs, err := st.ListRuns(ctx, "", 1)
+	if err != nil || len(runs) == 0 {
+		return time.Time{}
+	}
+
+	return runs[0].FinishedAt
+}
+
+// queueSettled is a queue holding nothing waiting or running: a restart's interrupted run reads pending again, so it is resumed before it is counted. An empty one is settled too: the revision is durable before the job is queued, and a crash or a failed queue in between leaves a one-off with nothing to run that every restart would serve again.
 func queueSettled(ctx context.Context, st store.Queue) bool {
 	rows, err := st.ListTriggerQueue(ctx, 20)
 	if err != nil {
@@ -145,4 +188,12 @@ func queueSettled(ctx context.Context, st store.Queue) bool {
 	}
 
 	return true
+}
+
+// markOneOff comes before the record, whose last write makes the revision current: a restart serves exactly the rows with one, and must never serve a one-off polled.
+func (d *daemon) markOneOff(ctx context.Context, st store.Control) error {
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
+	defer cancel()
+
+	return st.MarkOneOff(writeCtx) //nolint:wrapcheck // the driver names the pipeline
 }

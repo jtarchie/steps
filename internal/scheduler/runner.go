@@ -14,6 +14,7 @@ package scheduler
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -644,8 +645,9 @@ func admits(ctx context.Context, target *Pipeline) bool {
 }
 
 // interrupted asks the drain, not only the error: a step's own timeout: ends in DeadlineExceeded with the drain live, which is the job answering, and a drain is only ever cancelled, never timed out.
+// database/sql rolls a transaction back the moment its context is cancelled, so a store write the shutdown cut mid-transaction reports sql.ErrTxDone, not the cancellation.
 func interrupted(drain context.Context, runErr error) bool {
-	return drain.Err() != nil && errors.Is(runErr, context.Canceled)
+	return drain.Err() != nil && (errors.Is(runErr, context.Canceled) || errors.Is(runErr, sql.ErrTxDone))
 }
 
 // skipIfPaused finalizes a queued row for a job the circuit breaker has taken

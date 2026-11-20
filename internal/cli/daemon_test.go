@@ -471,7 +471,7 @@ func serveOn(t *testing.T, held *daemon, name string, st store.Store, source str
 		t.Fatalf("provider: %v", err)
 	}
 
-	held.start(name, cfg, st, provider, req.From)
+	held.start(name, cfg, st, provider, req.From, false)
 }
 
 const idlePipeline = "jobs:\n- name: build\n  plan:\n  - task: work\n    inputs: []\n    run: \"true\"\n"

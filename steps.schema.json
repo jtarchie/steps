@@ -838,7 +838,7 @@
         "states": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
-          "description": "State names in the team, any of which matches. A name the team does not have fails the check by name. Set, the version also carries when the issue last moved into one of them, so moving it out and back asks for the work again."
+          "description": "State names in the team, any of which matches. A name the team does not have fails the check by name. Set, the version also carries when the issue last moved into one of them from a state not listed, so moving it out of the list and back asks for the work again, and moving it between two listed states does not."
         },
         "state_types": {
           "type": "array",
@@ -2229,7 +2229,7 @@
         },
         "sandbox": {
           "const": true,
-          "description": "Fence this task's or agent's host commands with the OS sandbox (darwin only), as the entry-level sandbox: does; the only spelling an inline run: has. True only: it adds the fence over an entry that did not ask and cannot remove one. Refused beside image:, on a placed step, and on get/put/blocks."
+          "description": "Fence this task's or agent's host commands with the OS sandbox (darwin only), as the entry-level sandbox: does; the only spelling an inline run: has. On a block, fences its when: guard and every task, agent and guard inside it that runs on this machine outside an image:. True only: it adds the fence and cannot remove one. Refused beside image:, on a placed step or block, and on get/put/load_var/approval."
         },
         "container_limits": {
           "$ref": "#/$defs/containerLimits"

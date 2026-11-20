@@ -58,9 +58,35 @@ func (c *Config) validateGitResources() error {
 		if err != nil {
 			return err
 		}
+
+		err = c.checkGitLocalInImage(resource)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+// checkGitLocalInImage refuses a local uri (fetch: needs one) under a type run in an image: the path is on this machine, and the container has none of it.
+func (c *Config) checkGitLocalInImage(resource Resource) error {
+	rt, _ := c.FindResourceType(resource.Type)
+	uri, _ := resource.Source["uri"].(string)
+
+	if rt == nil || rt.Image == "" || !isLocalGitURI(uri) {
+		return nil
+	}
+
+	return fmt.Errorf("resource %q: source.uri %q is a path on this machine, and type %q runs in image %q, which cannot see it; give a remote uri, or drop image: from the type", resource.Name, uri, resource.Type, rt.Image)
+}
+
+// isLocalGitURI is a uri naming this machine's filesystem: a file:// url or a plain path. A ((var)) is filled in at run time and judged then.
+func isLocalGitURI(uri string) bool {
+	if uri == "" || strings.Contains(uri, "((") {
+		return false
+	}
+
+	return strings.HasPrefix(uri, "file://") || (!strings.Contains(uri, "://") && !isSCPLike(uri))
 }
 
 // validateGitCredential refuses a credential the command could never see, and one that cannot authenticate the uri it is paired with.

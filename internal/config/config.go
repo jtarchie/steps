@@ -123,6 +123,7 @@ func parseSource(source []byte, name string, label string, fsys Files) (*Config,
 	}
 
 	cfg.resolveTags()
+	cfg.fenceBlocks()
 
 	cfg.Name = name
 	// The revision covers the includes, not just the YAML: a run_file: decides what a step executes, so a hash over the file alone said "unchanged" for the edit that changed everything.

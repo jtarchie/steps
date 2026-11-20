@@ -41,6 +41,8 @@ type PipelineRow struct {
 	// CurrentSHA is the revision a `steps pipeline set` made current, empty for a pipeline that only ever ran by hand; a daemon serves exactly the rows that have one.
 	CurrentSHA string
 	Paused     bool
+	// OneOff is a pipeline `steps run --target` handed a daemon: served unpolled, and forgotten once it falls out of the daemon's last finished one-offs.
+	OneOff bool
 }
 
 // CrossRunRow is a run plus the pipeline it belongs to. The pipeline is not

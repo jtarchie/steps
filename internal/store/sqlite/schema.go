@@ -114,7 +114,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 45
+const schemaVersion = 46
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -145,14 +145,17 @@ const schema = `
 -- paused_at is the pipeline-level circuit breaker: set, nothing polls and
 -- nothing is admitted. set_at says when the current revision was set, and
 -- path, written by the same UPDATE, where from: for a reader who finds a
--- pipeline serving a configuration nobody remembers sending.
+-- pipeline serving a configuration nobody remembers sending. one_off is a
+-- pipeline a daemon minted for steps run --target: served unpolled, and
+-- kept only among its last finished one-offs.
 CREATE TABLE IF NOT EXISTS pipelines (
     id   INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     path TEXT NOT NULL,
     current_revision_id INTEGER REFERENCES pipeline_revisions(id) ON DELETE RESTRICT,
     paused_at TEXT,
-    set_at    TEXT
+    set_at    TEXT,
+    one_off   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_pipelines_revision ON pipelines(current_revision_id);
 

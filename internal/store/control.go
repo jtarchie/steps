@@ -29,4 +29,6 @@ type Control interface {
 	// the database can tell two checkouts apart. Only a command that LOADED
 	// the pipeline calls it.
 	SetSourcePath(ctx context.Context, source string) error
+	// MarkOneOff records that a daemon minted this pipeline for one `steps run --target`, so a restart serves it as one; nothing unmarks it.
+	MarkOneOff(ctx context.Context) error
 }

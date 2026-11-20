@@ -101,6 +101,8 @@ INSERT INTO cache_entries (kind, key, used_at)
 INSERT OR IGNORE INTO cache_entry_trees (kind, key, name, digest)
     SELECT 'step', action_key, output, digest FROM step_blobs ORDER BY rowid DESC;
 DROP TABLE step_blobs;`),
+	execStep(`ALTER TABLE pipelines ADD COLUMN one_off INTEGER NOT NULL DEFAULT 0;
+UPDATE pipelines SET one_off = 1 WHERE name GLOB 'one-off.[a-z2-7][a-z2-7][a-z2-7][a-z2-7][a-z2-7][a-z2-7][a-z2-7][a-z2-7][a-z2-7][a-z2-7][a-z2-7][a-z2-7]';`),
 	execStep(`ALTER TABLE questions ADD COLUMN step_key TEXT NOT NULL DEFAULT '';
 DROP INDEX idx_questions_memo;
 CREATE UNIQUE INDEX idx_questions_memo ON questions(run_id, memo_key) WHERE step_key = '';

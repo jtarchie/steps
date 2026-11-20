@@ -65,6 +65,34 @@ func (s suite) TestPipelinesReportWhatADaemonWouldServe(t *testing.T) {
 	}
 }
 
+// TestAOneOffIsWhatAReaderReports: a daemon restarting reads which pipelines it minted for steps run --target from the listing, and only those.
+func (s suite) TestAOneOffIsWhatAReaderReports(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	minted := s.open(t, "test")
+	s.open(t, "other")
+
+	err := minted.MarkOneOff(ctx)
+	if err != nil {
+		t.Fatalf("MarkOneOff: %v", err)
+	}
+
+	rows, err := minted.Reader().Pipelines(ctx)
+	if err != nil {
+		t.Fatalf("Pipelines: %v", err)
+	}
+
+	oneOffs := map[string]bool{}
+	for _, row := range rows {
+		oneOffs[row.Name] = row.OneOff
+	}
+
+	if !oneOffs["test"] || oneOffs["other"] || len(oneOffs) != 2 {
+		t.Errorf("one-offs = %v, want only test", oneOffs)
+	}
+}
+
 // pipelineNames is what the file holds, by name.
 func pipelineNames(t *testing.T, st store.Store) []string {
 	t.Helper()

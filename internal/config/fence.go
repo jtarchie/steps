@@ -90,6 +90,10 @@ func (c *Config) hostGuard(label string, step Step) []HostCommand {
 	case StepKindGet, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
 
+	if step.Sandboxed() {
+		return []HostCommand{{Where: where, Why: guardWhy + sandboxed(true), Sandboxed: true}}
+	}
+
 	return []HostCommand{{Where: where, Why: guardWhy + ", and this step has no image: or sandbox: to run it under; move the check into a task"}}
 }
 
@@ -105,7 +109,9 @@ func (c *Config) hostPutGuard(where string, step Step) []HostCommand {
 		return nil
 	}
 
-	return []HostCommand{{Name: resource.Name, Where: where, Why: fmt.Sprintf("%s, under type %q; give the type an image:", guardWhy, resource.Type) + sandboxed(rt.Sandbox), Sandboxed: rt.Sandbox}}
+	fenced := rt.Sandbox || step.Sandboxed()
+
+	return []HostCommand{{Name: resource.Name, Where: where, Why: fmt.Sprintf("%s, under type %q; give the type an image:", guardWhy, resource.Type) + sandboxed(fenced), Sandboxed: fenced}}
 }
 
 const privilegedWhy = "image: with privileged: true gives the container the host's privileges; drop privileged:"

@@ -34,7 +34,7 @@ func (s Step) Sandboxed() bool {
 	return s.Sandbox != nil && *s.Sandbox
 }
 
-// validateStepSandbox holds the step's spelling to what it can mean: true on a task or agent step, whose commands it fences. False would read as unfencing the entry, which a step cannot do, and every other kind has no command of its own (a get or put runs its type's, which the type fences).
+// validateStepSandbox holds the step's spelling to what it can mean: true on a task or agent step, whose commands it fences, or on a block, whose guard and contents it fences (fenceBlocks). False would read as unfencing the entry or the block's contents, which a step cannot do; a get or put runs its type's commands, which the type fences, and a load_var or approval has none.
 func (c *Config) validateStepSandbox() error {
 	err := c.rejectOnGetAndPut("sandbox", func(s *Step) bool { return s.Sandbox != nil })
 	if err != nil {
@@ -52,12 +52,12 @@ func (c *Config) validateStepSandbox() error {
 			}
 
 			switch kind, _ := step.Kind(); kind {
-			case StepKindTask, StepKindAgent:
+			case StepKindTask, StepKindAgent, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindDo:
 				return nil
-			case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
+			case StepKindGet, StepKindPut, StepKindLoadVar, StepKindApproval, StepKindAsk:
 			}
 
-			return fmt.Errorf("%s: sandbox: fences a task's or agent's own commands, and this step runs none; set it on the steps inside", label)
+			return fmt.Errorf("%s: sandbox: fences a task's, agent's or block's commands, and this step runs none; set it on the type, or on a block around the step", label)
 		})
 		if err != nil {
 			return err
@@ -74,7 +74,7 @@ func (c *Config) entrySandbox(step Step) bool {
 	return task != nil && task.Sandbox
 }
 
-// resolvedStepSandbox is whether a step runs fenced: its own sandbox: true, the tasks: or agents: entry it references, or a get/put's resource type.
+// resolvedStepSandbox is whether a step runs fenced: its own sandbox: true, the tasks: or agents: entry it references, a get/put's resource type, or a block's own.
 func (c *Config) resolvedStepSandbox(step Step) bool {
 	switch kind, _ := step.Kind(); kind {
 	case StepKindTask:
@@ -84,17 +84,70 @@ func (c *Config) resolvedStepSandbox(step Step) bool {
 
 		return step.Sandboxed() || (agent != nil && agent.Sandbox)
 	case StepKindGet, StepKindPut:
-		name, _ := step.resourceName()
+		return c.typeSandbox(step)
+	case StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindDo:
+		return step.Sandboxed()
+	case StepKindLoadVar, StepKindApproval, StepKindAsk:
+	}
 
-		resource, _ := c.FindResource(name)
-		if resource == nil {
+	return false
+}
+
+// typeSandbox is whether a get or put's resource type asked for the fence.
+func (c *Config) typeSandbox(step Step) bool {
+	name, _ := step.resourceName()
+
+	resource, _ := c.FindResource(name)
+	if resource == nil {
+		return false
+	}
+
+	rt, _ := c.FindResourceType(resource.Type)
+
+	return rt != nil && rt.Sandbox
+}
+
+// fenceBlocks stamps a block's sandbox: true onto everything inside it that runs here, after validation and resolveTags, so every reader (ResolveTask, ResolveAgentInvocation, a guard's runtime, the fence lists) sees one field. A step in an image or placed on a worker is left as it is; that is the add-only fence never reaching where it cannot hold.
+func (c *Config) fenceBlocks() {
+	for _, job := range c.Jobs {
+		_ = walkJob(job, false, handDownBlockFence, func(_ string, step *Step, fenced bool) error {
+			if fenced && len(step.Tags) == 0 && c.runsHere(*step) {
+				on := true
+				step.Sandbox = &on
+			}
+
+			return nil
+		})
+	}
+}
+
+// handDownBlockFence: a fenced block fences its children and its hooks, and whatever is inside a fenced block passes the fence on.
+func handDownBlockFence(_ string, step *Step, fenced bool) (bool, bool) {
+	kind, _ := step.Kind()
+	fenced = fenced || (kind != StepKindTask && kind != StepKindAgent && step.Sandboxed())
+
+	return fenced, fenced
+}
+
+// runsHere is whether a step's commands, or its when: guard, run on this machine outside an image: what a block's fence can reach.
+func (c *Config) runsHere(step Step) bool {
+	switch kind, _ := step.Kind(); kind {
+	case StepKindTask, StepKindAgent:
+		return c.resolvedStepImage(step) == ""
+	case StepKindPut:
+		resource, err := c.FindResource(step.PutResourceName())
+		if err != nil {
 			return false
 		}
 
 		rt, _ := c.FindResourceType(resource.Type)
 
-		return rt != nil && rt.Sandbox
-	case StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
+		return rt != nil && rt.Image == "" && step.Guarded()
+	case StepKindLoadVar, StepKindApproval, StepKindAsk:
+		return step.Guarded()
+	case StepKindGet:
+	case StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindDo:
+		return true
 	}
 
 	return false
