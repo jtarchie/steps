@@ -6,20 +6,20 @@
 # expect: volatile is only valid on task and agent steps
 
 resource_types:
-- name: dummy
-  config:
-    check: echo '[{"ref":"v1"}]'
-    in: "true"
-    out: "true"
+  - name: dummy
+    config:
+      check: echo '[{"ref":"v1"}]'
+      in: "true"
+      out: "true"
 
 resources:
-- name: results
-  type: dummy
-  source: {}
+  - name: results
+    type: dummy
+    source: {}
 
 jobs:
-- name: publish
-  plan:
-  - put: results
-    volatile: true
-    params: {}
+  - name: publish
+    plan:
+      - put: results
+        volatile: true
+        params: {}

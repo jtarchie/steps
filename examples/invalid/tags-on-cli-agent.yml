@@ -3,13 +3,13 @@
 # the tools run in this machine's copy of the step, and there is nothing to move.
 # expect: tags: needs image:
 agents:
-- name: reviewer
-  source: { model: "@claude/sonnet" }
+  - name: reviewer
+    source: {model: "@claude/sonnet"}
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    tags: [gpu]
-    messages:
-      - "Review it."
+  - name: review
+    plan:
+      - agent: reviewer
+        tags: [gpu]
+        messages:
+          - "Review it."

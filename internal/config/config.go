@@ -67,6 +67,11 @@ func Parse(source []byte, name string, fsys Files) (*Config, error) {
 
 // parseSource takes the identity separately from the label because a daemon's errors cite the name it was given and a local load cites the path that was typed.
 func parseSource(source []byte, name string, label string, fsys Files) (*Config, error) {
+	return parseQuietly(source, name, label, fsys, true)
+}
+
+// parseQuietly is parseSource with the load announcement optional: `steps fmt` loads every file twice to prove it changed nothing, which is not a load an operator reads about.
+func parseQuietly(source []byte, name string, label string, fsys Files, logged bool) (*Config, error) {
 	slog.Debug("config.load", "pipeline", label)
 
 	var cfg Config
@@ -93,12 +98,14 @@ func parseSource(source []byte, name string, label string, fsys Files) (*Config,
 		return nil, fmt.Errorf("pipeline YAML %q: %w", label, err)
 	}
 
-	slog.Info("config.loaded",
-		"pipeline", label,
-		"resource_types", len(cfg.ResourceTypes),
-		"resources", len(cfg.Resources),
-		"jobs", len(cfg.Jobs),
-	)
+	if logged {
+		slog.Info("config.loaded",
+			"pipeline", label,
+			"resource_types", len(cfg.ResourceTypes),
+			"resources", len(cfg.Resources),
+			"jobs", len(cfg.Jobs),
+		)
+	}
 
 	includes, err := cfg.resolveFileIncludes(fsys)
 	if err != nil {

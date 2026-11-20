@@ -7,26 +7,26 @@
 # name.
 # expect: message_files: mixes file paths with {artifact, path} entries
 resource_types:
-- name: mock
-  config:
-    check: echo '[{"ref":"1"}]'
-    in: 'mkdir -p "$1"/prompts && echo hi > "$1"/prompts/intro.md'
-    out: 'echo "{}"'
+  - name: mock
+    config:
+      check: echo '[{"ref":"1"}]'
+      in: 'mkdir -p "$1"/prompts && echo hi > "$1"/prompts/intro.md'
+      out: 'echo "{}"'
 
 resources:
-- name: prompts
-  type: mock
+  - name: prompts
+    type: mock
 
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
 
 jobs:
-- name: review
-  plan:
-  - get: prompts
-  - agent: reviewer
-    inputs: [prompts]
-    message_files:
-      - prompts/intro.md
-      - { artifact: prompts, path: intro.md }
+  - name: review
+    plan:
+      - get: prompts
+      - agent: reviewer
+        inputs: [prompts]
+        message_files:
+          - prompts/intro.md
+          - {artifact: prompts, path: intro.md}

@@ -3,18 +3,18 @@
 # expect: access: is required
 
 mcp_servers:
-- name: github
-  endpoint: https://api.githubcopilot.com/mcp/
-  auth: { type: bearer, api_key_env: GITHUB_PAT }
+  - name: github
+    endpoint: https://api.githubcopilot.com/mcp/
+    auth: {type: bearer, api_key_env: GITHUB_PAT}
 
 mcp_exports:
-- name: support
-  tools:
-  - mcp: github
-    tool: search_issues
+  - name: support
+    tools:
+      - mcp: github
+        tool: search_issues
 
 jobs:
-- name: build
-  plan:
-  - task: say
-    run: echo hi
+  - name: build
+    plan:
+      - task: say
+        run: echo hi

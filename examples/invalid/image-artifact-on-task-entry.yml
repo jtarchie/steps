@@ -4,23 +4,23 @@
 # expect: only a step's own image: can name an artifact
 
 resource_types:
-- name: registry-image
-  config:
-    check: echo '[]'
-    in: "true"
+  - name: registry-image
+    config:
+      check: echo '[]'
+      in: "true"
 
 resources:
-- name: toolchain
-  type: registry-image
-  source: {repository: ghcr.io/me/toolchain}
+  - name: toolchain
+    type: registry-image
+    source: {repository: ghcr.io/me/toolchain}
 
 tasks:
-- name: build
-  image: toolchain
-  run: go test ./...
+  - name: build
+    image: toolchain
+    run: go test ./...
 
 jobs:
-- name: build
-  plan:
-  - get: toolchain
-  - task: build
+  - name: build
+    plan:
+      - get: toolchain
+      - task: build

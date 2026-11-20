@@ -4,18 +4,18 @@
 # expect: are mutually exclusive — a resource type picks exactly one backend
 
 resource_types:
-- name: mixed
-  config:
-    check: printf '[]'
-    expr:
-      in: '{"version.json": toJSON(version)}'
+  - name: mixed
+    config:
+      check: printf '[]'
+      expr:
+        in: '{"version.json": toJSON(version)}'
 
 resources:
-- name: thing
-  type: mixed
-  source: {}
+  - name: thing
+    type: mixed
+    source: {}
 
 jobs:
-- name: build
-  plan:
-  - get: thing
+  - name: build
+    plan:
+      - get: thing

@@ -4,23 +4,23 @@ Every step runs isolated: its working directory is materialized from its own dec
 
 ```yaml
 jobs:
-- name: build
-  plan:
-  - task: generate
-    outputs: [meta]                  # an empty meta/ exists; its content is captured
-    run: echo 42 > meta/answer.txt
-  - task: consume
-    inputs: [meta]                   # sees meta/ because it says so — and nothing else
-    run: cat meta/answer.txt
+  - name: build
+    plan:
+      - task: generate
+        outputs: [meta]              # an empty meta/ exists; its content is captured
+        run: echo 42 > meta/answer.txt
+      - task: consume
+        inputs: [meta]               # sees meta/ because it says so — and nothing else
+        run: cat meta/answer.txt
+        assert:
+          stdout: "42"               # the artifact really crossed the step boundary
+      - task: blind
+        run: test ! -e meta          # declared nothing, sees nothing
+        assert:
+          code: 0                    # test(1) agrees meta/ is absent here
     assert:
-      stdout: "42"                   # the artifact really crossed the step boundary
-  - task: blind
-    run: test ! -e meta              # declared nothing, sees nothing
-    assert:
-      code: 0                        # test(1) agrees meta/ is absent here
-  assert:
-    execution: [generate, consume, blind]
-    outcome: succeeded
+      execution: [generate, consume, blind]
+      outcome: succeeded
 ```
 
 - **`inputs:`/`outputs:` are optional and default to empty.** An absent `inputs:` means the step mounts nothing; a pure-compute step legitimately declares nothing. An agent step's `dir:` also names the artifact it works in (its first path component) and is validated the same way.
@@ -29,30 +29,30 @@ jobs:
 
 ```yaml
 resource_types:
-- name: archive
-  config:
-    out: |
-      ls a b            # the put's view really holds both artifacts
+  - name: archive
+    config:
+      out: |
+        ls a b            # the put's view really holds both artifacts
 
 resources:
-- name: bundle
-  type: archive
-  source: {}
+  - name: bundle
+    type: archive
+    source: {}
 
 jobs:
-- name: publish
-  plan:
-  - task: one
-    outputs: [a]
-    run: echo 1 > a/one.txt
-  - task: two
-    outputs: [b]
-    run: echo 2 > b/two.txt
-  - put: bundle
-    inputs: all         # every artifact produced so far; valid only on put steps
-  assert:
-    execution: [one, two, bundle]    # `ls a b` in out: would fail if either were missing
-    outcome: succeeded
+  - name: publish
+    plan:
+      - task: one
+        outputs: [a]
+        run: echo 1 > a/one.txt
+      - task: two
+        outputs: [b]
+        run: echo 2 > b/two.txt
+      - put: bundle
+        inputs: all     # every artifact produced so far; valid only on put steps
+    assert:
+      execution: [one, two, bundle]  # `ls a b` in out: would fail if either were missing
+      outcome: succeeded
 ```
 
 ## Read-modify-write
@@ -61,23 +61,23 @@ A name in both `inputs:` and `outputs:` materializes the artifact's current cont
 
 ```yaml
 jobs:
-- name: accumulate
-  plan:
-  - task: start
-    outputs: [log]
-    run: echo first > log/entries.txt
-  - task: append
-    inputs: [log]                     # starts from what `start` captured…
-    outputs: [log]                    # …and its changes become the new content
-    run: echo second >> log/entries.txt
-  - task: show
-    inputs: [log]
-    run: wc -l < log/entries.txt
+  - name: accumulate
+    plan:
+      - task: start
+        outputs: [log]
+        run: echo first > log/entries.txt
+      - task: append
+        inputs: [log]                 # starts from what `start` captured…
+        outputs: [log]                # …and its changes become the new content
+        run: echo second >> log/entries.txt
+      - task: show
+        inputs: [log]
+        run: wc -l < log/entries.txt
+        assert:
+          stdout: "2"                 # both entries survived — the read-modify-write held
     assert:
-      stdout: "2"                     # both entries survived — the read-modify-write held
-  assert:
-    execution: [start, append, show]
-    outcome: succeeded
+      execution: [start, append, show]
+      outcome: succeeded
 ```
 
 A step that *fails* captures nothing, so put the state-advancing write in a step that succeeds.
@@ -88,28 +88,28 @@ A step that *fails* captures nothing, so put the state-advancing write in a step
 
 ```yaml
 tasks:
-- name: count-lines            # a reusable task, written against "src"
-  inputs: [src]
-  outputs: [report]
-  run: wc -l src/* > report/count.txt
+  - name: count-lines          # a reusable task, written against "src"
+    inputs: [src]
+    outputs: [report]
+    run: wc -l src/* > report/count.txt
 
 jobs:
-- name: audit
-  plan:
-  - task: fetch
-    outputs: [handbook]
-    run: printf 'a\nb\n' > handbook/pages.txt
-  - task: count-lines
-    input_mapping: { src: handbook }        # the plan's "handbook" appears as src/
-    output_mapping: { report: audit-notes } # captured as "audit-notes"
-  - task: check
-    inputs: [audit-notes]
-    run: cat audit-notes/count.txt
+  - name: audit
+    plan:
+      - task: fetch
+        outputs: [handbook]
+        run: printf 'a\nb\n' > handbook/pages.txt
+      - task: count-lines
+        input_mapping: {src: handbook}      # the plan's "handbook" appears as src/
+        output_mapping: {report: audit-notes} # captured as "audit-notes"
+      - task: check
+        inputs: [audit-notes]
+        run: cat audit-notes/count.txt
+        assert:
+          stdout: "2"                       # the mapped-in handbook is what got counted
     assert:
-      stdout: "2"                           # the mapped-in handbook is what got counted
-  assert:
-    execution: [fetch, count-lines, check]
-    outcome: succeeded
+      execution: [fetch, count-lines, check]
+      outcome: succeeded
 ```
 
 Mapping keys must be a subset of the resolved task's declared inputs/outputs, and mapping values must be plain artifact names.
@@ -163,17 +163,17 @@ Opt a single step out with `volatile:`:
 
 ```yaml
 jobs:
-- name: publish
-  plan:
-  - task: stamp
-    volatile: true          # produces an artifact, but reads the clock to do
-    outputs: [stamp]        # it — so a recorded answer would be a stale one
-    run: date +%s > stamp/at
+  - name: publish
+    plan:
+      - task: stamp
+        volatile: true      # produces an artifact, but reads the clock to do
+        outputs: [stamp]    # it — so a recorded answer would be a stale one
+        run: date +%s > stamp/at
+        assert:
+          files: [stamp/at]
     assert:
-      files: [stamp/at]
-  assert:
-    execution: [stamp]
-    outcome: succeeded
+      execution: [stamp]
+      outcome: succeeded
 ```
 
 - **The key is the work, plus the bytes it reads.** A step's own hashed content (its command or prompt, image, tool grant, declared inputs/outputs and mappings) combined with a content digest of each input artifact as materialized. Deliberately **not** the step's merkle node hash, which carries the whole chain that led to it: two jobs doing the same work over the same bytes share one entry, and an upstream step that re-ran and answered *differently* changes the digest, so this step misses and runs. The digest covers paths, file bytes, the executable bit and symlink targets — never mtimes or ownership, which would miss on every run.
@@ -191,53 +191,53 @@ A directory a task or agent step keeps between runs, on the machine that ran it 
 
 ```yaml
 jobs:
-- name: build
-  plan:
-  - task: compile
-    caches:
-    - path: .gocache          # relative to the working directory
-    run: |
-      if [ -e .gocache/built ]; then echo warm; else echo cold; fi
-      touch .gocache/built
-  - task: compile             # the same step name in the same job: the same cache
-    caches:
-    - path: .gocache
-    run: |
-      if [ -e .gocache/built ]; then echo warm; else echo cold; fi
+  - name: build
+    plan:
+      - task: compile
+        caches:
+          - path: .gocache    # relative to the working directory
+        run: |
+          if [ -e .gocache/built ]; then echo warm; else echo cold; fi
+          touch .gocache/built
+      - task: compile         # the same step name in the same job: the same cache
+        caches:
+          - path: .gocache
+        run: |
+          if [ -e .gocache/built ]; then echo warm; else echo cold; fi
+        assert:
+          stdout: warm
     assert:
-      stdout: warm
-  assert:
-    execution: [compile, compile]
-    outcome: succeeded
+      execution: [compile, compile]
+      outcome: succeeded
 ```
 
 On a `tasks:` or `agents:` entry it applies to every step using that entry; a step's own `caches:` replaces the entry's, and `caches: []` turns them off. On an agent, it is where `run_shell` builds land:
 
 ```yaml test=workspace-agent-cache
 tasks:
-- name: test
-  caches:
-  - path: .gocache
-  run: GOCACHE=$PWD/.gocache true
+  - name: test
+    caches:
+      - path: .gocache
+    run: GOCACHE=$PWD/.gocache true
 
 agents:
-- name: builder
-  source:
-    model: lmstudio/qwen3.8
-  tools: [run_shell]
-  caches:
-  - path: .cache
+  - name: builder
+    source:
+      model: lmstudio/qwen3.8
+    tools: [run_shell]
+    caches:
+      - path: .cache
 
 jobs:
-- name: build
-  plan:
-  - task: test
-  - agent: builder
-    messages:
-      - Build it.
-  assert:
-    execution: [test, builder]
-    outcome: succeeded
+  - name: build
+    plan:
+      - task: test
+      - agent: builder
+        messages:
+          - Build it.
+    assert:
+      execution: [test, builder]
+      outcome: succeeded
 ```
 
 - **Scoped like Concourse's**: pipeline + job + step name + path. Renaming any of them starts a fresh cache; two steps sharing a name in one job share one. Every `across:` cell of a step shares its cache.

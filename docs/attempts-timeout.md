@@ -13,21 +13,21 @@ Neither is ever hashed: adding or changing them invalidates no cache.
 
 ```yaml test=attempts-transient
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    attempts: 2                    # pins that a retry absorbs the one provider 500 —
-    messages:
-      - "Review the release."  # any attempts >= 2 would pass; the default is 3
+  - name: review
+    plan:
+      - agent: reviewer
+        attempts: 2                # pins that a retry absorbs the one provider 500 —
+        messages:
+          - "Review the release."  # any attempts >= 2 would pass; the default is 3
+        assert:
+          stdout: Release looks good   # the answer AFTER the absorbed 500
     assert:
-      stdout: Release looks good   # the answer AFTER the absorbed 500
-  assert:
-    execution: [reviewer]
-    outcome: succeeded
+      execution: [reviewer]
+      outcome: succeeded
 ```
 
 Use `attempts:` for transient faults — flaky network calls, rate limits, temporary unavailability. Do **not** use it for internal bugs, permanent failures (wrong credentials, missing resources), or anything that needs investigation: if a step fails reliably, fix the underlying issue instead of adding retries.
@@ -36,32 +36,32 @@ Use `attempts:` for transient faults — flaky network calls, rate limits, tempo
 
 ```yaml
 resource_types:
-- name: upstream
-  config:
-    check: |
-      printf '[{"ref": "v1"}]'
-    in: echo {{ .version.ref | shellquote }} > ref
+  - name: upstream
+    config:
+      check: |
+        printf '[{"ref": "v1"}]'
+      in: echo {{ .version.ref | shellquote }} > ref
 
 resources:
-- name: release
-  type: upstream
-  source: {}
+  - name: release
+    type: upstream
+    source: {}
 
 jobs:
-- name: fetch
-  plan:
-  - get: release
-    attempts: 3        # retries check and in
-    timeout: 2m        # per attempt
-  - task: verify
-    inputs: [release]
-    timeout: 5m
-    run: cat release/ref
+  - name: fetch
+    plan:
+      - get: release
+        attempts: 3    # retries check and in
+        timeout: 2m    # per attempt
+      - task: verify
+        inputs: [release]
+        timeout: 5m
+        run: cat release/ref
+        assert:
+          stdout: v1
     assert:
-      stdout: v1
-  assert:
-    execution: [release, verify]
-    outcome: succeeded
+      execution: [release, verify]
+      outcome: succeeded
 ```
 
 ## When to use timeout
@@ -86,18 +86,18 @@ Use `timeout:` to prevent hung commands — and don't set it aggressively; a leg
 
 ```yaml
 jobs:
-- name: bounded
-  timeout: 45m
-  budget:
-    tokens: 2000000
-  plan:
-  - task: work
-    run: echo well inside the ceiling
+  - name: bounded
+    timeout: 45m
+    budget:
+      tokens: 2000000
+    plan:
+      - task: work
+        run: echo well inside the ceiling
+        assert:
+          stdout: well inside the ceiling
     assert:
-      stdout: well inside the ceiling
-  assert:
-    execution: [work]
-    outcome: succeeded
+      execution: [work]
+      outcome: succeeded
 ```
 
 - **Checked between steps, never during one.** The step that is running finishes and keeps its work; the deadline decides only whether the *next* one starts. The price is that a job may overrun by one step's duration — **and that bound is only as tight as your steps are**: a step with no `timeout:` of its own is unbounded, so give long steps their own if you want the job's to be a hard ceiling.
@@ -110,22 +110,22 @@ Those claims are pinned by a deliberately-expired deadline: the step that outliv
 
 ```yaml
 jobs:
-- name: bounded-expired
-  timeout: 1s
-  on_failure:
-    task: overdue
-    run: echo the job deadline expired
-  on_error:
-    task: wrong-class
-    run: echo this must not fire
-  plan:
-  - task: slow
-    run: sleep 2                 # outlives the job's deadline, and still succeeds
-  - task: never
-    run: echo must not run
-  assert:
-    execution: [slow, overdue]   # slow kept its work; never was not admitted
-    outcome: failed
+  - name: bounded-expired
+    timeout: 1s
+    plan:
+      - task: slow
+        run: sleep 2             # outlives the job's deadline, and still succeeds
+      - task: never
+        run: echo must not run
+    assert:
+      execution: [slow, overdue] # slow kept its work; never was not admitted
+      outcome: failed
+    on_failure:
+      task: overdue
+      run: echo the job deadline expired
+    on_error:
+      task: wrong-class
+      run: echo this must not fire
 ```
 
 ### An expired timeout is not retried
@@ -154,21 +154,21 @@ A task step can name a **fix agent** — invoked when the task fails, running *i
 
 ```yaml test=attempts-fix
 agents:
-- name: fixer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools: [read_file, write_file, run_shell]
+  - name: fixer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools: [read_file, write_file, run_shell]
 
 jobs:
-- name: build
-  plan:
-  - task: check
-    run: test -f patched.txt      # fails until the fixer creates it
-    fix: fixer
+  - name: build
+    plan:
+      - task: check
+        fix: fixer
+        run: test -f patched.txt  # fails until the fixer creates it
+        assert:
+          code: 0                 # judged after the repair, on the re-run
     assert:
-      code: 0                     # judged after the repair, on the re-run
-  assert:
-    execution: [fixer, check]     # the fixer ran, then the task's re-run passed —
-    outcome: succeeded            # a green first try would record [check] alone
+      execution: [fixer, check]   # the fixer ran, then the task's re-run passed —
+      outcome: succeeded          # a green first try would record [check] alone
 ```
 
 With both `attempts:` and `fix:`, the fix agent runs **once per exhausted attempt**: attempt fails → fix agent → re-run, repeated until an attempt passes or all are spent, and the job fails with the error from the last attempt. Each fix invocation retries its own failing model requests under an `attempts:` resolved as for any agent step — `fix: {attempts: ...}`, then the fix agent's `agents:` entry, then 3.
@@ -219,45 +219,45 @@ A step's expired `timeout:` classifies as **failed** — `on_failure` fires, `on
 
 ```yaml
 jobs:
-- name: deadline
-  plan:
-  - task: slow
-    run: sleep 5
-    timeout: 1s
-    on_failure:
-      task: page
-      run: echo the deadline expired
-    on_error:
-      task: wrong
-      run: echo this must not fire
-  assert:
-    execution: [slow, page]    # on_failure fired, on_error did not
-    outcome: failed
+  - name: deadline
+    plan:
+      - task: slow
+        timeout: 1s
+        run: sleep 5
+        on_failure:
+          task: page
+          run: echo the deadline expired
+        on_error:
+          task: wrong
+          run: echo this must not fire
+    assert:
+      execution: [slow, page]  # on_failure fired, on_error did not
+      outcome: failed
 ```
 
 What still lands on `on_error` is the machinery genuinely breaking. A provider that answers nothing but 500s — with `attempts: 1`, so the single request is the whole budget — is that class:
 
 ```yaml test=attempts-provider-error
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: outage
-  plan:
-  - agent: reviewer
-    messages:
-      - "Review the PR."
-    attempts: 1
-    on_error:
-      task: page
-      run: echo the provider is down
-    on_failure:
-      task: wrong
-      run: echo this must not fire
-  assert:
-    execution: [reviewer, page]   # on_error fired, on_failure did not
-    outcome: failed
+  - name: outage
+    plan:
+      - agent: reviewer
+        attempts: 1
+        messages:
+          - "Review the PR."
+        on_error:
+          task: page
+          run: echo the provider is down
+        on_failure:
+          task: wrong
+          run: echo this must not fire
+    assert:
+      execution: [reviewer, page] # on_error fired, on_failure did not
+      outcome: failed
 ```
 
 ## Agent steps: the one implicit deadline
@@ -266,21 +266,21 @@ An `agent:` step's `timeout:` bounds the entire conversation, tool calls include
 
 ```yaml test=attempts-agent-timeout
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    messages:
-      - "Review the PR for safety issues."
-    timeout: 10m
+  - name: review
+    plan:
+      - agent: reviewer
+        timeout: 10m
+        messages:
+          - "Review the PR for safety issues."
+        assert:
+          stdout: No safety issues found
     assert:
-      stdout: No safety issues found
-  assert:
-    execution: [reviewer]
-    outcome: succeeded
+      execution: [reviewer]
+      outcome: succeeded
 ```
 
 > **An `agent:` step that sets no `timeout:` still gets one: 30 minutes.** This is the single exception to the explicit-only rule below, and it exists because the OpenAI client sets no request timeout of its own — without a fallback, one hung endpoint blocks the run forever.
@@ -299,29 +299,29 @@ jobs:
 
 ```yaml test=attempts-agent-dials
 agents:
-- name: deep-reviewer
-  timeout: 20m
-  attempts: 5
-  max_turns: 50
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: deep-reviewer
+    timeout: 20m
+    attempts: 5
+    max_turns: 50
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: review
-  plan:
-  - agent: deep-reviewer
-    messages:
-      - "Review the diff for correctness."
+  - name: review
+    plan:
+      - agent: deep-reviewer
+        messages:
+          - "Review the diff for correctness."
+        assert:
+          stdout: Looks correct
+      - agent: deep-reviewer
+        timeout: 45m
+        messages:
+          - "Now review it for security."
+        assert:
+          stdout: No injection paths
     assert:
-      stdout: Looks correct
-  - agent: deep-reviewer
-    messages:
-      - "Now review it for security."
-    timeout: 45m
-    assert:
-      stdout: No injection paths
-  assert:
-    execution: [deep-reviewer, deep-reviewer]
-    outcome: succeeded
+      execution: [deep-reviewer, deep-reviewer]
+      outcome: succeeded
 ```
 
 Both steps get 20 minutes, five attempts and 50 turns; the second one asks for 45 minutes and gets it. **Precedence is step, then agent entry, then the package default** (30 turns for a hosted agent, none for a CLI one — see [agents.md](agents.md)) — the same order `max_turns:` has always had, and nothing about it is new here except that two more dials now participate.
@@ -342,24 +342,24 @@ Every dial that bounds an agent step reads the same three ways:
 
 ```yaml test=attempts-no-limits
 agents:
-- name: marathon
-  max_turns: 0            # no turn cap — bounded by budget:, timeout: and loop detection
-  max_context_bytes: 0    # hand over context_paths: files whole, however large
-  timeout: "0"            # no deadline at all
-  budget: { tokens: 4000000 }
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: marathon
+    max_turns: 0          # no turn cap — bounded by budget:, timeout: and loop detection
+    max_context_bytes: 0  # hand over context_paths: files whole, however large
+    timeout: "0"          # no deadline at all
+    budget: {tokens: 4000000}
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: migrate
-  plan:
-  - agent: marathon
-    messages:
-      - "Migrate every call site, however long it takes."
+  - name: migrate
+    plan:
+      - agent: marathon
+        messages:
+          - "Migrate every call site, however long it takes."
+        assert:
+          stdout: migration complete
     assert:
-      stdout: migration complete
-  assert:
-    execution: [marathon]
-    outcome: succeeded
+      execution: [marathon]
+      outcome: succeeded
 ```
 
 Two things about that block are worth being explicit about.

@@ -5,9 +5,9 @@
 # expect: max_in_flight is set alongside serial
 
 jobs:
-- name: deploy
-  serial: true
-  max_in_flight: 5
-  plan:
-  - task: work
-    run: echo working
+  - name: deploy
+    serial: true
+    max_in_flight: 5
+    plan:
+      - task: work
+        run: echo working

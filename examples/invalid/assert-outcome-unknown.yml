@@ -3,10 +3,10 @@
 # expect: did you mean "succeeded"?
 
 jobs:
-- name: build
-  plan:
-  - task: work
-    inputs: []
-    run: "true"
-  assert:
-    outcome: suceeded
+  - name: build
+    plan:
+      - task: work
+        inputs: []
+        run: "true"
+    assert:
+      outcome: suceeded

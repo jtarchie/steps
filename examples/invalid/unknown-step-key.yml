@@ -3,9 +3,9 @@
 # expect: promt
 
 jobs:
-- name: build
-  plan:
-  - task: work
-    inputs: []
-    run: "true"
-    promt: review it
+  - name: build
+    plan:
+      - task: work
+        inputs: []
+        promt: review it
+        run: "true"

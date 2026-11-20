@@ -4,9 +4,9 @@
 # expect: messages is only valid on agent steps
 
 jobs:
-- name: build
-  plan:
-  - task: compile
-    run: "true"
-    messages:
-      - Please build carefully.
+  - name: build
+    plan:
+      - task: compile
+        run: "true"
+        messages:
+          - Please build carefully.

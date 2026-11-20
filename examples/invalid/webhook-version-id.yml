@@ -3,16 +3,16 @@
 # expect: source.version cannot set id or event
 
 resources:
-- name: push
-  type: webhook
-  source:
-    provider: github
-    secret_env: GITHUB_WEBHOOK_SECRET
-    version:
-      id: payload.after
+  - name: push
+    type: webhook
+    source:
+      provider: github
+      secret_env: GITHUB_WEBHOOK_SECRET
+      version:
+        id: payload.after
 
 jobs:
-- name: build
-  plan:
-  - get: push
-    trigger: true
+  - name: build
+    plan:
+      - get: push
+        trigger: true

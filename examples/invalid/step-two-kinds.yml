@@ -2,10 +2,10 @@
 # expect: but a step is exactly one of get/task/put/agent
 
 jobs:
-- name: build
-  plan:
-  - task: work
-    agent: reviewer
-    run: "true"
-    messages:
-      - review it
+  - name: build
+    plan:
+      - task: work
+        agent: reviewer
+        run: "true"
+        messages:
+          - review it

@@ -4,17 +4,17 @@
 # expect: min/max bound a number, and "title" is a string
 
 agents:
-- name: triager
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools:
-  - name: file_issue
-    description: File an issue.
-    run: echo {{ .args.title | shellquote }}
-    params:
-      title: { min: 1 }
+  - name: triager
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools:
+      - name: file_issue
+        description: File an issue.
+        params:
+          title: {min: 1}
+        run: echo {{ .args.title | shellquote }}
 
 jobs:
-- name: triage
-  plan:
-  - agent: triager
-    messages: [file one]
+  - name: triage
+    plan:
+      - agent: triager
+        messages: [file one]

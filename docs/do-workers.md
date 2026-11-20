@@ -65,25 +65,25 @@ Every droplet steps creates carries the bare tag `steps`, which is what this fir
 
 ```yaml noexec=credentials
 jobs:
-- name: burst
-  plan:
-  - task: make
-    outputs: [data]
-    run: echo seed > data/seed.txt
+  - name: burst
+    plan:
+      - task: make
+        outputs: [data]
+        run: echo seed > data/seed.txt
 
-  - task: on-a-droplet
-    tags: [do]
-    image: alpine:3
-    inputs: [data]
-    outputs: [report]
-    run: |
-      cat data/seed.txt > report/out
-      uname -m >> report/out
-      echo "$STEPS_WORKER" >> report/out
+      - task: on-a-droplet
+        tags: [do]
+        image: alpine:3
+        inputs: [data]
+        outputs: [report]
+        run: |
+          cat data/seed.txt > report/out
+          uname -m >> report/out
+          echo "$STEPS_WORKER" >> report/out
 
-  - task: publish
-    inputs: [report]
-    run: cat report/out
+      - task: publish
+        inputs: [report]
+        run: cat report/out
 ```
 
 The pipeline names a capability (`tags: [do]`); the invocation names the machine:

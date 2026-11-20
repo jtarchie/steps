@@ -11,15 +11,15 @@
 # expect: does not mean unlimited
 
 agents:
-- name: writer
-  source:
-    model: openai/gpt-4o
+  - name: writer
+    source:
+      model: openai/gpt-4o
 
 jobs:
-- name: publish
-  plan:
-  - agent: writer
-    inputs: []
-    attempts: 0
-    messages:
-      - Write something.
+  - name: publish
+    plan:
+      - agent: writer
+        inputs: []
+        attempts: 0
+        messages:
+          - Write something.

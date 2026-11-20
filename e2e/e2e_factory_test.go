@@ -24,19 +24,19 @@ func factoryAgainstFakes(t *testing.T, dir, llm, github, repo string) string {
 		t.Fatal(err)
 	}
 
-	const named = "    repo: ((repo))\n"
+	const named = "      repo: ((repo))\n"
 	if !strings.Contains(string(body), named) {
 		t.Fatalf("examples/factory.yml names no %q to point at the fake GitHub", strings.TrimSpace(named))
 	}
 
-	pointed := strings.ReplaceAll(string(body), named, named+"    endpoint: "+github+"\n")
+	pointed := strings.ReplaceAll(string(body), named, named+"      endpoint: "+github+"\n")
 	pointed = strings.ReplaceAll(pointed, "https://github.com/((repo)).git", repo)
-	pointed = strings.ReplaceAll(pointed, "  settings: project\n", "")
-	pointed = strings.ReplaceAll(pointed, "    token_env: GH_TOKEN\n", "")
+	pointed = strings.ReplaceAll(pointed, "    settings: project\n", "")
+	pointed = strings.ReplaceAll(pointed, "      token_env: GH_TOKEN\n", "")
 
 	// sandbox: refuses at the step off darwin, so elsewhere the agents run unfenced and TestFactoryFencesTheShell skips.
 	if runtime.GOOS != "darwin" {
-		pointed = strings.ReplaceAll(pointed, "  sandbox: true\n", "")
+		pointed = strings.ReplaceAll(pointed, "    sandbox: true\n", "")
 	}
 
 	return writePipeline(t, dir, injectFakeProvider(t, pointed, llm, "", false))

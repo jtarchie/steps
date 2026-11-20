@@ -150,43 +150,43 @@ Prints `docker-ok` once the daemon answers. steps waits for this itself — the 
 
 ```yaml noexec=credentials
 jobs:
-- name: all-phases
-  plan:
-  - task: make
-    outputs: [big]
-    run: dd if=/dev/urandom of=big/blob bs=1M count=64 2>/dev/null
+  - name: all-phases
+    plan:
+      - task: make
+        outputs: [big]
+        run: dd if=/dev/urandom of=big/blob bs=1M count=64 2>/dev/null
 
-  - task: measure
-    tags: [aws]
-    image: alpine:3
-    inputs: [big]
-    outputs: [r1]
-    run: |
-      wc -c < big/blob > r1/out
-      uname -m >> r1/out
+      - task: measure
+        tags: [aws]
+        image: alpine:3
+        inputs: [big]
+        outputs: [r1]
+        run: |
+          wc -c < big/blob > r1/out
+          uname -m >> r1/out
 
-  - task: measure-again
-    tags: [aws]
-    image: alpine:3
-    inputs: [big]
-    outputs: [r2]
-    run: |
-      wc -c < big/blob > r2/out
-      cat /etc/alpine-release >> r2/out
+      - task: measure-again
+        tags: [aws]
+        image: alpine:3
+        inputs: [big]
+        outputs: [r2]
+        run: |
+          wc -c < big/blob > r2/out
+          cat /etc/alpine-release >> r2/out
 
-  - task: on-a-launched-machine
-    tags: [burst]
-    image: alpine:3
-    inputs: [big]
-    outputs: [r3]
-    run: uname -m > r3/out
+      - task: on-a-launched-machine
+        tags: [burst]
+        image: alpine:3
+        inputs: [big]
+        outputs: [r3]
+        run: uname -m > r3/out
 
-  - task: publish
-    inputs: [r1, r2, r3]
-    run: |
-      echo "first:";            cat r1/out
-      echo "second:";           cat r2/out
-      echo "launched machine:"; cat r3/out
+      - task: publish
+        inputs: [r1, r2, r3]
+        run: |
+          echo "first:";            cat r1/out
+          echo "second:";           cat r2/out
+          echo "launched machine:"; cat r3/out
 ```
 
 The pipeline names **capabilities** (`tags: [aws]`), never machines. That is what lets the same file run on somebody else's fleet. `measure-again` sends nothing for `big`: the worker kept the 64MB input from `measure`, found it by its digest, and gave the second step a copy-on-write view of it.

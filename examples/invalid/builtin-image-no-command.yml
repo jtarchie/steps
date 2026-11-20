@@ -3,18 +3,18 @@
 # expect: image: cannot apply to cron
 
 resource_types:
-- name: cron
-  image: alpine:3
+  - name: cron
+    image: alpine:3
 
 resources:
-- name: nightly
-  type: cron
-  source: {expression: "0 3 * * *"}
+  - name: nightly
+    type: cron
+    source: {expression: "0 3 * * *"}
 
 jobs:
-- name: build
-  plan:
-  - get: nightly
-    trigger: true
-  - task: compile
-    run: echo building
+  - name: build
+    plan:
+      - get: nightly
+        trigger: true
+      - task: compile
+        run: echo building

@@ -4,8 +4,8 @@
 # expect: privileged requires image:
 
 jobs:
-- name: build
-  plan:
-  - task: work
-    run: echo working
-    privileged: true
+  - name: build
+    plan:
+      - task: work
+        privileged: true
+        run: echo working

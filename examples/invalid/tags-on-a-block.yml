@@ -3,12 +3,12 @@
 # declare one; wrap it in a do: with tags: instead.
 # expect: tags is not valid on a race step
 jobs:
-- name: build
-  plan:
-  - race:
-      steps:
-      - task: one
-        run: echo one
-      - task: two
-        run: echo two
-    tags: [gpu]
+  - name: build
+    plan:
+      - race:
+          steps:
+            - task: one
+              run: echo one
+            - task: two
+              run: echo two
+        tags: [gpu]

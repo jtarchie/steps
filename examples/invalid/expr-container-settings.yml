@@ -4,19 +4,19 @@
 # expect: expr: evaluates in-process, so image:/network: cannot apply
 
 resource_types:
-- name: api
-  image: alpine:3
-  network: none
-  config:
-    expr:
-      check: '[{ref: "v1"}]'
+  - name: api
+    image: alpine:3
+    network: none
+    config:
+      expr:
+        check: '[{ref: "v1"}]'
 
 resources:
-- name: thing
-  type: api
-  source: {}
+  - name: thing
+    type: api
+    source: {}
 
 jobs:
-- name: build
-  plan:
-  - get: thing
+  - name: build
+    plan:
+      - get: thing

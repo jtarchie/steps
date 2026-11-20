@@ -4,58 +4,59 @@ Everything the other pages introduce piece by piece, in one working pipeline: a 
 
 ```yaml test=complete-review
 resource_types:
-- name: notes                    # a self-contained stand-in for git/an API
-  config:
-    check: |
-      printf '[{"ref": "v1"}]'
-    in: |
-      echo 'The widget catalog is seeded from widgets.json on boot.' > NOTES.txt
-    out: |
-      echo publishing:
-      cat report/summary.md
+  - name: notes                  # a self-contained stand-in for git/an API
+    config:
+      check: |
+        printf '[{"ref": "v1"}]'
+      in: |
+        echo 'The widget catalog is seeded from widgets.json on boot.' > NOTES.txt
+      out: |
+        echo publishing:
+        cat report/summary.md
 
 resources:
-- name: repo
-  type: notes
-  source: {}
-- name: results
-  type: notes
-  source: {}
+  - name: repo
+    type: notes
+    source: {}
+
+  - name: results
+    type: notes
+    source: {}
 
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  system: You review release notes. Be terse.
-  tools: [read_file, write_file]
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools: [read_file, write_file]
+    system: You review release notes. Be terse.
 
 jobs:
-- name: review
-  plan:
-  - get: repo                          # fetch: NOTES.txt lands in repo/
-    trigger: true                      # a steps web daemon re-runs this on a new version
-  - task: prepare
-    outputs: [guidelines]
-    run: echo 'summaries must be one line' > guidelines/RULES.txt
-  - agent: reviewer
-    inputs: [repo, guidelines]         # sees exactly these two artifacts
-    outputs: [report]                  # and captures this one back
-    context_paths: [guidelines/RULES.txt]   # handed to the model at turn zero
-    max_turns: 8                            # read, write, decide, with room to spare
-    messages:
-      - "Read repo/NOTES.txt and write a one-line summary to report/summary.md."
-    verdicts:
-      - approve: results               # the verdict picks the next step
-      - reject: escalate
+  - name: review
+    plan:
+      - get: repo                      # fetch: NOTES.txt lands in repo/
+        trigger: true                  # a steps web daemon re-runs this on a new version
+      - task: prepare
+        outputs: [guidelines]
+        run: echo 'summaries must be one line' > guidelines/RULES.txt
+      - agent: reviewer
+        inputs: [repo, guidelines]     # sees exactly these two artifacts
+        outputs: [report]              # and captures this one back
+        context_paths: [guidelines/RULES.txt]   # handed to the model at turn zero
+        max_turns: 8                        # read, write, decide, with room to spare
+        verdicts:
+          - approve: results           # the verdict picks the next step
+          - reject: escalate
+        messages:
+          - "Read repo/NOTES.txt and write a one-line summary to report/summary.md."
+        assert:
+          verdict: approve             # what it decided
+          files: [report/summary.md]   # ...and that it actually wrote the thing
+      - task: escalate
+        run: echo paging a human
+      - put: results                   # out: reads the agent's artifact
+        inputs: [report]
     assert:
-      verdict: approve                 # what it decided
-      files: [report/summary.md]       # ...and that it actually wrote the thing
-  - task: escalate
-    run: echo paging a human
-  - put: results                       # out: reads the agent's artifact
-    inputs: [report]
-  assert:
-    execution: [repo, prepare, reviewer, results]   # escalate is absent — the
-    outcome: succeeded                              # approve verdict routed past it
+      execution: [repo, prepare, reviewer, results] # escalate is absent — the
+      outcome: succeeded                            # approve verdict routed past it
 ```
 
 What each piece is doing, with the page that explains it:

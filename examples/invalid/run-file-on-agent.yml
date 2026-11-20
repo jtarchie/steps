@@ -3,14 +3,14 @@
 # expect: run_file: is only valid on task steps
 
 agents:
-- name: reviewer
-  source:
-    model: openai/gpt-4o
+  - name: reviewer
+    source:
+      model: openai/gpt-4o
 
 jobs:
-- name: build
-  plan:
-  - agent: reviewer
-    messages:
-      - review it
-    run_file: tasks/build.sh
+  - name: build
+    plan:
+      - agent: reviewer
+        run_file: tasks/build.sh
+        messages:
+          - review it

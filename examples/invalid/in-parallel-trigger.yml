@@ -4,11 +4,11 @@
 # expect: trigger is not valid on an in_parallel step
 
 jobs:
-- name: build
-  plan:
-  - in_parallel:
-      steps:
-      - task: work
-        inputs: []
-        run: "true"
-    trigger: true
+  - name: build
+    plan:
+      - in_parallel:
+          steps:
+            - task: work
+              inputs: []
+              run: "true"
+        trigger: true

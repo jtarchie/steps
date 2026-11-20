@@ -4,8 +4,8 @@
 # expect: container_limits requires image:
 
 jobs:
-- name: build
-  plan:
-  - task: work
-    run: echo working
-    container_limits: { memory: 1073741824 }
+  - name: build
+    plan:
+      - task: work
+        container_limits: {memory: 1073741824}
+        run: echo working

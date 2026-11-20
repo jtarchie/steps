@@ -5,8 +5,8 @@
 # expect: dir is only valid on agent steps
 
 jobs:
-- name: build
-  plan:
-  - task: compile
-    run: "true"
-    dir: repo
+  - name: build
+    plan:
+      - task: compile
+        dir: repo
+        run: "true"

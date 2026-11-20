@@ -4,15 +4,15 @@
 # expect: temperature is not supported with a cli source
 
 agents:
-- name: reviewer
-  source:
-    model: "@claude/sonnet"
-  temperature: 0.2
+  - name: reviewer
+    source:
+      model: "@claude/sonnet"
+    temperature: 0.2
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - Review something.
+  - name: review
+    plan:
+      - agent: reviewer
+        inputs: []
+        messages:
+          - Review something.

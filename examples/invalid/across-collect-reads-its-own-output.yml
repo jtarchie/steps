@@ -7,15 +7,15 @@
 # expect: is both an input and a collected output
 
 jobs:
-- name: fan-out
-  plan:
-  - task: seed
-    outputs: [findings]
-    run: echo seeded > findings/base.txt
-  - across:
-    - var: dim
-      values: [a, b]
-    task: work
-    inputs: [findings]
-    outputs: [findings]
-    run: echo "{{ .vars.dim }}" >> findings/base.txt
+  - name: fan-out
+    plan:
+      - task: seed
+        outputs: [findings]
+        run: echo seeded > findings/base.txt
+      - task: work
+        across:
+          - var: dim
+            values: [a, b]
+        inputs: [findings]
+        outputs: [findings]
+        run: echo "{{ .vars.dim }}" >> findings/base.txt

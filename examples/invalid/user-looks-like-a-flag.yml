@@ -3,12 +3,12 @@
 # expect: must not start with '-'
 
 tasks:
-- name: build
-  image: alpine
-  run: echo hi
-  user: --privileged
+  - name: build
+    image: alpine
+    user: --privileged
+    run: echo hi
 
 jobs:
-- name: ship
-  plan:
-  - task: build
+  - name: ship
+    plan:
+      - task: build

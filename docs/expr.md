@@ -27,42 +27,42 @@ A resource type picks **exactly one** backend. Mixing `expr:` with `check:`/`in:
 
 ```yaml
 resource_types:
-- name: counters
-  config:
-    expr:
-      # Returns an array of version objects, OLDEST FIRST — the same contract
-      # a shell check's stdout has, and the same responsibility for ordering.
-      check: |
-        1..source.count | map((
-          {n: string(#)}
-        ))
+  - name: counters
+    config:
+      expr:
+        # Returns an array of version objects, OLDEST FIRST — the same contract
+        # a shell check's stdout has, and the same responsibility for ordering.
+        check: |
+          1..source.count | map((
+            {n: string(#)}
+          ))
 
-      # Returns an object of artifact-relative path to file contents. steps
-      # writes them into the get's directory.
-      in: |
-        {
-          "version.json": toJSON(version),
-          "n.txt": version.n,
-        }
+        # Returns an object of artifact-relative path to file contents. steps
+        # writes them into the get's directory.
+        in: |
+          {
+            "version.json": toJSON(version),
+            "n.txt": version.n,
+          }
 
 resources:
-- name: ticker
-  type: counters
-  source:
-    count: 3
+  - name: ticker
+    type: counters
+    source:
+      count: 3
 
 jobs:
-- name: build
-  plan:
-  - get: ticker
-  - task: show
-    inputs: [ticker]
-    run: cat ticker/n.txt
+  - name: build
+    plan:
+      - get: ticker
+      - task: show
+        inputs: [ticker]
+        run: cat ticker/n.txt
+        assert:
+          stdout: "3"      # check returned oldest-first, so latest is last
     assert:
-      stdout: "3"          # check returned oldest-first, so latest is last
-  assert:
-    execution: [ticker, show]
-    outcome: succeeded
+      execution: [ticker, show]
+      outcome: succeeded
 ```
 
 | Stage | Sees | Returns |
@@ -97,43 +97,45 @@ An allowed-but-unset variable is an **error**, not an empty string — an unset 
 
 ```yaml
 resource_types:
-- name: counters
-  config:
-    expr:
-      check: |
-        1..source.count | map((
-          {n: string(#)}
-        ))
-      in: |
-        {"n.txt": version.n}
-- name: ledger
-  config:
-    expr:
-      # No file read and no version.json anywhere: the fetched version
-      # comes from the build.
-      out: |
-        version("ticker").n == "3"
-          ? {recorded: version("ticker").n}
-          : fail("expected the third tick, got " + version("ticker").n)
+  - name: counters
+    config:
+      expr:
+        check: |
+          1..source.count | map((
+            {n: string(#)}
+          ))
+        in: |
+          {"n.txt": version.n}
+
+  - name: ledger
+    config:
+      expr:
+        # No file read and no version.json anywhere: the fetched version
+        # comes from the build.
+        out: |
+          version("ticker").n == "3"
+            ? {recorded: version("ticker").n}
+            : fail("expected the third tick, got " + version("ticker").n)
 
 resources:
-- name: ticker
-  type: counters
-  source:
-    count: 3
-- name: record
-  type: ledger
-  source: {}
+  - name: ticker
+    type: counters
+    source:
+      count: 3
+
+  - name: record
+    type: ledger
+    source: {}
 
 jobs:
-- name: build
-  plan:
-  - get: ticker
-  - put: record
-    inputs: [ticker]
-  assert:
-    execution: [ticker, record]
-    outcome: succeeded
+  - name: build
+    plan:
+      - get: ticker
+      - put: record
+        inputs: [ticker]
+    assert:
+      execution: [ticker, record]
+      outcome: succeeded
 ```
 
 - **Only the put's inputs are visible** — the same boundary as `file()`. `inputs: [a, b]` answers for those names; `inputs: all` for every get fetched so far; no `inputs:`, nothing. A name that is not an input is an error listing the ones that are, and so is an input a task produced rather than a get fetched.
@@ -240,54 +242,54 @@ Slack specifically ships as a built-in — `type: slack-mentions` / `type: slack
 
 ```yaml noexec=network
 resource_types:
-- name: mentions
-  env: [BOT_TOKEN]
-  config:
-    expr:
-      check: |
-        let auth = {Authorization: "Bearer " + env("BOT_TOKEN")};
+  - name: mentions
+    env: [BOT_TOKEN]
+    config:
+      expr:
+        check: |
+          let auth = {Authorization: "Bearer " + env("BOT_TOKEN")};
 
-        let me = http({url: "https://slack.com/api/auth.test"}, {headers: auth}).json.user_id;
+          let me = http({url: "https://slack.com/api/auth.test"}, {headers: auth}).json.user_id;
 
-        let channels = len(source.channels) > 0 ? source.channels :
-          http({url: "https://slack.com/api/users.conversations",
-                query: {types: "public_channel", limit: "1000"}},
-               {headers: auth}).json.channels | map((
-            #.id
-          ));
+          let channels = len(source.channels) > 0 ? source.channels :
+            http({url: "https://slack.com/api/users.conversations",
+                  query: {types: "public_channel", limit: "1000"}},
+                 {headers: auth}).json.channels | map((
+              #.id
+            ));
 
-        // One batched call instead of N serial ones: concurrent, backing off
-        // politely on a 429, and each result carries the request that made it.
-        http(channels | map((
-              {url: "https://slack.com/api/conversations.history",
-               query: {channel: #, oldest: version.ts ?? "0", limit: string(source.limit)}}
-            )),
-            {headers: auth, concurrency: 4, retry: {on: [429, 503], max: 3}})
-        | map((
-            let ch = #.request.query.channel;
-            #.json.messages
-              | filter(!("subtype" in #) && !("bot_id" in #) && #.user != me)
-              | filter((#.text ?? "") contains "<@" + me + ">")
-              | map((
-                {channel: ch, ts: #.ts}
-              ))
-          ))
-        | flatten()
-        | sortBy(float(#.ts))
+          // One batched call instead of N serial ones: concurrent, backing off
+          // politely on a 429, and each result carries the request that made it.
+          http(channels | map((
+                {url: "https://slack.com/api/conversations.history",
+                 query: {channel: #, oldest: version.ts ?? "0", limit: string(source.limit)}}
+              )),
+              {headers: auth, concurrency: 4, retry: {on: [429, 503], max: 3}})
+          | map((
+              let ch = #.request.query.channel;
+              #.json.messages
+                | filter(!("subtype" in #) && !("bot_id" in #) && #.user != me)
+                | filter((#.text ?? "") contains "<@" + me + ">")
+                | map((
+                  {channel: ch, ts: #.ts}
+                ))
+            ))
+          | flatten()
+          | sortBy(float(#.ts))
 
 resources:
-- name: asks
-  type: mentions
-  source:
-    channels: []          # [] = every channel the bot is in
-    limit: 200
+  - name: asks
+    type: mentions
+    source:
+      channels: []        # [] = every channel the bot is in
+      limit: 200
 
 jobs:
-- name: answer
-  plan:
-  - get: asks
-    trigger: true
-    version: every
+  - name: answer
+    plan:
+      - get: asks
+        trigger: true
+        version: every
 ```
 
 Note `version.ts ?? "0"`: that is the [cursor](resources.md#the-check-cursor), and it is why there is no `limit: 20` guess here. And `sortBy(float(#.ts))` — a Slack `ts` is a *string*, so sorting it as one silently misorders.

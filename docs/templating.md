@@ -6,30 +6,30 @@ Templates have the [slim-sprig](https://github.com/go-task/slim-sprig) function 
 
 ```yaml
 resource_types:
-- name: shouts
-  config:
-    check: |
-      printf '[{"word": "%s"}]' {{ .source.word | upper | shellquote }}
-    in: |
-      echo {{ .version.word | shellquote }} > word.txt
+  - name: shouts
+    config:
+      check: |
+        printf '[{"word": "%s"}]' {{ .source.word | upper | shellquote }}
+      in: |
+        echo {{ .version.word | shellquote }} > word.txt
 
 resources:
-- name: shout
-  type: shouts
-  source: { word: hello }
+  - name: shout
+    type: shouts
+    source: {word: hello}
 
 jobs:
-- name: demo
-  plan:
-  - get: shout
-  - task: show
-    inputs: [shout]
-    run: cat shout/word.txt
+  - name: demo
+    plan:
+      - get: shout
+      - task: show
+        inputs: [shout]
+        run: cat shout/word.txt
+        assert:
+          stdout: HELLO            # `upper` ran in the check template, not here
     assert:
-      stdout: HELLO                # `upper` ran in the check template, not here
-  assert:
-    execution: [shout, show]
-    outcome: succeeded
+      execution: [shout, show]
+      outcome: succeeded
 ```
 
 ## Shell-quoting untrusted values
@@ -50,32 +50,32 @@ Separate a pipeline's **shape** from its **parameters**, so one file serves stag
 
 ```yaml test=templating-vars
 resource_types:
-- name: echoes
-  config:
-    check: |
-      printf '[{"ref": "v1"}]'
-    in: |
-      echo {{ .source.uri | shellquote }} > uri.txt
+  - name: echoes
+    config:
+      check: |
+        printf '[{"ref": "v1"}]'
+      in: |
+        echo {{ .source.uri | shellquote }} > uri.txt
 
 resources:
-- name: repo
-  type: echoes
-  source:
-    uri: ((repo_uri))        # supplied at run time, not written in the file
+  - name: repo
+    type: echoes
+    source:
+      uri: ((repo_uri))      # supplied at run time, not written in the file
 
 jobs:
-- name: build
-  plan:
-  - get: repo
-  - task: show
-    inputs: [repo]
-    run: cat repo/uri.txt
+  - name: build
+    plan:
+      - get: repo
+      - task: show
+        inputs: [repo]
+        run: cat repo/uri.txt
+        assert:
+          # the exact value --var supplied (the command below) reached the template
+          stdout: github.com/acme/app-staging
     assert:
-      # the exact value --var supplied (the command below) reached the template
-      stdout: github.com/acme/app-staging
-  assert:
-    execution: [repo, show]
-    outcome: succeeded
+      execution: [repo, show]
+      outcome: succeeded
 ```
 
 ```bash
@@ -93,46 +93,46 @@ Some values do not exist until the run produces them: a tag a step just picked, 
 
 ```yaml
 jobs:
-- name: release
-  plan:
-  - task: pick-tag
-    outputs: [meta]
-    run: |
-      printf 'v1.2.3\n' > meta/version.txt
-      printf '{"channel": "beta", "build": 7}\n' > meta/info.json
-      printf '  {"kept": "as text"}\n' > meta/note.json
-  - load_var: tag
-    inputs: [meta]           # the load_var step reads from its own declared input
-    file: meta/version.txt
-    reveal: true             # a version is no secret: show it in step output
-  - load_var: info           # .json: read as data, so its fields can be named
-    inputs: [meta]
-    file: meta/info.json
-  - load_var: note
-    inputs: [meta]
-    file: meta/note.json
-    format: trim             # the file's text, whatever its extension says
-    reveal: true
-  - task: announce
-    run: echo "releasing ((.:tag)) ok"
+  - name: release
+    plan:
+      - task: pick-tag
+        outputs: [meta]
+        run: |
+          printf 'v1.2.3\n' > meta/version.txt
+          printf '{"channel": "beta", "build": 7}\n' > meta/info.json
+          printf '  {"kept": "as text"}\n' > meta/note.json
+      - load_var: tag
+        inputs: [meta]       # the load_var step reads from its own declared input
+        file: meta/version.txt
+        reveal: true         # a version is no secret: show it in step output
+      - load_var: info       # .json: read as data, so its fields can be named
+        inputs: [meta]
+        file: meta/info.json
+      - load_var: note
+        inputs: [meta]
+        file: meta/note.json
+        format: trim         # the file's text, whatever its extension says
+        reveal: true
+      - task: announce
+        run: echo "releasing ((.:tag)) ok"
+        assert:
+          # the captured value, trimmed, substituted — untrimmed, version.txt's
+          # trailing newline would land before "ok" and break this line
+          stdout: releasing v1.2.3 ok
+      - task: channel
+        run: echo "channel ((.:info.channel)), build ((.:info.build))"
+        assert:
+          # hidden by default: each string of a capture is masked in step output;
+          # a number is not
+          stdout: channel ***, build 7
+      - task: show-note
+        run: echo '[((.:note))]'
+        assert:
+          # trimmed of the surrounding spaces and newline, and kept as text
+          stdout: '[{"kept": "as text"}]'
     assert:
-      # the captured value, trimmed, substituted — untrimmed, version.txt's
-      # trailing newline would land before "ok" and break this line
-      stdout: releasing v1.2.3 ok
-  - task: channel
-    run: echo "channel ((.:info.channel)), build ((.:info.build))"
-    assert:
-      # hidden by default: each string of a capture is masked in step output;
-      # a number is not
-      stdout: channel ***, build 7
-  - task: show-note
-    run: echo '[((.:note))]'
-    assert:
-      # trimmed of the surrounding spaces and newline, and kept as text
-      stdout: '[{"kept": "as text"}]'
-  assert:
-    execution: [pick-tag, tag, info, note, announce, channel, show-note]
-    outcome: succeeded
+      execution: [pick-tag, tag, info, note, announce, channel, show-note]
+      outcome: succeeded
 ```
 
 - **`format:` says how the file is read**, with Concourse's names: `json`, `yaml` (or `yml`), `trim` and `raw`. Unset, a `.json`, `.yml` or `.yaml` file is read as structured data and anything else is `trim` — the text with its surrounding whitespace dropped, since the common way to produce a value is `git describe > version.txt`, whose trailing newline would otherwise land in the middle of a command. `raw` keeps the text exactly as written. A structured value's fields are named with dots, `((.:info.channel))`; a field that is not there fails the step, naming it, and a whole mapping or a non-string value is substituted as JSON.
@@ -151,36 +151,36 @@ A `when:`-guarded `load_var:` may be skipped green, so nothing after it can coun
 
 ```yaml
 jobs:
-- name: release
-  plan:
-  - task: pick-tag
-    outputs: [meta]
-    run: printf 'v1.2.3\n' > meta/version.txt
-  - do:
-    - load_var: tag
-      inputs: [meta]
-      file: meta/version.txt
-      reveal: true
-    - task: announce
-      run: echo "releasing ((.:tag))"
-      assert:
-        stdout: releasing v1.2.3
-    inputs: [meta]                 # for the guard; the steps inside see only their own
-    when: test -s meta/version.txt
-  - task: no-tag
-    outputs: [empty]
-    run: touch empty/version.txt
-  - do:
-    - load_var: other
-      inputs: [empty]
-      file: empty/version.txt
-    - task: never
-      run: echo "releasing ((.:other))"
-    inputs: [empty]
-    when: test -s empty/version.txt # empty file: the whole block is skipped
-  assert:
-    execution: [pick-tag, tag, announce, no-tag]
-    outcome: succeeded
+  - name: release
+    plan:
+      - task: pick-tag
+        outputs: [meta]
+        run: printf 'v1.2.3\n' > meta/version.txt
+      - do:
+          - load_var: tag
+            inputs: [meta]
+            file: meta/version.txt
+            reveal: true
+          - task: announce
+            run: echo "releasing ((.:tag))"
+            assert:
+              stdout: releasing v1.2.3
+        inputs: [meta]             # for the guard; the steps inside see only their own
+        when: test -s meta/version.txt
+      - task: no-tag
+        outputs: [empty]
+        run: touch empty/version.txt
+      - do:
+          - load_var: other
+            inputs: [empty]
+            file: empty/version.txt
+          - task: never
+            run: echo "releasing ((.:other))"
+        inputs: [empty]
+        when: test -s empty/version.txt # empty file: the whole block is skipped
+    assert:
+      execution: [pick-tag, tag, announce, no-tag]
+      outcome: succeeded
 ```
 
 ### ⚠️ Vars are config, not secrets

@@ -3,12 +3,12 @@
 # expect: only tells time
 
 resources:
-- name: tick
-  type: cron
-  source:
-    expression: "@hourly"
+  - name: tick
+    type: cron
+    source:
+      expression: "@hourly"
 
 jobs:
-- name: build
-  plan:
-  - put: tick
+  - name: build
+    plan:
+      - put: tick

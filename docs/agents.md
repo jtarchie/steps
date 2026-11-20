@@ -30,22 +30,22 @@ A step's `messages:` is a list, one user turn per entry. The loop above runs to 
 
 ```yaml test=agents-two-messages
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  system: You review code.
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    system: You review code.
 
 jobs:
-- name: review
-  assert:
-    execution: [reviewer]
-    outcome: succeeded
-  plan:
-  - agent: reviewer
-    messages:
-      - Review the diff and say whether it is safe to ship.
-      - Name the file and line your answer turns on, and what would have to be different for the opposite answer.
+  - name: review
+    plan:
+      - agent: reviewer
+        messages:
+          - Review the diff and say whether it is safe to ship.
+          - Name the file and line your answer turns on, and what would have to be different for the opposite answer.
+        assert:
+          stdout: parser.go
     assert:
-      stdout: parser.go
+      execution: [reviewer]
+      outcome: succeeded
 ```
 
 That sequencing is the whole difference from writing both asks in one message. Asked together, the model composes its answer to the second while it is still deciding the first, and can pick the evidence that fits the conclusion it was forming. Asked in turn, the second question is put to an answer that already exists and cannot be quietly revised.
@@ -68,28 +68,28 @@ Beware the obvious use. "Are you sure?" as a second message is one of the most r
 
 ```yaml test=agents-readonly
 agents:
-- name: reader
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  # no tools: -> read_file, list_dir, search_files
+  - name: reader
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    # no tools: -> read_file, list_dir, search_files
 
 jobs:
-- name: inspect
-  plan:
-  - task: fetch
-    outputs: [notes]
-    run: echo 'widgets ship on tuesday' > notes/plan.txt
-  - agent: reader
-    inputs: [notes]
-    messages:
-      - "What does notes/plan.txt say?"
+  - name: inspect
+    plan:
+      - task: fetch
+        outputs: [notes]
+        run: echo 'widgets ship on tuesday' > notes/plan.txt
+      - agent: reader
+        inputs: [notes]
+        messages:
+          - "What does notes/plan.txt say?"
+        assert:
+          tool_calls:             # read_file really ran, with this path...
+            - name: read_file
+              args: {path: notes/plan.txt}
+          stdout: widgets ship on tuesday   # ...and the answer could only come from what it returned
     assert:
-      tool_calls:                 # read_file really ran, with this path...
-      - name: read_file
-        args: { path: notes/plan.txt }
-      stdout: widgets ship on tuesday   # ...and the answer could only come from what it returned
-  assert:
-    execution: [fetch, reader]
-    outcome: succeeded
+      execution: [fetch, reader]
+      outcome: succeeded
 ```
 
 **Where the file tools run.** With no `image:`, in this process, against the step's directory here. With an `image:`, **inside that container** — the same one `run_shell` execs into — so the two always address one copy of the tree. That is what lets an agent be placed on a worker at all (see [infra.md](infra.md#remote-workers-tags)): `tags:` on an agent step requires `image:`, because without a container the file tools would stay here while the shell moved, and the model would read one machine while writing to another with no way to tell.
@@ -110,29 +110,29 @@ The built-ins that mutate state or reach beyond the workspace are deliberately n
 
 ```yaml test=agents-writer
 agents:
-- name: writer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools: [read_file, write_file, edit_file, run_shell]
+  - name: writer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools: [read_file, write_file, edit_file, run_shell]
 
 jobs:
-- name: draft
-  plan:
-  - agent: writer
-    outputs: [report]            # an empty report/ dir exists from turn one
-    max_turns: 40
-    tools: [write_file]          # this STEP narrows the agent's grant to one tool
-    messages:
-      - "Write your findings into report/summary.md."
+  - name: draft
+    plan:
+      - agent: writer
+        outputs: [report]        # an empty report/ dir exists from turn one
+        max_turns: 40
+        tools: [write_file]      # this STEP narrows the agent's grant to one tool
+        messages:
+          - "Write your findings into report/summary.md."
+        assert:
+          files: [report/summary.md]   # it WROTE the file, not just claimed to
+      - task: publish
+        inputs: [report]
+        run: cat report/summary.md
+        assert:
+          stdout: all clear        # ...and the artifact reached the next step
     assert:
-      files: [report/summary.md]   # it WROTE the file, not just claimed to
-  - task: publish
-    inputs: [report]
-    run: cat report/summary.md
-    assert:
-      stdout: all clear            # ...and the artifact reached the next step
-  assert:
-    execution: [writer, publish]
-    outcome: succeeded
+      execution: [writer, publish]
+      outcome: succeeded
 ```
 
 A step's `tools:` **selects from** what the agent already grants — it can narrow, never widen. Naming a tool the agent does not provide is a load error, so one careless step cannot hand a model a capability the pipeline never gave it; an absent step `tools:` means the agent's whole grant, unchanged.
@@ -143,36 +143,37 @@ A step's `tools:` **selects from** what the agent already grants — it can narr
 
 ```yaml test=agents-read-image
 agents:
-- name: looker
-  source: { model: openrouter/anthropic/claude-sonnet-4.5 }  # takes images
-- name: reader
-  source: { model: openrouter/qwen/qwen3.7-flash }           # does not
+  - name: looker
+    source: {model: openrouter/anthropic/claude-sonnet-4.5}  # takes images
+
+  - name: reader
+    source: {model: openrouter/qwen/qwen3.7-flash}           # does not
 
 jobs:
-- name: triage
-  plan:
-  - task: attach
-    outputs: [shots]
-    # a 4x3 red PNG, standing in for a screenshot from a bug report
-    run: echo iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGP4z8AARww4OQD1MQv1NXv7ggAAAABJRU5ErkJggg== | base64 -d > shots/login.png
-  - agent: looker
-    inputs: [shots]
-    messages:
-      - "What does shots/login.png show?"
+  - name: triage
+    plan:
+      - task: attach
+        outputs: [shots]
+        # a 4x3 red PNG, standing in for a screenshot from a bug report
+        run: echo iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGP4z8AARww4OQD1MQv1NXv7ggAAAABJRU5ErkJggg== | base64 -d > shots/login.png
+      - agent: looker
+        inputs: [shots]
+        messages:
+          - "What does shots/login.png show?"
+        assert:
+          tool_calls:
+            - name: read_file
+              args: {path: shots/login.png}
+          stdout: a red rectangle    # only the image itself could have said so
+      - agent: reader
+        inputs: [shots]
+        messages:
+          - "What does shots/login.png show?"
+        assert:
+          stdout: 4x3 PNG            # the description, never the bytes
     assert:
-      tool_calls:
-      - name: read_file
-        args: { path: shots/login.png }
-      stdout: a red rectangle        # only the image itself could have said so
-  - agent: reader
-    inputs: [shots]
-    messages:
-      - "What does shots/login.png show?"
-    assert:
-      stdout: 4x3 PNG                # the description, never the bytes
-  assert:
-    execution: [attach, looker, reader]
-    outcome: succeeded
+      execution: [attach, looker, reader]
+      outcome: succeeded
 ```
 
 Whether a model is shown the image depends on the path its conversation takes:
@@ -219,33 +220,33 @@ A bare grant reaches any **public** http(s) URL. Loopback, link-local (including
 
 ```yaml test=agents-web-fetch
 agents:
-- name: auditor
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools:
-  - write_file
-  - builtin: web_fetch
-    allow: [specification.website]   # this host and its subdomains; empty/absent = any public http(s) URL
+  - name: auditor
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools:
+      - write_file
+      - builtin: web_fetch
+        allow: [specification.website]   # this host and its subdomains; empty/absent = any public http(s) URL
 
 jobs:
-- name: audit
-  plan:
-  - agent: auditor
-    outputs: [notes]
-    messages:
-      - "Check the tracker at issues.example and record what you find in notes/status.md."
+  - name: audit
+    plan:
+      - agent: auditor
+        outputs: [notes]
+        messages:
+          - "Check the tracker at issues.example and record what you find in notes/status.md."
+        assert:
+          tool_calls:
+            - name: web_fetch
+              args: {url: "https://issues.example/open"}   # outside allow: — refused as tool-result data
+          files: [notes/status.md]
+      - task: show
+        inputs: [notes]
+        run: cat notes/status.md
+        assert:
+          stdout: refused
     assert:
-      tool_calls:
-      - name: web_fetch
-        args: { url: "https://issues.example/open" }   # outside allow: — refused as tool-result data
-      files: [notes/status.md]
-  - task: show
-    inputs: [notes]
-    run: cat notes/status.md
-    assert:
-      stdout: refused
-  assert:
-    execution: [auditor, show]
-    outcome: succeeded
+      execution: [auditor, show]
+      outcome: succeeded
 ```
 
 The refusal happens before any connection is attempted, so the example above runs without network — and the model, told about the fence in the tool's own description, records the refusal instead of retrying it.
@@ -266,39 +267,40 @@ It takes a `question` and an optional list of `options`, and it is granted like 
 
 ```yaml test=agents-ask-user
 agents:
-- name: architect          # a bigger model, asked before a person is
-  source: { model: openrouter/anthropic/claude-opus-4 }
-- name: writer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  max_questions: 5         # every step of this agent, unless the step says otherwise
-  tools:
-  - write_file
-  - builtin: ask_user
-    answered_by: architect   # escalate before parking for a person
-    timeout: 5m              # how long a person is waited on
-    default: patch           # what the model is told when nobody answers
-    options_required: true   # refuse an answer that is not one of the offered options
+  - name: architect        # a bigger model, asked before a person is
+    source: {model: openrouter/anthropic/claude-opus-4}
+
+  - name: writer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    max_questions: 5       # every step of this agent, unless the step says otherwise
+    tools:
+      - write_file
+      - builtin: ask_user
+        answered_by: architect   # escalate before parking for a person
+        timeout: 5m          # how long a person is waited on
+        default: patch       # what the model is told when nobody answers
+        options_required: true   # refuse an answer that is not one of the offered options
 
 jobs:
-- name: release-note
-  plan:
-  - agent: writer
-    max_questions: 2         # this step may interrupt somebody twice
-    outputs: [decision]
-    messages:
-      - "Draft the release note. Ask which version bump this is and whether to mention the storage migration, then write each answer on its own into decision/bump.txt and decision/migration.txt."
+  - name: release-note
+    plan:
+      - agent: writer
+        max_questions: 2     # this step may interrupt somebody twice
+        outputs: [decision]
+        messages:
+          - "Draft the release note. Ask which version bump this is and whether to mention the storage migration, then write each answer on its own into decision/bump.txt and decision/migration.txt."
+        assert:
+          tool_calls:
+            - name: ask_user
+          files: [decision/bump.txt, decision/migration.txt]
+      - task: tag
+        inputs: [decision]
+        run: cat decision/migration.txt
+        assert:
+          stdout: "yes"      # the second answer reached the next step — as a file
     assert:
-      tool_calls:
-      - name: ask_user
-      files: [decision/bump.txt, decision/migration.txt]
-  - task: tag
-    inputs: [decision]
-    run: cat decision/migration.txt
-    assert:
-      stdout: "yes"          # the second answer reached the next step — as a file
-  assert:
-    execution: [writer, tag]
-    outcome: succeeded
+      execution: [writer, tag]
+      outcome: succeeded
 ```
 
 **An answer does not escape the conversation.** It is a tool result and a transcript entry: it is not readable through `context: { from: ... }`, and a chosen option is not a routing key. A pipeline that needs the answer downstream has the agent write it to an output, exactly as above. This is the rule the verdict design already landed — decisions travel as verdicts, everything else travels as explicit files — and `verdicts:` is still the right tool when a decision should steer the plan.
@@ -374,30 +376,30 @@ An agent step's `dir:` sets its working directory *and* names the artifact it op
 
 ```yaml test=agents-dir
 agents:
-- name: reader
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: reader
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: inspect
-  plan:
-  - task: fetch
-    outputs: [repo]
-    run: |
-      mkdir -p repo/cmd
-      echo 'package main' > repo/cmd/main.go
-  - agent: reader
-    inputs: [repo]
-    dir: repo/cmd                 # start here; `repo` is the artifact it names
-    messages:
-      - "What package does main.go declare?"
+  - name: inspect
+    plan:
+      - task: fetch
+        outputs: [repo]
+        run: |
+          mkdir -p repo/cmd
+          echo 'package main' > repo/cmd/main.go
+      - agent: reader
+        inputs: [repo]
+        dir: repo/cmd             # start here; `repo` is the artifact it names
+        messages:
+          - "What package does main.go declare?"
+        assert:
+          tool_calls:
+            - name: read_file
+              args: {path: main.go}   # relative to dir:, not to the step's root
+          stdout: package main
     assert:
-      tool_calls:
-      - name: read_file
-        args: { path: main.go }   # relative to dir:, not to the step's root
-      stdout: package main
-  assert:
-    execution: [fetch, reader]
-    outcome: succeeded
+      execution: [fetch, reader]
+      outcome: succeeded
 ```
 
 Every tool path the model uses is relative to `dir:`, which is the point: a model handed the subdirectory it is meant to work in does not spend turns navigating to it, and cannot wander out: the file tools are confined to `dir:` itself, not merely to the step's workspace, and so is `context_paths:` (below).
@@ -408,33 +410,33 @@ A custom tool is a `tools:` entry with `name`/`description`/`run` — a [templat
 
 ```yaml test=agents-custom-tool
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools:
-  - read_file
-  - name: post_review
-    description: Post the review. body is the review text.
-    run: |
-      echo posting to {{ .args.repo | shellquote }} {{ .args.body | shellquote }}
-    required: true         # the step fails unless this succeeds
-    max_calls: 1           # at most once per conversation
-    args:
-      repo: jtarchie/ci    # pinned — the model neither sees nor can override it
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools:
+      - read_file
+      - name: post_review
+        description: Post the review. body is the review text.
+        required: true     # the step fails unless this succeeds
+        max_calls: 1       # at most once per conversation
+        args:
+          repo: jtarchie/ci    # pinned — the model neither sees nor can override it
+        run: |
+          echo posting to {{ .args.repo | shellquote }} {{ .args.body | shellquote }}
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    messages:
-      - "Review the change and post your conclusion."
+  - name: review
+    plan:
+      - agent: reviewer
+        messages:
+          - "Review the change and post your conclusion."
+        assert:
+          tool_calls:
+            - name: post_review
+              args: {body: looks correct}   # only model-authored args are assertable —
+                                            # naming the pinned `repo` here is a load error
     assert:
-      tool_calls:
-      - name: post_review
-        args: { body: looks correct }   # only model-authored args are assertable —
-                                        # naming the pinned `repo` here is a load error
-  assert:
-    execution: [reviewer]
-    outcome: succeeded
+      execution: [reviewer]
+      outcome: succeeded
 ```
 
 - **No tool failure, required or not, ever aborts or restarts the conversation.** A failed call comes back to the model as ordinary data (`{exit_code, stdout, stderr}` or `{"error": ...}`), exactly like `run_shell`, so the model sees what went wrong and can recover in the same session.
@@ -452,35 +454,35 @@ A tool's arguments come from a model, and a model can send anything. `params:` s
 
 ```yaml test=agents-tool-params
 agents:
-- name: triager
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools:
-  - name: file_issue
-    description: File an issue. title is one short line; severity defaults to low.
-    run: |
-      echo filed {{ .args.title | shellquote }} as {{ .args.severity | shellquote }}
-    params:
-      title:
-        min_length: 3
-        max_length: 40
-        pattern: '^[^;]*$'        # unanchored unless you write ^ and $
-      severity:
-        enum: [low, high]
-        default: low              # fills a missing argument, so the model may leave it out
+  - name: triager
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools:
+      - name: file_issue
+        description: File an issue. title is one short line; severity defaults to low.
+        params:
+          title:
+            min_length: 3
+            max_length: 40
+            pattern: '^[^;]*$'    # unanchored unless you write ^ and $
+          severity:
+            enum: [low, high]
+            default: low          # fills a missing argument, so the model may leave it out
+        run: |
+          echo filed {{ .args.title | shellquote }} as {{ .args.severity | shellquote }}
 
 jobs:
-- name: triage
-  plan:
-  - agent: triager
-    messages:
-      - "File an issue for the crash on startup."
+  - name: triage
+    plan:
+      - agent: triager
+        messages:
+          - "File an issue for the crash on startup."
+        assert:
+          tool_calls:
+            - name: file_issue
+              args: {title: crash on startup}   # the call that got through the limits
     assert:
-      tool_calls:
-      - name: file_issue
-        args: { title: crash on startup }   # the call that got through the limits
-  assert:
-    execution: [triager]
-    outcome: succeeded
+      execution: [triager]
+      outcome: succeeded
 ```
 
 - **Limits by kind**: `max_length`/`min_length` (characters, not bytes) and `pattern` ([Go regular expression](https://pkg.go.dev/regexp/syntax)) are for strings; `min`/`max` are for numbers; `enum` and `default` fit either. A custom tool's arguments are all strings, so `min`/`max` on one is a load error; on an [MCP tool](mcp.md) the server's own schema says which parameters are numbers, and a mismatch is refused when the step prepares.
@@ -494,38 +496,41 @@ jobs:
 
 ```yaml test=agents-tool-rules
 rules:
-- name: staging-only
-  when: 'args.env in ["staging", "dev"] ? true : fail("production deploys need a person")'
-- name: no-tokens
-  accept: not (result.text matches "ghp_")
-- name: deploy-sanity
-  judged_by: judge
+  - name: staging-only
+    when: 'args.env in ["staging", "dev"] ? true : fail("production deploys need a person")'
+
+  - name: no-tokens
+    accept: not (result.text matches "ghp_")
+
+  - name: deploy-sanity
+    judged_by: judge
 
 agents:
-- name: judge
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  system: You decide whether a deploy may go ahead. Reply allow or deny.
-- name: deployer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools:
-  - name: deploy
-    description: Deploy a build to an environment.
-    run: echo deployed {{ .args.build | shellquote }} to {{ .args.env | shellquote }}
-    rules: [staging-only, deploy-sanity, no-tokens]
+  - name: judge
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    system: You decide whether a deploy may go ahead. Reply allow or deny.
+
+  - name: deployer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools:
+      - name: deploy
+        description: Deploy a build to an environment.
+        rules: [staging-only, deploy-sanity, no-tokens]
+        run: echo deployed {{ .args.build | shellquote }} to {{ .args.env | shellquote }}
 
 jobs:
-- name: release
-  plan:
-  - agent: deployer
-    messages:
-      - "Deploy build b2 to production if you can, otherwise to staging."
+  - name: release
+    plan:
+      - agent: deployer
+        messages:
+          - "Deploy build b2 to production if you can, otherwise to staging."
+        assert:
+          tool_calls:
+            - name: deploy
+              args: {build: b2, env: staging}
     assert:
-      tool_calls:
-      - name: deploy
-        args: { build: b2, env: staging }
-  assert:
-    execution: [deployer]
-    outcome: succeeded
+      execution: [deployer]
+      outcome: succeeded
 ```
 
 - **Three kinds of check, in this order**: `when:` before the call, `judged_by:` before the call (so a cheap rule refuses before an agent is paid for), then the call, then `accept:` on what came back. Rules on a tool run in the order they are listed.
@@ -542,28 +547,28 @@ An agent's answer is not its final message. Everything downstream — a `put:`, 
 
 ```yaml test=agents-delivers-files
 agents:
-- name: responder
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools: [write_file]
+  - name: responder
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools: [write_file]
 
 jobs:
-- name: answer
-  plan:
-  - agent: responder
-    outputs: [answer]
-    messages:
-      - "Answer the question. Write your answer to answer/reply.md."
+  - name: answer
+    plan:
+      - agent: responder
+        outputs: [answer]
+        messages:
+          - "Answer the question. Write your answer to answer/reply.md."
+        assert:
+          files: [answer/reply.md]
+          nudge: true
+      - task: deliver
+        inputs: [answer]
+        run: cat answer/reply.md
+        assert:
+          stdout: widgets.json
     assert:
-      files: [answer/reply.md]
-      nudge: true
-  - task: deliver
-    inputs: [answer]
-    run: cat answer/reply.md
-    assert:
-      stdout: widgets.json
-  assert:
-    execution: [responder, deliver]
-    outcome: succeeded
+      execution: [responder, deliver]
+      outcome: succeeded
 ```
 
 The model in that example answers in prose first and writes nothing. Rather than ending the step there, the conversation puts it back:
@@ -580,26 +585,26 @@ The model in that example answers in prose first and writes nothing. Rather than
 
 ```yaml test=agents-follows-procedure
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools:
-  - name: run_tests
-    description: Run the test suite and report the result.
-    run: echo "42 passed"
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools:
+      - name: run_tests
+        description: Run the test suite and report the result.
+        run: echo "42 passed"
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    messages:
-      - "Review the change. Run the tests before you answer."
+  - name: review
+    plan:
+      - agent: reviewer
+        messages:
+          - "Review the change. Run the tests before you answer."
+        assert:
+          tool_calls:
+            - name: run_tests
+          nudge: true
     assert:
-      tool_calls:
-      - name: run_tests
-      nudge: true
-  assert:
-    execution: [reviewer]
-    outcome: succeeded
+      execution: [reviewer]
+      outcome: succeeded
 ```
 
 - **The nudge waits for the last message.** `assert.files:` is an obligation on the step, not on each message, so a step with more to ask is not nudged at an earlier boundary — telling a model it owes files before it has been asked the question meant to produce them is worse than not asking.
@@ -616,34 +621,35 @@ A `tools:` entry can be a sub-agent tool — `{ agent: <name>, description: <tex
 
 ```yaml test=agents-subagent
 agents:
-- name: summarizer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  description: Condenses a file to a paragraph.   # what a PARENT sees by default
-  tools: [read_file]
-- name: lead
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools:
-  - read_file
-  - agent: summarizer            # a sub-agent, exposed as a callable tool
-    description: Summarize a file; pass the path in `request`.
+  - name: summarizer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    description: Condenses a file to a paragraph. # what a PARENT sees by default
+    tools: [read_file]
+
+  - name: lead
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools:
+      - read_file
+      - agent: summarizer        # a sub-agent, exposed as a callable tool
+        description: Summarize a file; pass the path in `request`.
 
 jobs:
-- name: digest
-  plan:
-  - task: fetch
-    outputs: [notes]
-    run: echo 'a very long account of the outage' > notes/log.txt
-  - agent: lead
-    inputs: [notes]
-    messages:
-      - "Have your summarizer condense notes/log.txt, then report."
+  - name: digest
+    plan:
+      - task: fetch
+        outputs: [notes]
+        run: echo 'a very long account of the outage' > notes/log.txt
+      - agent: lead
+        inputs: [notes]
+        messages:
+          - "Have your summarizer condense notes/log.txt, then report."
+        assert:
+          tool_calls:
+            - name: summarizer   # the child was reached as an ordinary tool call
+          stdout: there was an outage
     assert:
-      tool_calls:
-      - name: summarizer         # the child was reached as an ordinary tool call
-      stdout: there was an outage
-  assert:
-    execution: [fetch, lead]     # the child records nothing of its own
-    outcome: succeeded
+      execution: [fetch, lead]   # the child records nothing of its own
+      outcome: succeeded
 ```
 
 - Each call runs the child's own fresh conversation (its own model, persona, dials, `max_turns`, tool grant) and returns its final text as the tool result, capped at 32,000 bytes like any other tool output.
@@ -662,20 +668,20 @@ jobs:
 
 ```yaml test=agents-fix
 agents:
-- name: fixer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  system: You fix failing checks. Make the smallest change that works.
-  tools: [read_file, search_files, edit_file, write_file, run_shell]
+  - name: fixer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools: [read_file, search_files, edit_file, write_file, run_shell]
+    system: You fix failing checks. Make the smallest change that works.
 
 jobs:
-- name: build
-  plan:
-  - task: check
-    run: test -f config.json
-    fix: fixer                 # scalar: just the agent name
-  assert:
-    execution: [fixer, check]  # the fixer ran and the re-run passed; a green first
-    outcome: succeeded         # try would record [check] alone
+  - name: build
+    plan:
+      - task: check
+        fix: fixer             # scalar: just the agent name
+        run: test -f config.json
+    assert:
+      execution: [fixer, check]  # the fixer ran and the re-run passed; a green first
+      outcome: succeeded       # try would record [check] alone
 ```
 
 The mapping form takes per-task overrides:
@@ -707,36 +713,37 @@ A top-level `tasks:` list (mirroring `resources:`/`agents:`) lets a `run:`/`fix:
 
 ```yaml test=agents-tasks-reuse
 agents:
-- name: fixer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools: [read_file, write_file, run_shell]
+  - name: fixer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools: [read_file, write_file, run_shell]
 
 tasks:
-- name: unit
-  run: echo running unit tests
-  fix: fixer                 # the run:/fix: PAIR, defined once, reused by both jobs
+  - name: unit
+    fix: fixer               # the run:/fix: PAIR, defined once, reused by both jobs
+    run: echo running unit tests
 
 jobs:
-- name: quick
-  plan:
-  - task: unit               # run: absent -> resolves the tasks: entry
+  - name: quick
+    plan:
+      - task: unit           # run: absent -> resolves the tasks: entry
+        assert:
+          stdout: running unit tests
     assert:
-      stdout: running unit tests
-  assert:
-    execution: [unit]
-    outcome: succeeded
-- name: full
-  plan:
-  - task: unit
+      execution: [unit]
+      outcome: succeeded
+
+  - name: full
+    plan:
+      - task: unit
+        assert:
+          stdout: running unit tests    # the same tasks: entry, resolved again
+      - task: integration    # run: present -> inline; tasks: never consulted
+        run: echo running integration tests
+        assert:
+          stdout: running integration tests
     assert:
-      stdout: running unit tests    # the same tasks: entry, resolved again
-  - task: integration        # run: present -> inline; tasks: never consulted
-    run: echo running integration tests
-    assert:
-      stdout: running integration tests
-  assert:
-    execution: [unit, integration]
-    outcome: succeeded
+      execution: [unit, integration]
+      outcome: succeeded
 
 assert:
   execution: [quick, full]   # pipeline level: the jobs `steps test` must have run
@@ -752,31 +759,31 @@ A task's `run:`, an agent's `system:` persona, an agent step's `messages:`, and 
 
 ```yaml test=agents-files
 tasks:
-- name: unit
-  run_file: ci/unit.sh              # loads the task's run: from a file
+  - name: unit
+    run_file: ci/unit.sh            # loads the task's run: from a file
 
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  system_file: prompts/reviewer.md  # loads the agent's persona from a file
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    system_file: prompts/reviewer.md  # loads the agent's persona from a file
 
 jobs:
-- name: build
-  plan:
-  - task: unit
+  - name: build
+    plan:
+      - task: unit
+        assert:
+          stdout: unit tests pass   # ci/unit.sh's text, resolved at load
+      - task: smoke
+        run_file: ci/smoke.sh       # a plan step's OWN run:, from a file
+        assert:
+          stdout: smoke ok
+      - agent: reviewer
+        message_files: [prompts/review.md]  # loads the step's message from a file
+        assert:
+          stdout: Build looks fine
     assert:
-      stdout: unit tests pass       # ci/unit.sh's text, resolved at load
-  - task: smoke
-    run_file: ci/smoke.sh           # a plan step's OWN run:, from a file
-    assert:
-      stdout: smoke ok
-  - agent: reviewer
-    message_files: [prompts/review.md]  # loads the step's message from a file
-    assert:
-      stdout: Build looks fine
-  assert:
-    execution: [unit, smoke, reviewer]
-    outcome: succeeded
+      execution: [unit, smoke, reviewer]
+      outcome: succeeded
 ```
 
 Every `*_file:` path is resolved **once, at load time**, relative to the pipeline YAML's own directory — so everything downstream sees the resolved text and cannot tell it apart from the same value written inline. Editing an included file busts the cache exactly like editing an inline value would.
@@ -787,29 +794,29 @@ A top-level `tasks:`/`agents:` entry additionally accepts a whole-document `file
 
 ```yaml test=agents-task-file
 tasks:
-- name: unit
-  file: ci/unit.yml         # supplies any task field but name:
-  timeout: 5m               # any field set here overrides the document's
+  - name: unit
+    file: ci/unit.yml       # supplies any task field but name:
+    timeout: 5m             # any field set here overrides the document's
 
 agents:
-- name: reviewer
-  file: ci/reviewer.yml     # the same for a whole agent definition
-  max_turns: 10             # ...and the same override rule
+  - name: reviewer
+    file: ci/reviewer.yml   # the same for a whole agent definition
+    max_turns: 10           # ...and the same override rule
 
 jobs:
-- name: build
-  plan:
-  - task: unit
+  - name: build
+    plan:
+      - task: unit
+        assert:
+          stdout: from the shared task   # the run: came out of ci/unit.yml
+      - agent: reviewer
+        messages:
+          - "Review the build."
+        assert:
+          stdout: Nothing to flag
     assert:
-      stdout: from the shared task   # the run: came out of ci/unit.yml
-  - agent: reviewer
-    messages:
-      - "Review the build."
-    assert:
-      stdout: Nothing to flag
-  assert:
-    execution: [unit, reviewer]
-    outcome: succeeded
+      execution: [unit, reviewer]
+      outcome: succeeded
 ```
 
 The entry's own inline fields win over the loaded document's — except `privileged:`, which is on if either says so, since an inline `false` cannot be told apart from leaving it out — and the loaded document may not itself use `file:`/`run_file:` — includes are resolved one level deep only, which is what makes cycle detection unnecessary.
@@ -820,36 +827,36 @@ An agent step's `message_files:` additionally accepts a `{artifact, path}` mappi
 
 ```yaml test=agents-prompt-artifact
 resource_types:
-- name: repos
-  config:
-    check: |
-      printf '[{"ref": "abc123"}]'
-    in: |
-      mkdir -p .ci
-      echo 'Review this change for correctness.' > .ci/REVIEW.md
+  - name: repos
+    config:
+      check: |
+        printf '[{"ref": "abc123"}]'
+      in: |
+        mkdir -p .ci
+        echo 'Review this change for correctness.' > .ci/REVIEW.md
 
 resources:
-- name: repo
-  type: repos
-  source: {}
+  - name: repo
+    type: repos
+    source: {}
 
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: review
-  plan:
-  - get: repo
-    trigger: true
-  - agent: reviewer
-    inputs: [repo]
-    message_files: [{ artifact: repo, path: .ci/REVIEW.md }]
+  - name: review
+    plan:
+      - get: repo
+        trigger: true
+      - agent: reviewer
+        inputs: [repo]
+        message_files: [{artifact: repo, path: .ci/REVIEW.md}]
+        assert:
+          stdout: The change is correct
     assert:
-      stdout: The change is correct
-  assert:
-    execution: [repo, reviewer]
-    outcome: succeeded
+      execution: [repo, reviewer]
+      outcome: succeeded
 ```
 
 This is the one place a step's config can come from a fetched artifact, and it is deliberately narrow — a task's `run:` and a whole agent definition cannot, for two reasons:
@@ -865,27 +872,27 @@ An `agent` step can declare `context_paths:` — files whose contents are inject
 
 ```yaml test=agents-context-paths
 agents:
-- name: coder
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  max_context_bytes: 100000    # what every step of this agent gets by default
+  - name: coder
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    max_context_bytes: 100000  # what every step of this agent gets by default
 
 jobs:
-- name: build
-  plan:
-  - task: conventions
-    outputs: [repo]
-    run: echo 'always run go vet before committing' > repo/CONVENTIONS.md
-  - agent: coder
-    inputs: [repo]
-    context_paths: [repo/CONVENTIONS.md]
-    max_context_bytes: 400000  # ...except this step, which is handed more
-    messages:
-      - "State this project's convention in one line."
+  - name: build
+    plan:
+      - task: conventions
+        outputs: [repo]
+        run: echo 'always run go vet before committing' > repo/CONVENTIONS.md
+      - agent: coder
+        inputs: [repo]
+        context_paths: [repo/CONVENTIONS.md]
+        max_context_bytes: 400000  # ...except this step, which is handed more
+        messages:
+          - "State this project's convention in one line."
+        assert:
+          stdout: go vet       # answered from the injected file, no read_file turn spent
     assert:
-      stdout: go vet           # answered from the injected file, no read_file turn spent
-  assert:
-    execution: [conventions, coder]
-    outcome: succeeded
+      execution: [conventions, coder]
+      outcome: succeeded
 ```
 
 The point is not convenience but **guarantee**: conventions every invocation must follow are present from the first turn, instead of costing a `read_file` round trip the model might not bother with.
@@ -894,29 +901,29 @@ Paths are relative to the step's working directory and confined to that same dir
 
 ```yaml test=agents-context-paths-root
 agents:
-- name: worker
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: worker
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: answer
-  plan:
-  - task: fetch
-    outputs: [ask, repo]
-    run: |
-      echo 'Why does the build skip vet?' > ask/comment.txt
-      echo 'always run go vet before committing' > repo/CONVENTIONS.md
-  - agent: worker
-    inputs: [ask, repo]
-    # No dir:, so both inputs are in reach. With dir: repo the first entry
-    # would have to be ../ask/comment.txt, which load refuses.
-    context_paths: [ask/comment.txt, repo/CONVENTIONS.md]
-    messages:
-      - "Answer the comment against the conventions."
+  - name: answer
+    plan:
+      - task: fetch
+        outputs: [ask, repo]
+        run: |
+          echo 'Why does the build skip vet?' > ask/comment.txt
+          echo 'always run go vet before committing' > repo/CONVENTIONS.md
+      - agent: worker
+        inputs: [ask, repo]
+        # No dir:, so both inputs are in reach. With dir: repo the first entry
+        # would have to be ../ask/comment.txt, which load refuses.
+        context_paths: [ask/comment.txt, repo/CONVENTIONS.md]
+        messages:
+          - "Answer the comment against the conventions."
+        assert:
+          stdout: go vet
     assert:
-      stdout: go vet
-  assert:
-    execution: [fetch, worker]
-    outcome: succeeded
+      execution: [fetch, worker]
+      outcome: succeeded
 ```
 
 Load can only check the spelling. A symlink inside a fetched input that leads out is caught when the step is prepared, since the link does not exist until the build fetches it. Paths are read at **run time** (per attempt), which is what distinguishes them from `system_file:`: the persona is the pipeline author's own text, resolved once at load; `context_paths:` is content that arrives with a fetched artifact and can change between runs. A missing or escaping file fails the step at preparation, before a token is spent. A file that is merely too big (over `max_context_bytes:`, default 100KB — `0` lifts the ceiling entirely) is **truncated** instead, with a note pointing at `read_file`'s paging — the author writes a path, not a size, and `pr/pr.diff` is a correct path that would otherwise start failing the day the pull request grew.
@@ -927,31 +934,31 @@ Load can only check the spelling. A symlink inside a fetched input that leads ou
 
 ```yaml test=agents-across-context
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: review
-  plan:
-  - task: fetch
-    outputs: [repo]
-    run: |
-      echo 'package api'     > repo/api.go
-      echo 'package storage' > repo/storage.go
-  - across:
-    - var: dim
-      values: [api, storage]
-    agent: reviewer
-    inputs: [repo]
-    context_paths: ["repo/{{ .vars.dim }}.go"]
-    messages:
-      - "Review the {{ .vars.dim }} package."
-  assert:
-    execution:                 # one cell per value, each under its own coordinates
-    - fetch
-    - reviewer [dim=api]
-    - reviewer [dim=storage]
-    outcome: succeeded
+  - name: review
+    plan:
+      - task: fetch
+        outputs: [repo]
+        run: |
+          echo 'package api'     > repo/api.go
+          echo 'package storage' > repo/storage.go
+      - agent: reviewer
+        across:
+          - var: dim
+            values: [api, storage]
+        inputs: [repo]
+        context_paths: ["repo/{{ .vars.dim }}.go"]
+        messages:
+          - "Review the {{ .vars.dim }} package."
+    assert:
+      execution:               # one cell per value, each under its own coordinates
+        - fetch
+        - reviewer [dim=api]
+        - reviewer [dim=storage]
+      outcome: succeeded
 ```
 
 One path per entry, rendered per cell. A `{{ .vars.x }}` naming an axis the matrix does not declare is a **load** error naming the entry (`context_paths[0]`).
@@ -964,36 +971,37 @@ A verdict is the one thing every judging step produces. A classifier that simply
 
 ```yaml test=agents-context-from
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-- name: editor
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+
+  - name: editor
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: revise
-  plan:
-  - agent: reviewer
-    messages:
-      - "Review the change."
-    verdicts: [approve, revise]      # no routing — this one just decides
+  - name: revise
+    plan:
+      - agent: reviewer
+        verdicts: [approve, revise]  # no routing — this one just decides
+        messages:
+          - "Review the change."
+        assert:
+          verdict: approve           # what it decided, pinned at the source
+      - agent: editor
+        context:
+          from:
+            reviewer: note           # verdict | note | full
+        messages:
+          - "Apply the review."
+      - task: gate
+        context:
+          from:
+            reviewer: verdict
+        run: grep -q 'approve' upstream/reviewer
+        assert:
+          code: 0                    # the verdict file really landed at upstream/reviewer
     assert:
-      verdict: approve               # what it decided, pinned at the source
-  - agent: editor
-    messages:
-      - "Apply the review."
-    context:
-      from:
-        reviewer: note               # verdict | note | full
-  - task: gate
-    context:
-      from:
-        reviewer: verdict
-    run: grep -q 'approve' upstream/reviewer
-    assert:
-      code: 0                        # the verdict file really landed at upstream/reviewer
-  assert:
-    execution: [reviewer, editor, gate]
-    outcome: succeeded
+      execution: [reviewer, editor, gate]
+      outcome: succeeded
 ```
 
 - **Levels.** `verdict` is the name it chose; `note` adds the reason it gave; `full` adds its final response text.
@@ -1013,45 +1021,46 @@ defaults:
   memory_entries: 50          # per scope, oldest first; 0 keeps everything
 
 agents:
-- name: notetaker
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools: [read_file, remember, forget]   # never granted by default
-- name: bot
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools: [read_file, write_file]
+  - name: notetaker
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools: [read_file, remember, forget] # never granted by default
+
+  - name: bot
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools: [read_file, write_file]
 
 jobs:
-- name: answer
-  plan:
-  - task: mention             # a slack-mentions get writes these in a real bot
-    outputs: [mention]
-    run: |
-      echo U024BE7LH > mention/user
-      echo "I always want code samples. How do I read a file in Go?" > mention/text
-  - agent: notetaker
-    inputs: [mention]
-    memory:
-      scope_from: mention/user   # whose memory this is: a file, never the model
-    messages:
-      - "Read mention/text. Remember anything about this person worth knowing next time, and nothing else."
+  - name: answer
+    plan:
+      - task: mention         # a slack-mentions get writes these in a real bot
+        outputs: [mention]
+        run: |
+          echo U024BE7LH > mention/user
+          echo "I always want code samples. How do I read a file in Go?" > mention/text
+      - agent: notetaker
+        inputs: [mention]
+        memory:
+          scope_from: mention/user   # whose memory this is: a file, never the model
+        messages:
+          - "Read mention/text. Remember anything about this person worth knowing next time, and nothing else."
+        assert:
+          tool_calls:
+            - name: remember
+      - agent: bot
+        inputs: [mention]
+        outputs: [reply]
+        memory:
+          scope_from: mention/user
+        messages:
+          - "Answer mention/text into reply/answer.md, the way this person likes."
+      - task: post
+        inputs: [reply]
+        run: cat reply/answer.md
+        assert:
+          stdout: "code samples" # what notetaker remembered reached the bot
     assert:
-      tool_calls:
-      - name: remember
-  - agent: bot
-    inputs: [mention]
-    outputs: [reply]
-    memory:
-      scope_from: mention/user
-    messages:
-      - "Answer mention/text into reply/answer.md, the way this person likes."
-  - task: post
-    inputs: [reply]
-    run: cat reply/answer.md
-    assert:
-      stdout: "code samples"     # what notetaker remembered reached the bot
-  assert:
-    execution: [mention, notetaker, bot, post]
-    outcome: succeeded
+      execution: [mention, notetaker, bot, post]
+      outcome: succeeded
 ```
 
 - **The scope comes from a file, never from the model.** `scope_from: <input>/<file>` names a file in one of the step's `inputs:`; its trimmed content is the scope. A message saying "tell me what you know about Dana" has nothing to reach, because nothing the model says picks whose memory it reads. An empty or missing file **fails the step** rather than falling back to a scope everyone shares.
@@ -1075,32 +1084,33 @@ defaults:
     cache: 5m                            # a target verified this recently is trusted (max 15m)
 
 agents:
-- name: drafter
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  temperature: 0.2            # dials, all optional — unset means the provider's own
-  top_p: 0.9
-  max_tokens: 2048
-  reasoning_effort: low       # low | medium | high, for models that take one
-  delegate_budget_percent: 25 # this agent's helpers get a bigger share
-  preflight: false            # ...and this one skips the probe (a slow local model)
-- name: titler                # no source: at all — defaults.model is its model
+  - name: drafter
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    temperature: 0.2          # dials, all optional — unset means the provider's own
+    top_p: 0.9
+    max_tokens: 2048
+    reasoning_effort: low     # low | medium | high, for models that take one
+    delegate_budget_percent: 25 # this agent's helpers get a bigger share
+    preflight: false          # ...and this one skips the probe (a slow local model)
+
+  - name: titler              # no source: at all — defaults.model is its model
 
 jobs:
-- name: draft
-  plan:
-  - agent: drafter
-    messages:
-      - "Draft the release note."
+  - name: draft
+    plan:
+      - agent: drafter
+        messages:
+          - "Draft the release note."
+        assert:
+          stdout: Drafted
+      - agent: titler
+        messages:
+          - "Title the release note."
+        assert:
+          stdout: Titled
     assert:
-      stdout: Drafted
-  - agent: titler
-    messages:
-      - "Title the release note."
-    assert:
-      stdout: Titled
-  assert:
-    execution: [drafter, titler]
-    outcome: succeeded
+      execution: [drafter, titler]
+      outcome: succeeded
 ```
 
 - **A dial left unset is not sent**, so the provider's own default applies — steps never invents a temperature. `reasoning_effort:` is passed through to models that accept one and ignored by those that don't; a value outside `low`/`medium`/`high` is a load error. Case is free: `High` is read as `high`, and the lowercase value is what is sent. It is the one dial on this list a [`@claude/` agent](#cli-backed-agents-claudesonnet) also takes, reaching the CLI as its own `--effort` flag rather than as part of a request steps shapes.
@@ -1114,20 +1124,20 @@ Four agents ship with steps — `explorer`, `planner`, `reviewer`, `builder` —
 
 ```yaml test=agents-builtin
 agents:
-- name: "@builtin/reviewer"                          # quotes required -- YAML reserves a leading @
-  source: { model: openrouter/qwen/qwen3.7-flash }   # the one thing the profile cannot supply
+  - name: "@builtin/reviewer"                        # quotes required -- YAML reserves a leading @
+    source: {model: openrouter/qwen/qwen3.7-flash}   # the one thing the profile cannot supply
 
 jobs:
-- name: gate
-  plan:
-  - agent: "@builtin/reviewer"
-    messages:
-      - "Review the change for correctness."
+  - name: gate
+    plan:
+      - agent: "@builtin/reviewer"
+        messages:
+          - "Review the change for correctness."
+        assert:
+          stdout: no correctness problems
     assert:
-      stdout: no correctness problems
-  assert:
-    execution: ["@builtin/reviewer"]
-    outcome: succeeded
+      execution: ["@builtin/reviewer"]
+      outcome: succeeded
 ```
 
 **An entry for a built-in name supplies what it sets and inherits the rest.** It is not all-or-nothing: naming `@builtin/reviewer` to give it a model keeps the persona and tool grant that were the reason to reference it. Anything you *do* state wins, exactly as it does for a `file:` include — so `tools: [read_file]` on the entry above narrows the grant without touching the persona.
@@ -1151,24 +1161,24 @@ An agent step can loop, hold a long conversation where every turn re-sends the w
 
 ```yaml test=agents-budget
 agents:
-- name: writer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  budget:
-    tokens: 200000      # per invocation of this agent
+  - name: writer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    budget:
+      tokens: 200000    # per invocation of this agent
 
 jobs:
-- name: publish
-  budget:
-    tokens: 500000      # cumulative, across every agent step in the job
-  plan:
-  - agent: writer
-    messages:
-      - "Write the release announcement."
+  - name: publish
+    budget:
+      tokens: 500000    # cumulative, across every agent step in the job
+    plan:
+      - agent: writer
+        messages:
+          - "Write the release announcement."
+        assert:
+          stdout: Announcement written
     assert:
-      stdout: Announcement written
-  assert:
-    execution: [writer]
-    outcome: succeeded
+      execution: [writer]
+      outcome: succeeded
 ```
 
 **A hosted model is warned before its own ceiling, once** (the shared wrap-up nudge, above). When a fifth of the agent's allowance is left, or less than two more turns the size of the last one, the next request carries a message saying how much is spent and asking it to answer from what it has. Tools stay granted, like the `timeout:` warning. There is no tools-withheld wrap-up after a breach the way there is for a spent `max_turns:`: one more request would spend past the cap the budget exists to hold. The job's ceiling does not warn, and a CLI agent's `usd` is enforced inside its own process, out of reach.
@@ -1237,19 +1247,19 @@ holds it:
 
 ```yaml noexec=secrets
 agents:
-- name: reviewer
-  source:
-    model: openrouter/qwen/qwen3.7-flash
-    api_key_env: OPENROUTER_API_KEY
-    secrets:
-      OPENROUTER_API_KEY: ((ci:openrouter_api_key))
-  tools: [run_shell]
+  - name: reviewer
+    source:
+      model: openrouter/qwen/qwen3.7-flash
+      api_key_env: OPENROUTER_API_KEY
+      secrets:
+        OPENROUTER_API_KEY: ((ci:openrouter_api_key))
+    tools: [run_shell]
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    messages: [Review the diff.]
+  - name: review
+    plan:
+      - agent: reviewer
+        messages: [Review the diff.]
 ```
 
 - **The model client is the only reader.** The value is sent as the request's bearer token. It is not in the environment of `run_shell` or a custom tool, which is why this is not the agent's own `secrets:` map: that one is exported to the agent's tools, and a model must not be able to use its own key.
@@ -1266,26 +1276,26 @@ When an agent's model is unreachable, try a backup instead of retrying a dead co
 
 ```yaml test=agents-fallback
 agents:
-- name: writer
-  source:
-    model: openrouter/qwen/qwen3.7-flash
-  fallback:
-  - source:
-      endpoint: https://backup-provider.example.com/v1/
-      model: equivalent-model
-      api_key_env: BACKUP_KEY
+  - name: writer
+    source:
+      model: openrouter/qwen/qwen3.7-flash
+    fallback:
+      - source:
+          endpoint: https://backup-provider.example.com/v1/
+          model: equivalent-model
+          api_key_env: BACKUP_KEY
 
 jobs:
-- name: publish
-  plan:
-  - agent: writer
-    messages:
-      - "Write the announcement."
+  - name: publish
+    plan:
+      - agent: writer
+        messages:
+          - "Write the announcement."
+        assert:
+          stdout: Announcement written   # the primary answered, so no source changed
     assert:
-      stdout: Announcement written   # the primary answered, so no source changed
-  assert:
-    execution: [writer]
-    outcome: succeeded
+      execution: [writer]
+      outcome: succeeded
 ```
 
 `fallback:` fires two ways, automatically — declaring it is what opts an agent into both, there's no separate switch for the second:
@@ -1295,27 +1305,27 @@ jobs:
 
 ```yaml test=agents-fallback-midrun
 agents:
-- name: writer
-  source:
-    model: openrouter/qwen/qwen3.7-flash
-  fallback:
-  - source:
-      endpoint: https://backup-provider.example.com/v1/
-      model: equivalent-model
-      api_key_env: BACKUP_KEY
+  - name: writer
+    source:
+      model: openrouter/qwen/qwen3.7-flash
+    fallback:
+      - source:
+          endpoint: https://backup-provider.example.com/v1/
+          model: equivalent-model
+          api_key_env: BACKUP_KEY
 
 jobs:
-- name: publish
-  plan:
-  - agent: writer
-    attempts: 1   # no room to retry — the very first failure trips the cascade
-    messages:
-      - "Write the announcement."
+  - name: publish
+    plan:
+      - agent: writer
+        attempts: 1   # no room to retry — the very first failure trips the cascade
+        messages:
+          - "Write the announcement."
+        assert:
+          stdout: Announcement written via the fallback   # this time the fallback actually served the run
     assert:
-      stdout: Announcement written via the fallback   # this time the fallback actually served the run
-  assert:
-    execution: [writer]
-    outcome: succeeded
+      execution: [writer]
+      outcome: succeeded
 ```
 
 - **Connection-level failures only** — an unreachable endpoint, a 5xx, a connection that died mid-response. A model *refusing* a request is a different class entirely; falling over on one would silently reroute a legitimate refusal to a possibly less suitable model. A conversation that ran out of turns, or that a model refused, is never eligible either way — only the mid-run trigger has a request to inspect for this, but the rule is the same one preflight's trigger already implies.
@@ -1356,26 +1366,26 @@ An agent's `source.model` normally names a hosted model steps calls over HTTP. P
 
 ```yaml noexec=cli
 agents:
-- name: reviewer
-  source:
-    model: "@claude/sonnet"     # quotes required -- YAML reserves a leading @
-  tools: [read_file, run_shell]
-  settings: project             # opt in to the repo's checked-in .claude/ scope
-  reasoning_effort: high        # the one generation dial a CLI takes
-  budget:
-    usd: 0.50                   # CLI agents meter in dollars, not tokens
+  - name: reviewer
+    source:
+      model: "@claude/sonnet"   # quotes required -- YAML reserves a leading @
+    tools: [read_file, run_shell]
+    settings: project           # opt in to the repo's checked-in .claude/ scope
+    reasoning_effort: high      # the one generation dial a CLI takes
+    budget:
+      usd: 0.50                 # CLI agents meter in dollars, not tokens
 
 jobs:
-- name: review
-  plan:
-  - task: fetch
-    outputs: [repo]
-    run: echo 'package main' > repo/main.go
-  - agent: reviewer
-    inputs: [repo]
-    dir: repo
-    messages:
-      - "Review this code."
+  - name: review
+    plan:
+      - task: fetch
+        outputs: [repo]
+        run: echo 'package main' > repo/main.go
+      - agent: reviewer
+        inputs: [repo]
+        dir: repo
+        messages:
+          - "Review this code."
 ```
 
 The quotes are not stylistic: a leading `@` is a reserved indicator in YAML, so an unquoted value is a parse error before steps ever sees it. `@claude/sonnet` reads as "the claude CLI, asked for sonnet" — the part after the slash is passed through untouched.
@@ -1456,39 +1466,41 @@ A single model has blind spots. Ask one reviewer "is this correct?" and you get 
 
 ```yaml test=agents-ensemble
 agents:
-- name: reviewer-a
-  source: { model: openrouter/qwen/qwen3.7-flash }
-- name: reviewer-b
-  source: { model: openrouter/qwen/qwen3.7-flash }
-- name: reviewer-c
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: reviewer-a
+    source: {model: openrouter/qwen/qwen3.7-flash}
+
+  - name: reviewer-b
+    source: {model: openrouter/qwen/qwen3.7-flash}
+
+  - name: reviewer-c
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: gate
-  plan:
-  - ensemble:
-      verdicts:                       # the vocabulary EVERY member votes in,
-        - reject: revise              # and where the BLOCK's decision goes
-        - approve: publish
-      decide: majority                # or: unanimous, any, or an agent name
-      member_errors: fail             # or: exclude
-      agents:
-      - {agent: reviewer-a, messages: ["Review the diff for correctness."]}
-      - {agent: reviewer-b, messages: ["Review the diff for style."]}
-      - {agent: reviewer-c, messages: ["Review the diff for security."]}
-  - task: revise
-    run: echo sending back
-  - task: publish
-    run: echo shipping
+  - name: gate
+    plan:
+      - ensemble:
+          verdicts:                   # the vocabulary EVERY member votes in,
+            - reject: revise          # and where the BLOCK's decision goes
+            - approve: publish
+          decide: majority            # or: unanimous, any, or an agent name
+          member_errors: fail         # or: exclude
+          agents:
+            - {agent: reviewer-a, messages: ["Review the diff for correctness."]}
+            - {agent: reviewer-b, messages: ["Review the diff for style."]}
+            - {agent: reviewer-c, messages: ["Review the diff for security."]}
+      - task: revise
+        run: echo sending back
+      - task: publish
+        run: echo shipping
+        assert:
+          stdout: shipping
     assert:
-      stdout: shipping
-  assert:
-    execution:                        # every member voted, then the majority's
-    - reviewer-a                      # target ran — revise is absent, which is
-    - reviewer-b                      # what "routed past it" looks like
-    - reviewer-c
-    - publish
-    outcome: succeeded
+      execution:                      # every member voted, then the majority's
+        - reviewer-a                  # target ran — revise is absent, which is
+        - reviewer-b                  # what "routed past it" looks like
+        - reviewer-c
+        - publish
+      outcome: succeeded
 ```
 
 ### ⚠️ N agents cost N times one

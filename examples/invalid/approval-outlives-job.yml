@@ -3,11 +3,11 @@
 # expect: approval.timeout 24h outlives the job's timeout: 2h
 
 jobs:
-- name: publish
-  timeout: 2h
-  plan:
-  - approval:
-      message: ship it?
-      timeout: 24h
-  - task: ship
-    run: echo shipped
+  - name: publish
+    timeout: 2h
+    plan:
+      - approval:
+          message: ship it?
+          timeout: 24h
+      - task: ship
+        run: echo shipped

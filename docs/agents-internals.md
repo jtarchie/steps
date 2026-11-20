@@ -205,22 +205,22 @@ Every model response and every tool result is normally appended to an agent step
 
 ```yaml test=internals-compaction
 agents:
-- name: coder
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  max_turns: 60
-  compact_after_tokens: 40000    # smaller than the 124,160 default -- see below
+  - name: coder
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    max_turns: 60
+    compact_after_tokens: 40000  # smaller than the 124,160 default -- see below
 
 jobs:
-- name: build
-  plan:
-  - agent: coder
-    messages:
-      - "Do the long-horizon work."
+  - name: build
+    plan:
+      - agent: coder
+        messages:
+          - "Do the long-horizon work."
+        assert:
+          stdout: Done
     assert:
-      stdout: Done
-  assert:
-    execution: [coder]
-    outcome: succeeded
+      execution: [coder]
+      outcome: succeeded
 ```
 
 Once a conversation's size crosses the budget, the agent's own model is asked to summarize everything older than a recent window (roughly the most recent 30% of the budget), and the conversation continues from `[summary] + [recent turns]` instead of the full history. This can happen more than once in a very long conversation — each pass folds the previous summary into the new one. A summarization failure is logged and the turn proceeds uncompacted, the same failure-is-data treatment a tool failure gets — with one exception: a summary whose tokens cross a `budget:` (the agent's own or the job's) stops the step, below.
@@ -252,22 +252,22 @@ INF agent.compaction_budget agent=coder model=some-local-build compact_after_tok
 
 ```yaml test=internals-context-window
 agents:
-- name: reviewer
-  source: { model: lmstudio/qwen2.5-coder }
-  max_turns: 60
-  context_window: 32000    # -> compacts at 25,600
+  - name: reviewer
+    source: {model: lmstudio/qwen2.5-coder}
+    max_turns: 60
+    context_window: 32000  # -> compacts at 25,600
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    messages:
-      - "Review the change."
+  - name: review
+    plan:
+      - agent: reviewer
+        messages:
+          - "Review the change."
+        assert:
+          stdout: Reviewed
     assert:
-      stdout: Reviewed
-  assert:
-    execution: [reviewer]
-    outcome: succeeded
+      execution: [reviewer]
+      outcome: succeeded
 ```
 
 `compact_after_tokens:` still outranks it, and overrides the budget outright rather than describing the model. Prefer `context_window:` unless you specifically want a budget that is not 97% of the window. Neither is available on a CLI agent (`@claude/...`), which resolves its own window and compacts its own conversation.
@@ -303,28 +303,28 @@ A step's `timeout:` bounds the whole conversation, so a tool that hangs spends t
 
 ```yaml test=internals-tool-timeout
 agents:
-- name: watcher
-  source: { model: lmstudio/qwen2.5-coder }
-  tools:
-  - name: await_rollout
-    description: Wait for the named service to finish rolling out.
-    run: |
-      until grep -q done {{ .args.service | shellquote }}.log 2>/dev/null; do sleep 1; done
-    timeout: 1s
+  - name: watcher
+    source: {model: lmstudio/qwen2.5-coder}
+    tools:
+      - name: await_rollout
+        description: Wait for the named service to finish rolling out.
+        timeout: 1s
+        run: |
+          until grep -q done {{ .args.service | shellquote }}.log 2>/dev/null; do sleep 1; done
 
 jobs:
-- name: watch
-  plan:
-  - agent: watcher
-    messages:
-      - "Check whether widgetd finished its rollout."
+  - name: watch
+    plan:
+      - agent: watcher
+        messages:
+          - "Check whether widgetd finished its rollout."
+        assert:
+          tool_calls:
+            - name: await_rollout
+          stdout: rollout status is unknown
     assert:
-      tool_calls:
-      - name: await_rollout
-      stdout: rollout status is unknown
-  assert:
-    execution: [watcher]
-    outcome: succeeded
+      execution: [watcher]
+      outcome: succeeded
 ```
 
 The polling loop above never finds its marker, so the call is cancelled at one second and the step carries on — that block is executed as written by the docs suite, deadline and all.

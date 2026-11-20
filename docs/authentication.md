@@ -109,13 +109,13 @@ access:
   operator: '"acme/oncall" in Groups'    # anybody else who may see it only reads
 
 jobs:
-- name: deploy
-  plan:
-  - task: ship
-    run: echo shipped
-  assert:
-    execution: [ship]
-    outcome: succeeded
+  - name: deploy
+    plan:
+      - task: ship
+        run: echo shipped
+    assert:
+      execution: [ship]
+      outcome: succeeded
 ```
 
 - **It only narrows.** A pipeline is a file anybody with a pull request can change, so nothing it says can give a person more than the daemon's `--role` rules do: an `operator: "true"` lets nobody trigger who could not already. Both have to agree.

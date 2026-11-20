@@ -3,17 +3,17 @@
 # expect: the name is built in
 
 resource_types:
-- name: webhook
-  config:
-    check: echo '[]'
+  - name: webhook
+    config:
+      check: echo '[]'
 
 resources:
-- name: push
-  type: webhook
-  source: {}
+  - name: push
+    type: webhook
+    source: {}
 
 jobs:
-- name: build
-  plan:
-  - get: push
-    trigger: true
+  - name: build
+    plan:
+      - get: push
+        trigger: true

@@ -4,19 +4,19 @@
 # expect: env is not valid on put steps
 
 resource_types:
-- name: dummy
-  config:
-    check: echo '[]'
-    in: 'true'
-    out: 'true'
+  - name: dummy
+    config:
+      check: echo '[]'
+      in: 'true'
+      out: 'true'
 
 resources:
-- name: results
-  type: dummy
-  source: {}
+  - name: results
+    type: dummy
+    source: {}
 
 jobs:
-- name: ship
-  plan:
-  - put: results
-    env: [DEPLOY_TOKEN]
+  - name: ship
+    plan:
+      - put: results
+        env: [DEPLOY_TOKEN]

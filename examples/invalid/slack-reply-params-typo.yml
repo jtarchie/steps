@@ -2,19 +2,20 @@
 # expect: put "reply": params: unknown key "fromm" (did you mean "from"?)
 
 resources:
-- name: mentions
-  type: slack-mentions
-  source: {}
-- name: reply
-  type: slack-reply
-  source: {}
+  - name: mentions
+    type: slack-mentions
+    source: {}
+
+  - name: reply
+    type: slack-reply
+    source: {}
 
 jobs:
-- name: answer
-  plan:
-  - get: mentions
-    trigger: true
-  - put: reply
-    inputs: [mentions]
-    params:
-      fromm: mentions
+  - name: answer
+    plan:
+      - get: mentions
+        trigger: true
+      - put: reply
+        inputs: [mentions]
+        params:
+          fromm: mentions

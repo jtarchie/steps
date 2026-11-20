@@ -3,6 +3,6 @@
 # expect: do must list at least one step
 
 jobs:
-- name: build
-  plan:
-  - do: []
+  - name: build
+    plan:
+      - do: []

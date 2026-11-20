@@ -6,13 +6,13 @@
 # expect: must be a variable NAME, not a KEY=VALUE pair
 
 tasks:
-- name: deploy
-  image: alpine
-  run: echo deploying
-  env:
-  - DEPLOY_TOKEN=hunter2
+  - name: deploy
+    image: alpine
+    env:
+      - DEPLOY_TOKEN=hunter2
+    run: echo deploying
 
 jobs:
-- name: ship
-  plan:
-  - task: deploy
+  - name: ship
+    plan:
+      - task: deploy

@@ -8,17 +8,17 @@
 # expect: must name a target
 
 agents:
-- name: reviewer
-  source:
-    model: openai/gpt-4o
+  - name: reviewer
+    source:
+      model: openai/gpt-4o
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - Review it.
-    verdicts:
-      - approve
-      - failure
+  - name: review
+    plan:
+      - agent: reviewer
+        inputs: []
+        verdicts:
+          - approve
+          - failure
+        messages:
+          - Review it.

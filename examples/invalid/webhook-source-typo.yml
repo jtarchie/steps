@@ -3,14 +3,14 @@
 # expect: source: unknown key "secret"
 
 resources:
-- name: push
-  type: webhook
-  source:
-    provider: github
-    secret: GITHUB_WEBHOOK_SECRET
+  - name: push
+    type: webhook
+    source:
+      provider: github
+      secret: GITHUB_WEBHOOK_SECRET
 
 jobs:
-- name: build
-  plan:
-  - get: push
-    trigger: true
+  - name: build
+    plan:
+      - get: push
+        trigger: true

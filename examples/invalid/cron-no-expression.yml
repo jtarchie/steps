@@ -3,12 +3,12 @@
 # expect: needs source.expression
 
 resources:
-- name: tick
-  type: cron
-  source: {}
+  - name: tick
+    type: cron
+    source: {}
 
 jobs:
-- name: build
-  plan:
-  - get: tick
-    trigger: true
+  - name: build
+    plan:
+      - get: tick
+        trigger: true

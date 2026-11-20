@@ -2,12 +2,12 @@
 # expect: load_var: is not valid in a hook
 
 jobs:
-- name: build
-  plan:
-  - task: work
-    run: echo ok
-  ensure:
-    try:
-      in_parallel:
-      - load_var: answer
-        file: answer.txt
+  - name: build
+    plan:
+      - task: work
+        run: echo ok
+    ensure:
+      try:
+        in_parallel:
+          - load_var: answer
+            file: answer.txt

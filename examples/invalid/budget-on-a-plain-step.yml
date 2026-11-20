@@ -8,17 +8,17 @@
 # expect: only valid on an across: step
 
 agents:
-- name: reviewer
-  source:
-    model: openai/test-model
-    api_key_env: STEPS_TEST_AGENT_API_KEY
+  - name: reviewer
+    source:
+      model: openai/test-model
+      api_key_env: STEPS_TEST_AGENT_API_KEY
 
 jobs:
-- name: fan
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - review it
-    budget:
-      tokens: 500
+  - name: fan
+    plan:
+      - agent: reviewer
+        inputs: []
+        budget:
+          tokens: 500
+        messages:
+          - review it

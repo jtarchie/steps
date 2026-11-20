@@ -4,18 +4,18 @@
 # expect: a get step is not valid inside do
 
 resource_types:
-- name: dummy
-  config:
-    check: 'echo ''[{"ref":"v1"}]'''
-    in: "true"
+  - name: dummy
+    config:
+      check: 'echo ''[{"ref":"v1"}]'''
+      in: "true"
 
 resources:
-- name: thing
-  type: dummy
-  source: {}
+  - name: thing
+    type: dummy
+    source: {}
 
 jobs:
-- name: build
-  plan:
-  - do:
-    - get: thing
+  - name: build
+    plan:
+      - do:
+          - get: thing

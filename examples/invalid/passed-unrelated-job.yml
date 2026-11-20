@@ -3,19 +3,19 @@
 # expect: neither gets nor puts resource
 
 resources:
-- name: repo
-  type: git
-  source:
-    uri: https://example.com/repo.git
+  - name: repo
+    type: git
+    source:
+      uri: https://example.com/repo.git
 
 jobs:
-- name: unrelated
-  plan:
-  - task: work
-    inputs: []
-    run: "true"
+  - name: unrelated
+    plan:
+      - task: work
+        inputs: []
+        run: "true"
 
-- name: deploy
-  plan:
-  - get: repo
-    passed: [unrelated]
+  - name: deploy
+    plan:
+      - get: repo
+        passed: [unrelated]

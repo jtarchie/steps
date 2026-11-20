@@ -10,8 +10,8 @@
 # expect: timeout must be a positive duration
 
 jobs:
-- name: build
-  plan:
-  - task: compile
-    timeout: "0"
-    run: echo building
+  - name: build
+    plan:
+      - task: compile
+        timeout: "0"
+        run: echo building

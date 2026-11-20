@@ -3,14 +3,14 @@
 # expect: provider: custom needs source.signature
 
 resources:
-- name: hook
-  type: webhook
-  source:
-    provider: custom
-    secret_env: HOOK_SECRET
+  - name: hook
+    type: webhook
+    source:
+      provider: custom
+      secret_env: HOOK_SECRET
 
 jobs:
-- name: build
-  plan:
-  - get: hook
-    trigger: true
+  - name: build
+    plan:
+      - get: hook
+        trigger: true

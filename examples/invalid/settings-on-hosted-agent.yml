@@ -5,14 +5,14 @@
 # expect: settings is only supported with a cli source
 
 agents:
-- name: reviewer
-  source:
-    model: openrouter/anthropic/claude-sonnet-4
-  settings: project
+  - name: reviewer
+    source:
+      model: openrouter/anthropic/claude-sonnet-4
+    settings: project
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    messages:
-      - Review something.
+  - name: review
+    plan:
+      - agent: reviewer
+        messages:
+          - Review something.

@@ -4,15 +4,15 @@
 # expect: remove source.endpoint
 
 agents:
-- name: reviewer
-  source:
-    model: "@claude/sonnet"
-    endpoint: https://example.test/v1/
+  - name: reviewer
+    source:
+      model: "@claude/sonnet"
+      endpoint: https://example.test/v1/
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - Review something.
+  - name: review
+    plan:
+      - agent: reviewer
+        inputs: []
+        messages:
+          - Review something.

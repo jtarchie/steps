@@ -3,14 +3,14 @@
 # expect: a remote uri is already fetched fresh by every check
 
 resources:
-- name: repo
-  type: git
-  source:
-    uri: https://github.com/jtarchie/steps.git
-    branch: main
-    fetch: true
+  - name: repo
+    type: git
+    source:
+      uri: https://github.com/jtarchie/steps.git
+      branch: main
+      fetch: true
 
 jobs:
-- name: build
-  plan:
-  - get: repo
+  - name: build
+    plan:
+      - get: repo

@@ -36,6 +36,7 @@ type CLI struct {
 	Run            RunCmd            `cmd:""                                  default:"withargs"                                                       help:"run a single job once"`
 	Test           TestCmd           `cmd:""                                  help:"run every job (force) and verify assert directives"`
 	Validate       ValidateCmd       `cmd:""                                  help:"check a pipeline for errors without running anything"`
+	Fmt            FmtCmd            `cmd:""                                  help:"rewrite pipeline files into the standard layout"`
 	Runs           RunsCmd           `cmd:""                                  help:"show what past runs recorded"`
 	Plan           PlanCmd           `cmd:""                                  help:"show which steps a run would execute or skip"`
 	MCP            MCPCmd            `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`

@@ -6,19 +6,19 @@ Every example on this page (and every other page) is a complete pipeline, verifi
 
 ```yaml noexec=network
 resources:
-- name: repo          # the artifact directory a get creates, and the name steps use
-  type: git           # which resource type
-  source:             # configuration for that type — type-specific; a built-in refuses keys it does not read
-    uri: https://github.com/jtarchie/ci.git
-    branch: main
+  - name: repo        # the artifact directory a get creates, and the name steps use
+    type: git         # which resource type
+    source:           # configuration for that type — type-specific; a built-in refuses keys it does not read
+      uri: https://github.com/jtarchie/ci.git
+      branch: main
 
 jobs:
-- name: build
-  plan:
-  - get: repo         # fetch it — the contents land in ./repo
-  - task: compile
-    inputs: [repo]
-    run: cd repo && go build ./...
+  - name: build
+    plan:
+      - get: repo     # fetch it — the contents land in ./repo
+      - task: compile
+        inputs: [repo]
+        run: cd repo && go build ./...
 ```
 
 `git` ships with steps, so that pipeline needs no `resource_types:` block; neither do [the GitHub types](#the-built-in-github-types), [the Linear types](#the-built-in-linear-types), Slack's, `cron`, [`registry-image`](#the-built-in-registry-image-type), [`docker-service`](#the-built-in-docker-service-type) and [`webhook`](webhooks.md). For anything else, you write the type yourself.
@@ -42,21 +42,21 @@ A local-path `uri` costs no network clone — the right call for a large reposit
 
 ```yaml noexec=network
 resources:
-- name: repo
-  type: git
-  source:
-    uri: /srv/clones/steps   # an absolute path to a local clone
-    branch: main
-    fetch: true              # report the remote's main, not whatever the clone last fetched
+  - name: repo
+    type: git
+    source:
+      uri: /srv/clones/steps # an absolute path to a local clone
+      branch: main
+      fetch: true            # report the remote's main, not whatever the clone last fetched
 
 jobs:
-- name: build
-  plan:
-  - get: repo
-    trigger: true
-  - task: compile
-    inputs: [repo]
-    run: cd repo && go build ./...
+  - name: build
+    plan:
+      - get: repo
+        trigger: true
+      - task: compile
+        inputs: [repo]
+        run: cd repo && go build ./...
 ```
 
 It fetches the exact commit the plan pinned, shallowly, so a branch that moves mid-run still gives you the version that was planned.
@@ -67,24 +67,24 @@ The type runs the `git` binary on the machine steps runs on. To run it in a cont
 
 ```yaml noexec=network
 resource_types:
-- name: git
-  image: alpine/git            # the built-in's check, in and out run here
+  - name: git
+    image: alpine/git          # the built-in's check, in and out run here
 
 resources:
-- name: repo
-  type: git
-  source:
-    uri: https://github.com/jtarchie/steps.git
-    branch: main
+  - name: repo
+    type: git
+    source:
+      uri: https://github.com/jtarchie/steps.git
+      branch: main
 
 jobs:
-- name: build
-  plan:
-  - get: repo
-  - task: compile
-    image: golang:1.26
-    inputs: [repo]
-    run: cd repo && go build ./...
+  - name: build
+    plan:
+      - get: repo
+      - task: compile
+        image: golang:1.26
+        inputs: [repo]
+        run: cd repo && go build ./...
 ```
 
 `env:`, `user:`, `network:` and the rest of a type's [container settings](infra.md#container-execution-image) apply as they would to any type. The `github-prs` and `github-comments` types take the same entry for [`checkout: git`](#checkout-git-a-repository-to-run-git-in). The other built-ins run no command, so an entry giving one of them an image is a load error.
@@ -97,26 +97,26 @@ A `uri:` that is a path on this machine (an absolute or relative path, or `file:
 
 ```yaml noexec=network
 resources:
-- name: tools-image-src
-  type: git
-  source:
-    uri: https://github.com/jtarchie/steps.git
-    branch: main
-    paths: [Dockerfile, go.mod]              # only a commit that changes one of these is a new version
-    ignore_paths: ["*.md"]                   # and not one that changes only markdown
+  - name: tools-image-src
+    type: git
+    source:
+      uri: https://github.com/jtarchie/steps.git
+      branch: main
+      paths: [Dockerfile, go.mod]            # only a commit that changes one of these is a new version
+      ignore_paths: ["*.md"]                 # and not one that changes only markdown
 
 jobs:
-- name: build
-  plan:
-  - get: tools-image-src
-  - task: show
-    inputs: [tools-image-src]
-    run: git -C tools-image-src log -1 --format=%s -- Dockerfile go.mod | grep -c .
+  - name: build
+    plan:
+      - get: tools-image-src
+      - task: show
+        inputs: [tools-image-src]
+        run: git -C tools-image-src log -1 --format=%s -- Dockerfile go.mod | grep -c .
+        assert:
+          stdout: "1"
     assert:
-      stdout: "1"
-  assert:
-    execution: [tools-image-src, show]
-    outcome: succeeded
+      execution: [tools-image-src, show]
+      outcome: succeeded
 ```
 
 - **Entries are git pathspecs**: a directory (`images/tools`) covers what is under it, and `*`, `?` and `[...]` match as git's do, across `/`.
@@ -133,20 +133,20 @@ Tags are read-only here. `tag_pattern` is refused at load together with `branch`
 
 ```yaml noexec=network
 resources:
-- name: release-tag
-  type: git
-  source:
-    uri: https://github.com/jtarchie/steps.git
-    tag_pattern: "v*"        # v1.2.0, v1.10.0, ...: one version per tag, oldest first
+  - name: release-tag
+    type: git
+    source:
+      uri: https://github.com/jtarchie/steps.git
+      tag_pattern: "v*"      # v1.2.0, v1.10.0, ...: one version per tag, oldest first
 
 jobs:
-- name: build
-  plan:
-  - get: release-tag
-    trigger: true
-  - task: show
-    inputs: [release-tag]
-    run: git -C release-tag describe --tags --exact-match
+  - name: build
+    plan:
+      - get: release-tag
+        trigger: true
+      - task: show
+        inputs: [release-tag]
+        run: git -C release-tag describe --tags --exact-match
 ```
 
 ### Credentials
@@ -177,53 +177,55 @@ It never runs the tree's hooks (`--no-verify`): an earlier step may have run the
 
 ```yaml noexec=credentials
 resources:
-- name: app
-  type: git
-  env: [GH_TOKEN]
-  source:
-    uri: https://github.com/acme/app.git
-    branch: main
-    token_env: GH_TOKEN          # this token only
-- name: release
-  type: git
-  env: [GH_TOKEN]
-  source:
-    uri: https://github.com/acme/app.git
-    branch: release
-    token_env: GH_TOKEN
-- name: mirror
-  type: git
-  env: [MIRROR_KEY]
-  source:
-    uri: git@git.example.com:acme/app.git
-    private_key_env: MIRROR_KEY  # this key only: no ~/.ssh/config, no agent
+  - name: app
+    type: git
+    env: [GH_TOKEN]
+    source:
+      uri: https://github.com/acme/app.git
+      branch: main
+      token_env: GH_TOKEN        # this token only
+
+  - name: release
+    type: git
+    env: [GH_TOKEN]
+    source:
+      uri: https://github.com/acme/app.git
+      branch: release
+      token_env: GH_TOKEN
+
+  - name: mirror
+    type: git
+    env: [MIRROR_KEY]
+    source:
+      uri: git@git.example.com:acme/app.git
+      private_key_env: MIRROR_KEY  # this key only: no ~/.ssh/config, no agent
 
 jobs:
-- name: promote
-  plan:
-  - get: app
-    trigger: true
-  - get: release
-  - task: lease
-    inputs: [release]
-    outputs: [meta]
-    run: git -C release rev-parse HEAD > meta/lease
-  - load_var: lease
-    inputs: [meta]
-    file: meta/lease
-  # Move release to main's head, unless someone pushed to release since the get above.
-  - put: release
-    inputs: [app]
-    params:
-      repository: app
-      force_with_lease: ((.:lease))
-  - put: mirror
-    inputs: [app]
-    params:
-      repository: app
-      branch: main
-      ref: HEAD~1       # the commit before HEAD; a sha an earlier step checked works the same
-      force: true
+  - name: promote
+    plan:
+      - get: app
+        trigger: true
+      - get: release
+      - task: lease
+        inputs: [release]
+        outputs: [meta]
+        run: git -C release rev-parse HEAD > meta/lease
+      - load_var: lease
+        inputs: [meta]
+        file: meta/lease
+      # Move release to main's head, unless someone pushed to release since the get above.
+      - put: release
+        inputs: [app]
+        params:
+          repository: app
+          force_with_lease: ((.:lease))
+      - put: mirror
+        inputs: [app]
+        params:
+          repository: app
+          branch: main
+          ref: HEAD~1   # the commit before HEAD; a sha an earlier step checked works the same
+          force: true
 ```
 
 ## The built-in `slack-mentions`, `slack-reply` and `slack-reaction` types
@@ -238,57 +240,57 @@ Under `steps web` that costs nothing that is ever built: everything below the ne
 
 ```yaml noexec=network
 resources:
-- name: mentions
-  type: slack-mentions
-  source:
-    channels: []   # optional; [] (the default) is every channel the bot is in
-    limit: 200      # optional; per-channel messages fetched per check, default 200
-    token_env: SLACK_BOT_TOKEN    # optional; the default
-    base_url: https://slack.com   # optional; the default — a test points it at a fake
+  - name: mentions
+    type: slack-mentions
+    source:
+      channels: [] # optional; [] (the default) is every channel the bot is in
+      limit: 200    # optional; per-channel messages fetched per check, default 200
+      token_env: SLACK_BOT_TOKEN  # optional; the default
+      base_url: https://slack.com # optional; the default — a test points it at a fake
 
-- name: reply
-  type: slack-reply
-  source:
-    base_url: https://slack.com   # optional; the default
+  - name: reply
+    type: slack-reply
+    source:
+      base_url: https://slack.com # optional; the default
 
-- name: reaction
-  type: slack-reaction
-  source: {}
+  - name: reaction
+    type: slack-reaction
+    source: {}
 
-# A second bot, in the same pipeline, answering as someone else: env: adds
-# SECOND_BOT_TOKEN to just THIS resource's own allow-list (the type's own
-# env: still only names SLACK_BOT_TOKEN), and source.token_env picks it.
-- name: reply-as-support-bot
-  type: slack-reply
-  env: [SECOND_BOT_TOKEN]
-  source:
-    token_env: SECOND_BOT_TOKEN
+  # A second bot, in the same pipeline, answering as someone else: env: adds
+  # SECOND_BOT_TOKEN to just THIS resource's own allow-list (the type's own
+  # env: still only names SLACK_BOT_TOKEN), and source.token_env picks it.
+  - name: reply-as-support-bot
+    type: slack-reply
+    env: [SECOND_BOT_TOKEN]
+    source:
+      token_env: SECOND_BOT_TOKEN
 
 jobs:
-- name: answer-mention
-  plan:
-  - get: mentions
-    trigger: true
-    version: every    # answer every mention found, not just the newest
-  - put: acknowledge           # 👀 — somebody is on it
-    resource: reaction
-    inputs: [mentions]         # the reaction type picks the mention's ts
-    params: {add: eyes}
-  - task: compose
-    outputs: [answer]
-    run: echo "got it, working on it" > answer/reply.md
-    on_failure:                # ❌, and the 👀 goes away
-      put: failed
-      resource: reaction
-      inputs: [mentions]
-      params: {add: x, remove: eyes}
-  - put: reply
-    inputs: [mentions, answer] # the reply type picks the mention's thread_ts
-    params: {from: mentions}   # optional with one fetched input; names it when there are several
-  - put: answered              # ✅, and the 👀 goes away in the same publish
-    resource: reaction
-    inputs: [mentions]
-    params: {add: white_check_mark, remove: eyes}
+  - name: answer-mention
+    plan:
+      - get: mentions
+        trigger: true
+        version: every    # answer every mention found, not just the newest
+      - put: acknowledge       # 👀 — somebody is on it
+        resource: reaction
+        inputs: [mentions]     # the reaction type picks the mention's ts
+        params: {add: eyes}
+      - task: compose
+        outputs: [answer]
+        run: echo "got it, working on it" > answer/reply.md
+        on_failure:            # ❌, and the 👀 goes away
+          put: failed
+          resource: reaction
+          inputs: [mentions]
+          params: {add: x, remove: eyes}
+      - put: reply
+        inputs: [mentions, answer] # the reply type picks the mention's thread_ts
+        params: {from: mentions}   # optional with one fetched input; names it when there are several
+      - put: answered          # ✅, and the 👀 goes away in the same publish
+        resource: reaction
+        inputs: [mentions]
+        params: {add: white_check_mark, remove: eyes}
 ```
 
 All three need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for an app with `chat:write`, `reactions:write`, `channels:history`, `channels:read`, `im:history` and `im:read` (plus `groups:history`/`groups:read` for private channels), installed to the workspace and **invited** to every channel it should watch or post to. Membership is what grants both reading history and appearing in `users.conversations`, so `/invite` *is* the subscribe action — `app_mentions:read` is not needed, since this polls rather than using the Events API.
@@ -345,23 +347,23 @@ A job's `on_failure`/`on_error` hook runs in an empty workspace: no `inputs:`, s
 
 ```yaml slack=hook-dm
 resources:
-- name: operator-dm
-  type: slack-reply
-  source:
-    channel: U024BE7LH   # a user id DMs; a channel id (C…) posts to the channel
+  - name: operator-dm
+    type: slack-reply
+    source:
+      channel: U024BE7LH # a user id DMs; a channel id (C…) posts to the channel
 
 jobs:
-- name: build
-  plan:
-  - task: compile
-    run: "false"
-  on_failure:
-    put: notify
-    resource: operator-dm
-    params: {text: "the build job failed; `steps runs -p build` knows more"}
-  assert:
-    execution: [compile, notify]
-    outcome: failed
+  - name: build
+    plan:
+      - task: compile
+        run: "false"
+    assert:
+      execution: [compile, notify]
+      outcome: failed
+    on_failure:
+      put: notify
+      resource: operator-dm
+      params: {text: "the build job failed; `steps runs -p build` knows more"}
 ```
 
 There is deliberately no `check:`/`in:` on `slack-reply` and no `out:` on `slack-mentions` — `get: reply` or `put: mentions` are both load errors, as a `put` is against any type without an `out:`.
@@ -372,42 +374,42 @@ React to any message with an emoji and a build answers it. `source.emoji` makes 
 
 ```yaml noexec=network
 resources:
-- name: tagged
-  type: slack-reaction
-  env: [SLACK_USER_TOKEN]
-  source:
-    token_env: SLACK_USER_TOKEN   # a user token: whose reactions count
-    emoji: robot_face             # the ask
-    done: white_check_mark        # your own ✅ = answered, never reported again
-    limit: 100                    # optional; reactions.list page size, default 100
-    pages: 5                      # optional; pages a check reads, default 5
-    base_url: https://slack.com   # optional; the default
+  - name: tagged
+    type: slack-reaction
+    env: [SLACK_USER_TOKEN]
+    source:
+      token_env: SLACK_USER_TOKEN # a user token: whose reactions count
+      emoji: robot_face           # the ask
+      done: white_check_mark      # your own ✅ = answered, never reported again
+      limit: 100                  # optional; reactions.list page size, default 100
+      pages: 5                    # optional; pages a check reads, default 5
+      base_url: https://slack.com # optional; the default
 
-- name: reply
-  type: slack-reply
-  env: [SLACK_USER_TOKEN]
-  source: {token_env: SLACK_USER_TOKEN}
+  - name: reply
+    type: slack-reply
+    env: [SLACK_USER_TOKEN]
+    source: {token_env: SLACK_USER_TOKEN}
 
-- name: mark                      # a second resource: a watcher cannot be put to
-  type: slack-reaction
-  env: [SLACK_USER_TOKEN]
-  source: {token_env: SLACK_USER_TOKEN}
+  - name: mark                    # a second resource: a watcher cannot be put to
+    type: slack-reaction
+    env: [SLACK_USER_TOKEN]
+    source: {token_env: SLACK_USER_TOKEN}
 
 jobs:
-- name: answer
-  plan:
-  - get: tagged
-    trigger: true
-    version: every
-  - task: compose
-    inputs: [tagged]
-    outputs: [answer]
-    run: echo "on it" > answer/reply.md
-  - put: reply
-    inputs: [tagged, answer]
-  - put: mark
-    inputs: [tagged]
-    params: {add: white_check_mark, from: tagged}
+  - name: answer
+    plan:
+      - get: tagged
+        trigger: true
+        version: every
+      - task: compose
+        inputs: [tagged]
+        outputs: [answer]
+        run: echo "on it" > answer/reply.md
+      - put: reply
+        inputs: [tagged, answer]
+      - put: mark
+        inputs: [tagged]
+        params: {add: white_check_mark, from: tagged}
 ```
 
 **The token decides whose reactions count.** Slack's `reactions.list` lists the reactions the token's own user made, and nothing else. A user token (`xoxp-`, with `reactions:read`) makes the watch "messages I reacted to"; the default bot token watches only reactions the bot itself left. Watching anybody's reaction is the Events API's `reaction_added`, a [webhook](webhooks.md), not a poll.
@@ -434,42 +436,42 @@ Each reports [facts](#facts-what-a-get-or-put-says-about-its-version) from the a
 
 ```yaml github=review
 resources:
-- name: pr
-  type: github-prs
-  source:
-    repo: acme/app
-    review_requested: "@me"      # quoted: @ cannot start a plain YAML value
-    base: main
-    labels: [ready-for-review]
-    draft: false
+  - name: pr
+    type: github-prs
+    source:
+      repo: acme/app
+      review_requested: "@me"    # quoted: @ cannot start a plain YAML value
+      base: main
+      labels: [ready-for-review]
+      draft: false
 
-- name: summary
-  type: github-pr-comment
-  source:
-    repo: acme/app
+  - name: summary
+    type: github-pr-comment
+    source:
+      repo: acme/app
 
 jobs:
-- name: review
-  plan:
-  - get: pr
-    trigger: true
-    version: every               # one build per pull request, and per push to it
-  - task: read
-    inputs: [pr]
-    outputs: [notes]
-    run: |
-      echo "#$(cat pr/pr.number) changes $(grep -c '^diff --git' pr/pr.diff) file(s) since $(cut -c1-7 pr/pr.mergebase)" | tee notes/body.md
-      test -x pr/bin/test.sh
+  - name: review
+    plan:
+      - get: pr
+        trigger: true
+        version: every           # one build per pull request, and per push to it
+      - task: read
+        inputs: [pr]
+        outputs: [notes]
+        run: |
+          echo "#$(cat pr/pr.number) changes $(grep -c '^diff --git' pr/pr.diff) file(s) since $(cut -c1-7 pr/pr.mergebase)" | tee notes/body.md
+          test -x pr/bin/test.sh
+        assert:
+          stdout: "#42 changes 2 file(s) since 1a2b3c4"
+      - put: summary
+        inputs: [pr, notes]
+        params:
+          body_file: notes/body.md
+          from: pr               # optional here: pr is the only input naming a pull request
     assert:
-      stdout: "#42 changes 2 file(s) since 1a2b3c4"
-  - put: summary
-    inputs: [pr, notes]
-    params:
-      body_file: notes/body.md
-      from: pr                   # optional here: pr is the only input naming a pull request
-  assert:
-    execution: [pr, read, summary]
-    outcome: succeeded
+      execution: [pr, read, summary]
+      outcome: succeeded
 ```
 
 A version is `{number, sha}`: the pull request and its head commit, so a push is a new build and a wording change to the title is not. The check reports them by number, oldest first. Every filter narrows, and a pull request is a version only while it is open and matches all of them:
@@ -508,31 +510,31 @@ A pipeline that reviews a pull request more than once wants to know what it alre
 
 ```yaml github=pr-reviews
 resources:
-- name: pr
-  type: github-prs
-  source:
-    repo: acme/app
-    review_requested: "@me"
-    checkout: false
-    include: [reviews]
+  - name: pr
+    type: github-prs
+    source:
+      repo: acme/app
+      review_requested: "@me"
+      checkout: false
+      include: [reviews]
 
 jobs:
-- name: review
-  plan:
-  - get: pr
-    trigger: true
-  - task: read
-    inputs: [pr]
-    run: |
-      sent=$(grep -o '"state":"[A-Z]*"' pr/pr.reviews.json | tr '\n' ' ')
-      draft=none
-      test -f pr/pr.pending_review.json && draft=$(grep -o '"body":"[^"]*"' pr/pr.pending_review.json)
-      echo "sent: ${sent}draft: $draft"
+  - name: review
+    plan:
+      - get: pr
+        trigger: true
+      - task: read
+        inputs: [pr]
+        run: |
+          sent=$(grep -o '"state":"[A-Z]*"' pr/pr.reviews.json | tr '\n' ' ')
+          draft=none
+          test -f pr/pr.pending_review.json && draft=$(grep -o '"body":"[^"]*"' pr/pr.pending_review.json)
+          echo "sent: ${sent}draft: $draft"
+        assert:
+          stdout: 'sent: "state":"COMMENTED" "state":"APPROVED" draft: "body":"half written"'
     assert:
-      stdout: 'sent: "state":"COMMENTED" "state":"APPROVED" draft: "body":"half written"'
-  assert:
-    execution: [pr, read]
-    outcome: succeeded
+      execution: [pr, read]
+      outcome: succeeded
 ```
 
 `pr.reviews.json` is every submitted review, as GitHub's objects, oldest first. `pr.pending_review.json` is the token user's own draft, kept apart from them: GitHub lists a draft to its author alone, and a step that hands `pr.reviews.json` to something public must never publish a review its author has not sent. Anybody else's draft is never listed. Both are read at the get, not at the commit, so they are as of the first fetch of the version: the resource cache keeps that fetch for it, and a review sent afterwards arrives with the next push. The listing stops at 1000 reviews.
@@ -551,61 +553,61 @@ The clone runs the `git` binary on the machine steps runs on, or in an image whe
 
 ```yaml github=checkout-git
 resources:
-- name: pr
-  type: github-prs
-  source:
-    repo: acme/app
-    checkout: git
+  - name: pr
+    type: github-prs
+    source:
+      repo: acme/app
+      checkout: git
 
 jobs:
-- name: review
-  plan:
-  - get: pr
-    trigger: true
-    version: every
-  - task: changed
-    inputs: [pr]
-    run: |
-      cd pr
-      base=$(git merge-base HEAD origin/main)
-      test "$base" = "$(cat pr.mergebase)"
-      test -z "$(git status --porcelain)"
-      echo "changed: $(git diff --name-only "$base" HEAD)"
+  - name: review
+    plan:
+      - get: pr
+        trigger: true
+        version: every
+      - task: changed
+        inputs: [pr]
+        run: |
+          cd pr
+          base=$(git merge-base HEAD origin/main)
+          test "$base" = "$(cat pr.mergebase)"
+          test -z "$(git status --porcelain)"
+          echo "changed: $(git diff --name-only "$base" HEAD)"
+        assert:
+          stdout: "changed: feature.txt"
     assert:
-      stdout: "changed: feature.txt"
-  assert:
-    execution: [pr, changed]
-    outcome: succeeded
+      execution: [pr, changed]
+      outcome: succeeded
 ```
 
 **Being assigned is a trigger.** An assignment brings a pull request into the filtered set, which makes it a version the resource has never seen:
 
 ```yaml github=assigned
 resources:
-- name: assigned
-  type: github-prs
-  source:
-    repo: acme/app
-    assignee: "@me"
-    author: alice
-    checkout: false                    # metadata only
-    token_env: GH_TOKEN                # the default, shown; name another variable to act as someone else
-    endpoint: https://api.github.com   # the default
+  - name: assigned
+    type: github-prs
+    source:
+      repo: acme/app
+      assignee: "@me"
+      author: alice
+      checkout: false                  # metadata only
+      token_env: GH_TOKEN              # the default, shown; name another variable to act as someone else
+      endpoint: https://api.github.com # the default
 
 jobs:
-- name: pick-up
-  plan:
-  - get: assigned
-    trigger: true
-    version: every
-  - task: announce
-    inputs: [assigned]
-    run: echo "picking up $(cat assigned/pr.url)"
+  - name: pick-up
+    plan:
+      - get: assigned
+        trigger: true
+        version: every
+      - task: announce
+        inputs: [assigned]
+        run: echo "picking up $(cat assigned/pr.url)"
+        assert:
+          stdout: "picking up https://github.example/acme/app/pull/42"
     assert:
-      stdout: "picking up https://github.example/acme/app/pull/42"
-  assert:
-    execution: [assigned, announce]
-    outcome: succeeded
+      execution: [assigned, announce]
+      outcome: succeeded
 ```
 
 The check is one GraphQL search per poll, because the filters a pipeline asks about are search qualifiers and nothing else: GitHub's pull request listing filters on none of them.
@@ -614,46 +616,46 @@ The check is one GraphQL search per poll, because the filters a pipeline asks ab
 
 ```yaml github=comment-command
 resources:
-- name: command
-  type: github-comments
-  source:
-    repo: acme/app
-    author: [alice, carol]           # either of them; one login needs no list
-    body: '^/steps\s+review\b'
-    labels: [ready-for-review]       # only on pull requests carrying it
-    kinds: [conversation, review]    # the default; add issue for comments on issues
-    checkout: true                   # the default: the pull request's tree comes with it
-    token_env: GH_TOKEN              # the default
-    endpoint: https://api.github.com # the default
+  - name: command
+    type: github-comments
+    source:
+      repo: acme/app
+      author: [alice, carol]         # either of them; one login needs no list
+      body: '^/steps\s+review\b'
+      labels: [ready-for-review]     # only on pull requests carrying it
+      kinds: [conversation, review]  # the default; add issue for comments on issues
+      checkout: true                 # the default: the pull request's tree comes with it
+      token_env: GH_TOKEN            # the default
+      endpoint: https://api.github.com # the default
 
-- name: answer
-  type: github-pr-review
-  source:
-    repo: acme/app
+  - name: answer
+    type: github-pr-review
+    source:
+      repo: acme/app
 
 jobs:
-- name: act
-  plan:
-  - get: command
-    trigger: true
-    version: every
-  - task: respond
-    inputs: [command]
-    outputs: [reply]
-    run: |
-      echo "asked by $(cat command/comment.author) on #$(cat command/pr.number): $(cat command/comment.body)" | tee reply/body.md
-      test -f command/README.md
+  - name: act
+    plan:
+      - get: command
+        trigger: true
+        version: every
+      - task: respond
+        inputs: [command]
+        outputs: [reply]
+        run: |
+          echo "asked by $(cat command/comment.author) on #$(cat command/pr.number): $(cat command/comment.body)" | tee reply/body.md
+          test -f command/README.md
+        assert:
+          stdout: "asked by carol on #42: /steps review please"
+      - put: answer
+        inputs: [command, reply]
+        params:
+          body_file: reply/body.md
+          from: command              # the input whose version names the pull request
+          event: pending             # a draft only you can see, until you submit it
     assert:
-      stdout: "asked by carol on #42: /steps review please"
-  - put: answer
-    inputs: [command, reply]
-    params:
-      body_file: reply/body.md
-      from: command                  # the input whose version names the pull request
-      event: pending                 # a draft only you can see, until you submit it
-  assert:
-    execution: [command, respond, answer]
-    outcome: succeeded
+      execution: [command, respond, answer]
+      outcome: succeeded
 ```
 
 | `source:` field | required | meaning |
@@ -676,28 +678,28 @@ A get writes `comment.json`, `comment.body`, `comment.id`, `comment.kind`, `comm
 
 ```yaml github=included
 resources:
-- name: command
-  type: github-comments
-  source:
-    repo: acme/app
-    body: '^/steps\s'
-    checkout: false
-    include: [conversation, reviews]   # review_comments too, for every inline comment
+  - name: command
+    type: github-comments
+    source:
+      repo: acme/app
+      body: '^/steps\s'
+      checkout: false
+      include: [conversation, reviews] # review_comments too, for every inline comment
 
 jobs:
-- name: answer
-  plan:
-  - get: command
-    trigger: true
-  - task: read
-    inputs: [command]
-    run: |
-      echo "$(grep -o '"body"' command/conversation.json | wc -l | tr -d ' ') comments, review said $(grep -o '"body":"[^"]*"' command/reviews.json)"
+  - name: answer
+    plan:
+      - get: command
+        trigger: true
+      - task: read
+        inputs: [command]
+        run: |
+          echo "$(grep -o '"body"' command/conversation.json | wc -l | tr -d ' ') comments, review said $(grep -o '"body":"[^"]*"' command/reviews.json)"
+        assert:
+          stdout: '2 comments, review said "body":"Two blocking, see inline."'
     assert:
-      stdout: '2 comments, review said "body":"Two blocking, see inline."'
-  assert:
-    execution: [command, read]
-    outcome: succeeded
+      execution: [command, read]
+      outcome: succeeded
 ```
 
 **The version is `{id, kind, number, updated}`**, and `updated` is there on purpose, against the usual rule that a version carries identity only. The text is the payload here, so a comment edited from one instruction to another is new work, and an edit that stops matching `body` is not. It is also the [cursor](#the-check-cursor): each check asks GitHub only for comments written since five minutes before the newest version it last reported, newest first, one page when there is no cursor yet. The five minutes are because GitHub can list a comment a little after a newer one: asked from the cursor exactly, a comment that showed up late would sit behind it for good. What the overlap reports again is already in [version history](#version-history), which records a version once, so it starts no second build. Every page is a conditional request, and GitHub answers an unchanged listing without charging the rate limit, so a quiet repository costs nothing to poll. Inline review comments and the rest are two separate listings, so a check watching both reads them until two rounds in a row agree: read once each, a comment landing in the first after it was read could be older than one the second shows, and the cursor would pass it for good. The second round is conditional too, and a check whose listings never settle fails rather than guess, so the next one tries again. Review summaries, the text a reviewer writes when submitting, are not watched: GitHub has no listing of them across a repository.
@@ -720,51 +722,51 @@ An issue list doubles as a queue: a person labels an issue `self-build`, and a p
 
 ```yaml github=labeled-issue
 resources:
-- name: issue
-  type: github-issues
-  source:
-    repo: acme/app
-    labels: [self-build]
-    author: alice
-    assignee: "@me"                    # quoted: @ cannot start a plain YAML value
-    token_env: GH_TOKEN                # the default
-    endpoint: https://api.github.com   # the default
+  - name: issue
+    type: github-issues
+    source:
+      repo: acme/app
+      labels: [self-build]
+      author: alice
+      assignee: "@me"                  # quoted: @ cannot start a plain YAML value
+      token_env: GH_TOKEN              # the default
+      endpoint: https://api.github.com # the default
 
-- name: state
-  type: github-label
-  source:
-    repo: acme/app
+  - name: state
+    type: github-label
+    source:
+      repo: acme/app
 
-- name: reply
-  type: github-pr-comment
-  source:
-    repo: acme/app
+  - name: reply
+    type: github-pr-comment
+    source:
+      repo: acme/app
 
 jobs:
-- name: plan
-  plan:
-  - get: issue
-    trigger: true
-    version: every                     # one build per issue, and per relabel
-  - put: claimed
-    resource: state
-    inputs: [issue]
-    params:
-      add: [factory:planning]          # not a filter label, so marking the issue starts no build
-  - task: read
-    inputs: [issue]
-    outputs: [notes]
-    run: |
-      echo "planning #$(cat issue/issue.number): $(cat issue/issue.title), $(grep -c '^## Comment by' issue/issue.md) comment(s)" | tee notes/body.md
+  - name: plan
+    plan:
+      - get: issue
+        trigger: true
+        version: every                 # one build per issue, and per relabel
+      - put: claimed
+        resource: state
+        inputs: [issue]
+        params:
+          add: [factory:planning]      # not a filter label, so marking the issue starts no build
+      - task: read
+        inputs: [issue]
+        outputs: [notes]
+        run: |
+          echo "planning #$(cat issue/issue.number): $(cat issue/issue.title), $(grep -c '^## Comment by' issue/issue.md) comment(s)" | tee notes/body.md
+        assert:
+          stdout: "planning #4: Plan the cache, 2 comment(s)"
+      - put: reply
+        inputs: [issue, notes]
+        params:
+          body_file: notes/body.md     # posted on issue #4
     assert:
-      stdout: "planning #4: Plan the cache, 2 comment(s)"
-  - put: reply
-    inputs: [issue, notes]
-    params:
-      body_file: notes/body.md         # posted on issue #4
-  assert:
-    execution: [issue, claimed, read, reply]
-    outcome: succeeded
+      execution: [issue, claimed, read, reply]
+      outcome: succeeded
 ```
 
 | `source:` field | required | meaning |
@@ -798,40 +800,41 @@ Both take `repo`, `token_env` and `endpoint` in `source:` and nothing else, and 
 
 ```yaml github=post-fixed
 resources:
-- name: tracking
-  type: github-pr-comment
-  source:
-    repo: acme/app
-    token_env: GH_TOKEN                # the default; name another variable to post as someone else
-    endpoint: https://api.github.com   # the default
-- name: verdict
-  type: github-pr-review
-  source:
-    repo: acme/app
+  - name: tracking
+    type: github-pr-comment
+    source:
+      repo: acme/app
+      token_env: GH_TOKEN              # the default; name another variable to post as someone else
+      endpoint: https://api.github.com # the default
+
+  - name: verdict
+    type: github-pr-review
+    source:
+      repo: acme/app
 
 jobs:
-- name: report
-  plan:
-  - task: summarize
-    outputs: [report]
-    run: |
-      echo "all green" > report/body.md
-      echo '[{"path": "app/a.rb", "line": 12, "body": "nice guard"}]' > report/comments.json
-  - put: tracking
-    inputs: [report]
-    params:
-      body_file: report/body.md
-      number: "42"
-  - put: verdict
-    inputs: [report]
-    params:
-      body_file: report/body.md
-      number: "42"
-      event: approve
-      comments_file: report/comments.json   # each comment on its line of the diff
-  assert:
-    execution: [summarize, tracking, verdict]
-    outcome: succeeded
+  - name: report
+    plan:
+      - task: summarize
+        outputs: [report]
+        run: |
+          echo "all green" > report/body.md
+          echo '[{"path": "app/a.rb", "line": 12, "body": "nice guard"}]' > report/comments.json
+      - put: tracking
+        inputs: [report]
+        params:
+          body_file: report/body.md
+          number: "42"
+      - put: verdict
+        inputs: [report]
+        params:
+          body_file: report/body.md
+          number: "42"
+          event: approve
+          comments_file: report/comments.json   # each comment on its line of the diff
+    assert:
+      execution: [summarize, tracking, verdict]
+      outcome: succeeded
 ```
 
 | `params:` field | put | meaning |
@@ -851,39 +854,40 @@ jobs:
 
 ```yaml github=thread
 resources:
-- name: question
-  type: github-comments
-  source:
-    repo: acme/app
-    body: '^/steps\s+explain\b'
-    checkout: false
-- name: answer
-  type: github-pr-comment
-  source:
-    repo: acme/app
+  - name: question
+    type: github-comments
+    source:
+      repo: acme/app
+      body: '^/steps\s+explain\b'
+      checkout: false
+
+  - name: answer
+    type: github-pr-comment
+    source:
+      repo: acme/app
 
 jobs:
-- name: explain
-  plan:
-  - get: question
-    trigger: true
-    version: every
-  - task: write
-    inputs: [question]
-    outputs: [reply]
-    run: |
-      echo "looking into $(cat question/comment.kind) comment $(cat question/comment.id)" | tee reply/body.md
+  - name: explain
+    plan:
+      - get: question
+        trigger: true
+        version: every
+      - task: write
+        inputs: [question]
+        outputs: [reply]
+        run: |
+          echo "looking into $(cat question/comment.kind) comment $(cat question/comment.id)" | tee reply/body.md
+        assert:
+          stdout: "looking into review comment 702"
+      - put: answer
+        inputs: [question, reply]
+        params:
+          body_file: reply/body.md
+          in_thread: true            # an inline comment's thread; the conversation for any other kind
+          from: question             # optional here: question is the only input naming a comment
     assert:
-      stdout: "looking into review comment 702"
-  - put: answer
-    inputs: [question, reply]
-    params:
-      body_file: reply/body.md
-      in_thread: true                # an inline comment's thread; the conversation for any other kind
-      from: question                 # optional here: question is the only input naming a comment
-  assert:
-    execution: [question, write, answer]
-    outcome: succeeded
+      execution: [question, write, answer]
+      outcome: succeeded
 ```
 
 The comment comes from a `github-comments` input and nothing else, as for [`github-reaction`](#github-reaction-marking-a-comment): a put whose inputs hold no such get is refused at load, as is a `from` naming one that is not, and so is `number`, which names a pull request with no comment in it to answer. **Only an inline comment has a thread.** A pull request's conversation and an issue's are flat, so a comment there is answered in the conversation, exactly as without the flag. That is deliberate: a pipeline watching both kinds sets `in_thread` once and gets the right place for each. GitHub's reply route takes only a thread's first comment, while a command is as often written as a reply further down, so the put reads the comment first and answers under the comment that started its thread; the answer lands at the bottom of the same thread either way. The put's version is `{id, number}` with or without the flag: the comment it posted, and the pull request or issue it is on.
@@ -894,48 +898,49 @@ A reaction is how a bot says "seen" and "done" on the comment that asked, withou
 
 ```yaml github=reaction
 resources:
-- name: command
-  type: github-comments
-  source:
-    repo: acme/app
-    author: alice
-    body: '^/steps\s+deploy\b'
-    checkout: false
-    skip_reacted: rocket             # the done mark, when the token's own user left it
-- name: mark
-  type: github-reaction
-  source:
-    repo: acme/app
-    token_env: GH_TOKEN              # the default; whose reactions these are
-    endpoint: https://api.github.com # the default
+  - name: command
+    type: github-comments
+    source:
+      repo: acme/app
+      author: alice
+      body: '^/steps\s+deploy\b'
+      checkout: false
+      skip_reacted: rocket           # the done mark, when the token's own user left it
+
+  - name: mark
+    type: github-reaction
+    source:
+      repo: acme/app
+      token_env: GH_TOKEN            # the default; whose reactions these are
+      endpoint: https://api.github.com # the default
 
 jobs:
-- name: deploy
-  plan:
-  - get: command
-    trigger: true
-    version: every
-  - put: seen
-    resource: mark
-    inputs: [command]
-    params:
-      add: eyes                      # picked up, before the work starts
-  - task: work
-    inputs: [command]
-    run: |
-      echo "deploying for $(cat command/comment.author): $(cat command/comment.body)"
+  - name: deploy
+    plan:
+      - get: command
+        trigger: true
+        version: every
+      - put: seen
+        resource: mark
+        inputs: [command]
+        params:
+          add: eyes                  # picked up, before the work starts
+      - task: work
+        inputs: [command]
+        run: |
+          echo "deploying for $(cat command/comment.author): $(cat command/comment.body)"
+        assert:
+          stdout: "deploying for alice: /steps deploy prod"
+      - put: done
+        resource: mark
+        inputs: [command]
+        params:
+          add: rocket                # done, and the mark skip_reacted reads
+          remove: eyes               # the token's own eyes; anybody else's stay
+          from: command              # optional here: command is the only input naming a comment
     assert:
-      stdout: "deploying for alice: /steps deploy prod"
-  - put: done
-    resource: mark
-    inputs: [command]
-    params:
-      add: rocket                    # done, and the mark skip_reacted reads
-      remove: eyes                   # the token's own eyes; anybody else's stay
-      from: command                  # optional here: command is the only input naming a comment
-  assert:
-    execution: [command, seen, work, done]
-    outcome: succeeded
+      execution: [command, seen, work, done]
+      outcome: succeeded
 ```
 
 | `params:` field | meaning |
@@ -956,44 +961,45 @@ A label is how a pipeline shows where a piece of work is, so the issue list doub
 
 ```yaml github=label
 resources:
-- name: pr
-  type: github-prs
-  source:
-    repo: acme/app
-    labels: [ready-for-review]
-    checkout: false
-- name: state
-  type: github-label
-  source:
-    repo: acme/app
+  - name: pr
+    type: github-prs
+    source:
+      repo: acme/app
+      labels: [ready-for-review]
+      checkout: false
+
+  - name: state
+    type: github-label
+    source:
+      repo: acme/app
 
 jobs:
-- name: build
-  plan:
-  - get: pr
-    trigger: true
-    version: every
-  - put: claimed
-    resource: state
-    inputs: [pr]
-    params:
-      add: [factory:building]
-      remove: [factory:queued, factory:failed]   # failed is not on it: already gone is success
-      from: pr                                   # optional here: pr is the only input naming one
-  - task: work
-    inputs: [pr]
-    run: |
-      echo "building #$(cat pr/pr.number)"
+  - name: build
+    plan:
+      - get: pr
+        trigger: true
+        version: every
+      - put: claimed
+        resource: state
+        inputs: [pr]
+        params:
+          add: [factory:building]
+          remove: [factory:queued, factory:failed]   # failed is not on it: already gone is success
+          from: pr                               # optional here: pr is the only input naming one
+      - task: work
+        inputs: [pr]
+        run: |
+          echo "building #$(cat pr/pr.number)"
+        assert:
+          stdout: "building #42"
+      - put: tracker
+        resource: state
+        params:
+          number: "12"                           # the release issue, which no input names
+          add: [has-builds]
     assert:
-      stdout: "building #42"
-  - put: tracker
-    resource: state
-    params:
-      number: "12"                               # the release issue, which no input names
-      add: [has-builds]
-  assert:
-    execution: [pr, claimed, work, tracker]
-    outcome: succeeded
+      execution: [pr, claimed, work, tracker]
+      outcome: succeeded
 ```
 
 | `params:` field | meaning |
@@ -1015,41 +1021,41 @@ A put's version is `{number, add, remove}`, each list joined with commas, and a 
 
 ```yaml github=issues
 resources:
-- name: children
-  type: github-issue
-  source:
-    repo: acme/app
-    token_env: GH_TOKEN              # the default; who opens the issues
-    endpoint: https://api.github.com # the default
+  - name: children
+    type: github-issue
+    source:
+      repo: acme/app
+      token_env: GH_TOKEN            # the default; who opens the issues
+      endpoint: https://api.github.com # the default
 
 jobs:
-- name: break-down
-  plan:
-  - task: plan
-    outputs: [plan]
-    run: |
-      printf '["login","search","docs"]' > plan/items.json
-      for c in login search docs; do
-        echo "Split out: $c" > plan/$c.title
-        echo "Part of #42" > plan/$c.md
-      done
-  - across:
-    - var: child
-      from_file: plan/items.json
-    put: children
-    inputs: [plan]
-    params:
-      title_file: plan/{{ .vars.child }}.title   # each cell its own
-      body_file: plan/{{ .vars.child }}.md
-      labels: [factory, "{{ .vars.child }}"]
-      assignees: [octocat]
-  assert:
-    execution:
-    - plan
-    - children [child=login]
-    - children [child=search]
-    - children [child=docs]
-    outcome: succeeded
+  - name: break-down
+    plan:
+      - task: plan
+        outputs: [plan]
+        run: |
+          printf '["login","search","docs"]' > plan/items.json
+          for c in login search docs; do
+            echo "Split out: $c" > plan/$c.title
+            echo "Part of #42" > plan/$c.md
+          done
+      - put: children
+        across:
+          - var: child
+            from_file: plan/items.json
+        inputs: [plan]
+        params:
+          title_file: plan/{{ .vars.child }}.title   # each cell its own
+          body_file: plan/{{ .vars.child }}.md
+          labels: [factory, "{{ .vars.child }}"]
+          assignees: [octocat]
+    assert:
+      execution:
+        - plan
+        - children [child=login]
+        - children [child=search]
+        - children [child=docs]
+      outcome: succeeded
 ```
 
 | `params:` field | meaning |
@@ -1074,58 +1080,58 @@ Then, when `ready` is set and the pull request is still a draft, it is marked re
 
 ```yaml github=pr
 resources:
-- name: pr
-  type: github-pr
-  source:
-    repo: acme/app
-    token_env: GH_TOKEN              # the default; who opens the pull request
-    endpoint: https://api.github.com # the default
+  - name: pr
+    type: github-pr
+    source:
+      repo: acme/app
+      token_env: GH_TOKEN            # the default; who opens the pull request
+      endpoint: https://api.github.com # the default
 
 jobs:
-- name: publish
-  plan:
-  - task: describe
-    outputs: [description]
-    run: |
-      echo "Add the widget cache" > description/title
-      printf 'Widgets are now cached.\n' > description/body.md
-  - put: pr
-    inputs: [description]
-    params:
-      head: feature/widget-cache     # already pushed to acme/app
-      base: main                     # unset: the repository's default branch
-      title_file: description/title
-      body_file: description/body.md
-      draft: true
-      labels: [factory]
-      assignees: [octocat]
-  assert:
-    execution:
-    - describe
-    - pr
-    outcome: succeeded
+  - name: publish
+    plan:
+      - task: describe
+        outputs: [description]
+        run: |
+          echo "Add the widget cache" > description/title
+          printf 'Widgets are now cached.\n' > description/body.md
+      - put: pr
+        inputs: [description]
+        params:
+          head: feature/widget-cache # already pushed to acme/app
+          base: main                 # unset: the repository's default branch
+          title_file: description/title
+          body_file: description/body.md
+          draft: true
+          labels: [factory]
+          assignees: [octocat]
+    assert:
+      execution:
+        - describe
+        - pr
+      outcome: succeeded
 ```
 
 A later put for the same branch is an update, not a second pull request. `ready` is how a pipeline that opens a draft, reviews it, and only then asks people to look, finishes:
 
 ```yaml github=pr-ready
 resources:
-- name: pr
-  type: github-pr
-  source:
-    repo: acme/app
+  - name: pr
+    type: github-pr
+    source:
+      repo: acme/app
 
 jobs:
-- name: publish
-  plan:
-  - put: pr
-    params:
-      head: feature/widget-cache
-      ready: true
-  assert:
-    execution:
-    - pr
-    outcome: succeeded
+  - name: publish
+    plan:
+      - put: pr
+        params:
+          head: feature/widget-cache
+          ready: true
+    assert:
+      execution:
+        - pr
+      outcome: succeeded
 ```
 
 | `params:` field | meaning |
@@ -1158,55 +1164,55 @@ A team's board doubles as a queue: someone moves an issue to `Todo`, and a pipel
 
 ```yaml linear=claim
 resources:
-- name: ticket
-  type: linear-issues
-  source:
-    team: ENG                          # a team key or name; required
-    states: [Todo]                     # names in that team; any of them
-    labels: [agent-ready]              # all must be on the issue
-    project: Platform                  # a name or an id
-    assignee: "@me"                    # the key's own user; quoted because @ cannot start a plain YAML value
-    token_env: LINEAR_API_KEY          # the default
-    endpoint: https://api.linear.app/graphql   # the default
+  - name: ticket
+    type: linear-issues
+    source:
+      team: ENG                        # a team key or name; required
+      states: [Todo]                   # names in that team; any of them
+      labels: [agent-ready]            # all must be on the issue
+      project: Platform                # a name or an id
+      assignee: "@me"                  # the key's own user; quoted because @ cannot start a plain YAML value
+      token_env: LINEAR_API_KEY        # the default
+      endpoint: https://api.linear.app/graphql # the default
 
-- name: board
-  type: linear-update
-  source:
-    token_env: LINEAR_API_KEY          # the default
-    endpoint: https://api.linear.app/graphql   # the default
+  - name: board
+    type: linear-update
+    source:
+      token_env: LINEAR_API_KEY        # the default
+      endpoint: https://api.linear.app/graphql # the default
 
-- name: reply
-  type: linear-comment
-  source: {}
+  - name: reply
+    type: linear-comment
+    source: {}
 
 jobs:
-- name: draft
-  plan:
-  - get: ticket
-    trigger: true
-    version: every                     # one build per issue, and per move back into Todo
-  - put: claimed
-    resource: board
-    inputs: [ticket]
-    params:
-      state: In Progress               # out of the finder's set, in Linear itself
-      add_labels: [urgent]
-      remove_labels: [agent-ready]
-  - task: read
-    inputs: [ticket]
-    outputs: [notes]
-    run: |
-      echo "planning $(cat ticket/issue.identifier): $(cat ticket/issue.title), $(grep -c '^## Comment' ticket/issue.md) comment(s)" | tee notes/body.md
+  - name: draft
+    plan:
+      - get: ticket
+        trigger: true
+        version: every                 # one build per issue, and per move back into Todo
+      - put: claimed
+        resource: board
+        inputs: [ticket]
+        params:
+          state: In Progress           # out of the finder's set, in Linear itself
+          add_labels: [urgent]
+          remove_labels: [agent-ready]
+      - task: read
+        inputs: [ticket]
+        outputs: [notes]
+        run: |
+          echo "planning $(cat ticket/issue.identifier): $(cat ticket/issue.title), $(grep -c '^## Comment' ticket/issue.md) comment(s)" | tee notes/body.md
+        assert:
+          stdout: "planning ENG-12: Plan the cache, 2 comment(s)"
+      - put: answered
+        resource: reply
+        inputs: [ticket, notes]
+        params:
+          body_file: notes/body.md     # posted on ENG-12
     assert:
-      stdout: "planning ENG-12: Plan the cache, 2 comment(s)"
-  - put: answered
-    resource: reply
-    inputs: [ticket, notes]
-    params:
-      body_file: notes/body.md         # posted on ENG-12
-  assert:
-    execution: [ticket, claimed, read, answered]
-    outcome: succeeded
+      execution: [ticket, claimed, read, answered]
+      outcome: succeeded
 ```
 
 | `source:` field | required | meaning |
@@ -1223,24 +1229,24 @@ The same finder by category, for a pipeline that should work with any team's ide
 
 ```yaml linear=types
 resources:
-- name: ticket
-  type: linear-issues
-  source:
-    team: ENG
-    state_types: [unstarted]           # whatever this team calls its not-yet-started states
+  - name: ticket
+    type: linear-issues
+    source:
+      team: ENG
+      state_types: [unstarted]         # whatever this team calls its not-yet-started states
 
 jobs:
-- name: list
-  plan:
-  - get: ticket
-  - task: show
-    inputs: [ticket]
-    run: cat ticket/issue.identifier
+  - name: list
+    plan:
+      - get: ticket
+      - task: show
+        inputs: [ticket]
+        run: cat ticket/issue.identifier
+        assert:
+          stdout: "ENG-12"
     assert:
-      stdout: "ENG-12"
-  assert:
-    execution: [ticket, show]
-    outcome: succeeded
+      execution: [ticket, show]
+      outcome: succeeded
 ```
 
 **The version is `{identifier, entered_at}` when `states` or `state_types` is set, and `{identifier}` when neither is.** `entered_at` is when the issue last moved into the filter's set of states from a state outside it, read from its history in the same query. That is a deliberate departure from Concourse, whose versions name a thing and nothing about it, made for the reason [`github-issues`](#github-issues-a-labeled-issue-as-a-trigger) carries `labeled_at`: in Linear the state is the request for work. So **moving an issue out of the set and back asks for the work again**, which is how a person retries from Linear's own board without touching steps. "Out" means a state the filter does not name: under `states: [Todo, Ready]`, dragging an issue from `Todo` to `Ready` is not a new version, since it never left the set, while `Ready` to `In Progress` and back to `Todo` is. `state_types:` draws the set the same way, so moving between two `unstarted` states is no retry under `state_types: [unstarted]`. Editing the title or description, commenting, or a label edit is not a new version. The check reads the newest twenty history entries of each issue; one with more history than that since it entered the state (a label edit is an entry too), or created straight into it, uses the time it was created instead, and comes back as a new version at most once.
@@ -1265,56 +1271,56 @@ Both take `token_env` and `endpoint` in `source:` and nothing else, and find whi
 
 ```yaml linear=acceptance
 resources:
-- name: ticket
-  type: linear-issues
-  source: {team: ENG, states: [Todo], labels: [agent-ready]}
+  - name: ticket
+    type: linear-issues
+    source: {team: ENG, states: [Todo], labels: [agent-ready]}
 
-- name: epic
-  type: linear-issues
-  source: {team: ENG, states: [Todo]}
+  - name: epic
+    type: linear-issues
+    source: {team: ENG, states: [Todo]}
 
-- name: reply
-  type: linear-comment
-  source: {}
+  - name: reply
+    type: linear-comment
+    source: {}
 
-- name: board
-  type: linear-update
-  source: {}
+  - name: board
+    type: linear-update
+    source: {}
 
 jobs:
-- name: accept
-  plan:
-  - get: ticket
-  - get: epic
-  - task: write
-    outputs: [out]
-    run: echo "Shipped in 4.2" > out/body.md
-  - put: on-ticket
-    resource: reply
-    inputs: [ticket, epic, out]
-    params:
-      body_file: out/body.md
-      from: ticket                     # both gets carry an identifier, so say which
-  - put: on-release
-    resource: reply
-    inputs: [out]
-    params:
-      body_file: out/body.md
-      issue: ENG-12                    # no get at all: an identifier a release named
-  - put: started
-    resource: board
-    inputs: [ticket, epic]
-    params:
-      state: In Progress
-      from: ticket
-  - put: started-by-name
-    resource: board
-    params:
-      state: In Progress               # already there, which succeeds: the issue is as asked for
-      issue: ENG-12
-  assert:
-    execution: [ticket, epic, write, on-ticket, on-release, started, started-by-name]
-    outcome: succeeded
+  - name: accept
+    plan:
+      - get: ticket
+      - get: epic
+      - task: write
+        outputs: [out]
+        run: echo "Shipped in 4.2" > out/body.md
+      - put: on-ticket
+        resource: reply
+        inputs: [ticket, epic, out]
+        params:
+          body_file: out/body.md
+          from: ticket                 # both gets carry an identifier, so say which
+      - put: on-release
+        resource: reply
+        inputs: [out]
+        params:
+          body_file: out/body.md
+          issue: ENG-12                # no get at all: an identifier a release named
+      - put: started
+        resource: board
+        inputs: [ticket, epic]
+        params:
+          state: In Progress
+          from: ticket
+      - put: started-by-name
+        resource: board
+        params:
+          state: In Progress           # already there, which succeeds: the issue is as asked for
+          issue: ENG-12
+    assert:
+      execution: [ticket, epic, write, on-ticket, on-release, started, started-by-name]
+      outcome: succeeded
 ```
 
 | `linear-comment` `params:` field | meaning |
@@ -1342,26 +1348,26 @@ The versions are `{issue, comment}` for a comment, and `{issue, state, add_label
 
 ```yaml
 resources:
-- name: tick
-  type: cron
-  source:
-    expression: "*/15 * * * *"     # every quarter hour
-    location: America/New_York     # optional; the zone the expression is read in, UTC otherwise
-    fire_immediately: true         # optional; the first-ever check mints a version instead of waiting
+  - name: tick
+    type: cron
+    source:
+      expression: "*/15 * * * *"   # every quarter hour
+      location: America/New_York   # optional; the zone the expression is read in, UTC otherwise
+      fire_immediately: true       # optional; the first-ever check mints a version instead of waiting
 
 jobs:
-- name: sweep
-  plan:
-  - get: tick
-    trigger: true
-  - task: show
-    inputs: [tick]
-    run: test -s tick/epoch && test -s tick/timestamp && grep -c '"time"' tick/version.json
+  - name: sweep
+    plan:
+      - get: tick
+        trigger: true
+      - task: show
+        inputs: [tick]
+        run: test -s tick/epoch && test -s tick/timestamp && grep -c '"time"' tick/version.json
+        assert:
+          stdout: "1"      # one line holds the version; the two files before it are non-empty
     assert:
-      stdout: "1"          # one line holds the version; the two files before it are non-empty
-  assert:
-    execution: [tick, show]
-    outcome: succeeded
+      execution: [tick, show]
+      outcome: succeeded
 ```
 
 | `source:` field | required | meaning |
@@ -1384,20 +1390,20 @@ jobs:
 
 ```yaml noexec=schedule
 resources:
-- name: nightly
-  type: cron
-  source:
-    expression: "0 2 * * 1-5"      # two in the morning, Monday to Friday
-    location: America/New_York
+  - name: nightly
+    type: cron
+    source:
+      expression: "0 2 * * 1-5"    # two in the morning, Monday to Friday
+      location: America/New_York
 
 jobs:
-- name: report
-  plan:
-  - get: nightly
-    trigger: true
-  - task: summarize
-    inputs: [nightly]
-    run: echo "report for $(cat nightly/timestamp)"
+  - name: report
+    plan:
+      - get: nightly
+        trigger: true
+      - task: summarize
+        inputs: [nightly]
+        run: echo "report for $(cat nightly/timestamp)"
 ```
 
 There is deliberately no `out:` — `put: tick` is a load error. A step that wants the current time has `date`; a version whose only meaning is "now" is not something to publish. `tags:` is refused too, as for every type that runs inside this process: there is nothing to place.
@@ -1408,26 +1414,26 @@ There is deliberately no `out:` — `put: tick` is a load error. A step that wan
 
 ```yaml registry=private
 resources:
-- name: app-image
-  type: registry-image
-  source:
-    repository: ghcr.io/acme/app    # the image name, registry host included
-    tag: latest                      # optional; latest when unset
-    username: robot                  # the registry login, used for check, get and put
-    password_env: REGISTRY_TOKEN     # the NAME of the variable holding its password or token
+  - name: app-image
+    type: registry-image
+    source:
+      repository: ghcr.io/acme/app  # the image name, registry host included
+      tag: latest                    # optional; latest when unset
+      username: robot                # the registry login, used for check, get and put
+      password_env: REGISTRY_TOKEN   # the NAME of the variable holding its password or token
 
 jobs:
-- name: inspect
-  plan:
-  - get: app-image
-  - task: show
-    inputs: [app-image]
-    run: cat app-image/tag && grep -c '^sha256:' app-image/digest
+  - name: inspect
+    plan:
+      - get: app-image
+      - task: show
+        inputs: [app-image]
+        run: cat app-image/tag && grep -c '^sha256:' app-image/digest
+        assert:
+          stdout: "latest1"
     assert:
-      stdout: "latest1"
-  assert:
-    execution: [app-image, show]
-    outcome: succeeded
+      execution: [app-image, show]
+      outcome: succeeded
 ```
 
 | `source:` field | required | meaning |
@@ -1445,36 +1451,36 @@ jobs:
 
 ```yaml noexec=network
 resources:
-- name: app-image
-  type: registry-image
-  source:
-    repository: registry.internal.example:5000/team/app
-    username: robot
-    password_env: REGISTRY_TOKEN
-    ca_certs:
-    - |
-      -----BEGIN CERTIFICATE-----
-      MIIBfDCCASKgAwIBAgIULT9Pz2NfEOZsWe+onzuqU9g82A8wCgYIKoZIzj0EAwIw
-      JDEiMCAGA1UEAwwZcmVnaXN0cnkuaW50ZXJuYWwuZXhhbXBsZTAeFw0yNjExMTcx
-      NDI1NDdaFw0zNjExMTQxNDI1NDdaMCQxIjAgBgNVBAMMGXJlZ2lzdHJ5LmludGVy
-      bmFsLmV4YW1wbGUwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATqBGwE3UEOpvv7
-      pzqZZp2rNoDidtGcwIV5wQSxue/7RWOC2Olkx1HHir/coPFKZJ7WHyowg5IOG6GH
-      DMqDEHBQozIwMDAdBgNVHQ4EFgQUV3ljUSR109o8iwtb4tqHdU04M+IwDwYDVR0T
-      AQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiEA+aWh/SabRB8U+tqhZCCaQHZ0
-      dQOOQrj+RRAjf7kat7UCIGa/qVYKEMv7n6jzk38S5QiC7ncvc/2x9mYl8Iu+r+uS
-      -----END CERTIFICATE-----
+  - name: app-image
+    type: registry-image
+    source:
+      repository: registry.internal.example:5000/team/app
+      username: robot
+      password_env: REGISTRY_TOKEN
+      ca_certs:
+        - |
+          -----BEGIN CERTIFICATE-----
+          MIIBfDCCASKgAwIBAgIULT9Pz2NfEOZsWe+onzuqU9g82A8wCgYIKoZIzj0EAwIw
+          JDEiMCAGA1UEAwwZcmVnaXN0cnkuaW50ZXJuYWwuZXhhbXBsZTAeFw0yNjExMTcx
+          NDI1NDdaFw0zNjExMTQxNDI1NDdaMCQxIjAgBgNVBAMMGXJlZ2lzdHJ5LmludGVy
+          bmFsLmV4YW1wbGUwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATqBGwE3UEOpvv7
+          pzqZZp2rNoDidtGcwIV5wQSxue/7RWOC2Olkx1HHir/coPFKZJ7WHyowg5IOG6GH
+          DMqDEHBQozIwMDAdBgNVHQ4EFgQUV3ljUSR109o8iwtb4tqHdU04M+IwDwYDVR0T
+          AQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiEA+aWh/SabRB8U+tqhZCCaQHZ0
+          dQOOQrj+RRAjf7kat7UCIGa/qVYKEMv7n6jzk38S5QiC7ncvc/2x9mYl8Iu+r+uS
+          -----END CERTIFICATE-----
 
-- name: scratch-image
-  type: registry-image
-  source:
-    repository: 10.0.0.5:5000/scratch   # a lab registry on plain http
-    insecure: true
+  - name: scratch-image
+    type: registry-image
+    source:
+      repository: 10.0.0.5:5000/scratch # a lab registry on plain http
+      insecure: true
 
 jobs:
-- name: show
-  plan:
-  - get: app-image
-  - get: scratch-image
+  - name: show
+    plan:
+      - get: app-image
+      - get: scratch-image
 ```
 
 **The version is `{digest}`**, the content the tag pointed at when the check ran. A new push to the tag is a new version; a push of the same content is not. A tag the registry does not have fails the check, naming it, rather than reading as "no versions yet", so a misspelled tag cannot hold a pipeline back in silence. A multi-platform image is one version: the digest of its index, which each machine's docker resolves to its own platform.
@@ -1502,46 +1508,46 @@ A put pushes an image a build left in the put's inputs, to `source.tag` and any 
 
 ```yaml registry=publish
 tasks:
-- name: oci-build                      # reusable: any step named oci-build runs this
-  image: moby/buildkit:v0.17.3
-  privileged: true                     # BuildKit mounts its own snapshots
-  caches:
-  - path: buildkit                     # its layer cache, warm on the next build of this step
-  run: |
-    buildctl-daemonless.sh build \
-      --frontend dockerfile.v0 --local context=src --local dockerfile=src \
-      --export-cache type=local,dest=buildkit,mode=max --import-cache type=local,src=buildkit \
-      --opt build-arg:SOURCE_DATE_EPOCH=0 \
-      --output type=oci,dest=image/image.tar,rewrite-timestamp=true
-    echo v1 > image/tags
+  - name: oci-build                    # reusable: any step named oci-build runs this
+    image: moby/buildkit:v0.17.3
+    privileged: true                   # BuildKit mounts its own snapshots
+    caches:
+      - path: buildkit                 # its layer cache, warm on the next build of this step
+    run: |
+      buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 --local context=src --local dockerfile=src \
+        --export-cache type=local,dest=buildkit,mode=max --import-cache type=local,src=buildkit \
+        --opt build-arg:SOURCE_DATE_EPOCH=0 \
+        --output type=oci,dest=image/image.tar,rewrite-timestamp=true
+      echo v1 > image/tags
 
 resources:
-- name: app-image
-  type: registry-image
-  source:
-    repository: ghcr.io/acme/app
-    username: robot
-    password_env: REGISTRY_TOKEN
+  - name: app-image
+    type: registry-image
+    source:
+      repository: ghcr.io/acme/app
+      username: robot
+      password_env: REGISTRY_TOKEN
 
 jobs:
-- name: publish
-  plan:
-  - task: source                       # stands in for a get of the repository holding the Dockerfile
-    outputs: [src]
-    run: |
-      printf 'FROM scratch\nCOPY hello /hello\n' > src/Dockerfile
-      echo hello > src/hello
-  - task: oci-build
-    inputs: [src]
-    outputs: [image]
-  - put: app-image
-    inputs: [image]
-    params:
-      image: image/image.tar           # what to push
-      additional_tags: image/tags      # optional; a file of whitespace-separated tags it also gets
-  assert:
-    execution: [source, oci-build, app-image]
-    outcome: succeeded
+  - name: publish
+    plan:
+      - task: source                   # stands in for a get of the repository holding the Dockerfile
+        outputs: [src]
+        run: |
+          printf 'FROM scratch\nCOPY hello /hello\n' > src/Dockerfile
+          echo hello > src/hello
+      - task: oci-build
+        inputs: [src]
+        outputs: [image]
+      - put: app-image
+        inputs: [image]
+        params:
+          image: image/image.tar       # what to push
+          additional_tags: image/tags  # optional; a file of whitespace-separated tags it also gets
+    assert:
+      execution: [source, oci-build, app-image]
+      outcome: succeeded
 ```
 
 The put's version is the pushed digest; the next build's get of `app-image` finds it. A get later in the same plan does not: it was [pinned when the plan was built](#a-put-publishes-it-does-not-fetch), before the push.
@@ -1563,56 +1569,57 @@ When the base image is a resource too, a new push of it is a new version: `trigg
 
 ```yaml registry=rebuild
 tasks:
-- name: oci-build
-  image: moby/buildkit:v0.17.3
-  privileged: true
-  caches:
-  - path: buildkit
-  run: |
-    buildctl-daemonless.sh build \
-      --frontend dockerfile.v0 --local context=src --local dockerfile=src \
-      --oci-layout base=base-image/oci \
-      --opt "context:ghcr.io/acme/base=oci-layout://base@$(cat base-image/digest)" \
-      --export-cache type=local,dest=buildkit,mode=max --import-cache type=local,src=buildkit \
-      --opt build-arg:SOURCE_DATE_EPOCH=0 \
-      --output type=oci,dest=image/image.tar,rewrite-timestamp=true
+  - name: oci-build
+    image: moby/buildkit:v0.17.3
+    privileged: true
+    caches:
+      - path: buildkit
+    run: |
+      buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 --local context=src --local dockerfile=src \
+        --oci-layout base=base-image/oci \
+        --opt "context:ghcr.io/acme/base=oci-layout://base@$(cat base-image/digest)" \
+        --export-cache type=local,dest=buildkit,mode=max --import-cache type=local,src=buildkit \
+        --opt build-arg:SOURCE_DATE_EPOCH=0 \
+        --output type=oci,dest=image/image.tar,rewrite-timestamp=true
 
 resources:
-- name: base-image
-  type: registry-image
-  source:
-    repository: ghcr.io/acme/base
-    username: robot
-    password_env: REGISTRY_TOKEN
-- name: app-image
-  type: registry-image
-  source:
-    repository: ghcr.io/acme/app
-    username: robot
-    password_env: REGISTRY_TOKEN
+  - name: base-image
+    type: registry-image
+    source:
+      repository: ghcr.io/acme/base
+      username: robot
+      password_env: REGISTRY_TOKEN
+
+  - name: app-image
+    type: registry-image
+    source:
+      repository: ghcr.io/acme/app
+      username: robot
+      password_env: REGISTRY_TOKEN
 
 jobs:
-- name: publish
-  plan:
-  - get: base-image
-    trigger: true                      # a new base starts a rebuild
-    params:
-      format: oci-layout               # download it, every platform, into base-image/oci
-  - task: source                       # stands in for a get of the repository holding the Dockerfile
-    outputs: [src]
-    run: |
-      printf 'FROM ghcr.io/acme/base\nCOPY hello /hello\n' > src/Dockerfile
-      echo hello > src/hello
-  - task: oci-build
-    inputs: [src, base-image]
-    outputs: [image]
-  - put: app-image
-    inputs: [image]
-    params:
-      image: image/image.tar
-  assert:
-    execution: [base-image, source, oci-build, app-image]
-    outcome: succeeded
+  - name: publish
+    plan:
+      - get: base-image
+        trigger: true                  # a new base starts a rebuild
+        params:
+          format: oci-layout           # download it, every platform, into base-image/oci
+      - task: source                   # stands in for a get of the repository holding the Dockerfile
+        outputs: [src]
+        run: |
+          printf 'FROM ghcr.io/acme/base\nCOPY hello /hello\n' > src/Dockerfile
+          echo hello > src/hello
+      - task: oci-build
+        inputs: [src, base-image]
+        outputs: [image]
+      - put: app-image
+        inputs: [image]
+        params:
+          image: image/image.tar
+    assert:
+      execution: [base-image, source, oci-build, app-image]
+      outcome: succeeded
 ```
 
 - **`--oci-layout base=…` and `context:<name>=oci-layout://base@<digest>`** are BuildKit's: the first names the downloaded layout, the second answers the Dockerfile's `FROM ghcr.io/acme/base` from it, so the Dockerfile stays one a plain `docker build` also builds. Concourse's oci-build-task does the same through `IMAGE_ARG_*`, which asks the Dockerfile for an `ARG`.
@@ -1627,25 +1634,25 @@ jobs:
 
 ```yaml noexec=docker
 resources:
-- name: test-db
-  type: docker-service
-  source:
-    container: ci-redis                      # its name, and how a step on the network reaches it
-    image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
-    network: ci                              # made if it is not there
-    env: {REDIS_ARGS: --save 60 1}           # hashed into the version: never a credential
-    volumes: {ci-redis-data: /data}          # a named volume, kept when the container is replaced
-    ready: [redis-cli, ping]                 # the put returns once this exits 0
-    ready_timeout: 90s                       # optional; 60s when unset
+  - name: test-db
+    type: docker-service
+    source:
+      container: ci-redis                    # its name, and how a step on the network reaches it
+      image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+      network: ci                            # made if it is not there
+      env: {REDIS_ARGS: --save 60 1}         # hashed into the version: never a credential
+      volumes: {ci-redis-data: /data}        # a named volume, kept when the container is replaced
+      ready: [redis-cli, ping]               # the put returns once this exits 0
+      ready_timeout: 90s                     # optional; 60s when unset
 
 jobs:
-- name: specs
-  plan:
-  - put: test-db
-  - task: ping
-    image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
-    network: ci
-    run: redis-cli -h ci-redis ping
+  - name: specs
+    plan:
+      - put: test-db
+      - task: ping
+        image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+        network: ci
+        run: redis-cli -h ci-redis ping
 ```
 
 | `source:` field | required | meaning |
@@ -1672,59 +1679,59 @@ A resource type is three shell commands. (For a resource that is a JSON HTTP API
 
 ```yaml
 resource_types:
-- name: greetings
-  # image: alpine:3   # optional — run these in a container instead of on the host
-  config:
-    check: |
-      printf '[{"word": "hello"}, {"word": "hola"}]'
-    in: |
-      echo {{ .version.word | shellquote }} > word.txt
+  - name: greetings
+    # image: alpine:3   # optional — run these in a container instead of on the host
+    config:
+      check: |
+        printf '[{"word": "hello"}, {"word": "hola"}]'
+      in: |
+        echo {{ .version.word | shellquote }} > word.txt
 
 resources:
-- name: greeting
-  type: greetings
-  source: {}
+  - name: greeting
+    type: greetings
+    source: {}
 
 jobs:
-- name: speak
-  plan:
-  - get: greeting
-  - task: shout
-    inputs: [greeting]
-    run: tr a-z A-Z < greeting/word.txt
+  - name: speak
+    plan:
+      - get: greeting
+      - task: shout
+        inputs: [greeting]
+        run: tr a-z A-Z < greeting/word.txt
+        assert:
+          stdout: HOLA       # check printed oldest-first, so the LATEST is "hola"
     assert:
-      stdout: HOLA           # check printed oldest-first, so the LATEST is "hola"
-  assert:
-    execution: [greeting, shout]
-    outcome: succeeded
+      execution: [greeting, shout]
+      outcome: succeeded
 ```
 
 **An `image:` in a private registry** takes its login in `image_login:`: `username`, and `password_env`, the **name** of a variable in the daemon's environment holding the password or token (a type has no `secrets:` of its own). steps pulls the image with that login and no other, for check, in and out alike; it reads none of docker's own. A [stock Concourse image](#running-a-stock-concourse-resource-image) says the same in its `source:`.
 
 ```yaml noexec=credentials
 resource_types:
-- name: release-notes
-  image: ghcr.io/acme/tools:latest
-  image_login:
-    username: robot                 # any name, for a registry that takes a token alone (ghcr.io)
-    password_env: GHCR_TOKEN        # the NAME of the variable, never the token
-  config:
-    check: echo '[]'
-    out: publish-notes --version "$(cat build/version)"
+  - name: release-notes
+    image: ghcr.io/acme/tools:latest
+    image_login:
+      username: robot               # any name, for a registry that takes a token alone (ghcr.io)
+      password_env: GHCR_TOKEN      # the NAME of the variable, never the token
+    config:
+      check: echo '[]'
+      out: publish-notes --version "$(cat build/version)"
 
 resources:
-- name: notes
-  type: release-notes
-  source: {}
+  - name: notes
+    type: release-notes
+    source: {}
 
 jobs:
-- name: publish
-  plan:
-  - task: build
-    outputs: [build]
-    run: echo 1.0.0 > build/version
-  - put: notes
-    inputs: [build]
+  - name: publish
+    plan:
+      - task: build
+        outputs: [build]
+        run: echo 1.0.0 > build/version
+      - put: notes
+        inputs: [build]
 ```
 
 ### `check` — what versions exist?
@@ -1776,30 +1783,30 @@ A resource may set `check_timeout:` (a Go duration such as `30s` or `5m`; defaul
 
 ```yaml
 resource_types:
-- name: counter
-  config:
-    check: |
-      printf '[{"n": "1"}]'
-    in: echo {{ .version.n | shellquote }} > n.txt
+  - name: counter
+    config:
+      check: |
+        printf '[{"n": "1"}]'
+      in: echo {{ .version.n | shellquote }} > n.txt
 
 resources:
-- name: ticks
-  type: counter
-  source: {}
-  check_timeout: 30s
+  - name: ticks
+    type: counter
+    source: {}
+    check_timeout: 30s
 
 jobs:
-- name: build
-  plan:
-  - get: ticks
-  - task: show
-    inputs: [ticks]
-    run: cat ticks/n.txt
+  - name: build
+    plan:
+      - get: ticks
+      - task: show
+        inputs: [ticks]
+        run: cat ticks/n.txt
+        assert:
+          stdout: "1"
     assert:
-      stdout: "1"
-  assert:
-    execution: [ticks, show]
-    outcome: succeeded
+      execution: [ticks, show]
+      outcome: succeeded
 ```
 
 ### Version history
@@ -1861,29 +1868,29 @@ defaults:
   version_history: 50
 
 resource_types:
-- name: counter
-  config:
-    check: |
-      printf '[{"n": "1"}, {"n": "2"}]'
-    in: echo {{ .version.n | shellquote }} > n.txt
+  - name: counter
+    config:
+      check: |
+        printf '[{"n": "1"}, {"n": "2"}]'
+      in: echo {{ .version.n | shellquote }} > n.txt
 
 resources:
-- name: ticks
-  type: counter
-  source: {}
+  - name: ticks
+    type: counter
+    source: {}
 
 jobs:
-- name: build
-  plan:
-  - get: ticks
-  - task: show
-    inputs: [ticks]
-    run: cat ticks/n.txt
+  - name: build
+    plan:
+      - get: ticks
+      - task: show
+        inputs: [ticks]
+        run: cat ticks/n.txt
+        assert:
+          stdout: "2"
     assert:
-      stdout: "2"
-  assert:
-    execution: [ticks, show]
-    outcome: succeeded
+      execution: [ticks, show]
+      outcome: succeeded
 ```
 
 `--version-history` sets a default for a pipeline that does not; when neither
@@ -1892,32 +1899,32 @@ kept.
 
 ```yaml
 resource_types:
-- name: since-cursor
-  config:
-    # A real type would send this to an API. Here it just reports what it was
-    # handed, which is the part worth seeing: on a fresh run there is no
-    # cursor, so the default is what the check gets.
-    check: |
-      printf '[{"seen": "%s"}]' {{ index .version "ts" | default "0" | shellquote }}
-    in: echo {{ .version.seen | shellquote }} > seen.txt
+  - name: since-cursor
+    config:
+      # A real type would send this to an API. Here it just reports what it was
+      # handed, which is the part worth seeing: on a fresh run there is no
+      # cursor, so the default is what the check gets.
+      check: |
+        printf '[{"seen": "%s"}]' {{ index .version "ts" | default "0" | shellquote }}
+      in: echo {{ .version.seen | shellquote }} > seen.txt
 
 resources:
-- name: feed
-  type: since-cursor
-  source: {}
+  - name: feed
+    type: since-cursor
+    source: {}
 
 jobs:
-- name: poll
-  plan:
-  - get: feed
-  - task: show
-    inputs: [feed]
-    run: cat feed/seen.txt
+  - name: poll
+    plan:
+      - get: feed
+      - task: show
+        inputs: [feed]
+        run: cat feed/seen.txt
+        assert:
+          stdout: "0"      # nothing recorded yet, so the check saw the default
     assert:
-      stdout: "0"          # nothing recorded yet, so the check saw the default
-  assert:
-    execution: [feed, show]
-    outcome: succeeded
+      execution: [feed, show]
+      outcome: succeeded
 ```
 
 ### `in` — fetch one version
@@ -1933,45 +1940,46 @@ Runs when a `get` step executes.
 
 ```yaml
 resource_types:
-- name: notes
-  config:
-    check: |
-      printf '[{"ref": "v1"}]'
-    in: |
-      head -n {{ index .params "lines" | default "100" | shellquote }} <<'EOF' > notes.txt
-      first line
-      second line
-      EOF
+  - name: notes
+    config:
+      check: |
+        printf '[{"ref": "v1"}]'
+      in: |
+        head -n {{ index .params "lines" | default "100" | shellquote }} <<'EOF' > notes.txt
+        first line
+        second line
+        EOF
 
 resources:
-- name: log
-  type: notes
-  source: {}
+  - name: log
+    type: notes
+    source: {}
 
 jobs:
-- name: quick
-  plan:
-  - get: log
-    params: { lines: 1 }     # this job fetches a truncated view
-  - task: show
-    inputs: [log]
-    run: wc -l < log/notes.txt
+  - name: quick
+    plan:
+      - get: log
+        params: {lines: 1}   # this job fetches a truncated view
+      - task: show
+        inputs: [log]
+        run: wc -l < log/notes.txt
+        assert:
+          stdout: "1"        # the param reached in:
     assert:
-      stdout: "1"            # the param reached in:
-  assert:
-    execution: [log, show]
-    outcome: succeeded
-- name: full
-  plan:
-  - get: log                 # same resource, whole thing
-  - task: show
-    inputs: [log]
-    run: wc -l < log/notes.txt
+      execution: [log, show]
+      outcome: succeeded
+
+  - name: full
+    plan:
+      - get: log             # same resource, whole thing
+      - task: show
+        inputs: [log]
+        run: wc -l < log/notes.txt
+        assert:
+          stdout: "2"        # no param, so the default won — same resource, other view
     assert:
-      stdout: "2"            # no param, so the default won — same resource, other view
-  assert:
-    execution: [log, show]
-    outcome: succeeded
+      execution: [log, show]
+      outcome: succeeded
 
 assert:
   execution: [quick, full]
@@ -1998,42 +2006,43 @@ A resource can hand back facts about what it touched — Concourse calls them me
 
 ```yaml
 resource_types:
-- name: ticket
-  config:
-    check: |
-      printf '[{"id": "412"}]'
-    in: |
-      echo fetching ticket {{ .version.id | shellquote }} >&2   # logs go to stderr
-      echo {{ .version.id | shellquote }} > id
-      printf '{"version": {"id": "412"}, "metadata": [{"name": "url", "value": "https://tickets.example/412"}, {"name": "title", "value": "Add the widget cache"}]}'
-    out: |
-      # the get's fact, handed over as a param and quoted by this template
-      test {{ .params.about | shellquote }} = https://tickets.example/412
-      printf '{"version": {"id": "2291"}, "metadata": [{"name": "url", "value": "https://tickets.example/412#comment-2291"}]}'
+  - name: ticket
+    config:
+      check: |
+        printf '[{"id": "412"}]'
+      in: |
+        echo fetching ticket {{ .version.id | shellquote }} >&2   # logs go to stderr
+        echo {{ .version.id | shellquote }} > id
+        printf '{"version": {"id": "412"}, "metadata": [{"name": "url", "value": "https://tickets.example/412"}, {"name": "title", "value": "Add the widget cache"}]}'
+      out: |
+        # the get's fact, handed over as a param and quoted by this template
+        test {{ .params.about | shellquote }} = https://tickets.example/412
+        printf '{"version": {"id": "2291"}, "metadata": [{"name": "url", "value": "https://tickets.example/412#comment-2291"}]}'
 
 resources:
-- name: ticket
-  type: ticket
-  source: {}
-- name: comment
-  type: ticket
-  source: {}
+  - name: ticket
+    type: ticket
+    source: {}
+
+  - name: comment
+    type: ticket
+    source: {}
 
 jobs:
-- name: answer
-  plan:
-  - get: ticket          # shows url and title under the step
-  - task: read
-    inputs: [ticket]
-    run: cat ticket/id
+  - name: answer
+    plan:
+      - get: ticket      # shows url and title under the step
+      - task: read
+        inputs: [ticket]
+        run: cat ticket/id
+        assert:
+          stdout: "412"  # the in: wrote its tree as usual
+      - put: comment     # shows the comment's url, and lists it as published
+        params:
+          about: ((.:ticket.url))   # a later step reads the get's facts
     assert:
-      stdout: "412"      # the in: wrote its tree as usual
-  - put: comment         # shows the comment's url, and lists it as published
-    params:
-      about: ((.:ticket.url))   # a later step reads the get's facts
-  assert:
-    execution: [ticket, read, comment]
-    outcome: succeeded
+      execution: [ticket, read, comment]
+      outcome: succeeded
 ```
 
 A name or value is shown as text: control characters are dropped, each is cut at a few kilobytes, and a resource reports at most 64. A value that is not an `http` or `https` address is never a link. Facts pass through the run's secret masking before they are shown or kept, but they are shown to everyone who can read the run, so a resource should report links and titles, not tokens.
@@ -2052,39 +2061,39 @@ A put step runs `out:` and nothing else — there is no implicit get afterward, 
 
 ```yaml
 resource_types:
-- name: release
-  config:
-    check: |
-      printf '[{"ref": "v1.4.1"}]'
-    in: echo {{ .version.ref | shellquote }} > ref
-    out: |
-      cat notes/summary.txt        # "publish" the summary an earlier step wrote
-      printf '{"ref": "v1.4.2"}'
+  - name: release
+    config:
+      check: |
+        printf '[{"ref": "v1.4.1"}]'
+      in: echo {{ .version.ref | shellquote }} > ref
+      out: |
+        cat notes/summary.txt        # "publish" the summary an earlier step wrote
+        printf '{"ref": "v1.4.2"}'
 
 resources:
-- name: releases
-  type: release
-  source: {}
+  - name: releases
+    type: release
+    source: {}
 
 jobs:
-- name: publish
-  plan:
-  - task: summarize
-    outputs: [notes]
-    run: echo 'what changed' > notes/summary.txt
-  - put: releases              # out: publishes and prints v1.4.2
-    inputs: [notes]
-  - get: releases              # fetch the resource, explicitly
-  - task: verify
-    inputs: [releases]
-    run: cat releases/ref
+  - name: publish
+    plan:
+      - task: summarize
+        outputs: [notes]
+        run: echo 'what changed' > notes/summary.txt
+      - put: releases          # out: publishes and prints v1.4.2
+        inputs: [notes]
+      - get: releases          # fetch the resource, explicitly
+      - task: verify
+        inputs: [releases]
+        run: cat releases/ref
+        assert:
+          # check's answer, NOT the v1.4.2 the put just printed — the get was
+          # pinned when the plan was built, before out: ran. See below.
+          stdout: v1.4.1
     assert:
-      # check's answer, NOT the v1.4.2 the put just printed — the get was
-      # pinned when the plan was built, before out: ran. See below.
-      stdout: v1.4.1
-  assert:
-    execution: [summarize, releases, releases, verify]   # put, then get — two entries
-    outcome: succeeded
+      execution: [summarize, releases, releases, verify] # put, then get — two entries
+      outcome: succeeded
 ```
 
 The explicit get fetches the version `check` reported **when the plan was built** — check runs once, before any step, so the version the put publishes mid-run is not what the same run's get fetches (the example above pins exactly that: `out:` prints `v1.4.2`, the get still fetches `v1.4.1`). The version a put prints is recorded with the run; it reaches a `passed:`-gated get in a later run whether or not a check ever reports it (see [`passed:`](infra.md#a-version-a-job-put-counts-as-having-passed-it)); an ungated get still needs the check to report it. A put whose output nothing reads simply has no get after it.
@@ -2095,34 +2104,34 @@ A resource type can be one of Concourse's own resource images, spelled as Concou
 
 ```yaml noexec=docker
 resource_types:
-- name: git
-  type: registry-image
-  source:
-    repository: concourse/git-resource
-    tag: "1.18"                       # pin it: latest is pulled once and never refreshed
-    # username: robot                 # a private image's login, with password_env: REGISTRY_TOKEN
-  defaults:                           # source: keys every git resource gets; its own keys win
-    branch: main
+  - name: git
+    type: registry-image
+    source:
+      repository: concourse/git-resource
+      tag: "1.18"                     # pin it: latest is pulled once and never refreshed
+      # username: robot                 # a private image's login, with password_env: REGISTRY_TOKEN
+    defaults:                         # source: keys every git resource gets; its own keys win
+      branch: main
 
 resources:
-- name: repo
-  type: git
-  source:
-    uri: git@github.com:acme/app.git
-  secrets:
-    private_key: ((ci:deploy_key))    # becomes source.private_key, on stdin only
+  - name: repo
+    type: git
+    source:
+      uri: git@github.com:acme/app.git
+    secrets:
+      private_key: ((ci:deploy_key))  # becomes source.private_key, on stdin only
 
 jobs:
-- name: build
-  plan:
-  - get: repo
-    params: {depth: 1}
-  - task: look
-    inputs: [repo]
-    run: git -C repo log -1 --oneline
-  - put: repo
-    inputs: [repo]
-    params: {repository: repo}
+  - name: build
+    plan:
+      - get: repo
+        params: {depth: 1}
+      - task: look
+        inputs: [repo]
+        run: git -C repo log -1 --oneline
+      - put: repo
+        inputs: [repo]
+        params: {repository: repo}
 ```
 
 What steps does, and where it differs from Concourse:
@@ -2160,51 +2169,53 @@ By default a get fetches the **latest** version `check` reported. `version: ever
 
 ```yaml
 resource_types:
-- name: builds
-  config:
-    check: |
-      printf '[{"number": "87"}, {"number": "88"}]'
-    in: echo {{ .version.number | shellquote }} > number.txt
+  - name: builds
+    config:
+      check: |
+        printf '[{"number": "87"}, {"number": "88"}]'
+      in: echo {{ .version.number | shellquote }} > number.txt
 
 resources:
-- name: build
-  type: builds
-  source: {}
+  - name: build
+    type: builds
+    source: {}
 
 jobs:
-- name: latest-only
-  plan:
-  - get: build                     # default: "88", the newest
-  - task: show
-    inputs: [build]
-    run: cat build/number.txt
+  - name: latest-only
+    plan:
+      - get: build                 # default: "88", the newest
+      - task: show
+        inputs: [build]
+        run: cat build/number.txt
+        assert:
+          stdout: "88"
     assert:
-      stdout: "88"
-  assert:
-    execution: [build, show]
-    outcome: succeeded
-- name: each-in-turn
-  plan:
-  - get: build
-    version: every                 # the rest of the plan runs per version
-  - task: show
-    inputs: [build]
-    run: cat build/number.txt      # no stdout assert: this runs once per version
-  assert:
-    execution: [build, show, build, show]   # one run per version, judged together
-    outcome: succeeded
-- name: pinned
-  plan:
-  - get: build
-    version: { number: "87" }      # exactly this one
-  - task: show
-    inputs: [build]
-    run: cat build/number.txt
+      execution: [build, show]
+      outcome: succeeded
+
+  - name: each-in-turn
+    plan:
+      - get: build
+        version: every             # the rest of the plan runs per version
+      - task: show
+        inputs: [build]
+        run: cat build/number.txt  # no stdout assert: this runs once per version
     assert:
-      stdout: "87"                 # the pin won over the newer version
-  assert:
-    execution: [build, show]
-    outcome: succeeded
+      execution: [build, show, build, show] # one run per version, judged together
+      outcome: succeeded
+
+  - name: pinned
+    plan:
+      - get: build
+        version: {number: "87"}    # exactly this one
+      - task: show
+        inputs: [build]
+        run: cat build/number.txt
+        assert:
+          stdout: "87"             # the pin won over the newer version
+    assert:
+      execution: [build, show]
+      outcome: succeeded
 
 assert:
   execution: [latest-only, each-in-turn, pinned]
@@ -2234,49 +2245,51 @@ The hold rule is what makes the steady state right, not just the burst: updates 
 
 ```yaml
 resource_types:
-- name: builds
-  config:
-    check: |
-      printf '[{"number": "87"}, {"number": "88"}, {"number": "89"}]'
-    in: echo {{ .version.number | shellquote }} > number.txt
-- name: configs
-  config:
-    check: |
-      printf '[{"rev": "5"}, {"rev": "6"}]'
-    in: echo {{ .version.rev | shellquote }} > rev.txt
+  - name: builds
+    config:
+      check: |
+        printf '[{"number": "87"}, {"number": "88"}, {"number": "89"}]'
+      in: echo {{ .version.number | shellquote }} > number.txt
+
+  - name: configs
+    config:
+      check: |
+        printf '[{"rev": "5"}, {"rev": "6"}]'
+      in: echo {{ .version.rev | shellquote }} > rev.txt
 
 resources:
-- name: build
-  type: builds
-  source: {}
-- name: conf
-  type: configs
-  source: {}
+  - name: build
+    type: builds
+    source: {}
+
+  - name: conf
+    type: configs
+    source: {}
 
 jobs:
-- name: pairwise
-  plan:
-  - get: build
-    version: every
-  - get: conf
-    version: every
-  - task: show
-    inputs: [build, conf]
-    # The case pins the pairing, not just the count: a cross product would
-    # build (87,6), (88,5) or (89,5) and fail here.
-    run: |
-      pair="$(cat build/number.txt)-$(cat conf/rev.txt)"
-      case "$pair" in
-        87-5|88-6|89-6) echo "took $pair" ;;
-        *) echo "unexpected pair $pair"; exit 1 ;;
-      esac
+  - name: pairwise
+    plan:
+      - get: build
+        version: every
+      - get: conf
+        version: every
+      - task: show
+        inputs: [build, conf]
+        # The case pins the pairing, not just the count: a cross product would
+        # build (87,6), (88,5) or (89,5) and fail here.
+        run: |
+          pair="$(cat build/number.txt)-$(cat conf/rev.txt)"
+          case "$pair" in
+            87-5|88-6|89-6) echo "took $pair" ;;
+            *) echo "unexpected pair $pair"; exit 1 ;;
+          esac
+        assert:
+          stdout: took
     assert:
-      stdout: took
-  assert:
-    # Three sets, not six: (87,5), (88,6), then conf is exhausted and
-    # HOLDS at rev 6 while build keeps moving — (89,6).
-    execution: [build, conf, show, build, conf, show, build, conf, show]
-    outcome: succeeded
+      # Three sets, not six: (87,5), (88,6), then conf is exhausted and
+      # HOLDS at rev 6 while build keeps moving — (89,6).
+      execution: [build, conf, show, build, conf, show, build, conf, show]
+      outcome: succeeded
 
 assert:
   execution: [pairwise]
@@ -2288,30 +2301,30 @@ Marks a `get` as something `steps web` should poll. When its version changes, th
 
 ```yaml
 resource_types:
-- name: ticker
-  config:
-    check: |
-      printf '[{"tick": "1"}]'
-    in: echo {{ .version.tick | shellquote }} > tick.txt
+  - name: ticker
+    config:
+      check: |
+        printf '[{"tick": "1"}]'
+      in: echo {{ .version.tick | shellquote }} > tick.txt
 
 resources:
-- name: clock
-  type: ticker
-  source: {}
+  - name: clock
+    type: ticker
+    source: {}
 
 jobs:
-- name: on-change
-  plan:
-  - get: clock
-    trigger: true      # steps web polls this; a new version runs the job
-  - task: react
-    inputs: [clock]
-    run: cat clock/tick.txt
+  - name: on-change
+    plan:
+      - get: clock
+        trigger: true  # steps web polls this; a new version runs the job
+      - task: react
+        inputs: [clock]
+        run: cat clock/tick.txt
+        assert:
+          stdout: "1"
     assert:
-      stdout: "1"
-  assert:
-    execution: [clock, react]
-    outcome: succeeded
+      execution: [clock, react]
+      outcome: succeeded
 ```
 
 See [infra.md](infra.md) for the watch loop and cross-job triggering, and [webhooks.md](webhooks.md) for a resource whose versions are webhook deliveries. Gating a get on upstream jobs — Concourse's `passed:` — is there too: [infra.md#passed](infra.md#passed--only-run-against-versions-that-are-green-upstream).

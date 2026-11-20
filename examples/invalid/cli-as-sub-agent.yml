@@ -5,20 +5,21 @@
 # expect: which has a cli source
 
 agents:
-- name: helper
-  description: Answers a narrow question.
-  source:
-    model: "@claude/sonnet"
-- name: reviewer
-  source:
-    model: openai/gpt-4o
-  tools:
-  - agent: helper
+  - name: helper
+    description: Answers a narrow question.
+    source:
+      model: "@claude/sonnet"
+
+  - name: reviewer
+    source:
+      model: openai/gpt-4o
+    tools:
+      - agent: helper
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - Review something.
+  - name: review
+    plan:
+      - agent: reviewer
+        inputs: []
+        messages:
+          - Review something.

@@ -4,16 +4,16 @@
 # command it is repairing ran on the worker.
 # expect: tags: is not valid on a task with fix:
 agents:
-- name: repair
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  - name: repair
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
 
 tasks:
-- name: compile
-  run: exit 1
-  fix: { agent: repair }
+  - name: compile
+    fix: {agent: repair}
+    run: exit 1
 
 jobs:
-- name: build
-  plan:
-  - task: compile
-    tags: [gpu]
+  - name: build
+    plan:
+      - task: compile
+        tags: [gpu]

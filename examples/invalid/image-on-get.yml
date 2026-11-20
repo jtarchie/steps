@@ -3,13 +3,13 @@
 # expect: image is not valid on get steps
 
 resources:
-- name: repo
-  type: git
-  source:
-    uri: https://example.com/repo.git
+  - name: repo
+    type: git
+    source:
+      uri: https://example.com/repo.git
 
 jobs:
-- name: build
-  plan:
-  - get: repo
-    image: golang:1.26
+  - name: build
+    plan:
+      - get: repo
+        image: golang:1.26

@@ -89,33 +89,33 @@ Nothing to build and nothing to push: a `gcp://` worker runs every placed step i
 
 ```yaml noexec=credentials
 jobs:
-- name: all-phases
-  plan:
-  - task: make
-    outputs: [big]
-    run: dd if=/dev/urandom of=big/blob bs=1M count=64 2>/dev/null
+  - name: all-phases
+    plan:
+      - task: make
+        outputs: [big]
+        run: dd if=/dev/urandom of=big/blob bs=1M count=64 2>/dev/null
 
-  - task: on-the-static-worker
-    tags: [gcp]
-    image: alpine:3
-    inputs: [big]
-    outputs: [r1]
-    run: |
-      wc -c < big/blob > r1/out
-      uname -m >> r1/out
+      - task: on-the-static-worker
+        tags: [gcp]
+        image: alpine:3
+        inputs: [big]
+        outputs: [r1]
+        run: |
+          wc -c < big/blob > r1/out
+          uname -m >> r1/out
 
-  - task: on-a-launched-machine
-    tags: [burst]
-    image: alpine:3
-    inputs: [big]
-    outputs: [r2]
-    run: uname -m > r2/out
+      - task: on-a-launched-machine
+        tags: [burst]
+        image: alpine:3
+        inputs: [big]
+        outputs: [r2]
+        run: uname -m > r2/out
 
-  - task: publish
-    inputs: [r1, r2]
-    run: |
-      echo "static worker:";    cat r1/out
-      echo "launched machine:"; cat r2/out
+      - task: publish
+        inputs: [r1, r2]
+        run: |
+          echo "static worker:";    cat r1/out
+          echo "launched machine:"; cat r2/out
 ```
 
 The pipeline names **capabilities** (`tags: [gcp]`), never machines — the same split as everywhere else.

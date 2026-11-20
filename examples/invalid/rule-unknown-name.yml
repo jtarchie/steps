@@ -3,23 +3,23 @@
 # expect: rules: no rule named "no-secrts"
 
 mcp_servers:
-- name: github
-  endpoint: https://api.githubcopilot.com/mcp/
+  - name: github
+    endpoint: https://api.githubcopilot.com/mcp/
 
 rules:
-- name: no-secrets
-  accept: not (result.text matches "(?i)private key")
+  - name: no-secrets
+    accept: not (result.text matches "(?i)private key")
 
 mcp_exports:
-- name: support
-  access: 'true'
-  rules: [no-secrts]
-  tools:
-  - mcp: github
-    tool: search_issues
+  - name: support
+    access: 'true'
+    rules: [no-secrts]
+    tools:
+      - mcp: github
+        tool: search_issues
 
 jobs:
-- name: build
-  plan:
-  - task: say
-    run: echo hi
+  - name: build
+    plan:
+      - task: say
+        run: echo hi

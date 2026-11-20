@@ -21,6 +21,7 @@ Read the page for what you're doing. Nothing here needs to be read in order. New
 | [templating.md](templating.md) | `{{ }}` in resource commands and custom tools, `shellquote`, `((var))`, `load_var:` and `((.:name))` | short |
 | [mcp.md](mcp.md) | MCP servers as tool sources and as resource-type backends | medium |
 | [complete.md](complete.md) | A full pipeline putting the pieces together | short |
+| [fmt.md](fmt.md) | `steps fmt`: the one standard layout for pipeline files, `--check`/`--diff`, and why it can never change what a pipeline does | short |
 
 ## Reference
 
@@ -48,6 +49,8 @@ steps run <pipeline>        run one job (--resume <id> continues a failed one,
 steps test <pipeline>       run every job and check assert: directives
 steps validate <pipeline>   check the file, and that this machine can run it
                             (--config <daemon file> lists what its fence: warn would)
+steps fmt <file|dir|->      rewrite pipelines into the standard layout
+                            (--check fails on an unformatted one, --diff shows it)
 steps plan <pipeline>       show what a run would execute vs skip
 steps validate --live       also probe the models and MCP servers themselves
                             (--job <name> narrows it to one job; --config <daemon file>

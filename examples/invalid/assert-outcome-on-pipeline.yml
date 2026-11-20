@@ -2,13 +2,13 @@
 # assert on — each job concludes separately, so outcome: belongs on a job.
 # expect: outcome is only valid on a job assert
 
+jobs:
+  - name: build
+    plan:
+      - task: work
+        inputs: []
+        run: "true"
+
 assert:
   execution: [build]
   outcome: failed
-
-jobs:
-- name: build
-  plan:
-  - task: work
-    inputs: []
-    run: "true"

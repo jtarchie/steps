@@ -3,12 +3,12 @@
 # expect: ask timeout 4h outlives the job's timeout: 1h
 
 jobs:
-- name: release
-  timeout: 1h
-  plan:
-  - ask: bump
-    question: Which bump?
-    options: [major, minor, patch]
-    timeout: 4h
-  - task: tag
-    run: echo ((.:bump))
+  - name: release
+    timeout: 1h
+    plan:
+      - ask: bump
+        question: Which bump?
+        options: [major, minor, patch]
+        timeout: 4h
+      - task: tag
+        run: echo ((.:bump))

@@ -8,25 +8,26 @@
 # expect: which is not a step in this job
 
 agents:
-- name: reviewer
-  source:
-    model: openai/gpt-4o
-- name: editor
-  source:
-    model: openai/gpt-4o
+  - name: reviewer
+    source:
+      model: openai/gpt-4o
+
+  - name: editor
+    source:
+      model: openai/gpt-4o
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - Review it.
-    verdicts: [approve, revise]
-  - agent: editor
-    inputs: []
-    messages:
-      - Edit it.
-    context:
-      from:
-        reviwer: note
+  - name: review
+    plan:
+      - agent: reviewer
+        inputs: []
+        verdicts: [approve, revise]
+        messages:
+          - Review it.
+      - agent: editor
+        inputs: []
+        context:
+          from:
+            reviwer: note
+        messages:
+          - Edit it.

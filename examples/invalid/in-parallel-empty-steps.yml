@@ -3,7 +3,7 @@
 # expect: in_parallel.steps must not be empty
 
 jobs:
-- name: build
-  plan:
-  - in_parallel:
-      steps: []
+  - name: build
+    plan:
+      - in_parallel:
+          steps: []

@@ -3,21 +3,21 @@
 # expect: neither gets nor puts resource
 
 resources:
-- name: image
-  type: git
-  source:
-    uri: https://example.com/image.git
+  - name: image
+    type: git
+    source:
+      uri: https://example.com/image.git
 
 jobs:
-- name: build
-  on_failure:
-    put: image
-  plan:
-  - task: work
-    inputs: []
-    run: "true"
+  - name: build
+    plan:
+      - task: work
+        inputs: []
+        run: "true"
+    on_failure:
+      put: image
 
-- name: use
-  plan:
-  - get: image
-    passed: [build]
+  - name: use
+    plan:
+      - get: image
+        passed: [build]

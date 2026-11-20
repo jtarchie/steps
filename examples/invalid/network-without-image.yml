@@ -5,11 +5,11 @@
 # expect: network "none" requires image:
 
 tasks:
-- name: build
-  run: curl https://example.com
-  network: none
+  - name: build
+    network: none
+    run: curl https://example.com
 
 jobs:
-- name: ship
-  plan:
-  - task: build
+  - name: ship
+    plan:
+      - task: build

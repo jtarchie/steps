@@ -8,17 +8,17 @@
 # expect: is not one of the declared verdicts
 
 agents:
-- name: reviewer
-  source:
-    model: openai/gpt-4o
+  - name: reviewer
+    source:
+      model: openai/gpt-4o
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - Review it.
-    verdicts: [approve, revise]
-    assert:
-      verdict: escalate
+  - name: review
+    plan:
+      - agent: reviewer
+        inputs: []
+        verdicts: [approve, revise]
+        messages:
+          - Review it.
+        assert:
+          verdict: escalate

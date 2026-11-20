@@ -16,35 +16,35 @@ Any plan step, or the whole job, can carry hooks. A hook is itself a full step �
 
 ```yaml
 jobs:
-- name: build
-  plan:
-  - task: work
-    run: echo building
-    on_success:                # step-level hook
-      task: record
-      run: echo built cleanly
-    ensure:
-      task: cleanup            # runs whatever happened above
-      run: echo tidying up
-  on_success:                  # job-level hooks (inline alongside plan:)
-    task: announce
-    run: echo the whole job passed
-  on_failure:                  # exactly one on_* fires, chosen by classification
-    task: page
-    run: echo a step said no
-  on_error:
-    task: alert
-    run: echo the infrastructure said no
-  on_abort:
-    task: note-abort
-    run: echo someone pressed ctrl-c
-  ensure:                      # and this one runs whatever happened
-    task: sweep
-    run: echo tidying the job
-  assert:
-    execution: [work, record, cleanup, announce, sweep]   # step, its hooks, then
-    outcome: succeeded                                    # the job's — page, alert
+  - name: build
+    plan:
+      - task: work
+        run: echo building
+        on_success:            # step-level hook
+          task: record
+          run: echo built cleanly
+        ensure:
+          task: cleanup        # runs whatever happened above
+          run: echo tidying up
+    assert:
+      execution: [work, record, cleanup, announce, sweep] # step, its hooks, then
+      outcome: succeeded                                  # the job's — page, alert
                                                           # and note-abort are absent
+    on_success:                # job-level hooks (inline alongside plan:)
+      task: announce
+      run: echo the whole job passed
+    on_failure:                # exactly one on_* fires, chosen by classification
+      task: page
+      run: echo a step said no
+    on_error:
+      task: alert
+      run: echo the infrastructure said no
+    on_abort:
+      task: note-abort
+      run: echo someone pressed ctrl-c
+    ensure:                    # and this one runs whatever happened
+      task: sweep
+      run: echo tidying the job
 ```
 
 - **Hooks observe, they don't consume.** A failing step's `on_failure` runs, and the failure still propagates — the job fails, `steps run` exits nonzero. This is the opposite of "swallow the error": a hook never clears a failure (only a matching `assert.execution` does that — see below). The one way a hook changes an outcome is upward: a failing `on_success` or `ensure` fails an otherwise-green step/job — and the step's node is recorded failed — since a broken notification or cleanup shouldn't read as success. A failing `on_failure`/`on_error`/`on_abort` is only logged.
@@ -58,26 +58,26 @@ A hook that has more than one thing to do says so with a block, exactly as a pla
 
 ```yaml
 jobs:
-- name: build
-  plan:
-  - task: work
-    run: "false"
-    on_failure:                # two reactions, in order
-      do:
-      - task: say-why
-        run: echo the build broke
-      - task: page
-        run: echo paging the on-call
-  ensure:                      # best-effort, both at once
-    try:
-      in_parallel:
-      - task: tidy
-        run: echo tidying
-      - task: notify
-        run: "false"           # tolerated by the try:, so ensure stays green
-  assert:
-    execution: [work, say-why, page, tidy, notify]
-    outcome: failed            # work's failure, which no hook clears
+  - name: build
+    plan:
+      - task: work
+        run: "false"
+        on_failure:            # two reactions, in order
+          do:
+            - task: say-why
+              run: echo the build broke
+            - task: page
+              run: echo paging the on-call
+    assert:
+      execution: [work, say-why, page, tidy, notify]
+      outcome: failed          # work's failure, which no hook clears
+    ensure:                    # best-effort, both at once
+      try:
+        in_parallel:
+          - task: tidy
+            run: echo tidying
+          - task: notify
+            run: "false"       # tolerated by the try:, so ensure stays green
 ```
 
 - **A block hook means what the block means in a plan**: a `do:` stops at its first failing step, an `in_parallel:` runs every branch and fails if any did, a `race:` keeps its first success, an `across:` runs every cell. The steps inside keep their own hooks.
@@ -90,33 +90,33 @@ Any step but a `get` — a hook step or a block (`do:`, `in_parallel:`, `approva
 
 ```yaml
 jobs:
-- name: guarded
-  plan:
-  - task: scout
-    outputs: [risk]
-    run: echo low > risk/level.txt
-  - task: deep-review                       # skipped: the guard exits 1
-    inputs: [risk]
-    when: grep -q high risk/level.txt       # scalar shorthand
-    run: echo auditing everything
-  - task: report                            # runs: the guard exits 0
-    inputs: [risk]
-    when: { run: test -s risk/level.txt }   # mapping form
-    run: cat risk/level.txt
+  - name: guarded
+    plan:
+      - task: scout
+        outputs: [risk]
+        run: echo low > risk/level.txt
+      - task: deep-review                   # skipped: the guard exits 1
+        inputs: [risk]
+        when: grep -q high risk/level.txt   # scalar shorthand
+        run: echo auditing everything
+      - task: report                        # runs: the guard exits 0
+        inputs: [risk]
+        when: {run: test -s risk/level.txt} # mapping form
+        run: cat risk/level.txt
+        assert:
+          stdout: low
+      - task: escalate                      # skipped, so alert/ is never written
+        inputs: [risk]                      # the guard reads it, so it declares it
+        outputs: [alert]
+        when: grep -q high risk/level.txt
+        run: echo paging > alert/page.txt
+      - task: page                          # skipped too: an unwritten input reads
+        inputs: [alert]                     # as absent to the guard, not as an error
+        when: test -s alert/page.txt
+        run: echo paged the on-call
     assert:
-      stdout: low
-  - task: escalate                          # skipped, so alert/ is never written
-    inputs: [risk]                          # the guard reads it, so it declares it
-    outputs: [alert]
-    when: grep -q high risk/level.txt
-    run: echo paging > alert/page.txt
-  - task: page                              # skipped too: an unwritten input reads
-    inputs: [alert]                         # as absent to the guard, not as an error
-    when: test -s alert/page.txt
-    run: echo paged the on-call
-  assert:
-    execution: [scout, report]              # deep-review is absent — that IS the skip
-    outcome: succeeded
+      execution: [scout, report]            # deep-review is absent — that IS the skip
+      outcome: succeeded
 ```
 
 - **The exit code is the whole contract.** A nonzero exit is a legitimate *false* (`grep -q` matching nothing, `test -f` on a missing file) and never a failure. Only a runner-level error — the command couldn't even be started (bad cwd, bad image, dead docker daemon) — fails the step. Note a shell "command not found" is exit 127, i.e. a false guard, not an error.
@@ -134,20 +134,20 @@ A `try:` wraps a single inner step (any kind but `get`: a task, put, agent, bloc
 
 ```yaml
 jobs:
-- name: ship
-  plan:
-  - task: build
-    run: echo ok
-  - try:
-      task: notify           # fails — and the plan shrugs
-      run: "false"           # (assert: is rejected on both halves of a try:)
-  - task: after
-    run: echo still running
+  - name: ship
+    plan:
+      - task: build
+        run: echo ok
+      - try:
+          task: notify       # fails — and the plan shrugs
+          run: "false"       # (assert: is rejected on both halves of a try:)
+      - task: after
+        run: echo still running
+        assert:
+          stdout: still running  # the plan really did carry on past the failure
     assert:
-      stdout: still running  # the plan really did carry on past the failure
-  assert:
-    execution: [build, notify, after]   # notify ran and failed; the wrapper hid it
-    outcome: succeeded
+      execution: [build, notify, after] # notify ran and failed; the wrapper hid it
+      outcome: succeeded
 ```
 
 The wrapper is **transparent**: the only thing it changes is whether the plan walker stops. Everything that *observes* the outcome sees the truth.
@@ -169,19 +169,19 @@ The timeout case deserves its own fixture — an expired `timeout:` classifies a
 
 ```yaml
 jobs:
-- name: shrug
-  plan:
-  - try:
-      task: slow
-      run: sleep 5
-      timeout: 1s          # expires — a failure, per Concourse — and try: eats it
-  - task: after
-    run: echo carried on
+  - name: shrug
+    plan:
+      - try:
+          task: slow
+          timeout: 1s      # expires — a failure, per Concourse — and try: eats it
+          run: sleep 5
+      - task: after
+        run: echo carried on
+        assert:
+          stdout: carried on
     assert:
-      stdout: carried on
-  assert:
-    execution: [slow, after]
-    outcome: succeeded     # a timed-out step inside try: is not a red job
+      execution: [slow, after]
+      outcome: succeeded   # a timed-out step inside try: is not a red job
 ```
 
 ## Step transitions (`to:`/`max_visits:`/`verdicts:`)
@@ -192,62 +192,62 @@ A task loop, modelless and complete — `bump` advances state (and always succee
 
 ```yaml
 jobs:
-- name: converge
-  plan:
-  - task: seed
-    outputs: [state]
-    run: touch state/visits.txt
-  - task: bump
-    inputs: [state]
-    outputs: [state]                # read-modify-write: each visit continues the last
-    run: echo visit >> state/visits.txt
-  - task: check
-    inputs: [state]
-    run: test "$(wc -l < state/visits.txt)" -ge 3
-    to: { failure: bump }           # backward — so max_visits is required
-    max_visits: 5
-  - task: done
-    run: echo converged
+  - name: converge
+    plan:
+      - task: seed
+        outputs: [state]
+        run: touch state/visits.txt
+      - task: bump
+        inputs: [state]
+        outputs: [state]            # read-modify-write: each visit continues the last
+        run: echo visit >> state/visits.txt
+      - task: check
+        inputs: [state]
+        to: {failure: bump}         # backward — so max_visits is required
+        max_visits: 5
+        run: test "$(wc -l < state/visits.txt)" -ge 3
+      - task: done
+        run: echo converged
+        assert:
+          stdout: converged
     assert:
-      stdout: converged
-  assert:
-    execution: [seed, bump, check, bump, check, bump, check, done]   # three laps
-    outcome: succeeded
+      execution: [seed, bump, check, bump, check, bump, check, done] # three laps
+      outcome: succeeded
 ```
 
 And verdict routing — the agent's decision picks the next step:
 
 ```yaml test=control-verdicts
 agents:
-- name: critic
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: critic
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: review
-  plan:
-  - task: draft
-    outputs: [notes]
-    run: echo 'first draft' > notes/draft.txt
-  - agent: critic
-    inputs: [notes]
-    messages:
-      - "Read notes/draft.txt. Approve it, or send it back."
-    verdicts:
-      - approve: publish       # route: record the verdict and jump forward
-      - revise: draft          # backward — the loop max_visits: bounds
-      - failure: escalate      # reserved: the step errored or decided nothing
-    max_visits: 3
+  - name: review
+    plan:
+      - task: draft
+        outputs: [notes]
+        run: echo 'first draft' > notes/draft.txt
+      - agent: critic
+        inputs: [notes]
+        verdicts:
+          - approve: publish   # route: record the verdict and jump forward
+          - revise: draft      # backward — the loop max_visits: bounds
+          - failure: escalate  # reserved: the step errored or decided nothing
+        max_visits: 3
+        messages:
+          - "Read notes/draft.txt. Approve it, or send it back."
+        assert:
+          verdict: approve
+      - task: escalate
+        run: echo paging a human
+      - task: publish
+        run: echo publishing
+        assert:
+          stdout: publishing
     assert:
-      verdict: approve
-  - task: escalate
-    run: echo paging a human
-  - task: publish
-    run: echo publishing
-    assert:
-      stdout: publishing
-  assert:
-    execution: [draft, critic, publish]   # escalate is absent: the route jumped past it
-    outcome: succeeded
+      execution: [draft, critic, publish] # escalate is absent: the route jumped past it
+      outcome: succeeded
 ```
 
 - **Routing keys**: `success`/`failure` for a task/put/verdict-less agent, or a verdict name for a verdict agent. An errored or aborted step produces no key and never routes — it propagates, so a loop can't spin during shutdown or mask an outage. A `to.failure` route consumes the failure (the job doesn't also fail).
@@ -261,18 +261,18 @@ jobs:
 
 ```yaml
 jobs:
-- name: fall-through
-  plan:
-  - task: flaky
-    run: "false"             # no assert: here — one would decide success itself,
-    to: { failure: next }    # and the failure is what the route consumes
-  - task: report
-    run: echo carrying on
+  - name: fall-through
+    plan:
+      - task: flaky
+        run: "false"         # no assert: here — one would decide success itself,
+        to: {failure: next}  # and the failure is what the route consumes
+      - task: report
+        run: echo carrying on
+        assert:
+          stdout: carrying on
     assert:
-      stdout: carrying on
-  assert:
-    execution: [flaky, report]
-    outcome: succeeded       # the route consumed the failure, so the job is green
+      execution: [flaky, report]
+      outcome: succeeded     # the route consumed the failure, so the job is green
 ```
 
   The word is reserved on the value side: a step actually named `next` inside a `to:`-using segment is a load error naming the collision.
@@ -288,16 +288,16 @@ jobs:
 
 ```yaml
 jobs:
-- name: failing-fixture
-  plan:
-  - task: boom
-    run: "false"
-    on_failure:
-      task: alarm
-      run: echo the failure was observed
-  assert:
-    execution: [boom, alarm]    # these ran, in this order — and that clears the failure
-    outcome: failed             # and the plan really did fail
+  - name: failing-fixture
+    plan:
+      - task: boom
+        run: "false"
+        on_failure:
+          task: alarm
+          run: echo the failure was observed
+    assert:
+      execution: [boom, alarm]  # these ran, in this order — and that clears the failure
+      outcome: failed           # and the plan really did fail
 ```
 
 - **`assert.execution`**, on a job (ordered task/agent/hook names that must have run) or the pipeline top level (ordered job names). **A matching job `assert.execution` clears the plan's failure** — evaluated after hooks — so a fixture of deliberately-failing tasks stays green as long as the recorded order matches. A mismatch fails the job with a want/got diff and is never itself cleared. Execution asserts are never hashed (they're meta-checks, like job hooks).
@@ -310,39 +310,39 @@ jobs:
 
 ```yaml
 jobs:
-- name: expected-exit
-  plan:
-  - task: probe
-    run: |
-      echo checking
-      exit 3
+  - name: expected-exit
+    plan:
+      - task: probe
+        run: |
+          echo checking
+          exit 3
+        assert:
+          stdout: checking
+          code: 3
     assert:
-      stdout: checking
-      code: 3
-  assert:
-    execution: [probe]
-    outcome: succeeded       # the matching assert is what makes exit 3 a success
+      execution: [probe]
+      outcome: succeeded     # the matching assert is what makes exit 3 a success
 ```
 
 - **`assert.verdict`**, on an agent step that declares `verdicts:`: the name the model must have emitted, matched exactly. A classifier's product *is* the choice, so without this a fixture passes on whatever the model decided:
 
 ```yaml test=control-classifier
 agents:
-- name: triage
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: triage
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: label
-  plan:
-  - agent: triage
-    messages:
-      - "Classify this report: the app crashes on launch."
-    verdicts: [bug, feature, question]    # all bare: record the choice, route nowhere
+  - name: label
+    plan:
+      - agent: triage
+        verdicts: [bug, feature, question]    # all bare: record the choice, route nowhere
+        messages:
+          - "Classify this report: the app crashes on launch."
+        assert:
+          verdict: bug
     assert:
-      verdict: bug
-  assert:
-    execution: [triage]
-    outcome: succeeded
+      execution: [triage]
+      outcome: succeeded
 ```
 
   Naming a verdict outside the declared list, or setting it on a step with no `verdicts:`, is a load error: the assert could never match on any run.
@@ -351,18 +351,18 @@ jobs:
 
 ```yaml
 jobs:
-- name: wrote-something
-  plan:
-  - task: draft
-    run: |
-      mkdir -p answer
-      echo "the answer is 42" > answer/reply.md
-    outputs: [answer]
+  - name: wrote-something
+    plan:
+      - task: draft
+        outputs: [answer]
+        run: |
+          mkdir -p answer
+          echo "the answer is 42" > answer/reply.md
+        assert:
+          files: [answer/reply.md]
     assert:
-      files: [answer/reply.md]
-  assert:
-    execution: [draft]
-    outcome: succeeded
+      execution: [draft]
+      outcome: succeeded
 ```
 
   A missing file or an empty one fails the assert. Two shapes are load errors instead, because neither could ever pass: a path naming no declared output, and a bare artifact name like `answer` — that is the output *directory*, and a directory is never a non-empty file. Name a file inside it.
@@ -371,19 +371,19 @@ jobs:
 
 ```yaml
 jobs:
-- name: shaped-output
-  plan:
-  - task: plan
-    run: |
-      mkdir -p units
-      echo '["recon","auth","idor"]' > units/index.json
-    outputs: [units]
+  - name: shaped-output
+    plan:
+      - task: plan
+        outputs: [units]
+        run: |
+          mkdir -p units
+          echo '["recon","auth","idor"]' > units/index.json
+        assert:
+          shape:
+            units/index.json: array<string>
     assert:
-      shape:
-        units/index.json: array<string>
-  assert:
-    execution: [plan]
-    outcome: succeeded
+      execution: [plan]
+      outcome: succeeded
 ```
 
   The same file written as `{"intents": [...]}` would fail — `units/index.json is not array<string> (got object)` — at the producer, before any step that reads it as a list fans out over it.
@@ -397,21 +397,21 @@ A plan is already sequential, so `do:` is not about ordering. It is about **cont
 
 ```yaml
 jobs:
-- name: ship
-  plan:
-  - do:
-    - task: migrate
-      run: echo migrating
-    - task: deploy
-      run: echo deploying
-    - task: smoke-test
-      run: echo smoke passed
-    on_failure:
-      task: rollback           # fires if ANY of the three failed
-      run: echo rolling back
-  assert:
-    execution: [migrate, deploy, smoke-test]   # the children, in order; the block
-    outcome: succeeded                         # itself records nothing
+  - name: ship
+    plan:
+      - do:
+          - task: migrate
+            run: echo migrating
+          - task: deploy
+            run: echo deploying
+          - task: smoke-test
+            run: echo smoke passed
+        on_failure:
+          task: rollback       # fires if ANY of the three failed
+          run: echo rolling back
+    assert:
+      execution: [migrate, deploy, smoke-test] # the children, in order; the block
+      outcome: succeeded                       # itself records nothing
 ```
 
 Without it that rollback has two spellings and both are worse: repeat the hook on all three steps and keep them in sync, or hoist it to the job, where it also fires for failures that have nothing to do with the group.
@@ -420,21 +420,21 @@ In a green run that rollback never fires, so the claims it exists for get their 
 
 ```yaml
 jobs:
-- name: ship-broken
-  plan:
-  - do:
-    - task: migrate
-      run: echo migrating
-    - task: deploy
-      run: "false"
-    - task: smoke-test
-      run: echo smoke passed
-    on_failure:
-      task: rollback
-      run: echo rolling back
-  assert:
-    execution: [migrate, deploy, rollback]   # smoke-test absent: the failure stopped the
-    outcome: failed                          # block; rollback present: the block's hook saw it
+  - name: ship-broken
+    plan:
+      - do:
+          - task: migrate
+            run: echo migrating
+          - task: deploy
+            run: "false"
+          - task: smoke-test
+            run: echo smoke passed
+        on_failure:
+          task: rollback
+          run: echo rolling back
+    assert:
+      execution: [migrate, deploy, rollback] # smoke-test absent: the failure stopped the
+      outcome: failed                        # block; rollback present: the block's hook saw it
 ```
 
 - **A failing step stops the block**, and the block reports that failure. Deliberately unlike `across:`, which runs every cell: a matrix asks which combinations work, while a `do:` block is one piece of work spelled in several steps — deploying after the migration failed is not a partial answer, it is a worse outcome.
@@ -452,37 +452,37 @@ A plan is otherwise strictly sequential, so independent work waits on itself: th
 
 ```yaml
 jobs:
-- name: verify
-  plan:
-  - in_parallel:
-      limit: 2          # max in flight; omit for unbounded
-      fail_fast: true   # cancel the siblings on the first failure
-      steps:
-      - task: lint
-        run: echo linting
-      - task: test
-        run: echo testing
-      - task: vet
-        run: echo vetting
-  assert:
-    execution: [lint, test, vet]   # declaration order, not completion order
-    outcome: succeeded             # outcome: is what catches a SWALLOWED branch
+  - name: verify
+    plan:
+      - in_parallel:
+          limit: 2      # max in flight; omit for unbounded
+          fail_fast: true   # cancel the siblings on the first failure
+          steps:
+            - task: lint
+              run: echo linting
+            - task: test
+              run: echo testing
+            - task: vet
+              run: echo vetting
+    assert:
+      execution: [lint, test, vet] # declaration order, not completion order
+      outcome: succeeded           # outcome: is what catches a SWALLOWED branch
 ```
 
 A bare list is shorthand for a block with only `steps:`, as in Concourse — the form to reach for when there is no `limit:` or `fail_fast:` to set:
 
 ```yaml
 jobs:
-- name: verify
-  plan:
-  - in_parallel:
-    - task: lint
-      run: echo linting
-    - task: test
-      run: echo testing
-  assert:
-    execution: [lint, test]
-    outcome: succeeded
+  - name: verify
+    plan:
+      - in_parallel:
+          - task: lint
+            run: echo linting
+          - task: test
+            run: echo testing
+    assert:
+      execution: [lint, test]
+      outcome: succeeded
 ```
 
 - **The block fails when any branch fails.** `fail_fast:` decides only whether the siblings are cancelled or allowed to finish — never whether the failure counts. That distinction is not hypothetical: the first implementation swallowed a child failure under `fail_fast: false`, and a job containing a failing parallel step reported PASS.
@@ -499,45 +499,45 @@ To regression-test a parallel block, use `assert.outcome` — `assert.execution`
 
 ```yaml
 jobs:
-- name: verify-broken
-  plan:
-  - in_parallel:
-      fail_fast: false   # let the siblings finish — the failure must still count
-      steps:
-      - task: lint
-        run: echo linting
-      - task: test
-        run: "false"
-      - task: vet
-        run: echo vetting
-  assert:
-    execution: [lint, test, vet]   # every branch ran to completion
-    outcome: failed                # and the one red branch still failed the job
+  - name: verify-broken
+    plan:
+      - in_parallel:
+          fail_fast: false   # let the siblings finish — the failure must still count
+          steps:
+            - task: lint
+              run: echo linting
+            - task: test
+              run: "false"
+            - task: vet
+              run: echo vetting
+    assert:
+      execution: [lint, test, vet] # every branch ran to completion
+      outcome: failed              # and the one red branch still failed the job
 ```
 
 Branches that run one task shape map its output apart, so the block writes two artifacts rather than racing for one:
 
 ```yaml
 jobs:
-- name: build
-  plan:
-  - in_parallel:
-    - task: linux
-      outputs: [bin]
-      output_mapping: { bin: bin-linux }   # the same task-config name in both branches...
-      run: echo linux > bin/os
-    - task: darwin
-      outputs: [bin]
-      output_mapping: { bin: bin-darwin }  # ...captured as two artifacts, so no race
-      run: echo darwin > bin/os
-  - task: package
-    inputs: [bin-linux, bin-darwin]
-    run: echo "$(cat bin-linux/os)+$(cat bin-darwin/os)"
+  - name: build
+    plan:
+      - in_parallel:
+          - task: linux
+            outputs: [bin]
+            output_mapping: {bin: bin-linux}   # the same task-config name in both branches...
+            run: echo linux > bin/os
+          - task: darwin
+            outputs: [bin]
+            output_mapping: {bin: bin-darwin}  # ...captured as two artifacts, so no race
+            run: echo darwin > bin/os
+      - task: package
+        inputs: [bin-linux, bin-darwin]
+        run: echo "$(cat bin-linux/os)+$(cat bin-darwin/os)"
+        assert:
+          stdout: linux+darwin
     assert:
-      stdout: linux+darwin
-  assert:
-    execution: [linux, darwin, package]
-    outcome: succeeded
+      execution: [linux, darwin, package]
+      outcome: succeeded
 ```
 
 ## `race:` — first success wins
@@ -546,24 +546,24 @@ Run a fast/cheap path and a slow/reliable path at the same time, keep whichever 
 
 ```yaml
 jobs:
-- name: summarize
-  plan:
-  - race:
-      steps:
-      - task: fast
-        outputs: [summary]
-        run: echo quick take > summary/text.txt
-      - task: slow
-        outputs: [summary]
-        run: sleep 2 && echo thorough take > summary/text.txt
-  - task: read
-    inputs: [summary]              # the winner's summary/, whoever wrote it
-    run: cat summary/text.txt
+  - name: summarize
+    plan:
+      - race:
+          steps:
+            - task: fast
+              outputs: [summary]
+              run: echo quick take > summary/text.txt
+            - task: slow
+              outputs: [summary]
+              run: sleep 2 && echo thorough take > summary/text.txt
+      - task: read
+        inputs: [summary]          # the winner's summary/, whoever wrote it
+        run: cat summary/text.txt
+        assert:
+          stdout: quick take       # `fast` won, so its artifact is the block's
     assert:
-      stdout: quick take           # `fast` won, so its artifact is the block's
-  assert:
-    execution: [fast, read]        # the cancelled loser records nothing
-    outcome: succeeded
+      execution: [fast, read]      # the cancelled loser records nothing
+      outcome: succeeded
 ```
 
 ### ⚠️ This costs more, not less
@@ -590,22 +590,22 @@ Run the same step for every combination of some values, instead of writing out a
 
 ```yaml
 jobs:
-- name: matrix
-  plan:
-  - across:
-    - var: go_version
-      values: ["1.25", "1.26"]
-    - var: package
-      values: [agent, pipeline]
-    task: matrix-test
-    run: echo testing {{ .vars.package }} on go {{ .vars.go_version }}
-  assert:
-    execution:                     # the product, last axis varying fastest
-    - matrix-test [go_version=1.25 package=agent]
-    - matrix-test [go_version=1.25 package=pipeline]
-    - matrix-test [go_version=1.26 package=agent]
-    - matrix-test [go_version=1.26 package=pipeline]
-    outcome: succeeded
+  - name: matrix
+    plan:
+      - task: matrix-test
+        across:
+          - var: go_version
+            values: ["1.25", "1.26"]
+          - var: package
+            values: [agent, pipeline]
+        run: echo testing {{ .vars.package }} on go {{ .vars.go_version }}
+    assert:
+      execution:                   # the product, last axis varying fastest
+        - matrix-test [go_version=1.25 package=agent]
+        - matrix-test [go_version=1.25 package=pipeline]
+        - matrix-test [go_version=1.26 package=agent]
+        - matrix-test [go_version=1.26 package=pipeline]
+      outcome: succeeded
 ```
 
 `across:` is a **modifier**, not a container: the step it sits on is still a task (or a put, or an agent), it just runs once per cell. `{{ .vars.<name> }}` substitutes into the command, the image, the prompt, the working directory, the step's own name, each entry of an agent step's `context_paths:`, and every string in a put's `params:` — so a fan-out cell can be *handed* the file it was assigned rather than told to go find it.
@@ -631,22 +631,22 @@ A cell's identity is its chain, which says what the steps before it were *told* 
 
 ```yaml
 jobs:
-- name: matrix
-  plan:
-  - across:
-    - var: shard
-      values: [a, b]
-    task: test
-    run: echo testing shard {{ .vars.shard }}
-    ensure:
-      task: tidy
-      run: echo tidying once
-  assert:
-    execution:                     # one tidy, after every cell
-    - test [shard=a]
-    - test [shard=b]
-    - tidy
-    outcome: succeeded
+  - name: matrix
+    plan:
+      - task: test
+        across:
+          - var: shard
+            values: [a, b]
+        run: echo testing shard {{ .vars.shard }}
+        ensure:
+          task: tidy
+          run: echo tidying once
+    assert:
+      execution:                   # one tidy, after every cell
+        - test [shard=a]
+        - test [shard=b]
+        - tidy
+      outcome: succeeded
 ```
 
 ### A width a step decides: `from_file:`
@@ -655,23 +655,23 @@ An axis can take its values from a JSON array an earlier step wrote, so the matr
 
 ```yaml
 jobs:
-- name: fan-out
-  plan:
-  - task: scan
-    outputs: [findings]
-    run: printf '["alpha","beta"]' > findings/items.json
-  - across:
-    - var: item
-      from_file: findings/items.json    # instead of values:
-    task: investigate
-    inputs: [findings]
-    run: echo investigating {{ .vars.item | shellquote }}
-  assert:
-    execution:                     # width decided by what scan wrote, not by the file
-    - scan
-    - investigate [item=alpha]
-    - investigate [item=beta]
-    outcome: succeeded
+  - name: fan-out
+    plan:
+      - task: scan
+        outputs: [findings]
+        run: printf '["alpha","beta"]' > findings/items.json
+      - task: investigate
+        across:
+          - var: item
+            from_file: findings/items.json    # instead of values:
+        inputs: [findings]
+        run: echo investigating {{ .vars.item | shellquote }}
+    assert:
+      execution:                   # width decided by what scan wrote, not by the file
+        - scan
+        - investigate [item=alpha]
+        - investigate [item=beta]
+      outcome: succeeded
 ```
 
 This is "the step plans, the pipeline executes": one step produces a work list, and each item becomes its own cell — independently hashed, cached and reported — instead of one agent grinding through the whole list in a conversation that outgrows its window.
@@ -692,41 +692,41 @@ A put is a cell like any other, and every string in its `params:` renders with t
 
 ```yaml
 resource_types:
-- name: tracker
-  config:
-    check: printf '[]'
-    out: |
-      set -e
-      title=$(cat {{ .params.title_file | shellquote }})   # a path that did not render fails the put
-      echo "filing: $title" >&2
+  - name: tracker
+    config:
+      check: printf '[]'
+      out: |
+        set -e
+        title=$(cat {{ .params.title_file | shellquote }})   # a path that did not render fails the put
+        echo "filing: $title" >&2
 
 resources:
-- name: issues
-  type: tracker
-  source: {}
+  - name: issues
+    type: tracker
+    source: {}
 
 jobs:
-- name: file-children
-  plan:
-  - task: split
-    outputs: [children]
-    run: |
-      printf '["login","search"]' > children/items.json
-      echo "Fix the login page" > children/login.title
-      echo "Speed up search" > children/search.title
-  - across:
-    - var: child
-      from_file: children/items.json
-    put: issues
-    inputs: [children]
-    params:
-      title_file: children/{{ .vars.child }}.title    # each cell reads its own
-  assert:
-    execution:
-    - split
-    - issues [child=login]
-    - issues [child=search]
-    outcome: succeeded
+  - name: file-children
+    plan:
+      - task: split
+        outputs: [children]
+        run: |
+          printf '["login","search"]' > children/items.json
+          echo "Fix the login page" > children/login.title
+          echo "Speed up search" > children/search.title
+      - put: issues
+        across:
+          - var: child
+            from_file: children/items.json
+        inputs: [children]
+        params:
+          title_file: children/{{ .vars.child }}.title    # each cell reads its own
+    assert:
+      execution:
+        - split
+        - issues [child=login]
+        - issues [child=search]
+      outcome: succeeded
 ```
 
 **Concourse does not allow this**: its `across:` refuses a `put` step. steps allows it because publishing per item is exactly the fan-out a planning step exists to feed, and a put cell is never skipped, so each one publishes. A `get:`'s params are not rendered.
@@ -737,25 +737,25 @@ A matrix's cells are clones of one step, so they declare the same output names �
 
 ```yaml
 jobs:
-- name: review-matrix
-  plan:
-  - across:
-    - var: dim
-      values: [api, errors]
-    outputs: [findings]                  # the block collects
-    task: review
-    run: echo {{ .vars.dim }} looks fine > findings/report.txt
-  - task: merge
-    inputs: [findings]                   # findings/api/report.txt, findings/errors/report.txt
-    run: test "$(ls findings | wc -l)" -eq 2 && cat findings/*/report.txt | tr '\n' ' '
+  - name: review-matrix
+    plan:
+      - task: review
+        across:
+          - var: dim
+            values: [api, errors]
+        outputs: [findings]              # the block collects
+        run: echo {{ .vars.dim }} looks fine > findings/report.txt
+      - task: merge
+        inputs: [findings]               # findings/api/report.txt, findings/errors/report.txt
+        run: test "$(ls findings | wc -l)" -eq 2 && cat findings/*/report.txt | tr '\n' ' '
+        assert:
+          stdout: api looks fine errors looks fine   # exactly two cells, both contents intact
     assert:
-      stdout: api looks fine errors looks fine   # exactly two cells, both contents intact
-  assert:
-    execution:
-    - review [dim=api]
-    - review [dim=errors]
-    - merge
-    outcome: succeeded
+      execution:
+        - review [dim=api]
+        - review [dim=errors]
+        - merge
+      outcome: succeeded
 ```
 
 The cell's own view is unchanged — it writes `findings/report.txt` and never sees the coordinates. The directory layout is one segment per axis value, declaration order, so it is derived entirely from declared things.
@@ -774,29 +774,29 @@ A wide matrix of agent cells is one whose total cost is easy to underestimate �
 
 ```yaml test=control-across-budget
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: bounded-review
-  plan:
-  - across:
-    - var: dim
-      values: [api-boundaries, error-paths, concurrency]
-    budget:
-      tokens: 1000            # cells stop being admitted once this is spent
-    agent: reviewer
-    messages:
-      - "Review the {{ .vars.dim }} dimension."
-  - task: publish
-    run: echo publishing what we got
+  - name: bounded-review
+    plan:
+      - agent: reviewer
+        across:
+          - var: dim
+            values: [api-boundaries, error-paths, concurrency]
+        budget:
+          tokens: 1000        # cells stop being admitted once this is spent
+        messages:
+          - "Review the {{ .vars.dim }} dimension."
+      - task: publish
+        run: echo publishing what we got
+        assert:
+          stdout: publishing what we got
     assert:
-      stdout: publishing what we got
-  assert:
-    execution:                     # cell one overspent the allowance, so cells two
-    - reviewer [dim=api-boundaries]   # and three were never admitted — and the plan
-    - publish                         # carried on anyway, which is the whole point
-    outcome: succeeded
+      execution:                   # cell one overspent the allowance, so cells two
+        - reviewer [dim=api-boundaries]   # and three were never admitted — and the plan
+        - publish                     # carried on anyway, which is the whole point
+      outcome: succeeded
 ```
 
 ```
@@ -845,21 +845,21 @@ Serial cells are the right default for a hand-written matrix. They are the wrong
 
 ```yaml
 jobs:
-- name: wide
-  plan:
-  - across:
-    - var: dimension
-      values: [api-boundaries, error-paths, concurrency, performance]
-    max_in_flight: 4        # four cells at a time
-    task: review
-    run: echo reviewing {{ .vars.dimension }}
-  assert:
-    execution:              # concurrent, but merged back in declaration order
-    - review [dimension=api-boundaries]
-    - review [dimension=error-paths]
-    - review [dimension=concurrency]
-    - review [dimension=performance]
-    outcome: succeeded
+  - name: wide
+    plan:
+      - task: review
+        across:
+          - var: dimension
+            values: [api-boundaries, error-paths, concurrency, performance]
+        max_in_flight: 4    # four cells at a time
+        run: echo reviewing {{ .vars.dimension }}
+    assert:
+      execution:            # concurrent, but merged back in declaration order
+        - review [dimension=api-boundaries]
+        - review [dimension=error-paths]
+        - review [dimension=concurrency]
+        - review [dimension=performance]
+      outcome: succeeded
 ```
 
 - **Unset or `1` is the serial walk**, unchanged. This is opt-in, unlike `in_parallel:`'s `limit:` where an absent value means unbounded — each default matches the contract its own block already had. A value at or above the cell count is effectively unbounded.
@@ -874,17 +874,17 @@ Sometimes the axis is just "run N copies" — a test suite split into shards, wh
 
 ```yaml
 jobs:
-- name: sharded
-  plan:
-  - task: unit
-    parallelism: 3
-    run: sh -c 'echo "slot {{ .vars.index }} of {{ .vars.count }}"'
-  assert:
-    execution:
-    - unit [index=1]
-    - unit [index=2]
-    - unit [index=3]
-    outcome: succeeded
+  - name: sharded
+    plan:
+      - task: unit
+        parallelism: 3
+        run: sh -c 'echo "slot {{ .vars.index }} of {{ .vars.count }}"'
+    assert:
+      execution:
+        - unit [index=1]
+        - unit [index=2]
+        - unit [index=3]
+      outcome: succeeded
 ```
 
 - **It IS an `across:` matrix** — desugared at load, so per-cell caching, coordinate naming, collected `outputs:`, `budget:` and the failure rule (every shard runs, every failure is reported) all apply exactly as written above. Some diagnostics accordingly name `across`. One honest caveat to the caching rule: `count` renders into every shard, so changing N rewrites every cell that interpolates it and re-runs them all — which is what a sharded suite needs, since shard assignments depend on the total.
@@ -899,25 +899,25 @@ Agent pipelines eventually gate something that cannot be undone — publishing, 
 
 ```yaml noexec=approval
 agents:
-- name: writer
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: writer
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: publish
-  plan:
-  - agent: writer
-    messages:
-      - "Draft the release announcement into draft/summary.md."
-    outputs: [draft]
-  - approval:
-      message: "Draft is in draft/summary.md — publish?"
-      timeout: 24h
-    on_abort:
-      task: nag
-      run: echo nobody decided within 24h    # expiry classifies as aborted
-  - task: post
-    inputs: [draft]
-    run: cat draft/summary.md
+  - name: publish
+    plan:
+      - agent: writer
+        outputs: [draft]
+        messages:
+          - "Draft the release announcement into draft/summary.md."
+      - approval:
+          message: "Draft is in draft/summary.md — publish?"
+          timeout: 24h
+        on_abort:
+          task: nag
+          run: echo nobody decided within 24h    # expiry classifies as aborted
+      - task: post
+        inputs: [draft]
+        run: cat draft/summary.md
 ```
 
 ```
@@ -964,24 +964,24 @@ Stated deliberately rather than left to be discovered. Who decided is recorded, 
 
 ```yaml test=control-flow-ask
 jobs:
-- name: release
-  plan:
-  - ask: bump
-    question: "Which bump?"
-    options: [major, minor, patch]   # a closed list; the answer must be one of them
-    timeout: 1s                      # short so this page can run it; a real one waits hours
-  - ask: notes
-    question: "Anything for the release notes?"
-    default: nothing to add          # stands in when nobody answers
-    timeout: 1s
-  - task: tag
-    inputs: [notes]
-    run: echo "((.:bump)) release, notes $(cat notes/answer)"
+  - name: release
+    plan:
+      - ask: bump
+        question: "Which bump?"
+        options: [major, minor, patch]   # a closed list; the answer must be one of them
+        timeout: 1s                  # short so this page can run it; a real one waits hours
+      - ask: notes
+        question: "Anything for the release notes?"
+        default: nothing to add      # stands in when nobody answers
+        timeout: 1s
+      - task: tag
+        inputs: [notes]
+        run: echo "((.:bump)) release, notes $(cat notes/answer)"
+        assert:
+          stdout: major release, notes nothing to add
     assert:
-      stdout: major release, notes nothing to add
-  assert:
-    execution: [bump, notes, tag]
-    outcome: succeeded
+      execution: [bump, notes, tag]
+      outcome: succeeded
 ```
 
 This page runs it with `--answer "which bump=major"`, the [same seed](agents.md#ask_user) an agent's `ask_user` question takes; otherwise it is answered in the web UI's questions page, with `steps questions answer <id> <answer>`, or at the terminal running `steps run`, exactly as an `ask_user` question is.
@@ -999,40 +999,40 @@ A parked approval or `ask:`, or a question an agent asks with [`ask_user`](agent
 
 ```yaml slack=pending-dm
 resources:
-- name: operator-dm
-  type: slack-reply
-  source:
-    channel: U024BE7LH          # a user id DMs
+  - name: operator-dm
+    type: slack-reply
+    source:
+      channel: U024BE7LH        # a user id DMs
 
 jobs:
-- name: publish
-  on_pending:                   # every park in this plan
-    put: tell
-    resource: operator-dm
-    params: {text: "((.:pending.job)) is waiting on approval ((.:pending.id)): ((.:pending.message)) | ((.:pending.command))"}
-  plan:
-  - approval:
-      message: "Publish the release?"
-      timeout: 1s               # short so this page can run it; a real gate waits hours
-  assert:
-    execution: [tell]
-    outcome: failed             # expired: nobody answered
+  - name: publish
+    plan:
+      - approval:
+          message: "Publish the release?"
+          timeout: 1s           # short so this page can run it; a real gate waits hours
+    assert:
+      execution: [tell]
+      outcome: failed           # expired: nobody answered
+    on_pending:                 # every park in this plan
+      put: tell
+      resource: operator-dm
+      params: {text: "((.:pending.job)) is waiting on approval ((.:pending.id)): ((.:pending.message)) | ((.:pending.command))"}
 
-- name: deploy
-  on_pending:
-    put: tell
-    resource: operator-dm
-    params: {text: "never sent: the step's own on_pending replaces this one"}
-  plan:
-  - approval:
-      message: "Deploy to production?"
-      timeout: 1s
-    on_pending:                 # the nearest one wins
-      task: page
-      run: echo "paging on-call about approval ((.:pending.id)), $STEPS_PENDING_MESSAGE, until ((.:pending.expires_at))"
-  assert:
-    execution: [page]
-    outcome: failed
+  - name: deploy
+    plan:
+      - approval:
+          message: "Deploy to production?"
+          timeout: 1s
+        on_pending:             # the nearest one wins
+          task: page
+          run: echo "paging on-call about approval ((.:pending.id)), $STEPS_PENDING_MESSAGE, until ((.:pending.expires_at))"
+    assert:
+      execution: [page]
+      outcome: failed
+    on_pending:
+      put: tell
+      resource: operator-dm
+      params: {text: "never sent: the step's own on_pending replaces this one"}
 
 assert:
   execution: [publish, deploy]

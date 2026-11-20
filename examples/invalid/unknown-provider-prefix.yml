@@ -4,14 +4,14 @@
 # expect: has no known provider prefix
 
 agents:
-- name: writer
-  source:
-    model: notaprovider/some-model
+  - name: writer
+    source:
+      model: notaprovider/some-model
 
 jobs:
-- name: publish
-  plan:
-  - agent: writer
-    inputs: []
-    messages:
-      - Write something.
+  - name: publish
+    plan:
+      - agent: writer
+        inputs: []
+        messages:
+          - Write something.

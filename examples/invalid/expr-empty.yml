@@ -3,16 +3,16 @@
 # expect: expr: sets none of check/in/out
 
 resource_types:
-- name: api
-  config:
-    expr: {}
+  - name: api
+    config:
+      expr: {}
 
 resources:
-- name: thing
-  type: api
-  source: {}
+  - name: thing
+    type: api
+    source: {}
 
 jobs:
-- name: build
-  plan:
-  - get: thing
+  - name: build
+    plan:
+      - get: thing

@@ -4,8 +4,8 @@
 # expect: max_turns is only valid on agent steps
 
 jobs:
-- name: build
-  plan:
-  - task: compile
-    run: "true"
-    max_turns: 10
+  - name: build
+    plan:
+      - task: compile
+        max_turns: 10
+        run: "true"

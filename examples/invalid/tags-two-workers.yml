@@ -4,8 +4,8 @@
 # refused rather than resolved by a rule nobody would guess.
 # expect: commands run on one machine, so name one
 jobs:
-- name: build
-  plan:
-  - task: compile
-    tags: [gpu, arm]
-    run: make
+  - name: build
+    plan:
+      - task: compile
+        tags: [gpu, arm]
+        run: make

@@ -5,16 +5,16 @@
 # expect: required: aborts a step, which an export does not have
 
 mcp_exports:
-- name: support
-  access: 'Provider == "github"'
-  tools:
-  - name: lookup
-    description: look a thing up
-    run: grep {{ .args.term | shellquote }} /etc/hosts
-    required: true
+  - name: support
+    access: 'Provider == "github"'
+    tools:
+      - name: lookup
+        description: look a thing up
+        required: true
+        run: grep {{ .args.term | shellquote }} /etc/hosts
 
 jobs:
-- name: build
-  plan:
-  - task: say
-    run: echo hi
+  - name: build
+    plan:
+      - task: say
+        run: echo hi

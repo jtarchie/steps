@@ -9,16 +9,16 @@
 # expect: budget must set tokens or usd to a positive ceiling
 
 agents:
-- name: writer
-  source:
-    model: openai/gpt-4o
-  budget:
-    tokens: 0
+  - name: writer
+    source:
+      model: openai/gpt-4o
+    budget:
+      tokens: 0
 
 jobs:
-- name: publish
-  plan:
-  - agent: writer
-    inputs: []
-    messages:
-      - Write something.
+  - name: publish
+    plan:
+      - agent: writer
+        inputs: []
+        messages:
+          - Write something.

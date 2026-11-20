@@ -5,11 +5,11 @@
 # expect: to: is not valid on do step
 
 jobs:
-- name: build
-  plan:
-  - do:
-    - task: work
-      run: echo working
-      to: { success: other }
-  - task: other
-    run: echo other
+  - name: build
+    plan:
+      - do:
+          - task: work
+            to: {success: other}
+            run: echo working
+      - task: other
+        run: echo other

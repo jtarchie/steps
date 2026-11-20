@@ -4,21 +4,21 @@
 # fraction of the stage; the load refuses it rather than placing half.
 # expect: tags: is not valid on a resource of type "tracker"
 mcp_servers:
-- name: tools
-  endpoint: http://127.0.0.1:1/mcp
+  - name: tools
+    endpoint: http://127.0.0.1:1/mcp
 
 resource_types:
-- name: tracker
-  config:
-    mcp: { server: tools, check: { tool: list_issues } }
+  - name: tracker
+    config:
+      mcp: {server: tools, check: {tool: list_issues}}
 
 resources:
-- name: issues
-  type: tracker
-  tags: [vpc]
-  source: {}
+  - name: issues
+    type: tracker
+    tags: [vpc]
+    source: {}
 
 jobs:
-- name: triage
-  plan:
-  - get: issues
+  - name: triage
+    plan:
+      - get: issues

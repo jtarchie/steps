@@ -3,13 +3,13 @@
 # expect: declares var "suite" twice
 
 jobs:
-- name: build
-  plan:
-  - across:
-    - var: suite
-      values: [unit]
-    - var: suite
-      values: [integration]
-    task: check
-    inputs: []
-    run: "true"
+  - name: build
+    plan:
+      - task: check
+        across:
+          - var: suite
+            values: [unit]
+          - var: suite
+            values: [integration]
+        inputs: []
+        run: "true"

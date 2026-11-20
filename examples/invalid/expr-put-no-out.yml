@@ -3,17 +3,17 @@
 # expect: which sets no expr.out
 
 resource_types:
-- name: api
-  config:
-    expr:
-      check: '[{ref: "v1"}]'
+  - name: api
+    config:
+      expr:
+        check: '[{ref: "v1"}]'
 
 resources:
-- name: thing
-  type: api
-  source: {}
+  - name: thing
+    type: api
+    source: {}
 
 jobs:
-- name: build
-  plan:
-  - put: thing
+  - name: build
+    plan:
+      - put: thing

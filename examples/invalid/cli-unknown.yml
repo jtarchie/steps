@@ -4,14 +4,14 @@
 # expect: names no known cli
 
 agents:
-- name: reviewer
-  source:
-    model: "@cluade/sonnet"
+  - name: reviewer
+    source:
+      model: "@cluade/sonnet"
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - Review something.
+  - name: review
+    plan:
+      - agent: reviewer
+        inputs: []
+        messages:
+          - Review something.

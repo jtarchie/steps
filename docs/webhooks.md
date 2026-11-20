@@ -9,32 +9,32 @@ That makes two things possible that polling cannot do:
 
 ```yaml deliver=github-push
 resources:
-- name: push
-  type: webhook
-  source:
-    provider: github
-    secret_env: GITHUB_WEBHOOK_SECRET   # the variable NAME, never the secret
-    filter: 'event == "push" && payload.ref == "refs/heads/main"'
-    id: 'payload.after'
-    version:
-      branch: 'trimPrefix(payload.ref, "refs/heads/")'
+  - name: push
+    type: webhook
+    source:
+      provider: github
+      secret_env: GITHUB_WEBHOOK_SECRET # the variable NAME, never the secret
+      filter: 'event == "push" && payload.ref == "refs/heads/main"'
+      id: 'payload.after'
+      version:
+        branch: 'trimPrefix(payload.ref, "refs/heads/")'
 
 jobs:
-- name: build
-  plan:
-  - get: push
-    trigger: true
-  - task: checkout
-    inputs: [push]
-    # A real pipeline clones the commit the push names:
-    #   git clone "$(jq -r .repository.clone_url push/body)" src
-    #   git -C src checkout "$(jq -r .after push/body)"
-    run: cat push/version.json
+  - name: build
+    plan:
+      - get: push
+        trigger: true
+      - task: checkout
+        inputs: [push]
+        # A real pipeline clones the commit the push names:
+        #   git clone "$(jq -r .repository.clone_url push/body)" src
+        #   git -C src checkout "$(jq -r .after push/body)"
+        run: cat push/version.json
+        assert:
+          stdout: '"id":"6113728f27ae82c7b1a177c8d03f9e96e0adf246"'
     assert:
-      stdout: '"id":"6113728f27ae82c7b1a177c8d03f9e96e0adf246"'
-  assert:
-    execution: [push, checkout]
-    outcome: succeeded
+      execution: [push, checkout]
+      outcome: succeeded
 ```
 
 The delivery's URL is `POST /p/<pipeline>/hooks/<resource>` on the daemon — here, `/p/app/hooks/push` for a pipeline set as `app`.
@@ -102,22 +102,22 @@ resource's `secrets:` map, the secret comes from one of the daemon's
 
 ```yaml noexec=secrets
 resources:
-- name: push
-  type: webhook
-  source:
-    provider: github
-    secret_env: GITHUB_WEBHOOK_SECRET
-  secrets:
-    GITHUB_WEBHOOK_SECRET: ((ci:github_webhook_secret))
+  - name: push
+    type: webhook
+    source:
+      provider: github
+      secret_env: GITHUB_WEBHOOK_SECRET
+    secrets:
+      GITHUB_WEBHOOK_SECRET: ((ci:github_webhook_secret))
 
 jobs:
-- name: build
-  plan:
-  - get: push
-    trigger: true
-  - task: build
-    inputs: [push]
-    run: cat push/body
+  - name: build
+    plan:
+      - get: push
+        trigger: true
+      - task: build
+        inputs: [push]
+        run: cat push/body
 ```
 
 - **Looked up when a delivery arrives, then held for one `--interval`.** A rotated secret reaches the route within one interval, where a variable in the environment is read on every delivery.
@@ -156,33 +156,33 @@ A sender not in the table, signing with an HMAC, is described rather than coded:
 
 ```yaml deliver=custom-signed
 resources:
-- name: deploys
-  type: webhook
-  source:
-    provider: custom
-    secret_env: DEPLOY_HOOK_SECRET
-    max_body: 65536
-    signature:
-      header: X-Signature                # where the signature arrives
-      prefix: "v1="                      # text before it in that header
-      encoding: base64                   # hex (default) or base64
-      algorithm: sha512                  # sha256 (default), sha1 or sha512
-      signed: 'headers["x-timestamp"] + "." + body'   # default: the raw body
-      timestamp: 'headers["x-timestamp"]'             # unix seconds, within five minutes
+  - name: deploys
+    type: webhook
+    source:
+      provider: custom
+      secret_env: DEPLOY_HOOK_SECRET
+      max_body: 65536
+      signature:
+        header: X-Signature              # where the signature arrives
+        prefix: "v1="                    # text before it in that header
+        encoding: base64                 # hex (default) or base64
+        algorithm: sha512                # sha256 (default), sha1 or sha512
+        signed: 'headers["x-timestamp"] + "." + body' # default: the raw body
+        timestamp: 'headers["x-timestamp"]'           # unix seconds, within five minutes
 
 jobs:
-- name: announce
-  plan:
-  - get: deploys
-    trigger: true
-  - task: show
-    inputs: [deploys]
-    run: cat deploys/body
+  - name: announce
+    plan:
+      - get: deploys
+        trigger: true
+      - task: show
+        inputs: [deploys]
+        run: cat deploys/body
+        assert:
+          stdout: '"status":"finished"'
     assert:
-      stdout: '"status":"finished"'
-  assert:
-    execution: [deploys, show]
-    outcome: succeeded
+      execution: [deploys, show]
+      outcome: succeeded
 ```
 
 `signed` and `timestamp` only **build strings**. The HMAC and the comparison happen in Go, the same code the built-in providers use, so an expression can never be the thing that decides a signature is valid. A `timestamp:` protects against replay only if `signed` includes it, as above, so a `timestamp:` without a `signed:` is refused at load (write `signed: 'body'` when the body carries the timestamp).

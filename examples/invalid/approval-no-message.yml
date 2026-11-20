@@ -3,7 +3,7 @@
 # expect: approval.message is required
 
 jobs:
-- name: publish
-  plan:
-  - approval:
-      timeout: 24h
+  - name: publish
+    plan:
+      - approval:
+          timeout: 24h

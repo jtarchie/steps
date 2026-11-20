@@ -3,19 +3,19 @@
 # expect: description/required/max_calls/args are only valid when tool: selects a single remote tool
 
 mcp_servers:
-- name: honeybadger
-  endpoint: https://mcp.honeybadger.io/mcp
+  - name: honeybadger
+    endpoint: https://mcp.honeybadger.io/mcp
 
 agents:
-- name: oncall
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools:
-  - mcp: honeybadger
-    tools: [list_faults, get_fault]
-    args: { project_id: "307" }
+  - name: oncall
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools:
+      - mcp: honeybadger
+        tools: [list_faults, get_fault]
+        args: {project_id: "307"}
 
 jobs:
-- name: triage
-  plan:
-  - agent: oncall
-    messages: ["What is failing?"]
+  - name: triage
+    plan:
+      - agent: oncall
+        messages: ["What is failing?"]

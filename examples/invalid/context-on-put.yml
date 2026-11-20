@@ -6,23 +6,23 @@
 # expect: context is only valid on agent and task steps
 
 resource_types:
-- name: dummy
-  config:
-    check: "echo '[]'"
-    in: "true"
-    out: "true"
+  - name: dummy
+    config:
+      check: "echo '[]'"
+      in: "true"
+      out: "true"
 
 resources:
-- name: results
-  type: dummy
-  source: {}
+  - name: results
+    type: dummy
+    source: {}
 
 jobs:
-- name: publish
-  plan:
-  - do:
-    - put: results
-      inputs: []
-      context:
-        from:
-          scan: verdict
+  - name: publish
+    plan:
+      - do:
+          - put: results
+            inputs: []
+            context:
+              from:
+                scan: verdict

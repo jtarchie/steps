@@ -2,15 +2,15 @@
 # expect: get "tick": a cron get takes no params
 
 resources:
-- name: tick
-  type: cron
-  source:
-    expression: "@hourly"
+  - name: tick
+    type: cron
+    source:
+      expression: "@hourly"
 
 jobs:
-- name: tock
-  plan:
-  - get: tick
-    trigger: true
-    params:
-      depth: 1
+  - name: tock
+    plan:
+      - get: tick
+        trigger: true
+        params:
+          depth: 1

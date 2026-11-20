@@ -263,7 +263,7 @@ func writeExampleAgainstFake(t *testing.T, dir, examplePath, endpoint, github st
 		t.Fatalf("%s names no %q to point at the fake GitHub", examplePath, strings.TrimSpace(repo))
 	}
 
-	pointed := strings.ReplaceAll(string(body), repo, repo+"    endpoint: "+github+"\n")
+	pointed := strings.ReplaceAll(string(body), repo, repo+"      endpoint: "+github+"\n")
 
 	return writePipeline(t, dir, injectFakeProvider(t, pointed, endpoint, "", false))
 }

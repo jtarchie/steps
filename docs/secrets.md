@@ -7,19 +7,19 @@ resolved to.
 
 ```yaml noexec=secrets
 tasks:
-- name: publish
-  secrets:
-    NPM_TOKEN: ((ci:npm_token))
-  run: npm publish
+  - name: publish
+    secrets:
+      NPM_TOKEN: ((ci:npm_token))
+    run: npm publish
 
 jobs:
-- name: release
-  plan:
-  - task: publish
-  - task: announce
-    secrets:
-      GH_TOKEN: ((ci:gh_token))
-    run: gh release create v1.0.0 --notes "published"
+  - name: release
+    plan:
+      - task: publish
+      - task: announce
+        secrets:
+          GH_TOKEN: ((ci:gh_token))
+        run: gh release create v1.0.0 --notes "published"
 ```
 
 Terms:
@@ -39,20 +39,20 @@ becomes the next message:
 
 ```yaml noexec=secrets
 agents:
-- name: triage
-  source:
-    endpoint: https://openrouter.ai/api/v1/
-    model: anthropic/claude-sonnet-5.5
-    api_key_env: OPENROUTER_API_KEY
-  tools: [run_shell]
-  secrets:
-    GH_TOKEN: ((ci:gh_token))
+  - name: triage
+    source:
+      endpoint: https://openrouter.ai/api/v1/
+      model: anthropic/claude-sonnet-5.5
+      api_key_env: OPENROUTER_API_KEY
+    tools: [run_shell]
+    secrets:
+      GH_TOKEN: ((ci:gh_token))
 
 jobs:
-- name: triage
-  plan:
-  - agent: triage
-    messages: [Label the open issues with gh.]
+  - name: triage
+    plan:
+      - agent: triage
+        messages: [Label the open issues with gh.]
 ```
 
 The model's own key is a second, separate map, under the agent's `source:`.
@@ -62,23 +62,23 @@ never use its own key. A `fallback:` source takes its own:
 
 ```yaml noexec=secrets
 agents:
-- name: reviewer
-  source:
-    model: openrouter/deepseek/deepseek-v4.1-flash
-    api_key_env: OPENROUTER_API_KEY
-    secrets:
-      OPENROUTER_API_KEY: ((ci:openrouter_api_key))
-  fallback:
-  - source:
-      model: openai/gpt-4.1
+  - name: reviewer
+    source:
+      model: openrouter/deepseek/deepseek-v4.1-flash
+      api_key_env: OPENROUTER_API_KEY
       secrets:
-        OPENAI_API_KEY: ((ci:openai_api_key))
+        OPENROUTER_API_KEY: ((ci:openrouter_api_key))
+    fallback:
+      - source:
+          model: openai/gpt-4.1
+          secrets:
+            OPENAI_API_KEY: ((ci:openai_api_key))
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    messages: [Review the diff.]
+  - name: review
+    plan:
+      - agent: reviewer
+        messages: [Review the diff.]
 ```
 
 A resource takes it too. Its `check`, `in` and `out` see the variables, an
@@ -87,19 +87,19 @@ name one:
 
 ```yaml noexec=secrets
 resources:
-- name: pr
-  type: github-prs
-  source:
-    repo: acme/app
-    token_env: GH_TOKEN
-  secrets:
-    GH_TOKEN: ((ci:gh_token))
+  - name: pr
+    type: github-prs
+    source:
+      repo: acme/app
+      token_env: GH_TOKEN
+    secrets:
+      GH_TOKEN: ((ci:gh_token))
 
 jobs:
-- name: review
-  plan:
-  - get: pr
-    trigger: true
+  - name: review
+    plan:
+      - get: pr
+        trigger: true
 ```
 
 ## Where a reference may appear

@@ -3,21 +3,21 @@
 # expect: a job-level hook runs outside any build
 
 resource_types:
-- name: registry-image
-  config:
-    check: echo '[]'
-    in: "true"
+  - name: registry-image
+    config:
+      check: echo '[]'
+      in: "true"
 
 resources:
-- name: toolchain
-  type: registry-image
-  source: {repository: ghcr.io/me/toolchain}
+  - name: toolchain
+    type: registry-image
+    source: {repository: ghcr.io/me/toolchain}
 
 jobs:
-- name: build
-  plan:
-  - get: toolchain
-  ensure:
-    task: report
-    image: toolchain
-    run: echo done
+  - name: build
+    plan:
+      - get: toolchain
+    ensure:
+      task: report
+      image: toolchain
+      run: echo done

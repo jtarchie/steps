@@ -8,9 +8,9 @@
 # expect: max_in_flight is only valid on an across: step
 
 jobs:
-- name: fan
-  plan:
-  - task: check
-    inputs: []
-    max_in_flight: 4
-    run: "true"
+  - name: fan
+    plan:
+      - task: check
+        inputs: []
+        max_in_flight: 4
+        run: "true"

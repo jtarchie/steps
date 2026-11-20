@@ -4,15 +4,15 @@
 # expect: prints a caller's value into the shell unquoted
 
 mcp_exports:
-- name: support
-  access: 'Provider == "github"'
-  tools:
-  - name: lookup
-    description: look a thing up
-    run: grep {{ .args.term }} /etc/hosts
+  - name: support
+    access: 'Provider == "github"'
+    tools:
+      - name: lookup
+        description: look a thing up
+        run: grep {{ .args.term }} /etc/hosts
 
 jobs:
-- name: build
-  plan:
-  - task: say
-    run: echo hi
+  - name: build
+    plan:
+      - task: say
+        run: echo hi

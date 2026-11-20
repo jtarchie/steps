@@ -2,10 +2,10 @@
 # expect: race.steps needs at least two branches
 
 jobs:
-- name: build
-  plan:
-  - race:
-      steps:
-      - task: alone
-        inputs: []
-        run: echo alone
+  - name: build
+    plan:
+      - race:
+          steps:
+            - task: alone
+              inputs: []
+              run: echo alone

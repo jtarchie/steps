@@ -15,13 +15,13 @@
 # expect: collides with the reserved to: target
 
 jobs:
-- name: j
-  plan:
-  - task: work
-    inputs: []
-    run: "true"
-    to:
-      success: next
-  - task: next
-    inputs: []
-    run: "true"
+  - name: j
+    plan:
+      - task: work
+        inputs: []
+        to:
+          success: next
+        run: "true"
+      - task: next
+        inputs: []
+        run: "true"

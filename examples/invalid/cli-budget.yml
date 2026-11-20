@@ -6,16 +6,16 @@
 # expect: budget.tokens is not supported with a cli source
 
 agents:
-- name: reviewer
-  source:
-    model: "@claude/sonnet"
-  budget:
-    tokens: 100000
+  - name: reviewer
+    source:
+      model: "@claude/sonnet"
+    budget:
+      tokens: 100000
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - Review something.
+  - name: review
+    plan:
+      - agent: reviewer
+        inputs: []
+        messages:
+          - Review something.

@@ -5,12 +5,12 @@
 # have already run.
 # expect: message_files: entry 1 is empty
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    message_files:
-      -
+  - name: review
+    plan:
+      - agent: reviewer
+        message_files:
+          -

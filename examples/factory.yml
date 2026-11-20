@@ -7,512 +7,521 @@
 # The labels are the columns: `epic` (a spec too big for one pull request), `self-build/proposed` (an issue decompose wrote, built by nothing until relabeled), `self-build` (build this one), `factory` (on every pull request the factory opened, the only place respond answers).
 
 resources:
-- name: epic
-  type: github-issues
-  source:
-    repo: ((repo))
-    labels: [epic]
-# The filter is the whole label: GitHub matches label names exactly, so self-build/proposed is not self-build, and promoting an issue is what starts it.
-- name: issue
-  type: github-issues
-  source:
-    repo: ((repo))
-    labels: [self-build]
-# A command, not any comment: the factory replies on the same pull request as the same user, and a reply that could match would be the next build. Nothing it writes starts with /factory, and the rocket it leaves marks a command answered even after the state database is gone.
-# author: is the trust boundary. A command becomes a prompt to an agent with run_shell on this machine and then a push with GH_TOKEN, so a repo anyone can comment on must not be able to issue one. "@me" is the token's own user; list other trusted logins beside it.
-- name: steer
-  type: github-comments
-  source:
-    repo: ((repo))
-    author: "@me"
-    body: '^/factory\s+\S'
-    labels: [factory]
-    checkout: false
-    skip_reacted: rocket
-- name: repo
-  type: git
-  env: [GIT_CONFIG_GLOBAL]
-  source:
-    uri: https://github.com/((repo)).git
-- name: branch
-  type: git
-  env: [GH_TOKEN, GIT_CONFIG_GLOBAL]
-  source:
-    uri: https://github.com/((repo)).git
-    token_env: GH_TOKEN
-- name: child
-  type: github-issue
-  source:
-    repo: ((repo))
-- name: note
-  type: github-pr-comment
-  source:
-    repo: ((repo))
-- name: label
-  type: github-label
-  source:
-    repo: ((repo))
-- name: done
-  type: github-reaction
-  source:
-    repo: ((repo))
-- name: pr
-  type: github-pr
-  source:
-    repo: ((repo))
+  - name: epic
+    type: github-issues
+    source:
+      repo: ((repo))
+      labels: [epic]
+
+  # The filter is the whole label: GitHub matches label names exactly, so self-build/proposed is not self-build, and promoting an issue is what starts it.
+  - name: issue
+    type: github-issues
+    source:
+      repo: ((repo))
+      labels: [self-build]
+
+  # A command, not any comment: the factory replies on the same pull request as the same user, and a reply that could match would be the next build. Nothing it writes starts with /factory, and the rocket it leaves marks a command answered even after the state database is gone.
+  # author: is the trust boundary. A command becomes a prompt to an agent with run_shell on this machine and then a push with GH_TOKEN, so a repo anyone can comment on must not be able to issue one. "@me" is the token's own user; list other trusted logins beside it.
+  - name: steer
+    type: github-comments
+    source:
+      repo: ((repo))
+      author: "@me"
+      body: '^/factory\s+\S'
+      labels: [factory]
+      checkout: false
+      skip_reacted: rocket
+
+  - name: repo
+    type: git
+    env: [GIT_CONFIG_GLOBAL]
+    source:
+      uri: https://github.com/((repo)).git
+
+  - name: branch
+    type: git
+    env: [GH_TOKEN, GIT_CONFIG_GLOBAL]
+    source:
+      uri: https://github.com/((repo)).git
+      token_env: GH_TOKEN
+
+  - name: child
+    type: github-issue
+    source:
+      repo: ((repo))
+
+  - name: note
+    type: github-pr-comment
+    source:
+      repo: ((repo))
+
+  - name: label
+    type: github-label
+    source:
+      repo: ((repo))
+
+  - name: done
+    type: github-reaction
+    source:
+      repo: ((repo))
+
+  - name: pr
+    type: github-pr
+    source:
+      repo: ((repo))
 
 # No budget: on any of them, for self-build.yml's reason: a @claude agent spends a subscription, and timeout: is the ceiling that means something.
 agents:
-- name: decomposer
-  source:
-    model: "@claude/opus"
-  reasoning_effort: high
-  settings: project
-  tools: [read_file, list_dir, search_files, write_file]
-  max_turns: 0
-  timeout: 45m
-  attempts: 2
-  system: |
-    You break one large specification into issues that can each be built and
-    reviewed as a single pull request, then stop. Read the repository before
-    you cut: a piece is the right size when one person could review its diff
-    in a sitting, and it can merge without the pieces after it. You do not
-    write code.
+  - name: decomposer
+    source:
+      model: "@claude/opus"
+    reasoning_effort: high
+    settings: project
+    tools: [read_file, list_dir, search_files, write_file]
+    max_turns: 0
+    timeout: 45m
+    attempts: 2
+    system: |
+      You break one large specification into issues that can each be built and
+      reviewed as a single pull request, then stop. Read the repository before
+      you cut: a piece is the right size when one person could review its diff
+      in a sitting, and it can merge without the pieces after it. You do not
+      write code.
 
-- name: planner
-  source:
-    model: "@claude/opus"
-  reasoning_effort: high
-  settings: project
-  tools: [read_file, list_dir, search_files, write_file]
-  max_turns: 0
-  timeout: 45m
-  attempts: 2
-  system: |
-    You plan the implementation of one GitHub issue in a checkout of the
-    repository, then stop. Where the issue underspecifies something, state the
-    assumption you will build on rather than asking about it. You do not write
-    code.
+  - name: planner
+    source:
+      model: "@claude/opus"
+    reasoning_effort: high
+    settings: project
+    tools: [read_file, list_dir, search_files, write_file]
+    max_turns: 0
+    timeout: 45m
+    attempts: 2
+    system: |
+      You plan the implementation of one GitHub issue in a checkout of the
+      repository, then stop. Where the issue underspecifies something, state the
+      assumption you will build on rather than asking about it. You do not write
+      code.
 
-# implementer and reviewer hold run_shell, and their brief is text from GitHub (an issue, or in respond a pull request comment), so a prompt injection there is a shell on this machine. sandbox: true fences that shell to the step's workspace, with ~/.ssh, ~/.aws, ~/.config/gh and the other credential paths unreadable, so a hijacked command cannot plant anything in HOME or read the operator's keys. Not image:, because their checks need the repository's own toolchain, which is on this machine. Darwin only: elsewhere these steps refuse to start rather than run unfenced, so on Linux use image: with a toolchain image instead.
-- name: implementer
-  source:
-    model: "@claude/opus"
-  sandbox: true
-  settings: project
-  tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
-  max_turns: 0
-  timeout: 2h
-  attempts: 2
-  system: |
-    You change code in a checkout of the repository, then stop. Follow the
-    repository's own conventions and run its checks. Touch only what you were
-    asked to. Do not commit, push, or open a pull request; the pipeline does
-    that from your working tree. Never stop a process by pattern (pkill -f,
-    killall): your own command line carries this prompt.
+  # implementer and reviewer hold run_shell, and their brief is text from GitHub (an issue, or in respond a pull request comment), so a prompt injection there is a shell on this machine. sandbox: true fences that shell to the step's workspace, with ~/.ssh, ~/.aws, ~/.config/gh and the other credential paths unreadable, so a hijacked command cannot plant anything in HOME or read the operator's keys. Not image:, because their checks need the repository's own toolchain, which is on this machine. Darwin only: elsewhere these steps refuse to start rather than run unfenced, so on Linux use image: with a toolchain image instead.
+  - name: implementer
+    source:
+      model: "@claude/opus"
+    sandbox: true
+    settings: project
+    tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
+    max_turns: 0
+    timeout: 2h
+    attempts: 2
+    system: |
+      You change code in a checkout of the repository, then stop. Follow the
+      repository's own conventions and run its checks. Touch only what you were
+      asked to. Do not commit, push, or open a pull request; the pipeline does
+      that from your working tree. Never stop a process by pattern (pkill -f,
+      killall): your own command line carries this prompt.
 
-- name: reviewer
-  source:
-    model: "@claude/opus"
-  reasoning_effort: high
-  sandbox: true
-  settings: project
-  tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
-  max_turns: 0
-  timeout: 1h15m
-  attempts: 2
-  system: |
-    You review an uncommitted diff in a checkout of the repository, then stop.
-    You did not write it and owe it no loyalty. First: does it do all of what
-    was asked, not the first tractable slice? Second: is it correct, secure
-    and resilient? Fix what an edit can fix. Send back what an edit cannot.
-    Do not commit, push, or open a pull request. Never stop a process by
-    pattern (pkill -f, killall): your own command line carries this prompt.
+  - name: reviewer
+    source:
+      model: "@claude/opus"
+    reasoning_effort: high
+    sandbox: true
+    settings: project
+    tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
+    max_turns: 0
+    timeout: 1h15m
+    attempts: 2
+    system: |
+      You review an uncommitted diff in a checkout of the repository, then stop.
+      You did not write it and owe it no loyalty. First: does it do all of what
+      was asked, not the first tractable slice? Second: is it correct, secure
+      and resilient? Fix what an edit can fix. Send back what an edit cannot.
+      Do not commit, push, or open a pull request. Never stop a process by
+      pattern (pkill -f, killall): your own command line carries this prompt.
 
 jobs:
-# An epic is decomposed once. The marker comment goes on BEFORE any issue is opened, because the failure worth preventing is the expensive one: an epic relabeled, or a run retried, opening a second set of children. A run that dies after the marker leaves an epic that says so and a run id to read; delete the comment to decompose again.
-- name: decompose
-  timeout: 1h
-  on_failure:
-    try:
-      put: failed
-      resource: note
-      inputs: [epic, said]
-      params:
-        body_file: said/failed.md
-        from: epic
-  plan:
-  - get: epic
-    trigger: true
-    version: every
-  - task: once
-    inputs: [epic]
-    outputs: [said]
-    run: |
-      set -eu
-      number=$(cat epic/issue.number)
-      printf 'The factory could not finish decomposing this epic. Run `%s` has the reason.\n' "$STEPS_RUN_ID" > said/failed.md
-      if grep -q '^factory: decomposing' epic/issue.md; then
-        echo "epic #$number was already decomposed: its issues say \"Part of #$number\". Delete the factory's comment on it to decompose again." >&2
-        exit 1
-      fi
-      printf 'factory: decomposing this epic into proposed issues (run `%s`). Each will say "Part of #%s" and carry the label `self-build/proposed`; relabel one `self-build` to have it built.\n' "$STEPS_RUN_ID" "$number" > said/started.md
-      echo "decomposing epic #$number"
-  - put: started
-    resource: note
-    inputs: [epic, said]
-    params:
-      body_file: said/started.md
-      from: epic
-  - get: repo
-  - task: brief
-    inputs: [repo, epic]
-    outputs: [repo]
-    run: |
-      set -eu
-      mkdir -p repo/steps-work/issues
-      cp epic/issue.md repo/steps-work/epic.md
-      cat epic/issue.number > repo/steps-work/epic.number
-  - agent: decomposer
-    inputs: [repo]
-    outputs: [repo]
-    dir: repo
-    context_paths: [steps-work/epic.md]
-    assert:
-      files: [repo/steps-work/issues/index.json]
-    messages:
-    - |
-      Break the epic in steps-work/epic.md into issues. Do not write code, and
-      do not ask whether to proceed.
-    - |
-      Check the cut: is each piece reviewable alone, can it merge before the
-      ones after it, and is anything in the epic left out? Then write them.
-      steps-work/issues/index.json is a JSON array of short ids, in the order
-      they should be built, for example ["01-schema","02-api"]. For each id
-      write steps-work/issues/<id>.title, one line, and
-      steps-work/issues/<id>.md in the repository's issue format: "## What",
-      "## Why", "## Notes". Do not mention the epic's number; the pipeline
-      adds it.
-  # Deterministic gate between the model and GitHub: at least one id, each a plain file name, each with both files, and each body ends naming its epic, which is the only link between the two. An empty cut fails here because the marker is already on the epic, so a green run with no children could never be retried.
-  - task: address
-    inputs: [repo]
-    outputs: [issues]
-    run: |
-      set -eu
-      epic=$(cat repo/steps-work/epic.number)
-      cp repo/steps-work/issues/index.json issues/index.json
-      ids=$(grep -o '"[^"]*"' issues/index.json | tr -d '"')
-      test -n "$ids" || { echo "steps-work/issues/index.json names no issues" >&2; exit 1; }
-      for id in $ids; do
-        case "$id" in .*|*[!A-Za-z0-9._-]*) echo "issue id $id is not a plain file name" >&2; exit 1 ;; esac
-        test -s "repo/steps-work/issues/$id.title" || { echo "issue $id has no title" >&2; exit 1; }
-        test -s "repo/steps-work/issues/$id.md" || { echo "issue $id has no body" >&2; exit 1; }
-        cp "repo/steps-work/issues/$id.title" "issues/$id.title"
-        { cat "repo/steps-work/issues/$id.md"; printf '\nPart of #%s\n' "$epic"; } > "issues/$id.md"
-      done
-      echo "proposing $(echo "$ids" | wc -l | tr -d ' ') issue(s) for epic #$epic"
-  - across:
-    - var: id
-      from_file: issues/index.json
-    put: child
-    inputs: [issues]
-    params:
-      title_file: issues/{{ .vars.id }}.title
-      body_file: issues/{{ .vars.id }}.md
-      labels: [self-build/proposed]
+  # An epic is decomposed once. The marker comment goes on BEFORE any issue is opened, because the failure worth preventing is the expensive one: an epic relabeled, or a run retried, opening a second set of children. A run that dies after the marker leaves an epic that says so and a run id to read; delete the comment to decompose again.
+  - name: decompose
+    timeout: 1h
+    plan:
+      - get: epic
+        trigger: true
+        version: every
+      - task: once
+        inputs: [epic]
+        outputs: [said]
+        run: |
+          set -eu
+          number=$(cat epic/issue.number)
+          printf 'The factory could not finish decomposing this epic. Run `%s` has the reason.\n' "$STEPS_RUN_ID" > said/failed.md
+          if grep -q '^factory: decomposing' epic/issue.md; then
+            echo "epic #$number was already decomposed: its issues say \"Part of #$number\". Delete the factory's comment on it to decompose again." >&2
+            exit 1
+          fi
+          printf 'factory: decomposing this epic into proposed issues (run `%s`). Each will say "Part of #%s" and carry the label `self-build/proposed`; relabel one `self-build` to have it built.\n' "$STEPS_RUN_ID" "$number" > said/started.md
+          echo "decomposing epic #$number"
+      - put: started
+        resource: note
+        inputs: [epic, said]
+        params:
+          body_file: said/started.md
+          from: epic
+      - get: repo
+      - task: brief
+        inputs: [repo, epic]
+        outputs: [repo]
+        run: |
+          set -eu
+          mkdir -p repo/steps-work/issues
+          cp epic/issue.md repo/steps-work/epic.md
+          cat epic/issue.number > repo/steps-work/epic.number
+      - agent: decomposer
+        inputs: [repo]
+        outputs: [repo]
+        dir: repo
+        context_paths: [steps-work/epic.md]
+        messages:
+          - |
+            Break the epic in steps-work/epic.md into issues. Do not write code, and
+            do not ask whether to proceed.
+          - |
+            Check the cut: is each piece reviewable alone, can it merge before the
+            ones after it, and is anything in the epic left out? Then write them.
+            steps-work/issues/index.json is a JSON array of short ids, in the order
+            they should be built, for example ["01-schema","02-api"]. For each id
+            write steps-work/issues/<id>.title, one line, and
+            steps-work/issues/<id>.md in the repository's issue format: "## What",
+            "## Why", "## Notes". Do not mention the epic's number; the pipeline
+            adds it.
+        assert:
+          files: [repo/steps-work/issues/index.json]
+      # Deterministic gate between the model and GitHub: at least one id, each a plain file name, each with both files, and each body ends naming its epic, which is the only link between the two. An empty cut fails here because the marker is already on the epic, so a green run with no children could never be retried.
+      - task: address
+        inputs: [repo]
+        outputs: [issues]
+        run: |
+          set -eu
+          epic=$(cat repo/steps-work/epic.number)
+          cp repo/steps-work/issues/index.json issues/index.json
+          ids=$(grep -o '"[^"]*"' issues/index.json | tr -d '"')
+          test -n "$ids" || { echo "steps-work/issues/index.json names no issues" >&2; exit 1; }
+          for id in $ids; do
+            case "$id" in .*|*[!A-Za-z0-9._-]*) echo "issue id $id is not a plain file name" >&2; exit 1 ;; esac
+            test -s "repo/steps-work/issues/$id.title" || { echo "issue $id has no title" >&2; exit 1; }
+            test -s "repo/steps-work/issues/$id.md" || { echo "issue $id has no body" >&2; exit 1; }
+            cp "repo/steps-work/issues/$id.title" "issues/$id.title"
+            { cat "repo/steps-work/issues/$id.md"; printf '\nPart of #%s\n' "$epic"; } > "issues/$id.md"
+          done
+          echo "proposing $(echo "$ids" | wc -l | tr -d ' ') issue(s) for epic #$epic"
+      - put: child
+        across:
+          - var: id
+            from_file: issues/index.json
+        inputs: [issues]
+        params:
+          title_file: issues/{{ .vars.id }}.title
+          body_file: issues/{{ .vars.id }}.md
+          labels: [self-build/proposed]
+    on_failure:
+      try:
+        put: failed
+        resource: note
+        inputs: [epic, said]
+        params:
+          body_file: said/failed.md
+          from: epic
 
-# One issue, one branch, one draft pull request. `revise` routes the reviewer's note back to the implementer once; a second revise fails the job, which is the right end for a diff a round of concrete notes could not finish.
-- name: implement
-  timeout: 8h
-  serial_groups: [checkout]
-  on_failure:
-    try:
-      put: failed
-      resource: note
-      inputs: [issue, said]
-      params:
-        body_file: said/failed.md
-        from: issue
-  plan:
-  - get: issue
-    trigger: true
-    version: every
-  - load_var: number
-    inputs: [issue]
-    file: issue/issue.number
-    reveal: true            # an issue number is not a secret; hidden, every 7 the run prints would be masked
-  - get: repo
-  - task: prep
-    inputs: [repo, issue]
-    outputs: [repo, said]
-    env: [GIT_CONFIG_GLOBAL]
-    run: |
-      set -eu
-      printf 'The factory could not finish this issue. Run `%s` has the reason. To try again, delete branch `issue-((.:number))` if the run pushed it (closing its pull request), then relabel the issue.\n' "$STEPS_RUN_ID" > said/failed.md
-      cd repo
-      # Three outcomes, not two: ls-remote exits 2 for "no such branch", and anything else is a failure to ask, which must not read as a free branch.
-      set +e
-      git ls-remote --exit-code origin "refs/heads/issue-((.:number))" >/dev/null 2>&1
-      probe=$?
-      set -e
-      case "$probe" in
-        0) echo "branch issue-((.:number)) already exists: this issue was already built. Steer its pull request with a /factory comment instead." >&2; exit 1 ;;
-        2) : ;;
-        *) echo "could not reach the remote to check for issue-((.:number)) (git exit $probe)" >&2; exit 1 ;;
-      esac
-      mkdir -p steps-work
-      printf 'steps-work/\n.steps-agent-out/\n' >> .git/info/exclude
-      cp ../issue/issue.md steps-work/issue.md
-      git rev-parse HEAD > steps-work/base
-      git checkout -q -B "issue-((.:number))"
-      echo "on issue-((.:number))"
-  - agent: planner
-    inputs: [repo]
-    outputs: [repo]
-    dir: repo
-    context_paths: [steps-work/issue.md]
-    assert:
-      files: [repo/steps-work/plan.md]
-    messages:
-    - |
-      Plan the GitHub issue in steps-work/issue.md. Do not write code, and do
-      not ask whether to proceed.
-    - |
-      Review your plan for what it missed in security and resilience, then
-      write the corrected plan to steps-work/plan.md: the files to change,
-      what changes in each, and the checks that prove it.
-  # Posted as soon as it exists, so a person can abort a run that is heading the wrong way before the expensive step starts.
-  - task: publish-plan
-    inputs: [repo]
-    outputs: [said]
-    run: |
-      set -eu
-      { printf 'factory: the plan for this issue (run `%s`). Abort the run, or drop the label, if it is heading the wrong way.\n\n' "$STEPS_RUN_ID"; cat repo/steps-work/plan.md; } > said/plan.md
-  - try:
-      put: plan
-      resource: note
-      inputs: [issue, said]
-      params:
-        body_file: said/plan.md
-        from: issue
-  - agent: implementer
-    inputs: [repo]
-    outputs: [repo]
-    dir: repo
-    context_paths: [steps-work/issue.md, steps-work/plan.md]
-    context:
-      from:
-        reviewer: note
-    messages:
-    - |
-      Execute the plan in steps-work/plan.md. If a reviewer note is in your
-      context, this is a second pass: the tree already holds your earlier
-      work, so read `git diff` first and continue from it.
-  - task: commit
-    inputs: [repo, issue]
-    outputs: [repo, said]
-    env: [GIT_CONFIG_GLOBAL]
-    run: |
-      set -eu
-      cd repo
-      git config user.name >/dev/null || git config user.name "steps factory"
-      git config user.email >/dev/null || git config user.email "factory@steps.invalid"
-      git add -A
-      if git diff --cached --quiet; then
-        # A second lap after revise may have nothing new to stage, but the branch must still differ from where prep started it.
-        test "$(git rev-list --count "$(cat steps-work/base)..HEAD")" != 0 || { echo "the implementer changed nothing" >&2; exit 1; }
-        echo "nothing new to commit"
-      else
-        git commit -q -m "$(cat ../issue/issue.title)" -m "Closes #((.:number))"
-        echo "committed $(git rev-parse --short HEAD) for #((.:number))"
-      fi
-      cat ../issue/issue.title > ../said/title
-      printf 'Draft: implemented, review in progress.\n\nCloses #%s\n\nBuilt by run `%s`. To change it, comment on this pull request starting with `/factory`.\n' "((.:number))" "$STEPS_RUN_ID" > ../said/draft.md
-  - put: branch
-    inputs: [repo]
-    params:
-      repository: repo
-      branch: issue-((.:number))
-  - put: pr
-    inputs: [said]
-    params:
-      head: issue-((.:number))
-      title_file: said/title
-      body_file: said/draft.md
-      draft: true
-      labels: [factory]
-  - agent: reviewer
-    inputs: [repo]
-    outputs: [repo]
-    dir: repo
-    context_paths: [steps-work/issue.md]
-    max_visits: 2
-    messages:
-    - |
-      The issue is above. The implementation is the commits on this branch
-      since steps-work/base (`git log`, `git diff "$(cat steps-work/base)"`). Fix
-      what an edit can fix and leave the fixes in the tree. Then decide, and
-      call the verdict tool.
+  # One issue, one branch, one draft pull request. `revise` routes the reviewer's note back to the implementer once; a second revise fails the job, which is the right end for a diff a round of concrete notes could not finish.
+  - name: implement
+    timeout: 8h
+    serial_groups: [checkout]
+    plan:
+      - get: issue
+        trigger: true
+        version: every
+      - load_var: number
+        inputs: [issue]
+        file: issue/issue.number
+        reveal: true        # an issue number is not a secret; hidden, every 7 the run prints would be masked
+      - get: repo
+      - task: prep
+        inputs: [repo, issue]
+        outputs: [repo, said]
+        env: [GIT_CONFIG_GLOBAL]
+        run: |
+          set -eu
+          printf 'The factory could not finish this issue. Run `%s` has the reason. To try again, delete branch `issue-((.:number))` if the run pushed it (closing its pull request), then relabel the issue.\n' "$STEPS_RUN_ID" > said/failed.md
+          cd repo
+          # Three outcomes, not two: ls-remote exits 2 for "no such branch", and anything else is a failure to ask, which must not read as a free branch.
+          set +e
+          git ls-remote --exit-code origin "refs/heads/issue-((.:number))" >/dev/null 2>&1
+          probe=$?
+          set -e
+          case "$probe" in
+            0) echo "branch issue-((.:number)) already exists: this issue was already built. Steer its pull request with a /factory comment instead." >&2; exit 1 ;;
+            2) : ;;
+            *) echo "could not reach the remote to check for issue-((.:number)) (git exit $probe)" >&2; exit 1 ;;
+          esac
+          mkdir -p steps-work
+          printf 'steps-work/\n.steps-agent-out/\n' >> .git/info/exclude
+          cp ../issue/issue.md steps-work/issue.md
+          git rev-parse HEAD > steps-work/base
+          git checkout -q -B "issue-((.:number))"
+          echo "on issue-((.:number))"
+      - agent: planner
+        inputs: [repo]
+        outputs: [repo]
+        dir: repo
+        context_paths: [steps-work/issue.md]
+        messages:
+          - |
+            Plan the GitHub issue in steps-work/issue.md. Do not write code, and do
+            not ask whether to proceed.
+          - |
+            Review your plan for what it missed in security and resilience, then
+            write the corrected plan to steps-work/plan.md: the files to change,
+            what changes in each, and the checks that prove it.
+        assert:
+          files: [repo/steps-work/plan.md]
+      # Posted as soon as it exists, so a person can abort a run that is heading the wrong way before the expensive step starts.
+      - task: publish-plan
+        inputs: [repo]
+        outputs: [said]
+        run: |
+          set -eu
+          { printf 'factory: the plan for this issue (run `%s`). Abort the run, or drop the label, if it is heading the wrong way.\n\n' "$STEPS_RUN_ID"; cat repo/steps-work/plan.md; } > said/plan.md
+      - try:
+          put: plan
+          resource: note
+          inputs: [issue, said]
+          params:
+            body_file: said/plan.md
+            from: issue
+      - agent: implementer
+        inputs: [repo]
+        outputs: [repo]
+        dir: repo
+        context_paths: [steps-work/issue.md, steps-work/plan.md]
+        context:
+          from:
+            reviewer: note
+        messages:
+          - |
+            Execute the plan in steps-work/plan.md. If a reviewer note is in your
+            context, this is a second pass: the tree already holds your earlier
+            work, so read `git diff` first and continue from it.
+      - task: commit
+        inputs: [repo, issue]
+        outputs: [repo, said]
+        env: [GIT_CONFIG_GLOBAL]
+        run: |
+          set -eu
+          cd repo
+          git config user.name >/dev/null || git config user.name "steps factory"
+          git config user.email >/dev/null || git config user.email "factory@steps.invalid"
+          git add -A
+          if git diff --cached --quiet; then
+            # A second lap after revise may have nothing new to stage, but the branch must still differ from where prep started it.
+            test "$(git rev-list --count "$(cat steps-work/base)..HEAD")" != 0 || { echo "the implementer changed nothing" >&2; exit 1; }
+            echo "nothing new to commit"
+          else
+            git commit -q -m "$(cat ../issue/issue.title)" -m "Closes #((.:number))"
+            echo "committed $(git rev-parse --short HEAD) for #((.:number))"
+          fi
+          cat ../issue/issue.title > ../said/title
+          printf 'Draft: implemented, review in progress.\n\nCloses #%s\n\nBuilt by run `%s`. To change it, comment on this pull request starting with `/factory`.\n' "((.:number))" "$STEPS_RUN_ID" > ../said/draft.md
+      - put: branch
+        inputs: [repo]
+        params:
+          repository: repo
+          branch: issue-((.:number))
+      - put: pr
+        inputs: [said]
+        params:
+          head: issue-((.:number))
+          title_file: said/title
+          body_file: said/draft.md
+          draft: true
+          labels: [factory]
+      - agent: reviewer
+        inputs: [repo]
+        outputs: [repo]
+        dir: repo
+        context_paths: [steps-work/issue.md]
+        max_visits: 2
+        verdicts:
+          - approve: next
+          - revise: implementer
+        messages:
+          - |
+            The issue is above. The implementation is the commits on this branch
+            since steps-work/base (`git log`, `git diff "$(cat steps-work/base)"`). Fix
+            what an edit can fix and leave the fixes in the tree. Then decide, and
+            call the verdict tool.
 
-      If it does not close steps-work/issue.md, or is wrong in a way your
-      edits cannot fix, call it with `revise`. Your note is the implementer's
-      entire brief, so name what is missing or wrong and what would close it.
+            If it does not close steps-work/issue.md, or is wrong in a way your
+            edits cannot fix, call it with `revise`. Your note is the implementer's
+            entire brief, so name what is missing or wrong and what would close it.
 
-      Otherwise write steps-work/pr-body.md and call it with `approve`. It has
-      exactly three sections: "## What" (what changes for someone using the
-      project, in plain words), "## Why" (the problem it fixes), "## Notes"
-      (what you verified, what you could not, and any decision a reviewer
-      should check). Under 150 words. No "Closes #n" line: the pipeline adds it.
-    verdicts:
-    - approve: next
-    - revise: implementer
-  - task: finish
-    inputs: [repo, issue]
-    outputs: [repo, said]
-    env: [GIT_CONFIG_GLOBAL]
-    run: |
-      set -eu
-      cd repo
-      for h in What Why Notes; do
-        grep -q "^## $h" steps-work/pr-body.md || { echo "pr-body.md lacks ## $h" >&2; exit 1; }
-      done
-      git config user.name >/dev/null || git config user.name "steps factory"
-      git config user.email >/dev/null || git config user.email "factory@steps.invalid"
-      git add -A
-      git diff --cached --quiet || git commit -q -m "$(cat ../issue/issue.title): review fixes" -m "Closes #((.:number))"
-      { cat steps-work/pr-body.md; printf '\nCloses #%s\n\nBuilt by run `%s`. To change it, comment on this pull request starting with `/factory`.\n' "((.:number))" "$STEPS_RUN_ID"; } > ../said/final.md
-  - put: reviewed
-    resource: branch
-    inputs: [repo]
-    params:
-      repository: repo
-      branch: issue-((.:number))
-  - put: ready
-    resource: pr
-    inputs: [said]
-    params:
-      head: issue-((.:number))
-      body_file: said/final.md
-      ready: true
+            Otherwise write steps-work/pr-body.md and call it with `approve`. It has
+            exactly three sections: "## What" (what changes for someone using the
+            project, in plain words), "## Why" (the problem it fixes), "## Notes"
+            (what you verified, what you could not, and any decision a reviewer
+            should check). Under 150 words. No "Closes #n" line: the pipeline adds it.
+      - task: finish
+        inputs: [repo, issue]
+        outputs: [repo, said]
+        env: [GIT_CONFIG_GLOBAL]
+        run: |
+          set -eu
+          cd repo
+          for h in What Why Notes; do
+            grep -q "^## $h" steps-work/pr-body.md || { echo "pr-body.md lacks ## $h" >&2; exit 1; }
+          done
+          git config user.name >/dev/null || git config user.name "steps factory"
+          git config user.email >/dev/null || git config user.email "factory@steps.invalid"
+          git add -A
+          git diff --cached --quiet || git commit -q -m "$(cat ../issue/issue.title): review fixes" -m "Closes #((.:number))"
+          { cat steps-work/pr-body.md; printf '\nCloses #%s\n\nBuilt by run `%s`. To change it, comment on this pull request starting with `/factory`.\n' "((.:number))" "$STEPS_RUN_ID"; } > ../said/final.md
+      - put: reviewed
+        resource: branch
+        inputs: [repo]
+        params:
+          repository: repo
+          branch: issue-((.:number))
+      - put: ready
+        resource: pr
+        inputs: [said]
+        params:
+          head: issue-((.:number))
+          body_file: said/final.md
+          ready: true
+    on_failure:
+      try:
+        put: failed
+        resource: note
+        inputs: [issue, said]
+        params:
+          body_file: said/failed.md
+          from: issue
 
-# A person's "/factory <what to change>" on a factory pull request: the same branch, rebased on the default branch, changed, reviewed by the same gate, pushed, and answered where it was asked. Never a second pull request. The rocket is left last, and only once the push landed, so a command the factory failed on is still a command.
-- name: respond
-  timeout: 6h
-  serial_groups: [checkout]
-  on_failure:
-    try:
-      put: failed
-      resource: note
-      inputs: [steer, said]
-      params:
-        body_file: said/failed.md
-        from: steer
-        in_thread: true
-  plan:
-  - get: steer
-    trigger: true
-    version: every
-  - get: repo
-  - task: checkout
-    inputs: [repo, steer]
-    outputs: [repo, said]
-    env: [GIT_CONFIG_GLOBAL]
-    run: |
-      set -eu
-      printf 'The factory could not act on this. Run `%s` has the reason; edit the comment to ask again.\n' "$STEPS_RUN_ID" > said/failed.md
-      # A comment on a closed or merged pull request would push to a branch nothing will merge again.
-      state=$(grep -o '"state": *"[a-z]*"' steer/pr.json | head -1)
-      case "$state" in *'"open"') ;; *) echo "pull request #$(cat steer/pr.number) is not open" >&2; exit 1 ;; esac
-      # Only a branch the factory names: the head of a pull request it did not open is not its to push. head -1 last, so no match reaches the message below rather than ending the script silently under set -e.
-      head=$(grep -o '"ref": *"issue-[0-9][0-9]*"' steer/pr.json | grep -o 'issue-[0-9][0-9]*' | head -1)
-      test -n "$head" || { echo "pull request #$(cat steer/pr.number) is not on an issue-<n> branch" >&2; exit 1; }
-      echo "$head" > said/head
-      cd repo
-      base=$(git rev-parse HEAD)
-      # The get fetched one commit; a rebase needs the history both sides share.
-      git fetch -q --unshallow origin 2>/dev/null || true
-      git fetch -q origin "refs/heads/$head"
-      # The ref grep cannot tell head from base, nor this repository's branch from a fork's of the same name; the pull request's own head sha can.
-      leased=$(git rev-parse FETCH_HEAD)
-      test "$leased" = "$(cat ../steer/pr.sha)" || { echo "$head is at $leased, not pull request #$(cat ../steer/pr.number)'s head $(cat ../steer/pr.sha): not its branch, or it moved since" >&2; exit 1; }
-      echo "$leased" > ../said/before
-      git checkout -q -B "$head" FETCH_HEAD
-      git config user.name >/dev/null || git config user.name "steps factory"
-      git config user.email >/dev/null || git config user.email "factory@steps.invalid"
-      git rebase -q "$base" || { git rebase --abort; echo "$head does not rebase onto the default branch cleanly; resolve it by hand" >&2; exit 1; }
-      mkdir -p steps-work
-      printf 'steps-work/\n.steps-agent-out/\n' >> .git/info/exclude
-      { printf '# Review comment by %s on pull request #%s\n\n' "$(cat ../steer/comment.author)" "$(cat ../steer/pr.number)"; cat ../steer/comment.body; printf '\n'; } > steps-work/request.md
-      test ! -f ../steer/thread.json || cp ../steer/thread.json steps-work/thread.json
-      echo "on $head, rebased onto $(git rev-parse --short "$base")"
-  - load_var: head
-    inputs: [said]
-    file: said/head
-    reveal: true
-  - load_var: before
-    inputs: [said]
-    file: said/before
-    reveal: true
-  - agent: implementer
-    inputs: [repo]
-    outputs: [repo]
-    dir: repo
-    context_paths: [steps-work/request.md]
-    context:
-      from:
-        reviewer: note
-    messages:
-    - |
-      A reviewer asked for the change in steps-work/request.md on this
-      branch's pull request (steps-work/thread.json, when present, is the
-      thread it was written in). The work so far is the commits since the
-      default branch. Make the change that was asked for and nothing else. If
-      a reviewer note is in your context, this is a second pass: read
-      `git diff` first.
-  - agent: reviewer
-    inputs: [repo]
-    outputs: [repo]
-    dir: repo
-    context_paths: [steps-work/request.md]
-    max_visits: 2
-    messages:
-    - |
-      The request is above; the answer to it is the uncommitted diff
-      (`git diff`). Fix what an edit can fix and leave the fixes in the tree.
-      Then decide, and call the verdict tool: `approve` if the diff does what
-      was asked and is correct, `revise` with a note naming what is missing or
-      wrong if it does not.
-    verdicts:
-    - approve: next
-    - revise: implementer
-  - task: commit
-    inputs: [repo, steer]
-    outputs: [repo, said]
-    env: [GIT_CONFIG_GLOBAL]
-    run: |
-      set -eu
-      cd repo
-      git add -A
-      git diff --cached --quiet && { echo "the request changed nothing" >&2; exit 1; }
-      git commit -q -m "Address review on #$(cat ../steer/pr.number)" -m "Answers $(cat ../steer/comment.url)"
-      printf 'Addressed in %s.\n' "$(git rev-parse HEAD)" > ../said/reply.md
-      echo "committed $(git rev-parse --short HEAD)"
-  # The branch was rebased, so this is a forced push, leased on the sha checkout fetched (not the rebased one): it refuses to overwrite a commit somebody pushed since.
-  - put: branch
-    inputs: [repo]
-    params:
-      repository: repo
-      branch: ((.:head))
-      force_with_lease: ((.:before))
-  - put: answered
-    resource: note
-    inputs: [steer, said]
-    params:
-      body_file: said/reply.md
-      from: steer
-      in_thread: true
-  - put: done
-    inputs: [steer]
-    params:
-      add: rocket
-      from: steer
+  # A person's "/factory <what to change>" on a factory pull request: the same branch, rebased on the default branch, changed, reviewed by the same gate, pushed, and answered where it was asked. Never a second pull request. The rocket is left last, and only once the push landed, so a command the factory failed on is still a command.
+  - name: respond
+    timeout: 6h
+    serial_groups: [checkout]
+    plan:
+      - get: steer
+        trigger: true
+        version: every
+      - get: repo
+      - task: checkout
+        inputs: [repo, steer]
+        outputs: [repo, said]
+        env: [GIT_CONFIG_GLOBAL]
+        run: |
+          set -eu
+          printf 'The factory could not act on this. Run `%s` has the reason; edit the comment to ask again.\n' "$STEPS_RUN_ID" > said/failed.md
+          # A comment on a closed or merged pull request would push to a branch nothing will merge again.
+          state=$(grep -o '"state": *"[a-z]*"' steer/pr.json | head -1)
+          case "$state" in *'"open"') ;; *) echo "pull request #$(cat steer/pr.number) is not open" >&2; exit 1 ;; esac
+          # Only a branch the factory names: the head of a pull request it did not open is not its to push. head -1 last, so no match reaches the message below rather than ending the script silently under set -e.
+          head=$(grep -o '"ref": *"issue-[0-9][0-9]*"' steer/pr.json | grep -o 'issue-[0-9][0-9]*' | head -1)
+          test -n "$head" || { echo "pull request #$(cat steer/pr.number) is not on an issue-<n> branch" >&2; exit 1; }
+          echo "$head" > said/head
+          cd repo
+          base=$(git rev-parse HEAD)
+          # The get fetched one commit; a rebase needs the history both sides share.
+          git fetch -q --unshallow origin 2>/dev/null || true
+          git fetch -q origin "refs/heads/$head"
+          # The ref grep cannot tell head from base, nor this repository's branch from a fork's of the same name; the pull request's own head sha can.
+          leased=$(git rev-parse FETCH_HEAD)
+          test "$leased" = "$(cat ../steer/pr.sha)" || { echo "$head is at $leased, not pull request #$(cat ../steer/pr.number)'s head $(cat ../steer/pr.sha): not its branch, or it moved since" >&2; exit 1; }
+          echo "$leased" > ../said/before
+          git checkout -q -B "$head" FETCH_HEAD
+          git config user.name >/dev/null || git config user.name "steps factory"
+          git config user.email >/dev/null || git config user.email "factory@steps.invalid"
+          git rebase -q "$base" || { git rebase --abort; echo "$head does not rebase onto the default branch cleanly; resolve it by hand" >&2; exit 1; }
+          mkdir -p steps-work
+          printf 'steps-work/\n.steps-agent-out/\n' >> .git/info/exclude
+          { printf '# Review comment by %s on pull request #%s\n\n' "$(cat ../steer/comment.author)" "$(cat ../steer/pr.number)"; cat ../steer/comment.body; printf '\n'; } > steps-work/request.md
+          test ! -f ../steer/thread.json || cp ../steer/thread.json steps-work/thread.json
+          echo "on $head, rebased onto $(git rev-parse --short "$base")"
+      - load_var: head
+        inputs: [said]
+        file: said/head
+        reveal: true
+      - load_var: before
+        inputs: [said]
+        file: said/before
+        reveal: true
+      - agent: implementer
+        inputs: [repo]
+        outputs: [repo]
+        dir: repo
+        context_paths: [steps-work/request.md]
+        context:
+          from:
+            reviewer: note
+        messages:
+          - |
+            A reviewer asked for the change in steps-work/request.md on this
+            branch's pull request (steps-work/thread.json, when present, is the
+            thread it was written in). The work so far is the commits since the
+            default branch. Make the change that was asked for and nothing else. If
+            a reviewer note is in your context, this is a second pass: read
+            `git diff` first.
+      - agent: reviewer
+        inputs: [repo]
+        outputs: [repo]
+        dir: repo
+        context_paths: [steps-work/request.md]
+        max_visits: 2
+        verdicts:
+          - approve: next
+          - revise: implementer
+        messages:
+          - |
+            The request is above; the answer to it is the uncommitted diff
+            (`git diff`). Fix what an edit can fix and leave the fixes in the tree.
+            Then decide, and call the verdict tool: `approve` if the diff does what
+            was asked and is correct, `revise` with a note naming what is missing or
+            wrong if it does not.
+      - task: commit
+        inputs: [repo, steer]
+        outputs: [repo, said]
+        env: [GIT_CONFIG_GLOBAL]
+        run: |
+          set -eu
+          cd repo
+          git add -A
+          git diff --cached --quiet && { echo "the request changed nothing" >&2; exit 1; }
+          git commit -q -m "Address review on #$(cat ../steer/pr.number)" -m "Answers $(cat ../steer/comment.url)"
+          printf 'Addressed in %s.\n' "$(git rev-parse HEAD)" > ../said/reply.md
+          echo "committed $(git rev-parse --short HEAD)"
+      # The branch was rebased, so this is a forced push, leased on the sha checkout fetched (not the rebased one): it refuses to overwrite a commit somebody pushed since.
+      - put: branch
+        inputs: [repo]
+        params:
+          repository: repo
+          branch: ((.:head))
+          force_with_lease: ((.:before))
+      - put: answered
+        resource: note
+        inputs: [steer, said]
+        params:
+          body_file: said/reply.md
+          from: steer
+          in_thread: true
+      - put: done
+        inputs: [steer]
+        params:
+          add: rocket
+          from: steer
+    on_failure:
+      try:
+        put: failed
+        resource: note
+        inputs: [steer, said]
+        params:
+          body_file: said/failed.md
+          from: steer
+          in_thread: true

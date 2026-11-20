@@ -3,14 +3,14 @@
 # expect: remember and forget need memory: on the step
 
 agents:
-- name: bot
-  source:
-    model: test-model
-    endpoint: http://127.0.0.1:1/v1/
-  tools: [remember]
+  - name: bot
+    source:
+      model: test-model
+      endpoint: http://127.0.0.1:1/v1/
+    tools: [remember]
 
 jobs:
-- name: answer
-  plan:
-  - agent: bot
-    messages: [hello]
+  - name: answer
+    plan:
+      - agent: bot
+        messages: [hello]

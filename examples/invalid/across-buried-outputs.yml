@@ -7,17 +7,17 @@
 # expect: a matrix cell's hooks and nested steps must not declare outputs
 
 jobs:
-- name: fan
-  plan:
-  - across:
-    - var: dim
-      values: [alpha, beta]
-    task: review
-    inputs: []
-    outputs: [findings]
-    run: printf 'x' > findings/report.txt
-    on_success:
-      task: annotate
-      inputs: []
-      outputs: [notes]
-      run: printf 'x' > notes/note.txt
+  - name: fan
+    plan:
+      - task: review
+        across:
+          - var: dim
+            values: [alpha, beta]
+        inputs: []
+        outputs: [findings]
+        run: printf 'x' > findings/report.txt
+        on_success:
+          task: annotate
+          inputs: []
+          outputs: [notes]
+          run: printf 'x' > notes/note.txt

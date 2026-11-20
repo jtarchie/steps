@@ -3,9 +3,9 @@
 # expect: serial_groups names "deploy-lock" twice
 
 jobs:
-- name: deploy
-  serial_groups: [deploy-lock, deploy-lock]
-  plan:
-  - task: ship
-    inputs: []
-    run: "true"
+  - name: deploy
+    serial_groups: [deploy-lock, deploy-lock]
+    plan:
+      - task: ship
+        inputs: []
+        run: "true"

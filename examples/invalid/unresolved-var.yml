@@ -4,8 +4,8 @@
 # expect: is not passed with --var/--vars-file
 
 jobs:
-- name: build
-  plan:
-  - task: announce
-    inputs: []
-    run: echo ((nobody_supplies_this))
+  - name: build
+    plan:
+      - task: announce
+        inputs: []
+        run: echo ((nobody_supplies_this))

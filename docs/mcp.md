@@ -8,27 +8,27 @@ MCP (Model Context Protocol) servers are a third kind of external system, alongs
 
 ```yaml noexec=credentials
 mcp_servers:
-- name: github
-  endpoint: https://api.githubcopilot.com/mcp/
-  auth: { type: bearer, api_key_env: GITHUB_PAT }
+  - name: github
+    endpoint: https://api.githubcopilot.com/mcp/
+    auth: {type: bearer, api_key_env: GITHUB_PAT}
 
-- name: linear
-  endpoint: https://mcp.linear.app/mcp
-  auth: { type: oauth }
+  - name: linear
+    endpoint: https://mcp.linear.app/mcp
+    auth: {type: oauth}
 
 agents:
-- name: triager
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools:
-  - mcp: github
-    tool: search_issues
+  - name: triager
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools:
+      - mcp: github
+        tool: search_issues
 
 jobs:
-- name: triage
-  plan:
-  - agent: triager
-    messages:
-      - "Find open issues labeled 'crash' and summarize them."
+  - name: triage
+    plan:
+      - agent: triager
+        messages:
+          - "Find open issues labeled 'crash' and summarize them."
 ```
 
 - `name` is how `agents:` tool grants and `resource_types:` `mcp:` blocks reference this server — declared once, shared by any number of consumers, the same "reusable top-level block" idiom as `agents:`/`resources:`.
@@ -41,32 +41,32 @@ jobs:
 
 ```yaml noexec=stdio-mcp
 mcp_servers:
-- name: gopls
-  command: gopls          # looked up on PATH; argv, never `sh -c`
-  args: [mcp]             # optional
-  cwd: repo               # optional — see below
+  - name: gopls
+    command: gopls        # looked up on PATH; argv, never `sh -c`
+    args: [mcp]           # optional
+    cwd: repo             # optional — see below
 
 agents:
-- name: coder
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools:
-  - read_file
-  - mcp: gopls
+  - name: coder
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools:
+      - read_file
+      - mcp: gopls
 
 resources:
-- name: repo
-  type: git
-  source: { uri: https://github.com/jtarchie/ci.git }
+  - name: repo
+    type: git
+    source: {uri: https://github.com/jtarchie/ci.git}
 
 jobs:
-- name: analyze
-  plan:
-  - get: repo
-  - agent: coder
-    inputs: [repo]
-    dir: repo
-    messages:
-      - "Find unused exported functions."
+  - name: analyze
+    plan:
+      - get: repo
+      - agent: coder
+        inputs: [repo]
+        dir: repo
+        messages:
+          - "Find unused exported functions."
 ```
 
 A `command:` server is a local subprocess `steps` spawns and speaks newline-delimited JSON to over stdin/stdout, instead of connecting over HTTP.
@@ -89,22 +89,22 @@ A `command:` server is a local subprocess `steps` spawns and speaks newline-deli
 
 ```yaml noexec=docker
 mcp_servers:
-- name: fetch
-  image: mcp/fetch        # the server runs here; the image needs no steps of its own
-  command: mcp-server-fetch
+  - name: fetch
+    image: mcp/fetch      # the server runs here; the image needs no steps of its own
+    command: mcp-server-fetch
 
 agents:
-- name: reader
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools:
-  - mcp: fetch
+  - name: reader
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools:
+      - mcp: fetch
 
 jobs:
-- name: read
-  plan:
-  - agent: reader
-    messages:
-      - "Summarize https://example.com."
+  - name: read
+    plan:
+      - agent: reader
+        messages:
+          - "Summarize https://example.com."
 ```
 
 - **One container per connection**, removed when the step (or the `check`/`in`/`out` call) ends. It is created over this machine's docker daemon, whatever `tags:` the agent has.
@@ -151,26 +151,26 @@ A `tools:` entry can reference an MCP server in three progressively broader form
 
 ```yaml noexec=credentials
 mcp_servers:
-- name: github
-  endpoint: https://api.githubcopilot.com/mcp/
-  auth: { type: bearer, api_key_env: GITHUB_PAT }
+  - name: github
+    endpoint: https://api.githubcopilot.com/mcp/
+    auth: {type: bearer, api_key_env: GITHUB_PAT}
 
 agents:
-- name: triager
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools:
-  - mcp: github
-    tool: search_issues            # one tool — may also set description/required/max_calls
-    max_calls: 5
-  - mcp: github
-    tools: [get_issue, list_pulls] # a named subset — each keeps its server-advertised description
+  - name: triager
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools:
+      - mcp: github
+        tool: search_issues        # one tool — may also set description/required/max_calls
+        max_calls: 5
+      - mcp: github
+        tools: [get_issue, list_pulls] # a named subset — each keeps its server-advertised description
 
 jobs:
-- name: triage
-  plan:
-  - agent: triager
-    messages:
-      - "Triage today's crash reports."
+  - name: triage
+    plan:
+      - agent: triager
+        messages:
+          - "Triage today's crash reports."
 ```
 
 - **Single tool** (`tool:`): the only form that may also set `description:` (overriding the server's own), `required:`, `max_calls:`, or `args:` (see [Pinning arguments](#pinning-arguments-args) below) — the same semantics as a custom tool (see [agents.md](agents.md)). Its model-facing function name is `<server>__<tool>` (double underscore — a dot is rejected by OpenAI's function-name charset).
@@ -186,34 +186,34 @@ Which tools exist is one lever; which project, database or repo they reach is th
 
 ```yaml test=mcp-pinned-args mcp=mcp-pinned-args
 mcp_servers:
-- name: honeybadger
-  endpoint: https://mcp.honeybadger.io/mcp
-  auth: { type: oauth }
+  - name: honeybadger
+    endpoint: https://mcp.honeybadger.io/mcp
+    auth: {type: oauth}
 
 agents:
-- name: oncall
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools:
-  - mcp: honeybadger
-    tool: list_faults
-    args:
-      project_id: 307        # removed from the schema the model sees, and
+  - name: oncall
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools:
+      - mcp: honeybadger
+        tool: list_faults
+        args:
+          project_id: 307    # removed from the schema the model sees, and
                              # sent as 307 whatever the model asks for
 
 jobs:
-- name: triage
-  plan:
-  - agent: oncall
-    messages:
-      - "What is failing right now?"
+  - name: triage
+    plan:
+      - agent: oncall
+        messages:
+          - "What is failing right now?"
+        assert:
+          tool_calls:
+            - name: honeybadger__list_faults
+              args: {q: timeout}  # only model-authored args are assertable —
+                                  # naming the pinned project_id is a load error
     assert:
-      tool_calls:
-      - name: honeybadger__list_faults
-        args: { q: timeout }  # only model-authored args are assertable —
-                              # naming the pinned project_id is a load error
-  assert:
-    execution: [oncall]
-    outcome: succeeded
+      execution: [oncall]
+      outcome: succeeded
 ```
 
 - **The model can neither see nor set a pinned key.** It is removed from the tool's advertised `properties` and `required` before the schema reaches the model, and merged **over** whatever the model sends before the call goes over the wire. A model that sends one anyway — or a case variant of one, like `Project_ID`, which a Go server's case-insensitive JSON decoding could bind instead — has it overwritten or dropped, and the run's transcript gets a warning naming the key (never the value it tried). A case variant the tool really does declare under that exact spelling is left alone. The same drop applies to every grant, pinned or not: an undeclared case variant of any declared property (`Repo` beside `repo`) never goes over the wire, so a `rules:` `when:` or a `params:` limit that reads the exact key cannot be stepped around.
@@ -230,51 +230,51 @@ A daemon can serve some of a pipeline's tools to agents somewhere else — a tea
 
 ```yaml noexec=credentials
 mcp_servers:
-- name: github
-  endpoint: https://api.githubcopilot.com/mcp/
-  auth: { type: bearer, api_key_env: GITHUB_PAT }
+  - name: github
+    endpoint: https://api.githubcopilot.com/mcp/
+    auth: {type: bearer, api_key_env: GITHUB_PAT}
 
 agents:
-- name: oncall
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools:
-  - mcp: github
-    tool: search_issues
-    args: { owner: acme, repo: app }
+  - name: oncall
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools:
+      - mcp: github
+        tool: search_issues
+        args: {owner: acme, repo: app}
 
 mcp_exports:
-- name: support
-  access: '"acme/support" in Groups'
-  rate: 60/m
-  image: alpine:3                       # where the commands below run, one fresh container each
-  user: nobody
-  network: none
-  privileged: false
-  container_limits: { cpu: 512, memory: 268435456 }
-  tools:
-  - mcp: github
-    tool: search_issues
-    description: Search issues in the app repository
-    args: { owner: acme, repo: app }   # hidden from the caller, sent whatever it asks
-    timeout: 20s
-    params:                            # what the caller may send, shown to it and enforced
-      query: { max_length: 200, pattern: '^[^;]*$' }
-      per_page: { max: 50, default: 20 }
-  - mcp: github
-    tools: [get_issue]
-  - agent: oncall                       # the caller gets an answer, not the tools
-    description: Ask what is failing right now
-  - name: lookup_owner                  # a command of the pipeline's own
-    description: Who owns this service?
-    run: grep -i {{ .args.service | shellquote }} OWNERS
-    params:
-      service: { max_length: 40, pattern: '^[a-z0-9-]+$' }
+  - name: support
+    access: '"acme/support" in Groups'
+    rate: 60/m
+    image: alpine:3                     # where the commands below run, one fresh container each
+    user: nobody
+    network: none
+    privileged: false
+    container_limits: {cpu: 512, memory: 268435456}
+    tools:
+      - mcp: github
+        tool: search_issues
+        description: Search issues in the app repository
+        args: {owner: acme, repo: app} # hidden from the caller, sent whatever it asks
+        timeout: 20s
+        params:                        # what the caller may send, shown to it and enforced
+          query: {max_length: 200, pattern: '^[^;]*$'}
+          per_page: {max: 50, default: 20}
+      - mcp: github
+        tools: [get_issue]
+      - agent: oncall                   # the caller gets an answer, not the tools
+        description: Ask what is failing right now
+      - name: lookup_owner              # a command of the pipeline's own
+        description: Who owns this service?
+        params:
+          service: {max_length: 40, pattern: '^[a-z0-9-]+$'}
+        run: grep -i {{ .args.service | shellquote }} OWNERS
 
 jobs:
-- name: build
-  plan:
-  - task: say
-    run: echo hi
+  - name: build
+    plan:
+      - task: say
+        run: echo hi
 ```
 
 - **`access:` is required**, a [role rule](authentication.md#who-may-do-what-roles) about the person connecting. Separate levels of access are separate exports (`support`, `support-write`), so who may do what stays in the file, where it is reviewed.
@@ -292,24 +292,24 @@ A custom command that has to authenticate to something names the variables it ne
 
 ```yaml noexec=credentials
 mcp_exports:
-- name: deploys
-  access: '"acme/eng" in Groups'
-  tools:
-  - name: deploy_status
-    description: What is deployed for this service?
-    env: [DEPLOY_API_TOKEN]
-    run: 'curl -fsS -H "Authorization: Bearer $DEPLOY_API_TOKEN" https://deploy.example.com/status/{{ .args.service | shellquote }}'
-    params:
-      service: { max_length: 40, pattern: '^[a-z0-9-]+$' }
-  - name: services
-    description: Which services are there?
-    run: cat SERVICES
+  - name: deploys
+    access: '"acme/eng" in Groups'
+    tools:
+      - name: deploy_status
+        description: What is deployed for this service?
+        env: [DEPLOY_API_TOKEN]
+        params:
+          service: {max_length: 40, pattern: '^[a-z0-9-]+$'}
+        run: 'curl -fsS -H "Authorization: Bearer $DEPLOY_API_TOKEN" https://deploy.example.com/status/{{ .args.service | shellquote }}'
+      - name: services
+        description: Which services are there?
+        run: cat SERVICES
 
 jobs:
-- name: build
-  plan:
-  - task: say
-    run: echo hi
+  - name: build
+    plan:
+      - task: say
+        run: echo hi
 ```
 
 - **Names only**, read from the daemon's environment at each call, as every `env:` is. Each tool lists its own: `services` above never holds the token.
@@ -323,41 +323,43 @@ jobs:
 
 ```yaml noexec=credentials
 mcp_servers:
-- name: github
-  endpoint: https://api.githubcopilot.com/mcp/
-  auth: { type: bearer, api_key_env: GITHUB_PAT }
+  - name: github
+    endpoint: https://api.githubcopilot.com/mcp/
+    auth: {type: bearer, api_key_env: GITHUB_PAT}
 
 agents:
-- name: triage-judge
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  system: You decide whether a call may go ahead. Reply allow or deny, then one short reason.
+  - name: triage-judge
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    system: You decide whether a call may go ahead. Reply allow or deny, then one short reason.
 
 rules:
-- name: acme-only
-  when: args.owner in who.Organizations
-- name: no-secrets
-  accept: not (result.text matches "(?i)private key|api[_-]?key")
-- name: sanity
-  judged_by: triage-judge
+  - name: acme-only
+    when: args.owner in who.Organizations
+
+  - name: no-secrets
+    accept: not (result.text matches "(?i)private key|api[_-]?key")
+
+  - name: sanity
+    judged_by: triage-judge
 
 mcp_exports:
-- name: support
-  access: '"acme/support" in Groups'
-  rules: [no-secrets]             # every tool in the export
-  tools:
-  - mcp: github
-    tool: search_issues
-    args: { owner: acme }
-    params:
-      query: { max_length: 200, pattern: '^[^;]*$' }
-      limit: { min: 1, max: 50, default: 20 }
-    rules: [acme-only, sanity]    # this tool, after the export's
+  - name: support
+    access: '"acme/support" in Groups'
+    rules: [no-secrets]           # every tool in the export
+    tools:
+      - mcp: github
+        tool: search_issues
+        args: {owner: acme}
+        params:
+          query: {max_length: 200, pattern: '^[^;]*$'}
+          limit: {min: 1, max: 50, default: 20}
+        rules: [acme-only, sanity]    # this tool, after the export's
 
 jobs:
-- name: build
-  plan:
-  - task: say
-    run: echo hi
+  - name: build
+    plan:
+      - task: say
+        run: echo hi
 ```
 
 - **`when:`** runs before the call and **`accept:`** after it, each an [expression](expr.md) that must come out `true`. **`judged_by:`** asks one of the pipeline's agents to answer `allow` or `deny`. The order is: the export's rules, then the tool's; within them every `when:`, then every judge, then the call, then every `accept:`. The cheapest check goes first, so an agent is paid for only by a call nothing cheaper refused.
@@ -446,27 +448,27 @@ it:
 
 ```yaml noexec=secrets
 mcp_servers:
-- name: github
-  endpoint: https://api.githubcopilot.com/mcp/
-  auth:
-    type: bearer
-    api_key_env: GITHUB_PAT
-    secrets:
-      GITHUB_PAT: ((ci:github_pat))
+  - name: github
+    endpoint: https://api.githubcopilot.com/mcp/
+    auth:
+      type: bearer
+      api_key_env: GITHUB_PAT
+      secrets:
+        GITHUB_PAT: ((ci:github_pat))
 
 agents:
-- name: triager
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools:
-  - mcp: github
-    tool: list_issues
+  - name: triager
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools:
+      - mcp: github
+        tool: list_issues
 
 jobs:
-- name: triage
-  plan:
-  - agent: triager
-    messages:
-    - Which issues are open?
+  - name: triage
+    plan:
+      - agent: triager
+        messages:
+          - Which issues are open?
 ```
 
 - **The HTTP client is the only reader.** The value is sent as the request's bearer token and is in no step's environment.
@@ -486,28 +488,28 @@ one key `client_secret_env:` names:
 
 ```yaml noexec=secrets
 mcp_servers:
-- name: slack
-  endpoint: https://mcp.slack.com/mcp
-  auth:
-    type: oauth
-    client_id: "1234567890.9876543210"
-    client_secret_env: SLACK_CLIENT_SECRET
-    secrets:
-      SLACK_CLIENT_SECRET: ((ci:slack_client_secret))
+  - name: slack
+    endpoint: https://mcp.slack.com/mcp
+    auth:
+      type: oauth
+      client_id: "1234567890.9876543210"
+      client_secret_env: SLACK_CLIENT_SECRET
+      secrets:
+        SLACK_CLIENT_SECRET: ((ci:slack_client_secret))
 
 agents:
-- name: helper
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools:
-  - mcp: slack
-    tool: slack_search_public
+  - name: helper
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools:
+      - mcp: slack
+        tool: slack_search_public
 
 jobs:
-- name: search
-  plan:
-  - agent: helper
-    messages:
-    - What was decided in the release channel?
+  - name: search
+    plan:
+      - agent: helper
+        messages:
+          - What was decided in the release channel?
 ```
 
 - **Fetched once, by `steps mcp login`, and then kept.** This is the one secret steps stores: every token refresh presents it, and no run could stop to ask for it. It is sealed with the login under `STEPS_ENCRYPTION_KEY`, as the tokens are.
@@ -519,43 +521,43 @@ jobs:
 
 ```yaml mcp=mcp-linear-issues
 mcp_servers:
-- name: linear
-  endpoint: https://mcp.linear.app/mcp
-  auth: { type: oauth }
+  - name: linear
+    endpoint: https://mcp.linear.app/mcp
+    auth: {type: oauth}
 
 resource_types:
-- name: linear-issues
-  config:
-    mcp:
-      server: linear
-      check:
-        tool: list_issues    # called with the source below as its arguments;
+  - name: linear-issues
+    config:
+      mcp:
+        server: linear
+        check:
+          tool: list_issues  # called with the source below as its arguments;
                              # must return an oldest-first JSON array of
                              # version objects
-      out:
-        tool: create_issue   # optional — enables `put`; called with the put's params:
+        out:
+          tool: create_issue # optional — enables `put`; called with the put's params:
 
 resources:
-- name: eng-bugs
-  type: linear-issues
-  source:                    # IS list_issues' argument object (see args: below)
-    team: ENG
-    label: bug
+  - name: eng-bugs
+    type: linear-issues
+    source:                  # IS list_issues' argument object (see args: below)
+      team: ENG
+      label: bug
 
 jobs:
-- name: react
-  plan:
-  - get: eng-bugs
-    trigger: true
-  - task: record
-    inputs: [eng-bugs]
-    run: cat eng-bugs/version.json
-    assert:
-      stdout: ENG-204        # the suite's server reports ENG-101 then ENG-204,
+  - name: react
+    plan:
+      - get: eng-bugs
+        trigger: true
+      - task: record
+        inputs: [eng-bugs]
+        run: cat eng-bugs/version.json
+        assert:
+          stdout: ENG-204    # the suite's server reports ENG-101 then ENG-204,
                              # oldest first — so the get took the LATEST
-  assert:
-    execution: [eng-bugs, record]
-    outcome: succeeded
+    assert:
+      execution: [eng-bugs, record]
+      outcome: succeeded
 ```
 
 - **Every stage is optional, but a block must do something.** A type declaring none of `check:`/`in:`/`out:` is a load error. A `get` against a type with no `check:` is one too, and so is a `put` against a type with no `out:` — which is what makes a **publish-only type** (all `out:`, no `check:`) a first-class shape: the half of a workflow that posts a reply has no versions to discover, and naming a check tool nothing ever calls would be a ritual. `mcp:` is mutually exclusive with the shell `check:`/`in:`/`out:` strings — a resource type sets one style or the other, which is how a pipeline **detects over HTTP and acts over MCP**: two resource types, one shell-backed and one MCP-backed.
@@ -572,54 +574,54 @@ jobs:
 
 ```yaml mcp=mcp-slack-thread
 mcp_servers:
-- name: slack
-  endpoint: https://mcp.slack.com/mcp
-  auth: { type: oauth }
+  - name: slack
+    endpoint: https://mcp.slack.com/mcp
+    auth: {type: oauth}
 
 resource_types:
-- name: slack-thread
-  config:
-    mcp:
-      server: slack
-      check:
-        tool: slack_search_public_and_private   # source: is already {query: ...}
-      in:
-        tool: slack_read_thread                 # needs the version's fields
-        args:
-          channel_id: "{{ .version.channel }}"
-          message_ts: "{{ .version.ts }}"
-      out:
-        tool: slack_send_message
-        args:
-          channel_id: "{{ .params.channel }}"
-          thread_ts: "{{ .params.thread_ts }}"
-          message: "{{ .params.text }}"         # the tool calls it `message`
+  - name: slack-thread
+    config:
+      mcp:
+        server: slack
+        check:
+          tool: slack_search_public_and_private # source: is already {query: ...}
+        in:
+          tool: slack_read_thread               # needs the version's fields
+          args:
+            channel_id: "{{ .version.channel }}"
+            message_ts: "{{ .version.ts }}"
+        out:
+          tool: slack_send_message
+          args:
+            channel_id: "{{ .params.channel }}"
+            thread_ts: "{{ .params.thread_ts }}"
+            message: "{{ .params.text }}"       # the tool calls it `message`
 
 resources:
-- name: mentions
-  type: slack-thread
-  source:
-    query: "to:me is:thread"
+  - name: mentions
+    type: slack-thread
+    source:
+      query: "to:me is:thread"
 
 jobs:
-- name: answer
-  plan:
-  - get: mentions
-    trigger: true
-  - task: read
-    inputs: [mentions]
-    run: cat mentions/content-0.txt   # slack_read_thread's text result
+  - name: answer
+    plan:
+      - get: mentions
+        trigger: true
+      - task: read
+        inputs: [mentions]
+        run: cat mentions/content-0.txt   # slack_read_thread's text result
+        assert:
+          stdout: C0123456789 at 1717171717.000100   # the version's own fields,
+                                                     # delivered through in.args:
+      - put: mentions                 # answer in the thread the check found
+        params:
+          channel: C0123456789
+          thread_ts: "1717171717.000100"
+          text: on it
     assert:
-      stdout: C0123456789 at 1717171717.000100   # the version's own fields,
-                                                 # delivered through in.args:
-  - put: mentions                     # answer in the thread the check found
-    params:
-      channel: C0123456789
-      thread_ts: "1717171717.000100"
-      text: on it
-  assert:
-    execution: [mentions, read, mentions]
-    outcome: succeeded
+      execution: [mentions, read, mentions]
+      outcome: succeeded
 ```
 
 - **`args:` replaces the default payload entirely** — it is the argument object, not an addition to it.
@@ -638,52 +640,53 @@ The split that does work: let the vendor's HTTP API do the **detecting**, where 
 
 ```yaml noexec=credentials
 mcp_servers:
-- name: slack
-  endpoint: https://mcp.slack.com/mcp
-  auth: { type: oauth }
+  - name: slack
+    endpoint: https://mcp.slack.com/mcp
+    auth: {type: oauth}
 
 resource_types:
-- name: slack-mentions          # DETECT: real JSON, stable {channel, ts}
-  env: [SLACK_BOT_TOKEN]
-  config:
-    check: |
-      channel={{ .source.channel | shellquote }}
-      curl -sS -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-        "https://slack.com/api/conversations.history?channel=$channel&limit=20" |
-      jq -c --arg ch "$channel" '[.messages[] | {channel: $ch, ts: .ts}] | reverse'
+  - name: slack-mentions        # DETECT: real JSON, stable {channel, ts}
+    env: [SLACK_BOT_TOKEN]
+    config:
+      check: |
+        channel={{ .source.channel | shellquote }}
+        curl -sS -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+          "https://slack.com/api/conversations.history?channel=$channel&limit=20" |
+        jq -c --arg ch "$channel" '[.messages[] | {channel: $ch, ts: .ts}] | reverse'
 
-- name: slack-reply             # ACT: publish-only, no check: to write
-  config:
-    mcp:
-      server: slack
-      out:
-        tool: slack_send_message
-        args:
-          channel_id: "{{ .params.channel }}"
-          message: "{{ .params.text }}"
+  - name: slack-reply           # ACT: publish-only, no check: to write
+    config:
+      mcp:
+        server: slack
+        out:
+          tool: slack_send_message
+          args:
+            channel_id: "{{ .params.channel }}"
+            message: "{{ .params.text }}"
 
 resources:
-- name: mentions
-  type: slack-mentions
-  source: { channel: C0123456789 }
-- name: reply
-  type: slack-reply
-  source: {}
+  - name: mentions
+    type: slack-mentions
+    source: {channel: C0123456789}
+
+  - name: reply
+    type: slack-reply
+    source: {}
 
 jobs:
-- name: answer
-  plan:
-  - get: mentions
-    trigger: true
-  - task: compose
-    inputs: [mentions]
-    outputs: [msg]
-    run: echo "on it" > msg/body
-  - put: reply
-    inputs: [msg]
-    params:
-      channel: C0123456789
-      text: { file: msg/body }
+  - name: answer
+    plan:
+      - get: mentions
+        trigger: true
+      - task: compose
+        inputs: [mentions]
+        outputs: [msg]
+        run: echo "on it" > msg/body
+      - put: reply
+        inputs: [msg]
+        params:
+          channel: C0123456789
+          text: {file: msg/body}
 ```
 
 The rule of thumb: **a tool whose output a model was meant to read is an agent's tool, not a resource's.** Grant it to an `agent:` step, where prose is exactly right, and keep `check:` on something that returns ids.
@@ -711,39 +714,39 @@ A `params:` mapping whose **only** key is `file` is replaced by that file's cont
 
 ```yaml mcp=mcp-file-params
 mcp_servers:
-- name: linear
-  endpoint: https://mcp.linear.app/mcp
-  auth: { type: oauth }
+  - name: linear
+    endpoint: https://mcp.linear.app/mcp
+    auth: {type: oauth}
 
 resource_types:
-- name: linear-issues
-  config:
-    mcp:
-      server: linear
-      check: { tool: list_issues }
-      out: { tool: create_issue }
+  - name: linear-issues
+    config:
+      mcp:
+        server: linear
+        check: {tool: list_issues}
+        out: {tool: create_issue}
 
 resources:
-- name: eng-bugs
-  type: linear-issues
-  source: { team: ENG }
+  - name: eng-bugs
+    type: linear-issues
+    source: {team: ENG}
 
 jobs:
-- name: file-a-bug
-  plan:
-  - task: investigate
-    outputs: [report]
-    run: echo 'the retry loop never backs off' > report/body.md
+  - name: file-a-bug
+    plan:
+      - task: investigate
+        outputs: [report]
+        run: echo 'the retry loop never backs off' > report/body.md
+        assert:
+          files: [report/body.md]
+      - put: eng-bugs
+        inputs: [report]
+        params:
+          title: Retry loop spins
+          description: {file: report/body.md} # <- contents, not the literal map
     assert:
-      files: [report/body.md]
-  - put: eng-bugs
-    inputs: [report]
-    params:
-      title: Retry loop spins
-      description: { file: report/body.md }   # <- contents, not the literal map
-  assert:
-    execution: [investigate, eng-bugs]
-    outcome: succeeded
+      execution: [investigate, eng-bugs]
+      outcome: succeeded
 ```
 
 - **The path is relative to the put's read view**, so its first component names an artifact in the step's `inputs:` — the same path shape as `across:`'s `from_file:`. Absolute paths, `../` escapes, and a bare filename naming no artifact are all errors, as is a file that isn't there (which says so, and asks whether its artifact is in `inputs:`).
@@ -887,29 +890,29 @@ Register the application yourself, then name its credentials:
 
 ```yaml noexec=credentials
 mcp_servers:
-- name: slack
-  endpoint: https://mcp.slack.com/mcp
-  auth:
-    type: oauth
-    client_id: "1234567890.9876543210"   # public app identifier
-    client_secret_env: SLACK_CLIENT_SECRET
-    callback_port: 3118                  # register http://127.0.0.1:3118/callback
+  - name: slack
+    endpoint: https://mcp.slack.com/mcp
+    auth:
+      type: oauth
+      client_id: "1234567890.9876543210" # public app identifier
+      client_secret_env: SLACK_CLIENT_SECRET
+      callback_port: 3118                # register http://127.0.0.1:3118/callback
                                          # (and https://<daemon>/mcp/callback, to
                                          # authorize a daemon — callback_port is
                                          # the loopback login's alone)
 
 agents:
-- name: responder
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools:
-  - mcp: slack
+  - name: responder
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools:
+      - mcp: slack
 
 jobs:
-- name: respond
-  plan:
-  - agent: responder
-    messages:
-      - "Summarize today's mentions."
+  - name: respond
+    plan:
+      - agent: responder
+        messages:
+          - "Summarize today's mentions."
 ```
 
 - **`client_id:` skips registration; everything else is identical.** PKCE, the loopback callback, the code exchange, the sealed login, and silent refresh at run/watch time all behave exactly as they do for a dynamically-registered client.

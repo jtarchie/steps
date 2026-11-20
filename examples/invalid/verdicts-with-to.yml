@@ -11,22 +11,22 @@
 # expect: to: is not valid on a step with verdicts:
 
 agents:
-- name: reviewer
-  source:
-    model: openai/gpt-4o
+  - name: reviewer
+    source:
+      model: openai/gpt-4o
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - Review it.
-    verdicts: [approve, revise]
-    to:
-      approve: ship
-      revise: reviewer
-    max_visits: 2
-  - task: ship
-    inputs: []
-    run: echo shipping
+  - name: review
+    plan:
+      - agent: reviewer
+        inputs: []
+        verdicts: [approve, revise]
+        to:
+          approve: ship
+          revise: reviewer
+        max_visits: 2
+        messages:
+          - Review it.
+      - task: ship
+        inputs: []
+        run: echo shipping

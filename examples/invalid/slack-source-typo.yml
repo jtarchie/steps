@@ -2,13 +2,13 @@
 # expect: resource "mentions" (slack-mentions): source: unknown key "chanels" (did you mean "channels"?)
 
 resources:
-- name: mentions
-  type: slack-mentions
-  source:
-    chanels: [C123]
+  - name: mentions
+    type: slack-mentions
+    source:
+      chanels: [C123]
 
 jobs:
-- name: answer
-  plan:
-  - get: mentions
-    trigger: true
+  - name: answer
+    plan:
+      - get: mentions
+        trigger: true

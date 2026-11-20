@@ -4,10 +4,10 @@
 # expect: image is not valid on a try: step
 
 jobs:
-- name: build
-  plan:
-  - try:
-      task: work
-      inputs: []
-      run: "true"
-    image: golang:1.26
+  - name: build
+    plan:
+      - try:
+          task: work
+          inputs: []
+          run: "true"
+        image: golang:1.26

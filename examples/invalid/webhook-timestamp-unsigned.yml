@@ -4,17 +4,17 @@
 # expect: source.signature.timestamp needs signed:
 
 resources:
-- name: hook
-  type: webhook
-  source:
-    provider: custom
-    secret_env: HOOK_SECRET
-    signature:
-      header: X-Signature
-      timestamp: 'headers["x-timestamp"]'
+  - name: hook
+    type: webhook
+    source:
+      provider: custom
+      secret_env: HOOK_SECRET
+      signature:
+        header: X-Signature
+        timestamp: 'headers["x-timestamp"]'
 
 jobs:
-- name: build
-  plan:
-  - get: hook
-    trigger: true
+  - name: build
+    plan:
+      - get: hook
+        trigger: true

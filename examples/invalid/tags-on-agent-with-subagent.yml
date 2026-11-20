@@ -3,21 +3,21 @@
 # conversation would see what the other edited.
 # expect: tags: is not valid on an agent granting the sub-agent
 agents:
-- name: helper
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  - name: helper
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
 
-- name: reviewer
-  image: alpine:3.20
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools:
-    - read_file
-    - agent: helper
-      description: Ask the helper about a file.
+  - name: reviewer
+    image: alpine:3.20
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools:
+      - read_file
+      - agent: helper
+        description: Ask the helper about a file.
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    tags: [gpu]
-    messages:
-      - "Review it."
+  - name: review
+    plan:
+      - agent: reviewer
+        tags: [gpu]
+        messages:
+          - "Review it."

@@ -8,20 +8,20 @@
 # expect: budget.usd is not valid on an across: step
 
 agents:
-- name: reviewer
-  source:
-    model: openai/test-model
-    api_key_env: STEPS_TEST_AGENT_API_KEY
+  - name: reviewer
+    source:
+      model: openai/test-model
+      api_key_env: STEPS_TEST_AGENT_API_KEY
 
 jobs:
-- name: fan
-  plan:
-  - across:
-    - var: item
-      values: [a, b]
-    agent: reviewer
-    inputs: []
-    messages:
-      - "review {{ .vars.item }}"
-    budget:
-      usd: 1.50
+  - name: fan
+    plan:
+      - agent: reviewer
+        across:
+          - var: item
+            values: [a, b]
+        inputs: []
+        budget:
+          usd: 1.50
+        messages:
+          - "review {{ .vars.item }}"

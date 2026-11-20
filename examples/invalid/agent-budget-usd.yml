@@ -5,16 +5,16 @@
 # expect: budget.usd is only supported with a cli source
 
 agents:
-- name: reviewer
-  source:
-    model: openai/gpt-4o
-  budget:
-    usd: 0.5
+  - name: reviewer
+    source:
+      model: openai/gpt-4o
+    budget:
+      usd: 0.5
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - Review something.
+  - name: review
+    plan:
+      - agent: reviewer
+        inputs: []
+        messages:
+          - Review something.

@@ -3,19 +3,19 @@
 # expect: cannot run as a fix agent
 
 agents:
-- name: fixer
-  source:
-    model: "@claude/sonnet"
+  - name: fixer
+    source:
+      model: "@claude/sonnet"
 
 tasks:
-- name: build
-  run: exit 1
-  fix:
-    agent: fixer
-    messages:
-      - Fix the build.
+  - name: build
+    fix:
+      agent: fixer
+      messages:
+        - Fix the build.
+    run: exit 1
 
 jobs:
-- name: ci
-  plan:
-  - task: build
+  - name: ci
+    plan:
+      - task: build

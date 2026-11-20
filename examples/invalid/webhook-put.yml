@@ -3,16 +3,16 @@
 # expect: a webhook resource, which only receives
 
 resources:
-- name: push
-  type: webhook
-  source:
-    provider: github
-    secret_env: GITHUB_WEBHOOK_SECRET
+  - name: push
+    type: webhook
+    source:
+      provider: github
+      secret_env: GITHUB_WEBHOOK_SECRET
 
 jobs:
-- name: reply
-  plan:
-  - task: write
-    outputs: [out]
-    run: echo hi > out/x
-  - put: push
+  - name: reply
+    plan:
+      - task: write
+        outputs: [out]
+        run: echo hi > out/x
+      - put: push

@@ -3,11 +3,11 @@
 # expect: task "compile": timeout must be a positive duration
 
 tasks:
-- name: compile
-  timeout: "0"
-  run: echo building
+  - name: compile
+    timeout: "0"
+    run: echo building
 
 jobs:
-- name: build
-  plan:
-  - task: compile
+  - name: build
+    plan:
+      - task: compile

@@ -7,20 +7,20 @@
 # expect: context_paths entry "../ask/comment.json" escapes dir: "repo"
 
 agents:
-- name: worker
-  source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: worker
+    source: {model: openrouter/qwen/qwen3.7-flash}
 
 jobs:
-- name: answer
-  plan:
-  - task: fetch
-    outputs: [ask, repo]
-    run: |
-      echo '{}' > ask/comment.json
-      echo 'conventions' > repo/CLAUDE.md
-  - agent: worker
-    inputs: [ask, repo]
-    dir: repo
-    context_paths: [../ask/comment.json, CLAUDE.md]
-    messages:
-      - "Answer the comment."
+  - name: answer
+    plan:
+      - task: fetch
+        outputs: [ask, repo]
+        run: |
+          echo '{}' > ask/comment.json
+          echo 'conventions' > repo/CLAUDE.md
+      - agent: worker
+        inputs: [ask, repo]
+        dir: repo
+        context_paths: [../ask/comment.json, CLAUDE.md]
+        messages:
+          - "Answer the comment."

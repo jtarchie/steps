@@ -19,14 +19,14 @@ defaults:
     cache: 1h
 
 agents:
-- name: writer
-  source:
-    model: openai/gpt-4o
+  - name: writer
+    source:
+      model: openai/gpt-4o
 
 jobs:
-- name: publish
-  plan:
-  - agent: writer
-    inputs: []
-    messages:
-      - Write something.
+  - name: publish
+    plan:
+      - agent: writer
+        inputs: []
+        messages:
+          - Write something.

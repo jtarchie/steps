@@ -3,15 +3,15 @@
 # expect: context_window is not supported with a cli source
 
 agents:
-- name: reviewer
-  source:
-    model: "@claude/sonnet"
-  context_window: 200000
+  - name: reviewer
+    source:
+      model: "@claude/sonnet"
+    context_window: 200000
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    inputs: []
-    messages:
-      - Review something.
+  - name: review
+    plan:
+      - agent: reviewer
+        inputs: []
+        messages:
+          - Review something.

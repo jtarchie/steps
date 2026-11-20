@@ -4,17 +4,17 @@
 # expect: which sets no expr.check
 
 resource_types:
-- name: api
-  config:
-    expr:
-      out: 'nil'
+  - name: api
+    config:
+      expr:
+        out: 'nil'
 
 resources:
-- name: thing
-  type: api
-  source: {}
+  - name: thing
+    type: api
+    source: {}
 
 jobs:
-- name: build
-  plan:
-  - get: thing
+  - name: build
+    plan:
+      - get: thing

@@ -5,17 +5,17 @@
 # expect: duplicate output names across in_parallel branches
 
 jobs:
-- name: build
-  plan:
-  - in_parallel:
-      steps:
-      - task: one
-        inputs: []
-        outputs: [report]
-        run: mkdir -p report
+  - name: build
+    plan:
       - in_parallel:
           steps:
-          - task: two
-            inputs: []
-            outputs: [report]
-            run: mkdir -p report
+            - task: one
+              inputs: []
+              outputs: [report]
+              run: mkdir -p report
+            - in_parallel:
+                steps:
+                  - task: two
+                    inputs: []
+                    outputs: [report]
+                    run: mkdir -p report

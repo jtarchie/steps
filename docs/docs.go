@@ -186,7 +186,7 @@ func Groups() []Group {
 		{Title: "Writing pipelines", Pages: []string{
 			"resources.md", "webhooks.md", "expr.md", "control-flow.md", "agents.md",
 			"attempts-timeout.md", "workspace.md", "infra.md",
-			"templating.md", "mcp.md", "complete.md",
+			"templating.md", "mcp.md", "complete.md", "fmt.md",
 		}},
 		{Title: "Reference", Pages: []string{
 			"web.md", "observability.md", "authentication.md", "secrets.md", "agents-internals.md", "aws-workers.md", "gcp-workers.md", "do-workers.md", "conformance.md",

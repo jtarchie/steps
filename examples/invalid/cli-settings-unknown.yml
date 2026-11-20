@@ -3,14 +3,14 @@
 # must never inherit, so there is no spelling that loads it.
 # expect: settings "user" is not supported
 agents:
-- name: builder
-  source:
-    model: "@claude/sonnet"
-  settings: user
+  - name: builder
+    source:
+      model: "@claude/sonnet"
+    settings: user
 
 jobs:
-- name: build
-  plan:
-  - agent: builder
-    messages:
-      - Build the thing.
+  - name: build
+    plan:
+      - agent: builder
+        messages:
+          - Build the thing.

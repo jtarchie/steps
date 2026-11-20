@@ -2,21 +2,21 @@
 
 # YAML reads 1.0 and "1" as two keys, but both are spelled "1" for the call and its cache key, which would each keep one of them at random.
 resource_types:
-- name: dummy
-  config:
-    check: echo '[]'
-    in: 'true'
-    out: 'true'
+  - name: dummy
+    config:
+      check: echo '[]'
+      in: 'true'
+      out: 'true'
 
 resources:
-- name: results
-  type: dummy
-  source:
-    filter:
-      "1": first
-      1.0: second
+  - name: results
+    type: dummy
+    source:
+      filter:
+        "1": first
+        1.0: second
 
 jobs:
-- name: ship
-  plan:
-  - put: results
+  - name: ship
+    plan:
+      - put: results

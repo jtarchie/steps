@@ -2,9 +2,9 @@
 # expect: image is not valid on a do step
 
 jobs:
-- name: build
-  plan:
-  - do:
-    - task: work
-      run: echo working
-    image: alpine
+  - name: build
+    plan:
+      - do:
+          - task: work
+            run: echo working
+        image: alpine

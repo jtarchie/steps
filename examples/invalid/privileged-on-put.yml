@@ -4,19 +4,19 @@
 # expect: privileged is not valid on put steps
 
 resource_types:
-- name: dummy
-  config:
-    check: 'echo ''[{"ref":"v1"}]'''
-    in: "true"
-    out: 'echo ''{"ref":"v1"}'''
+  - name: dummy
+    config:
+      check: 'echo ''[{"ref":"v1"}]'''
+      in: "true"
+      out: 'echo ''{"ref":"v1"}'''
 
 resources:
-- name: thing
-  type: dummy
-  source: {}
+  - name: thing
+    type: dummy
+    source: {}
 
 jobs:
-- name: build
-  plan:
-  - put: thing
-    privileged: true
+  - name: build
+    plan:
+      - put: thing
+        privileged: true

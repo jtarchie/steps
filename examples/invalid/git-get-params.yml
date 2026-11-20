@@ -2,15 +2,15 @@
 # expect: get "repo": a git get takes no params
 
 resources:
-- name: repo
-  type: git
-  source:
-    uri: https://github.com/jtarchie/steps
-    branch: main
+  - name: repo
+    type: git
+    source:
+      uri: https://github.com/jtarchie/steps
+      branch: main
 
 jobs:
-- name: build
-  plan:
-  - get: repo
-    params:
-      depth: 1
+  - name: build
+    plan:
+      - get: repo
+        params:
+          depth: 1

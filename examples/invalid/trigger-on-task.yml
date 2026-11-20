@@ -4,9 +4,9 @@
 # expect: trigger is only valid on get steps
 
 jobs:
-- name: build
-  plan:
-  - task: work
-    inputs: []
-    run: "true"
-    trigger: true
+  - name: build
+    plan:
+      - task: work
+        inputs: []
+        trigger: true
+        run: "true"

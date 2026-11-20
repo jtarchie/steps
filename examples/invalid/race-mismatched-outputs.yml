@@ -4,15 +4,15 @@
 # expect: every race branch must declare the same outputs
 
 jobs:
-- name: build
-  plan:
-  - race:
-      steps:
-      - task: fast
-        inputs: []
-        outputs: [summary]
-        run: mkdir -p summary
-      - task: slow
-        inputs: []
-        outputs: [report]
-        run: mkdir -p report
+  - name: build
+    plan:
+      - race:
+          steps:
+            - task: fast
+              inputs: []
+              outputs: [summary]
+              run: mkdir -p summary
+            - task: slow
+              inputs: []
+              outputs: [report]
+              run: mkdir -p report

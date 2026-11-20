@@ -3,15 +3,15 @@
 # expect: ask_user timeout 3h outlives the job's timeout: 1h
 
 agents:
-- name: writer
-  source: { model: openrouter/qwen/qwen3.7-flash }
-  tools:
-  - builtin: ask_user
-    timeout: 3h
+  - name: writer
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools:
+      - builtin: ask_user
+        timeout: 3h
 
 jobs:
-- name: draft
-  timeout: 1h
-  plan:
-  - agent: writer
-    messages: [Draft the notes, asking if unsure.]
+  - name: draft
+    timeout: 1h
+    plan:
+      - agent: writer
+        messages: [Draft the notes, asking if unsure.]

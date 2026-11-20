@@ -3,9 +3,9 @@
 # expect: container_limits sets neither cpu nor memory
 
 jobs:
-- name: build
-  plan:
-  - task: work
-    image: alpine:3
-    run: echo working
-    container_limits: {}
+  - name: build
+    plan:
+      - task: work
+        image: alpine:3
+        container_limits: {}
+        run: echo working

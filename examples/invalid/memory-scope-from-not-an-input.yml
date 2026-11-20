@@ -3,19 +3,19 @@
 # expect: memory.scope_from names input "mentions", which is not in this step's inputs:
 
 agents:
-- name: bot
-  source:
-    model: test-model
-    endpoint: http://127.0.0.1:1/v1/
+  - name: bot
+    source:
+      model: test-model
+      endpoint: http://127.0.0.1:1/v1/
 
 jobs:
-- name: answer
-  plan:
-  - task: who
-    outputs: [who]
-    run: echo U1 > who/user
-  - agent: bot
-    inputs: [who]
-    memory:
-      scope_from: mentions/user
-    messages: [hello]
+  - name: answer
+    plan:
+      - task: who
+        outputs: [who]
+        run: echo U1 > who/user
+      - agent: bot
+        inputs: [who]
+        memory:
+          scope_from: mentions/user
+        messages: [hello]

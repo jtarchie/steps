@@ -3,6 +3,6 @@
 # expect: needs a file:
 
 jobs:
-- name: build
-  plan:
-  - load_var: tag
+  - name: build
+    plan:
+      - load_var: tag

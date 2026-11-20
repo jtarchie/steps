@@ -8,47 +8,47 @@ By default every pipeline-defined command (a resource type's `check`/`in`/`out`,
 
 ```yaml noexec=docker
 resource_types:
-- name: releases
-  image: alpine/git             # check/in/out run in this image
-  config:
-    check: |
-      git ls-remote --tags https://github.com/jtarchie/ci.git | tail -1 | awk '{print "[{\"ref\": \""$2"\"}]"}'
-    in: echo {{ .version.ref | shellquote }} > ref
+  - name: releases
+    image: alpine/git           # check/in/out run in this image
+    config:
+      check: |
+        git ls-remote --tags https://github.com/jtarchie/ci.git | tail -1 | awk '{print "[{\"ref\": \""$2"\"}]"}'
+      in: echo {{ .version.ref | shellquote }} > ref
 
 resources:
-- name: tags
-  type: releases
-  source: {}
+  - name: tags
+    type: releases
+    source: {}
 
 tasks:
-- name: build
-  image: golang:1.26            # this task's run: (and fix-loop re-runs) run here
-  inputs: [tags]
-  run: cat tags/ref && go version
+  - name: build
+    image: golang:1.26          # this task's run: (and fix-loop re-runs) run here
+    inputs: [tags]
+    run: cat tags/ref && go version
 
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  image: python:3.12            # this agent's run_shell/custom tools run here
-  tools: [read_file, run_shell]
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    image: python:3.12          # this agent's run_shell/custom tools run here
+    tools: [read_file, run_shell]
 
 jobs:
-- name: verify
-  plan:
-  - get: tags
-  - task: build
-    image: golang:1.25          # every one of these is a STEP-level override,
-    env: [BUILD_TAG]            # applying to this step and no other use of the
-    user: root                  # tasks: entry above
-    network: host
-    privileged: true
-    container_limits:
-      cpu: 512
-      memory: 2147483648
-  - agent: reviewer
-    inputs: [tags]
-    messages:
-      - "Sanity-check the fetched tag."
+  - name: verify
+    plan:
+      - get: tags
+      - task: build
+        image: golang:1.25      # every one of these is a STEP-level override,
+        env: [BUILD_TAG]        # applying to this step and no other use of the
+        user: root              # tasks: entry above
+        network: host
+        privileged: true
+        container_limits:
+          cpu: 512
+          memory: 2147483648
+      - agent: reviewer
+        inputs: [tags]
+        messages:
+          - "Sanity-check the fetched tag."
 ```
 
 - **Step-level override**: a `task`/`agent` step's own `image:` overrides the referenced `tasks:`/`agents:` entry's image for that step only. It's inherit-only — a non-empty step `image:` always wins, and there's no way to force host execution from a step when the task/agent sets one. `image:` is invalid on `get`/`put` steps (a put's image comes from its resource type).
@@ -87,17 +87,17 @@ A step's own `image:` may name an artifact an earlier `get` in the same plan fet
 
 ```yaml noexec=docker
 resources:
-- name: toolchain-image
-  type: registry-image                 # built in; version = {digest}
-  source: {repository: ghcr.io/me/toolchain}
+  - name: toolchain-image
+    type: registry-image               # built in; version = {digest}
+    source: {repository: ghcr.io/me/toolchain}
 
 jobs:
-- name: implement
-  plan:
-  - get: toolchain-image
-  - task: build
-    image: toolchain-image             # runs ghcr.io/me/toolchain@<the digest fetched>
-    run: go version
+  - name: implement
+    plan:
+      - get: toolchain-image
+      - task: build
+        image: toolchain-image         # runs ghcr.io/me/toolchain@<the digest fetched>
+        run: go version
 ```
 
 - **The reference is `source.repository` + `@` + `version.digest`**, the shape of the built-in [`registry-image`](resources.md#the-built-in-registry-image-type) type; a resource of any type that follows it works. The repository is read only from `source:`, never from the version: a check, a webhook or a `--pin` can choose which content of the author's repository runs, never which repository. The digest must be `sha256:<64 hex>` or `sha512:<128 hex>`; anything else (a tag such as `latest`) fails the step, naming the get.
@@ -144,27 +144,27 @@ That single fact is why a CLI agent's containerization has none of the machinery
 
 ```yaml noexec=cli
 agents:
-- name: implementer
-  image: golang:1.27
-  source:
-    model: "@claude/sonnet"
-  tools: [read_file, write_file, edit_file, run_shell]
+  - name: implementer
+    image: golang:1.27
+    source:
+      model: "@claude/sonnet"
+    tools: [read_file, write_file, edit_file, run_shell]
 
 jobs:
-- name: build
-  plan:
-  - task: seed
-    outputs: [repo]
-    run: echo "package main" > repo/main.go
-  - agent: implementer
-    tags: [builder]            # --worker builder=docker+ssh://ci@build-box, or builder=local:
-    dir: repo
-    inputs: [repo]
-    outputs: [repo]
-    assert:
-      files: [repo/main.go]
-    messages:
-      - Make the package build, and run go vet.
+  - name: build
+    plan:
+      - task: seed
+        outputs: [repo]
+        run: echo "package main" > repo/main.go
+      - agent: implementer
+        tags: [builder]        # --worker builder=docker+ssh://ci@build-box, or builder=local:
+        dir: repo
+        inputs: [repo]
+        outputs: [repo]
+        messages:
+          - Make the package build, and run go vet.
+        assert:
+          files: [repo/main.go]
 ```
 
 - **`run_shell`, the file tools and custom `run:` tools all execute in the container on the worker**, in the step's [working directory](#the-working-directory-in-a-container) with `dir:` applied, and see `STEPS_WORKER`. The step's declared `outputs:` come home when it ends, and before an `assert: files:` check reads them, so the check is against what the tools wrote there.
@@ -181,25 +181,25 @@ Every step of a job runs on the machine `steps` runs on. `tags:` places one some
 
 ```yaml test=infra-worker
 jobs:
-- name: train
-  assert:
-    execution: [prepare, train]
-    outcome: succeeded
-  plan:
-  - task: prepare
-    outputs: [data]
-    run: echo seed > data/seed.txt
-  - task: train
-    tags: [gpu]
-    image: alpine:3
-    inputs: [data]
-    outputs: [model]
-    run: |
-      echo "trained from $(cat data/seed.txt)" > model/report.txt
-      echo "worker: ${STEPS_WORKER:-none}"
+  - name: train
+    plan:
+      - task: prepare
+        outputs: [data]
+        run: echo seed > data/seed.txt
+      - task: train
+        tags: [gpu]
+        image: alpine:3
+        inputs: [data]
+        outputs: [model]
+        run: |
+          echo "trained from $(cat data/seed.txt)" > model/report.txt
+          echo "worker: ${STEPS_WORKER:-none}"
+        assert:
+          stdout: "worker: gpu"
+          files: [model/report.txt]
     assert:
-      stdout: "worker: gpu"
-      files: [model/report.txt]
+      execution: [prepare, train]
+      outcome: succeeded
 ```
 
 The pipeline names a **capability**; the invocation names the **machine**:
@@ -301,30 +301,30 @@ A job that belongs on one machine says so once. `tags:` on the **job** places ev
 
 ```yaml test=infra-job-tags
 jobs:
-- name: train
-  tags: [gpu]
-  assert:
-    execution: [prepare, package, report]
-    outcome: succeeded
-  plan:
-  - task: prepare
-    image: alpine:3
-    run: 'echo "worker: ${STEPS_WORKER:-none}"'
+  - name: train
+    tags: [gpu]
+    plan:
+      - task: prepare
+        image: alpine:3
+        run: 'echo "worker: ${STEPS_WORKER:-none}"'
+        assert:
+          stdout: "worker: gpu"
+      - do:
+          - task: package
+            image: alpine:3
+            run: 'echo "worker: ${STEPS_WORKER:-none}"'
+            assert:
+              stdout: "worker: big-disk"
+        tags: [big-disk]
     assert:
-      stdout: "worker: gpu"
-  - tags: [big-disk]
-    do:
-    - task: package
+      execution: [prepare, package, report]
+      outcome: succeeded
+    ensure:
+      task: report
       image: alpine:3
       run: 'echo "worker: ${STEPS_WORKER:-none}"'
       assert:
-        stdout: "worker: big-disk"
-  ensure:
-    task: report
-    image: alpine:3
-    run: 'echo "worker: ${STEPS_WORKER:-none}"'
-    assert:
-      stdout: "worker: gpu"
+        stdout: "worker: gpu"
 ```
 
 ```console
@@ -347,41 +347,41 @@ A source only reachable from a worker's network — a git host inside a VPC, a r
 
 ```yaml test=infra-resource-worker
 resource_types:
-- name: probe
-  image: alpine:3
-  config:
-    check: printf '[{"ref":"v1","where":"%s"}]' "${STEPS_WORKER:-here}"
-    in: printf '%s/%s' {{ .version.where | shellquote }} "${STEPS_WORKER:-here}" > where.txt
-    out: printf '{"ref":"pushed","where":"%s"}' "${STEPS_WORKER:-here}"
+  - name: probe
+    image: alpine:3
+    config:
+      check: printf '[{"ref":"v1","where":"%s"}]' "${STEPS_WORKER:-here}"
+      in: printf '%s/%s' {{ .version.where | shellquote }} "${STEPS_WORKER:-here}" > where.txt
+      out: printf '{"ref":"pushed","where":"%s"}' "${STEPS_WORKER:-here}"
 
 resources:
-- name: repo
-  type: probe
-  tags: [vpc]
-  source: {}
+  - name: repo
+    type: probe
+    tags: [vpc]
+    source: {}
 
 jobs:
-- name: mirror
-  assert:
-    execution: [repo, inspect, repo, compare, repo]
-    outcome: succeeded
-  plan:
-  - get: repo
-  - task: inspect
-    inputs: [repo]
-    run: cat repo/where.txt
+  - name: mirror
+    plan:
+      - get: repo
+      - task: inspect
+        inputs: [repo]
+        run: cat repo/where.txt
+        assert:
+          stdout: vpc/vpc
+      - get: mirror
+        resource: repo
+        tags: [edge]
+      - task: compare
+        inputs: [mirror]
+        run: cat mirror/where.txt
+        assert:
+          stdout: vpc/edge
+      - put: repo
+        inputs: [repo]
     assert:
-      stdout: vpc/vpc
-  - get: mirror
-    resource: repo
-    tags: [edge]
-  - task: compare
-    inputs: [mirror]
-    run: cat mirror/where.txt
-    assert:
-      stdout: vpc/edge
-  - put: repo
-    inputs: [repo]
+      execution: [repo, inspect, repo, compare, repo]
+      outcome: succeeded
 ```
 
 - **The resource's tag covers its check, in and out.** Every `get` and `put` of `repo` runs on `vpc` unless the step names a tag of its own — the `mirror` get above fetches the same resource from `edge`, while the check that found its version still ran on `vpc`: a check is the resource's, wherever the fetch goes, which is why `mirror/where.txt` reads `vpc/edge`. This is a deliberate divergence from Concourse, whose resource-level `tags:` places only the check and has to be repeated on every step: a get's own version check and its `in` have to land on the same machine, and the repetition is the papercut Concourse's docs warn about.
@@ -464,22 +464,22 @@ steps run --artifact-store s3://my-bucket/team-prefix pipeline.yml
 
 ```yaml noexec=docker
 agents:
-- name: analyzer
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  image: python:3.12
-  network: none        # can read the workspace, can't reach anything
-  tools: [read_file, run_shell]
+  - name: analyzer
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    image: python:3.12
+    network: none      # can read the workspace, can't reach anything
+    tools: [read_file, run_shell]
 
 jobs:
-- name: analyze
-  plan:
-  - task: fetch
-    outputs: [data]
-    run: echo 42 > data/metrics.txt
-  - agent: analyzer
-    inputs: [data]
-    messages:
-      - "Analyze data/metrics.txt offline."
+  - name: analyze
+    plan:
+      - task: fetch
+        outputs: [data]
+        run: echo 42 > data/metrics.txt
+      - agent: analyzer
+        inputs: [data]
+        messages:
+          - "Analyze data/metrics.txt offline."
 ```
 
 - Passed to the daemon as the container's network mode, so `none`, `host`, `bridge`, or a named network all work; docker reports a typo itself at container start.
@@ -496,41 +496,41 @@ A container reaches the machine running docker as `host.docker.internal`, which 
 
 ```yaml noexec=docker
 resource_types:
-- name: site-status
-  image: curlimages/curl:8.11.1
-  extra_hosts: ["www.example.test:host-gateway"]   # list form: name:address
-  config:
-    check: |
-      printf '[{"status":"%s"}]' "$(curl -s -o /dev/null -w '%{http_code}' http://www.example.test:3000/up)"
+  - name: site-status
+    image: curlimages/curl:8.11.1
+    extra_hosts: ["www.example.test:host-gateway"] # list form: name:address
+    config:
+      check: |
+        printf '[{"status":"%s"}]' "$(curl -s -o /dev/null -w '%{http_code}' http://www.example.test:3000/up)"
 
 resources:
-- name: site
-  type: site-status
-  source: {}
+  - name: site
+    type: site-status
+    source: {}
 
 tasks:
-- name: smoke
-  image: curlimages/curl:8.11.1
-  extra_hosts:                                    # map form: name: address
-    www.example.test: host-gateway
-    tenant1.example.test: host-gateway
-  run: curl -fsS http://tenant1.example.test:3000/up
+  - name: smoke
+    image: curlimages/curl:8.11.1
+    extra_hosts:                                  # map form: name: address
+      www.example.test: host-gateway
+      tenant1.example.test: host-gateway
+    run: curl -fsS http://tenant1.example.test:3000/up
 
 agents:
-- name: scanner
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  image: curlimages/curl:8.11.1
-  extra_hosts: {www.example.test: 192.168.65.254}
-  tools: [run_shell]
+  - name: scanner
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    image: curlimages/curl:8.11.1
+    extra_hosts: {www.example.test: 192.168.65.254}
+    tools: [run_shell]
 
 jobs:
-- name: scan
-  plan:
-  - get: site
-  - task: smoke
-  - agent: scanner
-    messages:
-      - "Probe http://www.example.test:3000 and report what it serves."
+  - name: scan
+    plan:
+      - get: site
+      - task: smoke
+      - agent: scanner
+        messages:
+          - "Probe http://www.example.test:3000 and report what it serves."
 ```
 
 - Each address is an IP or `host-gateway`, docker's alias for the machine the daemon runs on (on Docker Desktop and colima, your laptop). Anything else is a load error, as is an entry that is not `name:address`.
@@ -547,55 +547,55 @@ Both sit wherever `image:` does, and both **require `image:`** — a host-execut
 
 ```yaml noexec=docker
 resource_types:
-- name: images                  # publishing an image needs a daemon of its own
-  image: docker:27-dind
-  privileged: true
-  user: root                    # dind's daemon will not start unprivileged
-  network: bridge               # ...and it has to reach the registry
-  container_limits:
-    cpu: 1024
-    memory: 4294967296
-  config:
-    check: |
-      printf '[{"tag": "latest"}]'
-    out: |
-      docker build -t app . && printf '{"tag": "latest"}'
+  - name: images                # publishing an image needs a daemon of its own
+    image: docker:27-dind
+    privileged: true
+    user: root                  # dind's daemon will not start unprivileged
+    network: bridge             # ...and it has to reach the registry
+    container_limits:
+      cpu: 1024
+      memory: 4294967296
+    config:
+      check: |
+        printf '[{"tag": "latest"}]'
+      out: |
+        docker build -t app . && printf '{"tag": "latest"}'
 
 resources:
-- name: app-image
-  type: images
-  source: {}
+  - name: app-image
+    type: images
+    source: {}
 
 tasks:
-- name: integration
-  image: docker:27-dind
-  privileged: true              # docker-in-docker needs it
-  network: bridge
-  container_limits:
-    cpu: 512                    # --cpu-shares
-    memory: 2147483648          # --memory, in BYTES (2 GiB)
-  run: ./run-integration.sh
+  - name: integration
+    image: docker:27-dind
+    privileged: true            # docker-in-docker needs it
+    network: bridge
+    container_limits:
+      cpu: 512                  # --cpu-shares
+      memory: 2147483648        # --memory, in BYTES (2 GiB)
+    run: ./run-integration.sh
 
 agents:
-- name: builder                 # an agent whose run_shell drives that daemon
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  image: docker:27-dind
-  privileged: true
-  user: root
-  env: [DOCKER_HOST]            # named, never valued — see env: below
-  container_limits:
-    cpu: 1024
-    memory: 4294967296
-  tools: [run_shell]
+  - name: builder               # an agent whose run_shell drives that daemon
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    image: docker:27-dind
+    privileged: true
+    user: root
+    env: [DOCKER_HOST]          # named, never valued — see env: below
+    container_limits:
+      cpu: 1024
+      memory: 4294967296
+    tools: [run_shell]
 
 jobs:
-- name: test
-  plan:
-  - task: integration
-  - agent: builder
-    messages:
-      - "Build the image and report what failed."
-  - put: app-image
+  - name: test
+    plan:
+      - task: integration
+      - agent: builder
+        messages:
+          - "Build the image and report what failed."
+      - put: app-image
 ```
 
 - **`cpu:` is a share weight, not a core count.** It is docker's CPU shares (`--cpu-shares`), a *relative* weight against other containers contending for CPU — 1024 is the default, so 512 means half a default container's share, and it caps nothing on an idle machine. The name matches Concourse so a pipeline moving between the two means the same thing in both.
@@ -612,15 +612,15 @@ Set it when the image's user is wrong for the job: an image that installs packag
 
 ```yaml noexec=docker
 tasks:
-- name: install-deps
-  image: ubuntu
-  user: root          # this image installs packages at run time; it needs root
-  run: apt-get update && apt-get install -y jq && echo ready
+  - name: install-deps
+    image: ubuntu
+    user: root        # this image installs packages at run time; it needs root
+    run: apt-get update && apt-get install -y jq && echo ready
 
 jobs:
-- name: setup
-  plan:
-  - task: install-deps
+  - name: setup
+    plan:
+      - task: install-deps
 ```
 
 - **`user:` is the escape hatch, and it always wins.** Anything docker's `--user` accepts works: `root`, `1000:1000`, a username in the image.
@@ -635,49 +635,49 @@ A host command reaches everything the operator who started `steps` can. `image:`
 
 ```yaml test=infra-sandbox
 resource_types:
-- name: stamp
-  sandbox: true                  # check/in/out run fenced too
-  config:
-    check: |
-      printf '[{"n": "7"}]'
-    in: echo {{ .version.n | shellquote }} > n.txt
+  - name: stamp
+    sandbox: true                # check/in/out run fenced too
+    config:
+      check: |
+        printf '[{"n": "7"}]'
+      in: echo {{ .version.n | shellquote }} > n.txt
 
 resources:
-- name: build-number
-  type: stamp
-  source: {}
+  - name: build-number
+    type: stamp
+    source: {}
 
 tasks:
-- name: probe
-  sandbox: true
-  network: none                  # legal without image: only under sandbox:
-  inputs: [build-number]
-  outputs: [report]
-  run: |
-    uname > report/os.txt                               # reads stay open: the toolchain is wherever you installed it
-    if touch ../escaped 2>/dev/null; then exit 1; fi    # outside the workspace: refused
-    mktemp "$TMPDIR/scratch.XXXXXX" > /dev/null         # a private TMPDIR, removed with the step
-    cat build-number/n.txt
+  - name: probe
+    sandbox: true
+    network: none                # legal without image: only under sandbox:
+    inputs: [build-number]
+    outputs: [report]
+    run: |
+      uname > report/os.txt                               # reads stay open: the toolchain is wherever you installed it
+      if touch ../escaped 2>/dev/null; then exit 1; fi    # outside the workspace: refused
+      mktemp "$TMPDIR/scratch.XXXXXX" > /dev/null         # a private TMPDIR, removed with the step
+      cat build-number/n.txt
 
 agents:
-- name: reviewer
-  sandbox: true                  # its run_shell and custom tools are fenced
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools: [run_shell]
+  - name: reviewer
+    sandbox: true                # its run_shell and custom tools are fenced
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools: [run_shell]
 
 jobs:
-- name: build
-  plan:
-  - get: build-number
-  - task: probe
+  - name: build
+    plan:
+      - get: build-number
+      - task: probe
+        assert:
+          stdout: "7"
+      - agent: reviewer
+        inputs: [report]
+        messages: ["Summarize report/os.txt."]
     assert:
-      stdout: "7"
-  - agent: reviewer
-    inputs: [report]
-    messages: ["Summarize report/os.txt."]
-  assert:
-    execution: [build-number, probe, reviewer]
-    outcome: succeeded
+      execution: [build-number, probe, reviewer]
+      outcome: succeeded
 ```
 
 What the fence allows:
@@ -703,26 +703,26 @@ An inline `run:` has no entry to ask for the fence, and neither does a job hook,
 
 ```yaml
 tasks:
-- name: tidy
-  run: |
-    if touch ../escaped 2>/dev/null; then echo escaped; else echo refused; fi
-
-jobs:
-- name: build
-  plan:
-  - task: scratch
-    sandbox: true                # an inline run: has no other spelling
+  - name: tidy
     run: |
       if touch ../escaped 2>/dev/null; then echo escaped; else echo refused; fi
+
+jobs:
+  - name: build
+    plan:
+      - task: scratch
+        sandbox: true            # an inline run: has no other spelling
+        run: |
+          if touch ../escaped 2>/dev/null; then echo escaped; else echo refused; fi
+        assert:
+          stdout: refused
+      - task: tidy
+        sandbox: true            # the entry did not ask; this step does
+        assert:
+          stdout: refused
     assert:
-      stdout: refused
-  - task: tidy
-    sandbox: true                # the entry did not ask; this step does
-    assert:
-      stdout: refused
-  assert:
-    execution: [scratch, tidy]
-    outcome: succeeded
+      execution: [scratch, tidy]
+      outcome: succeeded
 ```
 
 - **True only.** A step can add the fence, never take away an entry's, so `sandbox: false` on a step is a load error rather than a setting that silently does nothing.
@@ -735,25 +735,25 @@ A block (`do:`, `in_parallel:`, `race:`, `ensemble:`, `try:`) runs no command of
 
 ```yaml
 jobs:
-- name: build
-  plan:
-  - do:
-    - task: lint
-      run: |
-        if touch ../escaped 2>/dev/null; then echo escaped; else echo refused; fi
-      assert:
-        stdout: refused
-    - in_parallel:
-      - task: test
-        run: |
-          if touch ../escaped 2>/dev/null; then echo escaped; else echo refused; fi
-        assert:
-          stdout: refused
-    sandbox: true                # fences the guard and every step inside
-    when: test -d .              # the guard runs fenced too
-  assert:
-    execution: [lint, test]
-    outcome: succeeded
+  - name: build
+    plan:
+      - do:
+          - task: lint
+            run: |
+              if touch ../escaped 2>/dev/null; then echo escaped; else echo refused; fi
+            assert:
+              stdout: refused
+          - in_parallel:
+              - task: test
+                run: |
+                  if touch ../escaped 2>/dev/null; then echo escaped; else echo refused; fi
+                assert:
+                  stdout: refused
+        sandbox: true            # fences the guard and every step inside
+        when: test -d .          # the guard runs fenced too
+    assert:
+      execution: [lint, test]
+      outcome: succeeded
 ```
 
 - **Add only.** It fences what runs here and nothing else: a step inside that runs in an `image:`, or is placed on a worker (`tags:`), is left as it is, because the fence could not hold there. A `sandbox: false` inside cannot take the fence away; like any `sandbox: false` on a step, it is a load error.
@@ -769,24 +769,24 @@ Commands run with a deliberately narrow environment: a host command sees a fixed
 
 ```yaml
 tasks:
-- name: deploy
-  env: [OPENROUTER_API_KEY]     # the name; the value stays in the operator's env
-  run: |
-    if [ "${OPENROUTER_API_KEY+set}" = set ]; then
-      echo "credential reached the command"
-    else
-      echo "credential was filtered out"
-    fi
+  - name: deploy
+    env: [OPENROUTER_API_KEY]   # the name; the value stays in the operator's env
+    run: |
+      if [ "${OPENROUTER_API_KEY+set}" = set ]; then
+        echo "credential reached the command"
+      else
+        echo "credential was filtered out"
+      fi
 
 jobs:
-- name: release
-  plan:
-  - task: deploy
+  - name: release
+    plan:
+      - task: deploy
+        assert:
+          stdout: credential reached the command   # delete the env: line and this fails
     assert:
-      stdout: credential reached the command   # delete the env: line and this fails
-  assert:
-    execution: [deploy]
-    outcome: succeeded
+      execution: [deploy]
+      outcome: succeeded
 ```
 
 - **Names, never values.** `env: [DEPLOY_TOKEN=hunter2]` is rejected at load time, following `api_key_env:` and a webhook resource's `secret_env:`. The reason is concrete: these fields are hashed into the merkle content map, which is written to `state.db` — a literal would be persisted in cleartext.
@@ -809,21 +809,21 @@ Every command inside a run — tasks, `when:` guards, hooks, `in:`/`out:`, an ag
 
 ```yaml
 jobs:
-- name: release
-  plan:
-  - task: stamp
-    run: |
-      printf '%s' "$STEPS_RUN_ID" | grep -Eq '^[A-Z2-7]{16}$' || exit 1
-      [ "$STEPS_JOB_NAME" = release ] || exit 1
-      [ -n "$STEPS_PIPELINE_NAME" ] || exit 1
-      [ ${#STEPS_PIPELINE_REVISION} -eq 64 ] || exit 1
-      [ "${STEPS_URL+set}" != set ] || exit 1
-      echo "built by run $STEPS_RUN_ID"
+  - name: release
+    plan:
+      - task: stamp
+        run: |
+          printf '%s' "$STEPS_RUN_ID" | grep -Eq '^[A-Z2-7]{16}$' || exit 1
+          [ "$STEPS_JOB_NAME" = release ] || exit 1
+          [ -n "$STEPS_PIPELINE_NAME" ] || exit 1
+          [ ${#STEPS_PIPELINE_REVISION} -eq 64 ] || exit 1
+          [ "${STEPS_URL+set}" != set ] || exit 1
+          echo "built by run $STEPS_RUN_ID"
+        assert:
+          stdout: built by run
     assert:
-      stdout: built by run
-  assert:
-    execution: [stamp]
-    outcome: succeeded
+      execution: [stamp]
+      outcome: succeeded
 ```
 
 - **Unset, never empty.** A variable with nothing to say is absent, so test with `${VAR+set}`. `STEPS_URL` is unset under `steps run`/`steps test`, and under `steps web` when `--listen` is a wildcard address (`0.0.0.0`, `::`, `:8088`) with no `--external-url`.
@@ -839,40 +839,41 @@ By default `steps` is a one-shot, single-job CLI. `steps web` adds a long-runnin
 
 ```yaml
 resource_types:
-- name: countfile
-  config:
-    check: |
-      printf '[{"n": "%s"}]' "$(cat {{ .source.path | shellquote }} 2>/dev/null || echo 0)"
-    in: cat {{ .source.path | shellquote }} > n.txt 2>/dev/null || echo 0 > n.txt
-    out: |
-      next=$(( $(cat {{ .source.path | shellquote }} 2>/dev/null || echo 0) + 1 ))
-      echo "$next" > {{ .source.path | shellquote }}
-      printf '{"n": "%s"}' "$next"
+  - name: countfile
+    config:
+      check: |
+        printf '[{"n": "%s"}]' "$(cat {{ .source.path | shellquote }} 2>/dev/null || echo 0)"
+      in: cat {{ .source.path | shellquote }} > n.txt 2>/dev/null || echo 0 > n.txt
+      out: |
+        next=$(( $(cat {{ .source.path | shellquote }} 2>/dev/null || echo 0) + 1 ))
+        echo "$next" > {{ .source.path | shellquote }}
+        printf '{"n": "%s"}' "$next"
 
 resources:
-- name: counter
-  type: countfile
-  source: { path: counter.txt }
+  - name: counter
+    type: countfile
+    source: {path: counter.txt}
 
 jobs:
-- name: publish
-  plan:
-  - put: counter
-  assert:
-    execution: [counter]
-    outcome: succeeded
-- name: notify
-  plan:
-  - get: counter
-    trigger: true      # steps web runs this job when publish lands a new version
-  - task: announce
-    inputs: [counter]
-    run: echo "counter is now $(cat counter/n.txt)"
+  - name: publish
+    plan:
+      - put: counter
     assert:
-      stdout: counter is now     # which number depends on when the poller ran;
-  assert:                        # under `steps test` the plan resolved before the put
-    execution: [counter, announce]
-    outcome: succeeded
+      execution: [counter]
+      outcome: succeeded
+
+  - name: notify
+    plan:
+      - get: counter
+        trigger: true  # steps web runs this job when publish lands a new version
+      - task: announce
+        inputs: [counter]
+        run: echo "counter is now $(cat counter/n.txt)"
+        assert:
+          stdout: counter is now # which number depends on when the poller ran;
+    assert:                      # under `steps test` the plan resolved before the put
+      execution: [counter, announce]
+      outcome: succeeded
 
 assert:
   execution: [publish, notify]
@@ -896,30 +897,30 @@ A `get` step's `resource:` names the resource to fetch when it should differ fro
 
 ```yaml
 resource_types:
-- name: greetings
-  config:
-    check: |
-      printf '[{"word": "hello"}]'
-    in: echo {{ .version.word | shellquote }} > word.txt
+  - name: greetings
+    config:
+      check: |
+        printf '[{"word": "hello"}]'
+      in: echo {{ .version.word | shellquote }} > word.txt
 
 resources:
-- name: repo
-  type: greetings
-  source: {}
+  - name: repo
+    type: greetings
+    source: {}
 
 jobs:
-- name: aliased
-  plan:
-  - get: source          # the artifact (and directory, step name, to: target) is "source"
-    resource: repo       # the resource whose check/in runs is "repo"
-  - task: show
-    inputs: [source]
-    run: cat source/word.txt
+  - name: aliased
+    plan:
+      - get: source      # the artifact (and directory, step name, to: target) is "source"
+        resource: repo   # the resource whose check/in runs is "repo"
+      - task: show
+        inputs: [source]
+        run: cat source/word.txt
+        assert:
+          stdout: hello
     assert:
-      stdout: hello
-  assert:
-    execution: [repo, show]   # recorded under the RESOURCE name, not the alias
-    outcome: succeeded
+      execution: [repo, show] # recorded under the RESOURCE name, not the alias
+      outcome: succeeded
 ```
 
 The **artifact name is the `get:` value**; the **resource fetched is `resource:`**, defaulting to the `get:` value when omitted. This lets one resource appear under a task-friendly name, or twice in a plan under two names. Pair it with a task's `input_mapping:` (see [workspace.md](workspace.md)) to feed a reusable task's pinned input name from an aliased get.
@@ -928,30 +929,30 @@ A `put` step takes the same field, mirroring Concourse's `put.resource`: the **s
 
 ```yaml
 resource_types:
-- name: emoji
-  config:
-    check: echo '[]'
-    out: |
-      echo {{ .params.add | shellquote }}
-      echo '{}'
+  - name: emoji
+    config:
+      check: echo '[]'
+      out: |
+        echo {{ .params.add | shellquote }}
+        echo '{}'
 
 resources:
-- name: reaction
-  type: emoji
-  source: {}
+  - name: reaction
+    type: emoji
+    source: {}
 
 jobs:
-- name: triage
-  plan:
-  - put: acknowledge     # the step is "acknowledge"...
-    resource: reaction   # ...the out: that runs is "reaction"'s
-    params: {add: eyes}
-  - put: answered
-    resource: reaction
-    params: {add: white_check_mark}
-  assert:
-    execution: [acknowledge, answered]   # recorded under the STEP name
-    outcome: succeeded
+  - name: triage
+    plan:
+      - put: acknowledge # the step is "acknowledge"...
+        resource: reaction   # ...the out: that runs is "reaction"'s
+        params: {add: eyes}
+      - put: answered
+        resource: reaction
+        params: {add: white_check_mark}
+    assert:
+      execution: [acknowledge, answered] # recorded under the STEP name
+      outcome: succeeded
 ```
 
 The terminal line names both when they differ (`put: acknowledge (resource: reaction)`).
@@ -967,16 +968,16 @@ The terminal line names both when they differ (`put: acknowledge (resource: reac
 
 ```yaml
 jobs:
-- name: nightly-summary
-  max_consecutive_failures: 3
-  plan:
-  - task: summarize
-    run: echo summarizing
+  - name: nightly-summary
+    max_consecutive_failures: 3
+    plan:
+      - task: summarize
+        run: echo summarizing
+        assert:
+          stdout: summarizing
     assert:
-      stdout: summarizing
-  assert:
-    execution: [summarize]
-    outcome: succeeded        # a green run also clears the breaker's count
+      execution: [summarize]
+      outcome: succeeded      # a green run also clears the breaker's count
 ```
 
 ```
@@ -1007,15 +1008,15 @@ defaults:
   version_history: 50
 
 jobs:
-- name: summarize
-  plan:
-  - task: write
-    run: echo summarized
+  - name: summarize
+    plan:
+      - task: write
+        run: echo summarized
+        assert:
+          stdout: summarized
     assert:
-      stdout: summarized
-  assert:
-    execution: [write]
-    outcome: succeeded
+      execution: [write]
+      outcome: succeeded
 ```
 
 - **Per job, not pipeline-wide.** A global cap makes the least active job the least inspectable, because a busy neighbour evicts its history. Twenty runs of `summarize` and twenty of `deploy`, not twenty between them.
@@ -1034,44 +1035,44 @@ Without it, `steps web` will trigger `deploy` on a commit the `test` job **alrea
 
 ```yaml
 resource_types:
-- name: commits
-  config:
-    check: |
-      printf '[{"ref": "abc123"}]'
-    in: echo {{ .version.ref | shellquote }} > ref
+  - name: commits
+    config:
+      check: |
+        printf '[{"ref": "abc123"}]'
+      in: echo {{ .version.ref | shellquote }} > ref
 
 resources:
-- name: repo
-  type: commits
-  source: {}
+  - name: repo
+    type: commits
+    source: {}
 
 jobs:
-- name: unit
-  plan:
-  - get: repo
-    trigger: true
-  - task: test
-    inputs: [repo]
-    run: echo tests pass for "$(cat repo/ref)"
+  - name: unit
+    plan:
+      - get: repo
+        trigger: true
+      - task: test
+        inputs: [repo]
+        run: echo tests pass for "$(cat repo/ref)"
+        assert:
+          stdout: tests pass for abc123
     assert:
-      stdout: tests pass for abc123
-  assert:
-    execution: [repo, test]
-    outcome: succeeded
+      execution: [repo, test]
+      outcome: succeeded
 
-- name: deploy
-  plan:
-  - get: repo
-    trigger: true
-    passed: [unit]           # only a version unit went green on
-  - task: release
-    inputs: [repo]
-    run: echo deploying "$(cat repo/ref)"
+  - name: deploy
+    plan:
+      - get: repo
+        trigger: true
+        passed: [unit]       # only a version unit went green on
+      - task: release
+        inputs: [repo]
+        run: echo deploying "$(cat repo/ref)"
+        assert:
+          stdout: deploying abc123
     assert:
-      stdout: deploying abc123
-  assert:
-    execution: [repo, release]   # unit ran green first, so the version was released
-    outcome: succeeded
+      execution: [repo, release] # unit ran green first, so the version was released
+      outcome: succeeded
 
 assert:
   execution: [unit, deploy]      # declaration order, which is why unit's green counts
@@ -1114,39 +1115,39 @@ defaults:
     disabled: true
 
 resource_types:
-- name: registry
-  config:
-    check: |
-      echo '[{"digest":"from-check"}]'
-    in: echo {{ .version.digest | shellquote }} > digest.txt
-    out: |
-      echo '{"digest":"sha-1"}'
+  - name: registry
+    config:
+      check: |
+        echo '[{"digest":"from-check"}]'
+      in: echo {{ .version.digest | shellquote }} > digest.txt
+      out: |
+        echo '{"digest":"sha-1"}'
 
 resources:
-- name: toolchain-image
-  type: registry
-  source: {}
+  - name: toolchain-image
+    type: registry
+    source: {}
 
 jobs:
-- name: build-toolchain
-  plan:
-  - put: toolchain-image
-  assert:
-    execution: [toolchain-image]
-    outcome: succeeded
-
-- name: implement
-  plan:
-  - get: toolchain-image
-    passed: [build-toolchain]      # the digest build-toolchain published
-  - task: use
-    inputs: [toolchain-image]
-    run: cat toolchain-image/digest.txt
+  - name: build-toolchain
+    plan:
+      - put: toolchain-image
     assert:
-      stdout: sha-1
-  assert:
-    execution: [toolchain-image, use]
-    outcome: succeeded
+      execution: [toolchain-image]
+      outcome: succeeded
+
+  - name: implement
+    plan:
+      - get: toolchain-image
+        passed: [build-toolchain]  # the digest build-toolchain published
+      - task: use
+        inputs: [toolchain-image]
+        run: cat toolchain-image/digest.txt
+        assert:
+          stdout: sha-1
+    assert:
+      execution: [toolchain-image, use]
+      outcome: succeeded
 
 assert:
   execution: [build-toolchain, implement]
@@ -1164,16 +1165,16 @@ By default a job's builds are **unlimited**, bounded only by `steps web --max-co
 
 ```yaml
 jobs:
-- name: integration
-  max_in_flight: 2     # at most two builds of this job at a time
-  plan:
-  - task: test
-    run: echo testing
+  - name: integration
+    max_in_flight: 2   # at most two builds of this job at a time
+    plan:
+      - task: test
+        run: echo testing
+        assert:
+          stdout: testing
     assert:
-      stdout: testing
-  assert:
-    execution: [test]
-    outcome: succeeded
+      execution: [test]
+      outcome: succeeded
 ```
 
 - **Unset is unlimited**, matching Concourse. The worker pool is the real backstop.
@@ -1187,27 +1188,28 @@ jobs:
 
 ```yaml
 jobs:
-- name: deploy-staging
-  serial: true                  # never two builds of me at once
-  serial_groups: [deploy-lock]  # and never at the same time as anyone else in the group
-  plan:
-  - task: deploy
-    run: echo deploying staging
+  - name: deploy-staging
+    serial: true                # never two builds of me at once
+    serial_groups: [deploy-lock]  # and never at the same time as anyone else in the group
+    plan:
+      - task: deploy
+        run: echo deploying staging
+        assert:
+          stdout: deploying staging
     assert:
-      stdout: deploying staging
-  assert:
-    execution: [deploy]
-    outcome: succeeded
-- name: deploy-prod
-  serial_groups: [deploy-lock]
-  plan:
-  - task: deploy
-    run: echo deploying prod
+      execution: [deploy]
+      outcome: succeeded
+
+  - name: deploy-prod
+    serial_groups: [deploy-lock]
+    plan:
+      - task: deploy
+        run: echo deploying prod
+        assert:
+          stdout: deploying prod
     assert:
-      stdout: deploying prod
-  assert:
-    execution: [deploy]
-    outcome: succeeded
+      execution: [deploy]
+      outcome: succeeded
 
 assert:
   execution: [deploy-staging, deploy-prod]
@@ -1231,27 +1233,27 @@ assert:
 
 ```yaml
 jobs:
-- name: deploy-prod
-  plan:
-  - task: deploy
-    run: echo deploying
+  - name: deploy-prod
+    plan:
+      - task: deploy
+        run: echo deploying
+        assert:
+          stdout: deploying
+    # default: shutdown WAITS for a running build to finish
     assert:
-      stdout: deploying
-  # default: shutdown WAITS for a running build to finish
-  assert:
-    execution: [deploy]
-    outcome: succeeded
+      execution: [deploy]
+      outcome: succeeded
 
-- name: nightly-report
-  interruptible: true       # ...this one can just die
-  plan:
-  - task: report
-    run: echo reporting
+  - name: nightly-report
+    interruptible: true     # ...this one can just die
+    plan:
+      - task: report
+        run: echo reporting
+        assert:
+          stdout: reporting
     assert:
-      stdout: reporting
-  assert:
-    execution: [report]
-    outcome: succeeded
+      execution: [report]
+      outcome: succeeded
 
 assert:
   execution: [deploy-prod, nightly-report]

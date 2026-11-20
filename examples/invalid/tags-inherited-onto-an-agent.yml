@@ -5,15 +5,15 @@
 # tag came from.
 # expect: inherited from job "build"
 agents:
-- name: reviewer
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  - name: reviewer
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
 
 jobs:
-- name: build
-  tags: [gpu]
-  plan:
-  - task: compile
-    run: make
-  - agent: reviewer
-    messages:
-      - "Review it."
+  - name: build
+    tags: [gpu]
+    plan:
+      - task: compile
+        run: make
+      - agent: reviewer
+        messages:
+          - "Review it."

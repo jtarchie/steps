@@ -24,317 +24,318 @@ defaults:
 # ─── the PR, in and out ─────────────────────────────────────────────────────
 # Built-ins: steps talks to GitHub itself, so neither needs `gh` or `git` (docs/resources.md).
 resources:
-- name: pr
-  type: github-prs
-  source:
-    repo: ((pr_repo))
-- name: pr-review
-  type: github-pr-review
-  source:
-    repo: ((pr_repo))
+  - name: pr
+    type: github-prs
+    source:
+      repo: ((pr_repo))
+
+  - name: pr-review
+    type: github-pr-review
+    source:
+      repo: ((pr_repo))
 
 # ─── the reviewers ──────────────────────────────────────────────────────────
 # All read-only: withholding the write tools is what makes "this agent
 # reviews, it does not edit" a guarantee rather than a request in a prompt.
 agents:
-- name: planner
-  system: |
-    You decide what kinds of review a change needs — you do not review it.
+  - name: planner
+    max_turns: 8
+    # 20m, not the default 30: the planner reads a diff and writes briefs. If it
+    # is still going at twenty minutes it is not planning, it is stuck.
+    timeout: 20m
+    # Raised so a large PR is never silently truncated on the one step whose
+    # whole job is to see the change entire.
+    max_context_bytes: 400000
+    tools: [read_file, write_file]
+    system: |
+      You decide what kinds of review a change needs — you do not review it.
 
-    A dimension is a SPECIFIC INVESTIGATION QUESTION, not a category.
-      good: "Does the migration from sync to async preserve error propagation
-             to callers?"
-      bad:  "Check for concurrency issues"
+      A dimension is a SPECIFIC INVESTIGATION QUESTION, not a category.
+        good: "Does the migration from sync to async preserve error propagation
+               to callers?"
+        bad:  "Check for concurrency issues"
 
-    The diff is already in your context. Plan from it; you are not the step
-    that reads the codebase — the reviewers are, and each one opens holding
-    the brief you write it. If the change carries no risk on some axis,
-    propose nothing for it. Do not pad.
-  max_turns: 8
-  # 20m, not the default 30: the planner reads a diff and writes briefs. If it
-  # is still going at twenty minutes it is not planning, it is stuck.
-  timeout: 20m
-  # Raised so a large PR is never silently truncated on the one step whose
-  # whole job is to see the change entire.
-  max_context_bytes: 400000
-  tools: [read_file, write_file]
+      The diff is already in your context. Plan from it; you are not the step
+      that reads the codebase — the reviewers are, and each one opens holding
+      the brief you write it. If the change carries no risk on some axis,
+      propose nothing for it. Do not pad.
 
-- name: reviewer
-  system: |
-    You are a senior engineer reviewing one change through ONE assigned
-    dimension. If the change carries no risk on it, write an empty
-    findings array — do not pad.
+  - name: reviewer
+    max_turns: 50
+    timeout: 20m
+    tools: [read_file, list_dir, search_files, run_shell, write_file]
+    system: |
+      You are a senior engineer reviewing one change through ONE assigned
+      dimension. If the change carries no risk on it, write an empty
+      findings array — do not pad.
 
-    Read the target files properly: control flow, data flow, error paths, and
-    what happens at boundaries — entry and exit, early returns, exception
-    handlers. Then trace implications. If a signature changed, who calls it?
-    If a default changed, where is it consumed?
+      Read the target files properly: control flow, data flow, error paths, and
+      what happens at boundaries — entry and exit, early returns, exception
+      handlers. Then trace implications. If a signature changed, who calls it?
+      If a default changed, where is it consumed?
 
-    Think about what is NOT in the diff. The most dangerous bugs live in code
-    that was not changed but should have been: a signature that moved and left
-    its callers behind, an enum variant with no matching case.
+      Think about what is NOT in the diff. The most dangerous bugs live in code
+      that was not changed but should have been: a signature that moved and left
+      its callers behind, an enum variant with no matching case.
 
-    ## Before you report anything, pass three gates
+      ## Before you report anything, pass three gates
 
-    1. REACHABILITY. Trace the exact path from a real entry point to the code.
-       If you cannot construct a concrete scenario where this triggers, it is
-       speculation, not a finding.
+      1. REACHABILITY. Trace the exact path from a real entry point to the code.
+         If you cannot construct a concrete scenario where this triggers, it is
+         speculation, not a finding.
 
-    2. EVIDENCE CHAIN. Write the steps out:
-         Step 1: <entry point> calls <function> with <args>
-         Step 2: <function> passes <value> to <downstream>
-         Step 3: <downstream> expects <x> but receives <y>
-         Step 4: this fails as <specific failure>
-       If you cannot write that chain, you cannot report it.
+      2. EVIDENCE CHAIN. Write the steps out:
+           Step 1: <entry point> calls <function> with <args>
+           Step 2: <function> passes <value> to <downstream>
+           Step 3: <downstream> expects <x> but receives <y>
+           Step 4: this fails as <specific failure>
+         If you cannot write that chain, you cannot report it.
 
-    3. CONFIDENCE. Rate yourself honestly and report nothing below 0.6.
-       0.9+ means you traced the path and verified the failure.
+      3. CONFIDENCE. Rate yourself honestly and report nothing below 0.6.
+         0.9+ means you traced the path and verified the failure.
 
-    Three well-proven findings are worth more than ten speculative ones. When
-    in doubt, drop it.
+      Three well-proven findings are worth more than ten speculative ones. When
+      in doubt, drop it.
 
-    ## Severity is a fixed vocabulary
+      ## Severity is a fixed vocabulary
 
-    Exactly one of: critical, important, suggestion, nitpick. Never "high",
-    "medium", "low", or "warning".
+      Exactly one of: critical, important, suggestion, nitpick. Never "high",
+      "medium", "low", or "warning".
 
-      critical    it WILL fail in production — crash, corruption, security
-                  hole, or silently wrong results, and you can state the exact
-                  failure scenario
-      important   it CAN fail under known conditions — missing error handling,
-                  contract violation, a race under realistic load
-      suggestion  it works, but could be more robust
-      nitpick     cosmetic
+        critical    it WILL fail in production — crash, corruption, security
+                    hole, or silently wrong results, and you can state the exact
+                    failure scenario
+        important   it CAN fail under known conditions — missing error handling,
+                    contract violation, a race under realistic load
+        suggestion  it works, but could be more robust
+        nitpick     cosmetic
 
-    Write your findings as a JSON array of flat objects with severity, file,
-    line, claim, and the evidence chain you actually traced, to the path your
-    prompt names.
-  max_turns: 50
-  timeout: 20m
-  tools: [read_file, list_dir, search_files, run_shell, write_file]
+      Write your findings as a JSON array of flat objects with severity, file,
+      line, claim, and the evidence chain you actually traced, to the path your
+      prompt names.
 
-- name: falsifier
-  system: |
-    You are the adversarial reviewer. You CHALLENGE every finding handed to
-    you to decide whether it is real or a false positive. You are skeptical
-    by default.
+  - name: falsifier
+    max_turns: 50
+    timeout: 20m
+    tools: [read_file, list_dir, search_files, run_shell, write_file]
+    system: |
+      You are the adversarial reviewer. You CHALLENGE every finding handed to
+      you to decide whether it is real or a false positive. You are skeptical
+      by default.
 
-    A finding is a CLAIM ABOUT CODE, and the code is available to you. So the
-    protocol is a comparison, not an opinion:
+      A finding is a CLAIM ABOUT CODE, and the code is available to you. So the
+      protocol is a comparison, not an opinion:
 
-      1. read what the reviewer claims the code does
-      2. open the file and read what it ACTUALLY does
-      3. claim contradicts the code       -> false positive, drop it
-      4. claim matches the code           -> then check the callers, and
-                                             confirm the failure is reachable
+        1. read what the reviewer claims the code does
+        2. open the file and read what it ACTUALLY does
+        3. claim contradicts the code       -> false positive, drop it
+        4. claim matches the code           -> then check the callers, and
+                                               confirm the failure is reachable
 
-    A reviewer saying "X uses string comparison" when the code plainly calls
-    errors.Is() is the case this step exists to catch.
+      A reviewer saying "X uses string comparison" when the code plainly calls
+      errors.Is() is the case this step exists to catch.
 
-    Also ask, for each survivor: is this the intended behaviour? Is it already
-    mitigated somewhere else? A finding you cannot knock down survives — say
-    what made it survive.
+      Also ask, for each survivor: is this the intended behaviour? Is it already
+      mitigated somewhere else? A finding you cannot knock down survives — say
+      what made it survive.
 
-    Write the survivors to confirmed.json, as a JSON array of flat objects
-    with id, severity, file, line, claim.
-  max_turns: 50
-  timeout: 20m
-  tools: [read_file, list_dir, search_files, run_shell, write_file]
+      Write the survivors to confirmed.json, as a JSON array of flat objects
+      with id, severity, file, line, claim.
 
-- name: gatekeeper
-  system: |
-    You are the release manager. For each finding you answer ONE question,
-    and it is not the question severity answers.
+  - name: gatekeeper
+    max_turns: 50
+    timeout: 20m
+    tools: [read_file, list_dir, search_files, write_file]
+    system: |
+      You are the release manager. For each finding you answer ONE question,
+      and it is not the question severity answers.
 
-      severity   how bad is this?
-      you        must it be fixed BEFORE this ships?
+        severity   how bad is this?
+        you        must it be fixed BEFORE this ships?
 
-    Those come apart in both directions. A pedantic `critical` in unreachable
-    code can ship. A subtle `important` on a hot path cannot.
+      Those come apart in both directions. A pedantic `critical` in unreachable
+      code can ship. A subtle `important` on a hot path cannot.
 
-    Apply a TIGHT bar. Blocking only if it breaks the build or tests, is a
-    security hole reachable from a real user-facing path, causes data loss or
-    corruption, breaks a public contract real callers depend on with no
-    migration, or regresses behaviour that worked before this change.
+      Apply a TIGHT bar. Blocking only if it breaks the build or tests, is a
+      security hole reachable from a real user-facing path, causes data loss or
+      corruption, breaks a public contract real callers depend on with no
+      migration, or regresses behaviour that worked before this change.
 
-    NOT blocking: style, naming, refactors, missing tests, defensive
-    programming with no demonstrated reachable exploit, performance that does
-    not change correctness, documentation, or "should also handle X" when X is
-    not currently reachable.
+      NOT blocking: style, naming, refactors, missing tests, defensive
+      programming with no demonstrated reachable exploit, performance that does
+      not change correctness, documentation, or "should also handle X" when X is
+      not currently reachable.
 
-    When you cannot decide, answer NOT blocking. That asymmetry is deliberate:
-    a real blocker that slips through is caught by the human reading the
-    review, while an advisory nit that blocks a merge teaches the team to
-    ignore the whole tool.
+      When you cannot decide, answer NOT blocking. That asymmetry is deliberate:
+      a real blocker that slips through is caught by the human reading the
+      review, while an advisory nit that blocks a merge teaches the team to
+      ignore the whole tool.
 
-    Write blocking.json: a JSON array of the finding ids that block — and
-    only those. An empty array is a legitimate answer and the common one.
-  max_turns: 50
-  timeout: 20m
-  tools: [read_file, list_dir, search_files, write_file]
+      Write blocking.json: a JSON array of the finding ids that block — and
+      only those. An empty array is a legitimate answer and the common one.
 
-- name: synthesizer
-  system: |
-    You write the review a human will read. Cluster related findings into
-    compound risks where two of them are worse together than apart. A
-    finding whose id is not in blocking.json is advisory, not a blocker —
-    say so, do not drop it.
+  - name: synthesizer
+    max_turns: 50
+    timeout: 20m
+    tools: [read_file, list_dir, write_file]
+    system: |
+      You write the review a human will read. Cluster related findings into
+      compound risks where two of them are worse together than apart. A
+      finding whose id is not in blocking.json is advisory, not a blocker —
+      say so, do not drop it.
 
-    Explain WHY each finding is a problem, not just what is wrong. Quote the
-    exact code or call path as evidence. Give the fix concisely: what to
-    change, where, and the tradeoff if there is more than one way.
-  max_turns: 50
-  timeout: 20m
-  tools: [read_file, list_dir, write_file]
+      Explain WHY each finding is a problem, not just what is wrong. Quote the
+      exact code or call path as evidence. Give the fix concisely: what to
+      change, where, and the tradeoff if there is more than one way.
 
 jobs:
-- name: review
-  timeout: 26h           # wall-clock ceiling on the whole run: an hour of work plus the approval's day
-  budget:
-    tokens: 8000000      # cumulative across every agent step
-  plan:
-  - get: pr
-    trigger: true
-
-  # ── phase 1: decide what to review ────────────────────────────────────────
-  # Writes a work list (a JSON array of dimension ids) plus one brief per
-  # dimension. context_paths: hands the planner the whole diff up front; the
-  # ceiling that keeps a large PR from being truncated is on the agent entry,
-  # with the rest of the planner's dials.
-  - agent: planner
-    inputs: [pr]
-    outputs: [dims]
-    context_paths: [pr/pr.diff, pr/pr.json]
-    messages:
-      - |
-        Decide the review dimensions for this change.
-
-        Write dims/index.json: a JSON array of dimension ids. Each id must be
-        short kebab-case (letters, digits, - _ .), unique, and there must be at
-        most SIX — fewer is better than overlapping. A trivial change justifies
-        one or two.
-
-        For each id, also write dims/<id>.md: what a reviewer taking this
-        dimension looks for (one paragraph), and the repo-relative paths under
-        pr/ to start from.
-    assert:
-      files: [dims/index.json]     # the work list exists, or the matrix has no width
-
-  # ── phase 2: one reviewer per dimension, concurrently ────────────────────
-  # `from_file:` takes the matrix's width from what the planner just wrote.
-  # `outputs: [findings]` on the block collects every cell's output into one
-  # artifact: findings/<dimension>/report.json. Each cell is try:-wrapped so
-  # one reviewer failing doesn't cost the whole review — a failed cell just
-  # contributes no directory.
-  - across:
-    - var: dim
-      from_file: dims/index.json
-    # Width 6 — the planner writes at most six dimensions, so the whole matrix
-    # can run at once. The budget still binds: once the reservations below fill
-    # the allowance, admission PAUSES rather than dropping cells, and the next
-    # cell in is decided on what the finished ones really spent.
-    max_in_flight: 6
+  - name: review
+    timeout: 26h         # wall-clock ceiling on the whole run: an hour of work plus the approval's day
     budget:
-      tokens: 3600000        # when spent, no further cells start; the plan carries on
-      # What admission charges a cell that has not reported yet. Six of these
-      # exceeds the allowance, which is the point: the matrix runs three or
-      # four wide, then waits for real numbers instead of committing the whole
-      # purse to cells nobody has measured.
-      reserve_per_cell: 900000
-    try:
-      agent: reviewer
-      inputs: [pr, dims]
-      outputs: [findings]
-      context_paths: ["dims/{{ .vars.dim }}.md"]
-      messages:
-        - |
-          Review this change through one dimension only. Your brief is already
-          in your context — it says what to look for and where to start under
-          pr/. Read the code before you claim anything about it.
+      tokens: 8000000    # cumulative across every agent step
+    plan:
+      - get: pr
+        trigger: true
 
-          Write your findings to findings/report.json.
+      # ── phase 1: decide what to review ────────────────────────────────────────
+      # Writes a work list (a JSON array of dimension ids) plus one brief per
+      # dimension. context_paths: hands the planner the whole diff up front; the
+      # ceiling that keeps a large PR from being truncated is on the agent entry,
+      # with the rest of the planner's dials.
+      - agent: planner
+        inputs: [pr]
+        outputs: [dims]
+        context_paths: [pr/pr.diff, pr/pr.json]
+        messages:
+          - |
+            Decide the review dimensions for this change.
 
-  # ── phase 3: the falsifiability gate ─────────────────────────────────────
-  # A separate step rather than an instruction in the reviewer's messages: an
-  # agent grading its own work is not a gate.
-  - agent: falsifier
-    inputs: [pr, findings]
-    outputs: [confirmed]
-    messages:
-      - |
-        List findings/ — each <dimension>/report.json in it is a set of CLAIMS,
-        not facts. Try to invalidate each one against the code under pr/.
+            Write dims/index.json: a JSON array of dimension ids. Each id must be
+            short kebab-case (letters, digits, - _ .), unique, and there must be at
+            most SIX — fewer is better than overlapping. A trivial change justifies
+            one or two.
 
-        Write the survivors to confirmed/confirmed.json.
+            For each id, also write dims/<id>.md: what a reviewer taking this
+            dimension looks for (one paragraph), and the repo-relative paths under
+            pr/ to start from.
+        assert:
+          files: [dims/index.json] # the work list exists, or the matrix has no width
+
+      # ── phase 2: one reviewer per dimension, concurrently ────────────────────
+      # `from_file:` takes the matrix's width from what the planner just wrote.
+      # `outputs: [findings]` on the block collects every cell's output into one
+      # artifact: findings/<dimension>/report.json. Each cell is try:-wrapped so
+      # one reviewer failing doesn't cost the whole review — a failed cell just
+      # contributes no directory.
+      - try:
+          agent: reviewer
+          inputs: [pr, dims]
+          outputs: [findings]
+          context_paths: ["dims/{{ .vars.dim }}.md"]
+          messages:
+            - |
+              Review this change through one dimension only. Your brief is already
+              in your context — it says what to look for and where to start under
+              pr/. Read the code before you claim anything about it.
+
+              Write your findings to findings/report.json.
+        across:
+          - var: dim
+            from_file: dims/index.json
+        # Width 6 — the planner writes at most six dimensions, so the whole matrix
+        # can run at once. The budget still binds: once the reservations below fill
+        # the allowance, admission PAUSES rather than dropping cells, and the next
+        # cell in is decided on what the finished ones really spent.
+        max_in_flight: 6
+        budget:
+          tokens: 3600000    # when spent, no further cells start; the plan carries on
+          # What admission charges a cell that has not reported yet. Six of these
+          # exceeds the allowance, which is the point: the matrix runs three or
+          # four wide, then waits for real numbers instead of committing the whole
+          # purse to cells nobody has measured.
+          reserve_per_cell: 900000
+
+      # ── phase 3: the falsifiability gate ─────────────────────────────────────
+      # A separate step rather than an instruction in the reviewer's messages: an
+      # agent grading its own work is not a gate.
+      - agent: falsifier
+        inputs: [pr, findings]
+        outputs: [confirmed]
+        messages:
+          - |
+            List findings/ — each <dimension>/report.json in it is a set of CLAIMS,
+            not facts. Try to invalidate each one against the code under pr/.
+
+            Write the survivors to confirmed/confirmed.json.
+        assert:
+          files: [confirmed/confirmed.json]
+
+      # ── phase 4: what actually blocks the merge ──────────────────────────────
+      - agent: gatekeeper
+        inputs: [pr, confirmed]
+        outputs: [blocking]
+        context_paths: [confirmed/confirmed.json]
+        messages:
+          - |
+            For each confirmed finding above, decide whether it must be fixed
+            before this PR merges.
+
+            Write blocking/blocking.json.
+        assert:
+          files: [blocking/blocking.json]
+
+      # ── phase 5: write the review ────────────────────────────────────────────
+      - agent: synthesizer
+        inputs: [pr, confirmed, blocking]
+        outputs: [review]
+        context_paths: [confirmed/confirmed.json, blocking/blocking.json]
+        messages:
+          - |
+            Write the review from the confirmed findings above. Cluster any that
+            are worse together than apart into a single compound risk.
+
+            Write review/summary.md (what a human reads) and review/findings.json
+            (the structured list). Nothing else — the PR number is the pipeline's
+            to know, not yours.
+        assert:
+          # The one assertion a prose answer cannot satisfy: an agent that reports
+          # success without producing anything is otherwise indistinguishable.
+          files: [review/summary.md, review/findings.json]
+
+      # A deterministic check that the files exist, before a person is asked to look.
+      - task: check-draft
+        inputs: [pr, review]
+        run: |
+          set -e
+          test -s review/summary.md    || { echo "no review summary was written" >&2; exit 1; }
+          test -s review/findings.json || { echo "no findings file was written" >&2; exit 1; }
+
+          test -s pr/pr.number         || { echo "the PR number was never fetched" >&2; exit 1; }
+
+          echo "draft ready for review"
+        assert:
+          stdout: draft ready for review
+
+      # ── a human approves before anything is public ───────────────────────────
+      - approval:
+          message: "Review drafted in review/summary.md — post it to the PR?"
+          timeout: 24h
+
+      - put: pr-review
+        inputs: [pr, review]
+        params:
+          body_file: review/summary.md
+
+    # No assert.execution here, deliberately: the matrix width is decided by the
+    # planner at run time, so the step names are not knowable when this file is
+    # written. Everything asserted above holds on a REAL run against a real
+    # model — the fixture-specific shape (which dimensions, how many cells) is
+    # asserted in Go instead, by e2e_pr_review_test.go.
     assert:
-      files: [confirmed/confirmed.json]
+      outcome: succeeded
 
-  # ── phase 4: what actually blocks the merge ──────────────────────────────
-  - agent: gatekeeper
-    inputs: [pr, confirmed]
-    outputs: [blocking]
-    context_paths: [confirmed/confirmed.json]
-    messages:
-      - |
-        For each confirmed finding above, decide whether it must be fixed
-        before this PR merges.
-
-        Write blocking/blocking.json.
-    assert:
-      files: [blocking/blocking.json]
-
-  # ── phase 5: write the review ────────────────────────────────────────────
-  - agent: synthesizer
-    inputs: [pr, confirmed, blocking]
-    outputs: [review]
-    context_paths: [confirmed/confirmed.json, blocking/blocking.json]
-    messages:
-      - |
-        Write the review from the confirmed findings above. Cluster any that
-        are worse together than apart into a single compound risk.
-
-        Write review/summary.md (what a human reads) and review/findings.json
-        (the structured list). Nothing else — the PR number is the pipeline's
-        to know, not yours.
-    assert:
-      # The one assertion a prose answer cannot satisfy: an agent that reports
-      # success without producing anything is otherwise indistinguishable.
-      files: [review/summary.md, review/findings.json]
-
-  # A deterministic check that the files exist, before a person is asked to look.
-  - task: check-draft
-    inputs: [pr, review]
-    run: |
-      set -e
-      test -s review/summary.md    || { echo "no review summary was written" >&2; exit 1; }
-      test -s review/findings.json || { echo "no findings file was written" >&2; exit 1; }
-
-      test -s pr/pr.number         || { echo "the PR number was never fetched" >&2; exit 1; }
-
-      echo "draft ready for review"
-    assert:
-      stdout: draft ready for review
-
-  # ── a human approves before anything is public ───────────────────────────
-  - approval:
-      message: "Review drafted in review/summary.md — post it to the PR?"
-      timeout: 24h
-
-  - put: pr-review
-    inputs: [pr, review]
-    params:
-      body_file: review/summary.md
-
-  # Best-effort: a failing notification must not fail a review that succeeded.
-  on_failure:
-    try:
-      task: notify
-      run: echo "PR review pipeline failed" >&2
-
-  # No assert.execution here, deliberately: the matrix width is decided by the
-  # planner at run time, so the step names are not knowable when this file is
-  # written. Everything asserted above holds on a REAL run against a real
-  # model — the fixture-specific shape (which dimensions, how many cells) is
-  # asserted in Go instead, by e2e_pr_review_test.go.
-  assert:
-    outcome: succeeded
+    # Best-effort: a failing notification must not fail a review that succeeded.
+    on_failure:
+      try:
+        task: notify
+        run: echo "PR review pipeline failed" >&2

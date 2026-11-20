@@ -4,13 +4,13 @@
 # see it, because the step is a task.
 # expect: tags: is not valid on a task with fix:
 agents:
-- name: repair
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  - name: repair
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
 
 jobs:
-- name: build
-  plan:
-  - task: compile
-    tags: [gpu]
-    run: exit 1
-    fix: { agent: repair }
+  - name: build
+    plan:
+      - task: compile
+        tags: [gpu]
+        fix: {agent: repair}
+        run: exit 1

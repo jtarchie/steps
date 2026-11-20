@@ -3,21 +3,21 @@
 # agent's own edits never reach.
 # expect: whose cwd:
 mcp_servers:
-- name: lsp
-  command: gopls
-  cwd: repo
+  - name: lsp
+    command: gopls
+    cwd: repo
 
 agents:
-- name: reviewer
-  image: alpine:3.20
-  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
-  tools:
-    - mcp: lsp
+  - name: reviewer
+    image: alpine:3.20
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    tools:
+      - mcp: lsp
 
 jobs:
-- name: review
-  plan:
-  - agent: reviewer
-    tags: [gpu]
-    messages:
-      - "Review it."
+  - name: review
+    plan:
+      - agent: reviewer
+        tags: [gpu]
+        messages:
+          - "Review it."

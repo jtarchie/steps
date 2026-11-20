@@ -5,23 +5,23 @@
 # expect: rules "acme-only": when:
 
 mcp_servers:
-- name: github
-  endpoint: https://api.githubcopilot.com/mcp/
+  - name: github
+    endpoint: https://api.githubcopilot.com/mcp/
 
 rules:
-- name: acme-only
-  when: args.owner in who.Organizations and
+  - name: acme-only
+    when: args.owner in who.Organizations and
 
 mcp_exports:
-- name: support
-  access: 'true'
-  tools:
-  - mcp: github
-    tool: search_issues
-    rules: [acme-only]
+  - name: support
+    access: 'true'
+    tools:
+      - mcp: github
+        tool: search_issues
+        rules: [acme-only]
 
 jobs:
-- name: build
-  plan:
-  - task: say
-    run: echo hi
+  - name: build
+    plan:
+      - task: say
+        run: echo hi
