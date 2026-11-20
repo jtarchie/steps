@@ -295,7 +295,7 @@ func refuseLostInputs(ctx context.Context, st store.Versions, runID string, inpu
 		return fmt.Errorf("could not read the history run %q resumes against: %w", runID, err)
 	}
 
-	_, err = recordedInputSet(runID, inputs, history)
+	_, err = recordedInputSet(ctx, runID, inputs, history)
 
 	return err
 }
@@ -657,7 +657,7 @@ func resumeInputSets(ctx context.Context, st store.Versions, resolution setResol
 		return resolution, refuseUnrecordedBuild(state)
 	}
 
-	set, err := recordedInputSet(state.id, inputs, history)
+	set, err := recordedInputSet(ctx, state.id, inputs, history)
 	if err != nil {
 		return setResolution{}, err
 	}
@@ -686,19 +686,20 @@ func refuseUnrecordedBuild(state *resumeState) error {
 
 // recordedInputSet rebuilds the run's set from its record, refusing a version
 // the resource's history no longer holds.
-func recordedInputSet(runID string, bindings []store.RunInput, history *resourceHistory) (merkle.InputSet, error) {
+func recordedInputSet(ctx context.Context, runID string, bindings []store.RunInput, history *resourceHistory) (merkle.InputSet, error) {
 	set := merkle.InputSet{}
 
 	for _, binding := range bindings {
-		if !history.holds(binding.Resource, binding.Version) {
-			return nil, fmt.Errorf(
-				"cannot resume run %q: it was created with %s %s, which is no longer in the resource's history — start a new run",
-				runID, binding.Resource, binding.Version)
-		}
-
 		version, err := store.DecodeVersion(binding.Version)
 		if err != nil {
 			return nil, fmt.Errorf("cannot resume run %q: its recorded %s version: %w", runID, binding.Resource, err)
+		}
+
+		// An upload is never in the history, and is still the folder the run was sent while the one-off keeps it.
+		if !history.holds(binding.Resource, binding.Version) && !isUploadedVersion(ctx, binding.Resource, version) {
+			return nil, fmt.Errorf(
+				"cannot resume run %q: it was created with %s %s, which is no longer in the resource's history — start a new run",
+				runID, binding.Resource, binding.Version)
 		}
 
 		set[binding.Input] = version

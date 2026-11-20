@@ -274,3 +274,34 @@ func TestInputSetsZeroEveryIsOneSet(t *testing.T) {
 		t.Errorf("sets = %s, want one set of latest versions", got)
 	}
 }
+
+// A get whose versions lack the pinned fields is passed over, so a misspelled
+// field must not build the latest of everything under the pinned run's name.
+func TestAPinNoGetTookFailsTheRun(t *testing.T) {
+	t.Parallel()
+
+	fixed := merkle.InputSet{
+		"pr":    {"number": "87", "sha": "b"},
+		"image": {"digest": "sha256:new"},
+	}
+
+	err := refuseUntakenPin(fixed, map[string]string{"number": "87"})
+	if err != nil {
+		t.Errorf("a pin one get took: %v", err)
+	}
+
+	err = refuseUntakenPin(fixed, map[string]string{"nmber": "87"})
+	if err == nil || !strings.Contains(err.Error(), "nmber") {
+		t.Errorf("a pin no get took = %v, want an error naming the field", err)
+	}
+
+	err = refuseUntakenPin(fixed, nil)
+	if err != nil {
+		t.Errorf("no pin: %v", err)
+	}
+
+	err = refuseUntakenPin(merkle.InputSet{}, map[string]string{"number": "87"})
+	if err != nil {
+		t.Errorf("no top-level get, left to the nested ones: %v", err)
+	}
+}

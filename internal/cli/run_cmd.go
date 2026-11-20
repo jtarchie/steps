@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -29,6 +30,7 @@ type RunCmd struct {
 	HistoryFlags  `embed:""`
 	ProgressFlags `embed:""`
 	SecretFlags   `embed:""`
+	InputFlags    `embed:""`
 	Path          string            `arg:""                                                                                                                         help:"path to the pipeline YAML file" name:"pipeline"`
 	Job           string            `help:"job name to run (defaults to the pipeline's only job)"`
 	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                                        name:"pin"`
@@ -88,18 +90,27 @@ func (r *RunCmd) runOnDaemon(streams Streams, kctx *kong.Context) error {
 		return err
 	}
 
+	err = r.checkInputs(job)
+	if err != nil {
+		return err
+	}
+
 	from, err := filepath.Abs(r.Path)
 	if err != nil {
 		from = r.Path
 	}
 
-	created, err := client.oneOff(web.OneOffRequest{
+	ctx, cancel := streams.cancellable()
+	defer cancel()
+
+	created, err := client.oneOffWith(ctx, r.InputFlags, web.OneOffRequest{
 		Source:   cfg.Revision.Source,
 		Includes: convertIncludes[[]byte](cfg.Revision.Includes),
 		From:     from,
 		Job:      job.Name,
 		Pin:      r.Pin,
 		Force:    r.Force,
+		Inputs:   slices.Sorted(maps.Keys(r.Input)),
 	})
 	if err != nil {
 		return err
@@ -114,9 +125,6 @@ func (r *RunCmd) runOnDaemon(streams Streams, kctx *kong.Context) error {
 	sayf(out, "queued: %s on %s as %s\n", job.Name, client.target, minted)
 
 	remote := remoteRuns{client: client, pipeline: minted}
-
-	ctx, cancel := streams.cancellable()
-	defer cancel()
 
 	run, err := remote.oneOffStarted(ctx, created)
 	if err != nil {
@@ -207,6 +215,11 @@ func (r *RunCmd) applyReplay(
 func (r *RunCmd) Run(streams Streams, kctx *kong.Context) error {
 	if r.Target != "" {
 		return r.runOnDaemon(streams, kctx)
+	}
+
+	err := r.refuseWithoutTarget()
+	if err != nil {
+		return err
 	}
 
 	return r.runHere(streams)

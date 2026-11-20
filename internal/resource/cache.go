@@ -29,6 +29,8 @@ type Cache struct {
 	// WithResolvedVersions. Nil means nobody supplied any, which is every
 	// caller that did not arrive through the trigger queue.
 	resolved func(resourceName string) []map[string]any
+	// uploaded is each get a one-off replaced with a folder, keyed by get name, to the version that names the folder.
+	uploaded map[string]map[string]any
 }
 
 // CacheOption configures a Cache at construction.
@@ -75,6 +77,16 @@ func WithResolvedVersions(resolved func(resourceName string) []map[string]any) C
 	return func(c *Cache) { c.resolved = resolved }
 }
 
+// WithUploaded answers each named get with the one version given, without a check: the folder `steps run --target --input` sent stands in for whatever the resource would have answered, passed: and version: included, as an input fly execute -i replaces is never checked.
+func WithUploaded(uploaded map[string]map[string]any) CacheOption {
+	return func(c *Cache) { c.uploaded = uploaded }
+}
+
+// Uploaded reports whether get was replaced by an upload, which is one fixed version however the step asks for versions.
+func (c *Cache) Uploaded(get string) bool {
+	return c != nil && c.uploaded[get] != nil
+}
+
 // cacheKey is every field of the step ResolveVersions reads: two gets under one name with different pins are two resolutions.
 func cacheKey(step config.Step) string {
 	return fmt.Sprintf("%s\x00%s\x00%v\x00%q", step.Get, step.GetResourceName(), step.Version, step.Passed)
@@ -117,6 +129,10 @@ func (c *Cache) ResolveVersionsCached(
 ) (*config.Resource, *config.ResourceType, []map[string]any, error) {
 	if c == nil {
 		return ResolveVersions(ctx, cfg, step, pinned, nil)
+	}
+
+	if version := c.uploaded[step.Get]; version != nil {
+		return uploadedVersion(cfg, step, version)
 	}
 
 	key := cacheKey(step)
@@ -199,4 +215,18 @@ func (c *Cache) unconsumed(
 	}
 
 	return fresh
+}
+
+func uploadedVersion(cfg *config.Config, step config.Step, version map[string]any) (*config.Resource, *config.ResourceType, []map[string]any, error) {
+	res, err := cfg.FindResource(step.GetResourceName())
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
+	}
+
+	resourceType, err := cfg.FindResourceType(res.Type)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
+	}
+
+	return res, resourceType, []map[string]any{version}, nil
 }

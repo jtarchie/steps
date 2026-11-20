@@ -523,6 +523,21 @@ func (j Job) ResourceGets(resource string) []Step {
 	return gets
 }
 
+// Gets is what a one-off's --input is judged against: any get, in the plan or a hook, may be replaced by an upload, as fly execute -i may replace any input.
+func (j Job) Gets() map[string]string {
+	gets := map[string]string{}
+
+	_ = j.visitSteps(func(_ string, step *Step) error {
+		if step.Get != "" {
+			gets[step.Get] = step.GetResourceName()
+		}
+
+		return nil
+	})
+
+	return gets
+}
+
 // TriggersOn reports whether this job has a trigger:true get step resolving
 // to resourceName, walking the same nested tree PolledResourceNames does (a
 // trigger:true get is legal — just not version:every-eligible — inside an

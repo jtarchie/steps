@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -227,6 +228,16 @@ type OneOffRequest struct {
 	Job      string            `json:"job"`
 	Pin      map[string]string `json:"pin,omitempty"`
 	Force    bool              `json:"force,omitempty"`
+	// Inputs names the gets the request carries a folder for, so a refusal of one comes before any upload is read.
+	Inputs []string `json:"inputs,omitempty"`
+	// Uploads streams those folders. Never JSON: no request may name a path on the daemon's machine.
+	Uploads Uploads `json:"-"`
+}
+
+// Uploads is the folders a one-off carries, in the order they were sent.
+type Uploads interface {
+	// Next is the next folder as a zstd-compressed tar under the get it replaces, io.EOF after the last.
+	Next() (get string, archive io.Reader, err error)
 }
 
 // OneOffResult names the pipeline the daemon chose, which is where the run is read from.
@@ -516,10 +527,12 @@ func (s *Server) routes() error {
 	group.POST("/hooks/:resource", s.handleHook)
 
 	// Outside the /p/ group because a set may CREATE the pipeline it names, and that middleware resolves one that exists.
+	// Outside the group's body limit: an upload is bounded by the daemon, as it unpacks, and the request beside it by handleAPIOneOff.
+	e.POST(oneOffPath, s.handleAPIOneOff, refuseBrowsers)
+
 	api := e.Group("/api", refuseBrowsers, middleware.BodyLimit(maxUploadSize))
 	api.GET("/pipelines", s.handleAPIList)
 	api.GET("/pipelines/:pipeline", s.handleAPIGet)
-	api.POST(strings.TrimPrefix(oneOffPath, "/api"), s.handleAPIOneOff)
 	api.GET("/pipelines/:pipeline/runs", s.handleAPIRuns)
 	api.GET("/pipelines/:pipeline/runs/:run", s.handleAPIRun)
 	api.GET("/pipelines/:pipeline/runs/:run/events", s.handleAPIRunEvents)

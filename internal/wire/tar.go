@@ -131,6 +131,41 @@ func PackTreeAs(w io.Writer, dir, name string) error {
 	return nil
 }
 
+// PackFiles is PackTree of only the named files and links under root, slash-separated and relative to it, in the order given: what `git ls-files` lists is a set of files, not a tree. A name that is gone is skipped, as git still lists a tracked file deleted from the checkout; a directory named is packed without what is under it.
+func PackFiles(w io.Writer, root string, names []string) error {
+	writer := tar.NewWriter(w)
+
+	for _, name := range names {
+		err := packName(root, name)
+		if err != nil {
+			return fmt.Errorf("packing %q: %w", root, err)
+		}
+
+		path := filepath.Join(root, filepath.FromSlash(name))
+
+		info, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+
+		if err != nil {
+			return fmt.Errorf("packing %q: %w", root, err)
+		}
+
+		err = packEntry(writer, path, filepath.ToSlash(filepath.Clean(name)), fs.FileInfoToDirEntry(info))
+		if err != nil {
+			return fmt.Errorf("packing %q: %w", root, err)
+		}
+	}
+
+	err := writer.Close()
+	if err != nil {
+		return fmt.Errorf("packing %q: %w", root, err)
+	}
+
+	return nil
+}
+
 // packName refuses a name that would pack a tree from outside root.
 //
 // unpackName's twin: the names come from a pipeline's declared inputs and outputs, so without this an output named "../../.ssh" would pack a tree outside the work directory.

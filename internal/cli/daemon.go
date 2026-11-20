@@ -55,6 +55,8 @@ type daemon struct {
 	releaseWorkers func()
 	// oneOffHistory is how many finished one-offs stay served, --one-off-history; zero keeps every one.
 	oneOffHistory int
+	// oneOffInputMax bounds the bytes a one-off's uploaded folders unpack to, --one-off-input-max-bytes; zero is no bound.
+	oneOffInputMax int64
 	// reaping is every one-off trim in flight, which runs outside the loops it tears down; Close waits for them.
 	reaping sync.WaitGroup
 	// Embedded so the daemon IS a web.Authorizer, which is how the server finds one; see daemon_login.go and daemon_mcp.go.
@@ -553,6 +555,9 @@ func (d *daemon) start(
 	bus.Observe(runview.Log(loopCtx, nil))
 
 	target := web.NewPipeline(name, from, cfg, st, bus)
+	if oneOff {
+		target.Inputs = d.uploadsFor(loopCtx, name)
+	}
 	target.SetUnfenced(d.unfenced(name, cfg))
 
 	// One memo for everything this pipeline resolves outside a run, built once: a poll and a delivery asking for the same reference share an answer for --secret-cache-duration, where a memo made per call would cache nothing.
@@ -721,6 +726,10 @@ func (d *daemon) destroyBroken(ctx context.Context, name string) error {
 func (d *daemon) forgetPipeline(ctx context.Context, name, loginsOf string) error {
 	d.forget(loginsOf)
 	d.dropProbes(name)
+
+	if isOneOff(name) {
+		d.forgetUploads(ctx, name)
+	}
 
 	err := stepsmcp.ForgetLogins(loginsOf)
 	if err != nil {

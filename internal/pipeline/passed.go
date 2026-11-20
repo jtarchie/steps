@@ -111,7 +111,7 @@ func versionRecordable(ctx context.Context, resource string, version map[string]
 // was asked to do.
 func recordBuildVersion(ctx context.Context, resource string, version map[string]any) {
 	versions, ok := ctx.Value(buildVersionsKey{}).(*buildVersions)
-	if !ok {
+	if !ok || isUploadedVersion(ctx, resource, version) {
 		return
 	}
 
@@ -232,7 +232,7 @@ func recordPutOrder(ctx context.Context, st store.Versions, resource string, ver
 // Best-effort, same posture as recordBuildVersion: this is bookkeeping for
 // a page, not the work the step was asked to do.
 func recordResolvedVersion(ctx context.Context, st store.Versions, cfg *config.Config, resourceName string, version map[string]any, pinned bool) {
-	if pinned || cfg.ResourceIsPolled(resourceName) {
+	if pinned || cfg.ResourceIsPolled(resourceName) || isUploadedVersion(ctx, resourceName, version) {
 		return
 	}
 

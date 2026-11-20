@@ -3,8 +3,14 @@ package web
 // `steps run --target` (#283): a one-off handed to the daemon, and the reads a terminal follows any run through — this daemon's or one on another host — without the state file.
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/labstack/echo/v5"
@@ -22,9 +28,13 @@ func (s *Server) handleAPIOneOff(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
 	}
 
-	var req OneOffRequest
+	req, err := readOneOff(c)
 
-	err := c.Bind(&req)
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return echo.NewHTTPError(http.StatusRequestEntityTooLarge, fmt.Sprintf("the configuration is over %d bytes", tooLarge.Limit))
+	}
+
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "could not read the uploaded configuration: "+err.Error())
 	}
@@ -40,6 +50,60 @@ func (s *Server) handleAPIOneOff(c *echo.Context) error {
 
 	//nolint:wrapcheck // echo writes the response; an encoding failure is reported verbatim
 	return c.JSON(http.StatusCreated, result)
+}
+
+// uploadPart prefixes the form name of each folder a one-off carries; what follows it is the get the folder replaces.
+const uploadPart = "input:"
+
+// readOneOff is the request alone as JSON, or as the first part of a multipart body whose later parts are the folders, which the daemon reads as it accepts them.
+func readOneOff(c *echo.Context) (OneOffRequest, error) {
+	var req OneOffRequest
+
+	body := c.Request()
+	if !strings.HasPrefix(body.Header.Get(echo.HeaderContentType), echo.MIMEMultipartForm) {
+		body.Body = http.MaxBytesReader(c.Response(), body.Body, maxUploadSize)
+
+		return req, c.Bind(&req) //nolint:wrapcheck // the caller says what could not be read
+	}
+
+	parts, err := body.MultipartReader()
+	if err != nil {
+		return req, err //nolint:wrapcheck // as above
+	}
+
+	first, err := parts.NextPart()
+	if err != nil {
+		return req, err //nolint:wrapcheck // as above
+	}
+
+	if first.FormName() != "request" {
+		return req, fmt.Errorf("the first part is %q, want request", first.FormName())
+	}
+
+	err = json.NewDecoder(io.LimitReader(first, maxUploadSize)).Decode(&req)
+	if err != nil {
+		return req, err //nolint:wrapcheck // as above
+	}
+
+	req.Uploads = multipartUploads{parts}
+
+	return req, nil
+}
+
+type multipartUploads struct{ parts *multipart.Reader }
+
+func (m multipartUploads) Next() (string, io.Reader, error) {
+	part, err := m.parts.NextPart()
+	if err != nil {
+		return "", nil, err //nolint:wrapcheck // io.EOF is the end the caller waits for
+	}
+
+	get, ok := strings.CutPrefix(part.FormName(), uploadPart)
+	if !ok {
+		return "", nil, fmt.Errorf("%w: a part named %q is not a folder for a get", ErrRefused, part.FormName())
+	}
+
+	return get, part, nil
 }
 
 // handleAPIRuns is the newest runs, of ?job= when given.

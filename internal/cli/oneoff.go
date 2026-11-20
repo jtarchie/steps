@@ -41,17 +41,26 @@ func (d *daemon) OneOff(ctx context.Context, req web.OneOffRequest) (web.OneOffR
 		return web.OneOffResult{}, err
 	}
 
+	// Before the lock, as validation is: a gigabyte from a slow link must not stall every other verb.
+	err = d.receiveUploads(name, req)
+	if err != nil {
+		return web.OneOffResult{}, err
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	st, err := d.stateFor(name, nil)
 	if err != nil {
+		d.forgetUploads(ctx, name)
+
 		return web.OneOffResult{}, err
 	}
 
 	provider, err := d.workspaceFor(st, nil)
 	if err != nil {
 		release(st)
+		d.forgetUploads(ctx, name)
 
 		return web.OneOffResult{}, err
 	}
@@ -64,6 +73,7 @@ func (d *daemon) OneOff(ctx context.Context, req web.OneOffRequest) (web.OneOffR
 	if err != nil {
 		closeProvider(provider)
 		release(st)
+		d.forgetUploads(ctx, name)
 
 		return web.OneOffResult{}, err
 	}
@@ -100,9 +110,16 @@ func (d *daemon) acceptOneOff(name string, req web.OneOffRequest) (*config.Confi
 		return nil, err
 	}
 
-	_, err = cfg.FindJob(req.Job)
+	job, err := cfg.FindJob(req.Job)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", web.ErrRefused, err)
+	}
+
+	gets := job.Gets()
+	for _, get := range req.Inputs {
+		if _, ok := gets[get]; !ok {
+			return nil, fmt.Errorf("%w: --input %q: job %q has no get named %q", web.ErrRefused, get, job.Name, get)
+		}
 	}
 
 	return cfg, nil

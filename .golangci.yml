@@ -197,6 +197,9 @@ linters:
             # (shell.IgnoreTerminalStops). Process lifecycle, not execution:
             # running a command still goes through pipeline.
             - "github.com/jtarchie/steps/internal/shell"
+            # wire and compress: `steps run --target --input` packs a folder as the tree codec every other transfer uses, and the daemon unpacks it under the codec's bounds.
+            - "github.com/jtarchie/steps/internal/wire"
+            - "github.com/jtarchie/steps/internal/compress"
         # telemetry installs the OpenTelemetry SDK from the OTEL_* environment.
         # Only internal/cli imports it, so the SDK never becomes an edge of the
         # execution packages: they reach the global provider through the

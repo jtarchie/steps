@@ -6,6 +6,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -21,6 +22,8 @@ type Pipeline struct {
 	// this bus, which is why every live view falls back to replaying the
 	// stored events rather than assuming the bus saw everything.
 	Bus *events.Bus
+	// Inputs is a one-off's uploads, set before its drain starts and never after.
+	Inputs map[string]pipeline.Upload
 	// claimMu lets one worker at a time ask the queue for a row. ClaimNextJob checks for pending rows on the read pool and only then goes to the file's one writer, so without this every worker passes that check while any row is pending and queues a claim that finds nothing — ahead of the winners' own writes.
 	claimMu sync.Mutex
 }

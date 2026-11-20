@@ -651,7 +651,7 @@ steps runs resume  -p app 46UMHVPYRA6YHB7M           # continue a failed run fro
 ```
 
 - A plain trigger merges into a run of that job already waiting, exactly as a second click of the button does.
-- **`--pin`** takes the same `field=value` pairs `steps run --pin` takes, and is repeatable. A pinned trigger is a queue row of its own, because it builds something the job's ordinary trigger does not; asking for the same pin twice while it waits is still one run. The pin is stored with the row, so a daemon restarted before the run starts still builds what you asked for. A pin is matched against the versions already recorded first (on a `passed:` get, the ones upstream passed), and the check runs only when none matches — so a [webhook](webhooks.md) delivery, which no check can report, is rebuilt by pinning its `id`.
+- **`--pin`** takes the same `field=value` pairs `steps run --pin` takes, and is repeatable. A pinned trigger is a queue row of its own, because it builds something the job's ordinary trigger does not; asking for the same pin twice while it waits is still one run. The pin is stored with the row, so a daemon restarted before the run starts still builds what you asked for. A pin is matched against the versions already recorded first (on a `passed:` get, the ones upstream passed), and the check runs only when none matches — so a [webhook](webhooks.md) delivery, which no check can report, is rebuilt by pinning its `id`. In a job with several gets, the pin applies to the gets whose versions carry the pinned fields: `--pin number=87` picks the pull request, and an image beside it whose versions are `{digest}` takes its own `version:` pin or its latest. A pin no get takes fails the run rather than building the latest of everything.
 - **A pin skips `passed:`**: the pinned run builds the version it names, whether or not the upstream jobs passed it. So on a job with a `passed:` get, an operator may only pin a version every job in that `passed:` has passed; pinning anything else needs the **admin** role and is refused 403 otherwise. Without `--role` rules everyone is an admin. Each constrained resource is judged on its own: a fan-in whose pinned versions passed upstream in different builds is not caught.
 - **`--force`** skips the step cache for that run. It cannot be combined with `--pin`.
 - **`resume`** continues a failed run in place, keeping what it finished; refused, naming Retry, when the button would not be offered.
@@ -675,7 +675,22 @@ steps run ci.yml --job build --target http://alex:$(cat .steps/web-password)@ci.
 - **`--pin`** and **`--force`** go to the daemon and mean what they mean on `steps runs trigger`. `--force` matters even on a new pipeline, because the step cache is keyed by the work rather than the pipeline: a second one-off of the same file is answered from the first's outputs unless forced. Together they are refused before anything is sent, since the daemon cannot skip the cache for a pinned run.
 - The daemon keeps the last **`--one-off-history`** finished one-offs (default 10) — each one's run page, transcript and `steps runs -p one-off.<random>` entry. Once a newer one-off finishes past that count, the oldest finished one is no longer served and everything it recorded is deleted. A one-off still running is never counted or forgotten, and one retried from its page counts as finished when the retry does. `0` keeps every one. A restart serves the kept one-offs again, still unpolled, and resumes any interrupted run. (Concourse keeps `fly execute` builds forever, since its build-log retention only trims job builds; here a one-off is a whole pipeline in the list, so it is bounded.)
 - It needs the **admin** role, because it is arbitrary commands on the daemon's machine — what a set is. Names starting `one-off.` are the daemon's own: a set or rename onto one is refused.
-- Only the file and its `run_file:` includes travel. A `get` of a path on your machine (`uri: /Users/...`) cannot run on a daemon on another host. `--resume`, `--replay`, `--rerun` and `--db` do not apply.
+- Only the file and its `run_file:` includes travel, unless you send folders with `--input` (below). `--resume`, `--replay`, `--rerun` and `--db` do not apply.
+
+**`--input GET=PATH`** uploads a folder from your machine and uses it in place of that `get`, as Concourse's `fly execute -i` does — so the run sees your checkout, edits not yet committed included, and a `get` of a path only your laptop has (`uri: /Users/...`) can run on a daemon elsewhere:
+
+```bash
+steps run ci.yml --job build --target http://127.0.0.1:8088 --input src=.
+steps run ci.yml --job build --target http://127.0.0.1:8088 --input src=. --input config=../ci-config --exclude node_modules
+```
+
+- Any `get` in the job may be replaced, one `--input` each. One the job does not have is refused before anything is sent.
+- The replaced get's resource is neither checked nor fetched for the run. The folder is a one-off version of that get: it is never added to the resource's versions, never counts as having passed the job, cannot trigger anything, and never becomes the newest version a later run picks up. Its version is the hash of what was sent (`{"upload": "<sha256>"}`), so a second upload of the same files is answered from the step cache, as any repeated work is — `--force` re-runs it.
+- **Files git ignores are left out**, as in Concourse: inside a git repository, what is sent is what `git ls-files` lists — tracked files still on disk, plus untracked files no `.gitignore` excludes. **`--include-ignored`** sends the whole folder instead (the `.git` directory included). Outside a repository, the whole folder is sent.
+- **`--exclude GLOB`** (repeatable) leaves out what matches, by path or by name: `--exclude node_modules` drops that directory wherever it is at the top, `--exclude '*.log'` every log file, `--exclude 'build/*'` what is under `build/`.
+- Empty directories are not sent, as git does not keep them either. Outputs do not come back (Concourse's `-o` is not offered).
+- The daemon reads every folder before the run is queued, and refuses the lot — starting nothing — once they unpack past **`--one-off-input-max-bytes`** (default 1 GiB, `0` is no limit). The folders are kept with the one-off and deleted when it is forgotten, so a restart that resumes an interrupted one-off resumes it on what it was sent.
+- `--input`, `--include-ignored` and `--exclude` apply only with `--target`; a local `steps run` already reads your folders.
 - `--target` is read from the flag only, never from `STEPS_TARGET`: exported for the control verbs, it would quietly send every local run away.
 
 **`steps runs follow --target <daemon> -p <name> [run]`** follows a run through the daemon's API rather than the state file, which is how a daemon on another host is followed. It reads one page of events at a time, and each page asks the daemon's access rules again — a pipeline's `access:` hides those reads exactly as it hides its pages.
@@ -1331,6 +1346,9 @@ jobs:
                  how many finished steps run --target one-offs stay served
                  with their runs (default 10, 0 is no limit; see A one-off
                  from a file)
+--one-off-input-max-bytes
+                 how many bytes the folders a steps run --target --input sends
+                 may unpack to, all together (default 1 GiB, 0 is no limit)
 --allowed-host   refuse any request whose Host is not this name (repeatable;
                  loopback names always pass; implied on a loopback --listen;
                  env STEPS_ALLOWED_HOSTS, comma-separated; see Security)

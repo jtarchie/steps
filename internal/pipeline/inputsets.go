@@ -5,6 +5,8 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -110,7 +112,33 @@ func gatherInputs(
 		}
 	}
 
+	err := refuseUntakenPin(inputs.fixed, pinned)
+	if err != nil {
+		return setInputs{}, setResolution{}, err
+	}
+
 	return inputs, resolution, nil
+}
+
+// refuseUntakenPin fails a pinned run none of whose gets took the pin. A get
+// whose versions do not carry the pinned fields is passed over rather than
+// failed, so a misspelled field would otherwise build the latest of
+// everything and call it the pinned version. A plan with no top-level get is
+// left to the nested gets that resolve at run time.
+func refuseUntakenPin(fixed merkle.InputSet, pinned map[string]string) error {
+	if len(pinned) == 0 || len(fixed) == 0 {
+		return nil
+	}
+
+	for _, version := range fixed {
+		if rsrc.MatchesPin(version, pinned) {
+			return nil
+		}
+	}
+
+	fields := slices.Sorted(maps.Keys(pinned))
+
+	return fmt.Errorf("no version matches pin %v: no get in this job has versions with the field(s) %s", pinned, strings.Join(fields, ", "))
 }
 
 func gatherOneInput(
@@ -132,8 +160,7 @@ func gatherOneInput(
 	// A CLI pin collapses every-mode to a single named version (see
 	// resource.ResolveVersions), so a pinned run builds exactly one set and —
 	// via the existing take exemption — consumes nothing.
-	mode, _ := rsrc.VersionMode(step)
-	if mode != rsrc.ModeEvery || len(pinned) > 0 {
+	if bindsOneVersion(step, pinned, cache) {
 		// Narrowing to one version is SelectVersion's job and it errors on an
 		// empty list, so this list has an entry; say so rather than index
 		// into the promise.
@@ -267,4 +294,11 @@ func (c *versionCursor) heldVersion(resourceName string, candidates []map[string
 // blockingReport names what stops a fan-out, for the "no versions" message.
 func (r setResolution) blockingReport() string {
 	return strings.Join(r.blocking, ", ")
+}
+
+// bindsOneVersion is every get but an unpinned version: every one; an upload is one version however the step asks.
+func bindsOneVersion(step config.Step, pinned map[string]string, cache *rsrc.Cache) bool {
+	mode, _ := rsrc.VersionMode(step)
+
+	return mode != rsrc.ModeEvery || len(pinned) > 0 || cache.Uploaded(step.Get)
 }
