@@ -96,14 +96,16 @@ jobs:
 	}
 }
 
-// The step's spelling only strengthens: false cannot unfence an entry, so it is refused rather than read as meaning something; a get, put or block has no command of its own to fence; and a container is already its own fence.
+// The step's spelling only strengthens: false cannot unfence an entry or a block's contents, so it is refused rather than read as meaning something; a get, put or load_var has no command of its own to fence; a container is already its own fence; and a placed block runs elsewhere.
 func TestStepSandboxRefusesWhatItCannotMean(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct{ name, step, want string }{
 		{"false", "  - task: probe\n    sandbox: false\n    inputs: []\n", "sandbox: false"},
 		{"get", "  - get: ticks\n    sandbox: true\n", "not valid on get"},
-		{"block", "  - do:\n    - task: probe\n      inputs: []\n    sandbox: true\n", "runs none"},
+		{"load_var", "  - load_var: n\n    file: x/n.txt\n    sandbox: true\n", "runs none"},
+		{"block false", "  - do:\n    - task: probe\n      inputs: []\n    sandbox: false\n", "sandbox: false"},
+		{"placed block", "  - do:\n    - task: probe\n      inputs: []\n    tags: [gpu]\n    sandbox: true\n", "tags"},
 		{"image", "  - task: probe\n    sandbox: true\n    image: alpine:3\n    inputs: []\n", "image:"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

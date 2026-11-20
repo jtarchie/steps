@@ -675,8 +675,40 @@ jobs:
 ```
 
 - **True only.** A step can add the fence, never take away an entry's, so `sandbox: false` on a step is a load error rather than a setting that silently does nothing.
-- **Only on task and agent steps**, hooks included. A `get` or `put` runs its resource type's commands, which the type fences, and a block (`do:`, `in_parallel:`, `try:`, ...) has no command of its own; each is a load error.
+- **On task and agent steps, hooks included, and on blocks** (below). A `get` or `put` runs its resource type's commands, which the type fences, and a `load_var:` or `approval:` runs none; each is a load error.
 - The entry-level rules hold: refused beside `image:` and on a placed step, and `network: none` becomes legal without `image:`. A delegated sub-agent still runs under its own entry's sandbox, not the step's.
+
+### On a block
+
+A block (`do:`, `in_parallel:`, `race:`, `ensemble:`, `try:`) runs no command of its own, but its `when:` guard does, and so does everything inside it. `sandbox: true` on the block fences all of that at once: its guard, every task and agent inside it (their hooks and nested blocks included), and the guard of a `load_var:` or `put:` inside it:
+
+```yaml
+jobs:
+- name: build
+  plan:
+  - do:
+    - task: lint
+      run: |
+        if touch ../escaped 2>/dev/null; then echo escaped; else echo refused; fi
+      assert:
+        stdout: refused
+    - in_parallel:
+      - task: test
+        run: |
+          if touch ../escaped 2>/dev/null; then echo escaped; else echo refused; fi
+        assert:
+          stdout: refused
+    sandbox: true                # fences the guard and every step inside
+    when: test -d .              # the guard runs fenced too
+  assert:
+    execution: [lint, test]
+    outcome: succeeded
+```
+
+- **Add only.** It fences what runs here and nothing else: a step inside that runs in an `image:`, or is placed on a worker (`tags:`), is left as it is, because the fence could not hold there. A `sandbox: false` inside cannot take the fence away; like any `sandbox: false` on a step, it is a load error.
+- **Refused on a block with its own `tags:`**, as on a placed step.
+- A `get` or `put` inside still runs its type's commands under the type's own fence; only a `put`'s `when:` guard, which runs here when its type has no `image:`, takes the block's.
+- A delegated sub-agent still runs under its own entry's sandbox, as with a step's.
 
 ## Passing environment through (`env:`)
 

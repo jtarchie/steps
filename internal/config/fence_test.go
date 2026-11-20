@@ -384,3 +384,44 @@ jobs:
 		})
 	}
 }
+
+// A sandboxed block's fence reaches the guards inside it, a put's included, which runs under its type and takes the block's fence when the type has none.
+func TestUnfencedTrustsABlockSandboxOverTheGuardsInside(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]byte(`
+resource_types:
+- name: sink
+  config: {check: "true", out: "true"}
+
+resources:
+- name: drop
+  type: sink
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - do:
+    - task: make
+      outputs: [out]
+      run: "true"
+    - load_var: n
+      file: out/n.txt
+      inputs: [out]
+      when: "true"
+    - put: drop
+      inputs: []
+      when: "true"
+    sandbox: true
+`), "fence", nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	for _, host := range cfg.Unfenced(true) {
+		if strings.HasPrefix(host.Where, "when: guard") {
+			t.Errorf("a guard inside a sandboxed block is listed: %+v", host)
+		}
+	}
+}

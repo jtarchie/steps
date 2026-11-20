@@ -1130,7 +1130,8 @@ name gives it an `image:`), a `github-prs`/`github-comments` resource with
 own (a step's `sandbox: true` does not reach it), a `when:` guard on a step
 with no host command of its own (a block, `approval:`, `load_var:`, an agent
 whose tools touch nothing, a `put:` of a built-in type), which runs on this
-machine, and a CLI agent with `settings: project`, whose repository hooks run
+machine unless a block around it, or the block itself, says
+[`sandbox: true`](infra.md#on-a-block), and a CLI agent with `settings: project`, whose repository hooks run
 on this machine whatever fences its tools.
 
 Because the policy lives in the daemon's config file, a pipeline cannot loosen
