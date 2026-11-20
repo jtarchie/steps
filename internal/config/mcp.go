@@ -70,6 +70,8 @@ type MCPServer struct {
 	Args     []string `yaml:"args,omitempty"`
 	// Image runs the stdio command in a container from this image instead of on this machine: the fence #263 asks of every stdio server. cwd: is then a path in the container.
 	Image string `yaml:"image,omitempty"`
+	// Unfenced is the pipeline's half of fence: enforce's two-key opt-out (unfenced.go): why this server's command runs unfenced. Never hashed: a daemon's acceptance reads it, and nothing a step does.
+	Unfenced *string `yaml:"unfenced,omitempty"`
 	// Cwd is the working directory a stdio server's subprocess is spawned
 	// in. An ABSOLUTE path is used verbatim — a fixed location on the host,
 	// resolved identically for every step. A RELATIVE path is resolved

@@ -51,6 +51,16 @@ func (w *WebCmd) BeforeResolve(ctx *kong.Context) error {
 		}
 	}
 
+	raw, ok = values[allowUnfencedKey]
+	if ok {
+		delete(values, allowUnfencedKey)
+
+		w.allowUnfenced, err = parseAllowUnfenced(raw)
+		if err != nil {
+			return fmt.Errorf("web: --config %s: %w", path, err)
+		}
+	}
+
 	ctx.AddResolver(fileResolver(values))
 
 	return nil
@@ -134,8 +144,8 @@ func checkConfigKeys(path string, web map[string]any, flags []*kong.Flag) error 
 	}
 
 	for key := range web {
-		// The one key that is not a flag: a source is nested objects, which no flag can carry.
-		if key == "secret" {
+		// The keys that are not flags: nested objects, which no flag can carry.
+		if key == "secret" || key == allowUnfencedKey {
 			continue
 		}
 
@@ -165,28 +175,39 @@ func (r fileResolver) Resolve(_ *kong.Context, _ *kong.Path, flag *kong.Flag) (a
 
 func (r fileResolver) Validate(*kong.Application) error { return nil }
 
-// fenceFromConfigFile reads only web.fence, for `steps validate --config` to judge a pipeline by the policy the daemon would.
-func fenceFromConfigFile(path string) (string, error) {
+// allowUnfencedKey is the daemon file's half of fence: enforce's opt-out, and only the file's: the privilege boundary is this file, never a flag a pipeline's own tooling could pass.
+const allowUnfencedKey = "allow-unfenced"
+
+// fenceFromConfigFile reads only web.fence and web.allow-unfenced, for `steps validate --config` to judge a pipeline by the policy the daemon would.
+func fenceFromConfigFile(path string) (fencePolicy, error) {
 	top, err := readConfigFile(path)
 	if err != nil {
-		return "", err
+		return fencePolicy{}, err
 	}
 
 	web, _ := top["web"].(map[string]any)
 
+	policy := fencePolicy{mode: fenceOff}
+
 	raw, ok := web["fence"]
-	if !ok {
-		return fenceOff, nil
+	if ok {
+		policy.mode, ok = raw.(string)
+		if !ok {
+			return fencePolicy{}, fmt.Errorf("--config %s: web.fence must be a word, off, warn or enforce", path)
+		}
 	}
 
-	policy, ok := raw.(string)
-	if !ok {
-		return "", fmt.Errorf("--config %s: web.fence must be a word, off or warn", path)
-	}
-
-	err = checkFence(policy)
+	err = checkFence(policy.mode)
 	if err != nil {
-		return "", fmt.Errorf("--config %s: %w", path, err)
+		return fencePolicy{}, fmt.Errorf("--config %s: %w", path, err)
+	}
+
+	raw, ok = web[allowUnfencedKey]
+	if ok {
+		policy.allow, err = parseAllowUnfenced(raw)
+		if err != nil {
+			return fencePolicy{}, fmt.Errorf("--config %s: %w", path, err)
+		}
 	}
 
 	return policy, nil

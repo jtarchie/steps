@@ -297,6 +297,10 @@ func mergeTaskContainer(t *Task, doc Task) {
 	t.Privileged = t.Privileged || doc.Privileged
 	t.Sandbox = t.Sandbox || doc.Sandbox
 
+	if t.Unfenced == nil {
+		t.Unfenced = doc.Unfenced
+	}
+
 	if t.Limits == nil {
 		t.Limits = doc.Limits
 	}
@@ -412,6 +416,10 @@ func mergeAgentContainer(a *Agent, doc Agent) {
 	// OR, not set-wins: an inline false cannot be told from unset, and OR never loosens what the shared document asked for.
 	a.Privileged = a.Privileged || doc.Privileged
 	a.Sandbox = a.Sandbox || doc.Sandbox
+
+	if a.Unfenced == nil {
+		a.Unfenced = doc.Unfenced
+	}
 
 	if a.Limits == nil {
 		a.Limits = doc.Limits

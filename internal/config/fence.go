@@ -61,7 +61,7 @@ func (c *Config) hostGuards() []HostCommand {
 	for _, job := range c.Jobs {
 		_ = job.visitSteps(func(label string, step *Step) error {
 			if step.Guarded() {
-				found = append(found, c.hostGuard(label, step.Unwrap())...)
+				found = append(found, c.hostGuard(label, job.Name, *step)...)
 			}
 
 			return nil
@@ -71,8 +71,9 @@ func (c *Config) hostGuards() []HostCommand {
 	return found
 }
 
-func (c *Config) hostGuard(label string, step Step) []HostCommand {
+func (c *Config) hostGuard(label, job string, guarded Step) []HostCommand {
 	where := "when: guard of " + label
+	step := guarded.Unwrap()
 
 	switch kind, _ := step.Kind(); kind {
 	case StepKindTask:
@@ -84,17 +85,25 @@ func (c *Config) hostGuard(label string, step Step) []HostCommand {
 			return nil
 		}
 
-		return []HostCommand{{Name: step.Agent, Where: where, Why: guardWhy + "; set image: on the agent" + sandboxed(invocation.Sandbox), Sandboxed: invocation.Sandbox}}
+		return []HostCommand{{
+			Name: step.Agent, Where: where, Why: guardWhy + "; set image: on the agent" + sandboxed(invocation.Sandbox), Sandboxed: invocation.Sandbox,
+			Entity: entity(EntityAgent, step.Agent), Reason: c.agentReason(step, step.Agent),
+		}}
 	case StepKindPut:
 		return c.hostPutGuard(where, step)
 	case StepKindGet, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
 
-	if step.Sandboxed() {
-		return []HostCommand{{Where: where, Why: guardWhy + sandboxed(true), Sandboxed: true}}
+	guard := HostCommand{
+		Where: where, Why: guardWhy + ", and this step has no image: or sandbox: to run it under; move the check into a task",
+		Entity: entity(EntityGuard, job), Reason: reasonOf(guarded.Unfenced),
 	}
 
-	return []HostCommand{{Where: where, Why: guardWhy + ", and this step has no image: or sandbox: to run it under; move the check into a task"}}
+	if step.Sandboxed() {
+		guard.Why, guard.Sandboxed = guardWhy+sandboxed(true), true
+	}
+
+	return []HostCommand{guard}
 }
 
 // hostPutGuard: a put's guard runs under its resource type, as its out would.
@@ -111,7 +120,10 @@ func (c *Config) hostPutGuard(where string, step Step) []HostCommand {
 
 	fenced := rt.Sandbox || step.Sandboxed()
 
-	return []HostCommand{{Name: resource.Name, Where: where, Why: fmt.Sprintf("%s, under type %q; give the type an image:", guardWhy, resource.Type) + sandboxed(fenced), Sandboxed: fenced}}
+	return []HostCommand{{
+		Name: resource.Name, Where: where, Why: fmt.Sprintf("%s, under type %q; give the type an image:", guardWhy, resource.Type) + sandboxed(fenced), Sandboxed: fenced,
+		Entity: entity(EntityResourceType, resource.Type), Reason: reasonOf(rt.Unfenced),
+	}}
 }
 
 const privilegedWhy = "image: with privileged: true gives the container the host's privileges; drop privileged:"
@@ -123,7 +135,10 @@ func (c *Config) privilegedContainers() []HostCommand {
 	for _, resource := range c.Resources {
 		rt, err := c.FindResourceType(resource.Type)
 		if err == nil && rt.Image != "" && rt.Privileged {
-			found = append(found, HostCommand{Name: resource.Name, Where: fmt.Sprintf("resource %q", resource.Name), Why: fmt.Sprintf("type %q: %s", resource.Type, privilegedWhy)})
+			found = append(found, HostCommand{
+				Name: resource.Name, Where: fmt.Sprintf("resource %q", resource.Name), Why: fmt.Sprintf("type %q: %s", resource.Type, privilegedWhy),
+				Entity: entity(EntityResourceType, resource.Type), Reason: reasonOf(rt.Unfenced),
+			})
 		}
 	}
 
@@ -143,12 +158,12 @@ func (c *Config) privilegedStep(label string, step *Step) []HostCommand {
 	case StepKindTask:
 		task, err := c.ResolveTask(*step)
 		if err == nil && task.Image != "" && task.Privileged {
-			return []HostCommand{{Name: step.Task, Where: fmt.Sprintf("task %q in %s", step.Task, label), Why: privilegedWhy}}
+			return []HostCommand{{Name: step.Task, Where: fmt.Sprintf("task %q in %s", step.Task, label), Why: privilegedWhy, Entity: entity(EntityTask, step.Task), Reason: c.taskReason(*step)}}
 		}
 	case StepKindAgent:
 		invocation, err := c.ResolveAgentInvocation(*step)
 		if err == nil && invocation.Image != "" && invocation.Privileged {
-			return []HostCommand{{Name: step.Agent, Where: fmt.Sprintf("agent %q in %s", step.Agent, label), Why: privilegedWhy}}
+			return []HostCommand{{Name: step.Agent, Where: fmt.Sprintf("agent %q in %s", step.Agent, label), Why: privilegedWhy, Entity: entity(EntityAgent, step.Agent), Reason: c.agentReason(*step, step.Agent)}}
 		}
 	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
@@ -163,12 +178,16 @@ func (c *Config) hostExports() []HostCommand {
 	for _, export := range c.MCPExports {
 		where := fmt.Sprintf("mcp_exports %q", export.Name)
 
+		self := HostCommand{Name: export.Name, Where: where, Entity: entity(EntityMCPExport, export.Name), Reason: reasonOf(export.Unfenced)}
+
 		if export.hasCommands() {
 			switch {
 			case export.Image == "":
-				found = append(found, HostCommand{Name: export.Name, Where: where, Why: "its custom run: tools run on the host; set image:"})
+				self.Why = "its custom run: tools run on the host; set image:"
+				found = append(found, self)
 			case export.Privileged:
-				found = append(found, HostCommand{Name: export.Name, Where: where, Why: privilegedWhy})
+				self.Why = privilegedWhy
+				found = append(found, self)
 			}
 		}
 
@@ -193,12 +212,13 @@ func (c *Config) exportedAgent(export string, spec ToolSpec) []HostCommand {
 	}
 
 	where := fmt.Sprintf("%s agent %q", export, spec.Agent)
+	reason := c.agentReason(Step{}, spec.Agent)
 
 	if invocation.Image != "" && invocation.Privileged {
-		return []HostCommand{{Name: spec.Agent, Where: where, Why: privilegedWhy}}
+		return []HostCommand{{Name: spec.Agent, Where: where, Why: privilegedWhy, Entity: entity(EntityAgent, spec.Agent), Reason: reason}}
 	}
 
-	return c.hostAgent(where, invocation)
+	return c.hostAgent(where, invocation, reason)
 }
 
 // projectSettingsAgents is every CLI agent step that loads the repo's .claude/ hooks, which run on this machine whatever fences its tools.
@@ -215,7 +235,8 @@ func (c *Config) projectSettingsAgents() []HostCommand {
 			if err == nil && invocation.CLISettings == CLISettingsProject {
 				found = append(found, HostCommand{
 					Name: step.Agent, Where: fmt.Sprintf("agent %q in %s", step.Agent, label),
-					Why: "settings: project runs the repo's .claude/ hooks on this machine, outside image: and sandbox:",
+					Why:    "settings: project runs the repo's .claude/ hooks on this machine, outside image: and sandbox:",
+					Entity: entity(EntityAgent, step.Agent), Reason: c.agentReason(*step, step.Agent),
 				})
 			}
 

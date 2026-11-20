@@ -144,6 +144,11 @@
     }
   ],
   "$defs": {
+    "unfenced": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Why this entity runs a command nothing fences: the pipeline's half of a steps web daemon's fence: enforce opt-out. It loosens nothing alone; enforce accepts the entity only when the daemon's --config allow-unfenced: also names this pipeline and the entity. Under warn it is shown beside the listed command. On a task or agent step it covers that step as on the entry; on any other step, its when: guard."
+    },
     "extraHosts": {
       "description": "Names the container resolves through its own /etc/hosts (docker's --add-host): a map of name to an IP address or host-gateway (the daemon's machine), or a list of name:address strings. Requires image:, and is refused beside network: none.",
       "oneOf": [
@@ -207,6 +212,9 @@
             "type": "string"
           },
           "description": "Names of rules: entries that check every call of every tool in the export, before the rules of the tool itself."
+        },
+        "unfenced": {
+          "$ref": "#/$defs/unfenced"
         },
         "image": {
           "type": "string",
@@ -361,6 +369,12 @@
           "required": [
             "image"
           ]
+        },
+        {
+          "$comment": "unfenced: alone on a built-in type's name is that built-in, opted out of fence: enforce.",
+          "required": [
+            "unfenced"
+          ]
         }
       ],
       "properties": {
@@ -438,6 +452,9 @@
         "privileged": {
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
+        },
+        "unfenced": {
+          "$ref": "#/$defs/unfenced"
         },
         "sandbox": {
           "type": "boolean",
@@ -1202,6 +1219,9 @@
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
         },
+        "unfenced": {
+          "$ref": "#/$defs/unfenced"
+        },
         "sandbox": {
           "type": "boolean",
           "description": "Fence host commands with the OS sandbox (darwin sandbox-exec, linux Landlock on kernel 6.2+): writes only under the step's workspace and a private TMPDIR, credential paths unreadable, and on darwin network: none becomes legal without image:. Refused beside image: and on a placed step."
@@ -1565,6 +1585,9 @@
           "type": "string",
           "description": "command only."
         },
+        "unfenced": {
+          "$ref": "#/$defs/unfenced"
+        },
         "image": {
           "type": "string",
           "description": "command only: run the command in a container from this image instead of on this machine. cwd: is then a path in the container."
@@ -1671,6 +1694,9 @@
         "privileged": {
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
+        },
+        "unfenced": {
+          "$ref": "#/$defs/unfenced"
         },
         "sandbox": {
           "type": "boolean",
@@ -2236,6 +2262,9 @@
         "privileged": {
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
+        },
+        "unfenced": {
+          "$ref": "#/$defs/unfenced"
         },
         "sandbox": {
           "const": true,

@@ -47,6 +47,8 @@ type ResourceType struct {
 	Limits *ContainerLimits `yaml:"container_limits,omitempty"`
 	// Sandbox fences this entity's host commands with the OS sandbox: writes only under the step's workspace and a private TMPDIR, credential directories unreadable, and network: none becomes legal on the host. See internal/config/sandbox.go for the rules and docs/infra.md for the policy.
 	Sandbox bool `yaml:"sandbox,omitempty"`
+	// Unfenced is the pipeline's half of fence: enforce's two-key opt-out (unfenced.go): why this type runs a command nothing fences. On a built-in's name with no commands of its own it keeps the built-in, as image: does. Never hashed: a daemon's acceptance reads it, and nothing the step does.
+	Unfenced *string `yaml:"unfenced,omitempty"`
 	// ImageLogin is the registry login image: is pulled with, for a private image. A type: registry-image entry says the same in its source:.
 	ImageLogin *ImageLogin `yaml:"image_login,omitempty"`
 	// Type, Source and Defaults are Concourse's spelling of a resource type that is a resource image: `type: registry-image` with `source: {repository, tag}` (steps#237). Rewritten at load into Image and Config (see desugarConcourseTypes), which is what is hashed; Defaults is laid under each of this type's resources' source:, which is hashed there.

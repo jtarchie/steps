@@ -69,13 +69,15 @@ type WebCmd struct {
 	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed, and on a loopback --listen so is --external-url's)" name:"allowed-host" placeholder:"NAME"`
 	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
 	ExternalURL string `help:"the URL steps publish to every step as STEPS_URL (default http://<listen>)" name:"external-url"`
-	// Not an enum tag: kong's refusal of enforce could not say why it is missing.
-	Fence string `default:"off" help:"what to do about a pipeline that runs a command unfenced (no image:, sandbox: where this machine has one, or privileged: true): off, or warn to accept it and list each one on set and on its page" name:"fence" placeholder:"POLICY"`
+	// Not an enum tag: a mistyped word is refused naming all three (checkFence).
+	Fence string `default:"off" help:"what to do about a pipeline that runs a command unfenced (no image:, sandbox: where this machine has one, or privileged: true): off; warn to accept it and list each one on set and on its page; or enforce to refuse it unless the pipeline says unfenced: on it and --config's allow-unfenced: names it" name:"fence" placeholder:"POLICY"`
 	// Web's alone, not global: `pipeline set` and `mcp login` already own --config, and only the daemon has settings that cannot be flags (configfile.go).
 	Config string `env:"STEPS_CONFIG" help:"a YAML file of these flags, under a web: key (a flag on the command line wins; see docs/web.md)" name:"config" placeholder:"PATH"`
 
 	// secrets is the config file's secret: section, set by BeforeResolve; nil when none is configured.
 	secrets *secret.Resolver
+	// allowUnfenced is the config file's allow-unfenced:, set by BeforeResolve: pipeline name to the entities fence: enforce lets it run unfenced.
+	allowUnfenced map[string][]string
 
 	// published is the external URL Run resolved, which every OAuth address the daemon publishes is built from.
 	published string
@@ -426,7 +428,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 	defer cancel()
 
 	held := newDaemon(ctx, server, local, state, w.ExecFlags, w.HistoryFlags, w.Interval)
-	held.fence = w.Fence
+	held.fence = fencePolicy{mode: w.Fence, allow: w.allowUnfenced}
 	held.oneOffHistory = w.OneOffHistory
 	defer held.Close()
 

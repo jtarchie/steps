@@ -170,6 +170,7 @@ func (c *Config) validate() error {
 		c.validateTagRules,
 		c.validateLimitsRules,
 		c.validateSandbox,
+		c.validateUnfenced,
 		c.validateTimeouts,
 		c.validateAgentCompaction,
 		c.validateAgentModels,

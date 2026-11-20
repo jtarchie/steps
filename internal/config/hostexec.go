@@ -29,6 +29,10 @@ type HostCommand struct {
 	Why string
 	// Sandboxed is a host command under sandbox: true, which a fence policy counts where the OS sandbox exists.
 	Sandboxed bool
+	// Entity is what a daemon's allow-unfenced: names to accept it under fence: enforce, "<kind> <name>" (unfenced.go).
+	Entity string
+	// Reason is the pipeline's unfenced: on that entity, empty when it declares none.
+	Reason string
 }
 
 // HostCommands lists every place this pipeline runs a command on a host: resources, then mcp servers, then each job's steps, hooks included, in plan order.
@@ -46,7 +50,10 @@ func (c *Config) HostCommands() []HostCommand {
 			why = "a stdio server that runs docker itself: steps cannot check what that container may reach; move its image into image:"
 		}
 
-		found = append(found, HostCommand{Name: server.Name, Where: fmt.Sprintf("mcp_servers %q", server.Name), Why: why})
+		found = append(found, HostCommand{
+			Name: server.Name, Where: fmt.Sprintf("mcp_servers %q", server.Name), Why: why,
+			Entity: entity(EntityMCPServer, server.Name), Reason: reasonOf(server.Unfenced),
+		})
 	}
 
 	for _, job := range c.Jobs {
@@ -78,11 +85,15 @@ func (c *Config) hostResources() []HostCommand {
 					Name: resource.Name, Where: where,
 					Why:       fmt.Sprintf("type %q runs check/in/out on the host; give the type an image: (a built-in one, by a resource_types: entry of its name with only image:)", resource.Type) + sandboxed(resourceType.Sandbox),
 					Sandboxed: resourceType.Sandbox,
+					Entity:    entity(EntityResourceType, resource.Type), Reason: reasonOf(resourceType.Unfenced),
 				})
 			}
 		case BackendGitHub:
 			if resourceType.Image == "" && githubClonesWithGit(resourceType.Config.GitHub, resource.Source) {
-				found = append(found, HostCommand{Name: resource.Name, Where: where, Why: fmt.Sprintf("checkout: git runs the git binary on the host; give type %q an image: (a resource_types: entry of its name with only image:)", resource.Type)})
+				found = append(found, HostCommand{
+					Name: resource.Name, Where: where, Why: fmt.Sprintf("checkout: git runs the git binary on the host; give type %q an image: (a resource_types: entry of its name with only image:)", resource.Type),
+					Entity: entity(EntityResourceType, resource.Type), Reason: reasonOf(resourceType.Unfenced),
+				})
 			}
 		case BackendMCP, BackendExpr, BackendWebhook, BackendCron, BackendConcourse, BackendRegistry, BackendService, BackendLinear:
 		}
@@ -120,14 +131,17 @@ func (c *Config) hostStep(label string, step *Step) []HostCommand {
 			why = "run: and its fix: agent's commands run on the host; set image:"
 		}
 
-		return []HostCommand{{Name: step.Task, Where: fmt.Sprintf("task %q in %s", step.Task, label), Why: why + sandboxed(task.Sandbox), Sandboxed: task.Sandbox}}
+		return []HostCommand{{
+			Name: step.Task, Where: fmt.Sprintf("task %q in %s", step.Task, label), Why: why + sandboxed(task.Sandbox), Sandboxed: task.Sandbox,
+			Entity: entity(EntityTask, step.Task), Reason: c.taskReason(*step),
+		}}
 	case StepKindAgent:
 		invocation, err := c.ResolveAgentInvocation(*step)
 		if err != nil {
 			return nil
 		}
 
-		return c.hostAgent(fmt.Sprintf("agent %q in %s", step.Agent, label), invocation)
+		return c.hostAgent(fmt.Sprintf("agent %q in %s", step.Agent, label), invocation, c.agentReason(*step, invocation.AgentName))
 	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
 
@@ -135,7 +149,7 @@ func (c *Config) hostStep(label string, step *Step) []HostCommand {
 }
 
 // hostAgent is an agent whose tools touch the host's files or run a command there, named at where.
-func (c *Config) hostAgent(where string, invocation ResolvedInvocation) []HostCommand {
+func (c *Config) hostAgent(where string, invocation ResolvedInvocation, reason string) []HostCommand {
 	if invocation.Image != "" {
 		return nil
 	}
@@ -152,6 +166,7 @@ func (c *Config) hostAgent(where string, invocation ResolvedInvocation) []HostCo
 		Name: invocation.AgentName, Where: where,
 		Why:       fmt.Sprintf("its tools run on the host (%s); set image: on the agent", strings.Join(tools, ", ")) + sandboxed(fenced),
 		Sandboxed: fenced,
+		Entity:    entity(EntityAgent, invocation.AgentName), Reason: reason,
 	}}
 }
 

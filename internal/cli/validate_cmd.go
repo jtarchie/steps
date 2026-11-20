@@ -73,7 +73,7 @@ func (v *ValidateCmd) Run(streams Streams) error {
 		say(streams.Err, "warning: "+warning)
 	}
 
-	err = errors.Join(fileProblems(cfg), v.hostProblems(cfg), v.fenceReport(streams.Err, cfg))
+	err = errors.Join(fileProblems(cfg), v.hostProblems(cfg), v.fenceReport(streams.Err, resolvePipelineName(v.Pipeline, v.Name), cfg))
 	if err != nil {
 		return err
 	}
@@ -164,8 +164,8 @@ func (v *ValidateCmd) hostProblems(cfg *config.Config) error {
 	return nil
 }
 
-// fenceReport lists what the daemon's fence: policy would on set, as warnings: under warn a set accepts, so validate does too.
-func (v *ValidateCmd) fenceReport(out io.Writer, cfg *config.Config) error {
+// fenceReport is what the daemon's fence: policy would do on a set under name: list as warnings what it accepts, and refuse what enforce would.
+func (v *ValidateCmd) fenceReport(out io.Writer, name string, cfg *config.Config) error {
 	if v.Config == "" {
 		return nil
 	}
@@ -175,7 +175,12 @@ func (v *ValidateCmd) fenceReport(out io.Writer, cfg *config.Config) error {
 		return err
 	}
 
-	sayUnfenced(out, unfencedLines(policy, cfg))
+	lines, err := policy.judge(name, cfg)
+	if err != nil {
+		return err
+	}
+
+	sayUnfenced(out, lines)
 
 	return nil
 }

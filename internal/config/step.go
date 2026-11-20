@@ -322,6 +322,8 @@ type Step struct {
 	Privileged bool `yaml:"privileged,omitempty"`
 	// Sandbox, on a task or agent step, fences its host commands as Task.Sandbox does, and is the only spelling an inline run: has. True-only: it can add the fence over an entry that did not ask, never remove one an entry did, so a pointer tells an explicit false (refused at load) from absent.
 	Sandbox *bool `yaml:"sandbox,omitempty"`
+	// Unfenced, on a task or agent step, is fence: enforce's pipeline key for it as on the entry, and the only spelling an inline run: has; on any other step it covers the step's own when: guard (unfenced.go). Never hashed: a daemon's acceptance reads it, and nothing the step does.
+	Unfenced *string `yaml:"unfenced,omitempty"`
 	// Limits, on a task or agent step, overrides the referenced task's/agent's
 	// container_limits: for this step only (set-wins, like Image).
 	Limits *ContainerLimits `yaml:"container_limits,omitempty"`

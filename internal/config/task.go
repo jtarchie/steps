@@ -63,6 +63,8 @@ type Task struct {
 	Limits *ContainerLimits `yaml:"container_limits,omitempty"`
 	// Sandbox fences this entity's host commands with the OS sandbox: writes only under the step's workspace and a private TMPDIR, credential directories unreadable, and network: none becomes legal on the host. See internal/config/sandbox.go for the rules and docs/infra.md for the policy.
 	Sandbox bool `yaml:"sandbox,omitempty"`
+	// Unfenced is the pipeline's half of fence: enforce's two-key opt-out (unfenced.go): why this entity runs a command nothing fences. Never hashed: a daemon's acceptance reads it, and nothing the step does.
+	Unfenced *string `yaml:"unfenced,omitempty"`
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// (default) means no timeout. Inherited by task steps unless overridden.
 	Timeout string `yaml:"timeout,omitempty"`

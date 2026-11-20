@@ -32,8 +32,8 @@ type daemon struct {
 	exec     ExecFlags
 	history  HistoryFlags
 	interval time.Duration
-	// fence is the --fence policy every pipeline this daemon accepts is judged by; see fence.go.
-	fence string
+	// fence is the --fence policy, with its allow-unfenced:, every pipeline this daemon accepts is judged by; see fence.go.
+	fence fencePolicy
 
 	// wrapStore is a test seam: it wraps each store the daemon opens, so a fault is in place before the drain goroutine reads the store.
 	wrapStore func(store.Store) store.Store
@@ -199,17 +199,22 @@ func (d *daemon) load(ctx context.Context) error {
 		// Served or shown broken, never dropped and never the reason the rest go unserved: one pipeline's disk problem is not another team's outage, and a daemon that silently skipped one would look healthy while missing it.
 		err = d.restore(ctx, row.Name, row.Path, row.OneOff)
 		if err != nil {
-			hint := "`steps pipeline set -p " + row.Name + "` repairs it"
-			if errors.Is(err, errCannotRunHere) {
-				hint = "restart the daemon with this fixed, or set a configuration that does not need it"
-			}
-
+			hint := restoreHint(row.Name, err)
 			d.server.MarkBroken(web.BrokenPipeline{Name: row.Name, SHA: row.CurrentSHA, From: row.Path, Reason: err.Error() + "\n" + hint})
 			slog.ErrorContext(ctx, "web.not_serving", "pipeline", row.Name, "error", err, "hint", hint)
 		}
 	}
 
 	return nil
+}
+
+// restoreHint says who can repair a pipeline restore refused: a set, unless what refused it is this machine or this daemon's own policy.
+func restoreHint(name string, err error) string {
+	if errors.Is(err, errCannotRunHere) || errors.Is(err, errUnfenced) {
+		return "restart the daemon with this fixed, or set a configuration that does not need it"
+	}
+
+	return "`steps pipeline set -p " + name + "` repairs it"
 }
 
 // interruptedTrees is the workspace of every run still recorded running, which a restart resumes. Best-effort: a tree it cannot name is swept, and that run is built again from the top.
@@ -353,7 +358,7 @@ func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.
 	slog.InfoContext(ctx, "web.pipeline.set", "pipeline", name, "config", shortConfig(cfg.Revision.SHA))
 
 	result.Repaired = repairing
-	result.Unfenced = unfencedLines(d.fence, cfg)
+	result.Unfenced = d.unfenced(name, cfg)
 
 	return result, nil
 }
@@ -458,6 +463,12 @@ func (d *daemon) accept(name, source string, includes map[string]string) (*confi
 		return nil, fmt.Errorf("%w: %s %w: %w", web.ErrRefused, name, errCannotRunHere, err)
 	}
 
+	// A fact about this machine (is the sandbox here) and this daemon's file (allow-unfenced:), so a restart under a stricter policy leaves the pipeline shown broken, as a --worker change does.
+	_, err = d.fence.judge(name, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", web.ErrRefused, err)
+	}
+
 	d.history.Apply(cfg)
 
 	return cfg, nil
@@ -518,7 +529,7 @@ func (d *daemon) replace(existing *servedPipeline, cfg *config.Config, provider 
 	existing.target.SetConfig(cfg)
 	existing.checks.Set()
 	existing.target.SetPath(from)
-	existing.target.SetUnfenced(unfencedLines(d.fence, cfg))
+	existing.target.SetUnfenced(d.unfenced(existing.target.Slug, cfg))
 
 	// The daemon's context, never the request's: these are what make the queue obey the configuration just applied, and a sender that hung up must not leave serial: unwritten while the drain starts anyway.
 	scheduler.SyncQueueLimits(d.base, existing.target.Pipeline)
@@ -539,7 +550,7 @@ func (d *daemon) start(
 	bus.Observe(runview.Log(loopCtx, nil))
 
 	target := web.NewPipeline(name, from, cfg, st, bus)
-	target.SetUnfenced(unfencedLines(d.fence, cfg))
+	target.SetUnfenced(d.unfenced(name, cfg))
 
 	// One memo for everything this pipeline resolves outside a run, built once: a poll and a delivery asking for the same reference share an answer for an interval, where a memo made per call would cache nothing.
 	// A poll is no run: its secrets are cached for an interval rather than per run, or a trigger: true resource would prompt every poll.

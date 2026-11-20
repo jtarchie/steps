@@ -207,6 +207,7 @@ const (
 	loadedInto   = "source: resolved at load into a field that IS keyed (system_file: into system:, file: into every field it supplies, an agent's description onto the grant that names it) — a Config built by hand, as here, skips the loader"
 	otherForm    = "source: not a field of this grant form (validateSubAgentToolShape and its siblings refuse it at load)"
 	undocumented = "observed: nothing says this was left out on purpose"
+	fenceOptOut  = "source: the field's own doc says never hashed — unfenced: is read by a daemon's fence: enforce at set, never by what the step does"
 )
 
 type keyProbe struct {
@@ -292,7 +293,7 @@ func keyProbes() []keyProbe {
 	// desugared is type: registry-image: rewritten at load into Image, the three scripts and each resource's source:, all of which the key reads (steps#237).
 	const desugared = "rewritten at load into Image, Config and the resources' source:, which are keyed"
 
-	resourceType := map[string]string{"Name": "source: config.ResourceType — a step is keyed by what the type DOES, so a rename re-runs nothing and two types doing the same thing share an entry", "Config.Check": notThisVerb, "Config.Webhook": derivedFlag, "Config.Cron": derivedFlag, "Config.Concourse": derivedFlag, "Type": desugared, "Source": desugared, "Defaults": desugared, "ImageLogin": "auth: who pulls image:, not which image; image: is keyed, and the login names a variable, never anything the step runs"}
+	resourceType := map[string]string{"Name": "source: config.ResourceType — a step is keyed by what the type DOES, so a rename re-runs nothing and two types doing the same thing share an entry", "Config.Check": notThisVerb, "Config.Webhook": derivedFlag, "Config.Cron": derivedFlag, "Config.Concourse": derivedFlag, "Type": desugared, "Source": desugared, "Defaults": desugared, "ImageLogin": "auth: who pulls image:, not which image; image: is keyed, and the login names a variable, never anything the step runs", "Unfenced": fenceOptOut}
 
 	agentSilent := map[string]string{
 		"Attempts": operational, "Budget": operational, "DelegateBudgetPercent": operational, "Timeout": operational,
@@ -305,7 +306,8 @@ func keyProbes() []keyProbe {
 		"Source.APIKeyEnv":        secretNamed,
 		"Source.Secrets":          secretNamed,
 		"File":                    loadedInto, "SystemFile": loadedInto, "Description": loadedInto,
-		"Caches": "source: config.TaskCache — a speed-up only, never hashed, or a warm cache would make identical work look different",
+		"Caches":   "source: config.TaskCache — a speed-up only, never hashed, or a warm cache would make identical work look different",
+		"Unfenced": fenceOptOut,
 	}
 
 	with := func(base map[string]string, more map[string]string) map[string]string {
@@ -339,7 +341,7 @@ func keyProbes() []keyProbe {
 	deadline := "source: config.Step.Tags — a deadline or a retry count is not part of what a step produces, the reasoning placement shares"
 
 	stepTaskSilent := map[string]string{
-		"Task": taskName, "RunFile": loadedInto, "Fix": fixUncached, "Caches": agentSilent["Caches"],
+		"Task": taskName, "RunFile": loadedInto, "Fix": fixUncached, "Caches": agentSilent["Caches"], "Unfenced": fenceOptOut,
 		"Timeout": deadline, "Attempts": deadline,
 		"Tags":         "source: config.Step.Tags — NOT hashed: placement decides where a step runs, not what it produces",
 		"Volatile":     "source: config.Step.Volatile — a volatile step is never reused (stepRecordsOnlyOutputs), so no key answers for it",
@@ -390,6 +392,7 @@ func keyProbes() []keyProbe {
 		probeOf("MCPServer", server, map[string]string{
 			"Auth.CallbackPort": "source: config.MCPServerAuth — read only by `steps mcp login`, so no step ever runs with it",
 			"Auth.Secrets":      secretNamed,
+			"Unfenced":          fenceOptOut,
 		}, func(srv config.MCPServer) (any, error) {
 			return mcpServerContent(&config.Config{MCPServers: []config.MCPServer{srv}}, "github")
 		}),
@@ -410,7 +413,7 @@ func keyProbes() []keyProbe {
 			return out
 		}(), func(a config.Agent) (any, error) { return agentContent(a) }).choosing(agentEnums).leaving("Source.Endpoint", "Tools"),
 		probeOf("Task/run", config.Task{Name: "build", Run: "make"}, map[string]string{
-			"Name": taskName, "File": loadedInto, "RunFile": loadedInto, "Fix": fixUncached, "Timeout": deadline, "Caches": agentSilent["Caches"],
+			"Name": taskName, "File": loadedInto, "RunFile": loadedInto, "Fix": fixUncached, "Timeout": deadline, "Caches": agentSilent["Caches"], "Unfenced": fenceOptOut,
 		}, func(task config.Task) (any, error) {
 			cfg := &config.Config{Tasks: []config.Task{task}}
 			step := config.Step{Task: task.Name}

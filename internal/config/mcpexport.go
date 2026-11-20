@@ -35,6 +35,8 @@ type MCPExport struct {
 	Rate string `yaml:"rate,omitempty"`
 	// Image runs the export's custom run: commands in a container from this image, a fresh one per command; empty runs them on the daemon's machine.
 	Image string `yaml:"image,omitempty"`
+	// Unfenced is the pipeline's half of fence: enforce's two-key opt-out (unfenced.go): why this export's run: tools run unfenced.
+	Unfenced *string `yaml:"unfenced,omitempty"`
 	// User, Network, Privileged and Limits are the container's, as on a task, and need Image.
 	User       string           `yaml:"user,omitempty"`
 	Network    string           `yaml:"network,omitempty"`

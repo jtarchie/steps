@@ -255,9 +255,9 @@ func (c *Config) registerYAMLTypes() {
 	}
 }
 
-// runsBuiltinIn reports a declared type that is the built-in of its name run in its image (#263): image: and no commands or Concourse spelling of its own. Concourse runs every type, git included, in an image; steps' built-ins are commands, so the image is where they run.
+// runsBuiltinIn reports a declared type that is the built-in of its name run in its image (#263): image: and no commands or Concourse spelling of its own. Concourse runs every type, git included, in an image; steps' built-ins are commands, so the image is where they run. An entry with only unfenced: is the built-in too, opted out of fence: enforce rather than fenced.
 func runsBuiltinIn(declared ResourceType) bool {
-	return declared.Image != "" && declared.Type == "" && reflect.ValueOf(declared.Config).IsZero()
+	return (declared.Image != "" || declared.Unfenced != nil) && declared.Type == "" && reflect.ValueOf(declared.Config).IsZero()
 }
 
 // clonesWithGit is a Go-backed type that runs a command at all: checkout: git's clone. The others run nothing to put in an image.

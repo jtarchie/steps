@@ -1076,15 +1076,16 @@ reviewed. `basic-auth-password` is refused in it and stays
 `STEPS_BASIC_AUTH_PASSWORD`; the OAuth client secrets already come from the
 variables `--github-client-secret-env` and `--google-client-secret-env` name.
 
-**`secret:` is the one key that is not a flag.** It names the commands the
-daemon runs to fetch a credential, which are nested objects no flag can carry.
+**`secret:` and `allow-unfenced:` are the keys that are not flags**, both
+nested objects no flag can carry; `allow-unfenced:` is [below](#opting-out-two-keys). `secret:` names the commands the
+daemon runs to fetch a credential.
 A daemon with a secret source refuses to start unless somebody has to sign in
 (`--local-user`, `--basic-auth-username` or a sign-in provider), loopback
 included: a daemon nobody signs in to treats every request as admin, and every
 step is handed `STEPS_URL`, so any step could set a pipeline that reads another
 pipeline's secrets.
 
-`steps web` reads all of it. `steps validate` reads only `fence:` (below) and,
+`steps web` reads all of it. `steps validate` reads only `fence:` and `allow-unfenced:` (below) and,
 with `--live`, `secret:`. `steps run` and `steps test` take `--config` too (and
 never `STEPS_CONFIG`) but read only `secret:`,
 so a pipeline with secrets can be run without a daemon; see
@@ -1109,8 +1110,16 @@ web:
   under a `warning:` line (a set of the file already served sends nothing and
   says `unchanged`), and in a notice at the top of the pipeline's page. A pipeline restored at
   startup is judged the same way, so the notice is there after a restart too.
-- `enforce`, which would refuse such a pipeline, is not available yet, and the
-  daemon refuses to start with it rather than read it as `warn`.
+- **`enforce`** refuses such a pipeline at `steps pipeline set`, naming every
+  unfenced command and what would fence it, unless [both keys](#opting-out-two-keys)
+  opt it out. A pipeline restored at startup is judged the same way: one that
+  no longer complies, because the allowlist changed or this machine has no
+  sandbox, is shown **broken** with the reason, as a `--worker` change would
+  leave it, until a set repairs it or the daemon restarts with a policy it
+  meets. Roll out `warn` first: under `enforce` every stored pipeline that runs
+  something unfenced is broken on the next restart. A `steps run --target`
+  one-off is judged too, under the name the daemon mints for it, which no
+  allowlist can name, so under `enforce` it runs only what is fenced.
 
 A command is **fenced** when it runs in an `image:` without `privileged: true`,
 or under [`sandbox: true`](infra.md#host-sandbox-sandbox) on a daemon whose
@@ -1140,10 +1149,130 @@ on this machine whatever fences its tools.
 Because the policy lives in the daemon's config file, a pipeline cannot loosen
 the rule that judges it. To see the list before a set, give `steps validate`
 the same file: `steps validate --config /etc/steps/steps.yml pipeline.yml`
-prints it as warnings and still passes. It reads only `fence:` and, with
-`--live`, `secret:`, and judges `sandbox: true` by the machine it runs on, so
-validate on the daemon's machine (a darwin laptop does not see what a linux
-daemon without Landlock lists).
+prints it as warnings and still passes under `warn`, and fails as the set
+would under `enforce`. It judges the pipeline under the name it would be set
+as (the file's name, or `--name app=pipeline.yml`). It reads only `fence:`,
+`allow-unfenced:` and, with `--live`, `secret:`, and judges `sandbox: true` by
+the machine it runs on, so validate on the daemon's machine (a darwin laptop
+does not see what a linux daemon without Landlock lists).
+
+### Opting out: two keys
+
+Some commands cannot be fenced, or are not worth it: a task that posts with
+the machine's own `gh` login, say. Under `enforce` such a command runs only
+when **both** of these say so:
+
+1. **The pipeline declares it**, with `unfenced: "<reason>"` on the entity, the
+   place `image:` or `sandbox:` would go. The reason is what everyone reading
+   the pipeline, its diff and its page sees.
+2. **The daemon's config file allows it**, under `allow-unfenced:`, keyed by
+   the pipeline's name:
+
+```yaml config
+web:
+  fence: enforce
+  allow-unfenced:
+    release: [task notify, task tag, guard ship]
+    review: [agent coder, mcp_server gopls, resource_type git]
+```
+
+Either key alone does nothing: a pipeline's own `unfenced:` would be the
+pipeline vouching for itself, and an allowlist alone would hide why. The
+config file is the privilege boundary (owner-only, never read from a
+repository), and `allow-unfenced:` can only be set there, never as a flag.
+
+Each entity is a kind and a name. `warn` and `enforce` print it in brackets at
+the end of every listed line, so copy it from there:
+
+| Entity | `unfenced:` goes on |
+|---|---|
+| `task <name>` | the `tasks:` entry, or the step (the only place an inline `run:` has) |
+| `agent <name>` | the `agents:` entry, or the step; it also covers an `mcp_exports:` entry's exported agent |
+| `resource_type <name>` | the `resource_types:` entry; for a built-in such as `git`, an entry of its name with only `unfenced:` (it stays the built-in) |
+| `mcp_server <name>` | the `mcp_servers:` entry |
+| `mcp_export <name>` | the `mcp_exports:` entry, for its custom `run:` tools |
+| `guard <job>` | the step whose `when:` guard has nothing else to run under (a block, `get`, `load_var:`, `approval:`) |
+
+```yaml
+tasks:
+  - name: notify
+    unfenced: posts with this machine's own gh login
+    run: echo notified
+
+jobs:
+  - name: ship
+    plan:
+      - task: notify
+      - task: tag
+        unfenced: tags the operator's checkout in place  # an inline run: says it on the step
+        run: echo tagged
+      - do:
+          - task: notify
+        unfenced: the release lock lives on this machine  # covers this block's guard
+        when: test -d .
+    assert:
+      execution: [notify, tag, notify]
+      outcome: succeeded
+```
+
+```yaml noexec=stdio-mcp
+mcp_servers:
+  - name: gopls
+    command: gopls
+    args: [mcp]
+    unfenced: reads the module cache the operator keeps warm
+
+mcp_exports:
+  - name: lint
+    access: "true"
+    unfenced: runs the linter the operator installed
+    tools:
+      - name: golangci
+        description: lint the repository
+        run: golangci-lint run
+
+resource_types:
+  - name: git
+    unfenced: clones with the host's ssh agent
+
+resources:
+  - name: repo
+    type: git
+    source: {uri: https://github.com/jtarchie/ci.git}
+
+agents:
+  - name: coder
+    source: {model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY}
+    unfenced: needs the host's go toolchain
+    tools:
+      - run_shell
+      - mcp: gopls
+
+jobs:
+  - name: review
+    plan:
+      - get: repo
+      - agent: coder
+        inputs: [repo]
+        dir: repo
+        messages:
+          - "Review the change."
+```
+
+- **It weakens nothing on its own.** Under `off` it does nothing, and under
+  `warn` it is shown beside the listed command.
+- **The reason cannot be blank**; `unfenced: " "` is a load error. On a step
+  that runs no command and has no `when:` guard it covers nothing and is a load
+  error too, and on a `put:` it belongs on the resource type, whose commands the
+  put runs.
+- **A rename drops off the allowlist.** A renamed task, agent, resource type,
+  server, export, job or pipeline (`steps pipeline rename` included) no longer
+  matches its entry, and is refused until the operator allows the new name.
+- **An agent with a sub-agent** that runs host tools under no `sandbox:` of its
+  own is listed under the agent, whatever fences the agent: its `unfenced:` and
+  its entity are the agent's, since a block's or step's `sandbox: true` does not
+  reach the sub-agent.
+- **Never hashed**: adding or editing a reason re-runs nothing.
 
 ## Flags
 
@@ -1170,8 +1299,9 @@ daemon without Landlock lists).
 --store-max-bytes
                  how many bytes of cached trees the root's store keeps, least
                  recently used evicted first (default 8 GiB)
---fence          off (default) or warn: list every command a pipeline would
-                 run unfenced, on set and on its page (see Fencing commands)
+--fence          off (default); warn to list every command a pipeline would
+                 run unfenced, on set and on its page; or enforce to refuse it
+                 unless both keys opt it out (see Fencing commands)
 --read-only      serve without trigger, retry, approve/reject, answer, release,
                  pause, abort, connect or test controls, and serve no mcp_exports
                  (steps pipeline set is NOT withheld — see Security)

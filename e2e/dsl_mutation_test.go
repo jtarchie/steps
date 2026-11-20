@@ -53,6 +53,7 @@ type stepOperator struct {
 // oversight, and this is exactly the list where an oversight hides.
 var stepMutationSkips = map[string]string{ //nolint:gochecknoglobals // a test's data table
 	"trigger":  "steps test runs every job unconditionally, so trigger: changes nothing it can see; it decides polling under steps watch, covered by internal/trigger",
+	"unfenced": "steps test never consults a daemon's fence: policy, so a reason changes nothing it can see; it decides what steps web under fence: enforce accepts, pinned by TestFenceEnforceRefusesUnlessBothKeysOptOut",
 	"approval": "an approval parks the run until a person answers, which is why its example is noexec=approval — there is no run to mutate",
 	"on_abort": "only SIGINT/SIGTERM mid-run reaches it, and a fixture that signals itself is testing the harness; pinned by TestConformanceAbortFiresOnAbortHook and TestRunHooksAbortGracePeriod instead",
 
