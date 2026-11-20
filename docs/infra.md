@@ -698,7 +698,7 @@ Rules and edges:
 - Settable on `resource_types:`, `tasks:` and `agents:` entries, and on a task or agent **step** (below). A `when:` guard runs under its step's sandbox.
 - **Refused beside `image:`**, including a step's own `image:` over a sandboxed task: a container is already its own fence, and one the OS sandbox cannot reach into. **Refused on a placed step** (`tags:`, inherited or not): the fence is on this machine, and the step would run on another.
 - **A `fix:` agent runs under the failing task's sandbox**, as it does under the task's image, so a fix agent's own `sandbox: true` is a load error. A delegated sub-agent runs under its own entry's.
-- **Not fenced**, exactly as under `image:`: an agent's stdio MCP servers and a CLI agent's own process. They are host subprocesses either way.
+- **Not fenced by the agent's sandbox**: its stdio MCP servers and a CLI agent's own process are host subprocesses, as under `image:`. A stdio server is fenced by its own [`image:`](mcp.md#a-stdio-server-in-a-container-image).
 - **Caching**: `sandbox: true` folds into the node's hash; unset leaves every existing key as it was.
 
 ### On a step
