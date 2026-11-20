@@ -2,12 +2,44 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
+
+// database/sql rolls a transaction back the moment its context is cancelled, so a shutdown landing mid-write surfaces as sql.ErrTxDone rather than the cancellation; that run is still interrupted, left for the restart rather than failed (#283, where it cost a restarted daemon its one-off's run).
+func TestAShutdownMidTransactionLeavesTheRunForTheRestart(t *testing.T) {
+	t.Parallel()
+
+	runner, target, st := drainable(t, t.TempDir(), "jobs:\n  - name: build\n    plan:\n      - task: one\n        inputs: []\n        run: \"true\"\n")
+	drain, shutdown := context.WithCancel(context.Background())
+
+	cut := NewPipeline(target.Slug, target.Config(), txCutByShutdown{Store: st, shutdown: shutdown}, events.New(nil))
+
+	waitForDrain(t, drainInBackground(drain, runner, cut), 20*time.Second)
+
+	if got := queueStatuses(t, st); got != "running" {
+		t.Errorf("queue = %s, want the row left running for the restart to re-queue", got)
+	}
+}
+
+// txCutByShutdown is the daemon's shutdown landing inside the transaction that records the run's configuration.
+type txCutByShutdown struct {
+	store.Store
+
+	shutdown context.CancelFunc
+}
+
+func (s txCutByShutdown) RecordRevision(context.Context, string, string, map[string]string) error {
+	s.shutdown()
+
+	return fmt.Errorf("could not record the configuration of pipeline %q: %w", "demo", sql.ErrTxDone)
+}
 
 // A shutdown nobody asked the run to stop for is an interruption, not an abort: the run is left running for the next start to resume (#208).
 func TestAShutdownLeavesAnInterruptedRunRunningForTheRestart(t *testing.T) {
