@@ -76,6 +76,33 @@ func TestTheUpgradeFoldsStepBlobsIntoTheCacheIndex(t *testing.T) {
 	}
 }
 
+// TestTheUpgradeMarksTheOneOffsTheNameUsedTo: as sqlite's, only the daemon-minted shape becomes a one-off.
+func TestTheUpgradeMarksTheOneOffsTheNameUsedTo(t *testing.T) {
+	t.Parallel()
+
+	old := loadV010(t, `
+INSERT INTO pipelines (name, path) VALUES ('one-off.abcdefgh2345', 'a.yml'), ('one-off.mine', 'b.yml'), ('one-off.ABCDEFGH2345', 'c.yml'), ('one-off.abcdefgh23456', 'd.yml'), ('one-off.abcdefgh2341', 'e.yml'), ('one-offxabcdefgh2345', 'f.yml');`)
+
+	st := openStore(t, old, "app")
+
+	rows, err := st.Reader().Pipelines(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var marked []string
+
+	for _, row := range rows {
+		if row.OneOff {
+			marked = append(marked, row.Name)
+		}
+	}
+
+	if !slices.Equal(marked, []string{"one-off.abcdefgh2345"}) {
+		t.Errorf("one-offs after the upgrade = %v, want only the daemon-minted name", marked)
+	}
+}
+
 // TestEveryVersionHasItsMigration: schemaVersion and the step list are two facts about one thing.
 func TestEveryVersionHasItsMigration(t *testing.T) {
 	t.Parallel()

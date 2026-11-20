@@ -79,7 +79,7 @@ func (d *daemon) Rename(ctx context.Context, from, to string) error {
 	d.dropProbes(from)
 	moveErr := stepsmcp.MoveLogins(oldLogins, cfg.Name)
 
-	d.start(to, cfg, st, provider, setFrom)
+	d.start(to, cfg, st, provider, setFrom, false)
 
 	if moveErr != nil {
 		stay, _ := stepsmcp.LoginsExist(oldLogins)

@@ -86,6 +86,8 @@ INSERT INTO cache_entries (kind, key, used_at)
 INSERT INTO cache_entry_trees (kind, key, name, digest)
     SELECT DISTINCT ON (action_key, output) 'step', action_key, output, digest FROM step_blobs ORDER BY action_key, output, seq DESC;
 DROP TABLE step_blobs`,
+	`ALTER TABLE pipelines ADD COLUMN one_off BOOLEAN NOT NULL DEFAULT false;
+UPDATE pipelines SET one_off = true WHERE name ~ '^one-off\.[a-z2-7]{12}$'`,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

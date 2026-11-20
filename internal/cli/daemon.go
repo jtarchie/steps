@@ -50,9 +50,9 @@ type daemon struct {
 	spared []string
 	// releaseWorkers gives back what the shared registry still keeps warm; Close runs it after every loop that could hold a machine is gone.
 	releaseWorkers func()
-	// oneOffGrace is how long a finished one-off stays served, so a terminal that dropped can reconnect and a browser can read the end; a field so a test can shorten it.
-	oneOffGrace time.Duration
-	// reaping is every one-off destroy in flight, which runs outside the loops it tears down; Close waits for them.
+	// oneOffHistory is how many finished one-offs stay served, --one-off-history; zero keeps every one.
+	oneOffHistory int
+	// reaping is every one-off trim in flight, which runs outside the loops it tears down; Close waits for them.
 	reaping sync.WaitGroup
 	// Embedded so the daemon IS a web.Authorizer, which is how the server finds one; see daemon_login.go and daemon_mcp.go.
 	*logins
@@ -114,6 +114,7 @@ func (d *daemon) serves(name string) bool {
 
 // servedPipeline is one pipeline plus what has to be shut down when it goes.
 type servedPipeline struct {
+	oneOff bool
 	target *web.Pipeline
 	checks *trigger.Requests
 	cancel context.CancelFunc
@@ -147,7 +148,6 @@ func newDaemon(
 		served:         map[string]*servedPipeline{},
 		swept:          map[string]bool{},
 		releaseWorkers: releaseWorkers,
-		oneOffGrace:    10 * time.Minute,
 		logins:         newLogins(base),
 		probes:         newProbes(base),
 	}
@@ -197,7 +197,7 @@ func (d *daemon) load(ctx context.Context) error {
 		}
 
 		// Served or shown broken, never dropped and never the reason the rest go unserved: one pipeline's disk problem is not another team's outage, and a daemon that silently skipped one would look healthy while missing it.
-		err = d.restore(ctx, row.Name, row.Path)
+		err = d.restore(ctx, row.Name, row.Path, row.OneOff)
 		if err != nil {
 			hint := "`steps pipeline set -p " + row.Name + "` repairs it"
 			if errors.Is(err, errCannotRunHere) {
@@ -245,17 +245,17 @@ func interruptedTrees(ctx context.Context, state State, rows []store.PipelineRow
 }
 
 // restore serves a pipeline from the database, which after a restart is the only copy of it there is.
-func (d *daemon) restore(ctx context.Context, name, from string) error {
+func (d *daemon) restore(ctx context.Context, name, from string, oneOff bool) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	return d.restoreLocked(ctx, name, from)
+	return d.restoreLocked(ctx, name, from, oneOff)
 }
 
 // restoreLocked is restore under a d.mu the caller already holds.
 //
 //nolint:contextcheck // opening and closing a store take none, and the placement check deliberately reads the daemon's own context — see accept
-func (d *daemon) restoreLocked(ctx context.Context, name, from string) error {
+func (d *daemon) restoreLocked(ctx context.Context, name, from string, oneOff bool) error {
 	st, err := d.stateFor(name, nil)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
@@ -290,7 +290,7 @@ func (d *daemon) restoreLocked(ctx context.Context, name, from string) error {
 
 	slog.InfoContext(ctx, "web.pipeline.serving", "pipeline", name, "config", shortConfig(revision.SHA))
 
-	d.start(name, cfg, st, provider, from)
+	d.start(name, cfg, st, provider, from, oneOff)
 
 	return nil
 }
@@ -347,7 +347,7 @@ func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.
 	if serving {
 		d.replace(existing, cfg, provider, req.From)
 	} else {
-		d.start(name, cfg, st, provider, req.From)
+		d.start(name, cfg, st, provider, req.From, false)
 	}
 
 	slog.InfoContext(ctx, "web.pipeline.set", "pipeline", name, "config", shortConfig(cfg.Revision.SHA))
@@ -528,7 +528,7 @@ func (d *daemon) replace(existing *servedPipeline, cfg *config.Config, provider 
 // start launches the two loops a served pipeline is: the drain that runs what the queue holds, and the poll that fills it.
 func (d *daemon) start(
 	name string, cfg *config.Config, st store.Store,
-	provider workspace.Provider, from string,
+	provider workspace.Provider, from string, oneOff bool,
 ) {
 	// Rooted in the daemon's lifetime rather than the request's: a set is over in milliseconds and what it starts has to outlive it.
 	loopCtx, cancel := context.WithCancel(d.base)
@@ -577,12 +577,12 @@ func (d *daemon) start(
 		d.runner.DrainPipeline(loopCtx, target.Pipeline)
 	}()
 
-	if isOneOff(name) {
+	if oneOff {
 		// No poll: a one-off runs the job it was handed, never what its resources would trigger.
 		go func() {
 			defer loops.Done()
 
-			d.reapWhenDone(loopCtx, st, name)
+			d.trimWhenSettled(loopCtx, st)
 		}()
 	} else {
 		go func() {
@@ -599,6 +599,7 @@ func (d *daemon) start(
 	}
 
 	d.served[name] = &servedPipeline{
+		oneOff: oneOff,
 		target: target,
 		checks: checks,
 		cancel: cancel,
@@ -662,7 +663,7 @@ func (d *daemon) destroyLocked(ctx context.Context, name string) error {
 		restoreCtx, restoreCancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
 		defer restoreCancel()
 
-		restoreErr := d.restoreLocked(restoreCtx, name, served.target.Path())
+		restoreErr := d.restoreLocked(restoreCtx, name, served.target.Path(), served.oneOff)
 		if restoreErr != nil {
 			// Shown broken, as a restart's failed restore is: unlisted, the pipeline would vanish until the next restart while its rows stay, and a second destroy would answer that there is no such pipeline.
 			d.server.MarkBroken(web.BrokenPipeline{Name: name, SHA: served.target.Config().Revision.SHA, From: served.target.Path(), Reason: restoreErr.Error()})

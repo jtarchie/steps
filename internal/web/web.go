@@ -215,7 +215,7 @@ type Manager interface {
 	Set(ctx context.Context, name string, req SetRequest) (SetResult, error)
 	Destroy(ctx context.Context, name string) error
 	Rename(ctx context.Context, from, to string) error
-	// OneOff serves a configuration under a pipeline it names itself, queues one job of it, and forgets the pipeline once that run is over: `steps run --target`.
+	// OneOff serves a configuration under a pipeline it names itself and queues one job of it, keeping the pipeline until it falls out of the last finished one-offs: `steps run --target`.
 	OneOff(ctx context.Context, req OneOffRequest) (OneOffResult, error)
 }
 
