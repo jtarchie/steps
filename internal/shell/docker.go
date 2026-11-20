@@ -109,6 +109,8 @@ type dockerSession struct {
 	user string
 	// network is the --network value; empty takes docker's own default.
 	network string
+	// extraHosts are --add-host entries.
+	extraHosts []string
 	// privileged adds --privileged.
 	privileged bool
 	// cpuShares/memoryBytes are --cpu-shares and --memory; zero omits each.
@@ -289,6 +291,7 @@ func (s *dockerSession) start(ctx context.Context, name string) (string, error) 
 		Labels:      OwnershipLabels(),
 		User:        s.user,
 		Network:     s.network,
+		ExtraHosts:  s.extraHosts,
 		Privileged:  s.privileged,
 		CPUShares:   int64(s.cpuShares),
 		MemoryBytes: s.memoryBytes,

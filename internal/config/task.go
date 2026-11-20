@@ -51,6 +51,8 @@ type Task struct {
 	// --network); "none" cuts off egress entirely. Requires Image, except
 	// "none" beside Sandbox.
 	Network string `yaml:"network,omitempty"`
+	// ExtraHosts are names this task's run: resolves through the container's /etc/hosts (docker's --add-host), each to an IP or host-gateway, docker's alias for the daemon's machine. Requires Image, and is refused beside network: none.
+	ExtraHosts ExtraHosts `yaml:"extra_hosts,omitempty"`
 	// Privileged runs this command's container with `docker run --privileged`.
 	// Mirrors Concourse's privileged: (concourse-ci.org/docs/steps/task/).
 	// Container-only, like Network — a host command has nothing to elevate,

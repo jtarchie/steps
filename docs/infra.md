@@ -490,6 +490,57 @@ jobs:
 
 This is not a full sandbox — a command can still reach the host filesystem by absolute path, and `network: host` opts back out entirely.
 
+## Host aliases (`extra_hosts:`)
+
+A container reaches the machine running docker as `host.docker.internal`, which is no help to an app that routes by hostname — a site that serves `www.example.test` and redirects everything else answers that name with a 404 or a redirect the container cannot follow. `extra_hosts:` adds names to the container's own `/etc/hosts` (docker's `--add-host`), so a step reaches the target under the names it really answers to, and the target needs no changes:
+
+```yaml noexec=docker
+resource_types:
+- name: site-status
+  image: curlimages/curl:8.11.1
+  extra_hosts: ["www.example.test:host-gateway"]   # list form: name:address
+  config:
+    check: |
+      printf '[{"status":"%s"}]' "$(curl -s -o /dev/null -w '%{http_code}' http://www.example.test:3000/up)"
+
+resources:
+- name: site
+  type: site-status
+  source: {}
+
+tasks:
+- name: smoke
+  image: curlimages/curl:8.11.1
+  extra_hosts:                                    # map form: name: address
+    www.example.test: host-gateway
+    tenant1.example.test: host-gateway
+  run: curl -fsS http://tenant1.example.test:3000/up
+
+agents:
+- name: scanner
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  image: curlimages/curl:8.11.1
+  extra_hosts: {www.example.test: 192.168.65.254}
+  tools: [run_shell]
+
+jobs:
+- name: scan
+  plan:
+  - get: site
+  - task: smoke
+  - agent: scanner
+    messages:
+      - "Probe http://www.example.test:3000 and report what it serves."
+```
+
+- Each address is an IP or `host-gateway`, docker's alias for the machine the daemon runs on (on Docker Desktop and colima, your laptop). Anything else is a load error, as is an entry that is not `name:address`.
+- **Both spellings mean the same**: a map is stored in name order, a list in the order written, so the same YAML always produces the same cache key. A list may repeat a name; a map cannot.
+- **Requires `image:`**, checked at load time, like `network:` — a host command reads the host's own `/etc/hosts`, so there is nothing to add the names to. Unlike `network:`, `sandbox: true` does not make it legal.
+- **Refused beside `network: none`**, on the entry or as a step's override of it: the names would resolve and lead nowhere.
+- Settable on `resource_types:`, `tasks:` and `agents:` entries, not on a step — a step gets its entry's. It applies on whichever machine the container runs, a tagged worker included.
+- `((var))` works in an address, since variables are substituted before the YAML is read — useful when an IP differs between machines, though `host-gateway` usually avoids needing one.
+- **Caching**: `extra_hosts:` folds into the node's hash, so changing where a name points re-runs the step.
+
 ## Container privileges and limits (`privileged:`, `container_limits:`)
 
 Both sit wherever `image:` does, and both **require `image:`** — a host-executed command has no cgroup to cap and no privilege to raise, so accepting either there would promise something it does not do.

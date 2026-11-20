@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -45,6 +46,7 @@ type daemonView struct {
 	HostConfig struct {
 		Binds       []string `json:"Binds"`
 		NetworkMode string   `json:"NetworkMode"`
+		ExtraHosts  []string `json:"ExtraHosts"`
 		Privileged  bool     `json:"Privileged"`
 		CPUShares   int64    `json:"CpuShares"`
 		Memory      int64    `json:"Memory"`
@@ -138,6 +140,7 @@ func TestContractSessionContainerConfiguration(t *testing.T) {
 		EnvValues:   map[string]string{"STEPS_TEST_CONTRACT_SUPPLIED": "from-the-caller"},
 		User:        "1234:5678",
 		Network:     "none",
+		ExtraHosts:  []string{"contract.test:10.9.8.7"},
 		Privileged:  true,
 		CPUShares:   512,
 		MemoryBytes: 64 << 20,
@@ -179,6 +182,10 @@ func assertContainerLimits(t *testing.T, view daemonView) {
 
 	if view.HostConfig.NetworkMode != "none" {
 		t.Errorf("NetworkMode = %q, want none", view.HostConfig.NetworkMode)
+	}
+
+	if !slices.Equal(view.HostConfig.ExtraHosts, []string{"contract.test:10.9.8.7"}) {
+		t.Errorf("ExtraHosts = %q, want the configured entry", view.HostConfig.ExtraHosts)
 	}
 
 	if !view.HostConfig.Privileged {

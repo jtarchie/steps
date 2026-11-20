@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -260,11 +261,11 @@ func TestResolveStepRuntimeCarriesEveryIsolationField(t *testing.T) {
 
 	limits := &config.ContainerLimits{CPU: 512, Memory: 1 << 20}
 	cfg := &config.Config{
-		Tasks: []config.Task{{Name: "built", Run: "true", Image: "img", User: "uid", Network: "net", Privileged: true, Limits: limits, Sandbox: true}},
+		Tasks: []config.Task{{Name: "built", Run: "true", Image: "img", User: "uid", Network: "net", ExtraHosts: config.ExtraHosts{"h.test:10.0.0.1"}, Privileged: true, Limits: limits, Sandbox: true}},
 		Agents: []config.Agent{
-			{Name: "a", Source: config.AgentSource{Model: "lmstudio/qwen"}, Image: "img", User: "uid", Network: "net", Privileged: true, Limits: limits, Sandbox: true},
+			{Name: "a", Source: config.AgentSource{Model: "lmstudio/qwen"}, Image: "img", User: "uid", Network: "net", ExtraHosts: config.ExtraHosts{"h.test:10.0.0.1"}, Privileged: true, Limits: limits, Sandbox: true},
 		},
-		ResourceTypes: []config.ResourceType{{Name: "rt", Image: "img", User: "uid", Network: "net", Privileged: true, Limits: limits, Sandbox: true}},
+		ResourceTypes: []config.ResourceType{{Name: "rt", Image: "img", User: "uid", Network: "net", ExtraHosts: config.ExtraHosts{"h.test:10.0.0.1"}, Privileged: true, Limits: limits, Sandbox: true}},
 		Resources:     []config.Resource{{Name: "r", Type: "rt"}},
 	}
 
@@ -283,9 +284,19 @@ func TestResolveStepRuntimeCarriesEveryIsolationField(t *testing.T) {
 			t.Errorf("%s: Workdir = %q, want %q", name, spec.Workdir, want)
 		}
 
-		if spec.User != "uid" || spec.Network != "net" || !spec.Privileged || !spec.Sandbox || spec.CPUShares != limits.CPUShares() || spec.MemoryBytes != limits.MemoryBytes() {
-			t.Errorf("%s: spec = User %q Network %q Privileged %v Sandbox %v CPUShares %d MemoryBytes %d, want uid net true true %d %d",
-				name, spec.User, spec.Network, spec.Privileged, spec.Sandbox, spec.CPUShares, spec.MemoryBytes, limits.CPUShares(), limits.MemoryBytes())
-		}
+		assertCarriesIsolation(t, name, spec, limits)
+	}
+}
+
+func assertCarriesIsolation(t *testing.T, name string, spec shell.RunnerSpec, limits *config.ContainerLimits) {
+	t.Helper()
+
+	if spec.User != "uid" || spec.Network != "net" || !spec.Privileged || !spec.Sandbox || spec.CPUShares != limits.CPUShares() || spec.MemoryBytes != limits.MemoryBytes() {
+		t.Errorf("%s: spec = User %q Network %q Privileged %v Sandbox %v CPUShares %d MemoryBytes %d, want uid net true true %d %d",
+			name, spec.User, spec.Network, spec.Privileged, spec.Sandbox, spec.CPUShares, spec.MemoryBytes, limits.CPUShares(), limits.MemoryBytes())
+	}
+
+	if !slices.Equal(spec.ExtraHosts, []string{"h.test:10.0.0.1"}) {
+		t.Errorf("%s: ExtraHosts = %q, want the entry's h.test:10.0.0.1", name, spec.ExtraHosts)
 	}
 }

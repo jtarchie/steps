@@ -159,6 +159,7 @@ func (c *Config) validate() error {
 		c.validateSecrets,
 		c.validateUserRules,
 		c.validateNetworkRules,
+		c.validateExtraHostsRules,
 		c.validateTagRules,
 		c.validateLimitsRules,
 		c.validateSandbox,

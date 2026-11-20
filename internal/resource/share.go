@@ -83,12 +83,13 @@ func sharedCheckFor(ctx context.Context, command string, spec shell.RunnerSpec) 
 		Image       string   `json:"image"`
 		User        string   `json:"user"`
 		Network     string   `json:"network"`
+		ExtraHosts  []string `json:"extra_hosts"`
 		Env         []string `json:"env"`
 		Privileged  bool     `json:"privileged"`
 		CPUShares   int      `json:"cpu_shares"`
 		MemoryBytes int64    `json:"memory_bytes"`
 		Sandbox     bool     `json:"sandbox"`
-	}{command, spec.Image, spec.User, spec.Network, spec.Env, spec.Privileged, spec.CPUShares, spec.MemoryBytes, spec.Sandbox})
+	}{command, spec.Image, spec.User, spec.Network, spec.ExtraHosts, spec.Env, spec.Privileged, spec.CPUShares, spec.MemoryBytes, spec.Sandbox})
 	if err != nil {
 		return nil, ""
 	}

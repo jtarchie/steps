@@ -39,6 +39,10 @@ func withResourceTypeEnv(cfg *config.Config, resourceType config.ResourceType, e
 		content["network"] = resourceType.Network
 	}
 
+	if len(resourceType.ExtraHosts) > 0 {
+		content["extra_hosts"] = resourceType.ExtraHosts
+	}
+
 	withSandbox(resourceType.Sandbox, content)
 
 	withIsolation(resourceType.Privileged, resourceType.Limits, content)

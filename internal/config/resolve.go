@@ -40,6 +40,8 @@ type ResolvedTask struct {
 	// Network is the container network this task's commands join. See
 	// Task.Network/Step.Network.
 	Network string
+	// ExtraHosts are name:address entries added to the container's /etc/hosts; from the referenced entry, never the step.
+	ExtraHosts []string
 	// Privileged runs this task's container with --privileged. See
 	// Task.Privileged/Step.Privileged.
 	Privileged bool
@@ -107,7 +109,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 
 	return ResolvedTask{
 		Name: step.Task, Run: task.Run, Fix: fix, Inputs: inputs, Outputs: outputs,
-		Image: runtime.Image, Env: runtime.Env, Secrets: secrets, User: runtime.User, Network: runtime.Network,
+		Image: runtime.Image, Env: runtime.Env, Secrets: secrets, User: runtime.User, Network: runtime.Network, ExtraHosts: runtime.ExtraHosts,
 		Privileged: runtime.Privileged, Limits: runtime.Limits, Sandbox: runtime.Sandbox, Timeout: timeout,
 		InputMapping: step.InputMapping, OutputMapping: step.OutputMapping, Assert: step.Assert,
 		Caches: resolveCaches(task.Caches, step),
@@ -211,6 +213,8 @@ type ResolvedInvocation struct {
 	// Network is the container network this step's commands join. See
 	// Agent.Network/Step.Network.
 	Network string
+	// ExtraHosts are name:address entries added to the container's /etc/hosts; from the referenced entry, never the step.
+	ExtraHosts []string
 	// Privileged runs this step's container with --privileged. See
 	// Agent.Privileged/Step.Privileged.
 	Privileged bool
@@ -312,6 +316,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		Secrets:              resolveSecrets(agent.Secrets, step),
 		User:                 runtime.User,
 		Network:              runtime.Network,
+		ExtraHosts:           runtime.ExtraHosts,
 		Privileged:           runtime.Privileged,
 		Limits:               runtime.Limits,
 		Sandbox:              runtime.Sandbox,

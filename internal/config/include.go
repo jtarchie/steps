@@ -285,6 +285,10 @@ func mergeTaskContainer(t *Task, doc Task) {
 		t.User = doc.User
 	}
 
+	if t.ExtraHosts == nil {
+		t.ExtraHosts = doc.ExtraHosts
+	}
+
 	if t.Network == "" {
 		t.Network = doc.Network
 	}
@@ -395,6 +399,10 @@ func mergeAgentContainer(a *Agent, doc Agent) {
 
 	if a.User == "" {
 		a.User = doc.User
+	}
+
+	if a.ExtraHosts == nil {
+		a.ExtraHosts = doc.ExtraHosts
 	}
 
 	if a.Network == "" {

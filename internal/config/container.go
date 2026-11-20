@@ -15,6 +15,7 @@ type containerSettings struct {
 	Env        []string
 	User       string
 	Network    string
+	ExtraHosts ExtraHosts
 	Privileged bool
 	Limits     *ContainerLimits
 	Sandbox    bool
@@ -43,15 +44,15 @@ type entryRef struct {
 }
 
 func (rt ResourceType) containerSettings() containerSettings {
-	return containerSettings{Image: rt.Image, Env: rt.Env, User: rt.User, Network: rt.Network, Privileged: rt.Privileged, Limits: rt.Limits, Sandbox: rt.Sandbox}
+	return containerSettings{Image: rt.Image, Env: rt.Env, User: rt.User, Network: rt.Network, ExtraHosts: rt.ExtraHosts, Privileged: rt.Privileged, Limits: rt.Limits, Sandbox: rt.Sandbox}
 }
 
 func (a Agent) containerSettings() containerSettings {
-	return containerSettings{Image: a.Image, Env: a.Env, User: a.User, Network: a.Network, Privileged: a.Privileged, Limits: a.Limits, Sandbox: a.Sandbox}
+	return containerSettings{Image: a.Image, Env: a.Env, User: a.User, Network: a.Network, ExtraHosts: a.ExtraHosts, Privileged: a.Privileged, Limits: a.Limits, Sandbox: a.Sandbox}
 }
 
 func (t Task) containerSettings() containerSettings {
-	return containerSettings{Image: t.Image, Env: t.Env, User: t.User, Network: t.Network, Privileged: t.Privileged, Limits: t.Limits, Sandbox: t.Sandbox}
+	return containerSettings{Image: t.Image, Env: t.Env, User: t.User, Network: t.Network, ExtraHosts: t.ExtraHosts, Privileged: t.Privileged, Limits: t.Limits, Sandbox: t.Sandbox}
 }
 
 // from labels settings with the named entry they were read from.

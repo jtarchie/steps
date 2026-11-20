@@ -289,6 +289,10 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 		content["network"] = rt.Network
 	}
 
+	if len(rt.ExtraHosts) > 0 {
+		content["extra_hosts"] = rt.ExtraHosts
+	}
+
 	withSandbox(rt.Sandbox, content)
 
 	withIsolation(rt.Privileged, rt.Limits, content)

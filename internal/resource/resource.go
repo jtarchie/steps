@@ -83,7 +83,7 @@ func CheckVersions(ctx context.Context, c Call) ([]map[string]any, error) {
 func runnerSpec(rt config.ResourceType, extraEnv []string) shell.RunnerSpec {
 	iso := rt.Isolation()
 
-	return shell.RunnerSpec{Image: rt.Image, Env: config.UnionEnv(rt.Env, extraEnv), User: iso.User, Network: iso.Network, Sandbox: iso.Sandbox,
+	return shell.RunnerSpec{Image: rt.Image, Env: config.UnionEnv(rt.Env, extraEnv), User: iso.User, Network: iso.Network, ExtraHosts: iso.ExtraHosts, Sandbox: iso.Sandbox,
 		Privileged: iso.Privileged, CPUShares: iso.Limits.CPUShares(), MemoryBytes: iso.Limits.MemoryBytes()}
 }
 

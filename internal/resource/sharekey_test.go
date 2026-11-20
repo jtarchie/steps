@@ -14,7 +14,7 @@ import (
 // key: each changes how the check runs, so two checks differing in one must
 // not share an answer.
 var shareKeyed = map[string]bool{
-	"Image": true, "Env": true, "User": true, "Network": true,
+	"Image": true, "Env": true, "User": true, "Network": true, "ExtraHosts": true,
 	"Privileged": true, "CPUShares": true, "MemoryBytes": true, "Sandbox": true,
 }
 

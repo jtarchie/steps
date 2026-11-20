@@ -348,6 +348,10 @@ func subAgentInvocationContent(cfg *config.Config, name string) (map[string]any,
 		content["network"] = ri.Network
 	}
 
+	if len(ri.ExtraHosts) > 0 {
+		content["extra_hosts"] = ri.ExtraHosts
+	}
+
 	withSandbox(ri.Sandbox, content)
 
 	withIsolation(ri.Privileged, ri.Limits, content)
@@ -447,6 +451,10 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 
 	if ri.Network != "" {
 		content["network"] = ri.Network
+	}
+
+	if len(ri.ExtraHosts) > 0 {
+		content["extra_hosts"] = ri.ExtraHosts
 	}
 
 	withSandbox(ri.Sandbox, content)

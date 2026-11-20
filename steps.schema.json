@@ -144,6 +144,13 @@
     }
   ],
   "$defs": {
+    "extraHosts": {
+      "description": "Names the container resolves through its own /etc/hosts (docker's --add-host): a map of name to an IP address or host-gateway (the daemon's machine), or a list of name:address strings. Requires image:, and is refused beside network: none.",
+      "oneOf": [
+        {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
+        {"type": "array", "items": {"type": "string", "pattern": "^[^:]+:.+$"}}
+      ]
+    },
     "rule": {
       "type": "object",
       "additionalProperties": false,
@@ -427,6 +434,7 @@
           "type": "string",
           "description": "Container network for docker's --network (e.g. \"none\" to cut off egress entirely, \"host\", or a named network). Requires image: \u2014 a host-executed command uses the host's network."
         },
+        "extra_hosts": {"$ref": "#/$defs/extraHosts"},
         "privileged": {
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
@@ -1189,6 +1197,7 @@
           "type": "string",
           "description": "Container network for docker's --network (e.g. \"none\" to cut off egress entirely, \"host\", or a named network). Requires image: \u2014 a host-executed command uses the host's network."
         },
+        "extra_hosts": {"$ref": "#/$defs/extraHosts"},
         "privileged": {
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."
@@ -1658,6 +1667,7 @@
           "type": "string",
           "description": "Container network for docker's --network (e.g. \"none\" to cut off egress entirely, \"host\", or a named network). Requires image: \u2014 a host-executed command uses the host's network."
         },
+        "extra_hosts": {"$ref": "#/$defs/extraHosts"},
         "privileged": {
           "type": "boolean",
           "description": "Run the container with docker's --privileged. Requires image: \u2014 a host command already runs with whatever privileges started steps."

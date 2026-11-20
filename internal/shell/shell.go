@@ -104,6 +104,8 @@ type RunnerSpec struct {
 	// Empty takes docker's own default. On a host command only "none" beside
 	// Sandbox means anything; config rejects every other host use at load time.
 	Network string
+	// ExtraHosts are name:address entries added to the container's /etc/hosts. Ignored for host execution, which config rejects at load time.
+	ExtraHosts []string
 	// Privileged runs the container privileged. Ignored
 	// for host execution, which config rejects at load time.
 	Privileged bool
@@ -251,6 +253,7 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 			envValues:   spec.EnvValues,
 			user:        spec.User,
 			network:     spec.Network,
+			extraHosts:  spec.ExtraHosts,
 			privileged:  spec.Privileged,
 			cpuShares:   spec.CPUShares,
 			memoryBytes: spec.MemoryBytes,

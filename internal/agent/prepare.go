@@ -104,7 +104,7 @@ func (p preparedAgentStep) openTree(ctx context.Context) (preparedAgentStep, err
 
 // containerSpec is the one place a resolved invocation, task or export becomes a RunnerSpec's isolation fields, so a field added to the shape cannot be missed at one of the four call sites; callers set the placement fields (Subdir, Caches, Fetch, Keep) on the result.
 func containerSpec(image, cwd string, env []string, iso config.Isolation) shell.RunnerSpec {
-	return shell.RunnerSpec{Image: image, Cwd: cwd, Env: env, User: iso.User, Network: iso.Network, Sandbox: iso.Sandbox,
+	return shell.RunnerSpec{Image: image, Cwd: cwd, Env: env, User: iso.User, Network: iso.Network, ExtraHosts: iso.ExtraHosts, Sandbox: iso.Sandbox,
 		Privileged: iso.Privileged, CPUShares: iso.Limits.CPUShares(), MemoryBytes: iso.Limits.MemoryBytes()}
 }
 

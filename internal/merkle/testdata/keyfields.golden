@@ -7,6 +7,9 @@
     "env": [
       "Env[0]"
     ],
+    "extra_hosts": [
+      "ExtraHosts[0]"
+    ],
     "image": "Image",
     "inputs": [],
     "max_questions": 25,
@@ -95,6 +98,9 @@
           "env": [
             "Env[0]"
           ],
+          "extra_hosts": [
+            "ExtraHosts[0]"
+          ],
           "image": "Image",
           "max_tokens": 18,
           "max_turns": 92,
@@ -126,6 +132,9 @@
     "endpoint": "",
     "env": [
       "Env[0]"
+    ],
+    "extra_hosts": [
+      "ExtraHosts[0]"
     ],
     "image": "Image",
     "inputs": [],
@@ -191,13 +200,16 @@
       "Auth.Scopes[0]"
     ]
   },
-  "ResourceType/cache key": "b29fdfbf43e205c7a6d2970808cccc4a9303b9064549ed452f51f17c28ff99c1",
+  "ResourceType/cache key": "99ea5b2e3354f37e8e2ac10e9d2d026b60a1f378c320f98135502eb0c42f5b7e",
   "ResourceType/get": {
     "cpu_shares": 77,
     "env": [
       "Env[0]"
     ],
     "expr_in": "Config.Expr.In",
+    "extra_hosts": [
+      "ExtraHosts[0]"
+    ],
     "github": "Config.GitHub",
     "image": "Image",
     "in_template": "Config.In",
@@ -227,6 +239,9 @@
       "Env[0]"
     ],
     "expr_out": "Config.Expr.Out",
+    "extra_hosts": [
+      "ExtraHosts[0]"
+    ],
     "github": "Config.GitHub",
     "image": "Image",
     "inputs": [],
@@ -318,6 +333,9 @@
     "cpu_shares": 77,
     "env": [
       "Env[0]"
+    ],
+    "extra_hosts": [
+      "ExtraHosts[0]"
     ],
     "image": "Image",
     "inputs": [
