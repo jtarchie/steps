@@ -3,6 +3,7 @@ package cli
 // The half of the daemon that chooses a store driver and a workspace provider, which internal/web deliberately does not: it implements web.Manager, and the route calls it.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -32,6 +33,8 @@ type daemon struct {
 	exec     ExecFlags
 	history  HistoryFlags
 	interval time.Duration
+	// secretCache is how long a poll's looked-up secret answers. Its own duration, not the interval: an answer stamped when its lookup returned is just short of one interval old at the next poll and past it at the one after, so tied to the interval the source ran every other poll.
+	secretCache time.Duration
 	// fence is the --fence policy, with its allow-unfenced:, every pipeline this daemon accepts is judged by; see fence.go.
 	fence fencePolicy
 
@@ -552,9 +555,9 @@ func (d *daemon) start(
 	target := web.NewPipeline(name, from, cfg, st, bus)
 	target.SetUnfenced(d.unfenced(name, cfg))
 
-	// One memo for everything this pipeline resolves outside a run, built once: a poll and a delivery asking for the same reference share an answer for an interval, where a memo made per call would cache nothing.
-	// A poll is no run: its secrets are cached for an interval rather than per run, or a trigger: true resource would prompt every poll.
-	outsideRuns := pipeline.WithPollSecrets(loopCtx, name, d.interval)
+	// One memo for everything this pipeline resolves outside a run, built once: a poll and a delivery asking for the same reference share an answer for --secret-cache-duration, where a memo made per call would cache nothing.
+	// A poll is no run: its secrets are cached for that long rather than per run, or a trigger: true resource would prompt every poll.
+	outsideRuns := pipeline.WithPollSecrets(loopCtx, name, cmp.Or(d.secretCache, d.interval))
 
 	target.Hooks = trigger.HookHandler(outsideRuns, d.interval, target.Config, st)
 

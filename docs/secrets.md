@@ -250,8 +250,14 @@ is no job's. Run it on the daemon's machine as the daemon's user, since the
 source commands run as whoever invokes it.
 
 **A resource polled by `steps web` resolves outside any run.** Its answers are
-cached for one `--interval`, so a `trigger: true` resource does not prompt every
-poll and a rotated credential reaches the poller within one interval. A check
+cached for `--secret-cache-duration` (1m unless said otherwise, as Concourse's
+flag of the same name), so a `trigger: true` resource does not prompt every
+poll and a rotated credential reaches the poller within that long. Until it
+does, a check holding the old value fails and says so on the resource's page;
+a failed check does not ask the source again early. Raise it for a source that
+is slow or prompts, lower it for a credential that expires quickly. It is its
+own duration rather than `--interval` because an answer one interval old
+expires at every other poll. A check
 whose resource has secrets never shares its answer with another pipeline's
 identical check, since the same name can resolve to a different credential.
 

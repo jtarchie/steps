@@ -120,7 +120,7 @@ jobs:
         run: cat push/body
 ```
 
-- **Looked up when a delivery arrives, then held for one `--interval`.** A rotated secret reaches the route within one interval, where a variable in the environment is read on every delivery.
+- **Looked up when a delivery arrives, then held for one `--interval`.** The lookup itself is answered from the pipeline's secret cache, so a rotated secret reaches the route within one interval plus `--secret-cache-duration` (see [secrets.md](secrets.md)), where a variable in the environment is read on every delivery.
 - **A failed lookup is held for the interval too.** The lookup happens before the signature can be checked, so anyone who can reach the route can cause one; holding the failure keeps a source that prompts (`op read`) from prompting once per request. Until it is asked again, deliveries are answered 503, which a sender records as failed and can redeliver. Concourse asks its credential manager on every request and never holds an error.
 - **A delivery that arrives while the lookup is still running waits for it.** If the sender gives up first it gets a 503, and the lookup carries on for the next delivery.
 - **One key, the one `secret_env:` names.** Any other key is a load error: a delivery runs no command that could read it.

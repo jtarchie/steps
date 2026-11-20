@@ -1286,6 +1286,9 @@ jobs:
                  unset for a wildcard listen address). http(s) only, no credentials,
                  query or fragment: credentials would land in every step's environment
 --interval       how often to poll trigger: true resources (default 30s)
+--secret-cache-duration
+                 how long a secret looked up for a poll or a webhook delivery
+                 is reused before its source is asked again (default 1m)
 --max-concurrent maximum queued jobs running at once, per pipeline (default 1)
 --max-runs       maximum runs at once across every pipeline (default 0, no limit)
 --pin / --force  pin a version field; ignore the step cache (not the every-cursor)

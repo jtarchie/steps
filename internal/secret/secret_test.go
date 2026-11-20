@@ -194,7 +194,7 @@ func TestParseRefusals(t *testing.T) {
 	}
 }
 
-// A poll's cache answers within its window and asks again after it, so a rotated credential reaches the poller within one interval.
+// A poll's cache answers within its window and asks again after it, so a rotated credential reaches the poller within one window.
 func TestForChecksExpiresItsAnswers(t *testing.T) {
 	t.Parallel()
 

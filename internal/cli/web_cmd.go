@@ -43,9 +43,10 @@ type WebCmd struct {
 	ExecFlags    `embed:""`
 	HistoryFlags `embed:""`
 	// Its own --db rather than StateFlags, whose --name binds nothing here: a name is chosen by `steps pipeline set -p`, and a flag that parses and threads nowhere reads as configured.
-	DB            DB                `help:"state database: a sqlite file path, sqlite:// or postgres:// url (default: .steps/steps.db)"                             name:"db"                                                                   placeholder:"URL"`
+	DB            DB                `help:"state database: a sqlite file path, sqlite:// or postgres:// url (default: .steps/steps.db)"                             name:"db"                                                                                                      placeholder:"URL"`
 	Listen        string            `default:"127.0.0.1:8088"                                                                                                       help:"address to serve on"`
 	Interval      time.Duration     `default:"30s"                                                                                                                  help:"how often to check trigger: true resources"`
+	SecretCache   time.Duration     `default:"1m"                                                                                                                   help:"how long a secret looked up for a poll or a webhook delivery is reused before its source is asked again" name:"secret-cache-duration"`
 	MaxConcurrent int               `default:"1"                                                                                                                    help:"maximum number of queued jobs running at once, per pipeline"`
 	MaxRuns       int               `default:"0"                                                                                                                    help:"maximum number of runs at once across every pipeline (0 is no limit)"`
 	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                                        name:"pin"`
@@ -336,6 +337,11 @@ func (w *WebCmd) Run(streams Streams) error {
 		return fmt.Errorf("web: --interval must be positive, got %s", w.Interval)
 	}
 
+	// Zero would read as a memo that never expires, which is a run's, not a poll's.
+	if w.SecretCache <= 0 {
+		return fmt.Errorf("web: --secret-cache-duration must be positive, got %s", w.SecretCache)
+	}
+
 	err := checkFence(w.Fence)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
@@ -428,6 +434,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 	defer cancel()
 
 	held := newDaemon(ctx, server, local, state, w.ExecFlags, w.HistoryFlags, w.Interval)
+	held.secretCache = w.SecretCache
 	held.fence = fencePolicy{mode: w.Fence, allow: w.allowUnfenced}
 	held.oneOffHistory = w.OneOffHistory
 	defer held.Close()

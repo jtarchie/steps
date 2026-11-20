@@ -226,7 +226,7 @@ func unservable(host string) string { return host + ":not-a-port" }
 // Not t.Parallel(): captureLog swaps the process-wide default logger.
 func TestAnUnauthenticatedPublicListenWarnsOnce(t *testing.T) {
 	logs := captureLog(t)
-	_ = (&WebCmd{Listen: unservable("0.0.0.0"), Interval: time.Second, DB: DB(filepath.Join(t.TempDir(), "steps.db"))}).Run(std())
+	_ = (&WebCmd{Listen: unservable("0.0.0.0"), Interval: time.Second, SecretCache: time.Minute, DB: DB(filepath.Join(t.TempDir(), "steps.db"))}).Run(std())
 	out := logs()
 
 	if strings.Count(out, "msg=web.no_auth") != 1 {
@@ -244,7 +244,7 @@ func TestAnUnauthenticatedPublicListenWarnsOnce(t *testing.T) {
 func TestAnAllowedHostThatIsAURLIsRefused(t *testing.T) {
 	t.Parallel()
 
-	err := (&WebCmd{Listen: unservable("127.0.0.1"), Interval: time.Second, AllowedHost: []string{"https://steps.example"}, DB: DB(filepath.Join(t.TempDir(), "steps.db"))}).Run(std())
+	err := (&WebCmd{Listen: unservable("127.0.0.1"), Interval: time.Second, SecretCache: time.Minute, AllowedHost: []string{"https://steps.example"}, DB: DB(filepath.Join(t.TempDir(), "steps.db"))}).Run(std())
 	if err == nil || !strings.Contains(err.Error(), "--allowed-host") {
 		t.Errorf("a URL as --allowed-host = %v, want a refusal naming the flag", err)
 	}
@@ -253,8 +253,8 @@ func TestAnAllowedHostThatIsAURLIsRefused(t *testing.T) {
 // Not t.Parallel(): captureLog swaps the process-wide default logger.
 func TestALoopbackListenAndAnAuthedPublicOneAreQuiet(t *testing.T) {
 	for _, cmd := range []*WebCmd{
-		{Listen: unservable("127.0.0.1"), Interval: time.Second, DB: DB(filepath.Join(t.TempDir(), "steps.db"))},
-		{Listen: unservable("0.0.0.0"), Interval: time.Second, DB: DB(filepath.Join(t.TempDir(), "steps.db")), BasicAuthUsername: "ops", BasicAuthPassword: "s3cret"},
+		{Listen: unservable("127.0.0.1"), Interval: time.Second, SecretCache: time.Minute, DB: DB(filepath.Join(t.TempDir(), "steps.db"))},
+		{Listen: unservable("0.0.0.0"), Interval: time.Second, SecretCache: time.Minute, DB: DB(filepath.Join(t.TempDir(), "steps.db")), BasicAuthUsername: "ops", BasicAuthPassword: "s3cret"},
 	} {
 		logs := captureLog(t)
 		_ = cmd.Run(std())

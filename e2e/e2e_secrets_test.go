@@ -481,6 +481,86 @@ jobs:
 	assertNotInDatabase(t, served.state, e2eSecretValue)
 }
 
+// A polled resource's secret is looked up once per --secret-cache-duration, not once per --interval: tied to the interval, the answer was just short of expired at the next poll and expired at the one after, so the source command ran every other poll.
+func TestAPolledSecretIsHeldForItsOwnDurationNotTheInterval(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	asks, polls := filepath.Join(dir, "asks"), filepath.Join(dir, "polls")
+
+	path := pipelinePath(t, dir)
+	name := cli.PipelineName(path)
+
+	// The check reports no version, so no run starts and every lookup counted is a poll's.
+	writePipelineFile(t, path, `
+resource_types:
+- name: guarded
+  config:
+    check: test -n "$TOKEN" && echo poll >> `+polls+` && echo '[]'
+
+resources:
+- name: feed
+  type: guarded
+  source: {}
+  secrets:
+    TOKEN: ((ci:gh_token))
+
+jobs:
+- name: consume
+  plan:
+  - get: feed
+    trigger: true
+`)
+
+	config := filepath.Join(dir, "steps.yml")
+	writeConfigFile(t, config, `
+web:
+  secret:
+    source:
+      ci:
+        command: echo ask >> `+asks+`; echo `+e2eSecretValue+`
+        lookup: [{path: x}]
+`)
+
+	state := filepath.Join(dir, "daemon.db")
+
+	served := startWeb(t, "--db", state, "--config", config, "--basic-auth-username", "ops", "--basic-auth-password", "pw", "--interval", "100ms", "--secret-cache-duration", "1h")
+	defer served.stopIfRunning(t)
+
+	err := stepsRun(t, []string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "ops", "pw")})
+	if err != nil {
+		t.Fatalf("pipeline set: %v", err)
+	}
+
+	// At least six, not exactly: the poller keeps going while this reads.
+	for deadline := time.Now().Add(20 * time.Second); countLines(t, polls) < 6; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d polls in 20s, want 6", countLines(t, polls))
+		}
+	}
+
+	served.stop(t)
+
+	body, err := os.ReadFile(asks) //nolint:gosec // the test's own file
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := strings.Count(string(body), "ask"); got != 1 {
+		t.Errorf("the secret source ran %d times across six polls, want 1", got)
+	}
+}
+
+// Zero is a memo that never expires, so it is refused rather than served.
+func TestWebRefusesANonPositiveSecretCacheDuration(t *testing.T) {
+	t.Parallel()
+
+	err := stepsRun(t, []string{"web", "--listen", freeAddr(t), "--db", filepath.Join(t.TempDir(), "daemon.db"), "--secret-cache-duration", "0s"})
+	if err == nil || !strings.Contains(err.Error(), "--secret-cache-duration must be positive") {
+		t.Fatalf("web = %v, want the duration refused", err)
+	}
+}
+
 // A failed poll's error is stored and shown on the resource's page; one that quotes the resource's credential must not keep it.
 func TestAFailedChecksErrorIsScrubbed(t *testing.T) {
 	t.Parallel()
