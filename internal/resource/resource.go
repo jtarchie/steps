@@ -260,6 +260,39 @@ func SelectVersion(versions []map[string]any, pinned map[string]string) (map[str
 	return nil, fmt.Errorf("no version matches pin %v", pinned)
 }
 
+// MatchesPin reports whether version carries every pinned field with the
+// pinned value, compared as text.
+func MatchesPin(version map[string]any, pinned map[string]string) bool {
+	return matchesPin(version, pinned)
+}
+
+// pinFor is the CLI pin as it applies to one resource: the pin itself when
+// some version carries every field it names (or none is known yet, so a check
+// has to say), and nil when the versions are of another shape, which makes the
+// pin another resource's. A field that is carried and never equal is still
+// this resource's pin, and fails as "no version matches pin".
+func pinFor(versions []map[string]any, pin map[string]string) map[string]string {
+	if len(pin) == 0 || len(versions) == 0 {
+		return pin
+	}
+
+	carries := func(version map[string]any) bool {
+		for field := range pin {
+			if _, ok := version[field]; !ok {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	if slices.ContainsFunc(versions, carries) {
+		return pin
+	}
+
+	return nil
+}
+
 func matchesPin(version map[string]any, pinned map[string]string) bool {
 	for key, want := range pinned {
 		got, ok := version[key]
@@ -425,6 +458,40 @@ func (shellBackend) out(ctx context.Context, c Call) (map[string]any, error) {
 	return result, nil
 }
 
+// versionsUnderPin is versionsFor with the CLI pin narrowed to this get, the
+// pin as it applies here, and whether a CLI pin passed this get over as
+// another resource's.
+//
+// A CLI pin names one resource's version by its fields, and a job may get
+// several: `--pin number=87` is about the pull request, not the image beside
+// it whose versions are {digest}. Asked of every get, it failed the image
+// with "no version matches pin" before a step ran. So a get none of whose
+// versions carry the pinned fields is not the one pinned. Judged on recorded
+// versions first, so such a get is not sent to a check for a pin that was
+// never its own (a webhook's check answers nothing), and only under a CLI
+// pin: an unpinned get asks for its versions once.
+func versionsUnderPin(
+	ctx context.Context, cfg *config.Config, step config.Step,
+	res *config.Resource, resourceType *config.ResourceType,
+	cliPinned map[string]string, supplied func(resourceName string) []map[string]any,
+) ([]map[string]any, map[string]string, bool, error) {
+	var known []map[string]any
+	if supplied != nil && len(cliPinned) > 0 {
+		known = supplied(res.Name)
+	}
+
+	pin := pinFor(known, cliPinned)
+
+	versions, err := versionsFor(ctx, cfg, step, res, resourceType, pin, supplied)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	pin = pinFor(versions, pin)
+
+	return versions, pin, len(cliPinned) > 0 && len(pin) == 0, nil
+}
+
 // ResolveVersions determines which version(s) of a get step's resource to
 // fetch. An explicit CLI pin always wins (a single version); otherwise the
 // step's own version: field decides between latest (default, a single
@@ -460,7 +527,11 @@ func ResolveVersions(
 		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}
 
-	versions, err := versionsFor(ctx, cfg, step, res, resourceType, cliPinned, supplied)
+	// passedOver: the CLI pin is another resource's. This get still takes ONE
+	// version, its own version: pin or the latest: a pinned run builds a
+	// single set, and everything downstream of here reads a CLI pin as that
+	// promise.
+	versions, pin, passedOver, err := versionsUnderPin(ctx, cfg, step, res, resourceType, cliPinned, supplied)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -469,12 +540,11 @@ func ResolveVersions(
 	// field decides. version:every is the only path that fans out to more
 	// than one version — every other path narrows to a single pin (an empty
 	// pin meaning "latest").
-	pin := cliPinned
 	if len(pin) == 0 {
 		mode, stepPinned := VersionMode(step)
-		slog.DebugContext(ctx, "resource.version_mode", "resource", res.Name, "mode", mode)
+		slog.DebugContext(ctx, "resource.version_mode", "resource", res.Name, "mode", mode, "pin_passed_over", passedOver)
 
-		if mode == ModeEvery {
+		if mode == ModeEvery && !passedOver {
 			return res, resourceType, versions, nil
 		}
 

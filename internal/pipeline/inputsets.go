@@ -5,6 +5,8 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -110,7 +112,33 @@ func gatherInputs(
 		}
 	}
 
+	err := refuseUntakenPin(inputs.fixed, pinned)
+	if err != nil {
+		return setInputs{}, setResolution{}, err
+	}
+
 	return inputs, resolution, nil
+}
+
+// refuseUntakenPin fails a pinned run none of whose gets took the pin. A get
+// whose versions do not carry the pinned fields is passed over rather than
+// failed, so a misspelled field would otherwise build the latest of
+// everything and call it the pinned version. A plan with no top-level get is
+// left to the nested gets that resolve at run time.
+func refuseUntakenPin(fixed merkle.InputSet, pinned map[string]string) error {
+	if len(pinned) == 0 || len(fixed) == 0 {
+		return nil
+	}
+
+	for _, version := range fixed {
+		if rsrc.MatchesPin(version, pinned) {
+			return nil
+		}
+	}
+
+	fields := slices.Sorted(maps.Keys(pinned))
+
+	return fmt.Errorf("no version matches pin %v: no get in this job has versions with the field(s) %s", pinned, strings.Join(fields, ", "))
 }
 
 func gatherOneInput(

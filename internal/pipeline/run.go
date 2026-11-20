@@ -17,7 +17,7 @@ import (
 type Run struct {
 	// Provider materializes every build/step workspace the run needs.
 	Provider workspace.Provider
-	// Pinned applies to every get step's version selection.
+	// Pinned names one version by its fields. It applies to each get whose versions carry those fields; any other get takes its own pin or the latest (resource.ResolveVersions).
 	Pinned map[string]string
 	// Force (--force) runs every step: neither the chain skip nor the step cache answers for one, though what the run makes is still recorded and filed.
 	Force bool

@@ -346,3 +346,76 @@ func TestPinnedGetSelectsASuppliedVersionTheCheckCannotReport(t *testing.T) {
 		t.Errorf("check ran %d times, want 0 — the pins were already recorded", got)
 	}
 }
+
+// A CLI pin names one resource's version, and a job gets several: prs review
+// pinned to number=23407 failed its image get, whose versions are {digest},
+// with "no version matches pin" before a step ran. A get of another shape
+// takes its own pin or the latest, and is not sent to a check for it.
+func TestCLIPinPassesOverAGetWhoseVersionsLackItsFields(t *testing.T) {
+	t.Parallel()
+
+	counter := filepath.Join(t.TempDir(), "counter.txt")
+	cfg := countingConfig(t, counter)
+	cfg.ResourceTypes[0].Config.Check = "echo ran >> " + counter + "; echo '[]'"
+	cfg.Resources = append(cfg.Resources, config.Resource{Name: "image", Type: cfg.Resources[0].Type})
+
+	cache := NewCache(WithResolvedVersions(func(name string) []map[string]any {
+		if name == "image" {
+			return []map[string]any{{"digest": "sha256:old"}, {"digest": "sha256:new"}}
+		}
+
+		return []map[string]any{{"number": "86", "sha": "a"}, {"number": "87", "sha": "b"}, {"number": "88", "sha": "c"}}
+	}))
+	pin := map[string]string{"number": "87"}
+
+	cases := []struct {
+		name         string
+		step         config.Step
+		field, value string
+	}{
+		{"the pinned get, though every", config.Step{Get: "thing", Version: "every"}, "number", "87"},
+		{"a get the pin is not about takes the latest", config.Step{Get: "image"}, "digest", "sha256:new"},
+		{"its own version: pin still holds", config.Step{Get: "base", Resource: "image", Version: map[string]any{"digest": "sha256:old"}}, "digest", "sha256:old"},
+		{"an every get still builds one set", config.Step{Get: "each", Resource: "image", Version: "every"}, "digest", "sha256:new"},
+	}
+
+	for _, tc := range cases {
+		_, _, versions, err := cache.ResolveVersionsCached(context.Background(), cfg, tc.step, pin)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+
+			continue
+		}
+
+		if len(versions) != 1 || versions[0][tc.field] != tc.value {
+			t.Errorf("%s: versions = %+v, want %s=%s alone", tc.name, versions, tc.field, tc.value)
+		}
+	}
+
+	if got := countLines(t, counter); got != 0 {
+		t.Errorf("check ran %d times, want 0: every answer was recorded", got)
+	}
+}
+
+// A field the versions carry but never with that value is still this
+// resource's pin: it is owed a check, and then an error.
+func TestCLIPinWhoseFieldIsCarriedButNeverEqualStillFails(t *testing.T) {
+	t.Parallel()
+
+	counter := filepath.Join(t.TempDir(), "counter.txt")
+	cfg := countingConfig(t, counter)
+	cfg.ResourceTypes[0].Config.Check = "echo ran >> " + counter + "; echo '[]'"
+
+	cache := NewCache(WithResolvedVersions(func(string) []map[string]any {
+		return []map[string]any{{"number": "86"}}
+	}))
+
+	_, _, _, err := cache.ResolveVersionsCached(context.Background(), cfg, config.Step{Get: "thing"}, map[string]string{"number": "999"})
+	if err == nil {
+		t.Error("the pin resolved; want an error")
+	}
+
+	if got := countLines(t, counter); got != 1 {
+		t.Errorf("check ran %d times, want 1", got)
+	}
+}

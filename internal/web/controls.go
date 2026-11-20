@@ -152,6 +152,11 @@ func refuseUnpassedPin(ctx context.Context, pipeline *Pipeline, job *config.Job,
 			return fmt.Errorf("web: %w", err)
 		}
 
+		// A pin is about the resource whose versions carry its fields (resource.ResolveVersions); a gated resource of another shape is not being pinned past its gate, it takes its latest green version as an unpinned trigger would.
+		if len(green) > 0 && !slices.ContainsFunc(green, func(version map[string]any) bool { return pinCarried(version, pin) }) {
+			continue
+		}
+
 		if !slices.ContainsFunc(green, func(version map[string]any) bool { return pinMatches(version, pin) }) {
 			return echo.NewHTTPError(http.StatusForbidden, fmt.Sprintf(
 				"no version of %s matching that pin has passed %v; pinning past a passed: gate needs the admin role (an operator may pin a version that passed, or trigger without a pin)",
@@ -160,6 +165,17 @@ func refuseUnpassedPin(ctx context.Context, pipeline *Pipeline, job *config.Job,
 	}
 
 	return nil
+}
+
+// pinCarried reports whether version has every field the pin names, whatever its values.
+func pinCarried(version map[string]any, pin map[string]string) bool {
+	for key := range pin {
+		if _, ok := version[key]; !ok {
+			return false
+		}
+	}
+
+	return true
 }
 
 // pinMatches is resource.SelectVersion's matching, which depguard keeps out of this package: every pinned field present, compared as text.
