@@ -8,6 +8,8 @@ package postgres
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was DROP SCHEMA.
 //
+// 31 added questions.step_key and idx_questions_step, as sqlite's 45 did.
+//
 // 28 replaced oauth_tokens.pipeline with pipeline_id, as sqlite's 42 did.
 //
 // 27 added approvals.notified_at and questions.notified_at, as sqlite's 41 did.
@@ -38,7 +40,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 30
+const schemaVersion = 31
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -348,9 +350,13 @@ CREATE TABLE IF NOT EXISTS questions (
     answered_at     TIMESTAMPTZ,
     answered_by     TEXT,
     answer          TEXT,
-    notified_at     TIMESTAMPTZ
+    notified_at     TIMESTAMPTZ,
+    step_key        TEXT NOT NULL DEFAULT ''
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_memo ON questions(run_id, memo_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_memo ON questions(run_id, memo_key) WHERE step_key = '';
+CREATE INDEX IF NOT EXISTS idx_questions_run ON questions(run_id, step_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_step
+    ON questions(run_id, step_key) WHERE step_key <> '' AND (status IN ('pending', 'answered') OR answer <> '');
 CREATE INDEX IF NOT EXISTS idx_questions_pending ON questions(status, id);
 
 CREATE TABLE IF NOT EXISTS job_concurrency (

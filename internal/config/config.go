@@ -206,6 +206,7 @@ func (c *Config) validate() error {
 		c.validateGitResources,
 		c.validateGitPuts,
 		c.validateApprovals,
+		c.validateAsks,
 		c.validateAgentEndpoints,
 		c.validateMCPServers,
 		c.validateMCPToolGrants,

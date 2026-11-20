@@ -132,7 +132,7 @@ func cellBranches(cell config.Step) []config.Step {
 	case config.StepKindEnsemble:
 		return cell.Ensemble.Agents
 	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent,
-		config.StepKindTry, config.StepKindLoadVar, config.StepKindApproval:
+		config.StepKindTry, config.StepKindLoadVar, config.StepKindApproval, config.StepKindAsk:
 		// Only the container kinds wrap steps; the leaf kinds are the point of the nil.
 	}
 

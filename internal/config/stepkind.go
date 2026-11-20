@@ -32,6 +32,8 @@ const (
 	StepKindLoadVar StepKind = "load_var"
 	// StepKindApproval waits for a human decision.
 	StepKindApproval StepKind = "approval"
+	// StepKindAsk waits for a person's answer to a question the pipeline asks.
+	StepKindAsk StepKind = "ask"
 	// StepKindDo is a block of steps that run one after another AS ONE STEP.
 	// Its value is entirely in that last part: a hook on the block covers
 	// every step inside it, which is the one thing a plain run of sibling
@@ -42,7 +44,7 @@ const (
 // ReferencesEntities reports whether a step of this kind names something the
 // pipeline has to resolve — a resource, a task, an agent, or branches that do.
 func (k StepKind) ReferencesEntities() bool {
-	return k != StepKindLoadVar && k != StepKindApproval
+	return k != StepKindLoadVar && k != StepKindApproval && k != StepKindAsk
 }
 
 // nesting is how a kind holds the steps nested under it.
@@ -128,6 +130,7 @@ var stepKinds = [...]stepKindSpec{
 	},
 	{kind: StepKindLoadVar, isSet: func(s *Step) bool { return s.LoadVar != "" }},
 	{kind: StepKindApproval, isSet: func(s *Step) bool { return s.Approval != nil }},
+	{kind: StepKindAsk, isSet: func(s *Step) bool { return s.Ask != "" }},
 	{
 		kind: StepKindDo, isSet: func(s *Step) bool { return s.Do != nil }, nest: sequence,
 		children: func(s *Step) []*Step { return stepPointers(s.Do) },

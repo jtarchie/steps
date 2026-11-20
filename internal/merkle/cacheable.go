@@ -181,7 +181,7 @@ func unskippableReason(step config.Step) string {
 	case config.StepKindTry:
 		return "try step"
 	case config.StepKindGet, config.StepKindTask, config.StepKindInParallel, config.StepKindRace,
-		config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+		config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindAsk, config.StepKindDo:
 		// Uncacheable only for what they carry, checked below.
 	}
 
@@ -205,6 +205,8 @@ func runTimeReason(step config.Step) string {
 		return "load_var step"
 	case config.StepKindApproval:
 		return "approval step"
+	case config.StepKindAsk:
+		return "ask step"
 	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent,
 		config.StepKindTry, config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindDo:
 		// Known at plan time, unless across: below fans them out.
@@ -237,7 +239,7 @@ func ContainerBranches(step config.Step) []config.Step {
 	case config.StepKindEnsemble:
 		return step.Ensemble.Agents
 	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent,
-		config.StepKindTry, config.StepKindLoadVar, config.StepKindApproval:
+		config.StepKindTry, config.StepKindLoadVar, config.StepKindApproval, config.StepKindAsk:
 		// Only the blocks with branches answer; every other kind, try: included, has none.
 	}
 

@@ -128,7 +128,7 @@ func (c *Config) hostStep(label string, step *Step) []HostCommand {
 		}
 
 		return c.hostAgent(fmt.Sprintf("agent %q in %s", step.Agent, label), invocation)
-	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
 
 	return nil

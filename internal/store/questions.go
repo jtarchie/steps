@@ -14,8 +14,7 @@ import (
 // Questions is a build waiting on a person for a FACT — the ask_user tool and
 // the two ways a question ends. See Approvals for why the two stay apart.
 type Questions interface {
-	// AskQuestion records a pending question, or returns the one this run
-	// already asked under the same memo key — reporting false when it did.
+	// AskQuestion records a pending question, or returns the one this run already asked under the same memo key (or StepKey, when set), reporting true when it did.
 	// The memo is the row, so twelve across: cells asking the same thing all
 	// reach one row rather than one person twelve times.
 	AskQuestion(ctx context.Context, question Question) (Question, bool, error)
@@ -92,6 +91,8 @@ type Question struct {
 	Answer     string
 	// NotifiedAt is when its on_pending was attempted; zero while nothing has announced it.
 	NotifiedAt time.Time
+	// StepKey is set for an ask: step's question and keys it like an approval, by where in the run it was asked, instead of by its memo: a to: loop's second visit must ask again, and a resume must find the answer it was given. Only a pending or answered row is found; one that ended with no answer is asked afresh.
+	StepKey string
 }
 
 // ErrQuestionNotPending is what every answer path gets when the row it aimed

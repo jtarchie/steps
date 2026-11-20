@@ -52,7 +52,7 @@ func (c *Config) validateImages() error {
 			case StepKindPut:
 				return fmt.Errorf("%s (put %q): image is not valid on put steps; set it on the resource_type instead", label, step.Put)
 			case StepKindTask, StepKindAgent, StepKindInParallel, StepKindRace, StepKindEnsemble,
-				StepKindLoadVar, StepKindApproval, StepKindDo:
+				StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 				// Task and Agent are the kinds image: is FOR; the blocks are refused by their own placement rules.
 			case StepKindTry:
 				// A wrapper's own image: was accepted and then ignored:

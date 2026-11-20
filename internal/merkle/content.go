@@ -185,9 +185,21 @@ func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 		return map[string]any{"load_var": step.LoadVar, "file": step.VarFile}, nil
 	case config.StepKindApproval:
 		return map[string]any{"approval": step.Approval.Message}, nil
+	case config.StepKindAsk:
+		return AskContent(step), nil
 	default:
 		return nil, errors.New("unrecognized step")
 	}
+}
+
+// AskContent is an ask: as it is asked; the answer is a run-time fact the run folds in after.
+func AskContent(step config.Step) map[string]any {
+	options := make([]any, len(step.Options))
+	for i, option := range step.Options {
+		options[i] = option
+	}
+
+	return map[string]any{"ask": step.Ask, "question": step.Question, "options": options, "default": step.Default}
 }
 
 // ParallelNodeContent hashes an in_parallel: block: its branches' own content,

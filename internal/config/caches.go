@@ -77,7 +77,7 @@ func (c *Config) checkStepCaches(label string, step *Step) error {
 
 		return validateCachePaths(label, resolveCaches(agent.Caches, *step), step.InputNames(), step.Outputs)
 	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace,
-		StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+		StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
 
 	if step.Caches != nil {

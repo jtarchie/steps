@@ -188,7 +188,7 @@ func (s Step) resourceName() (string, bool) {
 	case StepKindPut:
 		return s.PutResourceName(), true
 	case StepKindTask, StepKindAgent, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble,
-		StepKindLoadVar, StepKindApproval, StepKindDo:
+		StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
 
 	return "", false
@@ -358,7 +358,7 @@ func (c *Config) handDownPlacement(label string, step *Step, received placement)
 		}
 
 		return received, resolved
-	case StepKindTry, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval:
+	case StepKindTry, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk:
 		return received, received
 	}
 
@@ -395,7 +395,7 @@ func (c *Config) effectivePlacement(step *Step, received placement) placement {
 	case StepKindTask, StepKindAgent:
 		return received
 	case StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble,
-		StepKindLoadVar, StepKindApproval, StepKindDo:
+		StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 		return own
 	}
 

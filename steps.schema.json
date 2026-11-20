@@ -2008,6 +2008,29 @@
           "type": "boolean",
           "description": "load_var steps only: show the captured value in step output. By default it is masked like a secret."
         },
+        "ask": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "Park the plan on a question for a person, with no model involved. The answer is written to <name>/answer and, when options: are given, captured as ((.:name)). timeout: bounds the wait (default 24h)."
+        },
+        "question": {
+          "type": "string",
+          "description": "ask steps only: what is asked. Required."
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "ask steps only: the closed list the answer must be one of. Omitted, the answer is free text, written to the file and never captured."
+        },
+        "default": {
+          "type": "string",
+          "description": "ask steps only: the answer when nobody gives one within timeout:, recorded as answered by default. Without it, an unanswered ask aborts the step."
+        },
         "passed": {
           "type": "array",
           "minItems": 1,

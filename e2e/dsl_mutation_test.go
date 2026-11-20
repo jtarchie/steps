@@ -90,6 +90,14 @@ var stepOperators = []stepOperator{
 	{tag: "format", apply: swapLoadVarFormat},
 	// Hide what was revealed, and the value the assertion reads is masked.
 	{tag: "reveal", apply: deleteKey("reveal")},
+	// A renamed ask: leaves its ((.:name)) reader with nothing.
+	{tag: "ask", apply: setString("ask", mutantMarker)},
+	// A question the --answer seed no longer matches waits out its timeout and aborts.
+	{tag: "question", apply: setString("question", mutantMarker)},
+	// The seeded answer is no longer offered, so it is refused.
+	{tag: "options", apply: replaceFirstOfList("options", mutantMarker)},
+	// Nothing stands in when nobody answers, so the step aborts.
+	{tag: "default", apply: deleteKey("default")},
 
 	// A command that runs fine and says something else: the assertion on
 	// what it printed is the only thing between this and a green build.

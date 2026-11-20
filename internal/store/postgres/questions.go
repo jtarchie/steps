@@ -25,15 +25,14 @@ func (s *Store) AskQuestion(ctx context.Context, question store.Question) (store
 		return store.Question{}, false, err //nolint:wrapcheck // EncodeOptions says what it was recording
 	}
 
-	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO questions (run_id, job_name, agent_name, question, options, options_required,
-		                       default_answer, memo_key, status, asked_at)
-		SELECT $1::text, $2::text, $3::text, $4::text, $5::text, $6::boolean, $7::text, $8::text, 'pending', $9::timestamptz
-		WHERE EXISTS (SELECT 1 FROM runs WHERE id = $1 AND pipeline_id = $10)
-		ON CONFLICT (run_id, memo_key) DO NOTHING
-	`, question.RunID, question.JobName, clean(question.AgentName), clean(question.Question), options,
+	insert, readBack, key := askByMemo, s.questionByMemo, question.MemoKey()
+	if question.StepKey != "" {
+		insert, readBack, key = askByStep, s.questionByStep, question.StepKey
+	}
+
+	result, err := s.db.ExecContext(ctx, insert, question.RunID, question.JobName, clean(question.AgentName), clean(question.Question), options,
 		question.OptionsRequired, nullable(question.Default), question.MemoKey(), now(),
-		s.pipelineID)
+		s.pipelineID, question.StepKey)
 	if err != nil {
 		return store.Question{}, false, fmt.Errorf("could not record question for job %q: %w", question.JobName, err)
 	}
@@ -43,13 +42,26 @@ func (s *Store) AskQuestion(ctx context.Context, question store.Question) (store
 		return store.Question{}, false, fmt.Errorf("could not record question for job %q: %w", question.JobName, err)
 	}
 
-	stored, err := s.questionByMemo(ctx, question.RunID, question.MemoKey())
+	stored, err := readBack(ctx, question.RunID, key)
 	if err != nil {
 		return store.Question{}, false, err
 	}
 
 	return stored, affected == 0, nil
 }
+
+const askInsert = `
+		INSERT INTO questions (run_id, job_name, agent_name, question, options, options_required,
+		                       default_answer, memo_key, status, asked_at, step_key)
+		SELECT $1::text, $2::text, $3::text, $4::text, $5::text, $6::boolean, $7::text, $8::text, 'pending', $9::timestamptz, $11::text
+		WHERE EXISTS (SELECT 1 FROM runs WHERE id = $1 AND pipeline_id = $10)
+`
+
+const (
+	askByMemo = askInsert + `ON CONFLICT (run_id, memo_key) WHERE step_key = '' DO NOTHING`
+	// The predicate is idx_questions_step's, which is what lets the conflict infer it.
+	askByStep = askInsert + `ON CONFLICT (run_id, step_key) WHERE step_key <> '' AND (status IN ('pending', 'answered') OR answer <> '') DO NOTHING`
+)
 
 // AnswerQuestion records an answer against a pending question, holding it to
 // the offered options when they are required.
@@ -130,8 +142,21 @@ func (s *Store) QuestionStatus(ctx context.Context, id int64) (store.Question, e
 
 func (s *Store) questionByMemo(ctx context.Context, runID, memoKey string) (store.Question, error) {
 	question, err := scanQuestion(s.db.QueryRowContext(ctx, questionColumns+`
-		WHERE q.run_id = $1 AND q.memo_key = $2 AND r.pipeline_id = $3
+		WHERE q.run_id = $1 AND q.memo_key = $2 AND q.step_key = '' AND r.pipeline_id = $3
 	`, runID, memoKey, s.pipelineID))
+	if err != nil {
+		return store.Question{}, fmt.Errorf("could not read the question just recorded: %w", err)
+	}
+
+	return question, nil
+}
+
+// questionByStep reads back the newest row asked at a step, which the unique index makes the live one whenever there is one.
+func (s *Store) questionByStep(ctx context.Context, runID, stepKey string) (store.Question, error) {
+	question, err := scanQuestion(s.db.QueryRowContext(ctx, questionColumns+`
+		WHERE q.run_id = $1 AND q.step_key = $2 AND r.pipeline_id = $3
+		ORDER BY q.id DESC LIMIT 1
+	`, runID, stepKey, s.pipelineID))
 	if err != nil {
 		return store.Question{}, fmt.Errorf("could not read the question just recorded: %w", err)
 	}
@@ -160,7 +185,7 @@ func (s *Store) Questions(ctx context.Context, pendingOnly bool, limit int) ([]s
 const questionColumns = `
 	SELECT q.id, q.run_id, q.job_name, q.agent_name, q.question, q.options, q.options_required,
 	       COALESCE(q.default_answer, ''), q.status, q.asked_at,
-	       q.answered_at, COALESCE(q.answered_by, ''), COALESCE(q.answer, ''), q.notified_at
+	       q.answered_at, COALESCE(q.answered_by, ''), COALESCE(q.answer, ''), q.notified_at, q.step_key
 	FROM questions q JOIN runs r ON r.id = q.run_id
 `
 
@@ -174,7 +199,7 @@ func scanQuestion(row rowScanner) (store.Question, error) {
 
 	err := row.Scan(&question.ID, &question.RunID, &question.JobName, &question.AgentName,
 		&question.Question, &options, &question.OptionsRequired, &question.Default,
-		&question.Status, &asked, &answered, &question.AnsweredBy, &question.Answer, &notified)
+		&question.Status, &asked, &answered, &question.AnsweredBy, &question.Answer, &notified, &question.StepKey)
 	if err != nil {
 		return store.Question{}, err //nolint:wrapcheck // every caller wraps with what it was reading
 	}

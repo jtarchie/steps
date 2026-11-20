@@ -155,6 +155,8 @@ func hookBodyRefusal(step *Step) error {
 		return errors.New("load_var: is not valid in a hook; a hook runs after the step it guards, so a value it loaded would reach the plan steps after it and let a hook's outcome steer the plan")
 	case StepKindApproval:
 		return errors.New("approval: is not valid in a hook; a hook reacts to an outcome, and an on_abort or ensure waiting on a person would hold a stopping job open")
+	case StepKindAsk:
+		return errors.New("ask: is not valid in a hook; a hook reacts to an outcome, and one waiting on a person would hold a stopping job open")
 	default:
 		return nil
 	}

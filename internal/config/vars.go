@@ -282,19 +282,31 @@ func newVarFlow(job Job) (*varFlow, error) {
 	return flow, err
 }
 
+// nameCapture files a load_var:'s or an ask:'s name, refusing one the scope already has: a free-text ask: captures nothing, but its artifact is named too.
+func (f *varFlow) nameCapture(label string, step *Step, scope map[string]string) error {
+	kind, name := "load_var", step.LoadVar
+	if step.Ask != "" {
+		kind, name = "ask", step.Ask
+	}
+
+	f.loadVars[name] = true
+
+	if earlier, taken := scope[name]; taken {
+		return fmt.Errorf("%s: %s %q is already the name of %s in this plan; a ((.:%s)) names one value, so give each capture its own name",
+			label, kind, name, earlier, name)
+	}
+
+	scope[name] = "an earlier " + kind + ":"
+
+	return nil
+}
+
 // name files what a step names in its scope, refusing a capture whose name
 // the scope already has.
 func (f *varFlow) name(label string, step *Step, scope map[string]string) error {
 	switch kind, _ := step.Kind(); kind {
-	case StepKindLoadVar:
-		f.loadVars[step.LoadVar] = true
-
-		if earlier, taken := scope[step.LoadVar]; taken {
-			return fmt.Errorf("%s: load_var %q is already the name of %s in this plan; a ((.:%s)) names one value, so give each capture its own name",
-				label, step.LoadVar, earlier, step.LoadVar)
-		}
-
-		scope[step.LoadVar] = "an earlier load_var:"
+	case StepKindLoadVar, StepKindAsk:
+		return f.nameCapture(label, step, scope)
 	case StepKindGet:
 		f.gets[step.Get] = true
 
@@ -350,6 +362,11 @@ func ownCaptures(step *Step) []string {
 		return []string{step.LoadVar}
 	case StepKindGet:
 		return []string{step.Get}
+	case StepKindAsk:
+		// Free text is never captured: a person's words substituted into a run: would be a shell command they wrote.
+		if len(step.Options) > 0 {
+			return []string{step.Ask}
+		}
 	case StepKindTask, StepKindPut, StepKindAgent, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindApproval, StepKindDo:
 		// A put's facts are not a later step's to read, as in Concourse.
 	}
@@ -624,6 +641,7 @@ func varFields(step *Step) []varField {
 		varField{"image", &step.Image},
 		varField{"dir", &step.Dir},
 		varField{"file", &step.VarFile},
+		varField{"question", &step.Question},
 	)
 
 	for i := range step.Messages {

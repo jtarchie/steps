@@ -292,6 +292,9 @@ var docScenarios = map[string]docScenario{
 			})
 		},
 	},
+	"control-flow-ask": {
+		answers: []string{"which bump=major"},
+	},
 	"agents-ask-user": {
 		answers: []string{"which bump=minor", "storage migration=yes"},
 		fake: func(t *testing.T) *fakeLLM {

@@ -101,6 +101,12 @@ INSERT INTO cache_entries (kind, key, used_at)
 INSERT OR IGNORE INTO cache_entry_trees (kind, key, name, digest)
     SELECT 'step', action_key, output, digest FROM step_blobs ORDER BY rowid DESC;
 DROP TABLE step_blobs;`),
+	execStep(`ALTER TABLE questions ADD COLUMN step_key TEXT NOT NULL DEFAULT '';
+DROP INDEX idx_questions_memo;
+CREATE UNIQUE INDEX idx_questions_memo ON questions(run_id, memo_key) WHERE step_key = '';
+CREATE INDEX idx_questions_run ON questions(run_id, step_key);
+CREATE UNIQUE INDEX idx_questions_step
+    ON questions(run_id, step_key) WHERE step_key <> '' AND (status IN ('pending', 'answered') OR answer <> '');`),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {

@@ -247,7 +247,7 @@ func stepResourceName(step config.Step) (string, bool) {
 	case config.StepKindPut:
 		return step.PutResourceName(), true
 	case config.StepKindTask, config.StepKindAgent, config.StepKindTry, config.StepKindInParallel,
-		config.StepKindRace, config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+		config.StepKindRace, config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindAsk, config.StepKindDo:
 	}
 
 	return "", false

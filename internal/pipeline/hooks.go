@@ -198,7 +198,7 @@ func runUnguardedHookStep(ctx context.Context, scope hookScope, step config.Step
 		return tolerateTryFailure(ctx, scope.jobName, step, 0, runResolvedHookStep(ctx, scope, *step.Try))
 	case config.StepKindDo, config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble:
 		return runHookBlock(ctx, scope, step, kind)
-	case config.StepKindGet, config.StepKindLoadVar, config.StepKindApproval:
+	case config.StepKindGet, config.StepKindLoadVar, config.StepKindApproval, config.StepKindAsk:
 		// Refused at LoadConfig (config's hookBodyRefusal).
 		return fmt.Errorf("%s: is not valid in a hook", kind)
 	}
@@ -317,6 +317,8 @@ func executedStepName(step config.Step) string {
 		// assert.execution covering a job that loads a var — unwritable as a
 		// fixture, and indistinguishable from a step that recorded nothing.
 		return step.LoadVar
+	case config.StepKindAsk:
+		return step.Ask
 	case config.StepKindTry:
 		return executedStepName(*step.Try)
 	default:

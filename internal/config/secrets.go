@@ -654,7 +654,7 @@ func (c *Config) SecretUses() []SecretUse {
 				if err == nil && r != nil {
 					resourceUses(job.Name, *step, *r, add)
 				}
-			case StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+			case StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 				// A block's members are visited on their own; the rest carry no secrets: map.
 			}
 

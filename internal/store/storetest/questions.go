@@ -66,6 +66,68 @@ func (s suite) TestAskQuestionMemoizesWithinARun(t *testing.T) {
 	}
 }
 
+func askAtStep(t *testing.T, st store.Store, key string) (store.Question, bool) {
+	t.Helper()
+
+	question, existing, err := st.AskQuestion(ctxFor(t), store.Question{
+		RunID: "run-1", JobName: "release-note", AgentName: "bump",
+		Question: "Is this release a major or a minor bump?", Options: []string{"major", "minor"},
+		OptionsRequired: true, StepKey: key,
+	})
+	if err != nil {
+		t.Fatalf("AskQuestion: %v", err)
+	}
+
+	return question, existing
+}
+
+// TestAStepQuestionIsKeyedByItsStep: an ask: step's row is found again at the same step once answered, and never by an ask_user memo of the same words or another step's.
+func (s suite) TestAStepQuestionIsKeyedByItsStep(t *testing.T) {
+	t.Parallel()
+
+	st := s.startQuestionRun(t)
+	memo, _ := askBump(t, st, "run-1")
+
+	first, existing := askAtStep(t, st, "step-a")
+	if existing || first.ID == memo.ID || first.StepKey != "step-a" {
+		t.Fatalf("the step's ask = %+v (existing %v), want a new row of its own beside the memo's %d", first, existing, memo.ID)
+	}
+
+	err := st.AnswerQuestion(ctxFor(t), first.ID, "minor", "someone")
+	if err != nil {
+		t.Fatalf("AnswerQuestion: %v", err)
+	}
+
+	again, existing := askAtStep(t, st, "step-a")
+	if !existing || again.ID != first.ID || again.Answer != "minor" {
+		t.Errorf("asking the same step again = %+v (existing %v), want the answered row %d", again, existing, first.ID)
+	}
+
+	other, existing := askAtStep(t, st, "step-b")
+	if existing || other.ID == first.ID {
+		t.Errorf("another step's ask found row %d, want one of its own", other.ID)
+	}
+}
+
+// TestAStepQuestionThatExpiredUnansweredIsAskedAfresh: as an expired approval is.
+func (s suite) TestAStepQuestionThatExpiredUnansweredIsAskedAfresh(t *testing.T) {
+	t.Parallel()
+
+	st := s.startQuestionRun(t)
+
+	first, _ := askAtStep(t, st, "step-a")
+
+	err := st.CloseQuestion(ctxFor(t), first.ID, store.QuestionExpired, "", "")
+	if err != nil {
+		t.Fatalf("CloseQuestion: %v", err)
+	}
+
+	retried, existing := askAtStep(t, st, "step-a")
+	if existing || retried.ID == first.ID || retried.Status != store.QuestionPending {
+		t.Errorf("asking after an unanswered expiry = %+v (existing %v), want a fresh pending row", retried, existing)
+	}
+}
+
 // TestAQuestionRemembersItWasAnnounced: the row carries when its on_pending was attempted, and a notice's link narrows the trail to it.
 func (s suite) TestAQuestionRemembersItWasAnnounced(t *testing.T) {
 	t.Parallel()

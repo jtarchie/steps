@@ -246,6 +246,7 @@ func TestCapturesVarFindsALoadVarAStepRuns(t *testing.T) {
 	}{
 		"a load_var:":          {loadVar, true},
 		"a task":               {task, false},
+		"a free-text ask:":     {config.Step{Ask: "note", Question: "Anything?"}, true},
 		"a do: holding one":    {config.Step{Do: []config.Step{task, loadVar}}, true},
 		"a parallel branch":    {config.Step{InParallel: &config.InParallel{Steps: []config.Step{task, loadVar}}}, true},
 		"a try: around one":    {config.Step{Try: &loadVar}, true},

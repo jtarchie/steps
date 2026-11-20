@@ -83,7 +83,7 @@ func validateStepKindArtifactFlow(cfg *Config, jobName string, i int, step Step,
 		return validateTryArtifactFlow(cfg, jobName, i, step, available)
 	case StepKindDo:
 		return validateDoArtifactFlow(cfg, jobName, i, step, available)
-	case StepKindLoadVar:
+	case StepKindLoadVar, StepKindAsk:
 		return validateLoadVarArtifactFlow(cfg, jobName, i, step, available)
 	case StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindApproval:
 		// Handled together below, via blockBranches.
@@ -134,6 +134,13 @@ func validateTryArtifactFlow(cfg *Config, jobName string, i int, step Step, avai
 // and then died mid-run on a file nothing had materialized.
 func validateLoadVarArtifactFlow(cfg *Config, jobName string, i int, step Step, available map[string]bool) error {
 	pre := maps.Clone(available)
+
+	// An ask: reads nothing and leaves its answer as the artifact it names.
+	if step.Ask != "" {
+		available[step.Ask] = true
+
+		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
+	}
 
 	err := checkInputsAvailable(jobName, i, "load_var", step.LoadVar, step.InputNames(), available)
 	if err != nil {
@@ -214,7 +221,7 @@ func blockBranches(step Step) []Step {
 	case StepKindEnsemble:
 		return step.Ensemble.Agents
 	case StepKindGet, StepKindTask, StepKindPut, StepKindAgent,
-		StepKindTry, StepKindLoadVar, StepKindApproval, StepKindDo:
+		StepKindTry, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 		// Only the concurrent blocks have branches; do: is walked as a sequence instead.
 	}
 
@@ -420,7 +427,7 @@ func validateHookArtifactFlow(cfg *Config, jobName string, i int, hookName strin
 	case StepKindAgent:
 		inputs, kind, name = hook.InputNames(), "agent", hook.Agent
 	case StepKindGet, StepKindInParallel, StepKindRace, StepKindEnsemble,
-		StepKindLoadVar, StepKindApproval, StepKindDo:
+		StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 		// get: is rejected in a hook body at load time (see config's validateHookStep); these declare no inputs checked here.
 	case StepKindTry:
 		// try: is a legal hook body, and a wrapper declares no inputs of its

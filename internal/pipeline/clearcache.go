@@ -232,7 +232,7 @@ func cachesFor(cfg *config.Config, s config.Step) ([]config.TaskCache, string, s
 
 		return resolved.Caches, s.Agent, resolved.Image, true
 	case config.StepKindGet, config.StepKindPut, config.StepKindTry, config.StepKindInParallel, config.StepKindRace,
-		config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+		config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindAsk, config.StepKindDo:
 	}
 
 	return nil, "", "", false

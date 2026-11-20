@@ -117,7 +117,12 @@ func announceApproval(ctx context.Context, st store.Approvals, id int64, message
 	}
 }
 
-// announceQuestion is the agent package's ParkAnnouncer: an ask_user question parked mid-step.
+// announceQuestion is the agent package's ParkAnnouncer: an ask_user question parked mid-step, or an ask: step's.
 func announceQuestion(ctx context.Context, row store.Question, expiresAt time.Time) bool {
-	return announce(ctx, park{id: row.ID, kind: "ask_user", message: row.Question, options: row.Options, expiresAt: expiresAt})
+	kind := "ask_user"
+	if row.StepKey != "" {
+		kind = string(config.StepKindAsk)
+	}
+
+	return announce(ctx, park{id: row.ID, kind: kind, message: row.Question, options: row.Options, expiresAt: expiresAt})
 }

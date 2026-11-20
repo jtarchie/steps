@@ -172,7 +172,7 @@ func (c *Config) stepNetwork(step Step) string {
 		if err == nil {
 			return invocation.Network
 		}
-	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
 
 	return step.Network

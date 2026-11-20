@@ -186,6 +186,14 @@ type Step struct {
 	// Reveal shows a load_var:'s value in step output, which otherwise masks
 	// it as it masks a secret.
 	Reveal bool `yaml:"reveal,omitempty"`
+	// Ask parks the plan on a question for a person, with no model involved: the answer is written to <name>/answer and, from a closed list, captured as ((.:name)). See validateAsks.
+	Ask string `kind:"ask" yaml:"ask,omitempty"`
+	// Question is what an ask: step asks.
+	Question string `yaml:"question,omitempty"`
+	// Options is an ask:'s closed list of answers; empty means free text, which is never captured.
+	Options []string `yaml:"options,omitempty"`
+	// Default stands in, recorded as nobody's answer, when an ask: expires; without one the step aborts, since nobody said no.
+	Default string `yaml:"default,omitempty"`
 	// Passed, on a get step, names upstream jobs this version must ALREADY
 	// have succeeded in before this job will run against it. See
 	// validatePassed.

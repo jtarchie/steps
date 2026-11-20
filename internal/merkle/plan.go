@@ -251,6 +251,10 @@ func planNodeOf(cfg *config.Config, step config.Step, i int, parentHash string) 
 		return Node{ParentHash: parentHash, Kind: NodeKindApproval, StepIndex: i, Resource: "approval"}, nil
 	}
 
+	if step.Ask != "" {
+		return Node{ParentHash: parentHash, Kind: NodeKindAsk, StepIndex: i, Resource: step.Ask}, nil
+	}
+
 	// across: is a modifier rather than a kind (see internal/pipeline's
 	// dispatch): the block is one plan node whose cells are hashed inside it.
 	if len(step.Across) > 0 {
@@ -408,7 +412,7 @@ func stepResourceName(step config.Step) string {
 	case config.StepKindAgent:
 		return inner.Agent
 	case config.StepKindGet, config.StepKindTry, config.StepKindInParallel, config.StepKindRace,
-		config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+		config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindAsk, config.StepKindDo:
 		// Unwrap() already resolved Try away, and a get node takes its name from the resource, not here.
 	}
 

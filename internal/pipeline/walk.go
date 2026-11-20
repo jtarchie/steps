@@ -104,7 +104,7 @@ func runSteps(ctx context.Context, w planWalk, steps []config.Step) error {
 			continue
 		case config.StepKindTask, config.StepKindPut, config.StepKindAgent, config.StepKindTry,
 			config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble,
-			config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+			config.StepKindLoadVar, config.StepKindApproval, config.StepKindAsk, config.StepKindDo:
 			// Run below, as is a step naming no kind, which runStep refuses.
 		}
 
@@ -347,13 +347,13 @@ func recordCompletedStep(ctx context.Context, st store.Runs, build string, i, vi
 	bestEffort(ctx, "RecordRunStep", st.RecordRunStep(context.WithoutCancel(ctx), resume.id, store.RunStep{BuildID: build, Index: i, Visit: visit, Name: executedStepName(step), Hash: hash, Outcome: outcome}))
 }
 
-// capturesVar reports whether step, or a step it runs, captures a ((.:name)) the plan reads after it: a value lives only in the attempt that captured it, so a resume runs such a step again rather than skip it. A matrix's captures end with it.
+// capturesVar reports whether step, or a step it runs, captures a ((.:name)) the plan reads after it: a value lives only in the attempt that captured it, so a resume runs such a step again rather than skip it. An ask: counts whatever it captures: run again, it finds the answer its row holds rather than asking. A matrix's captures end with it.
 func capturesVar(step config.Step) bool {
 	if len(step.Across) > 0 {
 		return false
 	}
 
-	if step.LoadVar != "" || (step.Try != nil && capturesVar(*step.Try)) {
+	if step.LoadVar != "" || step.Ask != "" || (step.Try != nil && capturesVar(*step.Try)) {
 		return true
 	}
 
@@ -444,6 +444,22 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	return res, final
 }
 
+// runsInPlace is the runner of a kind that never fans out over across:, nil for the rest, which are dispatched once across: has had its say.
+func runsInPlace(kind config.StepKind) func(context.Context, stepRunner, int, config.Step, string) (stepResult, error) {
+	switch kind {
+	case config.StepKindLoadVar:
+		return runLoadVarStep
+	case config.StepKindApproval:
+		return runApprovalStep
+	case config.StepKindAsk:
+		return runAskStep
+	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent, config.StepKindTry,
+		config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindDo:
+	}
+
+	return nil
+}
+
 // dispatchNonGetStep dispatches a non-get step — the kinds that, unlike get,
 // run in place and return a single new parentHash rather than delegating the
 // remainder of the plan. It first evaluates the step's when: guard (see
@@ -474,14 +490,8 @@ func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.St
 
 	kind, ok := step.Kind()
 
-	switch kind {
-	case config.StepKindLoadVar:
-		return runLoadVarStep(ctx, r, i, step, parentHash)
-	case config.StepKindApproval:
-		return runApprovalStep(ctx, r, i, step, parentHash)
-	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent, config.StepKindTry,
-		config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindDo:
-		// Dispatched below, once across: has had its say.
+	if run := runsInPlace(kind); run != nil {
+		return run(ctx, r, i, step, parentHash)
 	}
 
 	// across: is a MODIFIER, not a kind: the step it sits on is still a task

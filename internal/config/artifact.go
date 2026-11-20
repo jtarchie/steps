@@ -81,7 +81,7 @@ func (c *Config) validateStepArtifactDecls(label string, step Step) error {
 
 		return validateArtifactNames(fmt.Sprintf("%s (put %q)", label, step.Put), step.InputNames(), nil)
 	case StepKindTask, StepKindAgent, StepKindTry, StepKindInParallel, StepKindRace,
-		StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+		StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 		// Task, Agent and a try: wrapper all declare inputs/outputs the same way, validated below.
 	}
 

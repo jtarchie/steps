@@ -195,7 +195,7 @@ func (c *Config) rejectOnGetAndPut(field string, set func(*Step) bool) error {
 			case StepKindTry:
 				return fmt.Errorf("%s: %s is not valid on a try: step; set it on the step try: wraps", label, field)
 			case StepKindTask, StepKindAgent, StepKindInParallel, StepKindRace, StepKindEnsemble,
-				StepKindLoadVar, StepKindApproval, StepKindDo:
+				StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 				// Task and Agent are the kinds these settings are FOR; the blocks are refused by their own placement rules.
 			}
 
@@ -263,7 +263,7 @@ func (c *Config) resolvedStepImage(step Step) string {
 
 		return agent.Image
 	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble,
-		StepKindLoadVar, StepKindApproval, StepKindDo:
+		StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 		// Only task/agent reference an entry carrying an image; a put's comes from its resource type and every rule that consults this rejects put/get first.
 	}
 

@@ -32,6 +32,8 @@ const (
 	NodeKindLoadVar NodeKind = "load_var"
 	// NodeKindApproval is an approval: wait.
 	NodeKindApproval NodeKind = "approval"
+	// NodeKindAsk is an ask: wait.
+	NodeKindAsk NodeKind = "ask"
 )
 
 // Node is one content-addressed step in a job's resolved execution chain.

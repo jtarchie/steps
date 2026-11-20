@@ -143,7 +143,7 @@ func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 	}
 
 	switch kind {
-	case config.StepKindGet, config.StepKindLoadVar, config.StepKindApproval:
+	case config.StepKindGet, config.StepKindLoadVar, config.StepKindApproval, config.StepKindAsk:
 		return nil, fmt.Errorf("%s: is not valid in a hook", kind)
 	case config.StepKindTask, config.StepKindPut, config.StepKindAgent, config.StepKindTry,
 		config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindDo:

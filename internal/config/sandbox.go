@@ -54,7 +54,7 @@ func (c *Config) validateStepSandbox() error {
 			switch kind, _ := step.Kind(); kind {
 			case StepKindTask, StepKindAgent:
 				return nil
-			case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+			case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 			}
 
 			return fmt.Errorf("%s: sandbox: fences a task's or agent's own commands, and this step runs none; set it on the steps inside", label)
@@ -94,7 +94,7 @@ func (c *Config) resolvedStepSandbox(step Step) bool {
 		rt, _ := c.FindResourceType(resource.Type)
 
 		return rt != nil && rt.Sandbox
-	case StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+	case StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
 
 	return false

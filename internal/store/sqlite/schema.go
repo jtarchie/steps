@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 45 added questions.step_key, an ask: step's question keyed by where in its run it was asked, and narrowed idx_questions_memo to the rows without one.
+//
 // 42 replaced oauth_tokens.pipeline (a name) with pipeline_id REFERENCES pipelines: a grant followed a reused name onto a pipeline nobody granted, and lost a renamed one.
 //
 // 41 added approvals.notified_at and questions.notified_at, when a park's on_pending was attempted, so a restart neither announces it twice nor loses an announcement a crash cut short.
@@ -112,7 +114,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 44
+const schemaVersion = 45
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -710,9 +712,14 @@ CREATE TABLE IF NOT EXISTS questions (
     answered_at     TEXT,
     answered_by     TEXT,
     answer          TEXT,
-    notified_at     TEXT
+    notified_at     TEXT,
+    step_key        TEXT NOT NULL DEFAULT ''
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_memo ON questions(run_id, memo_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_memo ON questions(run_id, memo_key) WHERE step_key = '';
+CREATE INDEX IF NOT EXISTS idx_questions_run ON questions(run_id, step_key);
+-- An ask: step's question, keyed like an approval: one live row per step of a run, and one that ended unanswered is asked afresh.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_step
+    ON questions(run_id, step_key) WHERE step_key <> '' AND (status IN ('pending', 'answered') OR answer <> '');
 -- The waiting-on-a-person listing, which both the CLI and the web UI poll.
 CREATE INDEX IF NOT EXISTS idx_questions_pending ON questions(status, id);
 

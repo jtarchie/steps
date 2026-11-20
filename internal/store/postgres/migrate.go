@@ -86,6 +86,12 @@ INSERT INTO cache_entries (kind, key, used_at)
 INSERT INTO cache_entry_trees (kind, key, name, digest)
     SELECT DISTINCT ON (action_key, output) 'step', action_key, output, digest FROM step_blobs ORDER BY action_key, output, seq DESC;
 DROP TABLE step_blobs`,
+	`ALTER TABLE questions ADD COLUMN step_key TEXT NOT NULL DEFAULT '';
+DROP INDEX idx_questions_memo;
+CREATE UNIQUE INDEX idx_questions_memo ON questions(run_id, memo_key) WHERE step_key = '';
+CREATE INDEX idx_questions_run ON questions(run_id, step_key);
+CREATE UNIQUE INDEX idx_questions_step
+    ON questions(run_id, step_key) WHERE step_key <> '' AND (status IN ('pending', 'answered') OR answer <> '')`,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

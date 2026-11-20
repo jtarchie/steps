@@ -71,7 +71,7 @@ jobs:
 func TestValidateStepKinds(t *testing.T) {
 	t.Parallel()
 
-	const everyKind = "get/task/put/agent/try/in_parallel/race/ensemble/load_var/approval/do"
+	const everyKind = "get/task/put/agent/try/in_parallel/race/ensemble/load_var/approval/ask/do"
 
 	tests := []struct {
 		name     string

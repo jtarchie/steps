@@ -87,7 +87,7 @@ func (c *Config) hostGuard(label string, step Step) []HostCommand {
 		return []HostCommand{{Name: step.Agent, Where: where, Why: guardWhy + "; set image: on the agent" + sandboxed(invocation.Sandbox), Sandboxed: invocation.Sandbox}}
 	case StepKindPut:
 		return c.hostPutGuard(where, step)
-	case StepKindGet, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+	case StepKindGet, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
 
 	return []HostCommand{{Where: where, Why: guardWhy + ", and this step has no image: or sandbox: to run it under; move the check into a task"}}
@@ -144,7 +144,7 @@ func (c *Config) privilegedStep(label string, step *Step) []HostCommand {
 		if err == nil && invocation.Image != "" && invocation.Privileged {
 			return []HostCommand{{Name: step.Agent, Where: fmt.Sprintf("agent %q in %s", step.Agent, label), Why: privilegedWhy}}
 		}
-	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
 
 	return nil

@@ -351,7 +351,7 @@ func keyProbes() []keyProbe {
 		"OutputSubdir": "source: yaml:\"-\" — computed at across: expansion from the coordinates the cell's keyed Label already carries",
 	}
 
-	for _, field := range []string{"Agent", "Approval", "Do", "Ensemble", "Get", "InParallel", "LoadVar", "Put", "Race", "Try"} {
+	for _, field := range []string{"Agent", "Approval", "Ask", "Do", "Ensemble", "Get", "InParallel", "LoadVar", "Put", "Race", "Try"} {
 		stepTaskSilent[field] = "source: validateStepKinds — a second kind field is a load error, so a task step never carries one"
 	}
 
@@ -360,6 +360,10 @@ func keyProbes() []keyProbe {
 		"Trigger", "Version", "Params", "Passed", "Resource", "VarFile", "Format", "Reveal", "Budget", "MaxInFlight",
 	} {
 		stepTaskSilent[field] = "source: validateStepFieldPlacement — a field of another step kind is a load error on a task step"
+	}
+
+	for _, field := range []string{"Question", "Options", "Default"} {
+		stepTaskSilent[field] = "source: refuseAskFields — an ask: field is a load error on any other step"
 	}
 
 	return []keyProbe{
