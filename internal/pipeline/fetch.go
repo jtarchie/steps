@@ -97,6 +97,10 @@ type fetchStore interface {
 
 // fetchGetStep fetches one version and says, and returns, its facts: what the in: answered, or — when the resource cache reused an earlier fetch — what that fetch answered.
 func fetchGetStep(ctx context.Context, cfg *config.Config, st fetchStore, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) ([]events.Fact, error) {
+	if uploaded, err := fetchUpload(ctx, artifact, bw); uploaded {
+		return nil, err
+	}
+
 	notef(ctx, "get: %s (version: %s)", artifact, versionText(version))
 
 	var (

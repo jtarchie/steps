@@ -59,6 +59,8 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 
 	resume.rerunOf = opts.RerunOf
 
+	ctx = WithUploads(ctx, job, opts.Inputs)
+
 	skipCache := rerunSkipsCache(opts)
 
 	// Publish the run's identity where packages that cannot import this one
@@ -501,7 +503,7 @@ func resolveJobInputs(
 	// Scoped to this one invocation (never shared across concurrent ones —
 	// see resource.NewCache) and threaded into both plan-time and run-time
 	// get resolution, so a get's check runs at most once per job run.
-	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.resolvable))
+	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.resolvable), rsrc.WithUploaded(uploadedVersions(ctx)))
 
 	// One set per unconsumed step of the widest every-get, each binding EVERY
 	// get's version — the lockstep pairing per-get recursion cannot express.

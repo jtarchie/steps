@@ -764,7 +764,7 @@ func (r *LocalRunner) runJob(
 	}()
 
 	opts := r.base
-	opts.Provider, opts.Force, opts.ID, opts.QueueID = provider, force, runID, trigger.ID
+	opts.Provider, opts.Force, opts.ID, opts.QueueID, opts.Inputs = provider, force, runID, trigger.ID, target.Inputs
 	opts.Interrupted = func() bool { return ctx.Err() != nil && !errors.Is(context.Cause(runCtx), errAborted) }
 
 	if trigger.Pin != "" {
@@ -840,7 +840,7 @@ func resume(
 		return ctx, provider, false
 	}
 
-	resumed, dir, err := pipeline.PrepareResume(ctx, target.Store, runID)
+	resumed, dir, err := pipeline.PrepareResume(pipeline.WithUploads(ctx, job, target.Inputs), target.Store, runID)
 
 	fresh := false
 	if err == nil {

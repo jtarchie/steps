@@ -53,6 +53,8 @@ type Run struct {
 	ExternalURL string
 	// QueueID is the daemon's queue row this run was claimed from, recorded with the run so a restart can resume it; zero for a run no queue started.
 	QueueID int64
+	// Inputs replaces each named get with a folder on this machine: its resource is neither checked nor fetched, and the folder's version is never recorded as one of the resource's.
+	Inputs map[string]Upload
 	// Interrupted reports that the run was cancelled because its process is going down, not because anybody stopped it: the run is left running for the next start to resume rather than closed aborted. Nil for a run nothing resumes.
 	Interrupted func() bool
 

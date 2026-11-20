@@ -58,6 +58,10 @@ func refreshResourceHistory(ctx context.Context, cfg *config.Config, st store.St
 }
 
 func refreshOneResource(ctx context.Context, cfg *config.Config, st store.Store, job *config.Job, name string) {
+	if uploadedResource(ctx, name) {
+		return
+	}
+
 	resource, err := cfg.FindResource(name)
 	if err != nil {
 		return // an unresolvable resource is a load error long before here

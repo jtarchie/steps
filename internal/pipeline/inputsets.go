@@ -160,8 +160,7 @@ func gatherOneInput(
 	// A CLI pin collapses every-mode to a single named version (see
 	// resource.ResolveVersions), so a pinned run builds exactly one set and —
 	// via the existing take exemption — consumes nothing.
-	mode, _ := rsrc.VersionMode(step)
-	if mode != rsrc.ModeEvery || len(pinned) > 0 {
+	if bindsOneVersion(step, pinned, cache) {
 		// Narrowing to one version is SelectVersion's job and it errors on an
 		// empty list, so this list has an entry; say so rather than index
 		// into the promise.
@@ -295,4 +294,11 @@ func (c *versionCursor) heldVersion(resourceName string, candidates []map[string
 // blockingReport names what stops a fan-out, for the "no versions" message.
 func (r setResolution) blockingReport() string {
 	return strings.Join(r.blocking, ", ")
+}
+
+// bindsOneVersion is every get but an unpinned version: every one; an upload is one version however the step asks.
+func bindsOneVersion(step config.Step, pinned map[string]string, cache *rsrc.Cache) bool {
+	mode, _ := rsrc.VersionMode(step)
+
+	return mode != rsrc.ModeEvery || len(pinned) > 0 || cache.Uploaded(step.Get)
 }
