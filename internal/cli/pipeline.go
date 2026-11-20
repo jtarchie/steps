@@ -171,9 +171,43 @@ func (p *PipelineSetCmd) confirmFrom(in io.Reader, out io.Writer,
 	default:
 		_, _ = fmt.Fprint(out, diffSource(current.Config.Source, source))
 		_, _ = fmt.Fprint(out, diffIncludes(convertIncludes[string](current.Config.Includes), includes))
+		_, _ = fmt.Fprint(out, forgottenBySet(name, current, source, includes))
 	}
 
 	return askFrom(in, out, "apply configuration?", "not applied")
+}
+
+// forgottenBySet names the jobs and resources this set stops declaring, because adopting it deletes what was recorded under them (store.Pruning.RetireAbsent) and a diff line reading "- name: deploy" does not say so. Empty when either side does not load: the daemon is the one that refuses a configuration, and a broken pipeline being repaired has no served side to compare.
+func forgottenBySet(name string, current Held, source string, includes map[string]string) string {
+	before, err := config.Parse([]byte(current.Config.Source), name, config.Bundle(convertIncludes[string](current.Config.Includes)))
+	if err != nil {
+		return ""
+	}
+
+	after, err := config.Parse([]byte(source), name, config.Bundle(includes))
+	if err != nil {
+		return ""
+	}
+
+	var gone []string
+
+	for _, job := range before.Jobs {
+		if !slices.Contains(after.JobNames(), job.Name) {
+			gone = append(gone, "job "+job.Name)
+		}
+	}
+
+	for _, resource := range before.Resources {
+		if !slices.ContainsFunc(after.Resources, func(kept config.Resource) bool { return kept.Name == resource.Name }) {
+			gone = append(gone, "resource "+resource.Name)
+		}
+	}
+
+	if len(gone) == 0 {
+		return ""
+	}
+
+	return "no longer declared, so everything recorded under them (runs, caches, versions) is deleted: " + strings.Join(gone, ", ") + "\n"
 }
 
 // The includes are as much of a deploy as the YAML is — a run_file: decides what a step executes — so an edit that only moved one of them was shown a pipeline reported as unchanged, and confirmed on that.

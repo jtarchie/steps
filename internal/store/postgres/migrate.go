@@ -94,6 +94,49 @@ CREATE UNIQUE INDEX idx_questions_memo ON questions(run_id, memo_key) WHERE step
 CREATE INDEX idx_questions_run ON questions(run_id, step_key);
 CREATE UNIQUE INDEX idx_questions_step
     ON questions(run_id, step_key) WHERE step_key <> '' AND (status IN ('pending', 'answered') OR answer <> '')`,
+	`CREATE TABLE jobs (
+    pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    retired     BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (pipeline_id, name)
+);
+CREATE TABLE resources (
+    pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, name)
+);
+INSERT INTO jobs (pipeline_id, name)
+    SELECT pipeline_id, job_name FROM nodes
+    UNION SELECT pipeline_id, job_name FROM job_runs
+    UNION SELECT pipeline_id, job_name FROM trigger_queue
+    UNION SELECT pipeline_id, job_name FROM job_versions
+    UNION SELECT pipeline_id, job_name FROM job_version_cursor
+    UNION SELECT pipeline_id, job_name FROM runs
+    UNION SELECT pipeline_id, job_name FROM job_concurrency
+    UNION SELECT pipeline_id, job_name FROM job_serial_groups
+    UNION SELECT pipeline_id, job_name FROM job_breaker;
+INSERT INTO resources (pipeline_id, name)
+    SELECT pipeline_id, resource_name FROM resource_configs
+    UNION SELECT pipeline_id, resource_name FROM resource_checks
+    UNION SELECT pipeline_id, resource_name FROM resource_check_errors
+    UNION SELECT pipeline_id, resource_name FROM resource_versions
+    UNION SELECT pipeline_id, resource_name FROM job_version_cursor;
+ALTER TABLE nodes ADD FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE job_runs ADD FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE trigger_queue ADD FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE job_versions ADD FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE job_version_cursor ADD FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE runs ADD FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE job_concurrency ADD FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE job_serial_groups ADD FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE job_breaker ADD FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE resource_configs ADD FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE resource_checks ADD FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE resource_check_errors ADD FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE resource_versions ADD FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE job_version_cursor ADD FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE;
+CREATE INDEX idx_job_version_cursor_resource ON job_version_cursor(pipeline_id, resource_name);
+` + ensureParents,
 }
 
 // migrate brings a schema from found to schemaVersion inside the caller's transaction, which also holds the schema lock — so a failed step leaves it exactly as it was, Postgres DDL being transactional.

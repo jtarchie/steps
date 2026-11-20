@@ -8,6 +8,8 @@ package postgres
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was DROP SCHEMA.
 //
+// 33 added jobs and resources and the references to them, as sqlite's 47 did.
+//
 // 31 added questions.step_key and idx_questions_step, as sqlite's 45 did.
 //
 // 28 replaced oauth_tokens.pipeline with pipeline_id, as sqlite's 42 did.
@@ -40,7 +42,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 32
+const schemaVersion = 33
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -79,6 +81,20 @@ CREATE TABLE IF NOT EXISTS pipelines (
     paused_at TIMESTAMPTZ,
     set_at    TIMESTAMPTZ,
     one_off   BOOLEAN NOT NULL DEFAULT false
+);
+
+-- What every job- and resource-named table cascades off; see sqlite's schema.
+CREATE TABLE IF NOT EXISTS jobs (
+    pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    retired     BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (pipeline_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS resources (
+    pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS identity (
@@ -133,7 +149,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     status      TEXT NOT NULL,
     error       TEXT,
     created_at  TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (pipeline_id, hash)
+    PRIMARY KEY (pipeline_id, hash),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_job ON nodes(pipeline_id, job_name, seq);
 CREATE INDEX IF NOT EXISTS idx_nodes_content_hash ON nodes(content_hash);
@@ -146,7 +163,8 @@ CREATE TABLE IF NOT EXISTS job_runs (
     pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name   TEXT NOT NULL,
     root_hash  TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, job_name, root_hash)
+    PRIMARY KEY (pipeline_id, job_name, root_hash),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 -- The cache index, machine-wide on purpose; see the sqlite schema.
@@ -174,7 +192,8 @@ CREATE TABLE IF NOT EXISTS resource_configs (
     pipeline_id   BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     resource_name TEXT NOT NULL,
     config_hash   TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, resource_name)
+    PRIMARY KEY (pipeline_id, resource_name),
+    FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS resource_checks (
@@ -182,7 +201,8 @@ CREATE TABLE IF NOT EXISTS resource_checks (
     resource_name TEXT NOT NULL,
     version_json  TEXT NOT NULL,
     checked_at    TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (pipeline_id, resource_name)
+    PRIMARY KEY (pipeline_id, resource_name),
+    FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS resource_check_errors (
@@ -190,7 +210,8 @@ CREATE TABLE IF NOT EXISTS resource_check_errors (
     resource_name TEXT NOT NULL,
     message       TEXT NOT NULL,
     failed_at     TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (pipeline_id, resource_name)
+    PRIMARY KEY (pipeline_id, resource_name),
+    FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS resource_versions (
@@ -200,7 +221,8 @@ CREATE TABLE IF NOT EXISTS resource_versions (
     check_order   BIGINT NOT NULL,
     from_check    BOOLEAN NOT NULL DEFAULT FALSE,
     metadata      TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (pipeline_id, resource_name, version_json)
+    PRIMARY KEY (pipeline_id, resource_name, version_json),
+    FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_resource_versions_order
     ON resource_versions(pipeline_id, resource_name, check_order);
@@ -215,7 +237,8 @@ CREATE TABLE IF NOT EXISTS job_versions (
     build_id      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (pipeline_id, job_name, resource_name, version_json),
     FOREIGN KEY (pipeline_id, resource_name, version_json)
-        REFERENCES resource_versions(pipeline_id, resource_name, version_json) ON DELETE CASCADE
+        REFERENCES resource_versions(pipeline_id, resource_name, version_json) ON DELETE CASCADE,
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_job_versions_version ON job_versions(pipeline_id, resource_name, version_json);
 
@@ -235,8 +258,11 @@ CREATE TABLE IF NOT EXISTS job_version_cursor (
     job_name      TEXT NOT NULL,
     resource_name TEXT NOT NULL,
     check_order   BIGINT NOT NULL,
-    PRIMARY KEY (pipeline_id, job_name, resource_name)
+    PRIMARY KEY (pipeline_id, job_name, resource_name),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
+CREATE INDEX IF NOT EXISTS idx_job_version_cursor_resource ON job_version_cursor(pipeline_id, resource_name);
 
 CREATE TABLE IF NOT EXISTS runs (
     seq        BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE,
@@ -250,7 +276,8 @@ CREATE TABLE IF NOT EXISTS runs (
     parent_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
     rerun_of       TEXT REFERENCES runs(id) ON DELETE SET NULL,
     revision_id BIGINT REFERENCES pipeline_revisions(id) ON DELETE RESTRICT,
-    created_by  TEXT NOT NULL DEFAULT ''
+    created_by  TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(pipeline_id, job_name, started_at);
 CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(pipeline_id, started_at);
@@ -272,7 +299,8 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     enqueued_at TIMESTAMPTZ NOT NULL,
     started_at  TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
-    error       TEXT
+    error       TEXT,
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
     ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL AND pin IS NULL;
@@ -364,14 +392,16 @@ CREATE TABLE IF NOT EXISTS job_concurrency (
     pipeline_id   BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name      TEXT NOT NULL,
     max_in_flight INTEGER NOT NULL,
-    PRIMARY KEY (pipeline_id, job_name)
+    PRIMARY KEY (pipeline_id, job_name),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS job_serial_groups (
     pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name   TEXT NOT NULL,
     group_name TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, job_name, group_name)
+    PRIMARY KEY (pipeline_id, job_name, group_name),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS job_breaker (
@@ -380,7 +410,8 @@ CREATE TABLE IF NOT EXISTS job_breaker (
     job_name    TEXT NOT NULL,
     consecutive INTEGER NOT NULL,
     paused_at   TIMESTAMPTZ,
-    PRIMARY KEY (pipeline_id, job_name)
+    PRIMARY KEY (pipeline_id, job_name),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS run_events (
@@ -546,4 +577,32 @@ CREATE TABLE IF NOT EXISTS node_transcripts (
     PRIMARY KEY (pipeline_id, hash),
     FOREIGN KEY (pipeline_id, hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE
 );
+` + ensureParents
+
+// ensureParents files a job or a resource in its parent table the first time a row names it, so no insert site has to. SET search_path FROM CURRENT pins each function to the schema it was created in: a session with another path (psql, a test's raw connection) writing a schema-qualified row would otherwise have the trigger look for jobs in its own. Migration 33 runs this text too, so it is frozen: a change is a new migration.
+const ensureParents = `
+CREATE FUNCTION ensure_job() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $$
+BEGIN
+    INSERT INTO jobs (pipeline_id, name) VALUES (NEW.pipeline_id, NEW.job_name) ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END $$;
+CREATE FUNCTION ensure_resource() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $$
+BEGIN
+    INSERT INTO resources (pipeline_id, name) VALUES (NEW.pipeline_id, NEW.resource_name) ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER ensure_job BEFORE INSERT ON nodes FOR EACH ROW EXECUTE FUNCTION ensure_job();
+CREATE TRIGGER ensure_job BEFORE INSERT ON job_runs FOR EACH ROW EXECUTE FUNCTION ensure_job();
+CREATE TRIGGER ensure_job BEFORE INSERT ON trigger_queue FOR EACH ROW EXECUTE FUNCTION ensure_job();
+CREATE TRIGGER ensure_job BEFORE INSERT ON job_versions FOR EACH ROW EXECUTE FUNCTION ensure_job();
+CREATE TRIGGER ensure_job BEFORE INSERT ON job_version_cursor FOR EACH ROW EXECUTE FUNCTION ensure_job();
+CREATE TRIGGER ensure_job BEFORE INSERT ON runs FOR EACH ROW EXECUTE FUNCTION ensure_job();
+CREATE TRIGGER ensure_job BEFORE INSERT ON job_concurrency FOR EACH ROW EXECUTE FUNCTION ensure_job();
+CREATE TRIGGER ensure_job BEFORE INSERT ON job_serial_groups FOR EACH ROW EXECUTE FUNCTION ensure_job();
+CREATE TRIGGER ensure_job BEFORE INSERT ON job_breaker FOR EACH ROW EXECUTE FUNCTION ensure_job();
+CREATE TRIGGER ensure_resource BEFORE INSERT ON resource_configs FOR EACH ROW EXECUTE FUNCTION ensure_resource();
+CREATE TRIGGER ensure_resource BEFORE INSERT ON resource_checks FOR EACH ROW EXECUTE FUNCTION ensure_resource();
+CREATE TRIGGER ensure_resource BEFORE INSERT ON resource_check_errors FOR EACH ROW EXECUTE FUNCTION ensure_resource();
+CREATE TRIGGER ensure_resource BEFORE INSERT ON resource_versions FOR EACH ROW EXECUTE FUNCTION ensure_resource();
+CREATE TRIGGER ensure_resource BEFORE INSERT ON job_version_cursor FOR EACH ROW EXECUTE FUNCTION ensure_resource();
 `

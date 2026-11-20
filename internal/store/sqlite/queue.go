@@ -211,7 +211,8 @@ func (s *Store) CompleteJob(ctx context.Context, id int64, status store.QueueSta
 		return fmt.Errorf("could not complete job (id %d): %w", id, err)
 	}
 
-	return nil
+	// The build that kept a retired job from going has just ended.
+	return s.sweepRetired(ctx)
 }
 
 // QueuedWithoutInputs counts a row not yet claimed, or claimed with no run started: run_id is NULL until StartRun, and NOT EXISTS over a NULL run_id is true.

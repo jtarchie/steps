@@ -39,6 +39,8 @@ func TestV010UpgradesToTheFreshSchema(t *testing.T) {
 		t.Errorf("v0.1.0's placement after the upgrade = %+v (%v), want its row kept", placements, err)
 	}
 
+	assertV010JobIsRetirable(t, st)
+
 	_ = st.Close()
 
 	fresh := filepath.Join(dir, "fresh.db")
@@ -409,5 +411,74 @@ func TestOpeningACurrentDatabaseTakesNoBackup(t *testing.T) {
 		if strings.Contains(entry.Name(), ".bak") {
 			t.Errorf("opening a current database left %q beside it", entry.Name())
 		}
+	}
+}
+
+// assertV010JobIsRetirable: the upgrade files the jobs older rows already name, so a run recorded before the parent tables existed is kept by the upgrade and still goes with its job.
+func assertV010JobIsRetirable(t *testing.T, st store.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	runs, err := st.ListRuns(ctx, "build", 0)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("v0.1.0's runs of build after the upgrade = %+v (%v), want its one run kept", runs, err)
+	}
+
+	err = st.RetireAbsent(ctx, nil, nil)
+	if err != nil {
+		t.Fatalf("RetireAbsent: %v", err)
+	}
+
+	runs, err = st.ListRuns(ctx, "build", 0)
+	if err != nil || len(runs) != 0 {
+		t.Errorf("v0.1.0's runs of build after its job was retired = %+v (%v), want none: the upgrade left the run with no job row to cascade from", runs, err)
+	}
+}
+
+// TestAnUpgradeToleratesAReferenceAlreadyBroken: the check after the steps compares with what the file came with, so a row an older steps left dangling does not refuse a daemon its start.
+func TestAnUpgradeToleratesAReferenceAlreadyBroken(t *testing.T) {
+	t.Parallel()
+
+	old := filepath.Join(t.TempDir(), "old.db")
+
+	// execFile's connection enforces nothing, as sqlite does by default.
+	execFile(t, old, v010+"\nINSERT INTO run_steps (run_id, build_id, step_index, step_name) VALUES ('ghost', 'ghost', 0, 'compile');")
+
+	st, err := OpenStore(old, "app")
+	if err != nil {
+		t.Fatalf("opening a v0.1.0 database with a dangling row: %v", err)
+	}
+
+	_ = st.Close()
+}
+
+// TestBrokenReferencesCountsDanglingRows: the upgrade's only witness to a step that dropped a parent, since its steps run unenforced.
+func TestBrokenReferencesCountsDanglingRows(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.db")
+
+	execFile(t, path, `CREATE TABLE parent (id TEXT PRIMARY KEY);
+CREATE TABLE child (parent_id TEXT NOT NULL REFERENCES parent(id) ON DELETE CASCADE);
+INSERT INTO child (parent_id) VALUES ('ghost'), ('phantom');`)
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = db.Close() }()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	broken, err := brokenReferences(context.Background(), tx)
+	if err != nil || broken != 2 {
+		t.Errorf("brokenReferences = %d (%v), want the 2 dangling rows", broken, err)
 	}
 }

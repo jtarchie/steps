@@ -143,8 +143,24 @@ func checkCursorFor(ctx context.Context, st store.Versions, name string) (map[st
 	return cursor, nil
 }
 
-// AdoptResourceConfigs files each resource's type and source, emptying the version history of any that changed (steps#280), as Concourse points a resource at a fresh scope when set-pipeline changes either — so the first check after a move is not handed the old source's cursor, and no run resolves a version that only ever existed there. Its callers are the ones nothing else writes history beside: a one-shot command before it runs, and a daemon's poller between its own polls, so a poll still running under the old configuration cannot write after the reset.
-func AdoptResourceConfigs(ctx context.Context, st store.Versions, cfg *config.Config) error {
+// AdoptedStore is what adopting a configuration writes.
+type AdoptedStore interface {
+	store.Versions
+	store.Pruning
+}
+
+// Adopt brings what is recorded in line with a configuration, in two halves. It forgets every job and resource the configuration no longer declares, with all that was recorded under them (store.Pruning.RetireAbsent, a deliberate divergence from Concourse, which keeps them inactive). And it files each resource's type and source, emptying the version history of any that changed (steps#280), as Concourse points a resource at a fresh scope when set-pipeline changes either — so the first check after a move is not handed the old source's cursor, and no run resolves a version that only ever existed there. Its callers are the ones nothing else writes history beside: a one-shot command before it runs, and a daemon's poller between its own polls, so a poll still running under the old configuration cannot write after the reset.
+func Adopt(ctx context.Context, st AdoptedStore, cfg *config.Config) error {
+	resources := make([]string, 0, len(cfg.Resources))
+	for _, resource := range cfg.Resources {
+		resources = append(resources, resource.Name)
+	}
+
+	err := st.RetireAbsent(ctx, cfg.JobNames(), resources)
+	if err != nil {
+		return fmt.Errorf("could not forget what the pipeline no longer declares: %w", err)
+	}
+
 	hashes, err := cfg.ResourceConfigHashes()
 	if err != nil {
 		return err //nolint:wrapcheck // names the resource and what failed

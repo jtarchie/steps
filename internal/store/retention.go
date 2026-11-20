@@ -20,7 +20,28 @@ type Pruning interface {
 	// A transcript hangs off the node cache, not the run, and goes with its
 	// node. Every call also sweeps the configuration revisions nothing refers
 	// to any more; a wholly zero Retention is that sweep alone.
+	//
+	// And every call finishes a retirement RetireAbsent had to put off.
 	Prune(ctx context.Context, policy Retention, keepRunID string) error
+
+	// RetireAbsent is told every job and resource the pipeline's configuration
+	// now declares, and forgets the rest: a job no longer declared takes its
+	// runs, its caches, its queue rows and its passed: records with it, and a
+	// resource its versions, cursors and check errors. Called where a
+	// configuration is adopted.
+	//
+	// A deliberate divergence. Concourse marks a removed job or resource
+	// inactive and keeps every build and version until the pipeline is
+	// destroyed; here a name nothing declares is unreachable from every
+	// command and page, so keeping its rows is keeping what nobody can read.
+	//
+	// A job with a build still running is retired instead and goes once that
+	// build ends (Prune and CompleteJob both try), since the build writes under
+	// its run to the end. A job declared again before then is kept.
+	//
+	// Approvals are not taken: the record that somebody allowed a deploy
+	// outlives the job that asked.
+	RetireAbsent(ctx context.Context, jobs, resources []string) error
 }
 
 // Retention is what one build is allowed to leave behind: a policy read off

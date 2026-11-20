@@ -264,7 +264,11 @@ func (s suite) TestResumeKeepsTheConfigurationItCannotName(t *testing.T) {
 		t.Fatalf("ListRuns: %v", err)
 	}
 
-	if len(rows) != 1 || rows[0].ConfigSHA != "sha-recorded" {
+	if len(rows) != 1 {
+		t.Fatalf("after a resume the job lists %d runs, want the one resumed", len(rows))
+	}
+
+	if rows[0].ConfigSHA != "sha-recorded" {
 		t.Errorf("after a resume the run reports configuration %q, want it to keep %q",
 			rows[0].ConfigSHA, "sha-recorded")
 	}

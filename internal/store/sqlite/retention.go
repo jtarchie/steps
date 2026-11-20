@@ -63,6 +63,7 @@ func (s *Store) Prune(ctx context.Context, policy store.Retention, keepRunID str
 	return errors.Join(
 		s.pruneRuns(ctx, policy.JobName, policy.Runs, keepRunID),
 		s.pruneTriggerQueue(ctx, policy.JobName, policy.TriggerQueue),
+		s.sweepRetired(ctx),
 	)
 }
 

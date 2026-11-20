@@ -60,7 +60,7 @@ func setup(
 		return nil, nil, nil, err
 	}
 
-	err = pipeline.AdoptResourceConfigs(context.Background(), st, cfg)
+	err = pipeline.Adopt(context.Background(), st, cfg)
 	if err != nil {
 		_ = st.Close()
 

@@ -213,6 +213,10 @@ func (s suite) TestAgentUsageNeverPricedStaysNull(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if len(rows) != 1 {
+		t.Fatalf("RunUsage lists %d rows, want the one recorded", len(rows))
+	}
+
 	if rows[0].CostUSD != nil {
 		t.Errorf("a step nothing ever priced reports %v, want NULL", *rows[0].CostUSD)
 	}

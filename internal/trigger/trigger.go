@@ -59,6 +59,7 @@ type PollStore interface {
 	store.Queue
 	store.Versions
 	store.Control
+	store.Pruning
 }
 
 // Poll is the producer half of the daemon: it checks every trigger: true
@@ -227,7 +228,7 @@ func runPoller(ctx context.Context, current ConfigSource, st PollStore, interval
 	}
 }
 
-// adoption files each configuration's resource types and sources once, from the poller's own goroutine: between polls, so no check still running under the configuration being replaced can write the old source's versions or cursor after the reset (steps#280).
+// adoption retires what each configuration stopped declaring and files its resource types and sources, once, from the poller's own goroutine: between polls, so no check still running under the configuration being replaced can write the old source's versions or cursor after the reset (steps#280).
 type adoption struct {
 	// filed is the configuration last adopted, compared by identity as admission's is.
 	filed *config.Config
@@ -239,7 +240,7 @@ func (a *adoption) adopt(ctx context.Context, cfg *config.Config, st PollStore) 
 		return true
 	}
 
-	err := pipeline.AdoptResourceConfigs(ctx, st, cfg)
+	err := pipeline.Adopt(ctx, st, cfg)
 	if err != nil {
 		slog.ErrorContext(ctx, "trigger.adopt", "pipeline", cfg.Name, "error", err)
 

@@ -8,6 +8,8 @@ package sqlite
 // steps v0.1.0 shipped, it is a migration counter; below it, a detector whose
 // answer was deleting the file.
 //
+// 47 added jobs and resources, the rows every job- and resource-named table now references, so a name a pipeline stops declaring takes what was recorded under it (Pruning.RetireAbsent). An older file has the names and nothing to cascade from.
+//
 // 45 added questions.step_key, an ask: step's question keyed by where in its run it was asked, and narrowed idx_questions_memo to the rows without one.
 //
 // 42 replaced oauth_tokens.pipeline (a name) with pipeline_id REFERENCES pipelines: a grant followed a reused name onto a pipeline nobody granted, and lost a renamed one.
@@ -114,7 +116,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 46
+const schemaVersion = 47
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -158,6 +160,43 @@ CREATE TABLE IF NOT EXISTS pipelines (
     one_off   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_pipelines_revision ON pipelines(current_revision_id);
+
+-- The jobs and resources a pipeline has recorded anything under, by name. They
+-- exist to be DELETED: every table keyed by a job's or a resource's name
+-- references its row here and cascades off it, so a name the pipeline stops
+-- declaring takes its runs, cache, queue rows and versions with it in one
+-- DELETE (Pruning.RetireAbsent) instead of a list of DELETEs that have to agree
+-- with each other forever. A deliberate divergence: Concourse marks a removed
+-- job or resource inactive and keeps every build and version until the
+-- pipeline is destroyed (atc/db/team.go, inactivateTableForPipeline).
+--
+-- No writer inserts here. The ensure_parents_* triggers below file a name the
+-- first time anything is recorded under it, so a row can never lack its
+-- parent and no insert site has to remember one.
+--
+-- ON UPDATE CASCADE on every reference, so renaming a job is one UPDATE here.
+--
+-- retired is a job the pipeline no longer declares whose build was still
+-- running when that was noticed: it goes once nothing of it runs. A resource
+-- has no such state, since nothing holds one open.
+--
+-- Named by job and referencing nothing here, on purpose: questions,
+-- agent_usage and run_placements (they die with their run), approvals (the
+-- audit trail of a decision outlives the job that asked for it), and
+-- run_inputs.resource_name and nodes.resource (history of a run and of a node,
+-- which die with those).
+CREATE TABLE IF NOT EXISTS jobs (
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    retired     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (pipeline_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS resources (
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, name)
+);
 
 -- Who this database's daemon is, minted once by Identity: the value it stamps
 -- on every cloud machine it starts, so a restarted daemon can tell its own
@@ -241,7 +280,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     status      TEXT NOT NULL,
     error       TEXT,
     created_at  TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, hash)
+    PRIMARY KEY (pipeline_id, hash),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 -- Retention scans nodes by job (ordering by rowid, not created_at — see
 -- pruneNodes) and sweeps node_content by what nodes still point at; both are
@@ -276,7 +316,8 @@ CREATE TABLE IF NOT EXISTS job_runs (
     pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name   TEXT NOT NULL,
     root_hash  TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, job_name, root_hash)
+    PRIMARY KEY (pipeline_id, job_name, root_hash),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 -- The cache index (#259): for each step-cache entry (keyed by its action key) and resource-cache entry (keyed by type, source, params and version), which tree each name points at, and who holds it: an empty holder is this machine's store under --workspace-root, otherwise a docker. MACHINE-WIDE, not pipeline-scoped, and deliberately: Concourse's resource_caches carry no pipeline or team (atc/db resource_cache_factory.go keys one by resource config, version and params), because the key already hashes everything that determines the bytes; and the store's sweep spares only trees some entry names, so an index split by pipeline would let one pipeline's sweep delete another's trees. Bounded by count per kind, least recently used first, never by age. Also the --artifact-store mirror's index: a tree this machine's store lacks is asked of the mirror by the same digest.
@@ -305,7 +346,8 @@ CREATE TABLE IF NOT EXISTS resource_configs (
     pipeline_id   INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     resource_name TEXT NOT NULL,
     config_hash   TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, resource_name)
+    PRIMARY KEY (pipeline_id, resource_name),
+    FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS resource_checks (
@@ -313,7 +355,8 @@ CREATE TABLE IF NOT EXISTS resource_checks (
     resource_name TEXT NOT NULL,
     version_json  TEXT NOT NULL,
     checked_at    TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, resource_name)
+    PRIMARY KEY (pipeline_id, resource_name),
+    FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 -- Why a resource's last check failed. Apart from resource_checks rather than
@@ -326,7 +369,8 @@ CREATE TABLE IF NOT EXISTS resource_check_errors (
     resource_name TEXT NOT NULL,
     message       TEXT NOT NULL,
     failed_at     TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, resource_name)
+    PRIMARY KEY (pipeline_id, resource_name),
+    FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS trigger_queue (
@@ -349,7 +393,8 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     enqueued_at TEXT NOT NULL,
     started_at  TEXT,
     finished_at TEXT,
-    error       TEXT
+    error       TEXT,
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 -- At most one pending row per job at a time; a running row isn't covered,
 -- so a version change mid-run still enqueues a fresh pending row for after.
@@ -405,7 +450,8 @@ CREATE TABLE IF NOT EXISTS resource_versions (
     check_order   INTEGER NOT NULL,
     from_check    INTEGER NOT NULL DEFAULT 0,
     metadata      TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (pipeline_id, resource_name, version_json)
+    PRIMARY KEY (pipeline_id, resource_name, version_json),
+    FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_resource_versions_order
     ON resource_versions(pipeline_id, resource_name, check_order);
@@ -437,7 +483,8 @@ CREATE TABLE IF NOT EXISTS job_versions (
     build_id      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (pipeline_id, job_name, resource_name, version_json),
     FOREIGN KEY (pipeline_id, resource_name, version_json)
-        REFERENCES resource_versions(pipeline_id, resource_name, version_json) ON DELETE CASCADE
+        REFERENCES resource_versions(pipeline_id, resource_name, version_json) ON DELETE CASCADE,
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 -- The cascade's child key, which the primary key cannot serve because it leads with job_name: without it every version pruneVersions reaps scans the whole table.
 CREATE INDEX IF NOT EXISTS idx_job_versions_version ON job_versions(pipeline_id, resource_name, version_json);
@@ -490,8 +537,12 @@ CREATE TABLE IF NOT EXISTS job_version_cursor (
     job_name      TEXT NOT NULL,
     resource_name TEXT NOT NULL,
     check_order   INTEGER NOT NULL,
-    PRIMARY KEY (pipeline_id, job_name, resource_name)
+    PRIMARY KEY (pipeline_id, job_name, resource_name),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY (pipeline_id, resource_name) REFERENCES resources(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
+-- The resource cascade's child key, which the primary key cannot serve because it leads with job_name.
+CREATE INDEX IF NOT EXISTS idx_job_version_cursor_resource ON job_version_cursor(pipeline_id, resource_name);
 
 -- One row per CONFIGURATION this pipeline has been run with: the substituted
 -- source and the hash of it.
@@ -580,7 +631,8 @@ CREATE TABLE IF NOT EXISTS runs (
     -- is its queue row's requester, copied when the run is recorded rather
     -- than joined later: retention trims the queue on its own schedule, and a
     -- run must keep saying who started it after its row is gone.
-    created_by  TEXT NOT NULL DEFAULT ''
+    created_by  TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 -- Retention orders a job's runs by recency to find the ones past the cap.
 CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(pipeline_id, job_name, started_at);
@@ -737,7 +789,8 @@ CREATE TABLE IF NOT EXISTS job_concurrency (
     pipeline_id   INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name      TEXT NOT NULL,
     max_in_flight INTEGER NOT NULL,
-    PRIMARY KEY (pipeline_id, job_name)
+    PRIMARY KEY (pipeline_id, job_name),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 -- Which serial groups each job belongs to. Synced from config at startup; it
@@ -747,7 +800,8 @@ CREATE TABLE IF NOT EXISTS job_serial_groups (
     pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name   TEXT NOT NULL,
     group_name TEXT NOT NULL,
-    PRIMARY KEY (pipeline_id, job_name, group_name)
+    PRIMARY KEY (pipeline_id, job_name, group_name),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 -- The watch circuit breaker: how many times in a row a job has failed, and
@@ -757,7 +811,8 @@ CREATE TABLE IF NOT EXISTS job_breaker (
     job_name    TEXT NOT NULL,
     consecutive INTEGER NOT NULL,
     paused_at   TEXT,
-    PRIMARY KEY (pipeline_id, job_name)
+    PRIMARY KEY (pipeline_id, job_name),
+    FOREIGN KEY (pipeline_id, job_name) REFERENCES jobs(pipeline_id, name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 -- Everything a run did, in the order it did it: the persisted side of the
@@ -1080,6 +1135,64 @@ CREATE TABLE IF NOT EXISTS node_transcripts (
     PRIMARY KEY (pipeline_id, hash),
     FOREIGN KEY (pipeline_id, hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE
 );
+` + ensureParents
+
+// ensureParents files a job or a resource in its parent table the first time a row names it. WHERE NOT EXISTS rather than INSERT OR IGNORE: a trigger's conflict clause is replaced by the firing statement's, so under an INSERT OR REPLACE the parent would be replaced, and its cascade would delete everything recorded under it. Migration 47 runs this text too, so it is frozen: a change is a new migration that drops and recreates what it changes.
+const ensureParents = `
+CREATE TRIGGER IF NOT EXISTS ensure_parents_nodes BEFORE INSERT ON nodes BEGIN
+    INSERT INTO jobs (pipeline_id, name) SELECT NEW.pipeline_id, NEW.job_name
+        WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE pipeline_id = NEW.pipeline_id AND name = NEW.job_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_job_runs BEFORE INSERT ON job_runs BEGIN
+    INSERT INTO jobs (pipeline_id, name) SELECT NEW.pipeline_id, NEW.job_name
+        WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE pipeline_id = NEW.pipeline_id AND name = NEW.job_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_trigger_queue BEFORE INSERT ON trigger_queue BEGIN
+    INSERT INTO jobs (pipeline_id, name) SELECT NEW.pipeline_id, NEW.job_name
+        WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE pipeline_id = NEW.pipeline_id AND name = NEW.job_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_job_versions BEFORE INSERT ON job_versions BEGIN
+    INSERT INTO jobs (pipeline_id, name) SELECT NEW.pipeline_id, NEW.job_name
+        WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE pipeline_id = NEW.pipeline_id AND name = NEW.job_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_runs BEFORE INSERT ON runs BEGIN
+    INSERT INTO jobs (pipeline_id, name) SELECT NEW.pipeline_id, NEW.job_name
+        WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE pipeline_id = NEW.pipeline_id AND name = NEW.job_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_job_concurrency BEFORE INSERT ON job_concurrency BEGIN
+    INSERT INTO jobs (pipeline_id, name) SELECT NEW.pipeline_id, NEW.job_name
+        WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE pipeline_id = NEW.pipeline_id AND name = NEW.job_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_job_serial_groups BEFORE INSERT ON job_serial_groups BEGIN
+    INSERT INTO jobs (pipeline_id, name) SELECT NEW.pipeline_id, NEW.job_name
+        WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE pipeline_id = NEW.pipeline_id AND name = NEW.job_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_job_breaker BEFORE INSERT ON job_breaker BEGIN
+    INSERT INTO jobs (pipeline_id, name) SELECT NEW.pipeline_id, NEW.job_name
+        WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE pipeline_id = NEW.pipeline_id AND name = NEW.job_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_resource_configs BEFORE INSERT ON resource_configs BEGIN
+    INSERT INTO resources (pipeline_id, name) SELECT NEW.pipeline_id, NEW.resource_name
+        WHERE NOT EXISTS (SELECT 1 FROM resources WHERE pipeline_id = NEW.pipeline_id AND name = NEW.resource_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_resource_checks BEFORE INSERT ON resource_checks BEGIN
+    INSERT INTO resources (pipeline_id, name) SELECT NEW.pipeline_id, NEW.resource_name
+        WHERE NOT EXISTS (SELECT 1 FROM resources WHERE pipeline_id = NEW.pipeline_id AND name = NEW.resource_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_resource_check_errors BEFORE INSERT ON resource_check_errors BEGIN
+    INSERT INTO resources (pipeline_id, name) SELECT NEW.pipeline_id, NEW.resource_name
+        WHERE NOT EXISTS (SELECT 1 FROM resources WHERE pipeline_id = NEW.pipeline_id AND name = NEW.resource_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_resource_versions BEFORE INSERT ON resource_versions BEGIN
+    INSERT INTO resources (pipeline_id, name) SELECT NEW.pipeline_id, NEW.resource_name
+        WHERE NOT EXISTS (SELECT 1 FROM resources WHERE pipeline_id = NEW.pipeline_id AND name = NEW.resource_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ensure_parents_job_version_cursor BEFORE INSERT ON job_version_cursor BEGIN
+    INSERT INTO jobs (pipeline_id, name) SELECT NEW.pipeline_id, NEW.job_name
+        WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE pipeline_id = NEW.pipeline_id AND name = NEW.job_name);
+    INSERT INTO resources (pipeline_id, name) SELECT NEW.pipeline_id, NEW.resource_name
+        WHERE NOT EXISTS (SELECT 1 FROM resources WHERE pipeline_id = NEW.pipeline_id AND name = NEW.resource_name);
+END;
 `
 
 // Schema changes are append-only migrations stamped in PRAGMA user_version (see migrate.go and internal/store/CLAUDE.md).
