@@ -13,7 +13,9 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -57,6 +59,204 @@ func InterpolateVars(source []byte, vars map[string]string) []byte {
 
 		return []byte(value)
 	})
+}
+
+// interpolateSource is InterpolateVars for a whole pipeline file: Concourse substitutes into the parsed document, and text reproduces that for a multi-line value only inside a literal | block (continuation lines indented to its content), so anywhere else it is refused by name and line rather than failing the parse later; one trailing newline is dropped first, since a vars file's > or | adds it by default and kept it would end the line the ((name)) sits on.
+func interpolateSource(source []byte, label string, vars map[string]string) ([]byte, error) {
+	values := make(map[string]string, len(vars))
+	multiLine := false
+
+	for name, value := range vars {
+		values[name] = strings.TrimSuffix(value, "\n")
+		multiLine = multiLine || strings.Contains(values[name], "\n")
+	}
+
+	if !multiLine {
+		return InterpolateVars(source, values), nil
+	}
+
+	var doc yaml.Node
+
+	err := yaml.Unmarshal(source, &doc)
+	if err != nil {
+		return InterpolateVars(source, vars), nil //nolint:nilerr // a source with no structure to judge a var by is substituted as text, as it always was, and its parse after substitution reports the error
+	}
+
+	raw := rawSource{text: source, label: label, lines: lineStarts(source)}
+	raw.nodes = sourceNodes(&doc, source, raw.lines)
+
+	var out bytes.Buffer
+
+	last := 0
+
+	for _, match := range varPattern.FindAllSubmatchIndex(source, -1) {
+		name := string(source[match[2]:match[3]])
+
+		value, ok := values[name]
+		if !ok {
+			continue
+		}
+
+		if strings.Contains(value, "\n") {
+			value, err = raw.landInBlock(name, value, match[0])
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		out.Write(source[last:match[0]])
+		out.WriteString(value)
+
+		last = match[1]
+	}
+
+	out.Write(source[last:])
+
+	return out.Bytes(), nil
+}
+
+// rawSource is a pipeline file before substitution, with where its lines and nodes start.
+type rawSource struct {
+	text  []byte
+	label string
+	lines []int
+	nodes []sourceNode
+}
+
+// landInBlock is a multi-line value indented for the | block holding the ((name)) at offset, or an error naming where it was used instead.
+func (r rawSource) landInBlock(name string, value string, offset int) (string, error) {
+	line := sort.Search(len(r.lines), func(i int) bool { return r.lines[i] > offset })
+	at := sort.Search(len(r.nodes), func(i int) bool { return r.nodes[i].offset > offset }) - 1
+
+	var held sourceNode
+	if at >= 0 {
+		held = r.nodes[at]
+	}
+
+	indent, ok := literalIndent(held.node, r.text, r.lines, line)
+	if !ok {
+		return "", fmt.Errorf("%s:%d: var %q has a multi-line value, used %s: use it inside a | block, or give it a single-line value", r.label, line, name, held.describe(name))
+	}
+
+	parts := strings.Split(value, "\n")
+	for i := 1; i < len(parts); i++ {
+		if parts[i] != "" {
+			parts[i] = strings.Repeat(" ", indent) + parts[i]
+		}
+	}
+
+	return strings.Join(parts, "\n"), nil
+}
+
+// sourceNode is a node of the raw source and the byte offset it starts at.
+type sourceNode struct {
+	node   *yaml.Node
+	key    bool
+	offset int
+}
+
+// describe names the context a ((name)) sits in for an error, falling back to "outside any value" when the node nearest before it does not hold it, which is a comment.
+func (n sourceNode) describe(name string) string {
+	switch {
+	case n.node == nil || !strings.Contains(n.node.Value, "(("+name+"))"):
+		return "outside any value"
+	case n.key:
+		return "in a mapping key"
+	case n.node.Style&yaml.FoldedStyle != 0:
+		return "in a folded > block"
+	case n.node.Style&(yaml.SingleQuotedStyle|yaml.DoubleQuotedStyle) != 0:
+		return "in a quoted string"
+	default:
+		return "in a plain value"
+	}
+}
+
+// lineStarts is the byte offset of each line of source; line n (1-based) starts at lines[n-1].
+func lineStarts(source []byte) []int {
+	lines := []int{0}
+
+	for i, b := range source {
+		if b == '\n' {
+			lines = append(lines, i+1)
+		}
+	}
+
+	return lines
+}
+
+// sourceNodes lists every node of doc in source order, a container before the first child that starts where it does, so the last node starting at or before a position is the innermost one there.
+func sourceNodes(doc *yaml.Node, source []byte, lines []int) []sourceNode {
+	var nodes []sourceNode
+
+	var walk func(n *yaml.Node, key bool)
+
+	walk = func(n *yaml.Node, key bool) {
+		if n.Line > 0 && n.Line <= len(lines) {
+			start := lines[n.Line-1]
+			offset := start
+
+			for col := 1; col < n.Column && offset < len(source); col++ {
+				_, width := utf8.DecodeRune(source[offset:])
+				offset += width
+			}
+
+			nodes = append(nodes, sourceNode{node: n, key: key, offset: offset})
+		}
+
+		for i, child := range n.Content {
+			walk(child, n.Kind == yaml.MappingNode && i%2 == 0)
+		}
+	}
+
+	walk(doc, false)
+
+	return nodes
+}
+
+// literalIndent is the content indentation of the | block holding line, or false when line is not inside one's text: every line from the header down to it must be blank or indented at least that far, or the block ended before it.
+func literalIndent(n *yaml.Node, source []byte, lines []int, line int) (int, bool) {
+	if n == nil || n.Style&yaml.LiteralStyle == 0 {
+		return 0, false
+	}
+
+	text := func(l int) string {
+		end := len(source)
+		if l < len(lines) {
+			end = lines[l]
+		}
+
+		return strings.TrimRight(string(source[lines[l-1]:end]), "\r\n")
+	}
+
+	leading := func(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
+
+	indent := -1
+
+	for l := n.Line + 1; l <= line; l++ {
+		if strings.TrimSpace(text(l)) == "" {
+			continue
+		}
+
+		if indent < 0 {
+			first := ""
+
+			for v := range strings.SplitSeq(n.Value, "\n") {
+				if strings.TrimSpace(v) != "" {
+					first = v
+
+					break
+				}
+			}
+
+			indent = leading(text(l)) - leading(first)
+		}
+
+		if leading(text(l)) < indent {
+			return 0, false
+		}
+	}
+
+	return indent, indent >= 0
 }
 
 // UnresolvedVars lists every ((name)) still present in a value, sorted.

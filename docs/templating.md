@@ -85,6 +85,8 @@ steps run pipeline.yml --job build --vars-file prod.yml
 
 Both compose: the file is the shared, checked-in set and a `--var` flag overrides it, which is the only ordering that makes a one-off override possible.
 
+A var is substituted into the file's text before it is parsed. A value spanning several lines — a `|` in the vars file, or a `>` with a blank line in it — can only be used inside a `|` block in the pipeline (a `run:`, a `system:`, a message), where each of its lines lands at the block's indentation, so the step sees the value's lines as written. Used anywhere else (an inline value, a quoted string, a `>` block, a key), it is refused at load, naming the var and the line it was used on. One trailing newline is dropped from every value, since a `>` or `|` in the vars file adds one by default: a folded paragraph lands as a single line wherever it is used.
+
 ### Values the run captures: `load_var:` and `((.:name))`
 
 Some values do not exist until the run produces them: a tag a step just picked, a version a build wrote. `load_var:` reads one from a file into a value later steps read as `((.:name))` — Concourse's spelling, the `.:` marking a value of this run rather than a `--var`:

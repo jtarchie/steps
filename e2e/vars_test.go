@@ -67,6 +67,64 @@ jobs:
 	}
 }
 
+// TestMultiLineVarLandsInABlockScalar is the shape #292 hit: a folded vars-file value spanning paragraphs, used inside a | block, reaches the step as the same lines, with no stray indentation and no trailing newline.
+func TestMultiLineVarLandsInABlockScalar(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	log := filepath.Join(dir, "note.log")
+
+	varsFile := filepath.Join(dir, "vars.yml")
+	writePipelineFile(t, varsFile, "scope_note: >\n  Only probe\n  the staging host.\n\n  Never touch production.\n")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: announce
+    inputs: []
+    run: |
+      printf '%%s' '((scope_note))' > %s
+`, log))
+
+	err := stepsRun(t, []string{"run", path, "--job", "build", "--vars-file", varsFile})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if got, want := readFileString(t, log), "Only probe the staging host.\nNever touch production."; got != want {
+		t.Errorf("the step saw %q, want %q", got, want)
+	}
+}
+
+// TestMultiLineVarUsedInlineIsRefusedByName: text cannot keep a multi-line value inside a plain scalar, so the load names the var and the line it was used on rather than failing the parse somewhere after it.
+func TestMultiLineVarUsedInlineIsRefusedByName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	varsFile := filepath.Join(dir, "vars.yml")
+	writePipelineFile(t, varsFile, "scope_note: |\n  first line\n  second line\n")
+
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: announce
+    inputs: []
+    run: echo ((scope_note))
+`)
+
+	err := stepsRun(t, []string{"run", path, "--job", "build", "--vars-file", varsFile})
+	if err == nil {
+		t.Fatal("a multi-line var used in a plain scalar loaded")
+	}
+
+	if msg := err.Error(); !strings.Contains(msg, `"scope_note"`) || !strings.Contains(msg, path+":7") {
+		t.Errorf("error does not name the var and the line it was used on: %v", err)
+	}
+}
+
 // TestUnresolvedVarIsALoadError covers the failure that would otherwise reach
 // a shell as the literal text ((repo_uri)) and fail somewhere far from the
 // mistake.

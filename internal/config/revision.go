@@ -47,7 +47,7 @@ func ReadSource(path string, vars map[string]string) ([]byte, error) {
 		return nil, fmt.Errorf("could not read pipeline file %q: %w", path, err)
 	}
 
-	return InterpolateVars(data, vars), nil
+	return interpolateSource(data, path, vars)
 }
 
 // Slugify turns a pipeline path into its identity: the base name without its
