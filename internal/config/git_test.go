@@ -5,6 +5,26 @@ import (
 	"testing"
 )
 
+// Only a uri naming this machine's filesystem is out of an image's reach; a remote in any spelling, and a ((var)) filled in at run time, are not refused at load.
+func TestIsLocalGitURI(t *testing.T) {
+	t.Parallel()
+
+	for uri, want := range map[string]bool{
+		"/srv/repo":                   true,
+		"../repo":                     true,
+		"file:///srv/repo":            true,
+		"https://example.com/a.git":   false,
+		"ssh://git@example.com/a.git": false,
+		"git@github.com:acme/app.git": false,
+		"((repo_uri))":                false,
+		"":                            false,
+	} {
+		if got := isLocalGitURI(uri); got != want {
+			t.Errorf("isLocalGitURI(%q) = %v, want %v", uri, got, want)
+		}
+	}
+}
+
 func gitPipeline(source string) string {
 	return `
 resources:

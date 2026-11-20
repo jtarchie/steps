@@ -55,3 +55,35 @@ func TestGitHubCheckoutGitRunsInTheImageItIsGiven(t *testing.T) {
 		t.Fatalf("run = %v, want the clone to fail inside alpine:3, which has no git", err)
 	}
 }
+
+// An image cannot see this machine's files or run what steps runs in-process, so a built-in given one where it cannot apply is refused at load, naming why: git over a local path (fetch: needs one), and a type that runs no command.
+func TestABuiltinIsRefusedAnImageItCannotUse(t *testing.T) {
+	t.Parallel()
+
+	repo := t.TempDir()
+
+	for _, tc := range []struct{ name, pipeline, want string }{
+		{"local uri", "resource_types:\n- {name: git, image: alpine/git}\nresources:\n- {name: repo, type: git, source: {uri: " + repo + "}}\n", "a path on this machine"},
+		{"file uri", "resource_types:\n- {name: git, image: alpine/git}\nresources:\n- {name: repo, type: git, source: {uri: \"file://" + repo + "\"}}\n", "a path on this machine"},
+		{"fetch", "resource_types:\n- {name: git, image: alpine/git}\nresources:\n- {name: repo, type: git, source: {uri: " + repo + ", branch: main, fetch: true}}\n", "a path on this machine"},
+		{"no command", "resource_types:\n- {name: cron, image: alpine:3}\n", "image: cannot apply to cron"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writePipeline(t, t.TempDir(), tc.pipeline+"jobs:\n- name: build\n  plan:\n  - task: noop\n    run: \"true\"\n")
+
+			err := stepsRun(t, []string{"validate", "--syntax-only", path})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validate = %v, want a refusal naming %q", err, tc.want)
+			}
+		})
+	}
+
+	path := writePipeline(t, t.TempDir(), "resource_types:\n- {name: git, image: alpine/git}\nresources:\n- {name: repo, type: git, source: {uri: \"https://example.invalid/acme/app.git\"}}\njobs:\n- name: build\n  plan:\n  - get: repo\n")
+
+	err := stepsRun(t, []string{"validate", "--syntax-only", path})
+	if err != nil {
+		t.Fatalf("a remote uri in an image was refused: %v", err)
+	}
+}

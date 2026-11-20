@@ -87,7 +87,9 @@ jobs:
     run: cd repo && go build ./...
 ```
 
-`env:`, `user:`, `network:` and the rest of a type's [container settings](infra.md#container-execution-image) apply as they would to any type. The `github-prs` and `github-comments` types take the same entry for [`checkout: git`](#checkout-git-a-repository-to-run-git-in); the other built-ins run no command, and `slack-*` refuses an image.
+`env:`, `user:`, `network:` and the rest of a type's [container settings](infra.md#container-execution-image) apply as they would to any type. The `github-prs` and `github-comments` types take the same entry for [`checkout: git`](#checkout-git-a-repository-to-run-git-in). The other built-ins run no command, so an entry giving one of them an image is a load error.
+
+A `uri:` that is a path on this machine (an absolute or relative path, or `file://`, which `fetch: true` always is) is refused under an image: the container cannot see the path. Give a remote uri, or drop the image.
 
 ### Paths
 
