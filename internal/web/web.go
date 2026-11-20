@@ -225,12 +225,15 @@ type OneOffRequest struct {
 	Includes map[string][]byte `json:"includes,omitempty"`
 	From     string            `json:"from,omitempty"`
 	Job      string            `json:"job"`
+	Pin      map[string]string `json:"pin,omitempty"`
+	Force    bool              `json:"force,omitempty"`
 }
 
 // OneOffResult names the pipeline the daemon chose, which is where the run is read from.
 type OneOffResult struct {
 	Pipeline string `json:"pipeline"`
 	Job      string `json:"job"`
+	Queued   int64  `json:"queued,omitempty"`
 }
 
 // RunJSON is a run as the API answers it. Keys keep the Go field spellings the untagged store row went out under, so a CLI and a daemon of different versions still read each other.
@@ -302,8 +305,8 @@ var ErrNoSuchPipeline = errors.New("no such pipeline")
 // Implemented by scheduler.LocalRunner, which internal/cli installs; an interface so the
 // HTTP layer can be tested without starting real jobs.
 type Runner interface {
-	// Enqueue queues a person's trigger of a job.
-	Enqueue(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason string, force bool) error
+	// Enqueue queues a person's trigger of a job, answering the queue row's id: the one it merged into when the job already had one waiting.
+	Enqueue(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason string, force bool) (int64, error)
 	// EnqueueRerun queues a retry of a recorded run.
 	EnqueueRerun(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason, runID string) error
 	// EnqueueResume queues a person's resume of a failed run, which continues that run from the step that failed; scheduler.ErrNotResumable when ResumePoint would not offer one.
@@ -311,7 +314,7 @@ type Runner interface {
 	// ResumePoint is where a resume of a run would pick up, ok false when it would gain nothing or be refused.
 	ResumePoint(ctx context.Context, pipeline *scheduler.Pipeline, runID string) (scheduler.ResumeAt, bool)
 	// EnqueuePinned queues a person's trigger of a job pinned to the version fields named.
-	EnqueuePinned(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason string, pin map[string]string) error
+	EnqueuePinned(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason string, pin map[string]string) (int64, error)
 	// Abort cancels a run this process is executing, and reports false when it is not running here.
 	Abort(pipeline *scheduler.Pipeline, runID string) bool
 	// AbortQueued drops a job's queued run before it starts, and reports false when nothing was queued.
@@ -520,6 +523,7 @@ func (s *Server) routes() error {
 	api.GET("/pipelines/:pipeline/runs", s.handleAPIRuns)
 	api.GET("/pipelines/:pipeline/runs/:run", s.handleAPIRun)
 	api.GET("/pipelines/:pipeline/runs/:run/events", s.handleAPIRunEvents)
+	api.GET("/pipelines/:pipeline/queued/:id", s.handleAPIQueued)
 	api.PUT("/pipelines/:pipeline", s.handleAPISet)
 	api.DELETE("/pipelines/:pipeline", s.handleAPIDestroy)
 	api.POST("/pipelines/:pipeline/pause", s.handleAPIPause)

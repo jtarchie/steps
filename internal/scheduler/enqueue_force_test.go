@@ -18,12 +18,12 @@ type claimsMidEnqueue struct {
 	fail  error
 }
 
-func (s *claimsMidEnqueue) EnqueueManualJob(ctx context.Context, jobName, reason, by string) error {
+func (s *claimsMidEnqueue) EnqueueManualJob(ctx context.Context, jobName, reason, by string) (int64, error) {
 	if s.fail != nil {
-		return s.fail
+		return 0, s.fail
 	}
 
-	err := s.Store.EnqueueManualJob(ctx, jobName, reason, by)
+	id, err := s.Store.EnqueueManualJob(ctx, jobName, reason, by)
 	if err == nil && s.drain != nil {
 		drain := s.drain
 		s.drain = nil
@@ -31,7 +31,7 @@ func (s *claimsMidEnqueue) EnqueueManualJob(ctx context.Context, jobName, reason
 		drain()
 	}
 
-	return err //nolint:wrapcheck // a test double passing the real store's error through
+	return id, err //nolint:wrapcheck // a test double passing the real store's error through
 }
 
 // A worker can claim a forced trigger's row before Enqueue returns: that run must be the forced one, and no flag may outlive it to force the poll after.
@@ -57,7 +57,7 @@ jobs:
 	racing.drain = func() { runner.DrainOne(ctx, target) }
 	target.Store = racing
 
-	err := runner.Enqueue(ctx, target, "build", "trigger, no cache (web)", true)
+	_, err := runner.Enqueue(ctx, target, "build", "trigger, no cache (web)", true)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -99,7 +99,7 @@ jobs:
 
 	target.Store = &claimsMidEnqueue{Store: st, fail: errors.New("database is locked")}
 
-	err := runner.Enqueue(ctx, target, "build", "trigger, no cache (web)", true)
+	_, err := runner.Enqueue(ctx, target, "build", "trigger, no cache (web)", true)
 	if err == nil {
 		t.Fatal("Enqueue reported success for a row the store refused")
 	}

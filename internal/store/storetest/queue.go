@@ -278,7 +278,7 @@ func (s suite) TestAManualEnqueueIsMarkedWhicheverArrivesFirst(t *testing.T) {
 			for _, manual := range tc.manual {
 				var err error
 				if manual {
-					err = st.EnqueueManualJob(ctxFor(t), "build", "trigger (web)", "")
+					_, err = st.EnqueueManualJob(ctxFor(t), "build", "trigger (web)", "")
 				} else {
 					err = st.EnqueueJob(ctxFor(t), "build", "a new version", "")
 				}
@@ -338,6 +338,96 @@ func (s suite) TestARerunIsQueuedBesideAnOrdinaryTrigger(t *testing.T) {
 	}
 }
 
+// TestAPersonsEnqueueAnswersTheRowItMergedInto: a terminal that queued a run follows that row to its run, so a trigger merged into a waiting row must answer the waiting row.
+func (s suite) TestAPersonsEnqueueAnswersTheRowItMergedInto(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	mustEnqueueJob(t, st, "build", "a new version")
+
+	manual := mustQueued(t)(st.EnqueueManualJob(ctx, "build", "trigger (cli)", ""))
+	merged := mustQueued(t)(st.EnqueueManualJob(ctx, "build", "trigger (cli)", ""))
+	pinned := mustQueued(t)(st.EnqueuePinnedJob(ctx, "build", "trigger (cli)", `{"n":"one"}`, ""))
+	again := mustQueued(t)(st.EnqueuePinnedJob(ctx, "build", "trigger (cli)", `{"n":"one"}`, ""))
+
+	rows, err := st.ListTriggerQueue(ctx, 10)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("queue = %+v (%v), want the ordinary row and one pinned row", rows, err)
+	}
+
+	if manual != rows[1].ID || merged != rows[1].ID {
+		t.Errorf("manual enqueues answered %d and %d, want both the automatic row's id %d they merged into", manual, merged, rows[1].ID)
+	}
+
+	if pinned != rows[0].ID || again != rows[0].ID {
+		t.Errorf("pinned enqueues answered %d and %d, want both the pinned row's id %d", pinned, again, rows[0].ID)
+	}
+}
+
+// TestAQueueRowNamesItsRunOnceItStarts: the row a terminal waits on says which run it became, and only to its own pipeline.
+func (s suite) TestAQueueRowNamesItsRunOnceItStarts(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+	other := s.open(t, "other")
+
+	id := mustQueued(t)(st.EnqueueManualJob(ctx, "build", "trigger (cli)", ""))
+	mustClaimJob(t, st, "build")
+
+	if got, want := seenRow(t, st, id), (rowSeen{true, "build", store.QueueRunning, ""}); got != want {
+		t.Fatalf("before its run started the row reads %+v, want %+v", got, want)
+	}
+
+	err := st.StartRun(ctx, store.NewRun{ID: "STARTED", JobName: "build", Workspace: "/tmp/ws", QueueID: id})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	if got, want := seenRow(t, st, id), (rowSeen{true, "build", store.QueueRunning, "STARTED"}); got != want {
+		t.Errorf("after its run started the row reads %+v, want %+v", got, want)
+	}
+
+	if got := seenRow(t, other, id); got.Found {
+		t.Errorf("another pipeline reads the row as %+v, want not found", got)
+	}
+}
+
+type rowSeen struct {
+	Found  bool
+	Job    string
+	Status store.QueueStatus
+	Run    string
+}
+
+func seenRow(t *testing.T, st store.Queue, id int64) rowSeen {
+	t.Helper()
+
+	row, found, err := st.FindQueueRow(ctxFor(t), id)
+	if err != nil {
+		t.Fatalf("FindQueueRow: %v", err)
+	}
+
+	return rowSeen{found, row.JobName, row.Status, row.RunID}
+}
+
+// mustQueued takes an enqueue's answer whole, failing the test on its error.
+func mustQueued(t *testing.T) func(int64, error) int64 {
+	t.Helper()
+
+	return func(id int64, err error) int64 {
+		t.Helper()
+
+		if err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+
+		return id
+	}
+}
+
 // TestAPinnedTriggerIsQueuedBesideAnOrdinaryOne: a trigger pinned to a version builds something the job's ordinary trigger does not, so the two are two rows; the same pin asked twice is one, a different pin another, and the claim hands the pin back.
 func (s suite) TestAPinnedTriggerIsQueuedBesideAnOrdinaryOne(t *testing.T) {
 	t.Parallel()
@@ -347,7 +437,7 @@ func (s suite) TestAPinnedTriggerIsQueuedBesideAnOrdinaryOne(t *testing.T) {
 	mustEnqueueJob(t, st, "build", "a new version")
 
 	for _, pin := range []string{`{"n":"one"}`, `{"n":"one"}`, `{"n":"two"}`} {
-		err := st.EnqueuePinnedJob(ctxFor(t), "build", "trigger (cli)", pin, "local:ops")
+		_, err := st.EnqueuePinnedJob(ctxFor(t), "build", "trigger (cli)", pin, "local:ops")
 		if err != nil {
 			t.Fatalf("EnqueuePinnedJob: %v", err)
 		}
@@ -380,7 +470,7 @@ func (s suite) TestARestartKeepsAPinnedRowApartFromTheOrdinaryOne(t *testing.T) 
 
 	st := s.open(t, "test")
 
-	err := st.EnqueuePinnedJob(ctxFor(t), "build", "trigger (cli)", `{"n":"one"}`, "")
+	_, err := st.EnqueuePinnedJob(ctxFor(t), "build", "trigger (cli)", `{"n":"one"}`, "")
 	if err != nil {
 		t.Fatalf("EnqueuePinnedJob: %v", err)
 	}

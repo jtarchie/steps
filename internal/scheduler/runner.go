@@ -231,18 +231,18 @@ func (r *LocalRunner) EnqueueResume(ctx context.Context, target *Pipeline, jobNa
 }
 
 // EnqueuePinned puts a person's trigger of a job, pinned to the version fields named, on the pipeline's queue. The pin rides the row rather than this process's memory, so a restart between the request and the claim still builds what was asked for and not whatever is newest.
-func (r *LocalRunner) EnqueuePinned(ctx context.Context, target *Pipeline, jobName, reason string, pin map[string]string) error {
+func (r *LocalRunner) EnqueuePinned(ctx context.Context, target *Pipeline, jobName, reason string, pin map[string]string) (int64, error) {
 	encoded, err := json.Marshal(pin)
 	if err != nil {
-		return fmt.Errorf("scheduler: %w", err)
+		return 0, fmt.Errorf("scheduler: %w", err)
 	}
 
-	err = target.Store.EnqueuePinnedJob(ctx, jobName, reason, string(encoded), actor.From(ctx).String())
+	id, err := target.Store.EnqueuePinnedJob(ctx, jobName, reason, string(encoded), actor.From(ctx).String())
 	if err != nil {
-		return fmt.Errorf("scheduler: %w", err)
+		return 0, fmt.Errorf("scheduler: %w", err)
 	}
 
-	return nil
+	return id, nil
 }
 
 // RemoveProvider retires a destroyed pipeline's workspace, once nothing is running in it.
@@ -252,7 +252,7 @@ func (r *LocalRunner) RemoveProvider(slug string) { r.providers.remove(slug) }
 func (r *LocalRunner) Close() { r.providers.Close() }
 
 // Enqueue puts a person's trigger on the pipeline's queue.
-func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, reason string, force bool) error {
+func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, reason string, force bool) (int64, error) {
 	// Before the enqueue: set after, a worker claiming the row in between ran it cached and left the flag to force the job's next poll. Two forced requests collapse into one forced run, which is what a double-click meant.
 	if force {
 		r.mu.Lock()
@@ -260,16 +260,16 @@ func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, re
 		r.mu.Unlock()
 	}
 
-	err := target.Store.EnqueueManualJob(ctx, jobName, reason, actor.From(ctx).String())
+	id, err := target.Store.EnqueueManualJob(ctx, jobName, reason, actor.From(ctx).String())
 	if err != nil {
 		if force {
 			r.takeForce(target.Slug, jobName)
 		}
 
-		return fmt.Errorf("scheduler: %w", err)
+		return 0, fmt.Errorf("scheduler: %w", err)
 	}
 
-	return nil
+	return id, nil
 }
 
 // requestPin is the daemon's own --pin with one request's pin laid over it: the request is the narrower word.

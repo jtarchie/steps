@@ -69,7 +69,8 @@ steps runs follow -p <name> [run]
                             Ctrl-C detaches, never aborts)
 steps runs trigger -p <name> <job>
                             queue a run on a daemon (--pin field=value
-                            for one version; runs retry <run> re-queues
+                            for one version; -w follows the run it
+                            queued and exits as it did; runs retry <run> re-queues
                             a past run against the versions it built;
                             runs resume <run> continues a failed one from
                             the step that failed)

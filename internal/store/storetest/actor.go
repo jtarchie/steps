@@ -33,7 +33,7 @@ func (s suite) TestAPersonsTriggerTakesOverAPendingRow(t *testing.T) {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	err = st.EnqueueManualJob(ctxFor(t), "build", "trigger (web)", "local:ops")
+	_, err = st.EnqueueManualJob(ctxFor(t), "build", "trigger (web)", "local:ops")
 	if err != nil {
 		t.Fatalf("EnqueueManualJob: %v", err)
 	}

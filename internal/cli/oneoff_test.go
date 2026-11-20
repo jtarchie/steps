@@ -183,9 +183,9 @@ type neverQueued struct {
 	deleted chan<- struct{}
 }
 
-func (s neverQueued) EnqueueManualJob(ctx context.Context, jobName, reason, by string) error {
+func (s neverQueued) EnqueueManualJob(ctx context.Context, jobName, reason, by string) (int64, error) {
 	if s.faulty.Load() {
-		return errors.New("queue on fire")
+		return 0, errors.New("queue on fire")
 	}
 
 	return s.Store.EnqueueManualJob(ctx, jobName, reason, by) //nolint:wrapcheck // test double

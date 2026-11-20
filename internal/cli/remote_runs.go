@@ -122,7 +122,62 @@ func (r remoteRuns) target(ctx context.Context, runID, job string) (store.RunRow
 	return run, nil
 }
 
-// started waits for the one-off's run to exist: a run is named when the daemon claims its queue row, not when it is queued, and a one-off pipeline holds only that one job's runs, so its first is ours. ponytail: a one-off whose queued run was aborted before it started is waited on until it falls out of the daemon's --one-off-history, with Ctrl-C to leave sooner; a queue-row read on the API is the upgrade.
+// queued waits for the queue row an enqueue answered to start its run: a run is named when the daemon claims its row, not when it is queued. A row that ends without one is the answer too, so an abort before the start exits as an abort rather than waiting forever (#283).
+func (r remoteRuns) queued(ctx context.Context, id int64) (store.RunRow, error) {
+	path := pipelinePath(r.pipeline, "queued", strconv.FormatInt(id, 10))
+
+	for {
+		var row web.QueuedJSON
+
+		found, err := r.getJSON(ctx, path, &row)
+		if err != nil {
+			return store.RunRow{}, err
+		}
+
+		if !found {
+			return store.RunRow{}, fmt.Errorf("%s no longer holds queued run %d of %s", r.client.target, id, r.pipeline)
+		}
+
+		if row.Run != "" {
+			return r.target(ctx, row.Run, "")
+		}
+
+		err = endedUnstarted(row)
+		if err != nil {
+			return store.RunRow{}, err
+		}
+
+		select {
+		case <-ctx.Done():
+			return store.RunRow{}, fmt.Errorf("left before queued run %d of %s started on %s: %w", id, row.Job, r.client.target, ctx.Err())
+		case <-time.After(followPoll):
+		}
+	}
+}
+
+// endedUnstarted is how a row with no run ended, nil while it may still start one. An abort wraps context.Canceled so it exits as the aborted run it would have been.
+func endedUnstarted(row web.QueuedJSON) error {
+	switch store.QueueStatus(row.Status) {
+	case store.QueuePending, store.QueueRunning:
+		return nil
+	case store.QueueAborted:
+		return fmt.Errorf("the queued run of %s was aborted before it started: %w", row.Job, context.Canceled)
+	case store.QueueSucceeded, store.QueueFailed, store.QueueSkipped:
+		fallthrough
+	default:
+		return fmt.Errorf("the queued run of %s ended %s without starting: %s", row.Job, row.Status, row.Error)
+	}
+}
+
+func (r remoteRuns) oneOffStarted(ctx context.Context, created web.OneOffResult) (store.RunRow, error) {
+	if created.Queued != 0 {
+		return r.queued(ctx, created.Queued)
+	}
+
+	return r.started(ctx, created.Job)
+}
+
+// started is queued for a daemon too old to answer the row it queued: a one-off pipeline holds only that one job's runs, so its first is ours, and an abort before the start is waited on until Ctrl-C.
 func (r remoteRuns) started(ctx context.Context, job string) (store.RunRow, error) {
 	for {
 		run, found, err := r.newest(ctx, job)

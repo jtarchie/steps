@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/web"
 )
@@ -34,14 +36,9 @@ func errOneOffName(name string) error {
 func (d *daemon) OneOff(ctx context.Context, req web.OneOffRequest) (web.OneOffResult, error) {
 	name := oneOffPrefix + strings.ToLower(rand.Text()[:12])
 
-	cfg, err := d.accept(name, req.Source, convertIncludes[string](req.Includes))
+	cfg, err := d.acceptOneOff(name, req)
 	if err != nil {
 		return web.OneOffResult{}, err
-	}
-
-	_, err = cfg.FindJob(req.Job)
-	if err != nil {
-		return web.OneOffResult{}, fmt.Errorf("%w: %w", web.ErrRefused, err)
 	}
 
 	d.mu.Lock()
@@ -82,14 +79,41 @@ func (d *daemon) OneOff(ctx context.Context, req web.OneOffRequest) (web.OneOffR
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
 	defer cancel()
 
-	err = d.runner.Enqueue(writeCtx, served.target.Pipeline, req.Job, "one-off", false)
+	queued, err := d.enqueueOneOff(writeCtx, served.target.Pipeline, req)
 	if err != nil {
 		return web.OneOffResult{}, errors.Join(fmt.Errorf("could not queue %s: %w", req.Job, err), d.destroyLocked(writeCtx, name))
 	}
 
 	slog.InfoContext(ctx, "web.one_off", "pipeline", name, "job", req.Job, "config", shortConfig(cfg.Revision.SHA))
 
-	return web.OneOffResult{Pipeline: name, Job: req.Job}, nil
+	return web.OneOffResult{Pipeline: name, Job: req.Job, Queued: queued}, nil
+}
+
+// acceptOneOff is accept plus what only a one-off asks: the job it names, and no pin with a force, which the daemon cannot honor together (web's queuePinnedTrigger).
+func (d *daemon) acceptOneOff(name string, req web.OneOffRequest) (*config.Config, error) {
+	if len(req.Pin) > 0 && req.Force {
+		return nil, fmt.Errorf("%w: a pinned run cannot also skip the cache", web.ErrRefused)
+	}
+
+	cfg, err := d.accept(name, req.Source, convertIncludes[string](req.Includes))
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = cfg.FindJob(req.Job)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", web.ErrRefused, err)
+	}
+
+	return cfg, nil
+}
+
+func (d *daemon) enqueueOneOff(ctx context.Context, target *scheduler.Pipeline, req web.OneOffRequest) (int64, error) {
+	if len(req.Pin) > 0 {
+		return d.runner.EnqueuePinned(ctx, target, req.Job, "one-off, pinned", req.Pin) //nolint:wrapcheck // the caller wraps it naming the job
+	}
+
+	return d.runner.Enqueue(ctx, target, req.Job, "one-off", req.Force) //nolint:wrapcheck // as above
 }
 
 // trimWhenSettled asks for a trim each time the one-off's queue settles: the first is its own run finishing, a later one a retry from its page. The trim runs outside this loop because a destroy waits for the loops to end.

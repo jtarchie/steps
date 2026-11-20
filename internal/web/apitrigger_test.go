@@ -19,10 +19,10 @@ type pinRecorder struct {
 	pins []string
 }
 
-func (r *pinRecorder) EnqueuePinned(_ context.Context, _ *scheduler.Pipeline, job, reason string, pin map[string]string) error {
+func (r *pinRecorder) EnqueuePinned(_ context.Context, _ *scheduler.Pipeline, job, reason string, pin map[string]string) (int64, error) {
 	r.pins = append(r.pins, fmt.Sprintf("%s %s %v", job, reason, pin))
 
-	return nil
+	return 0, nil
 }
 
 func postJSON(t *testing.T, server *Server, target, body string) int {
@@ -133,6 +133,81 @@ func TestAnOperatorsPinIsHeldToThePassedGate(t *testing.T) {
 	if got := strings.Join(runner.pins, "|"); got != "deploy trigger, pinned (cli) map[number:87]|deploy trigger, pinned (cli) map[number:88]" {
 		t.Errorf("pinned = %q, want the operator's passed pin and the admin's", got)
 	}
+}
+
+// A terminal follows what it queued (#294): the trigger's answer names the queue row, and the row names its run once one starts.
+func TestAPITriggerNamesTheRowItQueuedAndTheRowItsRun(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+	runner := &enqueueRecorder{}
+
+	server, err := New([]*Pipeline{pipeline}, runner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/pipelines/demo/jobs/build/trigger", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if got := fmt.Sprintf("%d %s", rec.Code, strings.TrimSpace(rec.Body.String())); got != `202 {"queued":1}` {
+		t.Errorf("trigger answered %s, want 202 naming the row the runner queued", got)
+	}
+
+	ctx := t.Context()
+
+	id, err := pipeline.Store.EnqueueManualJob(ctx, "build", "trigger (cli)", "")
+	if err != nil {
+		t.Fatalf("EnqueueManualJob: %v", err)
+	}
+
+	queued := fmt.Sprintf("/api/pipelines/demo/queued/%d", id)
+
+	if got := getBody(t, server, queued); got != `200 {"job":"build","status":"pending"}` {
+		t.Errorf("GET %s = %s, want the pending row with no run", queued, got)
+	}
+
+	_, _, err = pipeline.Store.ClaimNextJob(ctx)
+	if err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+
+	err = pipeline.Store.StartRun(ctx, store.NewRun{ID: "STARTED", JobName: "build", Workspace: t.TempDir(), QueueID: id})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	if got := getBody(t, server, queued); got != `200 {"job":"build","status":"running","run":"STARTED"}` {
+		t.Errorf("GET %s = %s, want it naming its run", queued, got)
+	}
+}
+
+func TestAPIQueuedIsNotFoundForARowItDoesNotHold(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+
+	server, err := New([]*Pipeline{pipeline}, &enqueueRecorder{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, missing := range []string{"/api/pipelines/demo/queued/999", "/api/pipelines/demo/queued/x", "/api/pipelines/nobody/queued/1"} {
+		if got := getBody(t, server, missing); !strings.HasPrefix(got, "404 ") {
+			t.Errorf("GET %s = %s, want 404", missing, got)
+		}
+	}
+}
+
+// getBody is a GET answered as "<status> <body>".
+func getBody(t *testing.T, server *Server, target string) string {
+	t.Helper()
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, nil))
+
+	return fmt.Sprintf("%d %s", rec.Code, strings.TrimSpace(rec.Body.String()))
 }
 
 // --read-only withholds starting work from a terminal as it does from the page.

@@ -312,8 +312,6 @@ func TestRunTargetRefusesTheFlagsADaemonWouldIgnore(t *testing.T) {
 		"replay":             {"--replay", "RUN"},
 		"from":               {"--from", "say"},
 		"rerun":              {"--rerun", "RUN"},
-		"pin":                {"--pin", "n=1"},
-		"force":              {"--force"},
 		"answer":             {"--answer", "which bump=minor"},
 		"deliver":            {"--deliver", "push=push.http"},
 		"worker":             {"--worker", "gpu=ssh://jt@box"},

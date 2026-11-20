@@ -15,14 +15,14 @@ import (
 type Queue interface {
 	// EnqueueJob and its two siblings take by, the stored form of who or what asked (actor.Actor.String), which the run the row starts inherits.
 	EnqueueJob(ctx context.Context, jobName, reason, by string) error
-	// EnqueueManualJob is EnqueueJob for a person's trigger: the row is marked manual, and a pending row it merges into becomes manual too, because the breaker holds back only what was triggered automatically. The merged row takes this person as its requester, since they are why it is manual.
-	EnqueueManualJob(ctx context.Context, jobName, reason, by string) error
+	// EnqueueManualJob is EnqueueJob for a person's trigger: the row is marked manual, and a pending row it merges into becomes manual too, because the breaker holds back only what was triggered automatically. The merged row takes this person as its requester, since they are why it is manual. It answers the row's id, the merged one's too, so the asker can find the run it becomes.
+	EnqueueManualJob(ctx context.Context, jobName, reason, by string) (int64, error)
 	// EnqueueRerunJob queues a retry of a recorded run. It is a person's request, so it is manual; it is not merged into the job's ordinary pending row, since it builds different versions.
 	EnqueueRerunJob(ctx context.Context, jobName, reason, runID, by string) error
 	// EnqueueResumeJob queues a person's resume of a failed run: the row carries the run (ClaimedJob.Resume), so the claim continues it from the step that failed rather than starting a new one. Manual, and one row per run however often it is asked while one is pending or claimed and not yet resumed.
 	EnqueueResumeJob(ctx context.Context, jobName, reason, runID, by string) error
-	// EnqueuePinnedJob queues a person's trigger of a job against the versions pin names (ClaimedJob.Pin). Its own row for the reason a retry is: it builds different versions from the job's ordinary trigger. The same pin asked twice while pending is one row.
-	EnqueuePinnedJob(ctx context.Context, jobName, reason, pin, by string) error
+	// EnqueuePinnedJob queues a person's trigger of a job against the versions pin names (ClaimedJob.Pin). Its own row for the reason a retry is: it builds different versions from the job's ordinary trigger. The same pin asked twice while pending is one row, whose id both answer.
+	EnqueuePinnedJob(ctx context.Context, jobName, reason, pin, by string) (int64, error)
 	// ClaimNextJob takes the oldest pending row admitted by serial: and
 	// max_in_flight, atomically, and reports false when nothing is ready. The
 	// row comes back from the statement that claimed it, so nothing can be
@@ -37,6 +37,8 @@ type Queue interface {
 	// A row whose run is still running goes back to pending carrying that run (ClaimedJob.Resume); a row whose run already finished is closed with the run's status, so a run somebody aborted is never built again.
 	ResetStaleRunning(ctx context.Context) error
 	ListTriggerQueue(ctx context.Context, limit int) ([]QueueRow, error)
+	// FindQueueRow is one row by the id an enqueue answered, false when this pipeline has none: what a terminal that queued a run waits on until the row names its run or ends without one.
+	FindQueueRow(ctx context.Context, id int64) (QueueRow, bool, error)
 	// QueuedWithoutInputs reports whether a queued or claimed row of the job has yet to record the versions its build was created with (RecordRunInput): Concourse's pending build before it adopts its inputs, which a trigger must not make a second of. Queued counts too, because the claim that turns a queued row into a running one can land between a trigger's judgement and its enqueue, which then dedups against nothing.
 	QueuedWithoutInputs(ctx context.Context, jobName string) (bool, error)
 	// SyncJobLimits replaces both admission mirrors from one configuration, in
@@ -92,4 +94,6 @@ type QueueRow struct {
 	StartedAt  time.Time
 	FinishedAt time.Time
 	Error      string
+	// RunID is the run the row started, empty until its claim starts one.
+	RunID string
 }

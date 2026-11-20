@@ -87,6 +87,38 @@ func (s *Server) handleAPIRun(c *echo.Context) error {
 	return c.JSON(http.StatusOK, runJSON(run))
 }
 
+// QueuedJSON is a queue row as a terminal that queued it waits on: Run once its claim starts one, and Status with Error if it ends without one.
+type QueuedJSON struct {
+	Job    string `json:"job"`
+	Status string `json:"status"`
+	Run    string `json:"run,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+func (s *Server) handleAPIQueued(c *echo.Context) error {
+	target := s.Lookup(c.Param("pipeline"))
+	if target == nil {
+		return s.notServed(c, c.Param("pipeline"))
+	}
+
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "no such queued run")
+	}
+
+	row, found, err := target.Store.FindQueueRow(c.Request().Context(), id)
+	if err != nil {
+		return echoError(err)
+	}
+
+	if !found {
+		return echo.NewHTTPError(http.StatusNotFound, "no such queued run")
+	}
+
+	//nolint:wrapcheck // as above
+	return c.JSON(http.StatusOK, QueuedJSON{Job: row.JobName, Status: string(row.Status), Run: row.RunID, Error: row.Error})
+}
+
 // handleAPIRunEvents is one page of a run's events after ?after=, as recorded. Paged requests rather than a stream: each page passes the door again, so a revoked reader stops at the next poll with nothing to re-check mid-stream, and the follower's own end-of-run logic is the one `steps runs follow` already runs against a local file.
 func (s *Server) handleAPIRunEvents(c *echo.Context) error {
 	target := s.Lookup(c.Param("pipeline"))

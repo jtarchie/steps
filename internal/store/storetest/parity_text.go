@@ -241,9 +241,11 @@ func hostileQueueWrites() []hostileWrite {
 			seedRuns(t, st, "rerun", "queued-run")
 
 			must(t, "EnqueueJob", st.EnqueueJob(ctx, "auto", hostile, hostile))
-			must(t, "EnqueueManualJob", st.EnqueueManualJob(ctx, "manual", hostile, hostile))
+			_, err := st.EnqueueManualJob(ctx, "manual", hostile, hostile)
+			must(t, "EnqueueManualJob", err)
 			must(t, "EnqueueRerunJob", st.EnqueueRerunJob(ctx, "rerun", hostile, "queued-run", hostile))
-			must(t, "EnqueuePinnedJob", st.EnqueuePinnedJob(ctx, "pinned", hostile, hostile, hostile))
+			_, err = st.EnqueuePinnedJob(ctx, "pinned", hostile, hostile, hostile)
+			must(t, "EnqueuePinnedJob", err)
 
 			rows, err := st.ListTriggerQueue(ctx, 0)
 			must(t, "ListTriggerQueue", err)

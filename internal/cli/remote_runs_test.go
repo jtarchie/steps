@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,5 +71,38 @@ func TestPipelinePathEscapesEverySegment(t *testing.T) {
 	const want = "/api/pipelines/demo/runs/a%20b%2Fc%3Fd%23e%25f/abort"
 	if got != want {
 		t.Errorf("pipelinePath = %s, want %s", got, want)
+	}
+}
+
+// A queued row that ends without a run is the follower's answer, whichever way it ended: an abort exits as one, anything else names what the daemon recorded.
+func TestRemoteQueuedEndsWhenTheRowEndsWithoutARun(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		row     string
+		aborted bool
+		want    string
+	}{
+		{`{"job":"build","status":"aborted"}`, true, "aborted before it started"},
+		{`{"job":"build","status":"failed","error":"no workspace provider"}`, false, "ended failed without starting: no workspace provider"},
+		{`{"job":"build","status":"skipped"}`, false, "ended skipped without starting"},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(tc.row))
+		}))
+		t.Cleanup(server.Close)
+
+		client, err := newDaemonClient(server.URL)
+		if err != nil {
+			t.Fatalf("newDaemonClient: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		t.Cleanup(cancel)
+
+		_, err = remoteRuns{client: client, pipeline: "demo"}.queued(ctx, 7)
+		if err == nil || !strings.Contains(err.Error(), tc.want) || errors.Is(err, context.Canceled) != tc.aborted {
+			t.Errorf("queued over %s = %v, want %q (aborted %v)", tc.row, err, tc.want, tc.aborted)
+		}
 	}
 }

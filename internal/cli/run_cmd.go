@@ -43,17 +43,22 @@ type RunCmd struct {
 
 // notWithTarget is every run flag a one-off cannot carry: the request holds the source, its includes and the job, and the daemon runs it with its own state, workers and settings.
 var notWithTarget = []string{
-	"db", "name", "resume", "replay", "from", "rerun", "pin", "force",
+	"db", "name", "resume", "replay", "from", "rerun",
 	"answer", "deliver", "worker", "config", "no-preflight", "artifact-store",
 	"keep-workspace", "workspace-root", "resource-cache-max", "version-history", "run-history",
 }
 
 // refuseIgnoredFlags reads the command line, not the struct: an exported STEPS_KEEP_WORKSPACE is a standing preference for local runs, not something this one-off asked for and would silently drop.
-func refuseIgnoredFlags(kctx *kong.Context) error {
+func (r *RunCmd) refuseIgnoredFlags(kctx *kong.Context) error {
 	for _, path := range kctx.Path {
 		if path.Flag != nil && !path.Resolved && slices.Contains(notWithTarget, path.Flag.Name) {
 			return fmt.Errorf("--%s does not apply with --target: a one-off is a new run on the daemon, under the daemon's own state, workers and settings", path.Flag.Name)
 		}
+	}
+
+	// The daemon keeps a force per job in memory and a pin on its own queue row, so it cannot skip the cache for a pinned run (web's queuePinnedTrigger).
+	if len(r.Pin) > 0 && r.Force {
+		return errors.New("--pin and --force do not apply together with --target: the daemon cannot skip the cache for a pinned run")
 	}
 
 	return nil
@@ -63,7 +68,7 @@ func refuseIgnoredFlags(kctx *kong.Context) error {
 func (r *RunCmd) runOnDaemon(streams Streams, kctx *kong.Context) error {
 	out := streams.Out
 
-	err := refuseIgnoredFlags(kctx)
+	err := r.refuseIgnoredFlags(kctx)
 	if err != nil {
 		return err
 	}
@@ -93,6 +98,8 @@ func (r *RunCmd) runOnDaemon(streams Streams, kctx *kong.Context) error {
 		Includes: convertIncludes[[]byte](cfg.Revision.Includes),
 		From:     from,
 		Job:      job.Name,
+		Pin:      r.Pin,
+		Force:    r.Force,
 	})
 	if err != nil {
 		return err
@@ -104,12 +111,14 @@ func (r *RunCmd) runOnDaemon(streams Streams, kctx *kong.Context) error {
 		return err
 	}
 
+	sayf(out, "queued: %s on %s as %s\n", job.Name, client.target, minted)
+
 	remote := remoteRuns{client: client, pipeline: minted}
 
 	ctx, cancel := streams.cancellable()
 	defer cancel()
 
-	run, err := remote.started(ctx, job.Name)
+	run, err := remote.oneOffStarted(ctx, created)
 	if err != nil {
 		return err
 	}

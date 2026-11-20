@@ -42,7 +42,7 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 	// drainer started in between.
 	since := time.Now().UTC()
 
-	err = s.queueTrigger(c.Request().Context(), pipeline, name, "web", c.FormValue("force") == forceAll, pinFrom(c), s.roleOf(c))
+	_, err = s.queueTrigger(c.Request().Context(), pipeline, name, "web", c.FormValue("force") == forceAll, pinFrom(c), s.roleOf(c))
 	if err != nil {
 		return err
 	}
@@ -84,20 +84,20 @@ func pinFrom(c *echo.Context) map[string]string {
 }
 
 // queueTrigger is a person's trigger of a job, from the page or from `steps runs trigger`; from says which. A pin makes it a row of its own, built against the version it names.
-func (s *Server) queueTrigger(ctx context.Context, pipeline *Pipeline, name, from string, force bool, pin map[string]string, role Role) error {
+func (s *Server) queueTrigger(ctx context.Context, pipeline *Pipeline, name, from string, force bool, pin map[string]string, role Role) (int64, error) {
 	job, err := pipeline.Config().FindJob(name)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
+		return 0, echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
 	}
 
 	// Refused rather than queued: a pause that let the button enqueue would fill the queue with work nobody intends to run, and say nothing about why nothing happened.
 	stopped, err := pipeline.Store.Paused(ctx)
 	if err != nil {
-		return fmt.Errorf("web: %w", err)
+		return 0, fmt.Errorf("web: %w", err)
 	}
 
 	if stopped {
-		return pausedRefusal(ctx, pipeline)
+		return 0, pausedRefusal(ctx, pipeline)
 	}
 
 	if len(pin) > 0 {
@@ -109,34 +109,34 @@ func (s *Server) queueTrigger(ctx context.Context, pipeline *Pipeline, name, fro
 		reason = "trigger, no cache (" + from + ")"
 	}
 
-	err = s.runner.Enqueue(ctx, pipeline.Pipeline, name, reason, force)
+	id, err := s.runner.Enqueue(ctx, pipeline.Pipeline, name, reason, force)
 	if err != nil {
-		return fmt.Errorf("web: %w", err)
+		return 0, fmt.Errorf("web: %w", err)
 	}
 
-	return nil
+	return id, nil
 }
 
 // queuePinnedTrigger is queueTrigger's pinned row: refused with force, and held to the job's passed: gates below admin.
-func (s *Server) queuePinnedTrigger(ctx context.Context, pipeline *Pipeline, job *config.Job, name, from string, force bool, pin map[string]string, role Role) error {
+func (s *Server) queuePinnedTrigger(ctx context.Context, pipeline *Pipeline, job *config.Job, name, from string, force bool, pin map[string]string, role Role) (int64, error) {
 	// ponytail: a pinned trigger cannot also skip the cache; the force flag is per job in memory and a pinned row would spend another request's. Carry force on the row if anyone asks.
 	if force {
-		return echo.NewHTTPError(http.StatusBadRequest, "a pinned trigger cannot also skip the cache")
+		return 0, echo.NewHTTPError(http.StatusBadRequest, "a pinned trigger cannot also skip the cache")
 	}
 
 	if role < RoleAdmin {
 		err := refuseUnpassedPin(ctx, pipeline, job, pin)
 		if err != nil {
-			return err
+			return 0, err
 		}
 	}
 
-	err := s.runner.EnqueuePinned(ctx, pipeline.Pipeline, name, "trigger, pinned ("+from+")", pin)
+	id, err := s.runner.EnqueuePinned(ctx, pipeline.Pipeline, name, "trigger, pinned ("+from+")", pin)
 	if err != nil {
-		return fmt.Errorf("web: %w", err)
+		return 0, fmt.Errorf("web: %w", err)
 	}
 
-	return nil
+	return id, nil
 }
 
 // refuseUnpassedPin holds a non-admin's pin to the job's passed: gates. A pin no green version matches is resolved from the check instead, so it would build what upstream never passed — which Concourse does not let anyone do, and which here only an admin may.
@@ -293,6 +293,11 @@ type TriggerRequest struct {
 	Force bool              `json:"force,omitempty"`
 }
 
+// TriggerResult names the queue row a trigger became, or merged into, which names its run once one starts (QueuedJSON).
+type TriggerResult struct {
+	Queued int64 `json:"queued"`
+}
+
 // handleAPITrigger answers 202: the run is queued, not started.
 func (s *Server) handleAPITrigger(c *echo.Context) error {
 	err := s.requireControls()
@@ -316,12 +321,12 @@ func (s *Server) handleAPITrigger(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "the request body is not a trigger request: "+err.Error())
 	}
 
-	err = s.queueTrigger(c.Request().Context(), target, c.Param("job"), "cli", req.Force, req.Pin, s.roleOf(c))
+	queued, err := s.queueTrigger(c.Request().Context(), target, c.Param("job"), "cli", req.Force, req.Pin, s.roleOf(c))
 	if err != nil {
 		return err
 	}
 
-	return c.NoContent(http.StatusAccepted) //nolint:wrapcheck // echo's own response error
+	return c.JSON(http.StatusAccepted, TriggerResult{Queued: queued}) //nolint:wrapcheck // echo's own response error
 }
 
 func (s *Server) handleAPIRerun(c *echo.Context) error {

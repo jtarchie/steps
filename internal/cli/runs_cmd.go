@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/web"
 )
@@ -206,6 +207,9 @@ type RunsTriggerCmd struct {
 	Job              string            `arg:""                                                    help:"the job to run"`
 	Pin              map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"   name:"pin"`
 	Force            bool              `help:"ignore the step cache for this run; not with --pin"`
+	// -w is fly trigger-job's --watch, for hands that know it.
+	Follow        bool `aliases:"watch" help:"follow the run this trigger queued, or the waiting one it merged into, and exit as it did" short:"w"`
+	ProgressFlags `embed:""`
 }
 
 // Run queues the job on the daemon.
@@ -227,14 +231,45 @@ func (r *RunsTriggerCmd) Run(streams Streams) error {
 		return err
 	}
 
-	err = client.send(pipelinePath(name, "jobs", r.Job, "trigger"), payload, http.StatusAccepted)
+	status, body, err := client.do(http.MethodPost, pipelinePath(name, "jobs", r.Job, "trigger"), payload)
 	if err != nil {
 		return err
 	}
 
-	sayf(out, "queued: %s on %s; watch it with steps runs follow --target %s -p %s --job %s\n", r.Job, name, client.target, name, r.Job)
+	if status != http.StatusAccepted {
+		return daemonError(client.target, status, body)
+	}
 
-	return nil
+	if !r.Follow {
+		sayf(out, "queued: %s on %s; watch it with steps runs follow --target %s -p %s --job %s\n", r.Job, name, client.target, name, r.Job)
+
+		return nil
+	}
+
+	var queued web.TriggerResult
+
+	// An older daemon answers no body, and following the newest run of the job instead could follow somebody else's.
+	if json.Unmarshal(body, &queued) != nil || queued.Queued == 0 {
+		return fmt.Errorf("queued %s on %s, but %s does not say which run it became, so --follow cannot follow it; upgrade the daemon, or steps runs follow --target %s -p %s --job %s", r.Job, name, client.target, client.target, name, r.Job)
+	}
+
+	sayf(out, "queued: %s on %s\n", r.Job, name)
+
+	remote := remoteRuns{client: client, pipeline: name}
+
+	ctx, cancel := streams.cancellable()
+	defer cancel()
+
+	run, err := remote.queued(ctx, queued.Queued)
+	if err != nil {
+		return err
+	}
+
+	sayf(out, "following %s · %s · %s on %s\n", run.ID, runview.Scrub(run.JobName), runview.Scrub(string(run.Status)), client.target)
+
+	return watch(ctx, out, r.ProgressFlags, nil, remote, run, func(last store.RunRow) {
+		sayf(out, "detached: %s is still running — steps runs follow --target %s -p %s %s\n", last.ID, client.target, name, last.ID)
+	})
 }
 
 // RunsRetryCmd is the web page's retry button from a terminal.

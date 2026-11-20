@@ -46,18 +46,21 @@ func enqueueJobs(ctx context.Context, db executor, pipelineID int64, jobNames []
 }
 
 // EnqueueManualJob upserts, so a pending automatic row becomes manual.
-func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason, by string) error {
-	_, err := s.db.ExecContext(ctx, `
+func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason, by string) (int64, error) {
+	var id int64
+
+	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, status, enqueued_at)
 		VALUES ($1, $2, $3, $5, TRUE, 'pending', $4)
 		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL AND pin IS NULL
 		DO UPDATE SET manual = TRUE, reason = excluded.reason, requested_by = excluded.requested_by
-	`, s.pipelineID, jobName, clean(reason), now(), clean(by))
+		RETURNING id
+	`, s.pipelineID, jobName, clean(reason), now(), clean(by)).Scan(&id)
 	if err != nil {
-		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+		return 0, fmt.Errorf("could not enqueue job %q: %w", jobName, err)
 	}
 
-	return nil
+	return id, nil
 }
 
 // EnqueueResumeJob reads before it writes (no pending index covers a row carrying a run), so it takes the pipeline lock: two presses at once must not queue the run twice. A row claimed after the run last finished is a resume in flight that has not reached ResumeRun, so the run still reads failed.
@@ -85,18 +88,22 @@ func (s *Store) EnqueueResumeJob(ctx context.Context, jobName, reason, runID, by
 	return nil
 }
 
-// EnqueuePinnedJob queues a person's trigger pinned to the versions pin names.
-func (s *Store) EnqueuePinnedJob(ctx context.Context, jobName, reason, pin, by string) error {
-	_, err := s.db.ExecContext(ctx, `
+// EnqueuePinnedJob queues a person's trigger pinned to the versions pin names. Its conflict is a no-op update rather than DO NOTHING, which returns no row and so no id for the asker to follow.
+func (s *Store) EnqueuePinnedJob(ctx context.Context, jobName, reason, pin, by string) (int64, error) {
+	var id int64
+
+	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, pin, status, enqueued_at)
 		VALUES ($1, $2, $3, $6, TRUE, $4, 'pending', $5)
-		ON CONFLICT (pipeline_id, job_name, pin) WHERE status = 'pending' AND pin IS NOT NULL AND run_id IS NULL DO NOTHING
-	`, s.pipelineID, jobName, clean(reason), clean(pin), now(), clean(by))
+		ON CONFLICT (pipeline_id, job_name, pin) WHERE status = 'pending' AND pin IS NOT NULL AND run_id IS NULL
+		DO UPDATE SET manual = TRUE
+		RETURNING id
+	`, s.pipelineID, jobName, clean(reason), clean(pin), now(), clean(by)).Scan(&id)
 	if err != nil {
-		return fmt.Errorf("could not queue a pinned run of %q: %w", jobName, err)
+		return 0, fmt.Errorf("could not queue a pinned run of %q: %w", jobName, err)
 	}
 
-	return nil
+	return id, nil
 }
 
 // EnqueueRerunJob queues a retry of a recorded run.
@@ -316,28 +323,45 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 // ListTriggerQueue returns the most recent trigger-queue entries, newest
 // first.
 func (s *Store) ListTriggerQueue(ctx context.Context, limit int) ([]store.QueueRow, error) {
-	return collect(ctx, s.db, "trigger_queue", `
-		SELECT id, job_name, reason, status, enqueued_at, started_at, finished_at, error
-		FROM trigger_queue
+	return collect(ctx, s.db, "trigger_queue", queueRowSelect+`
 		WHERE pipeline_id = $1
 		ORDER BY id DESC
 		LIMIT $2
-	`, []any{s.pipelineID, rowLimit(limit)}, func(rows *sql.Rows) (store.QueueRow, error) {
-		var (
-			row               store.QueueRow
-			enqueued          sql.NullTime
-			started, finished sql.NullTime
-			errCol            sql.NullString
-		)
+	`, []any{s.pipelineID, rowLimit(limit)}, scanQueueRow)
+}
 
-		err := rows.Scan(&row.ID, &row.JobName, &row.Reason, &row.Status,
-			&enqueued, &started, &finished, &errCol)
+// FindQueueRow is one row by id, false when this pipeline has none.
+func (s *Store) FindQueueRow(ctx context.Context, id int64) (store.QueueRow, bool, error) {
+	rows, err := collect(ctx, s.db, "trigger_queue", queueRowSelect+`
+		WHERE pipeline_id = $1 AND id = $2
+	`, []any{s.pipelineID, id}, scanQueueRow)
+	if err != nil || len(rows) == 0 {
+		return store.QueueRow{}, false, err
+	}
 
-		row.EnqueuedAt, row.StartedAt, row.FinishedAt = utc(enqueued), utc(started), utc(finished)
-		row.Error = errCol.String
+	return rows[0], true, nil
+}
 
-		return row, err //nolint:wrapcheck // collect wraps with the thing being read
-	})
+const queueRowSelect = `
+		SELECT id, job_name, reason, status, enqueued_at, started_at, finished_at, error, run_id
+		FROM trigger_queue`
+
+func scanQueueRow(rows *sql.Rows) (store.QueueRow, error) {
+	var (
+		row               store.QueueRow
+		enqueued          sql.NullTime
+		started, finished sql.NullTime
+		errCol, runID     sql.NullString
+	)
+
+	err := rows.Scan(&row.ID, &row.JobName, &row.Reason, &row.Status,
+		&enqueued, &started, &finished, &errCol, &runID)
+
+	row.EnqueuedAt, row.StartedAt, row.FinishedAt = utc(enqueued), utc(started), utc(finished)
+	row.Error = errCol.String
+	row.RunID = runID.String
+
+	return row, err //nolint:wrapcheck // collect wraps with the thing being read
 }
 
 // SyncJobLimits replaces the recorded admission rules with what the pipeline

@@ -658,7 +658,7 @@ steps runs resume  -p app 46UMHVPYRA6YHB7M           # continue a failed run fro
 - **`retry`** rebuilds a past run against the versions it was built with, which is Concourse's `fly rerun-build`.
 - Each is refused where the button is: on a `--read-only` daemon, on a paused pipeline, for a job the configuration no longer names.
 
-Follow what you queued with `steps runs follow -p app --job build`.
+**`--follow`** (or `-w`, `--watch`, as in Concourse's `fly trigger-job -w`) waits for the run this trigger queued to start, then follows it to its end and exits as it did — 0 for succeeded, the failure code for failed, the abort code for aborted — so `steps runs trigger -p app build -w && deploy` deploys only on success. It follows exactly that run: if the trigger merged into a waiting one, two terminals that both asked follow the same run, and a newer run of the job is never picked up by mistake. If the run is aborted before it starts (`steps runs abort --queued`), the terminal says so and exits as an abort. Ctrl-C detaches and the run goes on, as with `steps runs follow`. Without `--follow`, the trigger returns at once; follow it later with `steps runs follow -p app --job build`.
 
 ### A one-off from a file
 
@@ -671,9 +671,11 @@ steps run ci.yml --job build --target http://alex:$(cat .steps/web-password)@ci.
 
 - The daemon validates the file as a set would, on its own machine, and serves it under a pipeline it names itself (`one-off.<random>`), so a one-off can never replace a pipeline you set. That pipeline is not polled: only the job you named runs, never what a `trigger: true` resource would start.
 - The run is the daemon's — its workers, its logins, its history and its run page, which the terminal prints a link to. Ctrl-C detaches and the run goes on; the detach line names the `steps runs follow --target` that reattaches.
+- The terminal names the one-off as soon as it is queued (`queued: build on … as one-off.<random>`). If its run is aborted before it starts — `steps runs abort -p one-off.<random> --queued build`, say, while it waits behind `--max-runs` — the terminal says so and exits as an abort.
+- **`--pin`** and **`--force`** go to the daemon and mean what they mean on `steps runs trigger`. `--force` matters even on a new pipeline, because the step cache is keyed by the work rather than the pipeline: a second one-off of the same file is answered from the first's outputs unless forced. Together they are refused before anything is sent, since the daemon cannot skip the cache for a pinned run.
 - The daemon keeps the last **`--one-off-history`** finished one-offs (default 10) — each one's run page, transcript and `steps runs -p one-off.<random>` entry. Once a newer one-off finishes past that count, the oldest finished one is no longer served and everything it recorded is deleted. A one-off still running is never counted or forgotten, and one retried from its page counts as finished when the retry does. `0` keeps every one. A restart serves the kept one-offs again, still unpolled, and resumes any interrupted run. (Concourse keeps `fly execute` builds forever, since its build-log retention only trims job builds; here a one-off is a whole pipeline in the list, so it is bounded.)
 - It needs the **admin** role, because it is arbitrary commands on the daemon's machine — what a set is. Names starting `one-off.` are the daemon's own: a set or rename onto one is refused.
-- Only the file and its `run_file:` includes travel. A `get` of a path on your machine (`uri: /Users/...`) cannot run on a daemon on another host. `--resume`, `--replay`, `--rerun`, `--pin`, `--force` and `--db` do not apply.
+- Only the file and its `run_file:` includes travel. A `get` of a path on your machine (`uri: /Users/...`) cannot run on a daemon on another host. `--resume`, `--replay`, `--rerun` and `--db` do not apply.
 - `--target` is read from the flag only, never from `STEPS_TARGET`: exported for the control verbs, it would quietly send every local run away.
 
 **`steps runs follow --target <daemon> -p <name> [run]`** follows a run through the daemon's API rather than the state file, which is how a daemon on another host is followed. It reads one page of events at a time, and each page asks the daemon's access rules again — a pipeline's `access:` hides those reads exactly as it hides its pages.
