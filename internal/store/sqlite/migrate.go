@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -109,6 +110,7 @@ CREATE UNIQUE INDEX idx_questions_memo ON questions(run_id, memo_key) WHERE step
 CREATE INDEX idx_questions_run ON questions(run_id, step_key);
 CREATE UNIQUE INDEX idx_questions_step
     ON questions(run_id, step_key) WHERE step_key <> '' AND (status IN ('pending', 'answered') OR answer <> '');`),
+	execStep(rebuildV47),
 }
 
 func execStep(statements string) func(ctx context.Context, tx *sql.Tx) error {
@@ -131,12 +133,38 @@ func upgrade(ctx context.Context, db *sql.DB, path string) error {
 		return err
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
+	// One connection for the whole upgrade, with foreign keys off on it: a step that rebuilds a table drops the old one, and with enforcement on that DROP cascades into every row referencing it. The pragma is a no-op inside a transaction, so it is set around this one, and what the steps left is checked before the commit instead.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("could not upgrade state db %q: %w", path, err)
+	}
+
+	defer func() { _ = conn.Close() }()
+
+	_, err = conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF")
+	if err != nil {
+		return fmt.Errorf("could not upgrade state db %q: %w", path, err)
+	}
+
+	// The connection goes back to the pool, so enforcement goes back on whatever happened; its own context, since a cancelled upgrade is exactly when this must still run.
+	defer func() { _, _ = conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA foreign_keys = ON") }()
+
+	return migrateOn(ctx, conn, path, found)
+}
+
+// migrateOn runs the steps from found and stamps the result, in one transaction on the connection upgrade prepared.
+func migrateOn(ctx context.Context, conn *sql.Conn, path string, found int) error {
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("could not upgrade state db %q: %w", path, err)
 	}
 
 	defer func() { _ = tx.Rollback() }()
+
+	brokenBefore, err := brokenReferences(ctx, tx)
+	if err != nil {
+		return err
+	}
 
 	for version := found; version < schemaVersion; version++ {
 		err = migrations[version-oldestUpgradable](ctx, tx)
@@ -144,6 +172,17 @@ func upgrade(ctx context.Context, db *sql.DB, path string) error {
 			return fmt.Errorf("could not upgrade state db %q from schema %d to %d (it is unchanged; the copy taken before is %s): %w",
 				path, version, version+1, backupPath(path, found), err)
 		}
+	}
+
+	// Compared with what the file came with, never with zero: a row an older steps left dangling is not this upgrade's to refuse a daemon its start over.
+	brokenAfter, err := brokenReferences(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	if brokenAfter > brokenBefore {
+		return fmt.Errorf("could not upgrade state db %q (it is unchanged; the copy taken before is %s): %w: %d rows now name a row that does not exist",
+			path, backupPath(path, found), errBrokenReference, brokenAfter-brokenBefore)
 	}
 
 	err = writeVersion(ctx, tx, path)
@@ -158,6 +197,30 @@ func upgrade(ctx context.Context, db *sql.DB, path string) error {
 
 	return nil
 }
+
+// brokenReferences counts the rows naming a parent they do not have. The steps run with enforcement off, so nothing else would say one of them broke a reference.
+func brokenReferences(ctx context.Context, tx *sql.Tx) (int, error) {
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return 0, fmt.Errorf("could not check foreign keys: %w", err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	broken := 0
+	for rows.Next() {
+		broken++
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return 0, fmt.Errorf("could not check foreign keys: %w", err)
+	}
+
+	return broken, nil
+}
+
+var errBrokenReference = errors.New("the upgrade broke a reference")
 
 // backup copies the file as it is before an upgrade, owner-only like the file itself, replacing the copy an earlier upgrade left: the newest is the one a failed upgrade needs.
 func backup(ctx context.Context, db *sql.DB, path string, version int) error {

@@ -741,6 +741,23 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		{"memories", "pipeline_id", "pipelines", "CASCADE"},
 		{"resource_configs", "pipeline_id", "pipelines", "CASCADE"},
 		{"run_inputs", "run_id", "runs", "CASCADE"},
+		// Every table keyed by a job's or a resource's name cascades off that name's row, which is what makes forgetting one a single DELETE (RetireAbsent).
+		{"nodes", "job_name", "jobs", "CASCADE"},
+		{"job_runs", "job_name", "jobs", "CASCADE"},
+		{"trigger_queue", "job_name", "jobs", "CASCADE"},
+		{"job_versions", "job_name", "jobs", "CASCADE"},
+		{"job_version_cursor", "job_name", "jobs", "CASCADE"},
+		{"runs", "job_name", "jobs", "CASCADE"},
+		{"job_concurrency", "job_name", "jobs", "CASCADE"},
+		{"job_serial_groups", "job_name", "jobs", "CASCADE"},
+		{"job_breaker", "job_name", "jobs", "CASCADE"},
+		{"resource_configs", "resource_name", "resources", "CASCADE"},
+		{"resource_checks", "resource_name", "resources", "CASCADE"},
+		{"resource_check_errors", "resource_name", "resources", "CASCADE"},
+		{"resource_versions", "resource_name", "resources", "CASCADE"},
+		{"job_version_cursor", "resource_name", "resources", "CASCADE"},
+		{"jobs", "pipeline_id", "pipelines", "CASCADE"},
+		{"resources", "pipeline_id", "pipelines", "CASCADE"},
 	} {
 		if !hasForeignKey(ctx, t, st, want.table, want.column, want.target, want.onDelete) {
 			t.Errorf("%s.%s does not declare REFERENCES %s ... ON DELETE %s",
@@ -785,6 +802,11 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 	// The fourth: run_events.step_id is no key (every event of a step carries it), and both rows die with their run.
 	if declaresForeignKey(ctx, t, st, "agent_usage", "step_id") {
 		t.Error("agent_usage.step_id declares a foreign key; run_events.step_id is not unique, so there is no key to point at")
+	}
+
+	// Not one of the five (it holds a name, not a key the rule reaches), and deliberate all the same: an approval is the audit trail of a decision, and must outlive the job that asked for it.
+	if declaresForeignKey(ctx, t, st, "approvals", "job_name") {
+		t.Error("approvals.job_name declares a foreign key; retiring a job would take the record that somebody allowed its deploy")
 	}
 
 	// The fifth, for job_runs.root_hash's reasons: a block's hash has no node, and a resume record must outlive the node it names.
@@ -1158,5 +1180,35 @@ func assertEachPipelineAtItsOwnCap(ctx context.Context, t *testing.T, shared []*
 	want := keep * len(shared)
 	if got := countRows(ctx, t, shared[0], "runs"); got != want {
 		t.Errorf("the file holds %d runs, want %d — one pipeline's prune reached another's", got, want)
+	}
+}
+
+// TestRetiringAJobSweepsTheContentOnlyItNamed: node_content is shared, so no cascade reaches it; the retire has to sweep what its cascade orphaned, and must leave what another job still names.
+func TestRetiringAJobSweepsTheContentOnlyItNamed(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = st.Close() }()
+
+	for job, content := range map[string]string{"drop": "only drop runs this", "keep": "keep runs this"} {
+		err := st.RecordNode(ctx, store.NodeRecord{Hash: "hash-" + job, Kind: "task", Content: map[string]any{"run": content}}, job, store.NodeSucceeded, nil, nil)
+		if err != nil {
+			t.Fatalf("RecordNode(%s): %v", job, err)
+		}
+	}
+
+	err := st.RetireAbsent(ctx, []string{"keep"}, nil)
+	if err != nil {
+		t.Fatalf("RetireAbsent: %v", err)
+	}
+
+	if got := countRows(ctx, t, st, "node_content"); got != 1 {
+		t.Errorf("node_content holds %d rows after the retire, want only the declared job's", got)
+	}
+
+	if got := countRows(ctx, t, st, "jobs"); got != 1 {
+		t.Errorf("jobs holds %d rows after the retire, want only the declared job", got)
 	}
 }

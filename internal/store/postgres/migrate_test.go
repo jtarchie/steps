@@ -48,6 +48,8 @@ func TestV010UpgradesToTheFreshSchema(t *testing.T) {
 		t.Errorf("v0.1.0's placement after the upgrade = %+v (%v), want its row kept", placements, err)
 	}
 
+	assertV010JobIsRetirable(t, st)
+
 	fresh := newDatabase(t)
 	openStore(t, fresh, "app")
 
@@ -128,7 +130,7 @@ func TestOpenReaderLeavesTheUpgradeToAWriter(t *testing.T) {
 	}
 }
 
-// schemaOf is the steps schema as the catalog describes it — columns, constraints, indexes, the stamp — rather than as the DDL was written.
+// schemaOf is the steps schema as the catalog describes it — columns, constraints, indexes, triggers, the stamp — rather than as the DDL was written.
 func schemaOf(t *testing.T, rawURL string) []string {
 	t.Helper()
 
@@ -140,6 +142,9 @@ func schemaOf(t *testing.T, rawURL string) []string {
 		UNION ALL SELECT 'constraint ' || conrelid::regclass::text || ' ' || conname || ' ' || pg_get_constraintdef(oid)
 			FROM pg_constraint WHERE connamespace = 'steps'::regnamespace
 		UNION ALL SELECT 'index ' || indexname || ' ' || indexdef FROM pg_indexes WHERE schemaname = 'steps'
+		UNION ALL SELECT 'trigger ' || tgrelid::regclass::text || ' ' || pg_get_triggerdef(t.oid)
+			FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relnamespace = 'steps'::regnamespace AND NOT t.tgisinternal
+		UNION ALL SELECT 'function ' || proname || ' ' || prosrc FROM pg_proc WHERE pronamespace = 'steps'::regnamespace
 		UNION ALL SELECT 'version ' || version FROM steps.schema_version`)
 
 	slices.Sort(facts)
@@ -180,4 +185,26 @@ func queryStrings(t *testing.T, db *sql.DB, query string) []string {
 
 func missingFrom(have, other []string) []string {
 	return slices.DeleteFunc(slices.Clone(have), func(fact string) bool { return slices.Contains(other, fact) })
+}
+
+// assertV010JobIsRetirable: the upgrade files the jobs older rows already name, so a run recorded before the parent tables existed is kept by the upgrade and still goes with its job.
+func assertV010JobIsRetirable(t *testing.T, st store.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	runs, err := st.ListRuns(ctx, "build", 0)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("v0.1.0's runs of build after the upgrade = %+v (%v), want its one run kept", runs, err)
+	}
+
+	err = st.RetireAbsent(ctx, nil, nil)
+	if err != nil {
+		t.Fatalf("RetireAbsent: %v", err)
+	}
+
+	runs, err = st.ListRuns(ctx, "build", 0)
+	if err != nil || len(runs) != 0 {
+		t.Errorf("v0.1.0's runs of build after its job was retired = %+v (%v), want none: the upgrade left the run with no job row to cascade from", runs, err)
+	}
 }

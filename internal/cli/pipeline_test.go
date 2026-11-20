@@ -3,6 +3,7 @@ package cli
 // What `steps pipeline` sends, and what it shows the person about to deploy it.
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -319,5 +320,32 @@ func TestAVerbTheDaemonRefusesFailsTheCommand(t *testing.T) {
 	})
 	if err != nil || !strings.Contains(out, "destroyed: app") {
 		t.Errorf("destroy app = %v, printing %q; want it destroyed and said so", err, out)
+	}
+}
+
+// A diff line reading "- name: deploy" does not say that adopting the set deletes the job's runs, so the confirmation names what goes, and says nothing when nothing does.
+func TestTheConfirmationNamesWhatASetForgets(t *testing.T) {
+	t.Parallel()
+
+	keep := "jobs:\n- name: keep\n  plan:\n  - task: go\n    inputs: []\n    run: \"true\"\n"
+	both := "resource_types:\n- name: dummy\n  config:\n    check: echo '[]'\n\nresources:\n- name: repo\n  type: dummy\n  source: {}\n\n" +
+		keep + "- name: drop\n  plan:\n  - get: repo\n"
+
+	current := Held{Present: true}
+	current.Config.Source = both
+
+	var out bytes.Buffer
+
+	err := (&PipelineSetCmd{}).confirmFrom(strings.NewReader("n\n"), &out, "app", current, keep, nil)
+	if err == nil {
+		t.Fatal("a refused confirmation applied")
+	}
+
+	if !strings.Contains(out.String(), "is deleted: job drop, resource repo\n") {
+		t.Errorf("the confirmation does not name the job and resource the set forgets:\n%s", out.String())
+	}
+
+	if got := forgottenBySet("app", current, both, nil); got != "" {
+		t.Errorf("a set that declares everything it did before warned %q", got)
 	}
 }
