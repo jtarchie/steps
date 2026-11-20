@@ -35,7 +35,7 @@ func (c *Config) Unfenced(sandboxHere bool) []HostCommand {
 				continue
 			}
 
-			host.Why = "sandbox: true is a fence only where the OS sandbox exists (darwin), and this machine has none; set image:"
+			host.Why = "sandbox: true is a fence only where the OS sandbox exists (darwin, or linux with Landlock ABI 3+), and this machine has none; set image:"
 		}
 
 		found = append(found, host)

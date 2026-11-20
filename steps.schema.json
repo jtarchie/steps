@@ -441,7 +441,7 @@
         },
         "sandbox": {
           "type": "boolean",
-          "description": "Fence host commands with the OS sandbox (darwin only): writes only under the step's workspace and a private TMPDIR, credential paths unreadable, and network: none becomes legal without image:. Refused beside image: and on a placed step."
+          "description": "Fence host commands with the OS sandbox (darwin sandbox-exec, linux Landlock on kernel 6.2+): writes only under the step's workspace and a private TMPDIR, credential paths unreadable, and on darwin network: none becomes legal without image:. Refused beside image: and on a placed step."
         },
         "container_limits": {
           "$ref": "#/$defs/containerLimits"
@@ -1204,7 +1204,7 @@
         },
         "sandbox": {
           "type": "boolean",
-          "description": "Fence host commands with the OS sandbox (darwin only): writes only under the step's workspace and a private TMPDIR, credential paths unreadable, and network: none becomes legal without image:. Refused beside image: and on a placed step."
+          "description": "Fence host commands with the OS sandbox (darwin sandbox-exec, linux Landlock on kernel 6.2+): writes only under the step's workspace and a private TMPDIR, credential paths unreadable, and on darwin network: none becomes legal without image:. Refused beside image: and on a placed step."
         },
         "caches": {
           "$ref": "#/$defs/caches"
@@ -1674,7 +1674,7 @@
         },
         "sandbox": {
           "type": "boolean",
-          "description": "Fence host commands with the OS sandbox (darwin only): writes only under the step's workspace and a private TMPDIR, credential paths unreadable, and network: none becomes legal without image:. Refused beside image: and on a placed step."
+          "description": "Fence host commands with the OS sandbox (darwin sandbox-exec, linux Landlock on kernel 6.2+): writes only under the step's workspace and a private TMPDIR, credential paths unreadable, and on darwin network: none becomes legal without image:. Refused beside image: and on a placed step."
         },
         "caches": {
           "$ref": "#/$defs/caches"
@@ -2239,7 +2239,7 @@
         },
         "sandbox": {
           "const": true,
-          "description": "Fence this task's or agent's host commands with the OS sandbox (darwin only), as the entry-level sandbox: does; the only spelling an inline run: has. On a block, fences its when: guard and every task, agent and guard inside it that runs on this machine outside an image:. True only: it adds the fence and cannot remove one. Refused beside image:, on a placed step or block, and on get/put/load_var/approval."
+          "description": "Fence this task's or agent's host commands with the OS sandbox (darwin, or linux with Landlock), as the entry-level sandbox: does; the only spelling an inline run: has. On a block, fences its when: guard and every task, agent and guard inside it that runs on this machine outside an image:. True only: it adds the fence and cannot remove one. Refused beside image:, on a placed step or block, and on get/put/load_var/approval."
         },
         "container_limits": {
           "$ref": "#/$defs/containerLimits"

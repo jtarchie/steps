@@ -34,7 +34,7 @@ func factoryAgainstFakes(t *testing.T, dir, llm, github, repo string) string {
 	pointed = strings.ReplaceAll(pointed, "    settings: project\n", "")
 	pointed = strings.ReplaceAll(pointed, "      token_env: GH_TOKEN\n", "")
 
-	// sandbox: refuses at the step off darwin, so elsewhere the agents run unfenced and TestFactoryFencesTheShell skips.
+	// In-process, sandbox: runs only on darwin (requireSandbox), so elsewhere the agents run unfenced and TestFactoryFencesTheShell skips.
 	if runtime.GOOS != "darwin" {
 		pointed = strings.ReplaceAll(pointed, "    sandbox: true\n", "")
 	}
@@ -304,9 +304,7 @@ func TestFactoryAnswersAReviewOnTheSameBranch(t *testing.T) {
 func TestFactoryFencesTheShell(t *testing.T) {
 	t.Parallel()
 
-	if runtime.GOOS != "darwin" {
-		t.Skip("sandbox: is implemented only on darwin")
-	}
+	requireSandbox(t)
 
 	repo, before := repoWithBranch(t)
 

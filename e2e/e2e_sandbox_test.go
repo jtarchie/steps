@@ -16,7 +16,7 @@ func requireSandbox(t *testing.T) {
 	t.Helper()
 
 	if runtime.GOOS != "darwin" {
-		t.Skip("sandbox: is implemented with sandbox-exec, darwin only")
+		t.Skip("an in-process sandbox: runs only on darwin; linux re-executes the steps binary, which a test binary is not (TestLandlockSandboxFencesAHostTaskOnLinux covers it)")
 	}
 }
 

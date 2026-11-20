@@ -159,9 +159,9 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 		testdocker.Require(t)
 	}
 
-	// sandbox: refuses at the step off darwin, so its examples run where it exists; they are validated everywhere above.
+	// In-process, sandbox: runs only on darwin (requireSandbox), so its examples run there; they are validated everywhere above.
 	if runtime.GOOS != "darwin" && strings.Contains(block.Body, "sandbox: true") {
-		t.Skip("sandbox: is implemented only on darwin")
+		t.Skip("an in-process sandbox: runs only on darwin; linux re-executes the steps binary, which a test binary is not (TestLandlockSandboxFencesAHostTaskOnLinux covers it)")
 	}
 
 	executeDocBlock(t, block, scenario, dir, path, varFlags, runFlags)

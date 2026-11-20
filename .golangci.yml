@@ -321,6 +321,8 @@ linters:
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/dockerapi"
             - "github.com/jtarchie/steps/internal/redact"
+            # The linux host sandbox (sandbox_linux.go): pure Go, so releases stay CGO_ENABLED=0.
+            - "github.com/landlock-lsm/go-landlock"
         Template:
           files:
             - "**/internal/template/**"

@@ -29,6 +29,7 @@ require (
 	github.com/klauspost/compress v1.20.4
 	github.com/labstack/echo-otel/v5 v5.0.0
 	github.com/labstack/echo/v5 v5.4.6
+	github.com/landlock-lsm/go-landlock v0.11.2
 	github.com/lmittmann/tint v1.2.1
 	github.com/markbates/goth v1.82.0
 	github.com/moby/moby/api v1.57.0
@@ -125,6 +126,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20261118221215-c8830f628b3f // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261118221215-c8830f628b3f // indirect
 	google.golang.org/grpc v1.85.0 // indirect
+	kernel.org/pub/linux/libs/security/libcap/psx v1.2.78 // indirect
 	modernc.org/libc v1.82.2 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.13.0 // indirect

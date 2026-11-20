@@ -70,7 +70,7 @@ type WebCmd struct {
 	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
 	ExternalURL string `help:"the URL steps publish to every step as STEPS_URL (default http://<listen>)" name:"external-url"`
 	// Not an enum tag: kong's refusal of enforce could not say why it is missing.
-	Fence string `default:"off" help:"what to do about a pipeline that runs a command unfenced (no image:, sandbox: on darwin, or privileged: true): off, or warn to accept it and list each one on set and on its page" name:"fence" placeholder:"POLICY"`
+	Fence string `default:"off" help:"what to do about a pipeline that runs a command unfenced (no image:, sandbox: where this machine has one, or privileged: true): off, or warn to accept it and list each one on set and on its page" name:"fence" placeholder:"POLICY"`
 	// Web's alone, not global: `pipeline set` and `mcp login` already own --config, and only the daemon has settings that cannot be flags (configfile.go).
 	Config string `env:"STEPS_CONFIG" help:"a YAML file of these flags, under a web: key (a flag on the command line wins; see docs/web.md)" name:"config" placeholder:"PATH"`
 

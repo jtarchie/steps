@@ -48,6 +48,7 @@ type CLI struct {
 	Web            WebCmd            `cmd:""                                  help:"serve the UI, poll trigger: true resources, and run affected jobs"`
 	Pipeline       PipelineCmd       `cmd:""                                  help:"tell a steps web daemon which pipelines to serve"`
 	Docs           DocsCmd           `cmd:""                                  help:"read the docs in the terminal (no page name lists them)"`
+	Sandbox        SandboxCmd        `cmd:""                                  help:"fence a command with Landlock (steps runs this)"                   hidden:""                    name:"__sandbox"`
 }
 
 // BuildVersion is the version string steps --version prints. Overridden at

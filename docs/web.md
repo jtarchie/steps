@@ -1113,8 +1113,9 @@ web:
   daemon refuses to start with it rather than read it as `warn`.
 
 A command is **fenced** when it runs in an `image:` without `privileged: true`,
-or under [`sandbox: true`](infra.md#host-sandbox-sandbox) on a darwin daemon
-(the only OS the sandbox exists on, so elsewhere a sandboxed command is listed).
+or under [`sandbox: true`](infra.md#host-sandbox-sandbox) on a daemon whose
+machine has the sandbox: darwin, or linux with Landlock (kernel 6.2+). Elsewhere,
+a linux kernel without Landlock included, a sandboxed command is listed.
 A step placed on a `docker+ssh://`, `aws://`, `gcp://`, `do://` or `local:`
 worker runs in its image, so it counts as fenced; one on a bare `ssh://` worker
 does not. Anything that runs no command has nothing to fence: an `expr:`
@@ -1141,8 +1142,8 @@ the rule that judges it. To see the list before a set, give `steps validate`
 the same file: `steps validate --config /etc/steps/steps.yml pipeline.yml`
 prints it as warnings and still passes. It reads only `fence:` and, with
 `--live`, `secret:`, and judges `sandbox: true` by the machine it runs on, so
-validate on the daemon's OS (a darwin laptop does not see what a linux daemon
-lists).
+validate on the daemon's machine (a darwin laptop does not see what a linux
+daemon without Landlock lists).
 
 ## Flags
 

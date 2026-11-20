@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -42,4 +43,12 @@ func (seatbelt) command(policy sandboxPolicy, argv []string) ([]string, error) {
 	args = append(args, "-p", profile.String())
 
 	return append(args, argv...), nil
+}
+
+// SandboxAvailable is nil: sandbox-exec ships with every macOS steps supports.
+func SandboxAvailable() error { return nil }
+
+// SandboxExec is linux's re-exec helper; darwin fences with sandbox-exec, which needs none.
+func SandboxExec(_, _, _ []string) error {
+	return errors.New("sandbox: the re-exec helper is linux's; darwin fences with sandbox-exec")
 }

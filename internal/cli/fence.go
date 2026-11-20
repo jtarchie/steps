@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // The daemon's fence: policy (jtarchie/steps#263). Whether the OS sandbox exists is a fact about the machine that runs the commands, which is why this is judged here and not by the file validator.
@@ -48,7 +48,7 @@ func unfencedLines(policy string, cfg *config.Config) []string {
 
 	var lines []string
 
-	for _, host := range cfg.Unfenced(runtime.GOOS == "darwin") {
+	for _, host := range cfg.Unfenced(shell.SandboxAvailable() == nil) {
 		lines = append(lines, host.Where+": "+host.Why)
 	}
 

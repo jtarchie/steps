@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package shell
 
@@ -11,11 +11,19 @@ import (
 //nolint:gochecknoglobals // the one sandboxer this OS has
 var hostSandbox sandboxer = unsupportedSandbox{}
 
-var errSandboxUnsupported = errors.New("sandbox: is implemented only on darwin")
+var errSandboxUnsupported = errors.New("sandbox: is implemented only on darwin and linux")
 
-// unsupportedSandbox refuses: running the command unfenced would make sandbox: true a promise nothing keeps. A Linux implementation (bubblewrap or Landlock) replaces this file for its OS.
+// unsupportedSandbox refuses: running the command unfenced would make sandbox: true a promise nothing keeps.
 type unsupportedSandbox struct{}
 
 func (unsupportedSandbox) command(sandboxPolicy, []string) ([]string, error) {
-	return nil, fmt.Errorf("%w (running on %s)", errSandboxUnsupported, runtime.GOOS)
+	return nil, SandboxAvailable()
 }
+
+// SandboxAvailable says why this machine cannot keep sandbox: true.
+func SandboxAvailable() error {
+	return fmt.Errorf("%w (running on %s)", errSandboxUnsupported, runtime.GOOS)
+}
+
+// SandboxExec refuses, as the fence does here.
+func SandboxExec(_, _, _ []string) error { return SandboxAvailable() }
