@@ -193,15 +193,31 @@ func (r remoteRuns) started(ctx context.Context, job string) (store.RunRow, erro
 	}
 }
 
-func (c *daemonClient) oneOff(req web.OneOffRequest) (web.OneOffResult, error) {
-	var result web.OneOffResult
+// sendOneOff is the request as JSON, or with folders as a multipart body.
+func (c *daemonClient) sendOneOff(ctx context.Context, inputs InputFlags, req web.OneOffRequest) (int, []byte, error) {
+	if len(req.Inputs) == 0 {
+		payload, err := json.Marshal(req)
+		if err != nil {
+			return 0, nil, fmt.Errorf("could not encode the configuration: %w", err)
+		}
 
-	payload, err := json.Marshal(req)
-	if err != nil {
-		return result, fmt.Errorf("could not encode the configuration: %w", err)
+		return c.doContext(ctx, http.MethodPost, "/api/one-offs", payload)
 	}
 
-	status, body, err := c.do(http.MethodPost, "/api/one-offs", payload)
+	body, contentType, err := inputs.uploadBody(ctx, req)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	defer discardBody(body)
+
+	return c.oneOffUpload(ctx, body, contentType)
+}
+
+func (c *daemonClient) oneOffWith(ctx context.Context, inputs InputFlags, req web.OneOffRequest) (web.OneOffResult, error) {
+	var result web.OneOffResult
+
+	status, body, err := c.sendOneOff(ctx, inputs, req)
 	if err != nil {
 		return result, err
 	}
