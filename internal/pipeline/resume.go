@@ -419,6 +419,15 @@ func refuseMissingWorkspace(runID, root string, done map[doneKey]doneStep, build
 		return fmt.Errorf("cannot resume run %q: its workspace %s is gone — start a new run with --pin <field>=<value> to rebuild that version: %w", runID, root, err)
 	}
 
+	gone, err := workspace.ShelvedGone(root)
+	if err != nil {
+		return fmt.Errorf("cannot resume run %q: %w", runID, err)
+	}
+
+	if gone != "" {
+		return fmt.Errorf("cannot resume run %q: artifact %q, filed in the store when %s failed, is no longer in the store — start a new run with --pin <field>=<value> to rebuild that version", runID, gone, root)
+	}
+
 	return nil
 }
 

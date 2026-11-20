@@ -186,6 +186,8 @@ func (w *planWalk) runTriggeredBuild(
 	defer func() {
 		if buildOK {
 			workspace.CloseBuild(bw, resource.Name)
+		} else {
+			noteFailedBuild(ctx, bw)
 		}
 	}()
 

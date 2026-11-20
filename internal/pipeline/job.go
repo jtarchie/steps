@@ -101,6 +101,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	defer func() { releaseWorkers(ctx) }()
 
 	ctx, holders := withRunHolders(ctx)
+	ctx, failedBuilds := withFailedBuilds(ctx)
 	ctx = workspace.WithHolds(ctx, workspace.Holds{Pull: pullHeld, Claim: claimHeld})
 
 	// One register of step decisions per job run, for context: from: readers.
@@ -205,7 +206,9 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 		// Keep the workspace on failure rather than destroying it: the files a
 		// step had just written when it failed are the most useful thing to
 		// look at, and they are what a resume continues from.
+		// An interrupted run keeps its trees as they are: the restart resumes it at once, and filing would only hold up the shutdown.
 		if !interruptedByShutdown(ctx, opts, finalErr) {
+			failedBuilds.shelve(ctx, bw)
 			bestEffort(ctx, "FinishRun", st.FinishRun(context.WithoutCancel(ctx), resume.id, failedStatus(ctx, finalErr)))
 		}
 

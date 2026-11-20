@@ -584,6 +584,21 @@ func buildInFlight(t *testing.T, root string) string {
 			return filepath.Dir(filepath.Dir(steps[0]))
 		}
 
+		// A host step works at its stable path, outside the build tree, while the tree holds its artifacts.
+		working, err := filepath.Glob(filepath.Join(root, "steps-work", "*", "out"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		builds, err := filepath.Glob(filepath.Join(root, "b-*", "artifacts"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(working) > 0 && len(builds) == 1 {
+			return filepath.Dir(builds[0])
+		}
+
 		time.Sleep(10 * time.Millisecond)
 	}
 

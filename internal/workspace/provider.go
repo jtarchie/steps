@@ -243,7 +243,8 @@ func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWo
 
 	return &isolatingBuild{
 		backend: p.backend, root: root, artifacts: artifacts, stepsDir: steps,
-		keep: p.keep, announce: p.keep && !p.ownsRoot, cache: p.cache, stepCache: p.stepCache, taskCaches: p.taskCaches,
+		keep: p.keep, keepFiles: p.keep, announce: p.keep && !p.ownsRoot, cache: p.cache, stepCache: p.stepCache, taskCaches: p.taskCaches,
+		workRoot: filepath.Join(p.root, workDirName), shelf: p.store,
 	}, nil
 }
 
@@ -256,9 +257,12 @@ func (p *isolatingProvider) reusedBuild(ctx context.Context, dir string) *isolat
 		artifacts:  filepath.Join(dir, "artifacts"),
 		stepsDir:   filepath.Join(dir, "steps"),
 		keep:       true, // never tear down a tree we did not create
+		keepFiles:  p.keep,
 		cache:      p.cache,
 		stepCache:  p.stepCache,
 		taskCaches: p.taskCaches,
+		workRoot:   filepath.Join(p.root, workDirName),
+		shelf:      p.shelfFor(dir),
 	}
 }
 

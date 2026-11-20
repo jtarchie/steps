@@ -69,6 +69,8 @@ type BuildWorkspace interface {
 	// collecting matrix (task or agent) passes the machine-composed
 	// coordinate mapping config.CollectedOutputMapping builds.
 	TaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, error)
+	// HostTaskSpace is TaskSpace for a step that runs on this machine: at the stable path key (StableWorkKey) names when no other run holds it, a throwaway one otherwise.
+	HostTaskSpace(ctx context.Context, key, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, error)
 	// PutSpace composes a put step's read view from its declared inputs, or —
 	// when all is true (inputs: all) — from every artifact in the build store.
 	// Unlike TaskSpace/agent steps, a put step never has outputs of its own.
@@ -122,6 +124,8 @@ type BuildWorkspace interface {
 	ResetArtifact(ctx context.Context, name string) error
 	// AttachCaches puts each cache (path relative to dir → TaskCacheKey) in place before a step runs; the func it returns files them back and must run before the space closes.
 	AttachCaches(ctx context.Context, dir string, caches map[string]string) func()
+	// Shelve files a failed build's artifacts into the store and keeps only the record of their digests, which a resume clones back from; a no-op under --keep-workspace or with no store.
+	Shelve(ctx context.Context) error
 	// HasArtifact reports whether name is in the build store, or held by a
 	// worker on the build's behalf, so a resume that keeps a get's artifact
 	// can refuse a tree that lost it.

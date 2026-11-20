@@ -147,6 +147,15 @@ func (b *isolatingBuild) RestoreHeld(pull func(holder, digest string) func(conte
 			continue
 		}
 
+		// No holder is the store beside the tree; one that lost the tree leaves the artifact absent, which a resume refuses before it gets here (ShelvedGone).
+		if record.Holder == "" {
+			if b.shelf != nil && b.shelf.has(record.Digest) {
+				b.remote[name] = RemoteArtifact{Name: record.Name, Digest: record.Digest, Pull: b.shelf.pull(record.Digest)}
+			}
+
+			continue
+		}
+
 		b.remote[name] = RemoteArtifact{Name: record.Name, Digest: record.Digest, Holder: record.Holder, Pull: pull(record.Holder, record.Digest)}
 	}
 
@@ -273,6 +282,10 @@ func (b *isolatingBuild) pull(ctx context.Context, name string, remote RemoteArt
 	err = remote.Pull(ctx, dst)
 	if err != nil {
 		_ = b.backend.remove(dst)
+
+		if remote.Holder == "" {
+			return fmt.Errorf("artifact %q was filed in the store and could not be restored: %w", name, err)
+		}
 
 		return fmt.Errorf("artifact %q is held by worker %s and could not be brought home: %w", name, remote.Holder, err)
 	}

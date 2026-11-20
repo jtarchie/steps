@@ -201,17 +201,14 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	ri := resolved.ri
 
-	// The mapping is nil except for a cell of a collecting matrix, where each
-	// output is captured under the cell's own coordinates — see
-	// config.CollectedOutputMapping.
-	space, err := bw.TaskSpace(ctx, step.Agent, step.InputNames(), step.Outputs,
-		nil, config.CollectedOutputMapping(step.Outputs, nil, step.OutputSubdir))
+	meta := shell.MetadataFrom(ctx)
+
+	space, err := agentSpace(ctx, bw, step, ri.Image, meta)
 	if err != nil {
 		return preparedAgentStep{}, fmt.Errorf("workspace: %w", err)
 	}
 
 	// Before anything reads the directory (prompt files, context_paths:, a stdio MCP server's cwd), as Concourse mounts a cache before the task starts.
-	meta := shell.MetadataFrom(ctx)
 	caches := workspace.TaskCacheKeys(meta.PipelineName, meta.JobName, step.Agent, ri.Caches)
 	detachCaches := attachAgentCaches(ctx, bw, step, ri.Image, space.Dir(), caches)
 	label := step.Agent
@@ -336,6 +333,19 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		space: space, conv: conv, llm: invocationLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir, workdir: path.Join(spec.Workdir, step.Dir),
 	}, nil
+}
+
+// agentSpace is the step's directory, at a stable path when its tools run on this machine, as a host task's is. The mapping is nil except for a cell of a collecting matrix, where each output is captured under the cell's own coordinates — see config.CollectedOutputMapping.
+func agentSpace(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, image string, meta shell.BuildMetadata) (workspace.StepSpace, error) {
+	outputMapping := config.CollectedOutputMapping(step.Outputs, nil, step.OutputSubdir)
+
+	if len(step.Tags) > 0 || image != "" {
+		return bw.TaskSpace(ctx, step.Agent, step.InputNames(), step.Outputs, nil, outputMapping) //nolint:wrapcheck // the caller names the workspace
+	}
+
+	key := workspace.StableWorkKey(meta.PipelineName, meta.JobName, step.Agent)
+
+	return bw.HostTaskSpace(ctx, key, step.Agent, step.InputNames(), step.Outputs, nil, outputMapping) //nolint:wrapcheck // the caller names the workspace
 }
 
 // attachAgentCaches puts the step's caches: in its directory, unless the step is placed or has an image: its worker (the implicit local: one for an untagged image) holds them, and one attached here would be packed into the tree sent over. resolveTags stamped the effective placement onto step.Tags at load.

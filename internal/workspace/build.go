@@ -14,15 +14,21 @@ import (
 )
 
 type isolatingBuild struct {
-	backend     treeBackend
-	root        string
-	artifacts   string
-	stepsDir    string
-	keep        bool
-	announce    bool
-	cache       *resourceCache
-	stepCache   *stepCache
-	taskCaches  *entryStore
+	backend   treeBackend
+	root      string
+	artifacts string
+	stepsDir  string
+	keep      bool
+	// keepFiles is --keep-workspace itself, which keep also is for a resumed tree that is merely not ours to remove.
+	keepFiles  bool
+	announce   bool
+	cache      *resourceCache
+	stepCache  *stepCache
+	taskCaches *entryStore
+	// workRoot holds the stable working paths HostTaskSpace claims.
+	workRoot string
+	// shelf is the store beside the tree, which a failed build files its artifacts in (Shelve); nil where there is none.
+	shelf       *treeStore
 	stepCounter atomic.Int64
 
 	// digests memoizes artifactDigest per artifact name. An artifact's bytes
@@ -225,6 +231,11 @@ func (b *isolatingBuild) ResetArtifact(ctx context.Context, name string) error {
 // Close removes the build's root directory and the materialized trees under
 // it, through backend.remove.
 func (b *isolatingBuild) Close() error {
+	// Closed means the build succeeded, so a resumed one no longer needs what its failed attempt filed.
+	if b.shelf != nil {
+		b.shelf.unpin(filepath.Base(b.root))
+	}
+
 	// The provider prints its own kept-root line when it owns the root; a build under a durable root has none, so --keep-workspace is answered here.
 	if b.keep {
 		if b.announce {

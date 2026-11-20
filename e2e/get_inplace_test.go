@@ -110,7 +110,8 @@ func TestResumeRefusesWhenAnInPlaceGetsKeptArtifactIsGone(t *testing.T) {
 
 	path := writePipeline(t, dir, artifactResumePipeline(dir, versions, "  - get: a\n    resource: ticks\n  - get: repo\n    resource: ticks", ""))
 
-	runID, root := failThenCapture(t, path)
+	// Kept in the tree, so the in-place get's own check is what refuses; a tree filed in the store is refused before any get (resume_store_test.go).
+	runID, root := failThenCapture(t, path, "--keep-workspace")
 
 	err := os.RemoveAll(filepath.Join(root, "artifacts", "repo"))
 	if err != nil {

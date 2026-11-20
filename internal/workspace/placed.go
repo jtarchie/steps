@@ -55,7 +55,8 @@ func (b *isolatingBuild) leaveRemote(inputs []string, inputMapping map[string]st
 			continue
 		}
 
-		if held, ok := b.remoteArtifact(in); ok && (held.Name == "" || held.Name == in) {
+		// A tree this machine's store holds has no worker to be offered from; it is brought home and sent like any local input.
+		if held, ok := b.remoteArtifact(in); ok && held.Holder != "" && (held.Name == "" || held.Name == in) {
 			remote[in] = held
 		}
 	}

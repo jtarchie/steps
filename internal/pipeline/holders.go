@@ -153,7 +153,9 @@ func onWorker(step config.Step, image string) bool {
 // otherwise the ordinary space, which pulls what it needs here.
 func placedTaskSpace(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, rt config.ResolvedTask, outputMapping map[string]string) (workspace.StepSpace, map[string]shell.RemoteInput, error) {
 	if !onWorker(step, rt.Image) {
-		space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
+		meta := shell.MetadataFrom(ctx)
+		key := workspace.StableWorkKey(meta.PipelineName, meta.JobName, step.Task)
+		space, err := bw.HostTaskSpace(ctx, key, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
 
 		return space, nil, err //nolint:wrapcheck // the caller names the task
 	}

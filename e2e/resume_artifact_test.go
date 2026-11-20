@@ -69,11 +69,11 @@ jobs:
 // The workspace comes from the run's row, not the "workspace kept at" line:
 // that line names the job-level build, while the row is re-pointed at the
 // tree the get fetched into, which is the one a resume reuses.
-func failThenCapture(t *testing.T, path string) (string, string) {
+func failThenCapture(t *testing.T, path string, flags ...string) (string, string) {
 	t.Helper()
 
 	out := captureStdout(t, func() {
-		err := stepsRun(t, []string{"run", path, "--job", "build"})
+		err := stepsRun(t, append([]string{"run", path, "--job", "build"}, flags...))
 		if err == nil {
 			t.Fatal("expected the fragile step to fail")
 		}
@@ -196,43 +196,66 @@ func TestResumeRerunsAJobHookAfterEveryBuildFinished(t *testing.T) {
 	}
 }
 
-// TestResumeRefusesWhenTheKeptArtifactIsGone: a get the skipped steps changed
-// cannot be fetched fresh without losing their work, so an artifact missing
-// from the kept tree is named rather than quietly replaced.
+// TestResumeRefusesWhenTheKeptArtifactIsGone: a get the skipped steps changed cannot be fetched fresh without losing their work, so an artifact missing from the kept tree, or reclaimed from the store a failed run filed it in, is named rather than quietly replaced.
 func TestResumeRefusesWhenTheKeptArtifactIsGone(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
+	for name, lose := range map[string]struct {
+		flags []string
+		lose  func(t *testing.T, root string)
+		said  []string
+	}{
+		"filed in the store": {
+			lose: reclaimStore,
+			said: []string{`artifact "repo"`, "no longer in the store"},
+		},
+		"kept in the tree": {
+			flags: []string{"--keep-workspace"},
+			lose: func(t *testing.T, root string) {
+				t.Helper()
 
-	versions := filepath.Join(dir, "versions.json")
-	writePipelineFile(t, versions, `[{"n":"two"}]`)
+				err := os.RemoveAll(filepath.Join(root, "artifacts", "repo"))
+				if err != nil {
+					t.Fatal(err)
+				}
+			},
+			said: []string{`get "repo" was already fetched`},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	path := writePipeline(t, dir, artifactResumePipeline(dir, versions, "  - get: repo\n    resource: ticks", ""))
+			dir := t.TempDir()
 
-	runID, root := failThenCapture(t, path)
+			versions := filepath.Join(dir, "versions.json")
+			writePipelineFile(t, versions, `[{"n":"two"}]`)
 
-	err := os.RemoveAll(filepath.Join(root, "artifacts", "repo"))
-	if err != nil {
-		t.Fatal(err)
+			path := writePipeline(t, dir, artifactResumePipeline(dir, versions, "  - get: repo\n    resource: ticks", ""))
+
+			runID, root := failThenCapture(t, path, lose.flags...)
+			lose.lose(t, root)
+
+			writePipelineFile(t, filepath.Join(dir, "fixed"), "")
+
+			var err error
+
+			out := captureStdout(t, func() {
+				err = stepsRun(t, []string{"run", path, "--resume", runID})
+			})
+
+			if err == nil {
+				t.Fatalf("the resume continued without the artifact the skipped steps changed:\n%s", out)
+			}
+
+			for _, want := range append(lose.said, root) {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+
+			assertLineCount(t, filepath.Join(dir, "fetches.log"), 1)
+		})
 	}
-
-	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
-
-	out := captureStdout(t, func() {
-		err = stepsRun(t, []string{"run", path, "--resume", runID})
-	})
-
-	if err == nil {
-		t.Fatalf("the resume continued without the artifact the skipped steps changed:\n%s", out)
-	}
-
-	for _, want := range []string{`get "repo" was already fetched`, root} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not name %q: %v", want, err)
-		}
-	}
-
-	assertLineCount(t, filepath.Join(dir, "fetches.log"), 1)
 }
 
 // TestResumeRefusesWhenTheKeptWorkspaceIsGone: with the whole tree gone there

@@ -172,7 +172,7 @@ func (s *treeStore) release(digests []string) {
 		}
 
 		info, err := os.Stat(path)
-		if err != nil || info.ModTime().After(cutoff) {
+		if err != nil || info.ModTime().After(cutoff) || s.pinned(digest) {
 			continue
 		}
 
@@ -228,7 +228,7 @@ func (s *treeStore) bound(ctx context.Context, filed string) {
 			return
 		}
 
-		if victim.digest == filed {
+		if !s.evictable(victim.digest, filed) {
 			continue
 		}
 
@@ -237,6 +237,11 @@ func (s *treeStore) bound(ctx context.Context, filed string) {
 
 		total -= victim.bytes
 	}
+}
+
+// evictable is what bound may take: never the tree just filed, nor one a failed run is waiting on.
+func (s *treeStore) evictable(digest, filed string) bool {
+	return digest != filed && !s.pinned(digest)
 }
 
 // size is a tree's recorded byte count, measured and recorded when the record is missing.
