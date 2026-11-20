@@ -838,7 +838,7 @@
         "states": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
-          "description": "State names in the team, any of which matches. A name the team does not have fails the check by name. Set, the version also carries when the issue last moved into one of them, so moving it out and back asks for the work again."
+          "description": "State names in the team, any of which matches. A name the team does not have fails the check by name. Set, the version also carries when the issue last moved into one of them from a state not listed, so moving it out of the list and back asks for the work again, and moving it between two listed states does not."
         },
         "state_types": {
           "type": "array",
