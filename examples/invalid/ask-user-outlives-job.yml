@@ -1,0 +1,17 @@
+# The same for a question a model parks: an answer given after the job's timeout: has passed is one the job can no longer use.
+
+# expect: ask_user timeout 3h outlives the job's timeout: 1h
+
+agents:
+- name: writer
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools:
+  - builtin: ask_user
+    timeout: 3h
+
+jobs:
+- name: draft
+  timeout: 1h
+  plan:
+  - agent: writer
+    messages: [Draft the notes, asking if unsure.]

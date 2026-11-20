@@ -231,7 +231,7 @@ agents:
 
 jobs:
 - name: audit
-  timeout: 4h              # wall-clock ceiling on the whole run
+  timeout: 28h             # wall-clock ceiling on the whole run: four hours of work plus the approval's day
   budget:
     tokens: 20000000       # cumulative across every agent step, delegations included
   plan:

@@ -189,7 +189,7 @@ agents:
 
 jobs:
 - name: review
-  timeout: 1h            # wall-clock ceiling on the whole run
+  timeout: 26h           # wall-clock ceiling on the whole run: an hour of work plus the approval's day
   budget:
     tokens: 8000000      # cumulative across every agent step
   plan:

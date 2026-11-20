@@ -25,7 +25,72 @@ func (c *Config) validateTimeouts() error {
 		return err
 	}
 
+	err = c.validateParksWithinJobs()
+	if err != nil {
+		return err
+	}
+
 	return c.validateStepTimeouts()
+}
+
+// validateParksWithinJobs refuses a park whose own timeout: outlives its job's. The job's deadline is checked between steps, so the park would wait out its whole timeout and the job would then fail at the next step, after somebody had answered.
+func (c *Config) validateParksWithinJobs() error {
+	for _, job := range c.Jobs {
+		limit, err := ParseTimeout(job.Timeout)
+		if job.Timeout == "" || err != nil {
+			continue
+		}
+
+		err = job.visitSteps(func(label string, step *Step) error {
+			for _, park := range c.parkTimeouts(step) {
+				wait, err := ParseTimeout(park.timeout)
+				if err == nil && wait > limit {
+					return fmt.Errorf("%s: %s %s outlives the job's timeout: %s; the job's deadline is checked only between steps, so the step would wait it out and the job then fail after somebody answered; shorten one or lengthen the other",
+						label, park.field, park.timeout, job.Timeout)
+				}
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+type parkTimeout struct{ field, timeout string }
+
+// parkTimeouts are the explicit waits on a person a step declares; a default wait is not counted.
+func (c *Config) parkTimeouts(step *Step) []parkTimeout {
+	if step.Approval != nil && step.Approval.Timeout != "" {
+		return []parkTimeout{{"approval.timeout", step.Approval.Timeout}}
+	}
+
+	if step.Ask != "" && step.Timeout != "" {
+		return []parkTimeout{{"ask timeout", step.Timeout}}
+	}
+
+	if step.Agent == "" {
+		return nil
+	}
+
+	// An agent that does not resolve is another validator's to report.
+	invocation, err := c.ResolveAgentInvocation(*step)
+	if err != nil {
+		return nil
+	}
+
+	var parks []parkTimeout
+
+	for _, spec := range invocation.ToolSpecs {
+		if spec.Builtin == AskUserBuiltinName && spec.Timeout != "" {
+			parks = append(parks, parkTimeout{AskUserBuiltinName + " timeout", spec.Timeout})
+		}
+	}
+
+	return parks
 }
 
 // validateResourceTimeouts checks check_timeout: zero is refused for the reason a job's timeout: is, and the empty field means the default.
