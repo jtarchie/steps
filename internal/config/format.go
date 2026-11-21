@@ -38,10 +38,11 @@ func Format(source []byte, fsys Files) ([]byte, error) {
 		return nil, ErrNotPipeline
 	}
 
+	lines := strings.Split(string(source), "\n")
+
 	// Hoisted first, so an anchored item's comment counts as its first line when looking for a blank above it.
 	hoistAnchoredComments(&doc)
-
-	lines := strings.Split(string(source), "\n")
+	hoistDanglingComments(&doc, lines)
 	blanks := map[*yaml.Node]bool{}
 	markAuthorBlanks(doc.Content[0], lines, blanks)
 
@@ -73,9 +74,10 @@ func Format(source []byte, fsys Files) ([]byte, error) {
 		return nil, fmt.Errorf("could not re-read formatted YAML: %w", err)
 	}
 
-	hoistAnchoredComments(&out)
-
 	outLines := strings.Split(encoded.String(), "\n")
+
+	hoistAnchoredComments(&out)
+	hoistDanglingComments(&out, outLines)
 	restoreScalars(doc.Content[0], out.Content[0], lines, outLines)
 	restoreCommentColumns(doc.Content[0], out.Content[0], lines, outLines)
 
@@ -286,6 +288,48 @@ func hoistAnchoredComments(node *yaml.Node) {
 	for _, child := range node.Content {
 		hoistAnchoredComments(child)
 	}
+}
+
+// hoistDanglingComments moves a comment written between two items, blank line below it, from the second item's first key back to the head of that item. yaml.v4 parses such a comment as the first key's foot comment, so the encoder printed it under `- name: ...` inside the item, and fmt was not idempotent: work/prs.yml's lone `# /bot's resources.` moved one item down per pass. A head comment the item already has stays below it, a blank line apart, as written.
+func hoistDanglingComments(node *yaml.Node, lines []string) {
+	if node.Kind == yaml.MappingNode && len(node.Content) > 0 && writtenAbove(node, node.Content[0].FootComment, lines) {
+		key := node.Content[0]
+
+		if node.HeadComment == "" {
+			node.HeadComment = key.FootComment
+		} else {
+			node.HeadComment = key.FootComment + "\n\n" + node.HeadComment
+		}
+
+		key.FootComment = ""
+	}
+
+	for _, child := range node.Content {
+		hoistDanglingComments(child, lines)
+	}
+}
+
+// writtenAbove is whether comment's first line is in lines above node's own line, with only comments and blank lines between: a foot comment is otherwise below what it belongs to.
+func writtenAbove(node *yaml.Node, comment string, lines []string) bool {
+	if comment == "" {
+		return false
+	}
+
+	first, _, _ := strings.Cut(comment, "\n")
+	first = strings.TrimSpace(first)
+
+	for i := min(node.Line-2, len(lines)-1); i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == first {
+			return true
+		}
+
+		if line != "" && !strings.HasPrefix(line, "#") {
+			return false
+		}
+	}
+
+	return false
 }
 
 // aboveAnchor is whether the first key's head comment does not fit between the anchor's line and the key, so was written above the anchor.

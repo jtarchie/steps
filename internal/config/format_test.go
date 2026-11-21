@@ -40,7 +40,33 @@ func TestFormatKeepsAnEmojiBlockABlock(t *testing.T) {
 	}
 }
 
-// TestFormatNeverWrapsALongLine: yaml.v4's v3 preset wraps at 80 columns where yaml.v3's encoder never did, which would fold every long description: and flow mapping onto a second line.
+// TestFormatLeavesACommentBetweenItemsWhereItIs: a comment under one item, a blank line, then the next item's own comment parses as a foot comment on the next item's first key, so fmt printed it inside that item, a line further down each pass (pipelines' work/prs.yml). Formatting twice is what proves it stays put.
+func TestFormatLeavesACommentBetweenItemsWhereItIs(t *testing.T) {
+	t.Parallel()
+
+	const source = "resources:\n- name: notify\n  type: x\n  source: {}\n# between the two\n\n# about ask\n- name: ask\n  type: y\n\njobs: []\n"
+	const want = "resources:\n  - name: notify\n    type: x\n    source: {}\n\n  # between the two\n\n  # about ask\n  - name: ask\n    type: y\n\njobs: []\n"
+
+	got, err := Format([]byte(source), Bundle{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(got) != want {
+		t.Errorf("first pass got:\n%s\nwant:\n%s", got, want)
+	}
+
+	again, err := Format(got, Bundle{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(again) != string(got) {
+		t.Errorf("second pass moved something:\n%s\nfirst pass:\n%s", again, got)
+	}
+}
+
+// TestFormatNeverWrapsALongLine:yaml.v4's v3 preset wraps at 80 columns where yaml.v3's encoder never did, which would fold every long description: and flow mapping onto a second line.
 func TestFormatNeverWrapsALongLine(t *testing.T) {
 	t.Parallel()
 
