@@ -59,6 +59,11 @@ type Retention struct {
 	JobName string
 	// Runs is how many of that job's runs to keep, newest first.
 	Runs int
+	// MinimumSucceeded is how many of those Runs are the job's newest
+	// succeeded runs, however old: Concourse's minimum_succeeded_builds. They
+	// count toward Runs rather than on top of it, and a value above Runs is
+	// read as Runs.
+	MinimumSucceeded int
 	// TriggerQueue is how many of its FINISHED queue rows to keep. A separate
 	// number because the queue is a work list rather than history: see
 	// DefaultTriggerQueueHistory, which is what the run passes.
@@ -99,3 +104,9 @@ const NodesPerRetainedRun = 20
 // rather than a plan's worth. Several because a version: every fan-out runs
 // several chains under one job.
 const ChainsPerRetainedRun = 5
+
+// KeptSucceeded is how many succeeded runs the prune holds back, clamped to the
+// cap they count toward.
+func (r Retention) KeptSucceeded() int {
+	return max(0, min(r.MinimumSucceeded, r.Runs))
+}

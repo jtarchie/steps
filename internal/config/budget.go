@@ -90,6 +90,11 @@ func (c *Config) validateBudgets() error {
 			return fmt.Errorf("job %q: max_consecutive_failures must not be negative (omit it for no circuit breaker)", job.Name)
 		}
 
+		err = validateBuildLogRetention(job)
+		if err != nil {
+			return err
+		}
+
 		err = validateStepBudgets(job)
 		if err != nil {
 			return err
@@ -204,6 +209,39 @@ func validateBudget(label string, budget *Budget) error {
 
 	if budget.USD < 0 {
 		return fmt.Errorf("%s: budget.usd must be a positive dollar amount (omit budget: entirely for no ceiling)", label)
+	}
+
+	return nil
+}
+
+// validateBuildLogRetention holds minimum_succeeded_builds to Concourse's rule
+// that it needs builds: beside it, and refuses one larger than builds:, which
+// would keep green runs past the cap the same block states.
+func validateBuildLogRetention(job Job) error {
+	policy := job.BuildLogRetention
+	if policy == nil {
+		return nil
+	}
+
+	if policy.Builds != nil && *policy.Builds < 0 {
+		return fmt.Errorf("job %q: build_log_retention.builds must not be negative (0 keeps every run)", job.Name)
+	}
+
+	if policy.MinimumSucceededBuilds < 0 {
+		return fmt.Errorf("job %q: build_log_retention.minimum_succeeded_builds must not be negative", job.Name)
+	}
+
+	if policy.MinimumSucceededBuilds == 0 {
+		return nil
+	}
+
+	if policy.Builds == nil || *policy.Builds == 0 {
+		return fmt.Errorf("job %q: build_log_retention.minimum_succeeded_builds needs builds: above 0 beside it", job.Name)
+	}
+
+	if policy.MinimumSucceededBuilds > *policy.Builds {
+		return fmt.Errorf("job %q: build_log_retention.minimum_succeeded_builds (%d) is more than builds: (%d)",
+			job.Name, policy.MinimumSucceededBuilds, *policy.Builds)
 	}
 
 	return nil

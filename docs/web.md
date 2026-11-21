@@ -1355,6 +1355,9 @@ jobs:
 --run-history / --version-history
                  how many runs of each job / versions of each resource to keep;
                  a pipeline's defaults: wins (see infra.md)
+--max-run-history
+                 the most runs of any job to keep, whatever a pipeline asks,
+                 its 0 included (default 0, no ceiling; see infra.md)
 --artifact-store mirror cached step outputs to a content-addressed store,
                  e.g. s3://bucket/prefix
 --keep-workspace leave build workspaces on disk ($STEPS_KEEP_WORKSPACE)

@@ -76,6 +76,10 @@ type Job struct {
 	MaxInFlight int `yaml:"max_in_flight,omitempty"`
 	// Concourse's interruptible: and its default of false: a `steps web` shutdown waits (bounded) for this job's running build, because a deploy half-applied by a daemon restart is the case it exists for, while `steps run` is a person at a terminal and ctrl-C there means now (internal/scheduler's LocalRunner.runContext).
 	Interruptible bool `yaml:"interruptible,omitempty"`
+	// BuildLogRetention is Concourse's job-level retention policy, overriding
+	// defaults.run_history: for this job alone. Never hashed: it bounds what a
+	// build leaves behind, not what a step does.
+	BuildLogRetention *BuildLogRetention `yaml:"build_log_retention,omitempty"`
 	// Line is the job's source line in the pipeline file, filled in after
 	// decoding (see stampLines). Never written in YAML and never hashed.
 	Line int `yaml:"-"`
@@ -203,4 +207,22 @@ func (j Job) AgentNames() []string {
 	})
 
 	return names
+}
+
+// BuildLogRetention is how many of one job's runs steps keeps, spelled as
+// Concourse spells it (concourse-ci.org/docs/jobs/#build_log_retention).
+//
+// Concourse's days: is deliberately absent: the state database is bounded by
+// count, and an age window keeps every run inside it however many there are.
+// A reaped run is deleted whole — row, events, steps, usage — where Concourse
+// keeps the build row and drops its logs.
+type BuildLogRetention struct {
+	// Builds is how many runs to keep, newest first. Omitted falls back to
+	// defaults.run_history:; 0 keeps everything.
+	Builds *int `yaml:"builds,omitempty"`
+	// MinimumSucceededBuilds keeps the newest this-many succeeded runs even
+	// when they are older than Builds. They count TOWARD Builds rather than on
+	// top of it, as Concourse's own example has it, so a job that has gone red
+	// keeps its last green run in place of its oldest red one.
+	MinimumSucceededBuilds int `yaml:"minimum_succeeded_builds,omitempty"`
 }

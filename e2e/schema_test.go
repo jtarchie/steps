@@ -186,13 +186,14 @@ jobs:
 // hand-written UnmarshalYAML, so reflection reports no yaml tags for them.
 func schemaDefsByType() map[string]reflect.Type {
 	return map[string]reflect.Type{
-		"step":         reflect.TypeOf(config.Step{}),
-		"job":          reflect.TypeOf(config.Job{}),
-		"task":         reflect.TypeOf(config.Task{}),
-		"agent":        reflect.TypeOf(config.Agent{}),
-		"resource":     reflect.TypeOf(config.Resource{}),
-		"resourceType": reflect.TypeOf(config.ResourceType{}),
-		"mcpServer":    reflect.TypeOf(config.MCPServer{}),
+		"step":              reflect.TypeOf(config.Step{}),
+		"job":               reflect.TypeOf(config.Job{}),
+		"buildLogRetention": reflect.TypeOf(config.BuildLogRetention{}),
+		"task":              reflect.TypeOf(config.Task{}),
+		"agent":             reflect.TypeOf(config.Agent{}),
+		"resource":          reflect.TypeOf(config.Resource{}),
+		"resourceType":      reflect.TypeOf(config.ResourceType{}),
+		"mcpServer":         reflect.TypeOf(config.MCPServer{}),
 		// Listed where mcpResourceConfig is not, because this one decodes
 		// with plain yaml tags and so CAN be compared by reflection — the
 		// unlisted defs are the ones whose members go through hand-written

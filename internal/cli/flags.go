@@ -282,12 +282,17 @@ func (e ExecFlags) Apply(ctx context.Context) (context.Context, pipeline.Run, er
 type HistoryFlags struct {
 	VersionHistory int `help:"how many versions of each resource to remember (pipeline defaults.version_history wins)" name:"version-history"`
 	RunHistory     int `help:"how many runs of each job to keep (pipeline defaults.run_history wins)"                  name:"run-history"`
+	MaxRunHistory  int `help:"the most runs of any job to keep, whatever the pipeline asks; 0 for no ceiling"          name:"max-run-history"`
 }
 
 // Apply lets the flags stand in for limits the pipeline did not set. The
-// pipeline wins where it spoke: it is the thing under version control.
+// pipeline wins where it spoke: it is the thing under version control. The
+// one exception is --max-run-history, a ceiling rather than a default: a daemon
+// holds pipelines other people upload, and Concourse's
+// CONCOURSE_MAX_BUILD_LOGS_TO_RETAIN is the same knob for the same reason.
 func (h HistoryFlags) Apply(cfg *config.Config) {
 	applyHistoryFlags(cfg, h.VersionHistory, h.RunHistory)
+	capRunHistory(cfg, h.MaxRunHistory)
 }
 
 // DefaultDaemonState is where a daemon and the commands that read its
@@ -413,6 +418,33 @@ func applyHistoryFlags(cfg *config.Config, versions, runs int) {
 
 	if runs > 0 && cfg.Defaults.RunHistory == nil {
 		cfg.Defaults.RunHistory = &runs
+	}
+}
+
+// capRunHistory lowers every run cap the config resolves to above ceiling, a 0
+// that would keep everything included. ceiling <= 0 is no ceiling.
+func capRunHistory(cfg *config.Config, ceiling int) {
+	if ceiling <= 0 {
+		return
+	}
+
+	if limit := cfg.RunHistoryLimit(); limit == 0 || limit > ceiling {
+		if cfg.Defaults == nil {
+			cfg.Defaults = &config.Defaults{}
+		}
+
+		cfg.Defaults.RunHistory = &ceiling
+	}
+
+	for i, job := range cfg.Jobs {
+		policy := job.BuildLogRetention
+		if policy == nil || policy.Builds == nil || (*policy.Builds != 0 && *policy.Builds <= ceiling) {
+			continue
+		}
+
+		capped := *policy
+		capped.Builds = &ceiling
+		cfg.Jobs[i].BuildLogRetention = &capped
 	}
 }
 

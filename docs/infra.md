@@ -1024,7 +1024,8 @@ jobs:
 ```
 
 - **Per job, not pipeline-wide.** A global cap makes the least active job the least inspectable, because a busy neighbour evicts its history. Twenty runs of `summarize` and twenty of `deploy`, not twenty between them.
-- **Default 100**, or `--run-history` on `steps run`/`steps web`. The pipeline wins when both are set, because it is the thing that knows how much its jobs write.
+- **Default 100**, or `--run-history` on `steps run`/`steps web`. The pipeline wins when both are set, because it is the thing that knows how much its jobs write. One job can ask for a different number with [`build_log_retention:`](#one-job-keeps-a-different-number-build_log_retention).
+- **`--max-run-history` is the operator's ceiling**, and the one flag here the pipeline does not beat: a daemon holds pipelines other people upload, so `--max-run-history 50` brings every job's cap down to 50 — a `run_history: 0` or a `builds: 0` included — and leaves a smaller one alone. Concourse's `CONCOURSE_MAX_BUILD_LOGS_TO_RETAIN` is the same knob.
 - **`0` keeps everything**, the same convention [every other limit here uses](attempts-timeout.md#zero-means-no-limit) — including `version_history:`. That is a real choice with a real cost, not a safe default.
 - **A reaped run takes its whole story with it** — events, per-step records, agent spend and transcripts, and the [full output kept in the database](web.md#live-runs) for a step its record elided — so the run pages and `steps runs cost` reach back exactly as far as the cap.
 - **A job or resource the pipeline stops declaring is forgotten outright.** Remove a job from the file and its runs, cached steps, queue rows and `passed:` records are deleted when the new configuration is adopted (the next `steps run`, or a `steps pipeline set`, which names what will go before it asks); remove a resource and its versions and check state go the same way. Nothing can reach them by name any more, so keeping them would be keeping what no command or page can show. A job with a build still running goes when that build ends. Two things to know: **renaming a job or resource in the file is removing one and adding another**, so its history does not follow the new name; and putting a removed job back gets it back empty. Approvals are kept, because the record that somebody allowed a deploy outlives the job that asked. This is a deliberate difference from Concourse, which hides a removed job and keeps every build until the pipeline is destroyed.
@@ -1033,6 +1034,37 @@ jobs:
 - **What is NOT trimmed is what would change behavior.** Recorded resource versions have their own separate limit (`version_history:`), the per-job version cursor is never touched, and the chain-level "this content already succeeded" index is aged out on the same horizon rather than tied to node retention — so bounding history never re-answers a version a job has already handled, and never re-triggers.
 - **Agent memory is not history.** What an agent step [remembers](agents.md#memory-across-runs-memory) is meant to outlive the run that wrote it, so reaping a run keeps the fact and forgets only which run it came from. Its bound is its own, `memory_entries:`, per scope.
 - **An agent transcript is capped on its own too**, at 256KB, regardless of this setting: a conversation has as many turns as it needs, and one very long step should not be able to outweigh every other row in the database.
+
+### One job keeps a different number: `build_log_retention:`
+
+A deploy job is worth keeping longer than a lint job. `build_log_retention:` on a job overrides `run_history:` for that job alone, with the field names [Concourse](https://concourse-ci.org/docs/jobs/#build_log_retention) uses:
+
+```yaml
+defaults:
+  run_history: 5
+
+jobs:
+  - name: deploy
+    build_log_retention:
+      # This job's cap, in place of run_history: 5. Omit to keep the default.
+      builds: 20
+      # The newest green run survives however many red ones follow it,
+      # taking a red run's place inside the 20 rather than adding a 21st.
+      minimum_succeeded_builds: 1
+    plan:
+      - task: ship
+        run: echo shipped
+        assert:
+          stdout: shipped
+    assert:
+      execution: [ship]
+      outcome: succeeded
+```
+
+- **`builds:`** is how many runs to keep, newest first. `0` keeps everything; omitted, the job keeps `run_history:`.
+- **`minimum_succeeded_builds:`** keeps the job's newest that-many succeeded runs even when they are older than `builds:` would reach. They count toward `builds:`, so the total stays the cap: a job that has gone red for a week still shows its last green run, which is the one to compare against. It needs `builds:` above 0 beside it, and may not be larger.
+- **Concourse's `days:` is not supported.** An age window keeps every run inside it however many there are, and this database is bounded by count on purpose.
+- **A reaped run is deleted whole**, as under `run_history:`. Concourse keeps the build row and drops only its logs; here an empty row would still hold the cached steps and recorded configuration it names, so nothing would shrink.
 
 ## `passed:` — only run against versions that are green upstream
 

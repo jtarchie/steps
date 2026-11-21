@@ -1,0 +1,13 @@
+# minimum_succeeded_builds counts toward builds:, so it needs a builds: in the
+# same block to count toward — Concourse's own rule. Falling back to
+# defaults.run_history: would make the floor's meaning depend on a number set
+# somewhere else.
+# expect: needs builds: above 0
+
+jobs:
+  - name: build
+    build_log_retention:
+      minimum_succeeded_builds: 1
+    plan:
+      - task: work
+        run: echo working

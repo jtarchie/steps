@@ -47,7 +47,7 @@ type RunCmd struct {
 var notWithTarget = []string{
 	"db", "name", "resume", "replay", "from", "rerun",
 	"answer", "deliver", "worker", "config", "no-preflight", "artifact-store",
-	"keep-workspace", "workspace-root", "resource-cache-max", "version-history", "run-history",
+	"keep-workspace", "workspace-root", "resource-cache-max", "version-history", "run-history", "max-run-history",
 }
 
 // refuseIgnoredFlags reads the command line, not the struct: an exported STEPS_KEEP_WORKSPACE is a standing preference for local runs, not something this one-off asked for and would silently drop.

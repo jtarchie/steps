@@ -1,0 +1,9 @@
+# expect: build_log_retention.builds must not be negative
+
+jobs:
+  - name: build
+    build_log_retention:
+      builds: -1
+    plan:
+      - task: work
+        run: echo working

@@ -19,7 +19,7 @@ import (
 // cap says: it is the run whose build is calling this.
 func (s *Store) Prune(ctx context.Context, policy store.Retention, keepRunID string) error {
 	return errors.Join(
-		s.pruneRuns(ctx, policy.JobName, policy.Runs, keepRunID),
+		s.pruneRuns(ctx, policy.JobName, policy.Runs, policy.KeptSucceeded(), keepRunID),
 		s.pruneTriggerQueue(ctx, policy.JobName, policy.TriggerQueue),
 		s.sweepRetired(ctx),
 	)
@@ -32,14 +32,14 @@ func (s *Store) Prune(ctx context.Context, policy store.Retention, keepRunID str
 // It holds the pipeline lock: every statement here decides what to delete
 // from a read of what survives, and a run or node recorded concurrently by
 // the same pipeline must not land in the middle of that.
-func (s *Store) pruneRuns(ctx context.Context, jobName string, limit int, keepRunID string) error {
+func (s *Store) pruneRuns(ctx context.Context, jobName string, limit, green int, keepRunID string) error {
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		if limit <= 0 {
 			// Unbounded runs still leave orphaned configurations behind.
 			return pruneRevisions(ctx, tx, s.pipelineID)
 		}
 
-		err := pruneRunRows(ctx, tx, s.pipelineID, jobName, limit, keepRunID)
+		err := pruneRunRows(ctx, tx, s.pipelineID, jobName, limit, green, keepRunID)
 		if err != nil {
 			return err
 		}
@@ -76,17 +76,25 @@ func (s *Store) pruneRuns(ctx context.Context, jobName string, limit int, keepRu
 }
 
 // pruneRunRows deletes a job's runs past the cap, never one still running and
-// never keepRunID.
-func pruneRunRows(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, limit int, keepRunID string) error {
+// never keepRunID. The newest `green` succeeded runs count toward the cap
+// whatever their age, as in the sqlite driver.
+func pruneRunRows(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, limit, green int, keepRunID string) error {
 	_, err := tx.ExecContext(ctx, `
+		WITH green AS (
+		    SELECT id FROM runs WHERE pipeline_id = $1 AND job_name = $2 AND status = 'succeeded'
+		    ORDER BY started_at DESC, seq DESC
+		    LIMIT $5
+		)
 		DELETE FROM runs
 		WHERE pipeline_id = $1 AND job_name = $2
 		  AND status <> 'running'
 		  AND id <> $3
+		  AND id NOT IN (SELECT id FROM green)
 		  AND id NOT IN (
 		      SELECT id FROM runs WHERE pipeline_id = $1 AND job_name = $2
+		        AND id NOT IN (SELECT id FROM green)
 		      ORDER BY started_at DESC, seq DESC
-		      LIMIT $4
+		      LIMIT $4 - (SELECT COUNT(*) FROM green)
 		  )
 		  AND id NOT IN (
 		      SELECT run_id FROM trigger_queue
@@ -96,7 +104,7 @@ func pruneRunRows(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName str
 		      SELECT rerun_of FROM trigger_queue
 		      WHERE pipeline_id = $1 AND status = 'pending' AND rerun_of IS NOT NULL
 		  )
-	`, pipelineID, jobName, keepRunID, limit)
+	`, pipelineID, jobName, keepRunID, limit, green)
 	if err != nil {
 		return fmt.Errorf("could not prune runs of %q: %w", jobName, err)
 	}

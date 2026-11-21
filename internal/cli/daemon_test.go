@@ -757,6 +757,40 @@ func TestAHistoryFlagGivenAloneReachesASetPipeline(t *testing.T) {
 	}
 }
 
+// --max-run-history is a ceiling on what a set pipeline asks, never a default: a cap under it stays, one over it or unbounded comes down to it.
+func TestMaxRunHistoryCapsASetPipelineOnlyWhereItAsksForMore(t *testing.T) {
+	t.Parallel()
+
+	held := servingDaemon(t)
+	held.history = HistoryFlags{MaxRunHistory: 5}
+
+	cfg, err := held.accept("app", `
+defaults:
+  run_history: 2
+jobs:
+- name: under
+  build_log_retention: {builds: 3, minimum_succeeded_builds: 1}
+  plan: [{task: work, inputs: [], run: "true"}]
+- name: over
+  build_log_retention: {builds: 50, minimum_succeeded_builds: 2}
+  plan: [{task: work, inputs: [], run: "true"}]
+- name: unbounded
+  build_log_retention: {builds: 0}
+  plan: [{task: work, inputs: [], run: "true"}]
+- name: silent
+  plan: [{task: work, inputs: [], run: "true"}]
+`, nil)
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+
+	for job, want := range map[string][2]int{"under": {3, 1}, "over": {5, 2}, "unbounded": {5, 0}, "silent": {2, 0}} {
+		if runs, green := cfg.RunRetention(job); runs != want[0] || green != want[1] {
+			t.Errorf("%s keeps (%d runs, %d green), want %v", job, runs, green, want)
+		}
+	}
+}
+
 // fileProblems is the half of validate that needs no machine; a set skipping it serves an expression that can never compile, or a step reading an input nothing makes.
 func TestASetIsRefusedForWhatValidateWouldRefuse(t *testing.T) {
 	t.Parallel()

@@ -1,0 +1,12 @@
+# A floor of green runs larger than the cap it counts toward would keep only
+# green runs, dropping every red one a person debugging the job wants to see.
+# expect: is more than builds:
+
+jobs:
+  - name: build
+    build_log_retention:
+      builds: 2
+      minimum_succeeded_builds: 3
+    plan:
+      - task: work
+        run: echo working

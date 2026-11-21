@@ -61,7 +61,7 @@ import (
 // unresumable. Pass "" when no run is in play.
 func (s *Store) Prune(ctx context.Context, policy store.Retention, keepRunID string) error {
 	return errors.Join(
-		s.pruneRuns(ctx, policy.JobName, policy.Runs, keepRunID),
+		s.pruneRuns(ctx, policy.JobName, policy.Runs, policy.KeptSucceeded(), keepRunID),
 		s.pruneTriggerQueue(ctx, policy.JobName, policy.TriggerQueue),
 		s.sweepRetired(ctx),
 	)
@@ -75,7 +75,7 @@ func (s *Store) Prune(ctx context.Context, policy store.Retention, keepRunID str
 // usage row. That is why the constraints came first — without them this would be
 // eight DELETEs that have to agree with each other forever, and the one that
 // gets forgotten leaves rows nothing can ever reach again.
-func (s *Store) pruneRuns(ctx context.Context, jobName string, limit int, keepRunID string) error {
+func (s *Store) pruneRuns(ctx context.Context, jobName string, limit, green int, keepRunID string) error {
 	if limit <= 0 {
 		// Runs are unbounded by request (zero means no limit), and
 		// configurations are not the same question: a revision nothing points
@@ -91,7 +91,7 @@ func (s *Store) pruneRuns(ctx context.Context, jobName string, limit int, keepRu
 
 	defer func() { _ = tx.Rollback() }()
 
-	deleted, err := pruneRunRows(ctx, tx, s.pipelineID, jobName, limit, keepRunID)
+	deleted, err := pruneRunRows(ctx, tx, s.pipelineID, jobName, limit, green, keepRunID)
 	if err != nil {
 		return err
 	}
@@ -169,6 +169,10 @@ func sweepAfterNodePrune(ctx context.Context, tx *sql.Tx, pipelineID int64, free
 // pruneRunRows deletes a job's runs past the cap, keeping the newest and
 // reporting whether any went.
 //
+// The kept set is the newest `green` succeeded runs plus the newest of the rest
+// up to `limit` in all, so a job gone red keeps its last green run in place of
+// its oldest red one; green 0 is plain newest-first.
+//
 // Two rows are never candidates whatever their age. A run still RUNNING is
 // another build in flight (max_in_flight, or a watch alongside a browser
 // trigger) and deleting it would make its own event and usage inserts fail the
@@ -179,17 +183,24 @@ func sweepAfterNodePrune(ctx context.Context, tx *sql.Tx, pipelineID int64, free
 // a zero-padded fixed-width layout; see sortableNano for what went wrong when it
 // was not.
 func pruneRunRows(
-	ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, limit int, keepRunID string,
+	ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, limit, green int, keepRunID string,
 ) (bool, error) {
 	result, err := tx.ExecContext(ctx, `
+		WITH green AS (
+		    SELECT id FROM runs WHERE pipeline_id = ? AND job_name = ? AND status = 'succeeded'
+		    ORDER BY started_at DESC, rowid DESC
+		    LIMIT ?
+		)
 		DELETE FROM runs
 		WHERE pipeline_id = ? AND job_name = ?
 		  AND status <> 'running'
 		  AND id <> ?
+		  AND id NOT IN (SELECT id FROM green)
 		  AND id NOT IN (
 		      SELECT id FROM runs WHERE pipeline_id = ? AND job_name = ?
+		        AND id NOT IN (SELECT id FROM green)
 		      ORDER BY started_at DESC, rowid DESC
-		      LIMIT ?
+		      LIMIT ? - (SELECT COUNT(*) FROM green)
 		  )
 		  -- A run a pending row will resume reads aborted until its claim starts it; reaped, its row's SET NULL collides with the job's next trigger on the pending-job index.
 		  AND id NOT IN (
@@ -201,7 +212,7 @@ func pruneRunRows(
 		      SELECT rerun_of FROM trigger_queue
 		      WHERE pipeline_id = ? AND status = 'pending' AND rerun_of IS NOT NULL
 		  )
-	`, pipelineID, jobName, keepRunID, pipelineID, jobName, limit, pipelineID, pipelineID)
+	`, pipelineID, jobName, green, pipelineID, jobName, keepRunID, pipelineID, jobName, limit, pipelineID, pipelineID)
 	if err != nil {
 		return false, fmt.Errorf("could not prune runs of %q: %w", jobName, err)
 	}

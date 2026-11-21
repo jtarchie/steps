@@ -680,6 +680,7 @@ func docsCoverageTypes() map[string]reflect.Type {
 	return map[string]reflect.Type{
 		"Config":              reflect.TypeOf(config.Config{}),
 		"Job":                 reflect.TypeOf(config.Job{}),
+		"BuildLogRetention":   reflect.TypeOf(config.BuildLogRetention{}),
 		"Step":                reflect.TypeOf(config.Step{}),
 		"Task":                reflect.TypeOf(config.Task{}),
 		"Agent":               reflect.TypeOf(config.Agent{}),
@@ -879,6 +880,7 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 
 		record(used, "Job", job)
 		record(used, "Assert", job["assert"])
+		record(used, "BuildLogRetention", job["build_log_retention"])
 
 		plan, _ := job["plan"].([]any)
 		collectStepKeys(plan, used)

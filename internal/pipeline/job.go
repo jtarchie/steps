@@ -551,10 +551,13 @@ func planSkippable(
 // keepRunID is this build's own run, which retention must never delete — see
 // store.Prune, where a resumed run reaped itself.
 func pruneHistory(ctx context.Context, st store.Pruning, cfg *config.Config, jobName, keepRunID string) {
+	runs, green := cfg.RunRetention(jobName)
+
 	err := st.Prune(context.WithoutCancel(ctx), store.Retention{
-		JobName:      jobName,
-		Runs:         cfg.RunHistoryLimit(),
-		TriggerQueue: store.DefaultTriggerQueueHistory,
+		JobName:          jobName,
+		Runs:             runs,
+		MinimumSucceeded: green,
+		TriggerQueue:     store.DefaultTriggerQueueHistory,
 	}, keepRunID)
 	if err != nil {
 		slog.WarnContext(ctx, "store.prune", "job", jobName, "error", err)

@@ -192,6 +192,50 @@ func (s suite) TestPruneKeepsTheNewestRuns(t *testing.T) {
 	}
 }
 
+// TestPruneKeepsTheNewestSucceededRuns is Concourse's minimum_succeeded_builds:
+// the newest green runs survive however old, counting toward the cap rather
+// than on top of it, and a minimum above the cap is read as the cap.
+func (s suite) TestPruneKeepsTheNewestSucceededRuns(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		green int
+		want  []string
+	}{
+		{"one green in place of the oldest red", 1, []string{"RUN00002", "RUN00007", "RUN00008"}},
+		{"a minimum above the cap keeps only the cap", 5, []string{"RUN00001", "RUN00002", "RUN00008"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := ctxFor(t)
+			st := s.open(t, "test")
+
+			for n := 1; n <= 8; n++ {
+				id := fmt.Sprintf("RUN%05d", n)
+				build(ctx, t, st, "job", id, n)
+
+				if n > 2 {
+					err := st.FinishRun(ctx, id, store.RunFailed)
+					if err != nil {
+						t.Fatalf("FinishRun: %v", err)
+					}
+				}
+			}
+
+			err := st.Prune(ctx, store.Retention{JobName: "job", Runs: 3, MinimumSucceeded: tc.green}, "")
+			if err != nil {
+				t.Fatalf("Prune: %v", err)
+			}
+
+			if got := runIDs(t, st, "job"); !slices.Equal(got, tc.want) {
+				t.Errorf("kept %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestPruneIsSafeOnAnEmptyDatabase: retention runs at the end of every build,
 // so it meets a job with nothing recorded constantly — and zero is no limit.
 func (s suite) TestPruneIsSafeOnAnEmptyDatabase(t *testing.T) {

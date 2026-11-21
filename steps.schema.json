@@ -1798,6 +1798,23 @@
         "type": "string"
       }
     },
+    "buildLogRetention": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How many of this job's runs steps keeps, overriding defaults.run_history: for this job alone. Concourse's field; its days: is not supported, since steps bounds history by count. A reaped run is deleted whole.",
+      "properties": {
+        "builds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many runs to keep, newest first. Omit to use defaults.run_history:; 0 keeps everything. steps web --max-run-history caps it."
+        },
+        "minimum_succeeded_builds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Keep this job's newest this-many succeeded runs however old, counted toward builds: rather than on top of it. Needs builds: above 0 beside it, and may not exceed it."
+        }
+      }
+    },
     "job": {
       "type": "object",
       "additionalProperties": false,
@@ -1846,6 +1863,9 @@
         "interruptible": {
           "type": "boolean",
           "description": "If true, a steps web shutdown cancels a running build of this job. Default false: shutdown waits for it to finish (bounded). Does not affect steps run, where ctrl-C is always immediate."
+        },
+        "build_log_retention": {
+          "$ref": "#/$defs/buildLogRetention"
         },
         "max_consecutive_failures": {
           "type": "integer",

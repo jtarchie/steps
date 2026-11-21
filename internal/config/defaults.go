@@ -108,6 +108,27 @@ func (c *Config) RunHistoryLimit() int {
 	return DefaultRunHistory
 }
 
+// RunRetention is how many runs of one job to keep and how many of those must
+// be succeeded ones: the job's build_log_retention: where it says, the
+// pipeline's run_history: (RunHistoryLimit) where it does not.
+func (c *Config) RunRetention(jobName string) (runs, minimumSucceeded int) {
+	runs = c.RunHistoryLimit()
+
+	for _, job := range c.Jobs {
+		if job.Name != jobName || job.BuildLogRetention == nil {
+			continue
+		}
+
+		if job.BuildLogRetention.Builds != nil {
+			runs = *job.BuildLogRetention.Builds
+		}
+
+		return runs, job.BuildLogRetention.MinimumSucceededBuilds
+	}
+
+	return runs, 0
+}
+
 // DefaultVersionHistory is how many versions of each resource steps
 // remembers when neither the pipeline nor the command line says.
 //

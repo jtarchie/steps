@@ -552,3 +552,120 @@ jobs:
 		t.Errorf("resource_versions = %d, want 2 — --version-history must apply when the pipeline says nothing", got)
 	}
 }
+
+// runJobTimes runs one job of a pipeline `count` times under --force, plus any
+// extra flags, failing the test on an error unless the build is allowed to fail.
+func runJobTimes(t *testing.T, path, job string, count int, mayFail bool, extra ...string) {
+	t.Helper()
+
+	for build := range count {
+		err := stepsRun(t, append([]string{"run", path, "--job", job, "--force"}, extra...))
+		if err != nil && !mayFail {
+			t.Fatalf("run %s %d: %v", job, build, err)
+		}
+	}
+}
+
+// TestBuildLogRetentionOverridesRunHistoryPerJob is Concourse's job-level
+// build_log_retention.builds: one job keeps more than the pipeline default, and
+// its neighbour keeps the default — the override is the job's alone.
+func TestBuildLogRetentionOverridesRunHistoryPerJob(t *testing.T) {
+	t.Parallel()
+
+	path := writePipeline(t, t.TempDir(), `
+defaults:
+  run_history: 2
+
+jobs:
+- name: deploy
+  build_log_retention:
+    builds: 4
+  plan:
+  - task: work
+    run: echo deploying
+- name: lint
+  plan:
+  - task: work
+    run: echo linting
+`)
+
+	runJobTimes(t, path, "deploy", 6, false)
+	runJobTimes(t, path, "lint", 6, false)
+
+	if got := countTableRows(t, path, "runs WHERE job_name = 'deploy'"); got != 4 {
+		t.Errorf("deploy runs = %d, want its own build_log_retention.builds: 4", got)
+	}
+
+	if got := countTableRows(t, path, "runs WHERE job_name = 'lint'"); got != 2 {
+		t.Errorf("lint runs = %d, want defaults.run_history: 2", got)
+	}
+}
+
+// TestBuildLogRetentionKeepsTheLastSucceededRun is minimum_succeeded_builds,
+// shaped like Concourse's own example: a job whose last green run is older than
+// its cap still keeps that run, and the cap stays the total — the green run takes
+// a failed run's place rather than adding one.
+func TestBuildLogRetentionKeepsTheLastSucceededRun(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	template := `
+jobs:
+- name: build
+  build_log_retention:
+    builds: 3
+    minimum_succeeded_builds: 1
+  plan:
+  - task: work
+    run: exit %d
+`
+
+	path := writePipeline(t, dir, fmt.Sprintf(template, 0))
+	runJobTimes(t, path, "build", 1, false)
+
+	path = writePipeline(t, dir, fmt.Sprintf(template, 1))
+	runJobTimes(t, path, "build", 5, true)
+
+	if got := countRunRows(t, path); got != 3 {
+		t.Errorf("runs = %d, want builds: 3 in total", got)
+	}
+
+	if got := countTableRows(t, path, "runs WHERE status = 'succeeded'"); got != 1 {
+		t.Errorf("succeeded runs kept = %d, want the one green run kept by minimum_succeeded_builds: 1", got)
+	}
+}
+
+// TestMaxRunHistoryCapsWhatAPipelineAsks is the operator ceiling: a daemon holds
+// pipelines other people upload, so --max-run-history bounds every job whatever
+// the pipeline says — including the 0 that would otherwise keep everything.
+func TestMaxRunHistoryCapsWhatAPipelineAsks(t *testing.T) {
+	t.Parallel()
+
+	path := writePipeline(t, t.TempDir(), `
+defaults:
+  run_history: 0
+
+jobs:
+- name: build
+  build_log_retention:
+    builds: 50
+  plan:
+  - task: work
+    run: echo working
+- name: unbounded
+  plan:
+  - task: work
+    run: echo working
+`)
+
+	runJobTimes(t, path, "build", 4, false, "--max-run-history", "2")
+	runJobTimes(t, path, "unbounded", 4, false, "--max-run-history", "2")
+
+	if got := countTableRows(t, path, "runs WHERE job_name = 'build'"); got != 2 {
+		t.Errorf("build runs = %d, want --max-run-history 2 to cap build_log_retention.builds: 50", got)
+	}
+
+	if got := countTableRows(t, path, "runs WHERE job_name = 'unbounded'"); got != 2 {
+		t.Errorf("unbounded runs = %d, want --max-run-history 2 to cap run_history: 0", got)
+	}
+}
