@@ -260,7 +260,7 @@ func (c *Client) StartContainer(ctx context.Context, id string) error {
 // paid deliberately, and it is not new — the shape this replaced spawned a
 // whole `docker inspect` process to ask the same question, which cost more.
 func (c *Client) SettleFor(ctx context.Context, id string, bound time.Duration) (died bool, exitCode int, err error) {
-	waitCtx, cancel := context.WithTimeout(ctx, bound)
+	waitCtx, cancel := context.WithTimeout(context.WithValue(ctx, untracedKey{}, true), bound)
 	defer cancel()
 
 	result := c.api.ContainerWait(waitCtx, id, client.ContainerWaitOptions{

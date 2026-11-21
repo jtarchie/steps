@@ -306,6 +306,9 @@ linters:
             - "github.com/moby/moby/client"
             - "github.com/containerd/errdefs"
             - "github.com/distribution/reference"
+            # otelhttp: the options that name and filter the spans the engine client already makes; otel itself is test-only, to record them.
+            - "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+            - "go.opentelemetry.io/otel"
             - "go.uber.org/goleak"
             # Test-only: the volume round trip through an ssh streamlocal forward, the docker+ssh:// data plane.
             - "github.com/jtarchie/steps/internal/testsshd"

@@ -54,7 +54,7 @@ func New(host string) (*Client, error) {
 			host, errSSHHost, strings.TrimPrefix(host, "ssh://"))
 	}
 
-	api, err := client.New(client.WithHost(host))
+	api, err := connect(client.WithHost(host))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to the docker daemon at %s: %w", host, err)
 	}
@@ -64,7 +64,7 @@ func New(host string) (*Client, error) {
 
 // NewDialer reaches a daemon through dial, for a socket with no address of its own here (one forwarded over ssh); name is what errors call it.
 func NewDialer(name string, dial func(ctx context.Context) (net.Conn, error)) (*Client, error) {
-	api, err := client.New(
+	api, err := connect(
 		client.WithHost(DefaultHost),
 		client.WithDialContext(func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) }),
 	)
