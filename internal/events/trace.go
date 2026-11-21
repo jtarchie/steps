@@ -14,6 +14,8 @@ type Tracer interface {
 	StartRun(ctx context.Context, runID, job string) context.Context
 	// EndRun closes a run's span with the status its job finished on, and anything of it still open.
 	EndRun(ctx context.Context, runID, status, text string)
+	// StartCheck opens a span for a resource check made outside any run (a poll), which would otherwise leave its engine calls as roots with nothing above them; the func ends it with the check's error.
+	StartCheck(ctx context.Context, resource string) (context.Context, func(err error))
 	// Event is told every event a run publishes, inline and in order, before it reaches the bus.
 	Event(ctx context.Context, event Event)
 	// Scope returns ctx under the span for a run's step (0 for the run itself), so work the step does is traced beneath it.
@@ -79,6 +81,15 @@ func EndRun(ctx context.Context, status, text string) {
 	if t := currentTracer(); t != nil {
 		t.EndRun(ctx, RunID(ctx), status, text)
 	}
+}
+
+// StartCheck opens a span for a check of resource, when a tracer is installed; the func it returns ends it and is never nil.
+func StartCheck(ctx context.Context, resource string) (context.Context, func(err error)) {
+	if t := currentTracer(); t != nil {
+		return t.StartCheck(ctx, resource)
+	}
+
+	return ctx, func(error) {}
 }
 
 func traceEvent(ctx context.Context, event Event) Event {

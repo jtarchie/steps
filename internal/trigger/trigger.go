@@ -837,6 +837,10 @@ func checkResource(ctx context.Context, cfg *config.Config, st PollStore, resour
 		return observedResource{}, false, err
 	}
 
+	// Opened before placement, so a worker a check had to start is in the check's trace.
+	ctx, endCheck := events.StartCheck(ctx, resourceName)
+	defer func() { endCheck(err) }()
+
 	ctx, err = pipeline.PlaceResource(ctx, cfg, resourceName)
 	if err != nil {
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)

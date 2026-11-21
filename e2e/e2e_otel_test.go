@@ -721,8 +721,14 @@ func TestOTelPutsAStepsNotesOnItsSpan(t *testing.T) {
 	flaky := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "task flaky")
 
 	for _, event := range flaky.GetEvents() {
-		if strings.Contains(event.GetName(), "attempt") {
-			return
+		if event.GetName() != "steps.note" {
+			continue
+		}
+
+		for _, kv := range event.GetAttributes() {
+			if kv.GetKey() == "steps.note.text" && strings.Contains(kv.GetValue().GetStringValue(), "attempt") {
+				return
+			}
 		}
 	}
 

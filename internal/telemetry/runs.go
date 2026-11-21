@@ -94,12 +94,16 @@ func (t *runTracer) note(event events.Event) {
 		return
 	}
 
-	text := event.Text
+	attrs := []attribute.KeyValue{
+		attribute.String("steps.note.level", event.Status),
+		attribute.String("steps.note.text", event.Text),
+	}
 	if events.IsFactNote(event) {
-		text = event.Detail + ": " + text
+		attrs = append(attrs, attribute.String("steps.note.fact", event.Detail))
 	}
 
-	span.AddEvent(text, trace.WithTimestamp(event.At), trace.WithAttributes(attribute.String("steps.note.level", event.Status)))
+	// One name for every note: a backend stores an event's name as a span's, and the text (a version, a PR title) was a new name each time.
+	span.AddEvent("steps.note", trace.WithTimestamp(event.At), trace.WithAttributes(attrs...))
 }
 
 func (t *runTracer) StartRun(ctx context.Context, runID, job string) context.Context {
@@ -132,6 +136,27 @@ func (t *runTracer) StartRun(ctx context.Context, runID, job string) context.Con
 	t.open[stepKey{runID, 0}] = span
 
 	return ctx
+}
+
+// StartCheck draws a poll's check of one resource as a trace of its own, as Concourse does; a check inside a run sits under that run's span instead.
+func (t *runTracer) StartCheck(ctx context.Context, resource string) (context.Context, func(err error)) {
+	attrs := []attribute.KeyValue{attribute.String("steps.resource", resource)}
+
+	for _, attr := range events.LogAttrs(ctx) {
+		if attr.Key != "resource" {
+			attrs = append(attrs, attribute.String("steps."+attr.Key, attr.Value.String()))
+		}
+	}
+
+	ctx, span := t.tracer.Start(ctx, "CHECK "+resource, trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attrs...))
+
+	return ctx, func(err error) {
+		if err != nil {
+			failed(span, "error", err.Error())
+		}
+
+		span.End()
+	}
 }
 
 func (t *runTracer) startStep(ctx context.Context, event events.Event) {
@@ -285,8 +310,17 @@ func resultOf(status string) string {
 	}
 }
 
+// statusLimit bounds a failed span's message: a failed command's error quotes its whole script, and 20KB of it rode on the step, every container above it and the run.
+const statusLimit = 1024
+
 func failed(span trace.Span, result, text string) {
-	if result == "failure" || result == "error" {
-		span.SetStatus(codes.Error, text)
+	if result != "failure" && result != "error" {
+		return
 	}
+
+	if len(text) > statusLimit {
+		text = strings.ToValidUTF8(text[:statusLimit], "") + "… (truncated; the run's transcript has the rest)"
+	}
+
+	span.SetStatus(codes.Error, text)
 }
