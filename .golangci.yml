@@ -580,6 +580,8 @@ linters:
           allow:
             - "$gostd"
             - "go.yaml.in/yaml/v4"
+            # github-release's semver_constraint, parsed at load so a bad one is a validate error; the library Concourse's resource uses. Pure Go, no dependencies.
+            - "github.com/Masterminds/semver/v3"
             # test-only (ConfigShellquoteTestOnly): shellquote_test.go holds
             # across:'s ported shellquote to the one internal/template calls.
             - "github.com/frioux/leatherman/pkg/shellquote"
@@ -612,6 +614,7 @@ linters:
             - "github.com/robfig/cron/v3"
             # The registry client behind the built-in registry-image type, the one Concourse's resource uses. Never its authn.DefaultKeychain: the login is the resource's.
             - "github.com/google/go-containerregistry"
+            - "github.com/Masterminds/semver/v3"
         # venue is the orchestrator half of remote execution, and the single
         # decision point one tier ABOVE shell: shell decides host vs container,
         # venue decides this machine vs a worker, and hands straight back to

@@ -30,6 +30,8 @@ type docGitHubFixture struct {
 	branches map[string]string
 	// git serves pull request #7 over a real repository, for checkout: git (fakegit_test.go).
 	git bool
+	// releases are the repository's releases, for github-release.
+	releases []fakeRelease
 }
 
 // docGitHubLogin is the token's own user on every fake, so a fixture can
@@ -246,6 +248,8 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 			}
 		},
 	},
+	"node-releases": {releases: nodeReleases()},
+	"ruby-releases": {releases: rubyReleases()},
 	"post-fixed": {
 		prs: []fakePR{docPR()},
 		check: func(t *testing.T, fake *fakeGitHub) {
@@ -293,6 +297,8 @@ func (fixture docGitHubFixture) serve(t *testing.T) *fakeGitHub {
 	for number, reviews := range fixture.reviews {
 		fake.reviews[number] = append(fake.reviews[number], reviews...)
 	}
+
+	fake.addReleases(fixture.releases...)
 
 	if fixture.git {
 		repo := newFakeGitRepo(t)

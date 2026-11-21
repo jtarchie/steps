@@ -3,6 +3,7 @@ module github.com/jtarchie/steps
 go 1.27
 
 require (
+	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/achetronic/adk-utils-go v1.4.0
 	github.com/alecthomas/chroma/v3 v3.0.0-alpha.5
 	github.com/alecthomas/kong v1.17.0

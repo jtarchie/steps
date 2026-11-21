@@ -424,13 +424,13 @@ Besides `version.json`, `thread.json` and `user` (who wrote the reacted message)
 
 ## The built-in GitHub types
 
-Nine built-ins, split by what they do, the way the Slack ones are. `github-prs`, `github-comments` and `github-issues` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction`, `github-label`, `github-issue` and `github-pr` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
+Ten built-ins, split by what they do, the way the Slack ones are. `github-prs`, `github-comments`, `github-issues` and `github-release` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction`, `github-label`, `github-issue` and `github-pr` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
 
-steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the nine can be placed with `tags:` themselves, as for every type that runs inside this process.
+steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the ten can be placed with `tags:` themselves, as for every type that runs inside this process.
 
-All nine read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
+All ten read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
 
-Each reports [facts](#facts-what-a-get-or-put-says-about-its-version) from the answers GitHub already sends, at no extra request: a `github-prs` get the pull request's `url`, `title` and `author`; a `github-comments` get the comment's `url` and `author`; a `github-issues` get the issue's `url`, `title` and `author`; a `github-pr-comment` or `github-pr-review` put the new comment's or review's `url`; a `github-issue` put the new issue's `url` and `title`; a `github-pr` put the pull request's `url` and `title`. `github-reaction` and `github-label` create nothing with a page of its own and report none.
+Each reports [facts](#facts-what-a-get-or-put-says-about-its-version) from the answers GitHub already sends, at no extra request: a `github-prs` get the pull request's `url`, `title` and `author`; a `github-comments` get the comment's `url` and `author`; a `github-issues` get the issue's `url`, `title` and `author`; a `github-release` get the release's `url`, `tag`, `name` and `commit_sha`; a `github-pr-comment` or `github-pr-review` put the new comment's or review's `url`; a `github-issue` put the new issue's `url` and `title`; a `github-pr` put the pull request's `url` and `title`. `github-reaction` and `github-label` create nothing with a page of its own and report none.
 
 ### `github-prs`: open pull requests
 
@@ -793,6 +793,128 @@ A get writes no tree, since an issue has none, only these:
 `issue.md` carries the discussion because a decision recorded in a comment after the issue was filed is part of what the work must do, and a plan built from the body alone builds the option the discussion rejected. **A get fetches the issue as it is now**, whichever version it is handed: an issue has no commit to pin it to, so a replay or a later job sees today's title, body and comments. Under a durable `--workspace-root` the [resource cache](workspace.md#cross-build-resource-cache) is on, so a version already fetched is not fetched again, so a later job sees the issue as it was when the version was first fetched instead.
 
 A `github-pr-comment` put handed a `github-issues` get posts on that issue, as above: the type is named for pull requests, but GitHub files the comment under the issue either way, and a `github-label` put labels it the same way.
+
+### `github-release`: a project's releases
+
+`github-release` follows a repository's GitHub releases, as Concourse's [github-release](https://github.com/concourse/github-release-resource) resource does, with Concourse's filters, defaults and order. A pipeline that pins a dependency watches the upstream project's releases with it, and a new one is the trigger:
+
+```yaml github=node-releases
+resources:
+  - name: node
+    type: github-release
+    source:
+      repo: acme/app
+      semver_constraint: "~24"         # one major line: 24.x, nothing older or newer
+      token_env: GH_TOKEN              # the default
+      endpoint: https://api.github.com # the default
+
+jobs:
+  - name: bump
+    plan:
+      - get: node
+        trigger: true
+      - task: read
+        inputs: [node]
+        run: echo "bump to $(cat node/version) at $(cat node/commit_sha)"
+        assert:
+          stdout: "bump to 24.22.3 at c0ffee0000000000000000000000000000000003"
+    assert:
+      execution: [node, read]
+      outcome: succeeded
+```
+
+Here the repository has releases on three major lines, a release candidate, a draft, and `v27.0.0-alpha.0.1.1`, an alpha GitHub was not told is a pre-release; `~24` keeps the 24.x finals alone, and the newest of them is `v24.22.3`.
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `repo` | yes | `owner/name` |
+| `tag_filter` | no | an RE2 pattern a release's tag must match; its **last** capture group is the version, or the whole match when it has none. `^v?([^v].*)` when unset: an optional leading `v`, then the version |
+| `version_template` | no | builds the version from `tag_filter`'s groups instead: `$1.$2.$3`, `${major}`. steps' own, below |
+| `order_by` | no | `version` (the default): by the version read from the tag; `time`: by when the release was published, or created for a draft |
+| `semver_constraint` | no | keeps the releases whose version satisfies it, such as `~24`, `^1.2` or `>= 1.2, < 3`, in [Masterminds/semver](https://github.com/Masterminds/semver#checking-version-constraints)'s syntax; a version that is not semver is dropped |
+| `release` | no | finds final releases; `true` when unset |
+| `pre_release` | no | finds pre-releases too; `false` when unset. With `release: false`, pre-releases alone |
+| `drafts` | no | finds drafts and nothing else; `false` when unset. Seeing them takes a token with push access |
+| `token_env`, `endpoint` | no | as for `github-prs` |
+
+`release: false` with `pre_release: false` is refused when the pipeline loads: it finds nothing. (Concourse's check finds everything under that pair, finals and pre-releases alike, which is not what anyone writing two falses means.)
+
+**The check is Concourse's.** It lists the repository's releases, drops the ones the filters refuse, and sorts the rest oldest first: by version, compared the way Concourse compares them, so `v2` comes before `v10` and `1.0.0-rc.1` before `1.0.0`; or by time. With no [cursor](#the-check-cursor), which is every `steps run` and a daemon's first poll, it reports the newest release alone. After that it reports every release from the cursor's place on. So **a release that sorts below the newest one already seen is never reported**, however recently it was published: a resource following every Node release, with no constraint, does not build `v22.23.6` published after `v24.22.4`. Follow each line with its own resource and constraint when every line matters. Under `order_by: version` a tag the filter matches must still read as a version (digits and letters in dot-separated parts, an optional `-pre-release` and `+build`); one that does not is skipped. Every page of the listing is a conditional request, so an unchanged repository costs no rate limit, and the listing stops at 1000 releases, the newest.
+
+**The version is `{id, tag, timestamp}`**, Concourse's shape: the release's id, its tag, and when it was published. The timestamp is the cursor `order_by: time` reads and does not change once a release is out; editing a release's notes is no new version.
+
+A get writes Concourse's files, under Concourse's names, so a task ported from a Concourse pipeline reads them unchanged:
+
+| file | what it holds |
+|---|---|
+| `tag` | the release's tag, `v24.22.3` |
+| `version` | the version `tag_filter` (and `version_template`) read from it, `24.22.3` |
+| `commit_sha` | the commit the tag points at, through an annotated tag; not written for a draft, whose tag need not exist yet |
+| `body` | the release notes; not written when there are none |
+| `timestamp` | when it was published, or created for a draft, in RFC 3339 |
+| `url` | its page |
+| `release.json` | the release, as GitHub's API describes it |
+
+The get finds the release by its id and, when that id is gone, by its tag, so a release deleted and published again under the same tag is still the version's release. It downloads no assets and no source archive yet: Concourse's `globs`, `include_source_tarball` and `include_source_zip` are get `params:`, and no built-in get takes `params:` here.
+
+#### `version_template`: a version spelled in pieces
+
+Some projects spell one version two ways. ruby/ruby tags `v4.0.10`, and before 4.0 `v3_4_13`. Concourse's version is one capture group, and no single group can turn `3_4_13` into `3.4.13`: the default filter reads it as one word, which is no semver, so `semver_constraint` drops it, and which sorts above every number, so `v3_4_9` would be the newest Ruby. `version_template` joins the groups instead, `$1.$2.$3` as Go's `Regexp.Expand` reads it (`${1}` where a letter or digit follows):
+
+```yaml github=ruby-releases
+resources:
+  - name: ruby
+    type: github-release
+    source:
+      repo: acme/app
+      tag_filter: '^v(\d+)(?:\.|_)(\d+)(?:\.|_)(\d+)$'   # 4.0.10 or 3_4_13
+      version_template: "$1.$2.$3"
+      semver_constraint: "~3.4"
+
+jobs:
+  - name: bump
+    plan:
+      - get: ruby
+        trigger: true
+      - task: read
+        inputs: [ruby]
+        run: echo "$(cat ruby/tag) is $(cat ruby/version)"
+        assert:
+          stdout: "v3_4_13 is 3.4.13"
+    assert:
+      execution: [ruby, read]
+      outcome: succeeded
+```
+
+`v3_4_9` and `v3_4_13` both read as 3.4.x, and 13 is newer than 9. The filter's anchors keep `v4.1.0-preview1` out, and the constraint keeps the 4.0 line out. A template naming a group the filter does not have is refused when the pipeline loads, since every tag would read as the same version. With no template, a filter's last group is the version, as in Concourse.
+
+**Pre-releases, newest first by time.** `order_by: time` with `release: false` follows a project's release candidates in the order they were cut, whatever their versions:
+
+```yaml github=node-releases
+resources:
+  - name: candidate
+    type: github-release
+    source:
+      repo: acme/app
+      order_by: time
+      release: false
+      pre_release: true
+      drafts: false                    # the default; true finds drafts alone
+
+jobs:
+  - name: try
+    plan:
+      - get: candidate
+        trigger: true
+      - task: read
+        inputs: [candidate]
+        run: cat candidate/tag
+        assert:
+          stdout: "v24.23.0-rc.1"
+    assert:
+      execution: [candidate, read]
+      outcome: succeeded
+```
 
 ### `github-pr-comment` and `github-pr-review`: publishing
 

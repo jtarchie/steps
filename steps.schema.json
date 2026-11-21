@@ -87,6 +87,10 @@
       "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-issues"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubIssuesSource"}}}}}}}
     },
     {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-release"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-release"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubReleaseSource"}}}}}}}
+    },
+    {
       "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-pr-comment"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
       "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-pr-comment"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubPostSource"}}}}}}}
     },
@@ -826,6 +830,60 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "description": "Labels that must all be on it. Set, the version also carries when the last of them went on, so taking one off and putting it back asks for the work again."
+        }
+      }
+    },
+    "githubReleaseSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo"
+      ],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9-]+/[A-Za-z0-9._-]+|\\(\\([A-Za-z0-9_.-]+\\)\\))$",
+          "description": "The repository, owner/name, or one ((var)) that holds it."
+        },
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the token, GH_TOKEN when unset. The variable NAME, never the token; `steps validate` refuses the pipeline while it is unset."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "The REST API base, https://api.github.com when unset; https://<host>/api/v3 for GitHub Enterprise Server."
+        },
+        "tag_filter": {
+          "type": "string",
+          "description": "RE2 pattern a release's tag must match; its last capture group is the version, or the whole match when it has none. ^v?([^v].*) when unset, as in Concourse."
+        },
+        "version_template": {
+          "type": "string",
+          "description": "Builds the version from tag_filter's groups instead, as Go's Regexp.Expand reads $1, ${2} and ${name}: $1.$2.$3 reads v3_4_13 as 3.4.13. steps' own; Concourse has no equivalent."
+        },
+        "order_by": {
+          "enum": [
+            "version",
+            "time"
+          ],
+          "description": "version (the default) sorts by the version read from the tag; time by when the release was published, or created for a draft."
+        },
+        "semver_constraint": {
+          "type": "string",
+          "description": "Keeps the releases whose version satisfies it, such as ~24 or >= 1.2, < 3 (Masterminds/semver); a version that is not semver is dropped."
+        },
+        "release": {
+          "type": "boolean",
+          "description": "Finds final releases; true when unset. false with pre_release: false is refused, since it finds nothing."
+        },
+        "pre_release": {
+          "type": "boolean",
+          "description": "Finds pre-releases too; false when unset. With release: false, pre-releases alone."
+        },
+        "drafts": {
+          "type": "boolean",
+          "description": "Finds drafts and nothing else; false when unset."
         }
       }
     },
