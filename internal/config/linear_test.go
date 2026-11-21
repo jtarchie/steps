@@ -79,9 +79,9 @@ func TestLinearLoadRules(t *testing.T) {
 		"from with issue":           {plan: "\n  - get: ticket\n  - put: board\n    inputs: [ticket]\n    params: {state: Done, from: ticket, issue: ENG-1}", want: "name one"},
 		"issue not an identifier":   {plan: "\n  - put: board\n    params: {state: Done, issue: 'eng 1'}", want: "not an issue identifier"},
 		"a rendered issue loads":    {plan: "\n  - task: write\n    outputs: [out]\n    run: echo ENG-1 > out/id\n  - load_var: issue\n    inputs: [out]\n    file: out/id\n  - put: board\n    params: {state: Done, issue: '((.:issue))'}"},
-		"no get names the issue":    {plan: "\n  - put: board\n    params: {state: Done}", want: "no linear-issues get among its inputs"},
+		"no get names the issue":    {plan: "\n  - put: board\n    params: {state: Done}", want: "no linear-issues or linear-issue get among its inputs"},
 		"issue stands in for a get": {plan: "\n  - put: board\n    params: {state: Done, issue: ENG-1}"},
-		"from a get not in inputs":  {plan: "\n  - get: ticket\n  - put: board\n    inputs: [ticket]\n    params: {state: Done, from: elsewhere}", want: "not a linear-issues get among this put's inputs"},
+		"from a get not in inputs":  {plan: "\n  - get: ticket\n  - put: board\n    inputs: [ticket]\n    params: {state: Done, from: elsewhere}", want: "not a linear-issues or linear-issue get among this put's inputs"},
 		"get takes no params":       {plan: "\n  - get: ticket\n    params: {depth: 1}", want: "linear-issues get takes no params"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -133,5 +133,76 @@ func TestLinearBlankNamesAreReportedInFieldOrder(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "params.add_labels") {
 			t.Fatalf("ParseLinearUpdateParams = %v, want params.add_labels named first", err)
 		}
+	}
+}
+
+func linearIssuePipeline(source, plan string) string {
+	return `
+resources:
+- name: ticket
+  type: linear-issue
+  source: {` + source + `}
+- name: reply
+  type: linear-comment
+  source: {}
+jobs:
+- name: build
+  plan:
+  - task: write
+    outputs: [out]
+    run: echo hi > out/title; echo hi > out/body.md` + plan + `
+`
+}
+
+const linearIssueHappyPlan = `
+  - put: ticket
+    inputs: [out]
+    params: {title_file: out/title, body_file: out/body.md}`
+
+// TestLinearIssueLoadRules: what is wrong with a linear-issue source or put and needs no request is a load error naming the field.
+func TestLinearIssueLoadRules(t *testing.T) {
+	t.Parallel()
+
+	put := func(params string) string {
+		return "\n  - put: ticket\n    inputs: [out]\n    params: {title_file: out/title, body_file: out/body.md" + params + "}"
+	}
+
+	for name, tc := range map[string]struct{ source, plan, want string }{
+		"a valid pipeline loads": {source: "team: ENG", plan: linearIssueHappyPlan},
+		"every field loads": {source: "team: ENG, token_env: LINEAR_API_KEY, endpoint: 'https://api.linear.app/graphql'",
+			plan: put(", state: Started, labels: [Dev Investment, Chore], assignee: '@me', estimate: 0, project: Platform, parent: ENG-7, reuse: title")},
+		"a user id assignee loads":          {source: "team: ENG", plan: put(", assignee: 4f1c-9a")},
+		"a rendered parent loads":           {source: "team: ENG", plan: "\n  - load_var: epic\n    inputs: [out]\n    file: out/title" + put(", parent: '((.:epic))'")},
+		"no team":                           {source: "", plan: linearIssueHappyPlan, want: "source.team is required"},
+		"a filter in the source":            {source: "team: ENG, states: [Todo]", plan: linearIssueHappyPlan, want: `unknown key "states"`},
+		"key as a value":                    {source: "team: ENG, token_env: lin_api_abc=1", plan: linearIssueHappyPlan, want: "NAME of an environment variable"},
+		"no title file":                     {source: "team: ENG", plan: "\n  - put: ticket\n    inputs: [out]\n    params: {body_file: out/body.md}", want: "params.title_file is required"},
+		"no body file":                      {source: "team: ENG", plan: "\n  - put: ticket\n    inputs: [out]\n    params: {title_file: out/title}", want: "params.body_file is required"},
+		"blank label":                       {source: "team: ENG", plan: put(`, labels: [""]`), want: "params.labels: a blank label name"},
+		"assignee by email":                 {source: "team: ENG", plan: put(", assignee: a@b.co"), want: "params.assignee: \"a@b.co\" is not @me or a user id"},
+		"negative estimate":                 {source: "team: ENG", plan: put(", estimate: -1"), want: "params.estimate: -1 is not an estimate"},
+		"parent not an identifier":          {source: "team: ENG", plan: put(", parent: 'eng 7'"), want: "params.parent: \"eng 7\" is not an issue identifier"},
+		"reuse by something else":           {source: "team: ENG", plan: put(", reuse: body"), want: `params.reuse: "body" is not a way to find an existing issue`},
+		"misspelled param":                  {source: "team: ENG", plan: put(", lables: [bug]"), want: `unknown key "lables"`},
+		"get with no put before it":         {source: "team: ENG", plan: "\n  - get: ticket", want: "only publishes"},
+		"get after the put loads":           {source: "team: ENG", plan: linearIssueHappyPlan + "\n  - get: ticket"},
+		"get after the put takes no params": {source: "team: ENG", plan: linearIssueHappyPlan + "\n  - get: ticket\n    params: {depth: 1}", want: "linear-issue get takes no params"},
+		"comment names the issue from the get": {source: "team: ENG",
+			plan: linearIssueHappyPlan + "\n  - get: ticket\n  - put: reply\n    inputs: [ticket, out]\n    params: {body_file: out/body.md}"},
+		"comment with no get": {source: "team: ENG",
+			plan: linearIssueHappyPlan + "\n  - put: reply\n    inputs: [out]\n    params: {body_file: out/body.md}", want: "no linear-issues or linear-issue get among its inputs"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := LoadConfig(writeConfig(t, linearIssuePipeline(tc.source, tc.plan)))
+
+			switch {
+			case tc.want == "" && err != nil:
+				t.Errorf("LoadConfig: %v", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Errorf("LoadConfig = %v, want it to say %q", err, tc.want)
+			}
+		})
 	}
 }

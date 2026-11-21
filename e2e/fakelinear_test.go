@@ -33,6 +33,7 @@ type fakeLinearProject struct{ Name, Team string }
 
 type fakeLinearIssue struct {
 	Identifier, Title, Description, Team, State, Branch string
+	Assignee, Parent                                    string   // a user id; an issue uuid
 	Project                                             string   // a project id
 	Labels                                              []string // label ids
 	CreatedAt                                           string
@@ -51,6 +52,8 @@ type fakeLinear struct {
 	issues   []*fakeLinearIssue
 	posted   []string // "<identifier>: <body>"
 	updates  []map[string]any
+	created  []map[string]any // each issueCreate's input, in order
+	users    []string         // user ids; the first is the key's own
 	requests []string
 	// failNext, when set, answers the next mutation with this status instead.
 	failNext int
@@ -64,12 +67,13 @@ func newFakeLinear(t *testing.T) *fakeLinear {
 		t: t,
 		states: []fakeLinearState{
 			{"st-backlog", "Backlog", "backlog"}, {"st-todo", "Todo", "unstarted"}, {"st-ready", "Ready", "unstarted"},
-			{"st-prog", "In Progress", "started"}, {"st-done", "Done", "completed"},
+			{"st-prog", "In Progress", "started"}, {"st-done", "Done", "completed"}, {"st-canceled", "Canceled", "canceled"},
 		},
 		labels: map[string]string{"lb-ready": "agent-ready", "lb-bug": "bug", "ws-urgent": "urgent"},
 		projects: map[string]fakeLinearProject{
 			"pj-plat": {"Platform", "tm-eng"}, "pj-web": {"Web", "tm-eng"}, "pj-mobile": {"Mobile App", "tm-other"},
 		},
+		users:  []string{"us-me", "us-bob"},
 		nextID: 100,
 	}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.serve))
@@ -169,6 +173,13 @@ func (f *fakeLinear) updateCount() int {
 	return len(f.updates)
 }
 
+func (f *fakeLinear) createdIssues() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.created)
+}
+
 func (f *fakeLinear) lastFilter() map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -254,10 +265,23 @@ func (f *fakeLinear) reply(w http.ResponseWriter, body map[string]any) {
 
 func (f *fakeLinear) answer(query string, vars map[string]any) (map[string]any, string) {
 	switch {
+	case strings.Contains(query, "issueCreate"):
+		return f.createIssue(vars)
 	case strings.Contains(query, "commentCreate"):
 		return f.createComment(vars)
 	case strings.Contains(query, "issueUpdate"):
 		return f.updateIssue(vars)
+	case strings.Contains(query, "viewer"):
+		return map[string]any{"viewer": map[string]any{"id": f.users[0]}}, ""
+	case strings.Contains(query, "users(filter"):
+		return f.userNodes(vars), ""
+	}
+
+	return f.read(query, vars)
+}
+
+func (f *fakeLinear) read(query string, vars map[string]any) (map[string]any, string) {
+	switch {
 	case strings.Contains(query, "teams(filter"):
 		return f.teams(vars), ""
 	case strings.Contains(query, "projects(filter"):
@@ -346,14 +370,12 @@ func (f *fakeLinear) matches(issue *fakeLinearIssue, filter map[string]any) bool
 		return false
 	}
 
-	if state, _ := filter["state"].(map[string]any); state != nil {
-		if ids, ok := inOf(state["id"]); ok && !slices.Contains(ids, issue.State) {
-			return false
-		}
+	if state, _ := filter["state"].(map[string]any); state != nil && !f.stateMatches(issue, state) {
+		return false
+	}
 
-		if types, ok := inOf(state["type"]); ok && !slices.Contains(types, f.stateByID(issue.State).Type) {
-			return false
-		}
+	if title, _ := filter["title"].(map[string]any); title != nil && eqOf(title) != issue.Title {
+		return false
 	}
 
 	if project, _ := filter["project"].(map[string]any); project != nil && eqOf(project["id"]) != issue.Project {
@@ -369,6 +391,23 @@ func (f *fakeLinear) matches(issue *fakeLinearIssue, filter map[string]any) bool
 	})
 }
 
+// stateMatches applies a state clause: by id, by type, or by type not in a list, as reuse: title asks.
+func (f *fakeLinear) stateMatches(issue *fakeLinearIssue, state map[string]any) bool {
+	kind := f.stateByID(issue.State).Type
+
+	if ids, ok := inOf(state["id"]); ok && !slices.Contains(ids, issue.State) {
+		return false
+	}
+
+	if types, ok := inOf(state["type"]); ok && !slices.Contains(types, kind) {
+		return false
+	}
+
+	types, ok := ofList(state["type"], "nin")
+
+	return !ok || !slices.Contains(types, kind)
+}
+
 func eqOf(node any) string {
 	mapping, _ := node.(map[string]any)
 	value, _ := mapping["eq"].(string)
@@ -376,10 +415,12 @@ func eqOf(node any) string {
 	return value
 }
 
-func inOf(node any) ([]string, bool) {
+func inOf(node any) ([]string, bool) { return ofList(node, "in") }
+
+func ofList(node any, op string) ([]string, bool) {
 	mapping, _ := node.(map[string]any)
 
-	values, ok := mapping["in"].([]any)
+	values, ok := mapping[op].([]any)
 	if !ok {
 		return nil, false
 	}
@@ -431,7 +472,7 @@ func (f *fakeLinear) listIssues(query string, vars map[string]any) (map[string]a
 			history = append(history, node)
 		}
 
-		node := map[string]any{"identifier": issue.Identifier, "createdAt": issue.CreatedAt}
+		node := map[string]any{"identifier": issue.Identifier, "createdAt": issue.CreatedAt, "title": issue.Title, "url": "https://linear.example/acme/issue/" + issue.Identifier}
 		if withHistory {
 			node["history"] = map[string]any{"nodes": history}
 		}
@@ -607,4 +648,49 @@ func (f *fakeLinear) updateIssue(vars map[string]any) (map[string]any, string) {
 	}
 
 	return map[string]any{"issueUpdate": map[string]any{"success": true, "issue": map[string]any{"id": "uuid-" + issue.Identifier, "identifier": issue.Identifier, "url": "https://linear.example/acme/issue/" + issue.Identifier, "state": map[string]any{"name": f.stateByID(issue.State).Name}}}}, ""
+}
+
+func (f *fakeLinear) userNodes(vars map[string]any) map[string]any {
+	id, _ := vars["id"].(string)
+	nodes := []map[string]any{}
+
+	if slices.Contains(f.users, id) {
+		nodes = append(nodes, map[string]any{"id": id})
+	}
+
+	return map[string]any{"users": map[string]any{"nodes": nodes}}
+}
+
+// createIssue opens an issue in the one team, refusing what Linear refuses: an id it does not know.
+func (f *fakeLinear) createIssue(vars map[string]any) (map[string]any, string) {
+	input, _ := vars["input"].(map[string]any)
+	f.created = append(f.created, input)
+
+	str := func(key string) string { value, _ := input[key].(string); return value }
+
+	if str("teamId") != "tm-eng" {
+		return nil, "Entity not found: Team"
+	}
+
+	issue := &fakeLinearIssue{
+		Identifier: "ENG-" + strconv.Itoa(200+len(f.created)), Title: str("title"), Description: str("description"),
+		Team: "tm-eng", State: "st-backlog", Project: str("projectId"), Assignee: str("assigneeId"), Parent: str("parentId"),
+		CreatedAt: "2026-10-09T09:00:00.000Z",
+	}
+
+	if state := str("stateId"); state != "" {
+		issue.State = state
+	}
+
+	labels, _ := input["labelIds"].([]any)
+	for _, id := range labels {
+		label, _ := id.(string)
+		issue.Labels = append(issue.Labels, label)
+	}
+
+	f.issues = append(f.issues, issue)
+
+	return map[string]any{"issueCreate": map[string]any{"success": true, "issue": map[string]any{
+		"id": "uuid-" + issue.Identifier, "identifier": issue.Identifier, "title": issue.Title, "url": "https://linear.example/acme/issue/" + issue.Identifier,
+	}}}, ""
 }

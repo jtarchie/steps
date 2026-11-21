@@ -2,7 +2,7 @@ package config
 
 // The built-in linear-* resource types: their names, the shape of each one's source: and put params:, and the load-time rules that need no network.
 
-// Split as the github-* types are, and for the same reason: linear-issues FINDS work (check and in, no out), linear-comment and linear-update PUBLISH (out, no check). A put records its version in the resource's own history, so a type that both watched and posted would mint a comment-shaped version into the history it fans out over, and under trigger: true a post would trigger the build that posts again.
+// Split as the github-* types are, and for the same reason: linear-issues FINDS work (check and in, no out), linear-comment, linear-update and linear-issue PUBLISH (out, no check; linear-issue also has the in a get after its put reads the new issue back with). A put records its version in the resource's own history, so a type that both watched and posted would mint a comment-shaped version into the history it fans out over, and under trigger: true a post would trigger the build that posts again.
 
 import (
 	"errors"
@@ -17,19 +17,20 @@ const (
 	LinearIssuesType  = "linear-issues"
 	LinearCommentType = "linear-comment"
 	LinearUpdateType  = "linear-update"
+	LinearIssueType   = "linear-issue"
 )
 
 // LinearTypes is every linear-* type, in the order the docs list them.
 func LinearTypes() []string {
-	return []string{LinearIssuesType, LinearCommentType, LinearUpdateType}
+	return []string{LinearIssuesType, LinearCommentType, LinearUpdateType, LinearIssueType}
 }
 
 // LinearFinds reports whether kind is the type a get reads.
 func LinearFinds(kind string) bool { return kind == LinearIssuesType }
 
 // LinearFetches reports whether a linear-* type has an in:, which a get after
-// its put fetches with. Only the finder does today.
-func LinearFetches(kind string) bool { return LinearFinds(kind) }
+// its put fetches with: the finder, and linear-issue, whose put leaves an issue to read back.
+func LinearFetches(kind string) bool { return LinearFinds(kind) || kind == LinearIssueType }
 
 // DefaultLinearTokenEnv is the variable a linear-* resource reads its key from when source.token_env does not name another.
 const DefaultLinearTokenEnv = "LINEAR_API_KEY" //nolint:gosec // the variable's name, not a credential
@@ -112,6 +113,44 @@ func (s LinearPostSource) Connection() LinearConnection {
 	return LinearConnection(s)
 }
 
+// LinearIssueSource is a linear-issue resource's source:. Team is here, as github-issue's repo is: it is where the issue opens, and the scope reuse: title searches. Everything about the issue itself is the put's params:, as linear-update's state and labels and github-issue's labels are, so one resource opens different kinds of issue from different jobs.
+type LinearIssueSource struct {
+	// Team is a team key (ENG) or name; state and label names are looked up in it.
+	Team     string `yaml:"team"`
+	TokenEnv string `yaml:"token_env,omitempty"`
+	Endpoint string `yaml:"endpoint,omitempty"`
+}
+
+// Connection is where this resource talks to.
+func (s LinearIssueSource) Connection() LinearConnection {
+	return LinearConnection{TokenEnv: s.TokenEnv, Endpoint: s.Endpoint}
+}
+
+// LinearReuseTitle is the one reuse: there is: an open issue in the team with exactly the title.
+const LinearReuseTitle = "title"
+
+// LinearIssueParams is a linear-issue put's params:. Every name is looked up before the one request that creates the issue.
+type LinearIssueParams struct {
+	// TitleFile is the issue's title, a path inside the put's inputs. One line, as github-issue's.
+	TitleFile string `yaml:"title_file"`
+	// BodyFile is the issue's description, a path inside the put's inputs; empty is refused.
+	BodyFile string `yaml:"body_file"`
+	// State is a state name in the team. Unset, Linear uses the team's default.
+	State string `yaml:"state,omitempty"`
+	// Labels are team or workspace label names. One that does not exist is refused, not created, as linear-update's.
+	Labels []string `yaml:"labels,omitempty"`
+	// Assignee is @me, the key's own user, or a user id. Never an email, as linear-issues' source.
+	Assignee string `yaml:"assignee,omitempty"`
+	// Estimate is the issue's points. A pointer, since 0 is an estimate on some scales.
+	Estimate *int `yaml:"estimate,omitempty"`
+	// Project is a project of the team, by name or id.
+	Project string `yaml:"project,omitempty"`
+	// Parent is the identifier (ENG-123) of the issue this is a sub-issue of.
+	Parent string `yaml:"parent,omitempty"`
+	// Reuse, set to title, returns an issue in the team that has the title exactly and is neither completed nor canceled instead of opening another.
+	Reuse string `yaml:"reuse,omitempty"`
+}
+
 // LinearCommentParams is a linear-comment put's params:.
 type LinearCommentParams struct {
 	// BodyFile is the comment, a path inside the put's inputs.
@@ -188,6 +227,69 @@ func validateLinearFilters(source LinearIssuesSource) error {
 	return nil
 }
 
+// ParseLinearIssueSource decodes a linear-issue source: strictly and checks it.
+func ParseLinearIssueSource(raw map[string]any) (LinearIssueSource, error) {
+	var source LinearIssueSource
+
+	err := decodeSource(raw, &source)
+	if err != nil {
+		return source, err
+	}
+
+	if strings.TrimSpace(source.Team) == "" {
+		return source, errors.New("source.team is required: the team the issue opens in, whose states and labels its names are looked up in")
+	}
+
+	return source, validateLinearConnection(source.Connection())
+}
+
+// ParseLinearIssueParams decodes a linear-issue put's params:.
+func ParseLinearIssueParams(raw map[string]any) (LinearIssueParams, error) {
+	var params LinearIssueParams
+
+	err := decodeParams(raw, &params)
+	if err != nil {
+		return params, err
+	}
+
+	switch {
+	case params.TitleFile == "":
+		return params, errors.New("params.title_file is required: the file, inside the put's inputs, whose one line is the issue's title")
+	case params.BodyFile == "":
+		return params, errors.New("params.body_file is required: the file, inside the put's inputs, whose text is the issue's description")
+	}
+
+	return params, validateLinearIssueFields(params)
+}
+
+func validateLinearIssueFields(params LinearIssueParams) error {
+	switch {
+	case slices.ContainsFunc(params.Labels, isBlank):
+		return errors.New("params.labels: a blank label name names no label; remove it")
+	case params.Estimate != nil && *params.Estimate < 0:
+		return fmt.Errorf("params.estimate: %d is not an estimate; Linear's are 0 or more", *params.Estimate)
+	case params.Reuse != "" && params.Reuse != LinearReuseTitle:
+		return fmt.Errorf("params.reuse: %q is not a way to find an existing issue; the one there is is %q", params.Reuse, LinearReuseTitle)
+	}
+
+	return validateLinearIssueRefs(params)
+}
+
+// validateLinearIssueRefs checks the fields that name a person or another issue.
+func validateLinearIssueRefs(params LinearIssueParams) error {
+	switch {
+	case params.Assignee != "" && params.Assignee != LinearAssigneeMe && !linearIDPattern.MatchString(params.Assignee):
+		return fmt.Errorf("params.assignee: %q is not @me or a user id; an email would put a person identifier in the pipeline", params.Assignee)
+	case params.Parent != "" && !rendered(params.Parent) && !linearIdentifierPattern.MatchString(params.Parent):
+		return fmt.Errorf("params.parent: %q is not an issue identifier such as ENG-123", params.Parent)
+	}
+
+	return nil
+}
+
+// rendered reports whether s is filled in after load, by an across: cell or a load_var, so only the put can check what it became.
+func rendered(s string) bool { return strings.Contains(s, "{{") || strings.Contains(s, "((") }
+
 // ParseLinearPostSource decodes a put-only type's source: strictly and checks it.
 func ParseLinearPostSource(raw map[string]any) (LinearPostSource, error) {
 	var source LinearPostSource
@@ -261,7 +363,7 @@ func validateLinearTarget(from, issue string) error {
 		return errors.New("params.from and params.issue both say which issue; name one")
 	}
 
-	if issue != "" && !strings.Contains(issue, "{{") && !strings.Contains(issue, "((") && !linearIdentifierPattern.MatchString(issue) {
+	if issue != "" && !rendered(issue) && !linearIdentifierPattern.MatchString(issue) {
 		return fmt.Errorf("params.issue: %q is not an issue identifier such as ENG-123", issue)
 	}
 
@@ -308,9 +410,12 @@ func (c *Config) validateLinearResource(resource Resource) error {
 
 	var err error
 
-	if kind == LinearIssuesType {
+	switch kind {
+	case LinearIssuesType:
 		_, err = ParseLinearIssuesSource(resource.Source)
-	} else {
+	case LinearIssueType:
+		_, err = ParseLinearIssueSource(resource.Source)
+	default:
 		_, err = ParseLinearPostSource(resource.Source)
 	}
 
@@ -321,7 +426,7 @@ func (c *Config) validateLinearResource(resource Resource) error {
 	return nil
 }
 
-// linearIssueGets is the name of every get in job that fetches a linear-issues resource: the inputs whose version can name an issue.
+// linearIssueGets is the name of every get in job that fetches a linear-issues or linear-issue resource: the inputs whose version can name an issue.
 func (c *Config) linearIssueGets(job Job) []string {
 	var names []string
 
@@ -331,7 +436,7 @@ func (c *Config) linearIssueGets(job Job) []string {
 		}
 
 		resource, err := c.FindResource(step.GetResourceName())
-		if err == nil && c.linearKind(resource.Type) == LinearIssuesType {
+		if err == nil && LinearFetches(c.linearKind(resource.Type)) {
 			names = append(names, step.Get)
 		}
 
@@ -352,30 +457,11 @@ func (c *Config) checkLinearStep(label string, step *Step, gets []string) error 
 		return nil //nolint:nilerr // reported by the rule that owns unknown resources
 	}
 
-	kind := c.linearKind(resource.Type)
-
-	var from, issue string
-
-	switch kind {
-	case LinearCommentType:
-		params, err := ParseLinearCommentParams(step.Params)
-		if err != nil {
-			return fmt.Errorf("%s: put %q: %w", label, step.Put, err)
-		}
-
-		from, issue = params.From, params.Issue
-	case LinearUpdateType:
-		params, err := ParseLinearUpdateParams(step.Params)
-		if err != nil {
-			return fmt.Errorf("%s: put %q: %w", label, step.Put, err)
-		}
-
-		from, issue = params.From, params.Issue
-	default:
-		return nil
+	from, issue, targets, err := linearPutTarget(c.linearKind(resource.Type), step.Params)
+	if err == nil && targets {
+		err = checkLinearTargetInput(step, gets, from, issue)
 	}
 
-	err = checkLinearTargetInput(step, gets, from, issue)
 	if err != nil {
 		return fmt.Errorf("%s: put %q: %w", label, step.Put, err)
 	}
@@ -383,7 +469,27 @@ func (c *Config) checkLinearStep(label string, step *Step, gets []string) error 
 	return nil
 }
 
-// checkLinearTargetInput refuses a put with no linear-issues get among its inputs to name the issue, unless params.issue does, and a from: naming no such get. Which input a build has fetched by then is a run-time fact.
+// linearPutTarget parses a put's params: for its kind and says how it names the issue it acts on; targets is false for a put that acts on no existing issue.
+func linearPutTarget(kind string, raw map[string]any) (string, string, bool, error) {
+	switch kind {
+	case LinearCommentType:
+		params, err := ParseLinearCommentParams(raw)
+
+		return params.From, params.Issue, true, err
+	case LinearUpdateType:
+		params, err := ParseLinearUpdateParams(raw)
+
+		return params.From, params.Issue, true, err
+	case LinearIssueType:
+		_, err := ParseLinearIssueParams(raw)
+
+		return "", "", false, err
+	}
+
+	return "", "", false, nil
+}
+
+// checkLinearTargetInput refuses a put with no linear-issues or linear-issue get among its inputs to name the issue, unless params.issue does, and a from: naming no such get. Which input a build has fetched by then is a run-time fact.
 func checkLinearTargetInput(step *Step, gets []string, from, issue string) error {
 	visible := gets
 	if !step.InputsAll() {
@@ -391,11 +497,11 @@ func checkLinearTargetInput(step *Step, gets []string, from, issue string) error
 	}
 
 	if issue == "" && len(visible) == 0 {
-		return errors.New("no linear-issues get among its inputs names the issue; list that get in the put's inputs, or set params.issue")
+		return errors.New("no linear-issues or linear-issue get among its inputs names the issue; list that get in the put's inputs, or set params.issue")
 	}
 
 	if from != "" && !slices.Contains(visible, from) {
-		return fmt.Errorf("params.from: %q is not a linear-issues get among this put's inputs (%s)", from, strings.Join(visible, ", "))
+		return fmt.Errorf("params.from: %q is not a linear-issues or linear-issue get among this put's inputs (%s)", from, strings.Join(visible, ", "))
 	}
 
 	return nil

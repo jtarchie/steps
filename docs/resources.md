@@ -1152,9 +1152,9 @@ Marking ready is a GraphQL mutation, since REST cannot do it; the token needs th
 
 ## The built-in Linear types
 
-Three built-ins, split the way the GitHub ones are. `linear-issues` **finds work**: it has a check and an in, and no out. `linear-comment` and `linear-update` **publish**: they have an out and nothing else, so a comment a pipeline posts never lands in the history it triggers from.
+Four built-ins, split the way the GitHub ones are. `linear-issues` **finds work**: it has a check and an in, and no out. `linear-comment`, `linear-update` and `linear-issue` **publish**: they have an out and no check, so a comment a pipeline posts never lands in the history it triggers from. `linear-issue` also has an in, for the [get after its put](#a-get-after-a-put-fetches-what-the-put-recorded) that reads the new issue back.
 
-steps calls Linear's GraphQL API itself: there is no `resource_types:` block, no GraphQL in the pipeline, no `curl` or `jq`. All three read the key from `LINEAR_API_KEY`; `source.token_env` names another variable, for a second identity. A personal API key (`lin_api_...`) is sent bare, as Linear expects, and any other token as an OAuth `Bearer` token. `steps validate` refuses a pipeline whose key variable is unset, before anything runs. `source.endpoint` is Linear's GraphQL URL; plain `http` is accepted only for a loopback host, so a key never travels in cleartext.
+steps calls Linear's GraphQL API itself: there is no `resource_types:` block, no GraphQL in the pipeline, no `curl` or `jq`. All four read the key from `LINEAR_API_KEY`; `source.token_env` names another variable, for a second identity. A personal API key (`lin_api_...`) is sent bare, as Linear expects, and any other token as an OAuth `Bearer` token. `steps validate` refuses a pipeline whose key variable is unset, before anything runs. `source.endpoint` is Linear's GraphQL URL; plain `http` is accepted only for a loopback host, so a key never travels in cleartext.
 
 Linear's limits are per user, shared by every key that user holds: 2,500 requests an hour for a personal key, 5,000 for OAuth. A `linear-issues` check at steps' default poll is about 120 requests an hour per resource, so a daemon with many Linear resources should raise `--interval` rather than spend the budget. A request Linear throttles is sent again after the wait it names, a failure it reports inside a 200 answer fails the step with Linear's own message, and a write is sent again only when it was throttled, never after a timeout, so a comment is not posted twice.
 
@@ -1267,7 +1267,7 @@ A get writes no tree, since an issue has none, only these:
 
 ### `linear-comment` and `linear-update`: writing back
 
-Both take `token_env` and `endpoint` in `source:` and nothing else, and find which issue a put is about in its inputs: the one input whose version carries an identifier, which every `linear-issues` get's does. `params.from` picks one when several do, and `params.issue` names one outright, as an identifier such as `ENG-123`, for a put with no such input; the type finds Linear's internal id itself, so a pipeline never handles one.
+Both take `token_env` and `endpoint` in `source:` and nothing else, and find which issue a put is about in its inputs: the one input whose version carries an identifier, which every `linear-issues` get's does, and every get after a `linear-issue` put. `params.from` picks one when several do, and `params.issue` names one outright, as an identifier such as `ENG-123`, for a put with no such input; the type finds Linear's internal id itself, so a pipeline never handles one.
 
 ```yaml linear=acceptance
 resources:
@@ -1341,6 +1341,125 @@ A `linear-update` is one request to Linear, so a state move and a label swap lan
 The versions are `{issue, comment}` for a comment, and `{issue, state, add_labels, remove_labels}` for an update, with the sides it was not asked for left out. A put reports the comment's or issue's `url` as a fact. A get of either is refused at load, and so is a put to a `linear-issues` resource.
 
 **Poll, and keep [`webhook`](webhooks.md) for latency.** The `webhook` type already has a `linear` provider, so a pipeline that wants seconds rather than a poll interval can have it, but the finder polls on purpose: Linear disables a webhook it could not deliver to three times, so a laptop asleep overnight would silence it until someone re-enabled it by hand, and a delivery's version is the delivery, not the issue. The check is the truth; a delivery is a hint that it is worth running now.
+
+### `linear-issue`: opening an issue
+
+`linear-issue` opens one issue per put, from a title and a description a step wrote, with every name in it looked up first. A [get after the put](#a-get-after-a-put-fetches-what-the-put-recorded) reads the issue back, and writes the same files a `linear-issues` get does, so a `linear-comment` or `linear-update` after it finds the issue from that input with nothing more to say:
+
+```yaml linear=open
+resources:
+  - name: ticket
+    type: linear-issue
+    source:
+      team: ENG                        # a team key or name; required
+      token_env: LINEAR_API_KEY        # the default
+      endpoint: https://api.linear.app/graphql # the default
+
+  - name: reply
+    type: linear-comment
+    source: {}
+
+jobs:
+  - name: file
+    plan:
+      - task: write
+        outputs: [files]
+        run: |
+          echo 'Bump Ruby to 3.4.2' > files/title
+          echo 'A patch release; CI is the gate.' > files/body.md
+      - put: ticket
+        inputs: [files]
+        params:
+          title_file: files/title      # one line
+          body_file: files/body.md     # the description; empty is refused
+          state: In Progress           # a state in the team
+          labels: [agent-ready, urgent] # team or workspace labels; never created
+          assignee: "@me"              # the key's own user, or a user id
+          estimate: 2
+          project: Platform            # a name or an id
+          parent: ENG-12               # makes this a sub-issue of ENG-12
+      - get: ticket                    # the issue the put just opened
+      - task: link
+        inputs: [ticket]
+        outputs: [notes]
+        run: |
+          echo "[$(cat ticket/issue.identifier)]: $(cat ticket/issue.title)"
+          echo "Picked up by the bump pipeline." > notes/body.md
+        assert:
+          stdout: "[ENG-201]: Bump Ruby to 3.4.2"
+      - put: reply
+        inputs: [ticket, notes]
+        params:
+          body_file: notes/body.md     # posted on the new issue, found from the get
+    assert:
+      execution: [write, ticket, ticket, link, reply]
+      outcome: succeeded
+```
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `team` | yes | a team key or name: where the issue opens, where its state and label names are looked up, and what `reuse:` searches |
+| `token_env`, `endpoint` | no | as above |
+
+| `params:` field | required | meaning |
+|---|---|---|
+| `title_file` | yes | the title, a path in the put's inputs. One line: a trailing newline is dropped and a second line is refused, as for `github-issue` |
+| `body_file` | yes | the description, a path in the put's inputs. An empty file is refused |
+| `state` | no | a state name in the team. Unset, Linear picks the team's default |
+| `labels` | no | label names, team or workspace, matched without regard to case. **One that does not exist is refused**, not created, as for `linear-update` |
+| `assignee` | no | `@me`, the key's own user, or a user id, which Linear must know. Not an email |
+| `estimate` | no | the issue's points, 0 or more |
+| `project` | no | a project of the team, by name (without regard to case) or id |
+| `parent` | no | the identifier of the issue this one is a sub-issue of |
+| `reuse` | no | `title`: return an open issue with the same title instead of opening another (below). Unset, nothing is looked for |
+
+The issue is about one thing, so what describes it is the put's: the same resource opens a chore from one job and a bug in another state from the next, as `github-issue`'s labels and `linear-update`'s state are params too. Only the team is the resource's, the way `github-issue`'s repository is.
+
+**Every name is looked up before anything is sent, and one request creates the issue**, so a typo in the last label, a state the team lacks, an unknown project, parent or assignee is a red put naming the field, and no issue. The put's version is `{identifier}`, and it reports the issue's `url`, `title` and `identifier` as facts. The run log says which issue it was: `created ENG-201 in team ENG`.
+
+**`reuse: title` makes the put safe to run again.** Without it, a put opens a new issue every time it runs, as `github-issue` does; and a put runs again whenever its build does, for instance after a later step failed and someone re-ran the job, which would leave a second ticket for the same work. With `reuse: title`, the put first looks in the team for an issue whose title is exactly the one it would use (case and spaces included) and whose state is not in Linear's `completed` or `canceled` category. If there is one, the oldest, the put returns it as if it had just opened it: same version, same facts plus `reused: yes`, and this line in the run log instead of `created`:
+
+```
+reused ENG-12: it is open in team ENG with this exact title (params.reuse: title), so no issue was created
+```
+
+A reused issue is returned as it is: the put does not move it to `state:` or add `labels:`, which a `linear-update` after the get does if the pipeline wants it. Every name is still looked up first, so a typo fails whether or not an issue would have been reused. A done or canceled issue is skipped because it is finished work: the same title again is new work, a second bump of the same version after the first was reverted, say. Archived issues are not searched, as Linear's own search leaves them out. Off by default because a title is no identity in general: two sub-issues may share one.
+
+```yaml linear=reuse
+resources:
+  - name: ticket
+    type: linear-issue
+    source: {team: ENG}
+
+jobs:
+  - name: file
+    plan:
+      - task: write
+        outputs: [files]
+        run: |
+          echo 'Plan the cache' > files/title
+          echo 'Asked for again.' > files/body.md
+      - put: ticket
+        inputs: [files]
+        params:
+          title_file: files/title
+          body_file: files/body.md
+          state: Todo
+          labels: [agent-ready]
+          assignee: "@me"
+          reuse: title                 # ENG-12 is open with this title, so it is returned
+      - get: ticket
+      - task: show
+        inputs: [ticket]
+        run: cat ticket/issue.identifier
+        assert:
+          stdout: "ENG-12"
+    assert:
+      execution: [write, ticket, ticket, show]
+      outcome: succeeded
+```
+
+A get of a `linear-issue` resource anywhere but after its put is refused at load, as for every publisher, and so is `params:` on that get.
 
 ## The built-in `cron` type
 

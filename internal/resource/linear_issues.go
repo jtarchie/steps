@@ -150,8 +150,8 @@ func (c *linearClient) labelsOf(ctx context.Context, teamID string) ([]linearLab
 	}
 }
 
-// projectID resolves a project name or id to the one project of team it names, refusing one the team does not have by name rather than matching nothing.
-func (c *linearClient) projectID(ctx context.Context, team linearTeam, project string) (string, error) {
+// projectID resolves a project name or id to the one project of team it names, refusing one the team does not have by name rather than matching nothing; field is where the pipeline wrote it.
+func (c *linearClient) projectID(ctx context.Context, field string, team linearTeam, project string) (string, error) {
 	var answer struct {
 		Projects struct {
 			Nodes []struct {
@@ -169,9 +169,9 @@ func (c *linearClient) projectID(ctx context.Context, team linearTeam, project s
 	case 1:
 		return answer.Projects.Nodes[0].ID, nil
 	case 0:
-		return "", fmt.Errorf("source.project: team %s has no project named %q", team.Key, project)
+		return "", fmt.Errorf("%s: team %s has no project named %q", field, team.Key, project)
 	default:
-		return "", fmt.Errorf("source.project: %q names more than one of team %s's projects; use its id", project, team.Key)
+		return "", fmt.Errorf("%s: %q names more than one of team %s's projects; use its id", field, project, team.Key)
 	}
 }
 
@@ -280,7 +280,7 @@ func (c *linearClient) sourceFilter(ctx context.Context, source config.LinearIss
 	var project string
 
 	if source.Project != "" {
-		project, err = c.projectID(ctx, team, source.Project)
+		project, err = c.projectID(ctx, "source.project", team, source.Project)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -407,12 +407,17 @@ func linearIssuesIn(ctx context.Context, raw, version map[string]any, destDir st
 		return fmt.Errorf("%w", err)
 	}
 
+	return fetchLinearIssue(ctx, source.Connection(), version, destDir)
+}
+
+// fetchLinearIssue writes the files every get of an issue writes, whichever type's version names it, so a linear-comment or linear-update finds the issue from either input the same way.
+func fetchLinearIssue(ctx context.Context, connection config.LinearConnection, version map[string]any, destDir string) error {
 	identifier := versionField(version, "identifier")
 	if !config.LinearIdentifierValid(identifier) {
 		return fmt.Errorf("version %v names no issue identifier", version)
 	}
 
-	client, err := newLinearClient(ctx, source.Connection())
+	client, err := newLinearClient(ctx, connection)
 	if err != nil {
 		return err
 	}
