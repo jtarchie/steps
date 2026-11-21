@@ -338,11 +338,11 @@ func packEntry(writer *tar.Writer, path, name string, entry fs.DirEntry) error {
 	}
 }
 
-// ErrUnsupportedEntry is a socket, fifo or device node in a tree being packed.
+// ErrUnsupportedEntry is a socket, fifo, device node or hard link in a tree being packed or unpacked.
 // See PackTree: dropping it would change what digestTree computes over the
 // extracted copy, and a cache that quietly disagrees with itself is worse than
 // a step that refuses to ship one.
-var ErrUnsupportedEntry = errors.New("cannot transfer a socket, fifo or device node")
+var ErrUnsupportedEntry = errors.New("cannot transfer a socket, fifo, device node or hard link")
 
 func packFile(writer *tar.Writer, path, name string, entry fs.DirEntry) error {
 	info, err := entry.Info()
@@ -650,6 +650,8 @@ func unpackEntry(dir *os.Root, reader *tar.Reader, header *tar.Header, name stri
 		return dir.Symlink(header.Linkname, name) //nolint:wrapcheck // the caller names the entry and the tree
 	case tar.TypeReg:
 		return unpackFile(dir, reader, header, name)
+	case tar.TypeLink:
+		return fmt.Errorf("%w: %q (a hard link to %q)", ErrUnsupportedEntry, name, header.Linkname)
 	default:
 		return fmt.Errorf("%w: %q", ErrUnsupportedEntry, name)
 	}

@@ -1,6 +1,8 @@
 package venue
 
 import (
+	"archive/tar"
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -127,4 +129,77 @@ func TestApplyChangesRefusesAnUntouchedLinkAChangeMadeEscape(t *testing.T) {
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("home/x = %v, want the escaping link removed", err)
 	}
+}
+
+// An overlay on Linux 5.8+ hard-links every whiteout after the first to one inode, so a step that deleted two files sent a device and a hard link to it; the link was kept and the unpack refused it, failing the step (a work/prs.yml bot run that merged master's deletions).
+func TestDropWhiteoutsDropsLinksToAWhiteout(t *testing.T) {
+	t.Parallel()
+
+	in := tarOf(t, []*tar.Header{
+		{Typeflag: tar.TypeDir, Name: "./", Mode: 0o755},
+		{Typeflag: tar.TypeChar, Name: "./b"},
+		{Typeflag: tar.TypeLink, Name: "./a", Linkname: "./b"},
+		{Typeflag: tar.TypeLink, Name: "sub/c", Linkname: "b"},
+		{Typeflag: tar.TypeReg, Name: "./kept.txt", Mode: 0o644, Size: 3},
+	})
+
+	var out bytes.Buffer
+
+	err := dropWhiteouts(in, &out)
+	if err != nil {
+		t.Fatalf("dropWhiteouts: %v", err)
+	}
+
+	staging := t.TempDir()
+
+	err = wire.UnpackFetchedTree(&out, staging, wire.UnpackOptions{})
+	if err != nil {
+		t.Fatalf("UnpackFetchedTree after dropWhiteouts: %v", err)
+	}
+
+	root, err := os.OpenRoot(staging)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	got, err := root.ReadFile("kept.txt")
+	if err != nil || string(got) != "hi\n" {
+		t.Errorf("kept.txt = %q, %v; want the regular file through", got, err)
+	}
+
+	for _, gone := range []string{"a", "b", "sub/c"} {
+		_, err = root.Lstat(gone)
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s = %v, want no entry: it stands for a deletion", gone, err)
+		}
+	}
+}
+
+// tarOf writes headers as a tar stream, each regular file holding "hi\n".
+func tarOf(t *testing.T, headers []*tar.Header) *bytes.Buffer {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	writer := tar.NewWriter(&buf)
+
+	for _, header := range headers {
+		err := writer.WriteHeader(header)
+		if err == nil && header.Size > 0 {
+			_, err = writer.Write([]byte("hi\n"))
+		}
+
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return &buf
 }

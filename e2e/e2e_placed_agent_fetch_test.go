@@ -121,7 +121,7 @@ jobs:
 	}
 }
 
-// TestAnEditedInputComesHomeAsItsChanges: an input declared as an output came home whole after every command, so a one-line edit in a repository cost the repository (steps#246 S6). Only the overlay's upper layer travels now, and a deletion still reaches home.
+// TestAnEditedInputComesHomeAsItsChanges: an input declared as an output came home whole after every command, so a one-line edit in a repository cost the repository (steps#246 S6). Only the overlay's upper layer travels now, and deletions still reach home: three of them, since an overlay hard-links every whiteout after the first to one inode and a second deletion once failed the step.
 func TestAnEditedInputComesHomeAsItsChanges(t *testing.T) {
 	t.Parallel()
 	dockerSlot(t)
@@ -138,17 +138,17 @@ jobs:
   plan:
   - task: prepare
     outputs: [data]
-    run: head -c %[2]d /dev/urandom > data/blob && mkdir -p data/sub && echo a > data/a.txt && echo b > data/sub/b.txt && echo c > data/sub/c.txt
+    run: head -c %[2]d /dev/urandom > data/blob && mkdir -p data/sub && echo a > data/a.txt && echo b > data/sub/b.txt && echo c > data/sub/c.txt && echo d > data/sub/d.txt && echo e > data/e.txt
 
   - task: change
     image: %[1]s
     inputs: [data]
     outputs: [data]
-    run: echo more >> data/a.txt && rm data/sub/b.txt && echo new > data/sub/new.txt
+    run: echo more >> data/a.txt && rm data/sub/b.txt data/sub/d.txt data/e.txt && echo new > data/sub/new.txt
 
   - task: check
     inputs: [data]
-    run: test "$(cat data/a.txt)" = "$(printf 'a\nmore')" && test ! -e data/sub/b.txt && test -s data/sub/c.txt && test -s data/sub/new.txt && test -s data/blob
+    run: test "$(cat data/a.txt)" = "$(printf 'a\nmore')" && test ! -e data/sub/b.txt && test ! -e data/sub/d.txt && test ! -e data/e.txt && test -s data/sub/c.txt && test -s data/sub/new.txt && test -s data/blob
 `, dockerE2EImage, fetchBlobBytes))
 
 	mustRun(t, path)

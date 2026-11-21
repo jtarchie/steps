@@ -220,8 +220,10 @@ func (s *plusSession) fetchUpper(ctx context.Context, upper, staging string) err
 }
 
 // dropWhiteouts copies a tar stream, leaving out character devices: an overlay records a deleted file as one, and no step output is ever one.
+// Since Linux 5.8 overlayfs makes every whiteout after the first a hard link to one shared inode, so the archive carries the first deletion as a device and each later one as a hard link to it; those go too, or a step that deleted two files failed to come home.
 func dropWhiteouts(from io.Reader, to io.Writer) error {
 	in, out := tar.NewReader(from), tar.NewWriter(to)
+	whiteouts := map[string]bool{}
 
 	for {
 		header, err := in.Next()
@@ -234,6 +236,12 @@ func dropWhiteouts(from io.Reader, to io.Writer) error {
 		}
 
 		if header.Typeflag == tar.TypeChar {
+			whiteouts[path.Clean(header.Name)] = true
+
+			continue
+		}
+
+		if header.Typeflag == tar.TypeLink && whiteouts[path.Clean(header.Linkname)] {
 			continue
 		}
 

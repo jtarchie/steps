@@ -84,6 +84,23 @@ func TestUnpackTreeRefusesUnsupportedEntries(t *testing.T) {
 	}
 }
 
+// A hard link is refused like a device, and the error says which it is: "socket, fifo or device node" sent a hard link's reader looking for a device (a whiteout an overlay had hard-linked).
+func TestUnpackTreeNamesAHardLink(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	writer := tar.NewWriter(&buf)
+	_ = writer.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "a", Mode: 0o644, Format: tar.FormatPAX})
+	_ = writer.WriteHeader(&tar.Header{Typeflag: tar.TypeLink, Name: "b", Linkname: "a", Format: tar.FormatPAX})
+	_ = writer.Close()
+
+	err := UnpackTree(&buf, t.TempDir(), UnpackOptions{})
+	if !errors.Is(err, ErrUnsupportedEntry) || !strings.Contains(err.Error(), `"b" (a hard link to "a")`) {
+		t.Fatalf("UnpackTree error = %v, want ErrUnsupportedEntry naming b as a hard link to a", err)
+	}
+}
+
 // TestPackTreeIsReproducible pins that the same tree packs to the same bytes.
 // It is what makes the stream comparable at all — and it only holds because
 // the codec normalizes away mtimes and ownership, which vary between two
