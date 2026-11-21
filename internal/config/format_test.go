@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -23,7 +24,7 @@ func TestFormatMovesAPipelineAssertLastWithoutDoublingABlankLine(t *testing.T) {
 	}
 }
 
-// TestFormatKeepsAnEmojiBlockABlock: yaml.v3 (and yaml.v4 by default) calls anything above U+FFFF unprintable, so a `run: |` holding 🤖 came out as one double-quoted string, and a `#` line further down read as a lost comment and fmt refused the file (pipelines' work/linear-release.yml). WithSupplementaryUnicode is the fix.
+// TestFormatKeepsAnEmojiBlockABlock: yaml.v3 and yaml.v4 call anything above U+FFFF unprintable, so a `run: |` holding 🤖 came out as one double-quoted string, and a `#` line further down read as a lost comment and fmt refused the file (pipelines' work/linear-release.yml).
 func TestFormatKeepsAnEmojiBlockABlock(t *testing.T) {
 	t.Parallel()
 
@@ -37,6 +38,90 @@ func TestFormatKeepsAnEmojiBlockABlock(t *testing.T) {
 
 	if string(got) != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestFormatKeepsUnicodeAsWritten: yaml/go-yaml#357's corpus (emoji with skin tones, flags and ZWJ sequences, a supplementary non-emoji, a mix, and BMP characters around them) comes through fmt unchanged in every place a pipeline holds text, and a second pass changes nothing.
+func TestFormatKeepsUnicodeAsWritten(t *testing.T) {
+	t.Parallel()
+
+	values := []string{"ASCII", "é", "©", "€", "漢", "😀", "👍🏽", "🇺🇸", "🏳️‍🌈", "👩🏼‍❤️‍💋‍👨🏾", "𐀀", "A😀𐀀Z"}
+	styles := map[string]string{
+		"plain":         "jobs:\n  - name: %s\n    plan: []\n",
+		"double-quoted": "jobs:\n  - name: \"%s\"\n    plan: []\n",
+		"single-quoted": "jobs:\n  - name: '%s'\n    plan: []\n",
+		"literal block": "jobs:\n  - name: a\n    plan:\n      - task: t\n        run: |\n          echo %s\n          # not a YAML comment\n",
+		"line comment":  "jobs:\n  - name: a # %s\n    plan: []\n",
+		"head comment":  "jobs:\n  # %s\n  - name: a\n    plan: []\n",
+		"key":           "jobs:\n  - name: a\n    plan:\n      - task: t\n        env:\n          %s: x\n        run: echo\n",
+	}
+
+	for style, layout := range styles {
+		for _, value := range values {
+			t.Run(style+"/"+value, func(t *testing.T) {
+				t.Parallel()
+
+				source := fmt.Sprintf(layout, value)
+
+				got, err := Format([]byte(source), Bundle{})
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if string(got) != source {
+					t.Errorf("got:\n%q\nwant:\n%q", got, source)
+				}
+			})
+		}
+	}
+}
+
+// TestFormatEmojiStandInsNeverCollide: the private-use runes standing in for emoji during the dump are ones the file does not already use, or a U+E000 the author wrote would come back as an emoji.
+func TestFormatEmojiStandInsNeverCollide(t *testing.T) {
+	t.Parallel()
+
+	const source = "jobs:\n- name: a \ue000 🤖 # 🚀 \ue001\n  plan: []\n"
+	const want = "jobs:\n  - name: a \ue000 🤖 # 🚀 \ue001\n    plan: []\n"
+
+	got, err := Format([]byte(source), Bundle{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(got) != want {
+		t.Errorf("got:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+// TestFormatKeepsAnEmojiCommentInItsColumn: the tree is unmasked after the dump, or restoreCommentColumns would compare a stand-in to the emoji and leave an aligned comment one space after its key instead of in the author's column.
+func TestFormatKeepsAnEmojiCommentInItsColumn(t *testing.T) {
+	t.Parallel()
+
+	const source = "jobs:\n- name: a      # 🚀\n  plan: []\n"
+	const want = "jobs:\n  - name: a    # 🚀\n    plan: []\n"
+
+	got, err := Format([]byte(source), Bundle{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(got) != want {
+		t.Errorf("got:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+// TestFormatRefusesMoreEmojiThanStandIns: the private-use area holds 6400 stand-ins; one more distinct character above U+FFFF is refused rather than dumped escaped.
+func TestFormatRefusesMoreEmojiThanStandIns(t *testing.T) {
+	t.Parallel()
+
+	var many strings.Builder
+	for r := rune(0x10000); r < 0x10000+6401; r++ {
+		many.WriteRune(r)
+	}
+
+	_, err := Format([]byte("jobs:\n- name: \""+many.String()+"\"\n  plan: []\n"), Bundle{})
+	if err == nil || !strings.Contains(err.Error(), "above U+FFFF") {
+		t.Fatalf("got %v, want a refusal", err)
 	}
 }
 

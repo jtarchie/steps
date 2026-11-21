@@ -49,32 +49,20 @@ func Format(source []byte, fsys Files) ([]byte, error) {
 	reorder(doc.Content[0], reflect.TypeFor[Config]())
 	unmergeTags(&doc)
 
-	var encoded bytes.Buffer
-
-	// WithSupplementaryUnicode keeps an emoji in a `run: |` block as itself. Without it the emitter calls anything above U+FFFF unprintable and rewrites the whole block as one double-quoted string, which also breaks restoreScalars' premise that formatting never rewrites a scalar (yaml/go-yaml#354; the option is jtarchie/go-yaml until yaml/go-yaml#521 lands).
-	enc, err := yaml.NewDumper(&encoded, yaml.WithV3Defaults(), yaml.WithIndent(2), yaml.WithLineWidth(-1), yaml.WithSupplementaryUnicode())
+	encoded, err := dump(&doc, source)
 	if err != nil {
-		return nil, fmt.Errorf("could not configure YAML encoder: %w", err)
-	}
-
-	err = enc.Dump(&doc)
-	if err == nil {
-		err = enc.Close()
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("could not encode YAML: %w", err)
+		return nil, err
 	}
 
 	// The encoded text, re-read, has the reordered tree's shape: walking the two side by side is how each node is found in the output.
 	var out yaml.Node
 
-	err = yaml.Unmarshal(encoded.Bytes(), &out)
+	err = yaml.Unmarshal(encoded, &out)
 	if err != nil {
 		return nil, fmt.Errorf("could not re-read formatted YAML: %w", err)
 	}
 
-	outLines := strings.Split(encoded.String(), "\n")
+	outLines := strings.Split(string(encoded), "\n")
 
 	hoistAnchoredComments(&out)
 	hoistDanglingComments(&out, outLines)
@@ -89,6 +77,96 @@ func Format(source []byte, fsys Files) ([]byte, error) {
 	}
 
 	return formatted, nil
+}
+
+func dump(doc *yaml.Node, source []byte) ([]byte, error) {
+	unmask, err := maskSupplementary(doc, source)
+	if err != nil {
+		return nil, err
+	}
+
+	var encoded bytes.Buffer
+
+	enc, err := yaml.NewDumper(&encoded, yaml.WithV3Defaults(), yaml.WithIndent(2), yaml.WithLineWidth(-1))
+	if err != nil {
+		return nil, fmt.Errorf("could not configure YAML encoder: %w", err)
+	}
+
+	err = enc.Dump(doc)
+	if err == nil {
+		err = enc.Close()
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("could not encode YAML: %w", err)
+	}
+
+	mapText(doc, unmask.Replace)
+
+	return []byte(unmask.Replace(encoded.String())), nil
+}
+
+// maskSupplementary swaps every rune above U+FFFF in the tree's scalars and comments for a private-use rune the source does not contain, and returns the replacer that swaps them back, in the dump and the tree. yaml.v4's emitter calls anything above U+FFFF unprintable (yaml/go-yaml#354) and rewrites a `run: |` holding an emoji as one double-quoted string, breaking restoreScalars' premise that formatting never rewrites a scalar; its plugins hook only loading, so there is no emitter option to set instead (yaml/go-yaml#521).
+func maskSupplementary(doc *yaml.Node, source []byte) (*strings.Replacer, error) {
+	used := map[rune]bool{}
+	for _, r := range string(source) {
+		used[r] = true
+	}
+
+	standIn := map[rune]rune{}
+	next := rune(0xE000)
+
+	var failed bool
+
+	mask := func(text string) string {
+		return strings.Map(func(r rune) rune {
+			if r <= 0xFFFF {
+				return r
+			}
+
+			if s, ok := standIn[r]; ok {
+				return s
+			}
+
+			for next <= 0xF8FF && used[next] {
+				next++
+			}
+
+			if next > 0xF8FF {
+				failed = true
+				return r
+			}
+
+			standIn[r] = next
+			next++
+
+			return standIn[r]
+		}, text)
+	}
+
+	mapText(doc, mask)
+
+	if failed {
+		return nil, errors.New("refusing to format: too many distinct characters above U+FFFF")
+	}
+
+	pairs := make([]string, 0, 2*len(standIn))
+	for original, s := range standIn {
+		pairs = append(pairs, string(s), string(original))
+	}
+
+	return strings.NewReplacer(pairs...), nil
+}
+
+func mapText(node *yaml.Node, fn func(string) string) {
+	node.Value = fn(node.Value)
+	node.HeadComment = fn(node.HeadComment)
+	node.LineComment = fn(node.LineComment)
+	node.FootComment = fn(node.FootComment)
+
+	for _, child := range node.Content {
+		mapText(child, fn)
+	}
 }
 
 // isPipeline is a top-level mapping whose keys are all Config's and include jobs: — a vars file or a task file fails one of the two.

@@ -131,5 +131,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.13.0 // indirect
 )
-
-replace go.yaml.in/yaml/v4 => github.com/jtarchie/go-yaml/v4 v4.0.1-0.20261121155752-b00bbf3852cc
