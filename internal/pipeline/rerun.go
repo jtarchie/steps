@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -66,7 +67,7 @@ func rerunOf(ctx context.Context) string {
 // (rerun_of) and the cache skip. Refusing it ("recorded no input versions")
 // was tried first, and it refused exactly the run a person retries after
 // fixing the configuration.
-func rerunInputSets(ctx context.Context, st store.Versions, resolution setResolution, history *resourceHistory) (setResolution, error) {
+func rerunInputSets(ctx context.Context, st store.Versions, job *config.Job, resolution setResolution, history *resourceHistory) (setResolution, error) {
 	of := rerunOf(ctx)
 	if of == "" {
 		return resolution, nil
@@ -76,6 +77,9 @@ func rerunInputSets(ctx context.Context, st store.Versions, resolution setResolu
 	if err != nil {
 		return setResolution{}, fmt.Errorf("could not read what run %q was created with: %w", of, err)
 	}
+
+	// A rerun runs the put again, and the get after it fetches what that put prints.
+	inputs = withoutBoundInputs(inputs, job)
 
 	if len(inputs) == 0 {
 		return resolution, nil

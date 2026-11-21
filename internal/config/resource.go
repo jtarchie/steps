@@ -462,13 +462,17 @@ func (j Job) ResourceNames() []string {
 //
 // Deduped because two gets of one resource are two artifacts of the same
 // thing: a caller asking what to load for this job wants each answered once.
+//
+// A get after a put is left out: it fetches what the put recorded, so nothing
+// about its resource needs checking or loading for it.
 func (j Job) GetResourceNames() []string {
 	var names []string
 
 	seen := map[string]bool{}
+	bound, _ := j.putBindings()
 
 	_ = j.visitSteps(func(_ string, step *Step) error {
-		if step.Get == "" {
+		if _, follows := bound[step]; step.Get == "" || follows {
 			return nil
 		}
 

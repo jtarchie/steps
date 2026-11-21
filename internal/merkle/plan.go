@@ -54,6 +54,11 @@ func PlanChains(
 
 	images := imagePlan{artifacts: cfg.ImageArtifacts(jobName)}
 
+	job, findErr := cfg.FindJob(jobName)
+	if findErr == nil {
+		images.followsPut = job.PutBindings()
+	}
+
 	if sets != nil {
 		chains := make([]Chain, 0, len(sets))
 
@@ -109,7 +114,10 @@ func planChainForSet(
 
 		index := i - base
 
-		if step.Get != "" {
+		if binding, follows := images.followsPut[step.Get]; step.Get != "" && follows {
+			node, err = planGetAfterPutNode(cfg, step, binding, index, parentHash)
+			stepUnskippable = true
+		} else if step.Get != "" {
 			var fetched config.Fetched
 
 			node, fetched, err = planBoundGetNode(ctx, cfg, step, index, pinned, cache, set, parentHash)
@@ -129,6 +137,26 @@ func planChainForSet(
 	}
 
 	return Chain{Nodes: prefix, RootHash: parentHash, Unskippable: unskippable}, nil
+}
+
+// planGetAfterPutNode stands in for a get after a put, whose version the put
+// prints only when it runs. Its content names the put rather than a version,
+// so its hash is never the run's; the chain is uncacheable anyway, since a put
+// precedes it.
+func planGetAfterPutNode(cfg *config.Config, step config.Step, binding config.PutBinding, i int, parentHash string) (Node, error) {
+	res, err := cfg.FindResource(binding.Resource)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+	}
+
+	resourceType, err := cfg.FindResourceType(res.Type)
+	if err != nil {
+		return Node{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+	}
+
+	return newNode(NodeKindGet, fmt.Sprintf("get %q", step.Get), i, parentHash, res.Name, func() (map[string]any, error) {
+		return GetNodeContent(cfg, step, *resourceType, res.HashedEnv(), res.Source, map[string]any{"recorded_by_put": binding.Put})
+	})
 }
 
 // planBoundGetNode builds a get node for the version the set assigned.
@@ -169,6 +197,19 @@ func planSteps(
 	prefix []Node, parentHash string, unskippable bool, cache VersionResolver, images imagePlan,
 ) ([]Chain, error) {
 	for i, step := range steps {
+		if binding, follows := images.followsPut[step.Get]; step.Get != "" && follows {
+			node, err := planGetAfterPutNode(cfg, step, binding, i, parentHash)
+			if err != nil {
+				return nil, err
+			}
+
+			prefix = append(prefix, node)
+			parentHash = node.Hash
+			unskippable = true
+
+			continue
+		}
+
 		if step.Get != "" {
 			return planGetStep(ctx, cfg, steps, i, step, pinned, prefix, parentHash, unskippable, cache, images)
 		}
@@ -193,6 +234,9 @@ func planSteps(
 type imagePlan struct {
 	artifacts map[string]bool
 	fetched   map[string]config.Fetched
+	// followsPut is the job's gets after puts, by name: the planner cannot
+	// know their version before the put prints it (see planGetAfterPutNode).
+	followsPut map[string]config.PutBinding
 }
 
 func (p imagePlan) with(get string, fetched config.Fetched) imagePlan {

@@ -1,0 +1,26 @@
+# A race: stops the branches that lose, so a put inside one may never record
+# the version the get after it would fetch.
+# expect: get "releases" follows put "releases" inside a race:, which stops the branches that lose
+
+resource_types:
+  - name: release
+    config:
+      check: echo '[{"ref":"v1"}]'
+      in: "true"
+      out: echo '{"ref":"v2"}'
+
+resources:
+  - name: releases
+    type: release
+    source: {}
+
+jobs:
+  - name: publish
+    plan:
+      - race:
+          steps:
+            - put: releases
+            - task: quick
+              inputs: []
+              run: "true"
+      - get: releases

@@ -1,0 +1,16 @@
+# A get after a put runs the type's in: with the version the put recorded.
+# A publisher with nothing to read back has no in:, so the get is refused,
+# naming the type.
+# expect: get "reply" follows put "reply", so it fetches the version that put records, but resource type "slack-reply" has no in: to fetch it with
+
+resources:
+  - name: reply
+    type: slack-reply
+    source: {channel: C123}
+
+jobs:
+  - name: answer
+    plan:
+      - put: reply
+        params: {text: hello}
+      - get: reply

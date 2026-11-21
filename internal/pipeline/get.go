@@ -5,6 +5,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -230,6 +231,7 @@ func (w *planWalk) runTriggeredBuild(
 	remainderWalk.stepRunner = build
 	remainderWalk.build = buildID
 	remainderWalk.parentHash = node.Hash
+	remainderWalk.offset = w.offset + w.index + 1
 	remainderWalk.allowGetTrigger = false
 	// Every get in the remainder binds this build's set — see
 	// fetchGetStepInPlace, which reads it before anything else.
@@ -303,7 +305,11 @@ func (w *planWalk) fetchWithHooks(
 
 	// Only now that the fetch (and its hooks) actually succeeded: recording
 	// it earlier would show resource_checks a version nothing ever fetched.
-	recordResolvedVersion(hookCtx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
+	// Not a get after a put: a put is no check, and that table is the next
+	// check's cursor.
+	if _, follows := putBindingFor(hookCtx, step); !follows {
+		recordResolvedVersion(hookCtx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
+	}
 
 	return nil
 }
@@ -399,6 +405,15 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 		return true, err
 	}
 
+	if res.disposition == stepGuardSkipped {
+		binding, _ := putBindingFor(ctx, step)
+		publishStepSkipped(ctx, w.jobName, w.index, step, mark, "", fmt.Sprintf("put %s was skipped, so there is no version to fetch", binding.Put))
+
+		w.index++
+
+		return false, nil
+	}
+
 	if res.disposition == stepChainSkipped {
 		publishStepSkipped(ctx, w.jobName, w.index, step, mark, res.published(), skipReason(res.disposition))
 		w.reportChainSkipped(ctx, res.nodeHash, w.index+1, steps[w.index+1:])
@@ -424,6 +439,10 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 func (w *planWalk) resolveInPlaceVersion(
 	ctx context.Context, step config.Step,
 ) (*config.Resource, *config.ResourceType, map[string]any, error) {
+	if binding, follows := putBindingFor(ctx, step); follows {
+		return w.resolvePutVersion(ctx, step, binding)
+	}
+
 	resource, resourceType, versions, err := fetchGetVersions(ctx, w.cfg, step, w.pinned, w.cache)
 	if err != nil {
 		return nil, nil, nil, err
@@ -449,6 +468,35 @@ func (w *planWalk) resolveInPlaceVersion(
 	return resource, resourceType, versions[0], nil
 }
 
+// errPutSkipped is a get after a put whose put its when: skipped: the get is
+// skipped with it.
+var errPutSkipped = errors.New("its put was skipped")
+
+// resolvePutVersion is resolveInPlaceVersion for a get after a put: the
+// version that put recorded, with no check. It is kept under the get as well
+// as the put, so a replay forked from this run binds it too.
+func (w *planWalk) resolvePutVersion(
+	ctx context.Context, step config.Step, binding config.PutBinding,
+) (*config.Resource, *config.ResourceType, map[string]any, error) {
+	resource, resourceType, err := findPutTarget(w.cfg, binding.Resource)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
+	}
+
+	version, skipped, err := putVersion(ctx, w.st, binding)
+	if skipped {
+		return nil, nil, nil, errPutSkipped
+	}
+
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	recordRunInput(ctx, w.st, step.Get, resource.Name, version)
+
+	return resource, resourceType, version, nil
+}
+
 // fetchGetStepInPlace resolves one version and fetches it into the walk's
 // current workspace, returning the new parentHash — or stepChainSkipped when
 // the node's hash is already in the skippable index.
@@ -456,12 +504,20 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	i := w.index
 
 	resource, resourceType, version, err := w.resolveInPlaceVersion(ctx, step)
+	if errors.Is(err, errPutSkipped) {
+		return stepResult{hash: w.parentHash, disposition: stepGuardSkipped}, nil
+	}
+
 	if err != nil {
 		return stepResult{}, err
 	}
 
 	if version == nil {
 		return stepResult{hash: w.parentHash}, nil
+	}
+
+	if binding, follows := putBindingFor(ctx, step); follows {
+		ctx = withPutSource(ctx, binding.Put)
 	}
 
 	recordBuildVersion(ctx, resource.Name, version)

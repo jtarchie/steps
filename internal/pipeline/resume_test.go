@@ -45,7 +45,7 @@ func resumeRecorded(done map[doneKey]doneStep, inputs []store.RunInput, history 
 	ctx := withResume(context.Background(), &resumeState{id: "R", resuming: true, done: done})
 	fresh := setResolution{everyInputs: []everyInput{{input: "ticks", resource: "ticks"}}}
 
-	return resumeInputSets(ctx, fakeRunInputs{inputs: inputs}, fresh, history)
+	return resumeInputSets(ctx, fakeRunInputs{inputs: inputs}, &config.Job{}, fresh, history)
 }
 
 // The e2e covers a version moving and one pruned; these cover the shapes a

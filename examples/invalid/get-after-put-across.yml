@@ -1,0 +1,24 @@
+# A put with across: runs once per cell and records a version in each, so a
+# get after the matrix would have to pick one.
+# expect: get "releases" follows put "releases", which runs once per across: cell and records a version in each
+
+resource_types:
+  - name: release
+    config:
+      check: echo '[{"ref":"v1"}]'
+      in: "true"
+      out: echo '{"ref":"v2"}'
+
+resources:
+  - name: releases
+    type: release
+    source: {}
+
+jobs:
+  - name: publish
+    plan:
+      - put: releases
+        across:
+          - var: n
+            values: ["1", "2"]
+      - get: releases

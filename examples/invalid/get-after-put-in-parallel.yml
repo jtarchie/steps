@@ -1,0 +1,24 @@
+# A get fetches what the put before it recorded, so the put has to finish
+# before the get starts. Two branches of one in_parallel: start together, and
+# the put may not have recorded anything when the get begins.
+# expect: get "releases" runs beside put "releases" in the same in_parallel, so it cannot fetch what that put records; move the get after the in_parallel block
+
+resource_types:
+  - name: release
+    config:
+      check: echo '[{"ref":"v1"}]'
+      in: "true"
+      out: echo '{"ref":"v2"}'
+
+resources:
+  - name: releases
+    type: release
+    source: {}
+
+jobs:
+  - name: publish
+    plan:
+      - in_parallel:
+          steps:
+            - put: releases
+            - get: releases

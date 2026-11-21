@@ -27,6 +27,10 @@ func LinearTypes() []string {
 // LinearFinds reports whether kind is the type a get reads.
 func LinearFinds(kind string) bool { return kind == LinearIssuesType }
 
+// LinearFetches reports whether a linear-* type has an in:, which a get after
+// its put fetches with. Only the finder does today.
+func LinearFetches(kind string) bool { return LinearFinds(kind) }
+
 // DefaultLinearTokenEnv is the variable a linear-* resource reads its key from when source.token_env does not name another.
 const DefaultLinearTokenEnv = "LINEAR_API_KEY" //nolint:gosec // the variable's name, not a credential
 
@@ -339,7 +343,7 @@ func (c *Config) linearIssueGets(job Job) []string {
 
 func (c *Config) checkLinearStep(label string, step *Step, gets []string) error {
 	name, ok := step.resourceName()
-	if !ok {
+	if !ok || step.Put == "" {
 		return nil
 	}
 

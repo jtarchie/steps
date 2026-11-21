@@ -1065,7 +1065,7 @@ jobs:
 | `labels` | labels put on the issue as it opens. GitHub creates a label the repository does not have yet, in its default color |
 | `assignees` | logins the issue is assigned to. `@me` is refused: GitHub assigns by login |
 
-A get of a `github-issue` resource is refused at load, as for every publisher. The put's version is `{id, number}`: the issue GitHub opened, by its id and by the number people write as `#N`.
+The put's version is `{id, number}`: the issue GitHub opened, by its id and by the number people write as `#N`. A [get after the put](#a-get-after-a-put-fetches-what-the-put-recorded) reads that issue back with one request, writing `issue.number`, `issue.title`, `issue.url` and `issue.json`; any other get of a `github-issue` resource is refused at load, as for every publisher.
 
 **Nothing dedupes.** A put that is retried or run again opens a second issue, exactly as a retried `github-pr-comment` posts a second comment: GitHub has no "open this unless it exists", and a title is no identity, since two children may share one. Guard it in the pipeline, where the identity is known: have the step that writes the list search the repository first and leave out any child already open, for instance one whose body carries the same `Part of #42` marker, so a re-run opens only what is missing.
 
@@ -1144,7 +1144,7 @@ jobs:
 | `labels`, `assignees` | as for `github-issue`, applied when the put opens the pull request |
 | `ready` | when true and the pull request is a draft, marks it ready for review. Default false |
 
-A get of a `github-pr` resource is refused at load, as for every publisher. The put's version is `{number, sha}`: the pull request's number and its head commit as GitHub reports it, the same shape `github-prs` uses, in the `github-pr` resource's own history.
+The put's version is `{number, sha}`: the pull request's number and its head commit as GitHub reports it, the same shape `github-prs` uses, in the `github-pr` resource's own history. A [get after the put](#a-get-after-a-put-fetches-what-the-put-recorded) reads that pull request back with one request, writing `pr.number`, `pr.sha` (the head the put recorded), `pr.title`, `pr.url` and `pr.json` — no checkout, since the branch is the one just pushed; any other get of a `github-pr` resource is refused at load, as for every publisher.
 
 **This put is idempotent, which `github-issue` is not.** A title is no identity, so an issue put that runs twice opens two. A head branch is one: GitHub allows one open pull request per head and base, so a retried or repeated put finds the pull request it opened and updates it. A closed or merged one is not found, so pushing the branch again after a merge and putting opens a new one. A head with several open pull requests (onto different bases) is refused rather than guessed at.
 
@@ -1550,7 +1550,7 @@ jobs:
       outcome: succeeded
 ```
 
-The put's version is the pushed digest; the next build's get of `app-image` finds it. A get later in the same plan does not: it was [pinned when the plan was built](#a-put-publishes-it-does-not-fetch), before the push.
+The put's version is the pushed digest; the next build's get of `app-image` finds it, and a [get after the put](#a-get-after-a-put-fetches-what-the-put-recorded) in the same plan fetches exactly that digest.
 
 - **The same digest, from the cache.** An unchanged Dockerfile and context reuse every cached layer and push the digest they pushed last time: no new version, nothing downstream triggers. `SOURCE_DATE_EPOCH=0` and `rewrite-timestamp=true` pin timestamps, and BuildKit's own exporter writes no provenance or SBOM attestations, but a step whose output is not deterministic (an `apt-get install`) gives a new digest when it is rebuilt cold. The cache is exported to and imported from the `caches:` directory (`type=local`); pointing BuildKit's own `--root` there keeps no layers between builds.
 - **Multi-platform** is `--opt platform=linux/amd64,linux/arm64` on the build; the tarball then holds one index, pushed whole, and its digest is the version. A platform other than this machine's runs under emulation, slowly.
@@ -2053,50 +2053,99 @@ A name or value is shown as text: control characters are dropped, each is cut at
 
 **A step reading a get's facts always runs**: neither a chain skip nor the step cache stands in for it, because the facts are only known once the run is under way — the same version can be fetched with a new title. Steps before it are skipped as usual.
 
-**A put's facts are shown and kept, but a later step cannot read them.** In Concourse a later step reaches them through the fetch that automatically follows a put; steps has no such fetch ([below](#a-put-publishes-it-does-not-fetch)), so `((.:comment.url))` after `put: comment` is a load error saying so.
+**A put's facts are shown and kept, but a later step cannot read them.** In Concourse a later step reaches them through the fetch that automatically follows a put; steps has no such fetch, so `((.:comment.url))` after `put: comment` is a load error saying so. Write the [get after the put](#a-get-after-a-put-fetches-what-the-put-recorded) and read that get's facts instead, when its type has an `in:`.
 
-### A put publishes; it does not fetch
+### A get after a put fetches what the put recorded
 
-A put step runs `out:` and nothing else — there is no implicit get afterward, so a put produces no artifact. (Concourse fetches the produced version automatically; steps deliberately does not: an artifact appearing in the build that no step declared is exactly the kind of ambient data flow this DSL rejects.) A plan that wants the resource's contents after a put writes the fetch it means:
+A put step runs `out:` and nothing else — there is no implicit get afterward, so a put produces no artifact on its own. (Concourse fetches the produced version automatically; steps deliberately does not: an artifact appearing in the build that no step declared is exactly the kind of ambient data flow this DSL rejects.) A plan that wants what the put made writes the fetch it means: **a `get` of the same resource after the put fetches exactly the version that put printed**, by running the type's `in:` with it. No check runs for that get, so a type with nothing to discover — a ticket, a pull request, a message — can still be read back:
 
 ```yaml
 resource_types:
-  - name: release
+  - name: ticket
     config:
-      check: |
-        printf '[{"ref": "v1.4.1"}]'
-      in: echo {{ .version.ref | shellquote }} > ref
+      # No check: this type only opens tickets, and the get below reads back
+      # the one the put opened.
+      in: |
+        echo {{ .version.id | shellquote }} > id
+        printf '{"version": {"id": "CON-7"}, "metadata": [{"name": "url", "value": "https://tickets.example/CON-7"}]}'
       out: |
-        cat notes/summary.txt        # "publish" the summary an earlier step wrote
-        printf '{"ref": "v1.4.2"}'
+        cat notes/title >&2              # "open" a ticket from the title a step wrote
+        printf '{"id": "CON-7"}'
 
 resources:
-  - name: releases
-    type: release
+  - name: ticket
+    type: ticket
     source: {}
 
 jobs:
-  - name: publish
+  - name: file
     plan:
-      - task: summarize
+      - task: describe
         outputs: [notes]
-        run: echo 'what changed' > notes/summary.txt
-      - put: releases          # out: publishes and prints v1.4.2
+        run: echo 'Bump Ruby' > notes/title
+      - put: ticket            # out: opens the ticket and prints CON-7
         inputs: [notes]
-      - get: releases          # fetch the resource, explicitly
-      - task: verify
-        inputs: [releases]
-        run: cat releases/ref
+      - get: ticket            # fetches CON-7, the version the put recorded
+      - task: title
+        inputs: [ticket]
+        run: |
+          echo "[$(cat ticket/id)]: Bump Ruby"
         assert:
-          # check's answer, NOT the v1.4.2 the put just printed — the get was
-          # pinned when the plan was built, before out: ran. See below.
-          stdout: v1.4.1
+          stdout: "[CON-7]: Bump Ruby"
     assert:
-      execution: [summarize, releases, releases, verify] # put, then get — two entries
+      execution: [describe, ticket, ticket, title] # put, then get — two entries
       outcome: succeeded
 ```
 
-The explicit get fetches the version `check` reported **when the plan was built** — check runs once, before any step, so the version the put publishes mid-run is not what the same run's get fetches (the example above pins exactly that: `out:` prints `v1.4.2`, the get still fetches `v1.4.1`). The version a put prints is recorded with the run; it reaches a `passed:`-gated get in a later run whether or not a check ever reports it (see [`passed:`](infra.md#a-version-a-job-put-counts-as-having-passed-it)); an ungated get still needs the check to report it. A put whose output nothing reads simply has no get after it.
+The run log says where the version came from — `get: ticket (version: {"id":"CON-7"}, recorded by put ticket)` — and `steps plan` lists the get as `fetches what put ticket records`, since the version is not known until the put prints it.
+
+**Which put.** The nearest put to the same resource before the get, `get: x, resource: r` aliases included; a put in a hook never counts, since a hook only reacts to the step it hangs on. The put must finish before the get starts on every path, so `steps validate` refuses, each by name:
+
+- a get in the same `in_parallel:`, `race:` or `ensemble:` as its put (move the get after the block — a put inside an `in_parallel:` with the get after the whole block is fine);
+- a put with `across:`, which records one version per cell, and a put inside a `race:`, which may be stopped;
+- two puts to the resource that run at once;
+- a `to:` route that jumps from before the put to after it;
+- `trigger:`, `version:` or `passed:` on the get, which ask for a version some other way;
+- a type with no `in:` to fetch with (`slack-reply`, `github-pr-comment`, …);
+- another get in the job with the same name.
+
+**When the put recorded nothing.** A put its `when:` skipped skips the get after it too (`skip: ticket (put ticket was skipped, so there is no version to fetch)`), and the plan carries on — give the steps that read the get the same `when:`. A put that failed under `try:`, or that printed no version, fails the get, naming the put: the plan asked for that version, and fetching another would be worse.
+
+```yaml
+resource_types:
+  - name: ticket
+    config:
+      in: echo {{ .version.id | shellquote }} > id
+      out: |
+        printf '{"id": "CON-7"}'
+
+resources:
+  - name: ticket
+    type: ticket
+    source: {}
+
+jobs:
+  - name: file
+    plan:
+      - task: decide
+        outputs: [bump]
+        run: "true"                      # nothing to bump today: bump/version stays empty
+      - put: ticket
+        when: test -s bump/version
+      - get: ticket                      # skipped with its put
+      - task: title
+        inputs: [ticket]
+        when: test -s bump/version
+        run: cat ticket/id
+      - task: done
+        inputs: []
+        run: echo nothing to do
+    assert:
+      execution: [decide, done]
+      outcome: succeeded
+```
+
+The version is kept with the run, so `--resume` after a later step failed skips the put and the get still binds what it recorded, and `--replay` from a step after the get binds what the forked run's put recorded. Every other get is resolved once, before any step runs, as before.
 
 ## Running a stock Concourse resource image
 

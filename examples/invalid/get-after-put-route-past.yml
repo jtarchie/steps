@@ -1,0 +1,28 @@
+# A to: route that jumps from before the put to after it reaches the get on a
+# path the put never took.
+# expect: success routes to "after", past put "releases", so get "releases" could run without the version that put records
+
+resource_types:
+  - name: release
+    config:
+      check: echo '[{"ref":"v1"}]'
+      in: "true"
+      out: echo '{"ref":"v2"}'
+
+resources:
+  - name: releases
+    type: release
+    source: {}
+
+jobs:
+  - name: publish
+    plan:
+      - task: decide
+        inputs: []
+        to: {success: after}
+        run: "true"
+      - put: releases
+      - task: after
+        inputs: []
+        run: "true"
+      - get: releases

@@ -85,10 +85,13 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 		return result, nil
 	})
 	if err != nil {
+		recordPut(ctx, r.st, step, putFailed, nil)
+
 		return res, err
 	}
 
 	recordPutVersion(ctx, r.st, step, result, facts)
+	recordPut(ctx, r.st, step, putRecorded, result)
 
 	return res, nil
 }
