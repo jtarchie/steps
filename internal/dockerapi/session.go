@@ -73,6 +73,8 @@ type ContainerSpec struct {
 	// 127.0.0.1 only; PublishedPort says which. Loopback because nothing
 	// that asks for one wants it reachable from another host.
 	Publish []string
+	// MaxOutput is RunOnce's bound on stdout for a caller that reads all of it: past it RunOnce fails with ErrOutputTruncated instead of answering with a cut. Zero keeps the first MiB and marks the cut, for an answer only the first line of matters.
+	MaxOutput int
 }
 
 // CreateContainer defines a container without starting it, returning its id.

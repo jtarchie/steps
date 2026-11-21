@@ -4,6 +4,7 @@ package dockerapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -114,29 +115,40 @@ func (c *Client) RunOnce(ctx context.Context, spec ContainerSpec) (int, string, 
 	}
 	defer func() { _ = logs.Close() }()
 
-	stdout, stderr := &cappedBuffer{}, &cappedBuffer{}
+	stdout, stderr := &cappedBuffer{limit: runOnceOutputCap}, &cappedBuffer{limit: runOnceOutputCap}
+	if spec.MaxOutput > 0 {
+		stdout.limit = spec.MaxOutput
+	}
 
 	_, err = stdcopy.StdCopy(stdout, stderr, logs)
 	if err != nil {
 		return code, "", "", fmt.Errorf("reading container %s's output: %w", id, err)
 	}
 
+	if spec.MaxOutput > 0 && stdout.truncated {
+		return code, "", stderr.String(), fmt.Errorf("%w: container %s printed more than %d bytes", ErrOutputTruncated, id, spec.MaxOutput)
+	}
+
 	return code, strings.TrimSpace(stdout.String()), stderr.String(), nil
 }
 
-// runOnceOutputCap bounds each of RunOnce's streams: the output is whatever the image chooses to print, and the one caller reads a digest from the first line, so truncating (with a marker) loses nothing it parses.
+// ErrOutputTruncated is a RunOnce whose stdout outgrew the spec's MaxOutput. A caller that sets one parses all of it, so a cut would be read as an answer: the folder listing that decides what is deleted at home read one as "these files are gone".
+var ErrOutputTruncated = errors.New("output exceeded its bound")
+
+// runOnceOutputCap bounds each of RunOnce's streams when the spec names no MaxOutput: the output is whatever the image chooses to print, and the digest caller reads only the first line, so truncating (with a marker) loses nothing it parses.
 const runOnceOutputCap = 1 << 20
 
-// cappedBuffer keeps the first runOnceOutputCap bytes and swallows the rest, reporting full writes so the log stream is still drained rather than failed with a short write.
+// cappedBuffer keeps the first limit bytes and swallows the rest, reporting full writes so the log stream is still drained rather than failed with a short write.
 type cappedBuffer struct {
 	buf       strings.Builder
+	limit     int
 	truncated bool
 }
 
 func (b *cappedBuffer) Write(p []byte) (int, error) {
 	n := len(p)
 
-	room := runOnceOutputCap - b.buf.Len()
+	room := b.limit - b.buf.Len()
 	if len(p) > room {
 		p, b.truncated = p[:room], true
 	}

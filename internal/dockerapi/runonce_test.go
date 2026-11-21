@@ -2,6 +2,7 @@ package dockerapi
 
 import (
 	"encoding/binary"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -66,6 +67,30 @@ func TestRunOnceCapsAnOversizeOutput(t *testing.T) {
 
 	if len(stdout) > runOnceOutputCap+64 {
 		t.Errorf("stdout = %d bytes, want it capped near %d", len(stdout), runOnceOutputCap)
+	}
+}
+
+// A caller that parses all of stdout names a MaxOutput, and past it gets an error rather than a cut it would read as the whole answer: the changed-directory listing read one as deletions.
+func TestRunOnceRefusesOutputPastMaxOutput(t *testing.T) {
+	t.Parallel()
+
+	engine := oversizeLogsEngine(t)
+
+	client, err := New("tcp://" + engine.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = client.Close() })
+
+	_, stdout, _, err := client.RunOnce(t.Context(), ContainerSpec{Image: "steps-test/big:1", MaxOutput: 2 << 20})
+	if !errors.Is(err, ErrOutputTruncated) || stdout != "" {
+		t.Fatalf("RunOnce = %d bytes, %v; want no stdout and ErrOutputTruncated", len(stdout), err)
+	}
+
+	_, stdout, _, err = client.RunOnce(t.Context(), ContainerSpec{Image: "steps-test/big:1", MaxOutput: 4 << 20})
+	if err != nil || len(stdout) < 3<<20 {
+		t.Fatalf("RunOnce = %d bytes, %v; want all three MiB under a four MiB bound", len(stdout), err)
 	}
 }
 

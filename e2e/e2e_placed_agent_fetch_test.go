@@ -158,3 +158,37 @@ jobs:
 		t.Errorf("bytes_received = %d, want about the edited files, not the %d-byte tree", row.BytesReceived, fetchBlobBytes)
 	}
 }
+
+// TestAChangeInABigDirectoryKeepsItsSiblings: the listing that decides what a step deleted came back through RunOnce's 1 MiB cut, and the names past the cut read as deletions, so a one-file edit in a directory of thousands deleted its tail at home (a work/prs.yml bot run whose yarn install filled the upper layer lost five specs). A listing too big to hold whole fails the step; this one fits and must come home entire.
+func TestAChangeInABigDirectoryKeepsItsSiblings(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
+	requireDockerE2E(t)
+
+	// 12000 names of ~100 bytes: a listing of about 1.2 MB.
+	path := writePipeline(t, t.TempDir(), fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+jobs:
+- name: edit
+  plan:
+  - task: prepare
+    outputs: [data]
+    run: mkdir -p data/big && cd data/big && for i in $(seq 1 12000); do printf '%%096d\n' $i; done | xargs touch
+
+  - task: change
+    image: %[1]s
+    inputs: [data]
+    outputs: [data]
+    run: echo changed > data/big/$(printf '%%096d' 1)
+
+  - task: check
+    inputs: [data]
+    run: test "$(ls data/big | wc -l)" -eq 12000 && test -e data/big/$(printf '%%096d' 12000) && test -s data/big/$(printf '%%096d' 1)
+`, dockerE2EImage))
+
+	mustRun(t, path)
+}

@@ -111,6 +111,8 @@ func (s *plusSession) mergedListings(ctx context.Context, overlay, upper string)
 		Labels:  shell.OwnershipLabels(),
 		Mounts:  []dockerapi.Bind{volumeMount(overlay, "/m", true), volumeMount(upper, "/u", true)},
 		Network: "none",
+		// Every name decides what survives at home, so a cut listing must fail rather than parse: under RunOnce's 1 MiB default, a step that ran yarn install (node_modules in the upper layer) had the tail of a sibling directory's listing dropped, and those files were deleted at home.
+		MaxOutput: listingMaxBytes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
@@ -124,6 +126,9 @@ func (s *plusSession) mergedListings(ctx context.Context, overlay, upper string)
 
 	return parseListings(stdout)
 }
+
+// listingMaxBytes bounds the listing held in memory: about two million names at a hundred bytes each.
+const listingMaxBytes = 256 << 20
 
 // errListingFailed is the listing container saying no.
 var errListingFailed = errors.New("listing the changed directories failed")
