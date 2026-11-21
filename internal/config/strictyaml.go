@@ -1,6 +1,6 @@
 package config
 
-// Strict YAML decoding: unknown keys are load errors, everywhere. yaml.v3's
+// Strict YAML decoding: unknown keys are load errors, everywhere. yaml.v4's
 // KnownFields(true) covers every field the decoder walks itself, and
 // rejectUnknownKeys covers the mappings this package decodes by hand.
 
@@ -14,7 +14,7 @@ import (
 	"slices"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // strictUnmarshal decodes YAML into out, rejecting any key that has no

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/docs"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // docSlackFixtures maps a slack=<id> fence to its assertion on what the workspace received.

@@ -5,7 +5,7 @@ package config
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // refuseWorkspaceBlock names what each workspace: key became, before the strict decode would answer only "field workspace not found". Refused rather than kept as an alias: an alias honored keeps the pipeline overriding the operator, the thing being removed, and one ignored reads as configured and binds nothing.

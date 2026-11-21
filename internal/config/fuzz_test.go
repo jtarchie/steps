@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 const canary = "CANARY-daemon-local-file-7f3a"

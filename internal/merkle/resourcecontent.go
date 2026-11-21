@@ -98,7 +98,7 @@ func withMCPResourceStage(cfg *config.Config, resourceType config.ResourceType, 
 	content["mcp_server"] = server
 
 	if len(call.Args) > 0 {
-		// Normalized, not stored raw: yaml.v3 decodes a mapping whose keys
+		// Normalized, not stored raw: yaml.v4 decodes a mapping whose keys
 		// are not all strings into map[any]any (`args: {filters: {2024:
 		// "yes"}}`, an unquoted `on:`), which encoding/json cannot marshal —
 		// so HashNode would fail the whole plan with "json: unsupported type"

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// A key yaml.v3 decoded as a non-string spells the same in the cache key as in the call it describes (resource's renderArgValue uses the same config.StringKeys), nested or not.
+// A key yaml.v4 decoded as a non-string spells the same in the cache key as in the call it describes (resource's renderArgValue uses the same config.StringKeys), nested or not.
 func TestNormalizeMapKeysSpellsNonStringKeysThroughStringKeys(t *testing.T) {
 	t.Parallel()
 

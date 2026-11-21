@@ -108,7 +108,7 @@ func renderArgValue(path string, value any, data map[string]any) (any, error) {
 	case map[string]any:
 		return renderArgMap(path, typed, data)
 	case map[any]any:
-		// yaml.v3 decodes a mapping whose keys are not ALL strings into
+		// yaml.v4 decodes a mapping whose keys are not ALL strings into
 		// map[any]any — an unquoted `on:`, a filter keyed by a year. Left in
 		// that shape it is both un-rendered (its templates would reach the
 		// server as the literal text `{{ .version.ts }}`) and un-marshalable

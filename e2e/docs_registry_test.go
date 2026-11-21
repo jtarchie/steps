@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/go-containerregistry/pkg/authn"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 
 	"github.com/jtarchie/steps/docs"
 )

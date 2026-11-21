@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // writeConfig writes pipeline to a temp pipeline.yml and returns its path.
@@ -908,7 +908,7 @@ tools:
 		Tools []ToolSpec `yaml:"tools"`
 	}
 
-	err := yaml.Unmarshal([]byte(doc), &v)
+	err := yaml.Unmarshal([]byte(doc), &v) //nolint:musttag // ToolSpec decodes itself (UnmarshalYAML); musttag knows only yaml.v3's Unmarshaler
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -938,7 +938,7 @@ tools:
 		Tools []ToolSpec `yaml:"tools"`
 	}
 
-	err := yaml.Unmarshal([]byte(doc), &v)
+	err := yaml.Unmarshal([]byte(doc), &v) //nolint:musttag // ToolSpec decodes itself (UnmarshalYAML); musttag knows only yaml.v3's Unmarshaler
 	if err == nil {
 		t.Error("expected an error for a sequence-node tool entry")
 	}
@@ -951,7 +951,7 @@ func TestFixSpecUnmarshalScalar(t *testing.T) {
 		Fix *FixSpec `yaml:"fix"`
 	}
 
-	err := yaml.Unmarshal([]byte("fix: fixer\n"), &v)
+	err := yaml.Unmarshal([]byte("fix: fixer\n"), &v) //nolint:musttag // FixSpec decodes itself (UnmarshalYAML); musttag knows only yaml.v3's Unmarshaler
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -978,7 +978,7 @@ fix:
 		Fix *FixSpec `yaml:"fix"`
 	}
 
-	err := yaml.Unmarshal([]byte(doc), &v)
+	err := yaml.Unmarshal([]byte(doc), &v) //nolint:musttag // FixSpec decodes itself (UnmarshalYAML); musttag knows only yaml.v3's Unmarshaler
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1017,7 +1017,7 @@ func TestFixSpecUnmarshalSequenceErrors(t *testing.T) {
 		Fix *FixSpec `yaml:"fix"`
 	}
 
-	err := yaml.Unmarshal([]byte("fix: [a, b]\n"), &v)
+	err := yaml.Unmarshal([]byte("fix: [a, b]\n"), &v) //nolint:musttag // FixSpec decodes itself (UnmarshalYAML); musttag knows only yaml.v3's Unmarshaler
 	if err == nil {
 		t.Error("expected an error for a sequence-node fix entry")
 	}

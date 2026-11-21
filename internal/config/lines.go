@@ -6,7 +6,7 @@ package config
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // stampLines records the source line of every job and plan step by walking the

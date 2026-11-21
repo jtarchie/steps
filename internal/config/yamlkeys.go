@@ -3,10 +3,10 @@ package config
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
-// StringKeys gives a mapping yaml.v3 decoded as map[any]any (an unquoted on:, a filter keyed by a year) string keys, one level deep and leaving values as they are. The cache key (merkle) and the call it describes (resource) both convert through here, because they must agree on how a key is spelled.
+// StringKeys gives a mapping yaml.v4 decoded as map[any]any (an unquoted on:, a filter keyed by a year) string keys, one level deep and leaving values as they are. The cache key (merkle) and the call it describes (resource) both convert through here, because they must agree on how a key is spelled.
 func StringKeys(mapping map[any]any) map[string]any {
 	keyed := make(map[string]any, len(mapping))
 	for key, value := range mapping {
@@ -20,7 +20,7 @@ func stringKey(key any) string {
 	return fmt.Sprint(key)
 }
 
-// refuseCollidingKeys refuses a mapping two of whose keys StringKeys spells alike (1.0 and "1"): yaml.v3 keeps both, and StringKeys would keep one at map-iteration random, separately for the call and its cache key.
+// refuseCollidingKeys refuses a mapping two of whose keys StringKeys spells alike (1.0 and "1"): yaml.v4 keeps both, and StringKeys would keep one at map-iteration random, separately for the call and its cache key.
 func refuseCollidingKeys(source []byte) error {
 	return collidingKeys(parseNode(source))
 }

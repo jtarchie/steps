@@ -20,7 +20,7 @@ import (
 	"slices"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // UpstreamDir is the directory a TASK reader's demanded outcomes are

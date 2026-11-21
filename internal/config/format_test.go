@@ -23,7 +23,42 @@ func TestFormatMovesAPipelineAssertLastWithoutDoublingABlankLine(t *testing.T) {
 	}
 }
 
-// TestFormatRefusesWhatIsNotAPipeline: a vars file, a task file and a multi-document file are not pipelines, so a directory walk passes over them.
+// TestFormatKeepsAnEmojiBlockABlock: yaml.v3 (and yaml.v4 by default) calls anything above U+FFFF unprintable, so a `run: |` holding 🤖 came out as one double-quoted string, and a `#` line further down read as a lost comment and fmt refused the file (pipelines' work/linear-release.yml). WithSupplementaryUnicode is the fix.
+func TestFormatKeepsAnEmojiBlockABlock(t *testing.T) {
+	t.Parallel()
+
+	const source = "jobs:\n- name: a\n  plan:\n  - task: t\n    run: |\n      printf '🤖 done\\n'\n      # not a YAML comment\n      true\n"
+	const want = "jobs:\n  - name: a\n    plan:\n      - task: t\n        run: |\n          printf '🤖 done\\n'\n          # not a YAML comment\n          true\n"
+
+	got, err := Format([]byte(source), Bundle{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(got) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestFormatNeverWrapsALongLine: yaml.v4's v3 preset wraps at 80 columns where yaml.v3's encoder never did, which would fold every long description: and flow mapping onto a second line.
+func TestFormatNeverWrapsALongLine(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("word ", 30)
+	source := "jobs:\n- name: a\n  plan:\n  - task: t\n    run: \"echo " + long + "\"\n"
+	want := "jobs:\n  - name: a\n    plan:\n      - task: t\n        run: \"echo " + long + "\"\n"
+
+	got, err := Format([]byte(source), Bundle{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(got) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestFormatRefusesWhatIsNotAPipeline:a vars file, a task file and a multi-document file are not pipelines, so a directory walk passes over them.
 func TestFormatRefusesWhatIsNotAPipeline(t *testing.T) {
 	t.Parallel()
 

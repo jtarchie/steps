@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // hostGateway is docker's alias for the machine running the daemon, which it substitutes when the container is created.
@@ -58,7 +58,7 @@ func (h *ExtraHosts) UnmarshalYAML(node *yaml.Node) error {
 		*h = entries
 
 		return nil
-	case yaml.DocumentNode, yaml.ScalarNode, yaml.AliasNode:
+	case yaml.DocumentNode, yaml.ScalarNode, yaml.AliasNode, yaml.StreamNode:
 	}
 
 	return fmt.Errorf("line %d: extra_hosts is a map of name: address or a list of name:address strings", node.Line)

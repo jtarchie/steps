@@ -48,6 +48,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0
 	go.opentelemetry.io/proto/otlp v1.11.1
 	go.uber.org/goleak v1.3.0
+	go.yaml.in/yaml/v4 v4.0.0
 	golang.org/x/crypto v0.59.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sys v0.50.0
@@ -57,7 +58,6 @@ require (
 	google.golang.org/api v0.316.0
 	google.golang.org/genai v1.79.1
 	google.golang.org/protobuf v1.36.12
-	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.62.0
 )
 
@@ -131,3 +131,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.13.0 // indirect
 )
+
+replace go.yaml.in/yaml/v4 => github.com/jtarchie/go-yaml/v4 v4.0.1-0.20261121155752-b00bbf3852cc

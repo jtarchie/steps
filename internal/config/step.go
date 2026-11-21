@@ -6,7 +6,7 @@ package config
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // Step is a flat union of the step kinds this interpreter supports: get,
@@ -506,7 +506,7 @@ func (in *InputSpec) UnmarshalYAML(node *yaml.Node) error {
 
 		return nil
 	case yaml.SequenceNode:
-		return node.Decode(&in.Names) //nolint:wrapcheck // yaml.v3 error is already descriptive
+		return node.Decode(&in.Names) //nolint:wrapcheck // yaml.v4 error is already descriptive
 	default:
 		return fmt.Errorf("inputs at line %d must be a sequence of names or the scalar \"all\"", node.Line)
 	}
@@ -541,7 +541,7 @@ func (c *Config) validateTaskInputsAll() error {
 // Inputs() declares the empty "starts from nothing" form, Inputs("a", "b") a
 // named list. It exists so callers building a Step programmatically (tests,
 // and any future config synthesis) get the same declared-vs-absent distinction
-// yaml.v3 gives a decoded pipeline.
+// yaml.v4 gives a decoded pipeline.
 func Inputs(names ...string) *InputSpec {
 	if names == nil {
 		names = []string{}
@@ -625,7 +625,7 @@ type FileRef struct {
 func (f *FileRef) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
 	case yaml.ScalarNode:
-		return value.Decode(&f.Path) //nolint:wrapcheck // yaml.v3 error is already descriptive
+		return value.Decode(&f.Path) //nolint:wrapcheck // yaml.v4 error is already descriptive
 	case yaml.MappingNode:
 		err := rejectUnknownKeys(value, "message_files", "artifact", "path")
 		if err != nil {

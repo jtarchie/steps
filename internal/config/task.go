@@ -5,7 +5,7 @@ package config
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // Task is a named, reusable command a `task` step can invoke by name instead
@@ -122,7 +122,7 @@ type FixSpec struct {
 func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear here
 	case yaml.ScalarNode:
-		return value.Decode(&f.Agent) //nolint:wrapcheck // yaml.v3 error is already descriptive
+		return value.Decode(&f.Agent) //nolint:wrapcheck // yaml.v4 error is already descriptive
 	case yaml.MappingNode:
 		err := rejectUnknownKeys(value, "task fix",
 			"agent", "messages", "message_files", "dir", "tools", "attempts", "timeout")

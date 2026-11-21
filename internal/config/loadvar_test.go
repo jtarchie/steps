@@ -23,7 +23,7 @@ func TestJSONWithTrailingTextIsRefused(t *testing.T) {
 	}
 }
 
-// TestYAMLKeysAreStrings: yaml.v3 decodes a mapping with a non-string key as map[any]any, which no field path reached, no mask saw into, and json could not encode — so reveal: true failed the step.
+// TestYAMLKeysAreStrings: yaml.v4 decodes a mapping with a non-string key as map[any]any, which no field path reached, no mask saw into, and json could not encode — so reveal: true failed the step.
 func TestYAMLKeysAreStrings(t *testing.T) {
 	t.Parallel()
 

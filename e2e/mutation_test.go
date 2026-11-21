@@ -36,7 +36,7 @@ import (
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 
 	"github.com/jtarchie/steps/docs"
 	"github.com/jtarchie/steps/internal/testdocker"

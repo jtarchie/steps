@@ -7,7 +7,7 @@ package config
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // ToolSpec is one entry in an agent step's tools: list — a built-in tool
@@ -170,7 +170,7 @@ type ToolSpec struct {
 func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind { //nolint:exhaustive // yaml.Node.Kind covers document/alias kinds that can't appear in a decoded sequence element
 	case yaml.ScalarNode:
-		return value.Decode(&t.Builtin) //nolint:wrapcheck // yaml.v3 error is already descriptive
+		return value.Decode(&t.Builtin) //nolint:wrapcheck // yaml.v4 error is already descriptive
 	case yaml.MappingNode:
 		err := rejectUnknownKeys(value, "agent tool",
 			"builtin", "name", "description", "run", "agent", "mcp", "tool", "tools",

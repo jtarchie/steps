@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// yaml.v3 decodes a mapping with a non-string key (an unquoted on:, a year) into map[any]any; both the cache key and the call it describes must spell those keys the same way, so they share this one conversion.
+// yaml.v4 decodes a mapping with a non-string key (an unquoted on:, a year) into map[any]any; both the cache key and the call it describes must spell those keys the same way, so they share this one conversion.
 func TestStringKeysSpellsEveryKeyTheWayFmtSprintDoes(t *testing.T) {
 	t.Parallel()
 

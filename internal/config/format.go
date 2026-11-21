@@ -1,6 +1,6 @@
 package config
 
-// The standard layout `steps fmt` writes (docs/fmt.md): a yaml.v3 node round trip, keys reordered by what the config structs say a mapping is, blank lines put back by structure, and a guard that refuses any rewrite that changed what the file means.
+// The standard layout `steps fmt` writes (docs/fmt.md): a yaml.v4 node round trip, keys reordered by what the config structs say a mapping is, blank lines put back by structure, and a guard that refuses any rewrite that changed what the file means.
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // ErrNotPipeline is Format's refusal of YAML that is not a pipeline (a vars file, a task file), which a directory walk skips and names.
@@ -50,10 +50,17 @@ func Format(source []byte, fsys Files) ([]byte, error) {
 
 	var encoded bytes.Buffer
 
-	enc := yaml.NewEncoder(&encoded)
-	enc.SetIndent(2)
+	// WithSupplementaryUnicode keeps an emoji in a `run: |` block as itself. Without it the emitter calls anything above U+FFFF unprintable and rewrites the whole block as one double-quoted string, which also breaks restoreScalars' premise that formatting never rewrites a scalar (yaml/go-yaml#354; the option is jtarchie/go-yaml until yaml/go-yaml#521 lands).
+	enc, err := yaml.NewDumper(&encoded, yaml.WithV3Defaults(), yaml.WithIndent(2), yaml.WithLineWidth(-1), yaml.WithSupplementaryUnicode())
+	if err != nil {
+		return nil, fmt.Errorf("could not configure YAML encoder: %w", err)
+	}
 
-	err = enc.Encode(&doc)
+	err = enc.Dump(&doc)
+	if err == nil {
+		err = enc.Close()
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("could not encode YAML: %w", err)
 	}
@@ -226,7 +233,7 @@ func separatesComments(pairs, sorted []pair) bool {
 	return false
 }
 
-// footLeaves is whether a comment written under the last key, which yaml.v3 holds as that key's foot comment, would leave the end of the mapping with it.
+// footLeaves is whether a comment written under the last key, which yaml.v4 holds as that key's foot comment, would leave the end of the mapping with it.
 func footLeaves(pairs, sorted []pair) bool {
 	if len(pairs) == 0 {
 		return false
@@ -259,7 +266,7 @@ func fieldByTag(typ reflect.Type, key string) (reflect.Type, bool) {
 	return nil, false
 }
 
-// unmergeTags drops the !!merge tag yaml.v3 resolves `<<` to, which its encoder otherwise prints as `!!merge <<:`.
+// unmergeTags drops the !!merge tag yaml.v4 resolves `<<` to, which its encoder otherwise prints as `!!merge <<:`.
 func unmergeTags(node *yaml.Node) {
 	if node.Kind == yaml.ScalarNode && node.Tag == "!!merge" {
 		node.Tag = ""
@@ -270,7 +277,7 @@ func unmergeTags(node *yaml.Node) {
 	}
 }
 
-// hoistAnchoredComments moves a comment written above `- &name` back onto the mapping: yaml.v3 parses it onto the first key, where the encoder prints it inside the item. One written below the anchor stays where it was.
+// hoistAnchoredComments moves a comment written above `- &name` back onto the mapping: yaml.v4 parses it onto the first key, where the encoder prints it inside the item. One written below the anchor stays where it was.
 func hoistAnchoredComments(node *yaml.Node) {
 	if node.Kind == yaml.MappingNode && node.Anchor != "" && len(node.Content) > 0 && node.HeadComment == "" && aboveAnchor(node) {
 		node.HeadComment, node.Content[0].HeadComment = node.Content[0].HeadComment, ""
@@ -626,7 +633,7 @@ func missingComments(before, after []byte) []string {
 	return missing
 }
 
-// commentLines is every "#..." tail in source, read as text rather than through yaml.v3, which drops a comment in some positions on parse and would then miss the same one dropped on encode. Text inside scalars counts too, harmlessly: formatting never rewrites a scalar, so it is on both sides.
+// commentLines is every "#..." tail in source, read as text rather than through yaml.v4, which drops a comment in some positions on parse and would then miss the same one dropped on encode. Text inside scalars counts too, harmlessly: formatting never rewrites a scalar, so it is on both sides.
 func commentLines(source []byte) []string {
 	var tails []string
 

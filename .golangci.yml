@@ -73,6 +73,24 @@ linters:
       gohawk:
         type: module
         description: Correctness-focused ownership, lifecycle, and concurrency checks.
+    # musttag knows gopkg.in/yaml.v3 by name and not go.yaml.in/yaml/v4, so the
+    # move to v4 would have silently dropped the check without these. It also
+    # knows only v3's Unmarshaler, so a type with its own UnmarshalYAML needs a
+    # //nolint:musttag at the call (config_test.go has five).
+    musttag:
+      functions:
+        - name: go.yaml.in/yaml/v4.Marshal
+          tag: yaml
+          arg-pos: 0
+        - name: go.yaml.in/yaml/v4.Unmarshal
+          tag: yaml
+          arg-pos: 1
+        - name: (*go.yaml.in/yaml/v4.Encoder).Encode
+          tag: yaml
+          arg-pos: 0
+        - name: (*go.yaml.in/yaml/v4.Decoder).Decode
+          tag: yaml
+          arg-pos: 0
     # A ctx in scope carries the line's pipeline/revision/run/job (events.LogHandler), so a slog call that ignores it loses them (#121).
     sloglint:
       context: scope
@@ -138,7 +156,7 @@ linters:
             # x/sys reads the terminal size for the live progress display.
             - "golang.org/x/sys/unix"
             - "github.com/jtarchie/steps/docs"
-            - "gopkg.in/yaml.v3"
+            - "go.yaml.in/yaml/v4"
             # goleak is test-only: goleak_test.go's TestMain fails a package's
             # tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
@@ -259,7 +277,7 @@ linters:
             # step properties still match config.Step's yaml tags. The schema
             # is a documentation artifact, and this is what stops it drifting.
             - "github.com/santhosh-tekuri/jsonschema/v6"
-            - "gopkg.in/yaml.v3"
+            - "go.yaml.in/yaml/v4"
             - "go.uber.org/goleak"
             # bcrypt is test-only here: the local-user fixtures hash their passwords the way an operator's htpasswd does.
             - "golang.org/x/crypto/bcrypt"
@@ -400,7 +418,7 @@ linters:
           allow:
             - "$gostd"
             - "github.com/expr-lang/expr"
-            - "gopkg.in/yaml.v3"
+            - "go.yaml.in/yaml/v4"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/template"
             - "go.uber.org/goleak"
@@ -561,7 +579,7 @@ linters:
             - "**/internal/config/**"
           allow:
             - "$gostd"
-            - "gopkg.in/yaml.v3"
+            - "go.yaml.in/yaml/v4"
             # test-only (ConfigShellquoteTestOnly): shellquote_test.go holds
             # across:'s ported shellquote to the one internal/template calls.
             - "github.com/frioux/leatherman/pkg/shellquote"

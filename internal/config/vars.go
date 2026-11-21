@@ -17,7 +17,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // varPattern matches a ((name)) reference. Concourse's spelling, kept because
@@ -1009,7 +1009,7 @@ func LocalValue(value any, ref LocalRef) (string, error) {
 }
 
 // stringKeys spells every mapping key of a decoded YAML value as a string, as
-// Concourse's YAML-to-JSON reading does: yaml.v3 decodes a mapping with any
+// Concourse's YAML-to-JSON reading does: yaml.v4 decodes a mapping with any
 // other key as map[any]any, which no field path, mask or encoder reaches.
 func stringKeys(value any) any {
 	switch typed := value.(type) {

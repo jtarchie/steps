@@ -6,7 +6,7 @@ package config
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // ContextSpec is a step's context: — what this step reads from named earlier

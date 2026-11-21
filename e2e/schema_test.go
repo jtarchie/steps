@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/webhook"
@@ -297,7 +297,7 @@ func yamlTagNames(t *testing.T, structType reflect.Type) map[string]struct{} {
 	for i := range structType.NumField() {
 		tag, declared := structType.Field(i).Tag.Lookup("yaml")
 		if !declared && structType.Field(i).IsExported() {
-			// yaml.v3 decodes an untagged exported field under its lowercased name, a key no schema, doc or hash table would know about.
+			// yaml.v4 decodes an untagged exported field under its lowercased name, a key no schema, doc or hash table would know about.
 			t.Errorf("config.%s.%s has no yaml tag; name its key, or yaml:\"-\" if it is never written", structType.Name(), structType.Field(i).Name)
 		}
 

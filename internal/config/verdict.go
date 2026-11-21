@@ -6,7 +6,7 @@ package config
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // VerdictRoute is one entry of a verdicts: list: the outcome name the model may

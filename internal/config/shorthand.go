@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // expandInParallelShorthand rewrites a step's `in_parallel: [steps...]` — the
