@@ -838,7 +838,7 @@ func checkResource(ctx context.Context, cfg *config.Config, st PollStore, resour
 	}
 
 	// Opened before placement, so a worker a check had to start is in the check's trace.
-	ctx, endCheck := traceCheck(ctx, cfg, *resource)
+	ctx, endCheck := events.StartCheck(ctx, resourceName)
 	defer func() { endCheck(err) }()
 
 	ctx, err = pipeline.PlaceResource(ctx, cfg, resourceName)
@@ -884,15 +884,6 @@ func checkResource(ctx context.Context, cfg *config.Config, st PollStore, resour
 		versions:  versions,
 		coldStart: !found,
 	}, true, nil
-}
-
-// traceCheck opens a check's span, except for a schedule's, whose check reads a clock: a span per poll of it is volume that says nothing.
-func traceCheck(ctx context.Context, cfg *config.Config, resource config.Resource) (context.Context, func(error)) {
-	if cfg.IsCron(resource) {
-		return ctx, func(error) {}
-	}
-
-	return events.StartCheck(ctx, resource.Name)
 }
 
 // recordedVersion reads the version last recorded for a resource, decoded.

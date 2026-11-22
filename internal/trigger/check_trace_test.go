@@ -83,33 +83,3 @@ func TestAFailedCheckEndsItsSpanWithTheError(t *testing.T) {
 		t.Errorf("checks ended = %v, want the failure naming items", tracer.ended)
 	}
 }
-
-// A cron check reads a clock and runs nothing, so a span for it says nothing: at one a poll, two schedules were a fifth of everything an idle daemon exported.
-func TestACronCheckIsNotASpan(t *testing.T) {
-	dir := t.TempDir()
-	cfg := loadConfig(t, dir, `
-defaults:
-  preflight:
-    disabled: true
-resources:
-- name: hourly
-  type: cron
-  source:
-    expression: "0 * * * *"
-jobs:
-- name: build
-  plan:
-  - get: hourly
-    trigger: true
-`)
-	tracer := traceChecks(t)
-
-	_, err := pollOnce(t.Context(), cfg, mustOpenStore(t, dir))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(tracer.started) != 0 {
-		t.Errorf("checks started = %v, want none for a schedule", tracer.started)
-	}
-}
