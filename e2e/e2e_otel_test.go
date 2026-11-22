@@ -320,6 +320,47 @@ func TestOTelPutsADockerCallUnderItsStep(t *testing.T) {
 	t.Fatal("no docker exec span was exported")
 }
 
+// TestOTelPutsADockerTeardownInItsStepsTrace: a session is closed with no context to carry a span, so the removal of its container and volumes was a root span apiece, a trace of one call that named nothing it belonged to.
+func TestOTelPutsADockerTeardownInItsStepsTrace(t *testing.T) {
+	requireDockerE2E(t)
+
+	collector := newOTLPCollector(t)
+
+	path := pipelinePath(t, t.TempDir())
+	writePipelineFile(t, path, `jobs:
+- name: build
+  plan:
+  - task: boxed
+    image: alpine:3.20
+    run: echo hi
+`)
+
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
+	if err != nil {
+		t.Fatalf("steps run: %v", err)
+	}
+
+	spans, _ := collector.snapshot()
+	boxed := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "task boxed")
+	removed := false
+
+	for _, span := range spans {
+		if span.GetKind() != tracepb.Span_SPAN_KIND_CLIENT || !strings.HasPrefix(span.GetName(), "DELETE /") {
+			continue
+		}
+
+		removed = removed || strings.HasPrefix(span.GetName(), "DELETE /containers/")
+
+		if string(span.GetTraceId()) != string(boxed.GetTraceId()) || len(span.GetParentSpanId()) == 0 {
+			t.Errorf("%s is a trace of its own, not part of the run that made it", span.GetName())
+		}
+	}
+
+	if !removed {
+		t.Fatal("no container removal span was exported")
+	}
+}
+
 // TestOTelMeasuresARun: a run's duration and outcome, how many runs are active, and each step's duration by kind and result — which is where a cache's hit ratio comes from.
 func TestOTelMeasuresARun(t *testing.T) {
 	collector := newOTLPCollector(t)

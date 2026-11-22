@@ -215,3 +215,29 @@ func checked(t *testing.T, err error) sdktrace.ReadOnlySpan {
 
 	return spans[0]
 }
+
+// A teardown runs on a context of its own, and an HTTP client takes its provider from its context's span: so the span carried across has to be the real one, which a traceparent string cannot rebuild.
+func TestWorkUnderACarriedTraceIsUnderTheSpanItCameFrom(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+
+	tracer, err := newRunTracer(provider.Tracer("test"), metricnoop.NewMeterProvider().Meter("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	under, step := provider.Tracer("test").Start(context.Background(), "step")
+	carry := tracer.Carry(under)
+	step.End()
+
+	later := carry(context.Background())
+
+	_, teardown := trace.SpanFromContext(later).TracerProvider().Tracer("client").Start(later, "teardown")
+	teardown.End()
+
+	spans := exporter.GetSpans().Snapshots()
+	if len(spans) != 2 || spans[1].Parent().SpanID() != spans[0].SpanContext().SpanID() {
+		t.Fatalf("spans = %v, want the teardown exported under the step", spans)
+	}
+}

@@ -25,6 +25,10 @@ func (c *checkTracer) StartCheck(ctx context.Context, resource string) (context.
 	return context.WithValue(ctx, checkSpanKey{}, "00-check-of-"+resource), func(err error) { c.ended = append(c.ended, err) }
 }
 
+func (c *checkTracer) Carry(context.Context) func(context.Context) context.Context {
+	return func(ctx context.Context) context.Context { return ctx }
+}
+
 func (c *checkTracer) Traceparent(ctx context.Context) string {
 	parent, _ := ctx.Value(checkSpanKey{}).(string)
 
@@ -77,5 +81,35 @@ func TestAFailedCheckEndsItsSpanWithTheError(t *testing.T) {
 
 	if len(tracer.ended) != 1 || tracer.ended[0] == nil || !strings.Contains(tracer.ended[0].Error(), "items") {
 		t.Errorf("checks ended = %v, want the failure naming items", tracer.ended)
+	}
+}
+
+// A cron check reads a clock and runs nothing, so a span for it says nothing: at one a poll, two schedules were a fifth of everything an idle daemon exported.
+func TestACronCheckIsNotASpan(t *testing.T) {
+	dir := t.TempDir()
+	cfg := loadConfig(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+resources:
+- name: hourly
+  type: cron
+  source:
+    expression: "0 * * * *"
+jobs:
+- name: build
+  plan:
+  - get: hourly
+    trigger: true
+`)
+	tracer := traceChecks(t)
+
+	_, err := pollOnce(t.Context(), cfg, mustOpenStore(t, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(tracer.started) != 0 {
+		t.Errorf("checks started = %v, want none for a schedule", tracer.started)
 	}
 }
