@@ -1,0 +1,20 @@
+# expect: get "releases" follows put "releases", so it fetches the version that put records; version: asks for a version some other way, so drop it
+
+resource_types:
+  - name: release
+    config:
+      check: echo '[{"ref":"v1"}]'
+      in: "true"
+      out: echo '{"ref":"v2"}'
+
+resources:
+  - name: releases
+    type: release
+    source: {}
+
+jobs:
+  - name: publish
+    plan:
+      - put: releases
+      - get: releases
+        version: every

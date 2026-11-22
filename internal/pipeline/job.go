@@ -379,12 +379,12 @@ func runJobPlan(ctx context.Context, r stepRunner, job *config.Job, opts Run, sk
 	// build began with — rather than against whatever is newest, and it does
 	// not disturb any other build's progress. --force only skips the cache;
 	// it never re-opens a taken version.
-	resolution, err = resumeInputSets(ctx, r.st, resolution, history)
+	resolution, err = resumeInputSets(ctx, r.st, job, resolution, history)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
-	resolution, err = rerunInputSets(ctx, r.st, resolution, history)
+	resolution, err = rerunInputSets(ctx, r.st, job, resolution, history)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
@@ -403,6 +403,8 @@ func runJobPlan(ctx context.Context, r stepRunner, job *config.Job, opts Run, sk
 
 	unlock()
 	locked = false
+
+	ctx = withPutRecords(ctx, job)
 
 	return runSteps(ctx, planWalk{
 		stepRunner:      r,
@@ -509,7 +511,7 @@ func resolveJobInputs(
 	// get's version — the lockstep pairing per-get recursion cannot express.
 	// Computed unconditionally (--force skips planning, but the walk still
 	// fans out over these), then walked identically by planner and executor.
-	resolution, err := resolveInputSets(ctx, cfg, job.Plan, pinned, cache, cursor, history)
+	resolution, err := resolveInputSets(ctx, cfg, checkedPlan(job), pinned, cache, cursor, history)
 	if err != nil {
 		return jobInputs{}, fmt.Errorf("job %q: %w", job.Name, err)
 	}

@@ -47,6 +47,40 @@ var docLinearFixtures = map[string]docLinearFixture{ //nolint:gochecknoglobals /
 		},
 	},
 	"types": {issues: []fakeLinearIssue{docLinearIssue()}},
+	"open": {
+		issues: []fakeLinearIssue{docLinearIssue()},
+		check: func(t *testing.T, fake *fakeLinear) {
+			t.Helper()
+
+			created := fake.createdIssues()
+			if len(created) != 1 {
+				t.Fatalf("issueCreate sent %d times, want once", len(created))
+			}
+
+			assertCreated(t, created[0], map[string]any{
+				"teamId": "tm-eng", "title": "Bump Ruby to 3.4.2", "stateId": "st-prog", "assigneeId": "us-me",
+				"estimate": float64(2), "projectId": "pj-plat", "parentId": "uuid-ENG-12",
+			})
+
+			if labels, _ := created[0]["labelIds"].([]any); len(labels) != 2 {
+				t.Errorf("issueCreate labelIds = %v, want agent-ready and urgent", created[0]["labelIds"])
+			}
+
+			if posted := fake.postedComments(); len(posted) != 1 || posted[0] != "ENG-201: Picked up by the bump pipeline.\n" {
+				t.Errorf("posted %q, want the comment on ENG-201", posted)
+			}
+		},
+	},
+	"reuse": {
+		issues: []fakeLinearIssue{docLinearIssue()},
+		check: func(t *testing.T, fake *fakeLinear) {
+			t.Helper()
+
+			if created := fake.createdIssues(); len(created) != 0 {
+				t.Errorf("issueCreate sent %d times, want none: ENG-12 is open with the title", len(created))
+			}
+		},
+	},
 	"acceptance": {
 		issues: []fakeLinearIssue{docLinearIssue()},
 		check: func(t *testing.T, fake *fakeLinear) {

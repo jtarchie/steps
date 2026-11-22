@@ -35,6 +35,9 @@ type resumeState struct {
 	refetch bool
 	// rerunOf is the recorded run this one re-runs (Run.RerunOf).
 	rerunOf string
+	// forkedFrom is the run a replay forked, which kept what each put of the
+	// steps it restores recorded (see keptPutVersion).
+	forkedFrom string
 	// nextStepID mints display-tree ids for this run (see steptree.go).
 	// Atomic because a fan-out block starts its cells concurrently.
 	nextStepID atomic.Int64
@@ -141,6 +144,8 @@ func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *con
 		return false, fmt.Errorf("could not read what run %q was created with: %w", runID, err)
 	}
 
+	inputs = withoutBoundInputs(inputs, job)
+
 	done := foldRunSteps(steps)
 	build := triggeredBuild(runID)
 
@@ -173,13 +178,26 @@ func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *con
 // remainderSteps is the plan a triggered build records against: the remainder
 // after the plan's first get, indexed from zero again.
 func remainderSteps(job *config.Job) []config.Step {
-	for first, step := range job.Plan {
-		if step.Get != "" {
-			return job.Plan[first+1:]
-		}
+	if first := triggerGet(job); first >= 0 {
+		return job.Plan[first+1:]
 	}
 
 	return nil
+}
+
+// triggerGet is the plan position of the get that starts the build, -1 when
+// none does: the first get that a check resolves. A get after a put fetches
+// in place wherever it sits.
+func triggerGet(job *config.Job) int {
+	bound := boundGetNames(job)
+
+	for i, step := range job.Plan {
+		if step.Get != "" && !bound[step.Get] {
+			return i
+		}
+	}
+
+	return -1
 }
 
 // buildFinished reports whether the passes recorded for build walk off the end of steps when replayed the way the walk replays them: each pass routes on the outcome it recorded, so a to: jump that left a step unvisited does not read as unfinished work. A get records nothing and is stepped over.
@@ -327,10 +345,8 @@ type planSegment struct {
 }
 
 func planSegments(runID string, job *config.Job) []planSegment {
-	for first, step := range job.Plan {
-		if step.Get != "" {
-			return []planSegment{{runID, job.Plan[:first]}, {triggeredBuild(runID), job.Plan[first+1:]}}
-		}
+	if first := triggerGet(job); first >= 0 {
+		return []planSegment{{runID, job.Plan[:first]}, {triggeredBuild(runID), job.Plan[first+1:]}}
 	}
 
 	return []planSegment{{runID, job.Plan}}
@@ -642,7 +658,7 @@ func recordRunIdentity(
 // that cannot tell which versions it is continuing would silently select the
 // wrong ones — or none, which is the false green this whole path exists to
 // remove.
-func resumeInputSets(ctx context.Context, st store.Versions, resolution setResolution, history *resourceHistory) (setResolution, error) {
+func resumeInputSets(ctx context.Context, st store.Versions, job *config.Job, resolution setResolution, history *resourceHistory) (setResolution, error) {
 	state := resumeFrom(ctx)
 	if state == nil || !state.resuming {
 		return resolution, nil
@@ -652,6 +668,8 @@ func resumeInputSets(ctx context.Context, st store.Versions, resolution setResol
 	if err != nil {
 		return setResolution{}, fmt.Errorf("could not read what run %q was created with: %w", state.id, err)
 	}
+
+	inputs = withoutBoundInputs(inputs, job)
 
 	if len(inputs) == 0 {
 		return resolution, refuseUnrecordedBuild(state)

@@ -39,6 +39,13 @@ func GitHubFinds(kind string) bool {
 	return kind == GitHubPRsType || kind == GitHubCommentsType || kind == GitHubIssuesType
 }
 
+// GitHubFetches reports whether a github-* type has an in: — every finder, and
+// the publishers whose put leaves something to read back (a pull request or an
+// issue), which a get after the put fetches.
+func GitHubFetches(kind string) bool {
+	return GitHubFinds(kind) || kind == GitHubPRType || kind == GitHubIssueType
+}
+
 // DefaultGitHubTokenEnv is the variable a github-* resource reads its token
 // from when source.token_env does not name another — the one gh itself reads
 // first, so `export GH_TOKEN=$(gh auth token)` is the whole setup.
@@ -902,7 +909,7 @@ func checkGitHubPut(kind string, step *Step, comments, gets []string) error {
 
 func (c *Config) checkGitHubStep(label string, step *Step, comments, gets []string) error {
 	name, ok := step.resourceName()
-	if !ok {
+	if !ok || step.Put == "" {
 		return nil
 	}
 

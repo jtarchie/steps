@@ -1,0 +1,22 @@
+# The get after a put keeps the version under its own name, so another get by
+# that name in the job would leave two versions under one.
+# expect: and another get in this job is also named "releases"; name one differently, as get: <name> with resource: releases
+
+resource_types:
+  - name: release
+    config:
+      check: echo '[{"ref":"v1"}]'
+      in: "true"
+      out: echo '{"ref":"v2"}'
+
+resources:
+  - name: releases
+    type: release
+    source: {}
+
+jobs:
+  - name: publish
+    plan:
+      - get: releases
+      - put: releases
+      - get: releases

@@ -601,8 +601,11 @@ func (c *Config) validateMCPResourcePuts() error {
 // way validateMCPResourcePuts walks puts.
 func (c *Config) validateMCPResourceGets() error {
 	for _, job := range c.Jobs {
+		// A get after a put needs no check, only an in: — validateBoundGet's rule.
+		bound, _ := job.putBindings()
+
 		err := job.visitSteps(func(label string, step *Step) error {
-			if step.Get == "" {
+			if _, follows := bound[step]; step.Get == "" || follows {
 				return nil
 			}
 

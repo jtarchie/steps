@@ -4,6 +4,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -107,6 +108,10 @@ func explainReason(cfg *config.Config, job *config.Job, index int, wouldSkip, ch
 	}
 
 	step := job.Plan[index]
+
+	if binding, follows := job.PutBindings()[step.Get]; step.Get != "" && follows {
+		return fmt.Sprintf("fetches what put %s records", binding.Put)
+	}
 
 	reason, err := merkle.UncacheableReason(cfg, step)
 	if err == nil && reason != "" {

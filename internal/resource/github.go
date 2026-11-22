@@ -35,7 +35,8 @@ const (
 )
 
 // githubStages is what one github-* type implements: a finder has a check
-// and an in, a publisher only an out. A nil stage is one the type does not
+// and an in, a publisher an out — and an in when its put leaves something a
+// get after it reads back. A nil stage is one the type does not
 // have.
 type githubStages struct {
 	check func(ctx context.Context, source, cursor map[string]any) ([]map[string]any, error)
@@ -56,8 +57,8 @@ var githubTypes = map[string]githubStages{
 	config.GitHubPRReviewType:  {out: githubReviewOut},
 	config.GitHubReactionType:  {out: githubReactionOut},
 	config.GitHubLabelType:     {out: githubLabelOut},
-	config.GitHubIssueType:     {out: githubIssueOut},
-	config.GitHubPRType:        {out: githubPROut},
+	config.GitHubIssueType:     {in: githubIssueIn, out: githubIssueOut},
+	config.GitHubPRType:        {in: githubPRIn, out: githubPROut},
 	config.GitHubIssuesType:    {check: githubIssuesCheck, in: githubIssuesIn},
 }
 

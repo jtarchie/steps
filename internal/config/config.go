@@ -203,6 +203,7 @@ func (c *Config) validate() error {
 		c.validateAcross,
 		c.validatePassed,
 		c.validateVersionEvery,
+		c.validateGetsAfterPuts,
 		c.validateSerial,
 		c.validateVars,
 		c.validateWebhookResources,

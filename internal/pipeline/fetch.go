@@ -101,7 +101,11 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, st fetchStore, artifa
 		return nil, err
 	}
 
-	notef(ctx, "get: %s (version: %s)", artifact, versionText(version))
+	if put := putSourceFrom(ctx); put != "" {
+		notef(ctx, "get: %s (version: %s, recorded by put %s)", artifact, versionText(version), put)
+	} else {
+		notef(ctx, "get: %s (version: %s)", artifact, versionText(version))
+	}
 
 	var (
 		fetched bool

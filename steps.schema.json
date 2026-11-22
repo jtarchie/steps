@@ -123,6 +123,10 @@
       "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "linear-update"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/linearPostSource"}}}}}}}
     },
     {
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "linear-issue"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "linear-issue"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/linearIssueSource"}}}}}}}
+    },
+    {
       "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "registry-image"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
       "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "registry-image"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/registryImageSource"}}}}}}}
     },
@@ -899,6 +903,27 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the API key, LINEAR_API_KEY when unset. The variable NAME, never the key; `steps validate` refuses the pipeline while it is unset."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "The GraphQL URL, https://api.linear.app/graphql when unset; plain http only for a loopback host."
+        }
+      }
+    },
+    "linearIssueSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["team"],
+      "properties": {
+        "team": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A team key (ENG) or name: where the issue opens, where the put's state and label names are looked up, and what reuse: title searches."
+        },
         "token_env": {
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",

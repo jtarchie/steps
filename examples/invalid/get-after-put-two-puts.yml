@@ -1,0 +1,25 @@
+# Two puts to one resource that run at once leave two versions and no order
+# between them, so the get after them cannot tell whose to fetch.
+# expect: get "releases" follows two puts to "releases" that run at once in the same in_parallel
+
+resource_types:
+  - name: release
+    config:
+      check: echo '[{"ref":"v1"}]'
+      in: "true"
+      out: echo '{"ref":"v2"}'
+
+resources:
+  - name: releases
+    type: release
+    source: {}
+
+jobs:
+  - name: publish
+    plan:
+      - in_parallel:
+          steps:
+            - put: releases
+            - put: again
+              resource: releases
+      - get: releases

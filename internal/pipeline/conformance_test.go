@@ -434,15 +434,15 @@ resources:
 
 	pipelineYAML := resourcesYAML + `
 jobs:
-# The opt-in spelling: an explicit get after the put. It fetches the
-# resource's latest version like any other get (here what check: reports).
+# The opt-in spelling: an explicit get after the put. It fetches the version
+# the put printed, not what check: reports.
 - name: explicit-get-after-put
   plan:
   - put: thing
   - get: thing
   - task: read-it
     inputs: [thing]
-    run: test "$(cat thing/ref)" = v1
+    run: test "$(cat thing/ref)" = published-1
 
 # A put whose out: printed no version still succeeds.
 - name: silent-out-still-succeeds

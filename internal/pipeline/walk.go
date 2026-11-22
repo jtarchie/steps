@@ -51,7 +51,10 @@ type planWalk struct {
 	// the first get.
 	build string
 
-	index            int
+	index int
+	// offset is the plan position of steps[0]: a triggered build's remainder
+	// counts from 0 again, and a get after a put names its put by plan step.
+	offset           int
 	parentHash       string
 	chainUnskippable bool
 	// cellReuseOff is chainUnskippable or a volatile: step upstream: see withoutCellReuse.
@@ -90,7 +93,9 @@ func runSteps(ctx context.Context, w planWalk, steps []config.Step) error {
 
 		switch kind, _ := step.Kind(); kind {
 		case config.StepKindGet:
-			if w.allowGetTrigger {
+			// A get after a put fetches in place wherever it sits: no check
+			// chose its version, so it starts no build.
+			if _, follows := putBindingFor(ctx, step); w.allowGetTrigger && !follows {
 				return w.triggerBuild(ctx, step, steps[w.index+1:])
 			}
 
@@ -164,6 +169,8 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 	// Recorded from there, one succeeding branch marked the whole block done,
 	// and a resume skipped the block including the branch that had failed,
 	// exiting 0 having re-attempted nothing.
+	ctx = withPutStep(ctx, w.offset+w.index)
+
 	res, resumed := w.skipCompleted(ctx, step)
 
 	var err error
@@ -394,6 +401,10 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	ctx, own := withOwnNode(ctx)
 
 	res, err := dispatchNonGetStep(ctx, r, i, step, skippable, parentHash)
+
+	if res.disposition == stepGuardSkipped {
+		recordPutsSkipped(ctx, step)
+	}
 
 	// A step whose outputs were reused counts as executed, even though no
 	// command or conversation ran: its artifacts are in place and the plan

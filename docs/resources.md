@@ -1065,7 +1065,7 @@ jobs:
 | `labels` | labels put on the issue as it opens. GitHub creates a label the repository does not have yet, in its default color |
 | `assignees` | logins the issue is assigned to. `@me` is refused: GitHub assigns by login |
 
-A get of a `github-issue` resource is refused at load, as for every publisher. The put's version is `{id, number}`: the issue GitHub opened, by its id and by the number people write as `#N`.
+The put's version is `{id, number}`: the issue GitHub opened, by its id and by the number people write as `#N`. A [get after the put](#a-get-after-a-put-fetches-what-the-put-recorded) reads that issue back with one request, writing `issue.number`, `issue.title`, `issue.url` and `issue.json`; any other get of a `github-issue` resource is refused at load, as for every publisher.
 
 **Nothing dedupes.** A put that is retried or run again opens a second issue, exactly as a retried `github-pr-comment` posts a second comment: GitHub has no "open this unless it exists", and a title is no identity, since two children may share one. Guard it in the pipeline, where the identity is known: have the step that writes the list search the repository first and leave out any child already open, for instance one whose body carries the same `Part of #42` marker, so a re-run opens only what is missing.
 
@@ -1144,7 +1144,7 @@ jobs:
 | `labels`, `assignees` | as for `github-issue`, applied when the put opens the pull request |
 | `ready` | when true and the pull request is a draft, marks it ready for review. Default false |
 
-A get of a `github-pr` resource is refused at load, as for every publisher. The put's version is `{number, sha}`: the pull request's number and its head commit as GitHub reports it, the same shape `github-prs` uses, in the `github-pr` resource's own history.
+The put's version is `{number, sha}`: the pull request's number and its head commit as GitHub reports it, the same shape `github-prs` uses, in the `github-pr` resource's own history. A [get after the put](#a-get-after-a-put-fetches-what-the-put-recorded) reads that pull request back with one request, writing `pr.number`, `pr.sha` (the head the put recorded), `pr.title`, `pr.url` and `pr.json` — no checkout, since the branch is the one just pushed; any other get of a `github-pr` resource is refused at load, as for every publisher.
 
 **This put is idempotent, which `github-issue` is not.** A title is no identity, so an issue put that runs twice opens two. A head branch is one: GitHub allows one open pull request per head and base, so a retried or repeated put finds the pull request it opened and updates it. A closed or merged one is not found, so pushing the branch again after a merge and putting opens a new one. A head with several open pull requests (onto different bases) is refused rather than guessed at.
 
@@ -1152,9 +1152,9 @@ Marking ready is a GraphQL mutation, since REST cannot do it; the token needs th
 
 ## The built-in Linear types
 
-Three built-ins, split the way the GitHub ones are. `linear-issues` **finds work**: it has a check and an in, and no out. `linear-comment` and `linear-update` **publish**: they have an out and nothing else, so a comment a pipeline posts never lands in the history it triggers from.
+Four built-ins, split the way the GitHub ones are. `linear-issues` **finds work**: it has a check and an in, and no out. `linear-comment`, `linear-update` and `linear-issue` **publish**: they have an out and no check, so a comment a pipeline posts never lands in the history it triggers from. `linear-issue` also has an in, for the [get after its put](#a-get-after-a-put-fetches-what-the-put-recorded) that reads the new issue back.
 
-steps calls Linear's GraphQL API itself: there is no `resource_types:` block, no GraphQL in the pipeline, no `curl` or `jq`. All three read the key from `LINEAR_API_KEY`; `source.token_env` names another variable, for a second identity. A personal API key (`lin_api_...`) is sent bare, as Linear expects, and any other token as an OAuth `Bearer` token. `steps validate` refuses a pipeline whose key variable is unset, before anything runs. `source.endpoint` is Linear's GraphQL URL; plain `http` is accepted only for a loopback host, so a key never travels in cleartext.
+steps calls Linear's GraphQL API itself: there is no `resource_types:` block, no GraphQL in the pipeline, no `curl` or `jq`. All four read the key from `LINEAR_API_KEY`; `source.token_env` names another variable, for a second identity. A personal API key (`lin_api_...`) is sent bare, as Linear expects, and any other token as an OAuth `Bearer` token. `steps validate` refuses a pipeline whose key variable is unset, before anything runs. `source.endpoint` is Linear's GraphQL URL; plain `http` is accepted only for a loopback host, so a key never travels in cleartext.
 
 Linear's limits are per user, shared by every key that user holds: 2,500 requests an hour for a personal key, 5,000 for OAuth. A `linear-issues` check at steps' default poll is about 120 requests an hour per resource, so a daemon with many Linear resources should raise `--interval` rather than spend the budget. A request Linear throttles is sent again after the wait it names, a failure it reports inside a 200 answer fails the step with Linear's own message, and a write is sent again only when it was throttled, never after a timeout, so a comment is not posted twice.
 
@@ -1267,7 +1267,7 @@ A get writes no tree, since an issue has none, only these:
 
 ### `linear-comment` and `linear-update`: writing back
 
-Both take `token_env` and `endpoint` in `source:` and nothing else, and find which issue a put is about in its inputs: the one input whose version carries an identifier, which every `linear-issues` get's does. `params.from` picks one when several do, and `params.issue` names one outright, as an identifier such as `ENG-123`, for a put with no such input; the type finds Linear's internal id itself, so a pipeline never handles one.
+Both take `token_env` and `endpoint` in `source:` and nothing else, and find which issue a put is about in its inputs: the one input whose version carries an identifier, which every `linear-issues` get's does, and every get after a `linear-issue` put. `params.from` picks one when several do, and `params.issue` names one outright, as an identifier such as `ENG-123`, for a put with no such input; the type finds Linear's internal id itself, so a pipeline never handles one.
 
 ```yaml linear=acceptance
 resources:
@@ -1341,6 +1341,125 @@ A `linear-update` is one request to Linear, so a state move and a label swap lan
 The versions are `{issue, comment}` for a comment, and `{issue, state, add_labels, remove_labels}` for an update, with the sides it was not asked for left out. A put reports the comment's or issue's `url` as a fact. A get of either is refused at load, and so is a put to a `linear-issues` resource.
 
 **Poll, and keep [`webhook`](webhooks.md) for latency.** The `webhook` type already has a `linear` provider, so a pipeline that wants seconds rather than a poll interval can have it, but the finder polls on purpose: Linear disables a webhook it could not deliver to three times, so a laptop asleep overnight would silence it until someone re-enabled it by hand, and a delivery's version is the delivery, not the issue. The check is the truth; a delivery is a hint that it is worth running now.
+
+### `linear-issue`: opening an issue
+
+`linear-issue` opens one issue per put, from a title and a description a step wrote, with every name in it looked up first. A [get after the put](#a-get-after-a-put-fetches-what-the-put-recorded) reads the issue back, and writes the same files a `linear-issues` get does, so a `linear-comment` or `linear-update` after it finds the issue from that input with nothing more to say:
+
+```yaml linear=open
+resources:
+  - name: ticket
+    type: linear-issue
+    source:
+      team: ENG                        # a team key or name; required
+      token_env: LINEAR_API_KEY        # the default
+      endpoint: https://api.linear.app/graphql # the default
+
+  - name: reply
+    type: linear-comment
+    source: {}
+
+jobs:
+  - name: file
+    plan:
+      - task: write
+        outputs: [files]
+        run: |
+          echo 'Bump Ruby to 3.4.2' > files/title
+          echo 'A patch release; CI is the gate.' > files/body.md
+      - put: ticket
+        inputs: [files]
+        params:
+          title_file: files/title      # one line
+          body_file: files/body.md     # the description; empty is refused
+          state: In Progress           # a state in the team
+          labels: [agent-ready, urgent] # team or workspace labels; never created
+          assignee: "@me"              # the key's own user, or a user id
+          estimate: 2
+          project: Platform            # a name or an id
+          parent: ENG-12               # makes this a sub-issue of ENG-12
+      - get: ticket                    # the issue the put just opened
+      - task: link
+        inputs: [ticket]
+        outputs: [notes]
+        run: |
+          echo "[$(cat ticket/issue.identifier)]: $(cat ticket/issue.title)"
+          echo "Picked up by the bump pipeline." > notes/body.md
+        assert:
+          stdout: "[ENG-201]: Bump Ruby to 3.4.2"
+      - put: reply
+        inputs: [ticket, notes]
+        params:
+          body_file: notes/body.md     # posted on the new issue, found from the get
+    assert:
+      execution: [write, ticket, ticket, link, reply]
+      outcome: succeeded
+```
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `team` | yes | a team key or name: where the issue opens, where its state and label names are looked up, and what `reuse:` searches |
+| `token_env`, `endpoint` | no | as above |
+
+| `params:` field | required | meaning |
+|---|---|---|
+| `title_file` | yes | the title, a path in the put's inputs. One line: a trailing newline is dropped and a second line is refused, as for `github-issue` |
+| `body_file` | yes | the description, a path in the put's inputs. An empty file is refused |
+| `state` | no | a state name in the team. Unset, Linear picks the team's default |
+| `labels` | no | label names, team or workspace, matched without regard to case. **One that does not exist is refused**, not created, as for `linear-update` |
+| `assignee` | no | `@me`, the key's own user, or a user id, which Linear must know. Not an email |
+| `estimate` | no | the issue's points, 0 or more |
+| `project` | no | a project of the team, by name (without regard to case) or id |
+| `parent` | no | the identifier of the issue this one is a sub-issue of |
+| `reuse` | no | `title`: return an open issue with the same title instead of opening another (below). Unset, nothing is looked for |
+
+The issue is about one thing, so what describes it is the put's: the same resource opens a chore from one job and a bug in another state from the next, as `github-issue`'s labels and `linear-update`'s state are params too. Only the team is the resource's, the way `github-issue`'s repository is.
+
+**Every name is looked up before anything is sent, and one request creates the issue**, so a typo in the last label, a state the team lacks, an unknown project, parent or assignee is a red put naming the field, and no issue. The put's version is `{identifier}`, and it reports the issue's `url`, `title` and `identifier` as facts. The run log says which issue it was: `created ENG-201 in team ENG`.
+
+**`reuse: title` makes the put safe to run again.** Without it, a put opens a new issue every time it runs, as `github-issue` does; and a put runs again whenever its build does, for instance after a later step failed and someone re-ran the job, which would leave a second ticket for the same work. With `reuse: title`, the put first looks in the team for an issue whose title is exactly the one it would use (case and spaces included) and whose state is not in Linear's `completed` or `canceled` category. If there is one, the oldest, the put returns it as if it had just opened it: same version, same facts plus `reused: yes`, and this line in the run log instead of `created`:
+
+```
+reused ENG-12: it is open in team ENG with this exact title (params.reuse: title), so no issue was created
+```
+
+A reused issue is returned as it is: the put does not move it to `state:` or add `labels:`, which a `linear-update` after the get does if the pipeline wants it. Every name is still looked up first, so a typo fails whether or not an issue would have been reused. A done or canceled issue is skipped because it is finished work: the same title again is new work, a second bump of the same version after the first was reverted, say. Archived issues are not searched, as Linear's own search leaves them out. Off by default because a title is no identity in general: two sub-issues may share one.
+
+```yaml linear=reuse
+resources:
+  - name: ticket
+    type: linear-issue
+    source: {team: ENG}
+
+jobs:
+  - name: file
+    plan:
+      - task: write
+        outputs: [files]
+        run: |
+          echo 'Plan the cache' > files/title
+          echo 'Asked for again.' > files/body.md
+      - put: ticket
+        inputs: [files]
+        params:
+          title_file: files/title
+          body_file: files/body.md
+          state: Todo
+          labels: [agent-ready]
+          assignee: "@me"
+          reuse: title                 # ENG-12 is open with this title, so it is returned
+      - get: ticket
+      - task: show
+        inputs: [ticket]
+        run: cat ticket/issue.identifier
+        assert:
+          stdout: "ENG-12"
+    assert:
+      execution: [write, ticket, ticket, show]
+      outcome: succeeded
+```
+
+A get of a `linear-issue` resource anywhere but after its put is refused at load, as for every publisher, and so is `params:` on that get.
 
 ## The built-in `cron` type
 
@@ -1550,7 +1669,7 @@ jobs:
       outcome: succeeded
 ```
 
-The put's version is the pushed digest; the next build's get of `app-image` finds it. A get later in the same plan does not: it was [pinned when the plan was built](#a-put-publishes-it-does-not-fetch), before the push.
+The put's version is the pushed digest; the next build's get of `app-image` finds it, and a [get after the put](#a-get-after-a-put-fetches-what-the-put-recorded) in the same plan fetches exactly that digest.
 
 - **The same digest, from the cache.** An unchanged Dockerfile and context reuse every cached layer and push the digest they pushed last time: no new version, nothing downstream triggers. `SOURCE_DATE_EPOCH=0` and `rewrite-timestamp=true` pin timestamps, and BuildKit's own exporter writes no provenance or SBOM attestations, but a step whose output is not deterministic (an `apt-get install`) gives a new digest when it is rebuilt cold. The cache is exported to and imported from the `caches:` directory (`type=local`); pointing BuildKit's own `--root` there keeps no layers between builds.
 - **Multi-platform** is `--opt platform=linux/amd64,linux/arm64` on the build; the tarball then holds one index, pushed whole, and its digest is the version. A platform other than this machine's runs under emulation, slowly.
@@ -2053,50 +2172,99 @@ A name or value is shown as text: control characters are dropped, each is cut at
 
 **A step reading a get's facts always runs**: neither a chain skip nor the step cache stands in for it, because the facts are only known once the run is under way — the same version can be fetched with a new title. Steps before it are skipped as usual.
 
-**A put's facts are shown and kept, but a later step cannot read them.** In Concourse a later step reaches them through the fetch that automatically follows a put; steps has no such fetch ([below](#a-put-publishes-it-does-not-fetch)), so `((.:comment.url))` after `put: comment` is a load error saying so.
+**A put's facts are shown and kept, but a later step cannot read them.** In Concourse a later step reaches them through the fetch that automatically follows a put; steps has no such fetch, so `((.:comment.url))` after `put: comment` is a load error saying so. Write the [get after the put](#a-get-after-a-put-fetches-what-the-put-recorded) and read that get's facts instead, when its type has an `in:`.
 
-### A put publishes; it does not fetch
+### A get after a put fetches what the put recorded
 
-A put step runs `out:` and nothing else — there is no implicit get afterward, so a put produces no artifact. (Concourse fetches the produced version automatically; steps deliberately does not: an artifact appearing in the build that no step declared is exactly the kind of ambient data flow this DSL rejects.) A plan that wants the resource's contents after a put writes the fetch it means:
+A put step runs `out:` and nothing else — there is no implicit get afterward, so a put produces no artifact on its own. (Concourse fetches the produced version automatically; steps deliberately does not: an artifact appearing in the build that no step declared is exactly the kind of ambient data flow this DSL rejects.) A plan that wants what the put made writes the fetch it means: **a `get` of the same resource after the put fetches exactly the version that put printed**, by running the type's `in:` with it. No check runs for that get, so a type with nothing to discover — a ticket, a pull request, a message — can still be read back:
 
 ```yaml
 resource_types:
-  - name: release
+  - name: ticket
     config:
-      check: |
-        printf '[{"ref": "v1.4.1"}]'
-      in: echo {{ .version.ref | shellquote }} > ref
+      # No check: this type only opens tickets, and the get below reads back
+      # the one the put opened.
+      in: |
+        echo {{ .version.id | shellquote }} > id
+        printf '{"version": {"id": "CON-7"}, "metadata": [{"name": "url", "value": "https://tickets.example/CON-7"}]}'
       out: |
-        cat notes/summary.txt        # "publish" the summary an earlier step wrote
-        printf '{"ref": "v1.4.2"}'
+        cat notes/title >&2              # "open" a ticket from the title a step wrote
+        printf '{"id": "CON-7"}'
 
 resources:
-  - name: releases
-    type: release
+  - name: ticket
+    type: ticket
     source: {}
 
 jobs:
-  - name: publish
+  - name: file
     plan:
-      - task: summarize
+      - task: describe
         outputs: [notes]
-        run: echo 'what changed' > notes/summary.txt
-      - put: releases          # out: publishes and prints v1.4.2
+        run: echo 'Bump Ruby' > notes/title
+      - put: ticket            # out: opens the ticket and prints CON-7
         inputs: [notes]
-      - get: releases          # fetch the resource, explicitly
-      - task: verify
-        inputs: [releases]
-        run: cat releases/ref
+      - get: ticket            # fetches CON-7, the version the put recorded
+      - task: title
+        inputs: [ticket]
+        run: |
+          echo "[$(cat ticket/id)]: Bump Ruby"
         assert:
-          # check's answer, NOT the v1.4.2 the put just printed — the get was
-          # pinned when the plan was built, before out: ran. See below.
-          stdout: v1.4.1
+          stdout: "[CON-7]: Bump Ruby"
     assert:
-      execution: [summarize, releases, releases, verify] # put, then get — two entries
+      execution: [describe, ticket, ticket, title] # put, then get — two entries
       outcome: succeeded
 ```
 
-The explicit get fetches the version `check` reported **when the plan was built** — check runs once, before any step, so the version the put publishes mid-run is not what the same run's get fetches (the example above pins exactly that: `out:` prints `v1.4.2`, the get still fetches `v1.4.1`). The version a put prints is recorded with the run; it reaches a `passed:`-gated get in a later run whether or not a check ever reports it (see [`passed:`](infra.md#a-version-a-job-put-counts-as-having-passed-it)); an ungated get still needs the check to report it. A put whose output nothing reads simply has no get after it.
+The run log says where the version came from — `get: ticket (version: {"id":"CON-7"}, recorded by put ticket)` — and `steps plan` lists the get as `fetches what put ticket records`, since the version is not known until the put prints it.
+
+**Which put.** The nearest put to the same resource before the get, `get: x, resource: r` aliases included; a put in a hook never counts, since a hook only reacts to the step it hangs on. The put must finish before the get starts on every path, so `steps validate` refuses, each by name:
+
+- a get in the same `in_parallel:`, `race:` or `ensemble:` as its put (move the get after the block — a put inside an `in_parallel:` with the get after the whole block is fine);
+- a put with `across:`, which records one version per cell, and a put inside a `race:`, which may be stopped;
+- two puts to the resource that run at once;
+- a `to:` route that jumps from before the put to after it;
+- `trigger:`, `version:` or `passed:` on the get, which ask for a version some other way;
+- a type with no `in:` to fetch with (`slack-reply`, `github-pr-comment`, …);
+- another get in the job with the same name.
+
+**When the put recorded nothing.** A put its `when:` skipped skips the get after it too (`skip: ticket (put ticket was skipped, so there is no version to fetch)`), and the plan carries on — give the steps that read the get the same `when:`. A put that failed under `try:`, or that printed no version, fails the get, naming the put: the plan asked for that version, and fetching another would be worse.
+
+```yaml
+resource_types:
+  - name: ticket
+    config:
+      in: echo {{ .version.id | shellquote }} > id
+      out: |
+        printf '{"id": "CON-7"}'
+
+resources:
+  - name: ticket
+    type: ticket
+    source: {}
+
+jobs:
+  - name: file
+    plan:
+      - task: decide
+        outputs: [bump]
+        run: "true"                      # nothing to bump today: bump/version stays empty
+      - put: ticket
+        when: test -s bump/version
+      - get: ticket                      # skipped with its put
+      - task: title
+        inputs: [ticket]
+        when: test -s bump/version
+        run: cat ticket/id
+      - task: done
+        inputs: []
+        run: echo nothing to do
+    assert:
+      execution: [decide, done]
+      outcome: succeeded
+```
+
+The version is kept with the run, so `--resume` after a later step failed skips the put and the get still binds what it recorded, and `--replay` from a step after the get binds what the forked run's put recorded. Every other get is resolved once, before any step runs, as before.
 
 ## Running a stock Concourse resource image
 

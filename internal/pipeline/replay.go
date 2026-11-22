@@ -100,7 +100,7 @@ func PrepareReplay(
 	notef(ctx, "replay: %s from %q (forked from %s, %d step(s) restored)", replayID, fromStep, sourceRunID, len(done))
 	slog.InfoContext(ctx, "run.replay", "run", replayID, "parent", sourceRunID, "job", job.Name, "from", fromStep, "restored_steps", len(done))
 
-	return withResume(ctx, &resumeState{id: replayID, done: done, resuming: true}), dir, nil
+	return withResume(ctx, &resumeState{id: replayID, done: done, resuming: true, forkedFrom: sourceRunID}), dir, nil
 }
 
 // replayIndex resolves --from to a plan position.
@@ -134,12 +134,11 @@ func replayIndex(job *config.Job, fromStep string) (int, error) {
 // replay could bind the run's recorded inputs (as resumeInputSets does) and
 // start inside that build.
 func refuseReplayAcrossGet(job *config.Job, from int, fromStep string) error {
-	for i := range from {
-		if get := job.Plan[i].Get; get != "" {
-			return fmt.Errorf(
-				"cannot replay from %q: it runs after step %d (get %q), inside the build that get triggered, and a replay can only start before the plan's first get",
-				fromStep, i, get)
-		}
+	// A get after a put starts no build, so a replay may start past one.
+	if first := triggerGet(job); first >= 0 && first < from {
+		return fmt.Errorf(
+			"cannot replay from %q: it runs after step %d (get %q), inside the build that get triggered, and a replay can only start before the plan's first get",
+			fromStep, first, job.Plan[first].Get)
 	}
 
 	return nil
