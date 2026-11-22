@@ -1,6 +1,6 @@
 package e2e
 
-// The fake GitHub's releases, for the built-in github-release type: the release listing, one release by id or by tag, and the git refs a tag resolves to its commit through.
+// The fake GitHub's releases, for the built-in github-releases type: the release listing, one release by id or by tag, and the git refs a tag resolves to its commit through.
 
 import (
 	"fmt"

@@ -424,13 +424,13 @@ Besides `version.json`, `thread.json` and `user` (who wrote the reacted message)
 
 ## The built-in GitHub types
 
-Ten built-ins, split by what they do, the way the Slack ones are. `github-prs`, `github-comments`, `github-issues` and `github-release` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction`, `github-label`, `github-issue` and `github-pr` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
+Ten built-ins, split by what they do, the way the Slack ones are. `github-prs`, `github-comments`, `github-issues` and `github-releases` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review`, `github-reaction`, `github-label`, `github-issue` and `github-pr` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
 
 steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the ten can be placed with `tags:` themselves, as for every type that runs inside this process.
 
 All ten read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
 
-Each reports [facts](#facts-what-a-get-or-put-says-about-its-version) from the answers GitHub already sends, at no extra request: a `github-prs` get the pull request's `url`, `title` and `author`; a `github-comments` get the comment's `url` and `author`; a `github-issues` get the issue's `url`, `title` and `author`; a `github-release` get the release's `url`, `tag`, `name` and `commit_sha`; a `github-pr-comment` or `github-pr-review` put the new comment's or review's `url`; a `github-issue` put the new issue's `url` and `title`; a `github-pr` put the pull request's `url` and `title`. `github-reaction` and `github-label` create nothing with a page of its own and report none.
+Each reports [facts](#facts-what-a-get-or-put-says-about-its-version) from the answers GitHub already sends, at no extra request: a `github-prs` get the pull request's `url`, `title` and `author`; a `github-comments` get the comment's `url` and `author`; a `github-issues` get the issue's `url`, `title` and `author`; a `github-releases` get the release's `url`, `tag`, `name` and `commit_sha`; a `github-pr-comment` or `github-pr-review` put the new comment's or review's `url`; a `github-issue` put the new issue's `url` and `title`; a `github-pr` put the pull request's `url` and `title`. `github-reaction` and `github-label` create nothing with a page of its own and report none.
 
 ### `github-prs`: open pull requests
 
@@ -794,14 +794,14 @@ A get writes no tree, since an issue has none, only these:
 
 A `github-pr-comment` put handed a `github-issues` get posts on that issue, as above: the type is named for pull requests, but GitHub files the comment under the issue either way, and a `github-label` put labels it the same way.
 
-### `github-release`: a project's releases
+### `github-releases`: a project's releases
 
-`github-release` follows a repository's GitHub releases, as Concourse's [github-release](https://github.com/concourse/github-release-resource) resource does, with Concourse's filters, defaults and order. A pipeline that pins a dependency watches the upstream project's releases with it, and a new one is the trigger:
+`github-releases` follows a repository's GitHub releases, as Concourse's [github-release](https://github.com/concourse/github-release-resource) resource does, with Concourse's filters, defaults and order. A pipeline that pins a dependency watches the upstream project's releases with it, and a new one is the trigger:
 
 ```yaml github=node-releases
 resources:
   - name: node
-    type: github-release
+    type: github-releases
     source:
       repo: acme/app
       semver_constraint: "~24"         # one major line: 24.x, nothing older or newer
@@ -864,7 +864,7 @@ Some projects spell one version two ways. ruby/ruby tags `v4.0.10`, and before 4
 ```yaml github=ruby-releases
 resources:
   - name: ruby
-    type: github-release
+    type: github-releases
     source:
       repo: acme/app
       tag_filter: '^v(\d+)(?:\.|_)(\d+)(?:\.|_)(\d+)$'   # 4.0.10 or 3_4_13
@@ -893,7 +893,7 @@ jobs:
 ```yaml github=node-releases
 resources:
   - name: candidate
-    type: github-release
+    type: github-releases
     source:
       repo: acme/app
       order_by: time

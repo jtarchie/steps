@@ -30,7 +30,7 @@ type docGitHubFixture struct {
 	branches map[string]string
 	// git serves pull request #7 over a real repository, for checkout: git (fakegit_test.go).
 	git bool
-	// releases are the repository's releases, for github-release.
+	// releases are the repository's releases, for github-releases.
 	releases []fakeRelease
 }
 

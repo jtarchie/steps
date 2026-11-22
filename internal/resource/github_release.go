@@ -16,7 +16,7 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 )
 
-// The files a github-release get writes: Concourse's names, so a task ported from a Concourse pipeline reads them unchanged, and release.json, as every github-* finder writes GitHub's own object.
+// The files a github-releases get writes: Concourse's names, so a task ported from a Concourse pipeline reads them unchanged, and release.json, as every github-* finder writes GitHub's own object.
 const (
 	releaseJSONFile      = "release.json"
 	releaseTagFile       = "tag"

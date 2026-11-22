@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestGitHubReleaseLoadRules: a github-release source is refused at load for anything its check could only get wrong at run time, and a Concourse spelling is answered with the steps one.
+// TestGitHubReleaseLoadRules: a github-releases source is refused at load for anything its check could only get wrong at run time, and a Concourse spelling is answered with the steps one.
 func TestGitHubReleaseLoadRules(t *testing.T) {
 	t.Parallel()
 
@@ -17,7 +17,7 @@ func TestGitHubReleaseLoadRules(t *testing.T) {
 		return `
 resources:
 - name: release
-  type: github-release
+  type: github-releases
   source:
     repo: acme/app
 ` + source + `

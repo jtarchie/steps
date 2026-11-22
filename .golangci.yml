@@ -580,7 +580,7 @@ linters:
           allow:
             - "$gostd"
             - "go.yaml.in/yaml/v4"
-            # github-release's semver_constraint, parsed at load so a bad one is a validate error; the library Concourse's resource uses. Pure Go, no dependencies.
+            # github-releases' semver_constraint, parsed at load so a bad one is a validate error; the library Concourse's resource uses. Pure Go, no dependencies.
             - "github.com/Masterminds/semver/v3"
             # test-only (ConfigShellquoteTestOnly): shellquote_test.go holds
             # across:'s ported shellquote to the one internal/template calls.

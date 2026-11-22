@@ -36,7 +36,7 @@ func rubyReleases() []fakeRelease {
 const releasePipeline = `
 resources:
 - name: node
-  type: github-release
+  type: github-releases
   source:
     repo: ` + fakeRepo + `
     endpoint: ENDPOINT
@@ -85,7 +85,7 @@ func TestEndToEndGitHubReleaseGetWritesConcourseFiles(t *testing.T) {
 	path := writePipeline(t, t.TempDir(), `
 resources:
 - name: node
-  type: github-release
+  type: github-releases
   source:
     repo: `+fakeRepo+`
     endpoint: `+fake.URL()+`

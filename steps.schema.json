@@ -87,8 +87,8 @@
       "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-issues"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubIssuesSource"}}}}}}}
     },
     {
-      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-release"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
-      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-release"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubReleaseSource"}}}}}}}
+      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-releases"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
+      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "github-releases"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/githubReleaseSource"}}}}}}}
     },
     {
       "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "github-pr-comment"}}, "required": ["name"]}}}, "required": ["resource_types"]}},

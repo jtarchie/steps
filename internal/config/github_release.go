@@ -12,9 +12,9 @@ import (
 )
 
 // GitHubReleaseType finds a repository's releases, as Concourse's github-release resource does; it does not publish them (see github.go for why find and publish are separate types).
-const GitHubReleaseType = "github-release"
+const GitHubReleaseType = "github-releases"
 
-// The orders a github-release check can sort by, as Concourse spells them.
+// The orders a github-releases check can sort by, as Concourse spells them.
 const (
 	GitHubReleaseByVersion = "version"
 	GitHubReleaseByTime    = "time"
@@ -23,7 +23,7 @@ const (
 // defaultReleaseTagFilter is Concourse's: an optional leading v, then the version. Its code anchors it though its README does not, and the code is what pipelines run against.
 const defaultReleaseTagFilter = `^v?([^v].*)`
 
-// GitHubReleaseSource is a github-release resource's source:. The filters and their defaults are Concourse's; the connection is the github-* family's.
+// GitHubReleaseSource is a github-releases resource's source:. The filters and their defaults are Concourse's; the connection is the github-* family's.
 type GitHubReleaseSource struct {
 	Repo     string `yaml:"repo"`
 	TokenEnv string `yaml:"token_env,omitempty"`
@@ -52,7 +52,7 @@ func (s GitHubReleaseSource) Connection() GitHubConnection {
 // FindsReleases is source.release with its default filled in.
 func (s GitHubReleaseSource) FindsReleases() bool { return s.Release == nil || *s.Release }
 
-// GitHubReleaseVersioning is how a github-release source reads a version from a tag and which versions it keeps, compiled once at parse.
+// GitHubReleaseVersioning is how a github-releases source reads a version from a tag and which versions it keeps, compiled once at parse.
 type GitHubReleaseVersioning struct {
 	pattern    *regexp.Regexp
 	template   string
@@ -100,14 +100,14 @@ var concourseReleaseKeys = map[string]string{ //nolint:gochecknoglobals,gosec //
 	"access_token":       "name the environment variable that holds the token in token_env (GH_TOKEN when unset), or map it from secrets:; a literal token would be hashed into the state database",
 	"github_api_url":     "steps calls it endpoint, as every github-* type does",
 	"github_v4_api_url":  "steps reads releases over REST alone, so there is no GraphQL URL to set; endpoint is the REST base",
-	"github_uploads_url": "github-release only finds releases, so there is nothing to upload",
+	"github_uploads_url": "github-releases only finds releases, so there is nothing to upload",
 	"insecure":           "steps does not skip TLS verification; an http endpoint is accepted for a loopback host only",
 	"app_id":             "the github-* types authenticate with a token alone; mint an installation token into the variable token_env names",
 	"private_key":        "the github-* types authenticate with a token alone; mint an installation token into the variable token_env names",
-	"asset_dir":          "a github-release get downloads no assets yet",
+	"asset_dir":          "a github-releases get downloads no assets yet",
 }
 
-// ParseGitHubReleaseSource decodes a github-release source: strictly, checks it, and compiles what it reads tags with, so a bad pattern or constraint is a load error.
+// ParseGitHubReleaseSource decodes a github-releases source: strictly, checks it, and compiles what it reads tags with, so a bad pattern or constraint is a load error.
 func ParseGitHubReleaseSource(raw map[string]any) (GitHubReleaseSource, GitHubReleaseVersioning, error) {
 	var source GitHubReleaseSource
 
