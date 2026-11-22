@@ -182,15 +182,28 @@ func waitSucceeded(t *testing.T, held *daemon, name string) {
 	}
 }
 
+// newestRunOf waits for the run's row, because the runner reports a job running before the run has recorded itself: under load the two are a few milliseconds apart.
 func newestRunOf(t *testing.T, held *daemon, name string) string {
 	t.Helper()
 
-	runs, err := served(t, held, name).Store.ListRuns(t.Context(), "build", 1)
-	if err != nil || len(runs) != 1 {
-		t.Fatalf("ListRuns = %v, %v", runs, err)
-	}
+	deadline := time.Now().Add(30 * time.Second)
 
-	return runs[0].ID
+	for {
+		runs, err := served(t, held, name).Store.ListRuns(t.Context(), "build", 1)
+		if err != nil {
+			t.Fatalf("ListRuns: %v", err)
+		}
+
+		if len(runs) == 1 {
+			return runs[0].ID
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("%s is running and never recorded a run", name)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 type unreadUploads struct{ t *testing.T }
