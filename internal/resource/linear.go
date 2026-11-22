@@ -10,7 +10,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 )
 
-// linearStages is what one linear-* type implements: a finder has a check and an in, a publisher only an out.
+// linearStages is what one linear-* type implements: a finder has a check and an in, a publisher an out, and an in when its put leaves an issue a get after it reads back.
 type linearStages struct {
 	check func(ctx context.Context, source map[string]any) ([]map[string]any, error)
 	in    func(ctx context.Context, source, version map[string]any, destDir string) error
@@ -21,6 +21,7 @@ var linearTypes = map[string]linearStages{ //nolint:gochecknoglobals // read-onl
 	config.LinearIssuesType:  {check: linearIssuesCheck, in: linearIssuesIn},
 	config.LinearCommentType: {out: linearCommentOut},
 	config.LinearUpdateType:  {out: linearUpdateOut},
+	config.LinearIssueType:   {in: linearIssueIn, out: linearIssueOut},
 }
 
 type linearBackend struct{}
