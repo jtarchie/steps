@@ -171,6 +171,8 @@ type fakeGitHub struct {
 	gitRequests int
 	// refuseSHAWants answers git as a server that serves only advertised refs.
 	refuseSHAWants bool
+	// releases are the repository's releases, in the order a test filed them (fakegithub_release_test.go).
+	releases []fakeRelease
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
@@ -398,6 +400,7 @@ func (f *fakeGitHub) routes() http.Handler {
 		f.removeLabel(w, atoi(r.PathValue("number")), r.PathValue("label"))
 	})
 
+	f.releaseRoutes(handle, repo)
 	handle("GET "+repo+"/compare/{basehead...}", func(w http.ResponseWriter, r *http.Request) { f.serveCompare(w, r, r.PathValue("basehead")) })
 	// GitHub answers a tarball with a redirect to codeload; following one is part of the contract. Under the repo prefix, so the one auth check covers it.
 	handle("GET "+repo+"/tarball/{sha}", func(w http.ResponseWriter, r *http.Request) {

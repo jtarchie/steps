@@ -60,6 +60,7 @@ var githubTypes = map[string]githubStages{
 	config.GitHubIssueType:     {in: githubIssueIn, out: githubIssueOut},
 	config.GitHubPRType:        {in: githubPRIn, out: githubPROut},
 	config.GitHubIssuesType:    {check: githubIssuesCheck, in: githubIssuesIn},
+	config.GitHubReleaseType:   {check: githubReleaseCheck, in: githubReleaseIn},
 }
 
 type githubBackend struct{}
