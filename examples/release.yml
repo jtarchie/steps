@@ -150,7 +150,7 @@ jobs:
 
   - name: release
     serial: true
-    timeout: 1h
+    timeout: 25h                       # must outlive the 24h approval below; the deadline is only checked between steps
     plan:
       - get: repo
         resource: tag
