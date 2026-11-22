@@ -25,6 +25,10 @@ func (c *checkTracer) StartCheck(ctx context.Context, resource string) (context.
 	return context.WithValue(ctx, checkSpanKey{}, "00-check-of-"+resource), func(err error) { c.ended = append(c.ended, err) }
 }
 
+func (c *checkTracer) Carry(context.Context) func(context.Context) context.Context {
+	return func(ctx context.Context) context.Context { return ctx }
+}
+
 func (c *checkTracer) Traceparent(ctx context.Context) string {
 	parent, _ := ctx.Value(checkSpanKey{}).(string)
 

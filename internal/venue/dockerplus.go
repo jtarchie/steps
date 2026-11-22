@@ -57,6 +57,8 @@ type plusRunner struct {
 }
 
 type plusSession struct {
+	// carry puts close's own context under the span the session was opened under, so what it removes is traced there; nil until ensure.
+	carry  func(context.Context) context.Context
 	worker Worker
 	spec   shell.RunnerSpec
 	// reach is nil for local:, whose daemon is this machine's.
@@ -257,6 +259,7 @@ func (s *plusSession) ensure(ctx context.Context) (shell.Runner, error) {
 
 	if !s.attempted {
 		s.attempted = true
+		s.carry = events.CarryTrace(ctx)
 
 		err := s.connect(ctx)
 
@@ -854,7 +857,7 @@ func (s *plusSession) close() error {
 
 	s.closed = true
 
-	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	ctx, cancel := context.WithTimeout(s.traced(context.Background()), closeTimeout)
 	defer cancel()
 
 	var errs []error
@@ -922,6 +925,15 @@ func (s *plusSession) weighMounts() []dockerapi.Bind {
 	}
 
 	return mounts
+}
+
+// traced puts ctx under the span the session was opened under, when it was opened at all.
+func (s *plusSession) traced(ctx context.Context) context.Context {
+	if s.carry == nil {
+		return ctx
+	}
+
+	return s.carry(ctx)
 }
 
 // removeOwned drops what only this session used: the holder, and every volume not now named by a digest. Newest first, so an overlay goes before its upper.

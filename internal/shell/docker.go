@@ -141,6 +141,8 @@ type dockerSession struct {
 	id       string
 	startOut string
 	startErr error
+	// carry puts close's own context under the span the container was started under, so its removal is traced there too.
+	carry func(context.Context) context.Context
 	// served records that the container has run at least one command, which is what tells "it never came up" from "it stopped under the step" when a later command finds it gone.
 	served bool
 }
@@ -190,6 +192,8 @@ func (s *dockerSession) ensure(ctx context.Context) (*dockerapi.Client, string, 
 	}
 
 	slog.DebugContext(ctx, "shell.docker.session_start", "image", s.image, "container", containerName, "cwd", s.resolvedCwd)
+
+	s.carry = events.CarryTrace(ctx)
 
 	containerID, startErr := s.start(ctx, containerName)
 	if startErr != nil && (ctx.Err() != nil || !dockerapi.IsDaemonRefusal(startErr)) {
@@ -490,7 +494,7 @@ func reclaim(ctx context.Context, client *dockerapi.Client, id string) {
 // leaving a container running would be worst.
 func (s *dockerSession) close() error {
 	s.mu.Lock()
-	id, client := s.id, s.client
+	id, client, carry := s.id, s.client, s.carry
 	s.id, s.name, s.client = "", "", nil
 	s.closed = true
 	s.mu.Unlock()
@@ -505,7 +509,12 @@ func (s *dockerSession) close() error {
 		return nil
 	}
 
-	ctx, cancel := removalContext(context.Background())
+	base := context.Background()
+	if carry != nil {
+		base = carry(base)
+	}
+
+	ctx, cancel := removalContext(base)
 	defer cancel()
 
 	slog.Debug("shell.docker.session_close", "container", id)

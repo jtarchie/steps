@@ -22,6 +22,8 @@ type Tracer interface {
 	Scope(ctx context.Context, runID string, stepID int64) context.Context
 	// Traceparent is the W3C trace context ctx is under, or "".
 	Traceparent(ctx context.Context) string
+	// Carry returns what puts another context under the span ctx is under.
+	Carry(ctx context.Context) func(context.Context) context.Context
 }
 
 // ponytail: process-wide, like the tracer provider it fronts; a ctx-carried tracer would need every command's context to be built through one funnel first.
@@ -58,6 +60,17 @@ func Traceparent(ctx context.Context) string {
 	}
 
 	return ""
+}
+
+// CarryTrace returns what puts another context under the span ctx is under, for work that outlives ctx: a teardown runs on a context of its own, and a struct may hold this where it may not hold a context. Never nil.
+//
+// The span itself is carried, not its traceparent: an HTTP client with no provider of its own takes the one its context's span came from, and a span rebuilt from a string has none, so every call under it was silently untraced.
+func CarryTrace(ctx context.Context) func(context.Context) context.Context {
+	if t := currentTracer(); t != nil {
+		return t.Carry(ctx)
+	}
+
+	return func(ctx context.Context) context.Context { return ctx }
 }
 
 // LogAttrs is what WithLogAttrs put on ctx, which is also a run's identity (pipeline, revision, run, job) to anything recording it.

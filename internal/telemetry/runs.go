@@ -276,6 +276,12 @@ func (t *runTracer) Traceparent(ctx context.Context) string {
 	return carrier.Get("traceparent")
 }
 
+func (t *runTracer) Carry(ctx context.Context) func(context.Context) context.Context {
+	span := trace.SpanFromContext(ctx)
+
+	return func(ctx context.Context) context.Context { return trace.ContextWithSpan(ctx, span) }
+}
+
 // attrs is a run's identity as a metric sees it: never the run id, whose every value is new.
 func (r runInfo) attrs() []attribute.KeyValue {
 	return []attribute.KeyValue{
