@@ -691,3 +691,151 @@ jobs:
 		t.Errorf("the cron reader was asked about the pipeline's own cron type: %v", asked)
 	}
 }
+
+// manyJobs is a pipeline of n manual jobs named j1..jn, in that order.
+func manyJobs(n int) string {
+	var b strings.Builder
+
+	b.WriteString("jobs:\n")
+
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, "  - name: j%d\n    plan: [{task: work, run: \"true\"}]\n", i)
+	}
+
+	return b.String()
+}
+
+// TestAPipelinePastSixJobsIsAMap: named cells wrapped a 24-job pipeline to nine lines, and on a phone one pipeline was taller than the screen, while 22 of its cells said only "passed". Past six jobs every job is one tick in config order, only the jobs that want a person keep a named cell, and a tally says in words what the ticks draw.
+func TestAPipelinePastSixJobsIsAMap(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := lanePipelines(t, nil, "wide", manyJobs(8), "other", oneManualJob)
+
+	for i := 1; i <= 5; i++ {
+		seedRun(t, pipelines[0], fmt.Sprintf("run-%d", i), fmt.Sprintf("j%d", i), "succeeded")
+	}
+
+	seedRun(t, pipelines[0], "run-6", "j6", "failed")
+	seedRun(t, pipelines[0], "run-7", "j7", "")
+
+	_, page := get(t, server, "/")
+	row := pipelineRow(t, page, "wide")
+	jobmap := between(t, row, `<span class="jobmap">`, "</span>")
+
+	if got := strings.Count(jobmap, `<a class="mapjob `); got != 8 {
+		t.Errorf("the map draws %d ticks, want one per job:\n%s", got, jobmap)
+	}
+
+	for _, want := range []string{
+		`<a class="mapjob st-passed" href="/p/wide/jobs/j1" title="j1: passed" aria-label="j1, passed" tabindex="-1"></a>`,
+		`<a class="mapjob st-failed" href="/p/wide/jobs/j6" title="j6: failed" aria-label="j6, failed" tabindex="-1"></a>`,
+		`<a class="mapjob st-running" href="/p/wide/jobs/j7" title="j7: never ran, running" aria-label="j7, never ran, running" tabindex="-1"></a>`,
+		`<a class="mapjob st-none" href="/p/wide/jobs/j8" title="j8: never ran" aria-label="j8, never ran" tabindex="-1"></a>`,
+	} {
+		if !strings.Contains(jobmap, want) {
+			t.Errorf("the map lacks %s:\n%s", want, jobmap)
+		}
+	}
+
+	if !strings.HasPrefix(jobmap, `<span class="jobmap"><a class="mapjob st-passed" href="/p/wide/jobs/j1"`) {
+		t.Errorf("the map is not in config order:\n%s", jobmap)
+	}
+
+	if strings.Contains(row, `class="hist"`) || strings.Contains(row, `class="jobsep"`) {
+		t.Errorf("a map row still draws strips or separators:\n%s", row)
+	}
+}
+
+// TestAMapNamesOnlyTheJobsThatWantAPerson: green cells were the noise that hid the red one; on a map only failed, errored, held and running jobs keep a name, and the tally counts what the ticks draw.
+func TestAMapNamesOnlyTheJobsThatWantAPerson(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := lanePipelines(t, nil, "wide", manyJobs(8), "other", oneManualJob)
+
+	for i := 1; i <= 5; i++ {
+		seedRun(t, pipelines[0], fmt.Sprintf("run-%d", i), fmt.Sprintf("j%d", i), "succeeded")
+	}
+
+	seedRun(t, pipelines[0], "run-6", "j6", "failed")
+	seedRun(t, pipelines[0], "run-7", "j7", "")
+
+	_, page := get(t, server, "/")
+	row := pipelineRow(t, page, "wide")
+
+	if got := strings.Count(row, `<a class="cell `); got != 2 {
+		t.Errorf("the row names %d jobs, want the failed and the running one:\n%s", got, row)
+	}
+
+	if !strings.Contains(row, `href="/p/wide/jobs/j6"`+` title="j6: failed"`) || !strings.Contains(row, `class="cell st-none live"`) {
+		t.Errorf("the failed and running jobs are not named:\n%s", row)
+	}
+
+	if !strings.Contains(row, `<a class="tally" href="/p/wide">8 jobs · 1 failed · 1 running · 1 never ran</a>`) {
+		t.Errorf("the tally does not say what the map draws:\n%s", row)
+	}
+}
+
+// TestSixJobsStayNamed: the map is for the pipeline the names no longer fit; up to six, the row is what it was.
+func TestSixJobsStayNamed(t *testing.T) {
+	t.Parallel()
+
+	server, _ := lanePipelines(t, nil, "six", manyJobs(6), "seven", manyJobs(7))
+
+	_, page := get(t, server, "/")
+
+	if row := pipelineRow(t, page, "six"); strings.Count(row, `<a class="cell `) != 6 || strings.Contains(row, "jobmap") {
+		t.Errorf("a six-job pipeline is not six named cells:\n%s", row)
+	}
+
+	if row := pipelineRow(t, page, "seven"); !strings.Contains(row, `<span class="jobmap">`) {
+		t.Errorf("a seven-job pipeline is not a map:\n%s", row)
+	}
+}
+
+// TestAMapNamesThreeJobsAndCountsTheRest: a pipeline where everything broke would otherwise name every job again, and be the wrapped row the map replaced.
+func TestAMapNamesThreeJobsAndCountsTheRest(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := lanePipelines(t, nil, "wide", manyJobs(10), "other", oneManualJob)
+
+	for i := 1; i <= 5; i++ {
+		seedRun(t, pipelines[0], fmt.Sprintf("run-%d", i), fmt.Sprintf("j%d", i), "failed")
+	}
+
+	_, page := get(t, server, "/")
+	row := pipelineRow(t, page, "wide")
+
+	if got := strings.Count(row, `<a class="cell `); got != 3 {
+		t.Errorf("the row names %d jobs, want 3:\n%s", got, row)
+	}
+
+	if !strings.Contains(row, `<a class="moremap" href="/p/wide">+2</a>`) {
+		t.Errorf("the jobs past the third are not counted:\n%s", row)
+	}
+
+	if !strings.Contains(row, "10 jobs · 5 failed · 5 never ran") {
+		t.Errorf("the tally does not count every failure:\n%s", row)
+	}
+
+	if !strings.Contains(row, `aria-describedby="red-wide"`) || !strings.Contains(page, `<p id="red-wide">wide is failing: j1 failed, j2 failed, j3 failed, j4 failed, j5 failed</p>`) {
+		t.Errorf("the live region does not still name every red job:\n%s", page)
+	}
+}
+
+// TestAHealthyMapSaysAllPassed: a green map draws no named cell, so the tally is the row's one sentence.
+func TestAHealthyMapSaysAllPassed(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := lanePipelines(t, nil, "wide", manyJobs(7), "other", oneManualJob)
+
+	for i := 1; i <= 7; i++ {
+		seedRun(t, pipelines[0], fmt.Sprintf("run-%d", i), fmt.Sprintf("j%d", i), "succeeded")
+	}
+
+	_, page := get(t, server, "/")
+	row := pipelineRow(t, page, "wide")
+
+	if !strings.Contains(row, `<a class="tally" href="/p/wide">7 jobs · all passed</a>`) || strings.Contains(row, `<a class="cell `) {
+		t.Errorf("a healthy map does not say all passed, alone:\n%s", row)
+	}
+}

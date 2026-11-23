@@ -259,8 +259,25 @@ func TestRunHistoryTicksDifferBeyondHue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	statuses := []string{"passed", "failed", "errored", "aborted", "running", "queued"}
-	color, shape := tickLooks(t, css, statuses)
+	ticksDifferBeyondHue(t, css, "tick", []string{"passed", "failed", "errored", "aborted", "running", "queued"})
+}
+
+// TestJobMapTicksDifferBeyondHue: a map row's ticks are the strip's squares for jobs instead of runs, with held and never ran added — held is red like failed, so only its shape tells them apart.
+func TestJobMapTicksDifferBeyondHue(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ticksDifferBeyondHue(t, css, "mapjob", []string{"passed", "failed", "errored", "held", "aborted", "running", "queued", "none"})
+}
+
+func ticksDifferBeyondHue(t *testing.T, css []byte, class string, statuses []string) {
+	t.Helper()
+
+	color, shape := tickLooks(t, css, class, statuses)
 
 	for i, tokens := range themeTokens(t, css) {
 		for a := range statuses {
@@ -280,8 +297,8 @@ func TestRunHistoryTicksDifferBeyondHue(t *testing.T) {
 	}
 }
 
-// tickLooks reads, per status, the color token its .st- class writes text in and the declarations its .tick rule adds beyond color and motion: its shape.
-func tickLooks(t *testing.T, css []byte, statuses []string) (color, shape map[string]string) {
+// tickLooks reads, per status, the color token its .st- class writes text in and the declarations its .<class> rule adds beyond color and motion: its shape.
+func tickLooks(t *testing.T, css []byte, class string, statuses []string) (color, shape map[string]string) {
 	t.Helper()
 
 	color, shape = map[string]string{}, map[string]string{}
@@ -295,7 +312,7 @@ func tickLooks(t *testing.T, css []byte, statuses []string) (color, shape map[st
 		color[status] = string(m[1])
 
 		var decls []string
-		for _, rule := range regexp.MustCompile(`(?m)^\.tick\.st-`+status+` \{([^}]*)\}`).FindAllSubmatch(css, -1) {
+		for _, rule := range regexp.MustCompile(`(?m)^\.`+class+`\.st-`+status+` \{([^}]*)\}`).FindAllSubmatch(css, -1) {
 			for _, decl := range strings.Split(string(rule[1]), ";") {
 				if decl = strings.TrimSpace(decl); decl != "" && !strings.HasPrefix(decl, "animation") {
 					decls = append(decls, decl)

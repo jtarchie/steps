@@ -265,6 +265,7 @@ func templateFuncs(loc *locale) template.FuncMap {
 		"word":       loc.word,
 		"join":       strings.Join,
 		"redWords":   func(p overviewPipeline) string { return p.RedWordsIn(loc) },
+		"mapTally":   func(p overviewPipeline) string { return p.MapTallyIn(loc) },
 		"cellTitle":  func(c versionCell) string { return c.TitleIn(loc) },
 		"budget":     func(d agentDialView) string { return d.BudgetIn(loc) },
 		"markWords":  func(m mark) string { return m.WordsIn(loc) },
