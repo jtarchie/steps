@@ -444,6 +444,8 @@ func (s *Server) routes() error {
 	e.GET("/static/htmx.min.js", assetHandler("static/htmx.min.js", "text/javascript; charset=utf-8"))
 	e.GET("/static/hx-sse.min.js", assetHandler("static/hx-sse.min.js", "text/javascript; charset=utf-8"))
 	e.GET("/static/app.js", assetHandler("static/app.js", "text/javascript; charset=utf-8"))
+	// The wall's dot-matrix face (Doto, SIL OFL 1.1, static/doto-OFL.txt), vendored for the same reason as htmx: a TV's daemon may have no route to a font CDN.
+	e.GET("/static/doto-900.woff2", assetHandler("static/doto-900.woff2", "font/woff2"))
 	e.GET("/mark", s.handleMark)
 	e.GET("/docs", s.handleDocsIndex)
 	e.GET("/docs/:page", s.handleDocs)

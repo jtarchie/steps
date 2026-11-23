@@ -8,17 +8,18 @@ import (
 	"testing"
 )
 
-// TestAssetRoutesServeTheirOwnFileWithItsContentHashAsETag: four routes share one handler factory, so a swapped file or content type between them is the bug, and the tag must stay the content's own hash so a vendored bump invalidates it.
+// TestAssetRoutesServeTheirOwnFileWithItsContentHashAsETag: every asset route shares one handler factory, so a swapped file or content type between them is the bug, and the tag must stay the content's own hash so a vendored bump invalidates it.
 func TestAssetRoutesServeTheirOwnFileWithItsContentHashAsETag(t *testing.T) {
 	t.Parallel()
 
 	server, _ := testPipeline(t)
 
 	for route, want := range map[string]struct{ file, contentType string }{
-		"/static/app.css":       {"static/app.css", "text/css; charset=utf-8"},
-		"/static/htmx.min.js":   {"static/htmx.min.js", "text/javascript; charset=utf-8"},
-		"/static/hx-sse.min.js": {"static/hx-sse.min.js", "text/javascript; charset=utf-8"},
-		"/static/app.js":        {"static/app.js", "text/javascript; charset=utf-8"},
+		"/static/app.css":        {"static/app.css", "text/css; charset=utf-8"},
+		"/static/doto-900.woff2": {"static/doto-900.woff2", "font/woff2"},
+		"/static/htmx.min.js":    {"static/htmx.min.js", "text/javascript; charset=utf-8"},
+		"/static/hx-sse.min.js":  {"static/hx-sse.min.js", "text/javascript; charset=utf-8"},
+		"/static/app.js":         {"static/app.js", "text/javascript; charset=utf-8"},
 	} {
 		data, err := assets.ReadFile(want.file)
 		if err != nil {

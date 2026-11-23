@@ -1,8 +1,9 @@
 package web
 
 import (
-	"math"
+	"cmp"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/labstack/echo/v5"
@@ -10,16 +11,8 @@ import (
 
 const wallPath = "/wall"
 
-// wallGrid is the columns and rows that put n tiles on one 16:9 screen: columns grow with the square root of the count, so the tiles stay roughly the screen's shape however many there are.
-func wallGrid(n int) (cols, rows int) {
-	if n < 1 {
-		return 1, 1
-	}
-
-	cols = min(n, int(math.Ceil(math.Sqrt(float64(n)*16/9))))
-
-	return cols, (n + cols - 1) / cols
-}
+// wallNameCap is the longest failing name the wall sizes its type for; past it a name is cut rather than shrinking every other sign for one.
+const wallNameCap = 24
 
 // wallTile is one pipeline on the wall: the root's row, read for a screen across the room.
 type wallTile struct {
@@ -37,38 +30,6 @@ func (w wallTile) Building() bool {
 	return false
 }
 
-// Class is the tile's one state, red outranking paused outranking building, as the root's mark ranks them.
-func (w wallTile) Class() string {
-	switch {
-	case w.Red():
-		return "red"
-	case w.Paused:
-		return "paused"
-	case w.Building():
-		return "building"
-	case !w.HasRun:
-		return "never"
-	default:
-		return ""
-	}
-}
-
-// Glyph draws the state in shape, so it reads without its colour.
-func (w wallTile) Glyph() string {
-	switch {
-	case w.Red():
-		return "✗"
-	case w.Paused:
-		return "‖"
-	case w.Building():
-		return "◐"
-	case !w.HasRun:
-		return "○"
-	default:
-		return "✓"
-	}
-}
-
 // RunningJob is the first job in flight, in config order.
 func (w wallTile) RunningJob() string {
 	for _, chip := range w.Chips {
@@ -80,65 +41,56 @@ func (w wallTile) RunningJob() string {
 	return ""
 }
 
-// wallNameLen is the longest name the wall sizes its type for, so every name is one size and a tile is not read as smaller news; past wallNameCap a name is cut rather than shrinking every tile for one.
-func wallNameLen(tiles []wallTile) int {
-	longest := 1
-
-	for _, tile := range tiles {
-		longest = max(longest, len([]rune(tile.Slug)))
-	}
-
-	return min(longest, wallNameCap)
+// wallSigns is the wall's answer, ordered by what wants a person: each failing pipeline its own sign, newest failure first, then one sign each for building, passing, paused and never run.
+type wallSigns struct {
+	Failing, Building, Passing, Paused, Never []wallTile
+	Total                                     int
+	// Len is the longest failing name, which every failing name is sized for, so one is not read as smaller news than another.
+	Len int
 }
 
-const wallNameCap = 24
+// AllPassing is the quiet wall: every pipeline green, which is said once, large.
+func (w wallSigns) AllPassing() bool { return w.Total > 0 && len(w.Passing) == w.Total }
 
-// wallTally is the wall's head: what is red, building, paused, and the rest.
-type wallTally struct {
-	Total, Failing, Building, Paused, Green int
-}
+// sortWall files each pipeline under the one sign its state belongs to, red outranking paused outranking building, as the root's mark ranks them.
+func sortWall(rows []overviewPipeline) wallSigns {
+	signs := wallSigns{Total: len(rows), Len: 1}
 
-func tallyWall(tiles []wallTile) wallTally {
-	tally := wallTally{Total: len(tiles)}
+	for _, row := range rows {
+		tile := wallTile{row}
 
-	for _, tile := range tiles {
-		switch tile.Class() {
-		case "red":
-			tally.Failing++
-		case "paused":
-			tally.Paused++
-		case "building":
-			tally.Building++
-		case "":
-			tally.Green++
+		switch {
+		case tile.Red():
+			signs.Failing = append(signs.Failing, tile)
+			signs.Len = max(signs.Len, min(len([]rune(tile.Slug)), wallNameCap))
+		case tile.Paused:
+			signs.Paused = append(signs.Paused, tile)
+		case tile.Building():
+			signs.Building = append(signs.Building, tile)
+		case !tile.HasRun:
+			signs.Never = append(signs.Never, tile)
+		default:
+			signs.Passing = append(signs.Passing, tile)
 		}
 	}
 
-	return tally
+	slices.SortStableFunc(signs.Failing, func(a, b wallTile) int {
+		return cmp.Compare(b.Latest.StartedAt.UnixNano(), a.Latest.StartedAt.UnixNano())
+	})
+
+	return signs
 }
 
-// handleWall serves the radiator: every pipeline the reader may see as a tile, sized to one screen, with nothing on it to click but the tiles. It is the root's rows, so a tile and a row cannot disagree.
+// handleWall serves the radiator: a highway message sign for the pipelines the reader may see, with nothing on it to press but the pipelines. It is the root's rows, so a sign and a row cannot disagree.
 func (s *Server) handleWall(c *echo.Context) error {
 	nav := s.globalNav(c)
-	rows := s.overviewPipelines(c, nav)
-	tiles := make([]wallTile, 0, len(rows))
-
-	for _, row := range rows {
-		tiles = append(tiles, wallTile{row})
-	}
-
-	cols, gridRows := wallGrid(len(tiles))
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "wall", map[string]any{
 		"Nav":   nav,
 		"Title": "wall",
 		"Wall":  true,
-		"Tiles": tiles,
-		"Tally": tallyWall(tiles),
-		"Cols":  cols,
-		"Rows":  gridRows,
-		"Len":   wallNameLen(tiles),
+		"Signs": sortWall(s.overviewPipelines(c, nav)),
 		"Now":   time.Now(),
 	})
 }

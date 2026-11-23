@@ -1693,49 +1693,51 @@ pre.hl { color: var(--fg); background: var(--panel); }
 }
 
 /* ---- wall ----
-   /wall is a screen read from across a room: every pipeline a tile, all on
-   one screen, sized by the grid the server picked. Type scales with the tile
-   (cqmin), not the window, so thirty tiles and three both read. A red tile is
-   the only loud thing; it fills with the red token and its text takes the
-   ground's, which is 6:1 or better in both themes. Nothing animates: an
-   always-on screen that pulses is burn-in and a distraction. */
-.wallpage { height: 100vh; overflow: hidden; }
-.wallpage main { max-width: none; height: 100vh; box-sizing: border-box; padding: 2vh 1.6vw; display: flex; flex-direction: column; gap: 2vh; }
-.wallhead { display: flex; align-items: baseline; gap: 2vw; font-size: clamp(14px, 2.4vh, 32px); color: var(--dim); }
-.wallhead h1 { margin: 0; font-size: inherit; color: var(--fg); }
-.wallcount { display: flex; gap: 1.5vw; margin: 0; }
-.wallstale { display: none; margin: 0 0 0 auto; color: var(--yellow); font-weight: 700; }
-.stale .wallstale { display: block; }
-/* Stale: the wall stops claiming anything. Grey, so a red tile is not read as current either. */
-.stale .wallgrid, .stale .wallcount { filter: grayscale(1); opacity: 0.45; }
-.wallgrid { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); grid-template-rows: repeat(var(--rows), minmax(0, 1fr)); gap: 1.2vmin; }
-/* The tile's own box is sized in %, not cq: a container's cq units resolve against ITS container, here the viewport, and 7cqmin of padding was 75px a side. */
-.tile { container-type: size; position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 3%; padding: 5% 6%; border-radius: 4px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); color: var(--fg); text-decoration: none; min-width: 0; }
-.tile:hover { text-decoration: none; }
-.tilehead { display: flex; flex-direction: column; align-items: start; gap: 2cqmin; min-width: 0; flex-shrink: 0; }
-.tileglyph { font-size: clamp(14px, 20cqmin, 96px); line-height: 1; color: var(--green); }
-/* Every name is one size: the server passes the longest name's length, and the type is the largest whose monospace width (~0.62em a character) fits the tile. */
-.tilename { max-width: 100%; font-size: clamp(12px, min(16cqmin, calc(100cqi / (var(--len, 12) * 0.62))), 120px); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tilewhy { flex-shrink: 0; font-size: clamp(11px, 9cqmin, 48px); line-height: 1.25; color: var(--dim); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
-.tile .jobmap { --tick: clamp(6px, 5cqmin, 18px); margin-top: auto; max-width: none; gap: calc(var(--tick) / 3); }
-.tile .mapjob { width: var(--tick); height: var(--tick); animation: none; }
-.tile .mapjob.st-failed, .tile .mapjob.st-held { height: calc(var(--tick) * 1.6); }
-.tile.red { background: var(--red); box-shadow: none; color: var(--bg); }
-.tile.red .tileglyph, .tile.red .tilewhy { color: inherit; }
-.tile.red .mapjob { color: var(--bg); }
-.tile.red .mapjob.st-none { box-shadow: inset 0 -1px 0 currentColor; }
-.tile.building { box-shadow: inset 0 0 0 1px var(--line), inset 0 -1.2vmin 0 var(--yellow); }
-.tile.building .tileglyph, .tile.building .tilewhy { color: var(--yellow); }
-/* Red and being rebuilt: the fill stays, since it is still red, and the bar says a fix is on its way. */
-.tile.red.live { box-shadow: inset 0 -1.2vmin 0 var(--yellow); }
-.tile.paused { opacity: 0.6; }
-/* Forced colours drop the red fill but not the ground-coloured text written on it; there the tile is the system's own text on its own ground, and a thick edge is what still says red, beside the glyph. */
+   /wall is a highway message sign, read from across a room: black panels,
+   a dot-matrix face, and one lit word per state in its own colour, so the
+   state is a WORD (read without telling hues apart) and nothing is grey.
+   Always dark, whatever the theme: a sign is lit on black, so the page is
+   color-scheme: dark and every token resolves to its dark half. Type is sized
+   by the sign (cqh, cqi), never the window; a container's own padding and gap are
+   in vw/vh, since its cq units would resolve against the viewport. Nothing
+   moves: an always-on screen that pulses is burn-in and a distraction. */
+@font-face { font-family: "Doto"; src: url("/static/doto-900.woff2") format("woff2"); font-weight: 900; font-display: swap; }
+.wallpage { color-scheme: dark; height: 100vh; overflow: hidden; background: var(--bg); color: var(--yellow); }
+.wallpage main { max-width: none; height: 100vh; box-sizing: border-box; padding: 2.4vh 1.6vw 1.6vh; display: flex; flex-direction: column; gap: 1.8vh; font-family: "Doto", var(--mono); font-weight: 900; text-transform: uppercase; }
+.wallhead { display: contents; }
+.wallfoot { order: 1; display: flex; justify-content: space-between; margin: 0 0.6vw; font-size: clamp(14px, 3vh, 36px); letter-spacing: 0.08em; color: var(--yellow); }
+.wallfoot h1 { margin: 0; font: inherit; }
+.wallsigns { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 1.8vh; }
+.sign { container-type: size; flex: 1.6 1 0; min-height: 0; overflow: hidden; display: flex; align-items: center; gap: 2.6vw; margin: 0; padding: 0 2.8vw; border-radius: 10px; background: var(--code-bg); box-shadow: inset 0 0 0 3px var(--line); line-height: 1.05; text-decoration: none; }
+.sign a { color: inherit; text-decoration: none; }
+.sign .word { flex: none; font-size: min(40cqh, 5.4cqi); letter-spacing: 0.05em; white-space: nowrap; }
+.sign .names { display: flex; flex-wrap: wrap; align-content: center; gap: 0.2em 0.9em; font-size: min(34cqh, 4cqi); }
+.sign .names .why { font-size: 0.7em; }
+/* A failing pipeline is its own sign, the name the largest thing on the wall, sized for the longest failing name so every one is the same size. */
+.sign.red { flex: 3 1 0; flex-direction: column; align-items: start; justify-content: center; gap: 0.8vh; color: var(--red); }
+.sign.red .word { font-size: min(18cqh, 4.6cqi); }
+.sign.red .name { font-size: min(38cqh, calc(94cqi / (var(--len, 12) * 0.62))); white-space: nowrap; }
+.sign.red .why { font-size: min(16cqh, 3.6cqi); color: var(--yellow); white-space: nowrap; }
+/* Red and being rebuilt: still red, and the amber bar says a fix is on its way. */
+.sign.red.live { box-shadow: inset 0 0 0 3px var(--line), inset 0 -1.2vh 0 var(--yellow); }
+.sign.building { color: var(--yellow); }
+.sign.passing { color: var(--green); }
+.sign.paused { color: var(--blue); }
+.sign.never { color: var(--yellow); }
+.sign.all { flex-direction: column; align-items: start; justify-content: center; gap: 3vh; }
+.sign.all .word { font-size: min(30cqh, 7.5cqi); }
+.sign.all .names { font-size: min(14cqh, 3.4cqi); }
+.wallstale { display: none; order: -1; flex: 2 1 0; flex-direction: column; align-items: start; justify-content: center; gap: 1.5vh; color: var(--yellow); box-shadow: inset 0 0 0 3px var(--yellow); }
+.wallstale .word { font-size: min(36cqh, 7cqi); }
+.wallstale .why { font-size: min(17cqh, 3.6cqi); }
+/* Stale: every word goes dark, so nothing is read as current; only the notice is lit. */
+.stale .wallstale { display: flex; }
+.stale .wallsigns .sign, .stale .wallsigns .sign .why, .stale .wallfoot { color: var(--line); }
+.stale .sign.red.live { box-shadow: inset 0 0 0 3px var(--line); }
 @media (forced-colors: active) {
-  .tile.red { color: CanvasText; background: Canvas; box-shadow: inset 0 0 0 6px CanvasText; }
-  .tile.red .mapjob { color: CanvasText; }
+  .sign, .sign .why, .wallfoot { color: CanvasText; }
+  .sign.red { box-shadow: inset 0 0 0 6px CanvasText; }
 }
-.tile.never .tileglyph { color: var(--dim); }
-.tile.paused .tileglyph { color: var(--blue); }
 
 /* /connections: adding a wall display, and the address it is shown once. */
 .display-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 16px; }
