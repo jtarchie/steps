@@ -114,6 +114,7 @@ func a11yPages(t *testing.T) (base string, pages []string) {
 
 	return listener.URL, []string{
 		"/",
+		"/wall",
 		"/p/demo",
 		"/p/demo/runs",
 		"/p/demo/runs/run-ok",

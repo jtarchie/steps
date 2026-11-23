@@ -383,6 +383,18 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
     e.preventDefault();
   });
 
+  // The wall greys out once its polls stop landing: a frozen screen that still says green is worse than none. Freshness is the server's render stamp on #wall changing, not a swap event, because htmx swaps an error response too and an error page has no #wall to carry a new stamp.
+  (function () {
+    var seen = null, heard = Date.now();
+    setInterval(function () {
+      var wall = document.getElementById('wall');
+      if (!wall) return;
+      if (wall.dataset.at !== seen) { seen = wall.dataset.at; heard = Date.now(); }
+      var after = Number(document.documentElement.dataset.staleAfter) || 10000;
+      document.documentElement.classList.toggle('stale', Date.now() - heard > after);
+    }, 500);
+  })();
+
   // Keyboard navigation over the root's pipeline table.
   //
   // j/k walk pipelines and h/l walk a row's job cells, so the table is one
@@ -631,7 +643,8 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
   document.addEventListener('htmx:after:swap', watchScrollers);
 
   // A second only when something is actively counting; otherwise half a
-  // minute is plenty for text measured in minutes and hours.
-  var live = document.querySelector('time[data-elapsed-since], time[data-deadline]') !== null;
+  // minute is plenty for text measured in minutes and hours. The wall counts
+  // too: its "last heard" is the one line read while everything else is grey.
+  var live = document.querySelector('time[data-elapsed-since], time[data-deadline], #wall') !== null;
   setInterval(tick, live ? 1000 : 30000);
 })();

@@ -1691,3 +1691,54 @@ pre.hl { color: var(--fg); background: var(--panel); }
   .dag .dagnode .dagname, .dag .dagnode .dagstatus, .dag .dagnode .dagqueued, .dag .dagres text { fill: CanvasText; }
   .dag .dagnode:focus-visible .dagbox, .dag .dagres:focus-visible rect { stroke: Highlight; }
 }
+
+/* ---- wall ----
+   /wall is a screen read from across a room: every pipeline a tile, all on
+   one screen, sized by the grid the server picked. Type scales with the tile
+   (cqmin), not the window, so thirty tiles and three both read. A red tile is
+   the only loud thing; it fills with the red token and its text takes the
+   ground's, which is 6:1 or better in both themes. Nothing animates: an
+   always-on screen that pulses is burn-in and a distraction. */
+.wallpage { height: 100vh; overflow: hidden; }
+.wallpage main { max-width: none; height: 100vh; box-sizing: border-box; padding: 2vh 1.6vw; display: flex; flex-direction: column; gap: 2vh; }
+.wallhead { display: flex; align-items: baseline; gap: 2vw; font-size: clamp(14px, 2.4vh, 32px); color: var(--dim); }
+.wallhead h1 { margin: 0; font-size: inherit; color: var(--fg); }
+.wallcount { display: flex; gap: 1.5vw; margin: 0; }
+.wallstale { display: none; margin: 0 0 0 auto; color: var(--yellow); font-weight: 700; }
+.stale .wallstale { display: block; }
+/* Stale: the wall stops claiming anything. Grey, so a red tile is not read as current either. */
+.stale .wallgrid, .stale .wallcount { filter: grayscale(1); opacity: 0.45; }
+.wallgrid { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); grid-template-rows: repeat(var(--rows), minmax(0, 1fr)); gap: 1.2vmin; }
+/* The tile's own box is sized in %, not cq: a container's cq units resolve against ITS container, here the viewport, and 7cqmin of padding was 75px a side. */
+.tile { container-type: size; position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 3%; padding: 5% 6%; border-radius: 4px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); color: var(--fg); text-decoration: none; min-width: 0; }
+.tile:hover { text-decoration: none; }
+.tilehead { display: flex; flex-direction: column; align-items: start; gap: 2cqmin; min-width: 0; flex-shrink: 0; }
+.tileglyph { font-size: clamp(14px, 20cqmin, 96px); line-height: 1; color: var(--green); }
+/* Every name is one size: the server passes the longest name's length, and the type is the largest whose monospace width (~0.62em a character) fits the tile. */
+.tilename { max-width: 100%; font-size: clamp(12px, min(16cqmin, calc(100cqi / (var(--len, 12) * 0.62))), 120px); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tilewhy { flex-shrink: 0; font-size: clamp(11px, 9cqmin, 48px); line-height: 1.25; color: var(--dim); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.tile .jobmap { --tick: clamp(6px, 5cqmin, 18px); margin-top: auto; max-width: none; gap: calc(var(--tick) / 3); }
+.tile .mapjob { width: var(--tick); height: var(--tick); animation: none; }
+.tile .mapjob.st-failed, .tile .mapjob.st-held { height: calc(var(--tick) * 1.6); }
+.tile.red { background: var(--red); box-shadow: none; color: var(--bg); }
+.tile.red .tileglyph, .tile.red .tilewhy { color: inherit; }
+.tile.red .mapjob { color: var(--bg); }
+.tile.red .mapjob.st-none { box-shadow: inset 0 -1px 0 currentColor; }
+.tile.building { box-shadow: inset 0 0 0 1px var(--line), inset 0 -1.2vmin 0 var(--yellow); }
+.tile.building .tileglyph, .tile.building .tilewhy { color: var(--yellow); }
+/* Red and being rebuilt: the fill stays, since it is still red, and the bar says a fix is on its way. */
+.tile.red.live { box-shadow: inset 0 -1.2vmin 0 var(--yellow); }
+.tile.paused { opacity: 0.6; }
+/* Forced colours drop the red fill but not the ground-coloured text written on it; there the tile is the system's own text on its own ground, and a thick edge is what still says red, beside the glyph. */
+@media (forced-colors: active) {
+  .tile.red { color: CanvasText; background: Canvas; box-shadow: inset 0 0 0 6px CanvasText; }
+  .tile.red .mapjob { color: CanvasText; }
+}
+.tile.never .tileglyph { color: var(--dim); }
+.tile.paused .tileglyph { color: var(--blue); }
+
+/* /connections: adding a wall display, and the address it is shown once. */
+.display-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 16px; }
+.display-new { margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--yellow); background: var(--panel); }
+.display-new p { margin: 0 0 6px; }
+.display-url { word-break: break-all; user-select: all; }

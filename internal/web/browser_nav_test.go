@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/chromedp/cdproto/network"
@@ -291,5 +292,34 @@ func TestTheKeysWalkIntoAJobMap(t *testing.T) {
 
 	if got != "j2, never ran" {
 		t.Errorf("j then l three times lands on %q, want the map's second tick", got)
+	}
+}
+
+// TestAWallThatStopsHearingGoesGrey: a wall whose daemon went away kept painting the last answer it had, so a broken build could sit green on the TV all afternoon. Once the server's render stamp stops changing the wall greys and says since when.
+func TestAWallThatStopsHearingGoesGrey(t *testing.T) {
+	ctx := browser(t)
+
+	server, _ := testPipelines(t, "app", "infra")
+	listener := httptest.NewServer(server.Handler())
+
+	stale := chromedp.Evaluate[bool](`document.documentElement.classList.contains('stale') && getComputedStyle(document.querySelector('.wallstale')).display !== 'none'`)
+
+	// 4s against a 2.5s poll, watched for 7s: a wall that heard nothing since it loaded is stale by then, one whose polls land is not.
+	alive := must(ctx, t, stale, media("dark", false), chromedp.Navigate(listener.URL+"/wall"), chromedp.Evaluate[chromedp.Void](`document.documentElement.dataset.staleAfter = '4000'`), chromedp.Evaluate[chromedp.Void](`new Promise(done => setTimeout(done, 7000))`, chromedp.EvalAwaitPromise))
+	if alive {
+		t.Fatal("a wall whose polls are landing says it is not updating")
+	}
+
+	listener.Close()
+
+	gone := must(ctx, t, stale, chromedp.Evaluate[chromedp.Void](`document.documentElement.dataset.staleAfter = '1000'`), chromedp.Evaluate[chromedp.Void](`new Promise(done => setTimeout(done, 3000))`, chromedp.EvalAwaitPromise))
+	if !gone {
+		t.Error("a wall whose server went away still claims to be current")
+	}
+
+	// "last heard" counts on by the second: at a 30-second tick it read "5s ago" for half a minute after the daemon died.
+	heard := must(ctx, t, chromedp.Evaluate[string](`document.querySelector('.wallstale time').textContent`))
+	if !strings.HasSuffix(heard, "s ago") || strings.HasPrefix(heard, "0") {
+		t.Errorf("a stale wall says it last heard %q; want the seconds since, counting", heard)
 	}
 }

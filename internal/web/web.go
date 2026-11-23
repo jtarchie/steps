@@ -430,6 +430,7 @@ func (s *Server) routes() error {
 	e.Use(s.recordActivity)
 
 	e.GET("/", s.handleIndex)
+	e.GET(wallPath, s.handleWall)
 	e.GET("/static/app.css", assetHandler("static/app.css", "text/css; charset=utf-8"))
 	// The htmx route serves the vendored copy of htmx (4.0.0), which drives every
 	// live region in the UI. Vendored and embedded rather than pulled from a CDN:
@@ -467,6 +468,7 @@ func (s *Server) routes() error {
 		e.POST(tokenPath, s.handleToken)
 		e.GET(connectionsPath, s.handleConnections)
 		e.POST(revokePath, s.handleRevoke)
+		e.POST(displaysPath, s.handleAddDisplay)
 		// The methods MCP's streamable HTTP transport uses: POST a message, GET a stream, DELETE a session.
 		e.POST(exportPath, s.handleExport)
 		e.GET(exportPath, s.handleExport)

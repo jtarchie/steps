@@ -205,6 +205,7 @@ var routeRoles = map[string]Role{
 	"POST " + logoutPath:    RoleViewer,
 	"POST " + authorizePath: RoleViewer,
 	"POST " + revokePath:    RoleViewer,
+	"POST " + displaysPath:  RoleViewer,
 	// Never asked: each carries its own credential — a password, an agent's token, a sender's signature — and skips authorize.
 	"POST " + loginPath:                 RoleViewer,
 	"POST " + registerPath:              RoleViewer,

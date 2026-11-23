@@ -353,6 +353,21 @@ func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 			},
 		},
 		{
+			name: "wall",
+			path: "/wall",
+			setup: func(t *testing.T) (*Server, *Pipeline) {
+				t.Helper()
+
+				server, pipelines := testPipelines(t, "app", "infra")
+
+				return server, pipelines[0]
+			},
+			change: func(t *testing.T, pipeline *Pipeline) {
+				t.Helper()
+				startRunningBuild(t, pipeline)
+			},
+		},
+		{
 			name: "overview",
 			path: "/",
 			setup: func(t *testing.T) (*Server, *Pipeline) {
@@ -533,6 +548,7 @@ func TestLiveRegionsAreDrivenByHtmx(t *testing.T) {
 		path   string
 	}{
 		{overview, "/"},
+		{overview, "/wall"},
 		{server, "/p/demo"},
 		{server, "/p/demo/runs"},
 		{server, "/p/demo/jobs/build/detail"},

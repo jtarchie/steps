@@ -20,6 +20,7 @@ func TestStatusConstantsKeepTheirStoredStrings(t *testing.T) {
 		{string(NodeAborted), "aborted"},
 		{string(TokenAccess), "access"},
 		{string(TokenRefresh), "refresh"},
+		{string(TokenDisplay), "display"},
 	} {
 		if c.got != c.want {
 			t.Errorf("constant is %q, stored form is %q", c.got, c.want)

@@ -1,5 +1,8 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps connections</b></h1>
+{{/* Outside the refreshing region: the new address is shown once, on the answer to the form, and a poll must not take it away. */}}
+{{with .NewDisplay}}<div class="display-new" role="status"><p>{{t "conn.display.made" .Name}}</p><p><code class="display-url">{{.URL}}</code></p></div>{{end}}
+<form class="display-add" method="post" action="/connections/displays"><label for="display-name">{{t "conn.display.add"}}</label> <input id="display-name" name="name" type="text" maxlength="100" placeholder="{{t "conn.display.placeholder"}}"> <button class="btn" type="submit">{{t "conn.display.button"}}</button></form>
 <div id="connections-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#connections-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph">
 <p class="metaline">{{if .Everyone}}{{t "conn.all"}}{{else}}{{t "conn.mine"}}{{end}}{{if .CanAll}}<span class="sep">·</span>{{if .Everyone}}<a href="/connections">{{t "conn.tab.mine"}}</a> | <b>{{t "conn.tab.everyone"}}</b>{{else}}<b>{{t "conn.tab.mine"}}</b> | <a href="/connections?everyone=1">{{t "conn.tab.everyone"}}</a>{{end}}{{end}}</p>
 {{if .Rows}}
@@ -7,11 +10,11 @@
 {{range .Rows}}
   <li class="connection">
     <div class="conn-head">
-      <span class="conn-client">“{{.Client}}”</span> <span class="faint">{{t "conn.unverified"}}</span>
+      <span class="conn-client">“{{.Client}}”</span>{{if not .Display}} <span class="faint">{{t "conn.unverified"}}</span>{{end}}
       {{if $.Everyone}}<span class="sep">·</span>{{template "actor" .Actor}}{{end}}
     </div>
     <div class="conn-meta metaline">
-      {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}<span class="sep">·</span>{{if .Reads}}{{t "conn.read"}}{{else if .Live}}<a href="/p/{{.Pipeline}}/mcp/exports/{{.Export}}">{{.Pipeline}} / {{.Export}}</a>{{else}}{{.Pipeline}} / {{.Export}} <span class="faint">{{t "gone"}}</span>{{end}}<span class="sep">·</span>{{th "conn.authorized" (agoTag .AuthorizedAt)}}<span class="sep">·</span>{{if .LastCall.ID}}{{th "conn.lastcall" (agoTag .LastCall.At)}}{{else}}{{t "conn.never"}}{{end}}<span class="sep">·</span>{{t "conn.calls" .Calls}}
+      {{if .Display}}{{t "conn.display.kind"}}<span class="sep">·</span>{{th "conn.authorized" (agoTag .AuthorizedAt)}}{{else}}{{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}<span class="sep">·</span>{{if .Reads}}{{t "conn.read"}}{{else if .Live}}<a href="/p/{{.Pipeline}}/mcp/exports/{{.Export}}">{{.Pipeline}} / {{.Export}}</a>{{else}}{{.Pipeline}} / {{.Export}} <span class="faint">{{t "gone"}}</span>{{end}}<span class="sep">·</span>{{th "conn.authorized" (agoTag .AuthorizedAt)}}<span class="sep">·</span>{{if .LastCall.ID}}{{th "conn.lastcall" (agoTag .LastCall.At)}}{{else}}{{t "conn.never"}}{{end}}<span class="sep">·</span>{{t "conn.calls" .Calls}}{{end}}
     </div>
     {{/* A fold rather than a dialog, so it works with nothing but HTML: Revoke opens the question, the button inside answers it, and the summary — now reading Cancel — closes it. */}}
     <details class="conn-revoke">
@@ -23,7 +26,7 @@
         <input type="hidden" name="pipeline" value="{{.Pipeline}}">
         <input type="hidden" name="export" value="{{.Export}}">
         {{if $.Everyone}}<input type="hidden" name="everyone" value="1">{{end}}
-        <span>{{if .Reads}}{{t "conn.confirm.read" .Client}}{{else}}{{t "conn.confirm" .Client .Pipeline .Export}}{{end}}</span>
+        <span>{{if .Display}}{{t "conn.display.confirm" .Client}}{{else if .Reads}}{{t "conn.confirm.read" .Client}}{{else}}{{t "conn.confirm" .Client .Pipeline .Export}}{{end}}</span>
         <button class="btn danger" type="submit">{{t "conn.revoke"}}</button>
       </form>
     </details>
