@@ -693,6 +693,7 @@
  "wall.passing": "passing",
  "wall.paused": "paused",
  "wall.stale": "not updating",
+ "wall.title": "wall",
  "wall.updated": "updated",
  "who.answer": "answer",
  "who.compacted": "compacted",

@@ -28,6 +28,11 @@ func addDisplay(t *testing.T, server *Server, name string) string {
 		t.Fatalf("the page does not show the display's address:\n%s", page)
 	}
 
+	// The answer is drawn at the form's address, which has no GET; its region polling there swapped a 405 over the list.
+	if !strings.Contains(page, `hx-get="`+connectionsPath+`"`) || strings.Contains(page, `hx-get="`+displaysPath) {
+		t.Errorf("the page answering the form does not refresh from %s:\n%s", connectionsPath, page)
+	}
+
 	key, _, _ := strings.Cut(rest, `"`)
 	key, _, _ = strings.Cut(key, "<")
 

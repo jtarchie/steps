@@ -20,20 +20,23 @@ type wallTile struct {
 }
 
 // Building is a pipeline with a job in flight: on a green wall, the one thing about to change.
-func (w wallTile) Building() bool {
-	for _, chip := range w.Chips {
-		if chip.Running {
-			return true
-		}
-	}
-
-	return false
-}
+func (w wallTile) Building() bool { return w.RunningJob() != "" }
 
 // RunningJob is the first job in flight, in config order.
 func (w wallTile) RunningJob() string {
 	for _, chip := range w.Chips {
 		if chip.Running {
+			return chip.Name
+		}
+	}
+
+	return ""
+}
+
+// HeldJob is the first job the breaker holds, in config order: a pipeline red only for that has no failed run to name, and its latest run may well have passed.
+func (w wallTile) HeldJob() string {
+	for _, chip := range w.Chips {
+		if chip.Held {
 			return chip.Name
 		}
 	}
@@ -88,7 +91,7 @@ func (s *Server) handleWall(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "wall", map[string]any{
 		"Nav":   nav,
-		"Title": "wall",
+		"Title": s.renderer.localeOf(c).text("wall.title"),
 		"Wall":  true,
 		"Signs": sortWall(s.overviewPipelines(c, nav)),
 		"Now":   time.Now(),

@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
@@ -321,5 +323,80 @@ func TestAWallThatStopsHearingGoesGrey(t *testing.T) {
 	heard := must(ctx, t, chromedp.Evaluate[string](`document.querySelector('.wallstale time').textContent`))
 	if !strings.HasSuffix(heard, "s ago") || strings.HasPrefix(heard, "0") {
 		t.Errorf("a stale wall says it last heard %q; want the seconds since, counting", heard)
+	}
+}
+
+// TestAWallAnsweredWithAnErrorGoesGreyAndComesBack: a proxy's 502 while the daemon restarts was swapped in over #wall, which took the signs, the poll and the stale check with them, so the screen sat blank until somebody walked over and reloaded it.
+func TestAWallAnsweredWithAnErrorGoesGreyAndComesBack(t *testing.T) {
+	ctx := browser(t)
+
+	server, _ := testPipelines(t, "app", "infra")
+
+	var failing atomic.Bool
+
+	handler := server.Handler()
+	listener := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failing.Load() {
+			http.Error(w, "<html><body>bad gateway</body></html>", http.StatusBadGateway)
+
+			return
+		}
+
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(listener.Close)
+
+	read := chromedp.Evaluate[string](`(document.getElementById('wall') ? 'wall' : 'gone') + ' ' + (document.documentElement.classList.contains('stale') ? 'stale' : 'fresh')`)
+
+	if loaded := must(ctx, t, read, chromedp.Navigate(listener.URL+"/wall"), chromedp.Evaluate[chromedp.Void](`document.documentElement.dataset.staleAfter = '4000'`)); loaded != "wall fresh" {
+		t.Fatalf("a wall just loaded is %q", loaded)
+	}
+
+	failing.Store(true)
+
+	broken := must(ctx, t, read, chromedp.Evaluate[chromedp.Void](`new Promise(done => setTimeout(done, 8000))`, chromedp.EvalAwaitPromise))
+	if broken != "wall stale" {
+		t.Fatalf("a wall answered 502 is %q; want its signs kept and greyed", broken)
+	}
+
+	failing.Store(false)
+
+	back := must(ctx, t, read, chromedp.Evaluate[chromedp.Void](`new Promise(done => setTimeout(done, 5000))`, chromedp.EvalAwaitPromise))
+	if back != "wall fresh" {
+		t.Errorf("a wall whose daemon answers again is %q; want it current", back)
+	}
+}
+
+// TestARevokedWallIsAskedToSignIn: a refresh answered 401 is a display revoked or a session ended, and the wall has no attention line to say so in, so it reloads, which is where a stranger is sent to sign in.
+func TestARevokedWallIsAskedToSignIn(t *testing.T) {
+	ctx := browser(t)
+
+	server, _ := testPipelines(t, "app", "infra")
+
+	var revoked atomic.Bool
+
+	handler := server.Handler()
+	listener := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if revoked.Load() && r.Header.Get("HX-Request") != "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+
+			return
+		}
+
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(listener.Close)
+
+	must(ctx, t, chromedp.Evaluate[chromedp.Void](`window.beforeRevoke = true`), chromedp.Navigate(listener.URL+"/wall"))
+
+	revoked.Store(true)
+	// Waited out here rather than in the page, which a reload would cut short: a 2.5s poll, with margin.
+	time.Sleep(4 * time.Second)
+	revoked.Store(false)
+
+	stayed := must(ctx, t, chromedp.Evaluate[bool](`window.beforeRevoke === true`))
+
+	if stayed {
+		t.Error("a wall whose refresh is answered 401 kept showing what it last had instead of reloading to sign in")
 	}
 }

@@ -383,13 +383,21 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
     e.preventDefault();
   });
 
-  // The wall greys out once its polls stop landing: a frozen screen that still says green is worse than none. Freshness is the server's render stamp on #wall changing, not a swap event, because htmx swaps an error response too and an error page has no #wall to carry a new stamp.
+  // The wall greys out once its polls stop landing: a frozen screen that still says green is worse than none. Freshness is the server's render stamp on #wall changing, not a swap event.
   (function () {
+    if (!document.getElementById('wall')) return;
+    // htmx swaps an error answer too, and a proxy's 502 has no #wall: swapped in, it took the signs and the poll with them. Kept out, the stamp stops changing and the wall greys until the daemon answers again. A 401 is a display revoked or a session ended, so the screen reloads into being asked to sign in.
+    document.addEventListener('htmx:before:response', function (e) {
+      var ctx = e.detail && e.detail.ctx;
+      if (!ctx || !ctx.response || ctx.response.status < 400 || !e.target || e.target.id !== 'wall') return;
+      e.preventDefault();
+      if (ctx.response.status === 401) window.location.reload();
+    });
     var seen = null, heard = Date.now();
     setInterval(function () {
       var wall = document.getElementById('wall');
-      if (!wall) return;
-      if (wall.dataset.at !== seen) { seen = wall.dataset.at; heard = Date.now(); }
+      var at = wall ? wall.dataset.at : seen;
+      if (at !== seen) { seen = at; heard = Date.now(); }
       var after = Number(document.documentElement.dataset.staleAfter) || 10000;
       document.documentElement.classList.toggle('stale', Date.now() - heard > after);
     }, 500);

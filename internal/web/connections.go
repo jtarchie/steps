@@ -68,6 +68,10 @@ func (s *Server) renderConnections(c *echo.Context, extra map[string]any) error 
 
 	nav := s.globalNav(c)
 	nav.Anchored = false
+	// The answer to adding a display is drawn at the form's address, which has no GET: the region would poll it into a 405 and the language picker would return there.
+	if c.Request().Method != http.MethodGet {
+		nav.URL = connectionsPath
+	}
 
 	values := map[string]any{
 		"Nav":      nav,

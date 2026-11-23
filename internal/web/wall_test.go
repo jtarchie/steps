@@ -174,3 +174,34 @@ func TestEveryFailingNameIsOneSize(t *testing.T) {
 		t.Errorf("Len with a 60-character name = %d, want the cap %d", got, wallNameCap)
 	}
 }
+
+// TestAHeldPipelineSaysHeld: a pipeline red only because the breaker holds a job has no failed run to name, and its latest may have passed; FAILING over "build succeeded" contradicts itself, so the sign names the held job.
+func TestAHeldPipelineSaysHeld(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := lanePipelines(t, nil, "app", twoJobs, "infra", oneManualJob)
+	seedRun(t, pipelines[0], "run-1", "build", "succeeded")
+
+	held, _, err := pipelines[0].Store.RecordJobOutcome(t.Context(), "build", false, 1)
+	if err != nil || !held {
+		t.Fatalf("RecordJobOutcome = %v, %v; want the job held", held, err)
+	}
+
+	_, page := get(t, server, "/wall")
+
+	if !strings.Contains(page, `<span class="name">app</span><span class="why">build held</span>`) {
+		t.Errorf("a held pipeline's sign does not say which job is held:\n%s", page)
+	}
+}
+
+// TestTheWallsTitleIsInTheReadersLanguage: the tab title is the one line of the wall a browser shows outside it.
+func TestTheWallsTitleIsInTheReadersLanguage(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "app", "infra")
+
+	_, page := getAs(t, server, "/wall", http.Header{"Accept-Language": {"es"}})
+	if !strings.Contains(page, "<title>muro — steps</title>") {
+		t.Errorf("a Spanish reader's wall is not titled muro:\n%s", page[:min(len(page), 600)])
+	}
+}
