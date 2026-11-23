@@ -401,7 +401,7 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
   // cell -1 is the row's name. A broken row has no link to land on, so its
   // name cell takes focus itself.
   function spotTarget(row, cell) {
-    var cells = row.querySelectorAll('.cell');
+    var cells = row.querySelectorAll('.cell, .mapjob');
     if (cell >= 0 && cells.length) return cells[Math.min(cell, cells.length - 1)];
     var name = row.querySelector('.pname > a') || row.querySelector('.pname');
     if (name.tagName !== 'A') name.setAttribute('tabindex', '-1');
@@ -412,7 +412,7 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
     var wrap = document.getElementById('pipelines-table');
     var row = wrap && node.closest && node.closest('tr[data-slug]');
     if (!row || !wrap.contains(row)) return null;
-    return { slug: row.dataset.slug, cell: Array.prototype.indexOf.call(row.querySelectorAll('.cell'), node) };
+    return { slug: row.dataset.slug, cell: Array.prototype.indexOf.call(row.querySelectorAll('.cell, .mapjob'), node) };
   }
 
   document.addEventListener('focusin', function (e) {
@@ -449,7 +449,7 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
       index = 0;
     } else {
       index = Math.min(Math.max(index + by[0], 0), rows.length - 1);
-      var cells = rows[index].querySelectorAll('.cell').length;
+      var cells = rows[index].querySelectorAll('.cell, .mapjob').length;
       cell = Math.min(Math.max(cell + by[1], -1), cells - 1);
     }
 

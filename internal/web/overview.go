@@ -122,6 +122,76 @@ const stripJobs = 4
 // laneRuns is how many of a job's runs its strip shows.
 const laneRuns = 10
 
+// mapJobs is the widest pipeline drawn as named cells; past it the cells wrapped a row to a screenful, so every job is a tick and only the jobs that want a person keep a name.
+const mapJobs = 6
+
+// mapNamed is how many jobs a map row names before it counts the rest.
+const mapNamed = 3
+
+// Mapped is a row past mapJobs, drawn as a job map rather than named cells.
+func (p overviewPipeline) Mapped() bool { return len(p.Chips) > mapJobs }
+
+func (p overviewPipeline) wanting() []jobChip {
+	var chips []jobChip
+
+	for _, chip := range p.Chips {
+		if chip.Red() || chip.Running {
+			chips = append(chips, chip)
+		}
+	}
+
+	return chips
+}
+
+// Named is what a map row names: the jobs that are red or running, the first mapNamed of them in config order.
+func (p overviewPipeline) Named() []jobChip {
+	chips := p.wanting()
+
+	return chips[:min(len(chips), mapNamed)]
+}
+
+// NamedRest is how many wanting jobs a map row counts rather than names.
+func (p overviewPipeline) NamedRest() int { return max(len(p.wanting())-mapNamed, 0) }
+
+// MapTallyIn says in words what a map row's ticks draw, so the ticks are never the only carrier.
+func (p overviewPipeline) MapTallyIn(loc *locale) string {
+	var failed, errored, running, held, never int
+
+	for _, chip := range p.Chips {
+		switch {
+		case chip.Held:
+			held++
+		case chip.Class == "st-failed":
+			failed++
+		case chip.Class == "st-errored":
+			errored++
+		}
+
+		if chip.Running {
+			running++
+		} else if chip.Class == "st-none" {
+			never++
+		}
+	}
+
+	parts := []string{loc.count("overview.map.jobs", len(p.Chips))}
+
+	for _, part := range []struct {
+		key string
+		n   int
+	}{{"overview.map.failed", failed}, {"overview.map.errored", errored}, {"overview.map.running", running}, {"overview.map.held", held}, {"overview.map.never", never}} {
+		if part.n > 0 {
+			parts = append(parts, loc.text(part.key, part.n))
+		}
+	}
+
+	if len(parts) == 1 {
+		parts = append(parts, loc.text("overview.map.allpassed"))
+	}
+
+	return strings.Join(parts, " · ")
+}
+
 // Red is a row that wants a person: a job failed or errored, the breaker holds one, or the daemon cannot serve it. Read off the mark with the header tally's own >= discFailed, so the stripe, the glyph and the "failing" count agree; a paused pipeline that is also failing is red, as its mark is.
 func (p overviewPipeline) Red() bool {
 	return p.Broken != "" || p.Held > 0 || p.Mark.Disc >= discFailed
@@ -183,6 +253,8 @@ func tallyOverview(rows []overviewPipeline) overviewTally {
 // mark folds by.
 // Held outranks the run: the breaker is why it will not move on its own.
 type jobChip struct {
+	// Slug is the pipeline's, for the cell's link.
+	Slug  string
 	Name  string
 	Class string
 	// Glyph is the cell's whole visible content; Word is what the cell says
@@ -207,6 +279,15 @@ func (c jobChip) Empty() int {
 	}
 
 	return max(laneRuns-len(c.History), 0)
+}
+
+// MapClass is the chip's tick on a map: a running job that is not red reads as running, since a map has no bar to draw under it.
+func (c jobChip) MapClass() string {
+	if c.Running && !c.Red() {
+		return "st-running"
+	}
+
+	return c.Class
 }
 
 // Red is a chip whose run Latest reports and whose strip survives the wide-pipeline cap.
@@ -247,9 +328,10 @@ func jobChips(ctx context.Context, reads *pipelineReads) []jobChip {
 
 	for i, view := range views {
 		chip := chipFor(view)
+		chip.Slug = pipeline.Slug
 		chip.Fed = i > 0 && fedBy(view, views[i-1].Name)
 
-		if view.HasRun && (len(views) <= stripJobs || chip.Red()) {
+		if view.HasRun && strips(len(views), chip) {
 			chip.History = jobHistory(ctx, pipeline, view.Name)
 		}
 
@@ -257,6 +339,11 @@ func jobChips(ctx context.Context, reads *pipelineReads) []jobChip {
 	}
 
 	return chips
+}
+
+// strips is whether a job draws its run strip: every job up to stripJobs, only red ones up to mapJobs, and none on a map, which has no strips to fill.
+func strips(jobs int, chip jobChip) bool {
+	return jobs <= mapJobs && (jobs <= stripJobs || chip.Red())
 }
 
 func chipFor(view jobView) jobChip {

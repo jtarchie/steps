@@ -275,3 +275,21 @@ func TestThePausedBarCentersItsWordsOnItsButton(t *testing.T) {
 		t.Errorf("\"everything is paused\" sits %.1fpx off Resume all's middle, want them centered on one line", off)
 	}
 }
+
+// TestTheKeysWalkIntoAJobMap: h and l walk a row's job cells, and a map row's ticks are its jobs, so the walk goes on past the named cells into them; a tick the keys skip is a job a keyboard reader cannot open from the root.
+func TestTheKeysWalkIntoAJobMap(t *testing.T) {
+	ctx := browser(t)
+
+	server, pipelines := lanePipelines(t, nil, "a-wide", manyJobs(8), "b-other", oneManualJob)
+	seedRun(t, pipelines[0], "run-6", "j6", "failed")
+
+	listener := httptest.NewServer(server.Handler())
+	t.Cleanup(listener.Close)
+
+	focused := chromedp.Evaluate[string](`document.activeElement.getAttribute('aria-label') || ''`)
+	got := must(ctx, t, focused, media("dark", false), chromedp.Navigate(listener.URL+"/"), chromedp.KeyEvent("j"), chromedp.KeyEvent("l"), chromedp.KeyEvent("l"), chromedp.KeyEvent("l"))
+
+	if got != "j2, never ran" {
+		t.Errorf("j then l three times lands on %q, want the map's second tick", got)
+	}
+}

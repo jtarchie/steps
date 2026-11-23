@@ -549,6 +549,24 @@ td.faint, .faint { color: var(--faint); }
 .tick.st-running { animation: tick-pulse 1.4s ease-in-out infinite; }
 @keyframes tick-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .tick.st-running { animation: none; } }
+/* A pipeline past mapJobs: one tick per job in config order, the strip's shapes so a job reads apart by more than hue, beside a tally that says the same in words. Held is red like failed, so it is the tall hollow one. */
+.maprow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.cellrow + .maprow { margin-top: 6px; }
+.jobmap { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 3px; max-width: 30em; padding: 2px 0; }
+.mapjob { display: block; width: 8px; height: 8px; border-radius: 1px; background: currentColor; forced-color-adjust: none; }
+.mapjob:hover { outline: 1px solid currentColor; outline-offset: 1px; }
+.mapjob.st-failed { height: 12px; }
+.mapjob.st-errored { background: none; box-shadow: inset 0 0 0 1.5px currentColor; }
+.mapjob.st-held { height: 12px; background: none; box-shadow: inset 0 0 0 1.5px currentColor; }
+.mapjob.st-running { background: linear-gradient(to top, currentColor 50%, transparent 50%); box-shadow: inset 0 0 0 1px currentColor; animation: tick-pulse 1.4s ease-in-out infinite; }
+.mapjob.st-none { background: none; box-shadow: inset 0 -1px 0 var(--faint-line); }
+.mapjob.st-queued { background: none; box-shadow: inset 0 -2px 0 currentColor; }
+.mapjob.st-aborted { background: var(--faint-line); }
+@media (prefers-reduced-motion: reduce) { .mapjob.st-running { animation: none; } }
+.tally, .moremap { color: var(--dim); white-space: nowrap; }
+@media (hover: none) {
+  .tally, .moremap { display: inline-flex; align-items: center; min-height: 44px; }
+}
 .jobsep { color: var(--faint); padding: 0 3px; align-self: start; line-height: 22px; }
 .pipelines .next { white-space: nowrap; color: var(--dim); }
 /* The root's rows: a pipeline's badges follow its name, and only when
