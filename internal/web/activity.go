@@ -121,6 +121,7 @@ var notRecorded = map[string]string{ //nolint:gosec // route keys and reasons, n
 	"DELETE /mcp/x/:pipeline/:export":   "ending an MCP session, which a stateless export never holds",
 	"POST /mcp":                         "an agent reading, recorded per tool call by the read server itself as mcp read, against each pipeline the call read",
 	"DELETE /mcp":                       "ending an MCP session, which the stateless read server never holds",
+	"POST " + displaysPath:              "adding a wall display is about the daemon, not a pipeline, as a read connection is; the daemon's log line web.display_added records it",
 	"POST /connections/revoke":          "recorded by handleRevoke itself as mcp disconnect, against the pipeline the connection was to — this route carries none in its path; a read connection names no pipeline, and the daemon's log line web.mcp_read_disconnected records it",
 	"POST /login":                       "signing in is about the daemon, not a pipeline, and the log is written through a pipeline's handle; the daemon's log line web.signed_in records it",
 	"POST /logout":                      "as POST /login: web.signed_out in the daemon's log",

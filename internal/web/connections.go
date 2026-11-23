@@ -39,7 +39,15 @@ type connectionRow struct {
 // Reads is a connection to the read server rather than to one export.
 func (r connectionRow) Reads() bool { return r.Kind == store.GrantRead }
 
+// Display is a wall display rather than an agent: registration refuses an agent that names no redirect address, so a client with none is one this daemon made for a screen.
+func (r connectionRow) Display() bool { return r.Kind == store.GrantRead && len(r.RedirectURIs) == 0 }
+
 func (s *Server) handleConnections(c *echo.Context) error {
+	return s.renderConnections(c, nil)
+}
+
+// renderConnections draws /connections, with extra beside what it always shows: the address of a display just added, which is shown that once.
+func (s *Server) renderConnections(c *echo.Context, extra map[string]any) error {
 	ctx := c.Request().Context()
 	everyone := c.QueryParam("everyone") != "" && s.roleOfPerson(c) >= RoleAdmin
 
@@ -60,19 +68,32 @@ func (s *Server) handleConnections(c *echo.Context) error {
 
 	nav := s.globalNav(c)
 	nav.Anchored = false
+	// The answer to adding a display is drawn at the form's address, which has no GET: the region would poll it into a 405 and the language picker would return there.
+	if c.Request().Method != http.MethodGet {
+		nav.URL = connectionsPath
+	}
 
-	//nolint:wrapcheck // render errors surface through the shared error handler
-	return c.Render(http.StatusOK, "connections", map[string]any{
+	values := map[string]any{
 		"Nav":      nav,
 		"Title":    s.renderer.localeOf(c).text("nav.connections"),
 		"Rows":     rows,
 		"Everyone": everyone,
 		"CanAll":   s.roleOfPerson(c) >= RoleAdmin,
-	})
+	}
+
+	for key, value := range extra {
+		values[key] = value
+	}
+
+	//nolint:wrapcheck // render errors surface through the shared error handler
+	return c.Render(http.StatusOK, "connections", values)
 }
 
 func (s *Server) connectionRowFor(ctx context.Context, conn store.Connection) connectionRow {
 	row := connectionRow{Connection: conn, Calls: "0"}
+	if row.Display() {
+		return row
+	}
 
 	for _, uri := range conn.RedirectURIs {
 		row.Hosts = append(row.Hosts, redirectHost(uri))

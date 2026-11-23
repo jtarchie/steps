@@ -221,6 +221,10 @@ func (s *Server) authenticate(next echo.HandlerFunc) echo.HandlerFunc {
 			return next(c)
 		}
 
+		if entered, err := s.enterDisplay(c); entered {
+			return err
+		}
+
 		if who, session, found := s.credentialed(c); found {
 			if session {
 				c.Set(sessionKey, true)
@@ -248,10 +252,14 @@ func (s *Server) authenticate(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// credentialed is who a request's credential names: its session, else a Basic pair that matches. session says which, since only a session is a browser that signed in.
+// credentialed is who a request's credential names: its session, else a wall display's key on /wall, else a Basic pair that matches. session says which, since only a session is a browser that signed in.
 func (s *Server) credentialed(c *echo.Context) (who actor.Actor, session, found bool) {
 	if who, found := s.sessionActor(c); found {
 		return who, true, true
+	}
+
+	if who, found := s.displayCredential(c); found {
+		return who, false, true
 	}
 
 	username, password, sent := c.Request().BasicAuth()

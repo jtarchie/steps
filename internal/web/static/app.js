@@ -383,6 +383,26 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
     e.preventDefault();
   });
 
+  // The wall greys out once its polls stop landing: a frozen screen that still says green is worse than none. Freshness is the server's render stamp on #wall changing, not a swap event.
+  (function () {
+    if (!document.getElementById('wall')) return;
+    // htmx swaps an error answer too, and a proxy's 502 has no #wall: swapped in, it took the signs and the poll with them. Kept out, the stamp stops changing and the wall greys until the daemon answers again. A 401 is a display revoked or a session ended, so the screen reloads into being asked to sign in.
+    document.addEventListener('htmx:before:response', function (e) {
+      var ctx = e.detail && e.detail.ctx;
+      if (!ctx || !ctx.response || ctx.response.status < 400 || !e.target || e.target.id !== 'wall') return;
+      e.preventDefault();
+      if (ctx.response.status === 401) window.location.reload();
+    });
+    var seen = null, heard = Date.now();
+    setInterval(function () {
+      var wall = document.getElementById('wall');
+      var at = wall ? wall.dataset.at : seen;
+      if (at !== seen) { seen = at; heard = Date.now(); }
+      var after = Number(document.documentElement.dataset.staleAfter) || 10000;
+      document.documentElement.classList.toggle('stale', Date.now() - heard > after);
+    }, 500);
+  })();
+
   // Keyboard navigation over the root's pipeline table.
   //
   // j/k walk pipelines and h/l walk a row's job cells, so the table is one
@@ -631,7 +651,8 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
   document.addEventListener('htmx:after:swap', watchScrollers);
 
   // A second only when something is actively counting; otherwise half a
-  // minute is plenty for text measured in minutes and hours.
-  var live = document.querySelector('time[data-elapsed-since], time[data-deadline]') !== null;
+  // minute is plenty for text measured in minutes and hours. The wall counts
+  // too: its "last heard" is the one line read while everything else is grey.
+  var live = document.querySelector('time[data-elapsed-since], time[data-deadline], #wall') !== null;
   setInterval(tick, live ? 1000 : 30000);
 })();

@@ -41,8 +41,9 @@
 <script src="/static/hx-sse.min.js"></script>
 <script src="/static/app.js" defer></script>
 </head>
-<body data-t-copied="{{t "client.copied"}}" data-t-addresscopied="{{t "client.addresscopied"}}" data-t-signedout="{{t "client.signedout"}}" data-t-ago="{{t "time.ago"}}" data-t-running="{{t "client.running"}}" data-t-expired="{{t "client.expired"}}">
+<body{{if .Wall}} class="wallpage"{{end}} data-t-copied="{{t "client.copied"}}" data-t-addresscopied="{{t "client.addresscopied"}}" data-t-signedout="{{t "client.signedout"}}" data-t-ago="{{t "time.ago"}}" data-t-running="{{t "client.running"}}" data-t-expired="{{t "client.expired"}}">
 <a class="skiplink" href="#main">{{t "layout.skip"}}</a>
+{{if not .Wall}}
 
 {{/* Everything in here counts work waiting on a person, so all of it goes
      stale on a page that is left open — which is every page, since they poll
@@ -103,6 +104,7 @@
 </div>
 </header>
 
+{{end}}
 <main id="main" tabindex="-1">
 {{/* The sentence behind each badge, and the only place an item no tab owns —
      a paused pipeline — can appear at all.
@@ -121,16 +123,17 @@
      Anchored, because the list says "this pipeline" and carries that
      pipeline's Unpause: the root and /docs anchor their tabs to a pipeline
      they did not resolve, and an unnamed one of several is worse than none. */}}
-<div id="attention" role="status" aria-label="{{t "attention.label"}}">{{if and .Nav.Anchored .Nav.Attention}}<ul class="attention">
+{{if not .Wall}}<div id="attention" role="status" aria-label="{{t "attention.label"}}">{{if and .Nav.Anchored .Nav.Attention}}<ul class="attention">
   {{range .Nav.Attention}}<li class="atitem at-{{.Kind}}">
     <a href="{{.URL}}">{{.Detail}}</a>
   </li>{{end}}
 </ul>{{end}}</div>
 {{template "crumbs" .}}
+{{end}}
 {{template "page" .}}
 </main>
 
-{{/* Docs are not a section of a pipeline and did not belong among its tabs.
+{{if not .Wall}}{{/* Docs are not a section of a pipeline and did not belong among its tabs.
      The footer is the reference shelf on every page: the docs, the source,
      and the version — so a bug report can name the build. */}}
 <footer class="foot">
@@ -138,7 +141,7 @@
   <nav aria-label="{{t "foot.about"}}"><a {{if eq .Section "docs"}}aria-current="page" {{end}}href="/docs">{{t "foot.docs"}}</a><a href="https://github.com/jtarchie/steps" rel="noopener">{{t "foot.source"}}</a></nav>
   <form class="langs" method="get" action="/lang"><label for="lang">{{t "lang.label"}}</label><select id="lang" name="lang" aria-describedby="lang-note"><option value=""{{if not .LangPicked}} selected{{end}}>{{t "lang.auto"}}</option>{{range languages}}<option lang="{{.Tag}}" value="{{.Tag}}"{{if and $.LangPicked (eq .Tag $.Lang)}} selected{{end}}>{{.Name}}</option>{{end}}</select><input type="hidden" name="return" value="{{.Nav.URL}}"><button type="submit">{{t "lang.apply"}}</button><span class="visually-hidden" id="lang-note">{{t "lang.note"}}</span></form>
   <span class="copy">© {{year}} JT Archie</span>
-</footer>
+</footer>{{end}}
 
 <div class="palette-backdrop" id="palette-backdrop"></div>
 <div class="palette" id="palette" role="dialog" aria-label="{{t "palette.label"}}" data-search="/p/{{.Nav.Current}}/search">

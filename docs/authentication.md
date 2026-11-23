@@ -49,6 +49,16 @@ A browser that is not signed in is sent to **`/login`**, a form asking for an ac
 - A page's own refresh is never redirected to the form, or challenged: a session that ends while a page sits open answers `401`, and the page stops refreshing and says `signed out · sign in again` where it lists what needs you, linking back to itself.
 - The CLI is unchanged: it sends its account on every request and never sees the form.
 
+## A screen on the wall
+
+A TV showing [`/wall`](web.md#what-it-shows) cannot type a password, and a session left signed in on a shared screen could do more than look. So a screen gets a **display key** instead: on `/connections`, name it (`office TV`) and **Add a display**. The page shows an address — `https://<daemon>/wall?key=…` — once; open it on the screen.
+
+- The screen trades the key for a cookie and is sent on to plain `/wall`, so the key does not stay in its address bar or history, or in a photo of it.
+- The cookie is scoped to `/wall` and the daemon takes it nowhere else: no other page, no button, and not the [read MCP server](mcp.md#reading-the-daemon-from-an-agent), which refuses it as a token.
+- The screen sees what the person who added it can see, as that person: their role and each pipeline's `access:` apply on every refresh, and a person this daemon no longer lets in turns their screens off.
+- A display key does not expire; **Revoke** beside it on `/connections` is how it is turned off, and the screen is asked to sign in at its next refresh. An admin's *everyone* view lists every display.
+- Only the key's digest is stored, as for a session; a lost address is replaced by adding the display again and revoking the old one.
+
 ## Signing in with GitHub or Google
 
 ```bash

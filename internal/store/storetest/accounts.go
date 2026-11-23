@@ -477,3 +477,34 @@ func (s accountsSuite) TestACorruptRedirectColumnIsAnErrorNotAnEmptyList(t *test
 		t.Errorf("Grants over corrupt redirect_uris = %+v, nil error; want an error", connections)
 	}
 }
+
+// TestADisplayTokenLastsUntilRevoked: a wall display holds one token for as long as the screen hangs there, so it is issued a century out, found by its kind, and ended by revoking its grant like any connection.
+func (s accountsSuite) TestADisplayTokenLastsUntilRevoked(t *testing.T) {
+	t.Parallel()
+
+	accounts := s.open(t)
+	registerClient(t, accounts, "office-tv")
+
+	grant := store.Grant{Kind: store.GrantRead, ClientID: "office-tv", Actor: "local:alex"}
+	now := time.Now()
+
+	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "display", Kind: store.TokenDisplay, Grant: grant, CreatedAt: now, ExpiresAt: now.AddDate(100, 0, 0)})
+	if err != nil {
+		t.Fatalf("IssueToken(display): %v", err)
+	}
+
+	token, found, err := accounts.FindToken(ctxFor(t), "display")
+	if err != nil || !found || token.Kind != store.TokenDisplay || token.Grant != grant {
+		t.Fatalf("FindToken(display) = %+v, %v, %v; want the display token back", token, found, err)
+	}
+
+	err = accounts.RevokeGrant(ctxFor(t), grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, found, err = accounts.FindToken(ctxFor(t), "display")
+	if err != nil || found {
+		t.Errorf("FindToken after revoke = %v, %v; want gone", found, err)
+	}
+}

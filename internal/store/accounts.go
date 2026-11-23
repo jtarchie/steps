@@ -114,13 +114,14 @@ var ErrUnknownGrantKind = errors.New("a grant is for an export or for reading, a
 // Valid is whether k is one of the kinds a token may be issued under.
 func (k GrantKind) Valid() bool { return k == GrantExport || k == GrantRead }
 
-// TokenKind says what an OAuth token may do: an access token calls tools, a refresh token only mints the next access token.
+// TokenKind says what an OAuth token may do: an access token calls tools, a refresh token only mints the next access token, and a display token only shows /wall.
 type TokenKind string
 
 // The kinds a token is stored with.
 const (
 	TokenAccess  TokenKind = "access"
 	TokenRefresh TokenKind = "refresh"
+	TokenDisplay TokenKind = "display"
 )
 
 // OAuthToken is a token issued under a grant.

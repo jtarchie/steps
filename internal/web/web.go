@@ -430,6 +430,7 @@ func (s *Server) routes() error {
 	e.Use(s.recordActivity)
 
 	e.GET("/", s.handleIndex)
+	e.GET(wallPath, s.handleWall)
 	e.GET("/static/app.css", assetHandler("static/app.css", "text/css; charset=utf-8"))
 	// The htmx route serves the vendored copy of htmx (4.0.0), which drives every
 	// live region in the UI. Vendored and embedded rather than pulled from a CDN:
@@ -443,6 +444,8 @@ func (s *Server) routes() error {
 	e.GET("/static/htmx.min.js", assetHandler("static/htmx.min.js", "text/javascript; charset=utf-8"))
 	e.GET("/static/hx-sse.min.js", assetHandler("static/hx-sse.min.js", "text/javascript; charset=utf-8"))
 	e.GET("/static/app.js", assetHandler("static/app.js", "text/javascript; charset=utf-8"))
+	// The wall's dot-matrix face (Doto, SIL OFL 1.1, static/doto-OFL.txt), vendored for the same reason as htmx: a TV's daemon may have no route to a font CDN.
+	e.GET("/static/doto-900.woff2", assetHandler("static/doto-900.woff2", "font/woff2"))
 	e.GET("/mark", s.handleMark)
 	e.GET("/docs", s.handleDocsIndex)
 	e.GET("/docs/:page", s.handleDocs)
@@ -467,6 +470,7 @@ func (s *Server) routes() error {
 		e.POST(tokenPath, s.handleToken)
 		e.GET(connectionsPath, s.handleConnections)
 		e.POST(revokePath, s.handleRevoke)
+		e.POST(displaysPath, s.handleAddDisplay)
 		// The methods MCP's streamable HTTP transport uses: POST a message, GET a stream, DELETE a session.
 		e.POST(exportPath, s.handleExport)
 		e.GET(exportPath, s.handleExport)
