@@ -124,10 +124,13 @@ Skip it if `podman-mac-helper` or the `podman-docker` package already put a sock
 
 - **Short image names resolve to Docker Hub**, as under docker: `image: alpine:3` works. (The `podman` command line may prompt for a registry; its docker-compatible API does not.)
 - **Private registries: no login to make.** steps sends a pull the login its `registry-image` resource names and reads none of docker's or podman's own, so `podman login` changes nothing here.
+- **A `podman machine` is rootless unless `podman machine set --rootful` made it otherwise**, and the socket above is then the `core` user's, not root's. `podman machine inspect --format '{{.Rootful}}'` says which.
+- **[Building an image](resources.md#the-built-in-registry-image-type) works unchanged, rootless included.** Both build examples there — `moby/buildkit` with `privileged: true`, then a `registry-image` put — passed against podman 6.1 on a macOS `podman machine` (Fedora, SELinux enforcing), rootless and rootful alike, pushing the same digest. Under rootless podman `privileged: true` is root only inside the user's namespace: every capability, no seccomp filter, no SELinux confinement, `/proc` and `/sys` unmasked, and nothing more on the machine than that user has. That is enough for BuildKit to mount and unshare, so the rootful `moby/buildkit` image builds there, `RUN` steps included.
+- **The unprivileged rootless recipe is not expressible, and not needed.** `moby/buildkit:rootless` without `privileged:` builds under rootless podman only with security options steps has no field for: `--security-opt label=disable --security-opt seccomp=unconfined` plus either `BUILDKITD_FLAGS=--oci-worker-no-process-sandbox` (an `env:` can say that) or `--security-opt systempaths=unconfined`. Without `label=disable`, SELinux refuses BuildKit's `/dev/pts` mount whatever else is set; `/dev/fuse` was not needed. `privileged: true` is the one knob, and it covers all of these.
 
 Not verified, and expected to need care:
 
-- **Rootless podman on a Linux host.** A step's tree is overlay volumes under the daemon's own storage, which rootless podman supports but which nothing here has run against. If a step fails mounting its inputs, that is where to look.
+- **Rootless podman on a Linux host other than a `podman machine`'s Fedora.** A step's tree is overlay volumes under the daemon's own storage; the machine's rootless podman mounts them, but an older kernel or an AppArmor host (where `privileged:` drops a different confinement) has not been run against. If a step fails mounting its inputs, that is where to look.
 
 ### CLI agents
 
