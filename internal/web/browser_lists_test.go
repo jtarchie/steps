@@ -169,3 +169,20 @@ func TestAPhoneReadsAVersionAsACard(t *testing.T) {
 		t.Errorf("on a phone the version takes %v of the row's px, want nearly all of it", widths)
 	}
 }
+
+// A version is JSON and reads as JSON everywhere else in the UI: its key and its value keep their own colors rather than one dim gray.
+func TestAVersionKeepsItsJSONColors(t *testing.T) {
+	ctx := browser(t)
+
+	lists := listServer(t)
+
+	const colors = `(() => {
+		const th = document.querySelector('table.versions tbody th');
+		return [getComputedStyle(th.querySelector('.j-key')).color, getComputedStyle(th.querySelector('.j-str')).color];
+	})()`
+
+	got := must(ctx, t, chromedp.Evaluate[[]string](colors), media("dark", false), chromedp.Navigate(lists+"/p/demo/resources/repo"))
+	if len(got) != 2 || got[0] == got[1] {
+		t.Errorf("a version's key and value are both %v, want each highlighted", got)
+	}
+}

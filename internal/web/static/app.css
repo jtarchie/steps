@@ -1503,8 +1503,6 @@ table.versions tbody tr:last-child th { border-bottom: 0; }
 table.versions thead th a { color: inherit; }
 /* Its own line: inline beside the state and run id, a cell was five tokens wide and pushed the Action column off a laptop screen. */
 table.versions td .when { display: block; color: var(--dim); font-family: var(--sans); font-size: 12px; }
-/* The version is an id; its facts' title is what a reader scans for. Every row alike, or a dim line reads as a stale version. */
-table.versions tbody th :is(.j-key, .j-str, .j-num, .j-lit) { color: var(--dim); }
 table.versions .cellname { display: none; }
 /* Run buttons appear on the row a reader is on, as Retry does on a job's runs: on every row they outweighed the statuses the page is for. */
 table.versions .acts { width: 1%; text-align: right; white-space: nowrap; }
