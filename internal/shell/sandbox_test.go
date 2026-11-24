@@ -115,3 +115,20 @@ func mustResolve(t *testing.T, path string) string {
 
 	return resolved
 }
+
+// The agent CLIs keep a file login under HOME where there is no keychain, and steps hands them HOME to find it: a fenced run_shell must not read what the CLI beside it logs in with. Files, not the directories: ~/.claude also holds the settings and skills a fenced command may be there to read.
+func TestDenyReadNamesTheAgentCLILoginFiles(t *testing.T) {
+	t.Parallel()
+
+	paths := denyReadPaths("/home/op")
+
+	for _, want := range []string{"/home/op/.claude/.credentials.json", "/home/op/.claude.json", "/home/op/.codex/auth.json"} {
+		if !slices.Contains(paths, want) {
+			t.Errorf("denyReadPaths does not name %s", want)
+		}
+	}
+
+	if slices.Contains(paths, "/home/op/.claude") {
+		t.Error("denyReadPaths names all of ~/.claude: only its login file is a credential")
+	}
+}

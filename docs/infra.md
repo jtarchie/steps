@@ -783,7 +783,7 @@ jobs:
 What the fence allows:
 
 - **Writes** only under the step's workspace (its caches included, since a host step's caches live there) and a private `TMPDIR` made for the step and removed after it. The shared temp directory is not writable, because every other step's workspace lives in it.
-- **Reads** everywhere except credential paths: `~/.ssh`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.config/gcloud`, `~/.config/op`, `~/.kube`, `~/.gnupg`, `~/.netrc`, `~/.docker`, `~/.git-credentials`, `~/.config/git/credentials`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials` (and `.toml`), `~/.terraform.d` and `~/Library/Keychains`, each also by its real path when it is a symlink. Reads stay open because a host command needs its toolchain wherever the operator installed it.
+- **Reads** everywhere except credential paths: `~/.ssh`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.config/gcloud`, `~/.config/op`, `~/.kube`, `~/.gnupg`, `~/.netrc`, `~/.docker`, `~/.git-credentials`, `~/.config/git/credentials`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials` (and `.toml`), `~/.terraform.d`, `~/Library/Keychains`, and the agent CLIs' login files `~/.claude/.credentials.json`, `~/.claude.json` and `~/.codex/auth.json` (the rest of `~/.claude` stays readable), each also by its real path when it is a symlink. Reads stay open because a host command needs its toolchain wherever the operator installed it.
 - **Network** stays open unless the entry also says `network: none`, which on macOS cuts the command off from everything, loopback and unix sockets included (Linux refuses it, below). Any other `network:` value beside `sandbox:` is a load error, because the sandbox can only cut the network off, not join one.
 
 Rules and edges:

@@ -45,6 +45,10 @@ func TestSandboxDeniesCredentialReadsOnly(t *testing.T) {
 		home + "/.config/op/config":                  "secret",
 		home + "/.config/steps/private/mcp.json":     "secret",
 		home + "/.config/steps/notes.txt":            "fine",
+		home + "/.claude/.credentials.json":          "secret",
+		home + "/.claude/settings.json":              "fine",
+		home + "/.claude.json":                       "secret",
+		home + "/.codex/auth.json":                   "secret",
 	} {
 		err := os.MkdirAll(filepath.Dir(path), 0o700)
 		if err == nil {
@@ -82,8 +86,58 @@ func TestSandboxDeniesCredentialReadsOnly(t *testing.T) {
 		"$HOME/.config/op/config":                  false,
 		"$HOME/.config/steps/private/mcp.json":     false,
 		"$HOME/.config/steps/notes.txt":            true,
+		"$HOME/.claude/.credentials.json":          false,
+		"$HOME/.claude/settings.json":              true,
+		"$HOME/.claude.json":                       false,
+		"$HOME/.codex/auth.json":                   false,
 	} {
 		checkRead(t, runner, path, allowed)
+	}
+}
+
+// The deny rules are path strings, so what holds them is the kernel matching the file's real path: another spelling of it on a case-insensitive volume, the firmlink above it, or a hard link the command makes in its own workspace must not be a second name that reads (measured on macOS 27.0.1; link(2) itself is what is refused).
+func TestSandboxDeniesACredentialUnderAnotherNameForIt(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+
+	err := os.MkdirAll(home+"/.ssh", 0o700)
+	if err == nil {
+		err = os.WriteFile(home+"/.ssh/id_ed25519", []byte("key"), 0o600)
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", home)
+
+	runner := fencedRunner(t, cwd, "")
+
+	scripts := []string{
+		"cat /System/Volumes/Data$HOME/.ssh/id_ed25519",
+		"ln $HOME/.ssh/id_ed25519 ./k; cat ./k",
+		"ln -s $HOME/.ssh/id_ed25519 ./s; cat ./s",
+	}
+
+	_, err = os.Stat(home + "/.SSH/ID_ED25519")
+	if err == nil {
+		scripts = append(scripts, "cat $HOME/.SSH/id_ed25519", "cat $HOME/.Ssh/ID_ED25519")
+	}
+
+	for _, script := range scripts {
+		stdout, stderr, code, err := RunCaptureFull(context.Background(), runner, script)
+		if err != nil {
+			t.Fatalf("%s: %v", script, err)
+		}
+
+		if code == 0 || strings.Contains(stdout, "key") {
+			t.Errorf("%s = %q, exit %d, stderr %q: want the sandbox to deny it", script, stdout, code, stderr)
+		}
+	}
+
+	_, err = os.Lstat(cwd + "/k")
+	if !os.IsNotExist(err) {
+		t.Errorf("the fenced command hard-linked a credential into its workspace: %v", err)
 	}
 }
 

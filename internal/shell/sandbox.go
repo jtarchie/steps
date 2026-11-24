@@ -27,6 +27,8 @@ var credentialPaths = []string{ //nolint:gochecknoglobals // static, read-only l
 	".ssh", ".aws", ".config/gh", ".config/gcloud", ".kube", ".gnupg", ".netrc", ".docker", "Library/Keychains",
 	".git-credentials", ".config/git/credentials", ".npmrc", ".pypirc", ".cargo/credentials", ".cargo/credentials.toml",
 	".azure", ".terraform.d", ".config/op", privateDir,
+	// The agent CLIs' file logins, which steps hands HOME to the CLI child to find. The files, not ~/.claude: a fenced command may be there for its settings and skills, and the CLI child is never fenced.
+	".claude/.credentials.json", ".claude.json", ".codex/auth.json",
 }
 
 // privateDir is home-relative, not under the temp dir: home is already walked child by child for the paths above, where hiding one entry of the shared temp dir would make Landlock stop reading whatever appears there after the command starts.
