@@ -43,7 +43,7 @@ type commentWatch struct {
 	self string
 }
 
-func githubCommentsCheck(ctx context.Context, raw, cursor map[string]any) ([]map[string]any, error) {
+func githubCommentsCheck(ctx context.Context, raw, cursor map[string]any, recorded func(context.Context) ([]map[string]any, error)) ([]map[string]any, error) {
 	watch, client, err := newCommentWatch(ctx, raw, cursor)
 	if err != nil {
 		return nil, err
@@ -69,6 +69,11 @@ func githubCommentsCheck(ctx context.Context, raw, cursor map[string]any) ([]map
 		}
 	}
 
+	err = watch.bindHeads(ctx, client, versions, cursor, recorded)
+	if err != nil {
+		return nil, err
+	}
+
 	sortCommentVersions(versions)
 
 	// The overlap lists comments older than the cursor; when the cursor's own comment is no longer listed (deleted, reacted, edited away), the newest of them would be the next cursor, a step back the trigger reads as a change.
@@ -77,6 +82,91 @@ func githubCommentsCheck(ctx context.Context, raw, cursor map[string]any) ([]map
 	}
 
 	return versions, nil
+}
+
+// bindHeads gives each pull request comment the commit its command is about: the pull request's head when a check first reported the comment.
+//
+// The look-back lists a comment again on later checks, and a version is its whole JSON, so one reported with the head of that later moment would be a second version and a second build of one command. A comment already filed is therefore reported exactly as filed, which also keeps a version filed before versions held a sha from reading as new. Only a comment nothing has filed costs a request, one per pull request.
+func (w commentWatch) bindHeads(ctx context.Context, client *githubClient, versions []map[string]any, cursor map[string]any, recorded func(context.Context) ([]map[string]any, error)) error {
+	var filed map[string]map[string]any
+
+	heads := map[string]string{}
+
+	for i, version := range versions {
+		if versionField(version, "kind") == config.GitHubCommentIssue {
+			continue
+		}
+
+		if filed == nil {
+			var err error
+
+			filed, err = filedComments(ctx, cursor, recorded)
+			if err != nil {
+				return err
+			}
+		}
+
+		if known, ok := filed[commentEdition(version)]; ok {
+			versions[i] = known
+
+			continue
+		}
+
+		number := versionNumber(version, "number")
+
+		if heads[number] == "" {
+			var pull struct {
+				Head struct {
+					SHA string `json:"sha"`
+				} `json:"head"`
+			}
+
+			_, err := client.getJSON(ctx, "/repos/"+w.source.Repo+"/pulls/"+number, &pull)
+			if err != nil {
+				return err
+			}
+
+			// Reported without one, the get would lay down whatever the head had become.
+			if pull.Head.SHA == "" {
+				return fmt.Errorf("github: pull request #%s names no head commit to bind comment %s to", number, versionField(version, "id"))
+			}
+
+			heads[number] = pull.Head.SHA
+		}
+
+		version["sha"] = heads[number]
+	}
+
+	return nil
+}
+
+// filedComments is the versions a check already reported, by commentEdition: the cursor, and all of history where the caller keeps one.
+func filedComments(ctx context.Context, cursor map[string]any, recorded func(context.Context) ([]map[string]any, error)) (map[string]map[string]any, error) {
+	filed := map[string]map[string]any{}
+
+	if versionField(cursor, "id") != "" {
+		filed[commentEdition(cursor)] = cursor
+	}
+
+	if recorded == nil {
+		return filed, nil
+	}
+
+	history, err := recorded(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("github: reading the versions already filed: %w", err)
+	}
+
+	for _, known := range history {
+		filed[commentEdition(known)] = known
+	}
+
+	return filed, nil
+}
+
+// commentEdition is what makes two versions the same command: the comment and the edit of it.
+func commentEdition(version map[string]any) string {
+	return versionField(version, "id") + "@" + versionField(version, "updated")
 }
 
 // wanted is the filters that cost a request, run after author and body so only a comment that would otherwise be work pays: labels before skip_reacted, because one read answers for every comment on its issue and a comment it refuses needs no reactions listed.
@@ -465,7 +555,7 @@ func githubCommentsIn(ctx context.Context, raw, version map[string]any, destDir 
 		return writeMetadata(destDir, files)
 	}
 
-	err = fetchCommentedPR(ctx, client, source, number, kind, files, destDir)
+	err = fetchCommentedPR(ctx, client, source, version, files, destDir)
 	if err != nil {
 		return err
 	}
@@ -676,23 +766,36 @@ func fetchCommentedIssue(ctx context.Context, client *githubClient, source confi
 	return err
 }
 
-// fetchCommentedPR lays down the pull request a comment sits on. The version
-// names a comment, not a commit, so the pull request comes as it is now: a
-// command written on it is about what it says today. What the source
-// includes, and an inline comment's thread, are added to files.
-func fetchCommentedPR(ctx context.Context, client *githubClient, source config.GitHubCommentsSource, number, kind string, files map[string][]byte, destDir string) error {
+// fetchCommentedPR lays down the pull request a comment sits on, at the
+// commit the version holds: the head when a check first reported the comment,
+// so a push made after a command is not built under it. A commit that can no
+// longer be fetched fails the get rather than falling back to the head. A
+// version filed before versions held one comes at the head as it is now. What
+// the source includes, and an inline comment's thread, are added to files.
+func fetchCommentedPR(ctx context.Context, client *githubClient, source config.GitHubCommentsSource, version map[string]any, files map[string][]byte, destDir string) error {
+	number, sha := versionNumber(version, "number"), versionField(version, "sha")
+
 	inline, err := fetchIncluded(ctx, client, source, number, true, files)
 	if err != nil {
 		return err
 	}
 
-	if kind == config.GitHubCommentReview {
+	if versionField(version, "kind") == config.GitHubCommentReview {
 		thread, err := fetchThread(ctx, client, source.Repo, number, files["comment.json"], inline)
 		if err != nil {
 			return err
 		}
 
 		files["thread.json"] = thread
+	}
+
+	if sha != "" {
+		err = fetchPullRequest(ctx, client, source.Repo, number, sha, source.Checkout, nil, destDir)
+		if err != nil {
+			return fmt.Errorf("pull request #%s at %s, its head when comment %s was first seen (a commit force-pushed away or on a deleted fork cannot be fetched; a new comment is bound to the head it finds): %w", number, sha, versionField(version, "id"), err)
+		}
+
+		return nil
 	}
 
 	var pull struct {

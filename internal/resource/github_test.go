@@ -545,7 +545,7 @@ func TestGitHubListingsStopAtThePageLimit(t *testing.T) {
 		"comments": func(_ *githubClient, connection config.GitHubConnection) error {
 			_, err := githubCommentsCheck(context.Background(), map[string]any{
 				"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "kinds": []any{"conversation"},
-			}, map[string]any{"updated": "2026-09-26T00:00:00Z"})
+			}, map[string]any{"updated": "2026-09-26T00:00:00Z"}, nil)
 
 			return err
 		},
@@ -564,7 +564,7 @@ func TestGitHubListingsStopAtThePageLimit(t *testing.T) {
 				pages []string
 			)
 
-			connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+			connection := githubServer(t, withPullHeads(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/user" {
 					_, _ = w.Write([]byte(`{"login":"octocat"}`))
 
@@ -582,7 +582,7 @@ func TestGitHubListingsStopAtThePageLimit(t *testing.T) {
 				}
 
 				_, _ = w.Write([]byte(full))
-			})
+			}))
 
 			client, err := newGitHubClient(t.Context(), connection)
 			if err != nil {
@@ -679,7 +679,7 @@ func commentListing(t *testing.T) (map[string]any, *atomic.Int32, *atomic.Value)
 		full[i] = `{"id":` + strconv.Itoa(i+1) + `,"body":"/go","updated_at":"2026-09-27T00:00:00Z","user":{"login":"Alice"},"html_url":"https://x/pull/7#c","issue_url":"https://x/issues/7"}`
 	}
 
-	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+	connection := githubServer(t, withPullHeads(func(w http.ResponseWriter, r *http.Request) {
 		pages.Add(1)
 		since.Store(r.URL.Query().Get("since"))
 
@@ -690,7 +690,7 @@ func commentListing(t *testing.T) (map[string]any, *atomic.Int32, *atomic.Value)
 		}
 
 		_, _ = w.Write([]byte(`[{"id":999,"body":"/go","updated_at":"2026-09-27T00:00:01Z","user":{"login":"alice"},"html_url":"https://x/issues/9#c","issue_url":"https://x/issues/9"}]`))
-	})
+	}))
 
 	source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "author": "alice", "body": "^/go", "kinds": []any{"conversation"}}
 
@@ -702,7 +702,7 @@ func commentListing(t *testing.T) (map[string]any, *atomic.Int32, *atomic.Value)
 func TestGitHubCommentsFirstCheckReadsOnePage(t *testing.T) {
 	source, pages, _ := commentListing(t)
 
-	versions, err := githubCommentsCheck(context.Background(), source, nil)
+	versions, err := githubCommentsCheck(context.Background(), source, nil, nil)
 	if err != nil || pages.Load() != 1 || len(versions) != githubPageSize {
 		t.Fatalf("%d versions, %v, %d pages; want one full page and no more", len(versions), err, pages.Load())
 	}
@@ -713,7 +713,7 @@ func TestGitHubCommentsFirstCheckReadsOnePage(t *testing.T) {
 func TestGitHubCommentsCheckReadsBackToTheCursor(t *testing.T) {
 	source, pages, since := commentListing(t)
 
-	versions, err := githubCommentsCheck(context.Background(), source, map[string]any{"updated": "2026-09-26T00:00:00Z"})
+	versions, err := githubCommentsCheck(context.Background(), source, map[string]any{"updated": "2026-09-26T00:00:00Z"}, nil)
 	if err != nil || pages.Load() != 2 || since.Load() != "2026-09-25T23:55:00Z" {
 		t.Fatalf("%v, %d pages, since %v; want two pages asked since five minutes before the cursor", err, pages.Load(), since.Load())
 	}
@@ -1085,7 +1085,7 @@ func TestGitHubCommentsSkipReactedAsksOnlyWhenItMatters(t *testing.T) {
 		return `{"id":` + strconv.Itoa(id) + `,"body":"/go","updated_at":"2026-09-27T00:00:0` + strconv.Itoa(id) + `Z","user":{"login":"alice"},"html_url":"https://x/pull/7#c","issue_url":"https://x/issues/7","reactions":{"total_count":` + strconv.Itoa(rockets) + `,"rocket":` + strconv.Itoa(rockets) + `,"eyes":0}}`
 	}
 
-	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+	connection := githubServer(t, withPullHeads(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -1105,12 +1105,12 @@ func TestGitHubCommentsSkipReactedAsksOnlyWhenItMatters(t *testing.T) {
 			t.Errorf("unexpected %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}
-	})
+	}))
 
 	versions, err := githubCommentsCheck(context.Background(), map[string]any{
 		"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint,
 		"kinds": []any{"conversation"}, "skip_reacted": "rocket",
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1153,7 +1153,7 @@ func TestGitHubCommentsSkipReactedRefusesHalfAnAnswer(t *testing.T) {
 
 	_, err := githubCommentsCheck(context.Background(), map[string]any{
 		"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "kinds": []any{"conversation"}, "skip_reacted": "rocket",
-	}, nil)
+	}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "/issues/comments/2/reactions") {
 		t.Errorf("err = %v, want the failed lookup named", err)
 	}
@@ -1175,7 +1175,7 @@ func TestGitHubCommentsLabelsReadEachParentOnce(t *testing.T) {
 		"/repos/acme/app/issues/8": `{"labels":[{"name":"factory"}]}`,
 	}
 
-	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+	connection := githubServer(t, withPullHeads(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -1197,12 +1197,12 @@ func TestGitHubCommentsLabelsReadEachParentOnce(t *testing.T) {
 			t.Errorf("unexpected %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}
-	})
+	}))
 
 	versions, err := githubCommentsCheck(context.Background(), map[string]any{
 		"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint,
 		"author": "alice", "kinds": []any{"conversation"}, "labels": []any{"factory", "Approved"}, "skip_reacted": "rocket",
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1242,7 +1242,7 @@ func TestGitHubCommentsLabelsRefuseHalfAnAnswer(t *testing.T) {
 
 	versions, err := githubCommentsCheck(context.Background(), map[string]any{
 		"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "kinds": []any{"conversation"}, "labels": []any{"factory"},
-	}, nil)
+	}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "/issues/7") {
 		t.Errorf("versions %v, err = %v; want the failed read of #7 named", versions, err)
 	}
@@ -1251,7 +1251,7 @@ func TestGitHubCommentsLabelsRefuseHalfAnAnswer(t *testing.T) {
 // TestGitHubCommentsAuthorMeIsTheTokensUser: @me is resolved once, to the
 // login the token answers to, whether or not skip_reacted needed it too.
 func TestGitHubCommentsAuthorMeIsTheTokensUser(t *testing.T) {
-	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+	connection := githubServer(t, withPullHeads(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/user" {
 			_, _ = w.Write([]byte(`{"login":"octocat"}`))
 
@@ -1260,7 +1260,7 @@ func TestGitHubCommentsAuthorMeIsTheTokensUser(t *testing.T) {
 
 		_, _ = w.Write([]byte(`[{"id":1,"body":"/go","updated_at":"2026-09-27T00:00:01Z","user":{"login":"alice"},"html_url":"https://x/pull/7#c","issue_url":"https://x/issues/7","reactions":{"rocket":0}},` +
 			`{"id":2,"body":"/go","updated_at":"2026-09-27T00:00:02Z","user":{"login":"OctoCat"},"html_url":"https://x/pull/7#c","issue_url":"https://x/issues/7","reactions":{"rocket":0}}]`))
-	})
+	}))
 
 	for _, skip := range []string{"", "rocket"} {
 		source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "author": "@me", "kinds": []any{"conversation"}}
@@ -1268,7 +1268,7 @@ func TestGitHubCommentsAuthorMeIsTheTokensUser(t *testing.T) {
 			source["skip_reacted"] = skip
 		}
 
-		versions, err := githubCommentsCheck(context.Background(), source, nil)
+		versions, err := githubCommentsCheck(context.Background(), source, nil, nil)
 		if err != nil || len(versions) != 1 || versions[0]["id"] != "2" {
 			t.Errorf("skip_reacted %q: %v, %v; want only octocat's comment", skip, versions, err)
 		}
@@ -1276,7 +1276,7 @@ func TestGitHubCommentsAuthorMeIsTheTokensUser(t *testing.T) {
 
 	versions, err := githubCommentsCheck(context.Background(), map[string]any{
 		"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "author": []any{"bob", "@me"}, "kinds": []any{"conversation"},
-	}, nil)
+	}, nil, nil)
 	if err != nil || len(versions) != 1 || versions[0]["id"] != "2" {
 		t.Errorf("author [bob, @me]: %v, %v; want octocat's comment, @me resolved inside the list", versions, err)
 	}
@@ -1424,7 +1424,7 @@ func TestGitHubCommentsCheckSkipsNothingWrittenBetweenItsListings(t *testing.T) 
 	var discovered []string
 
 	for range 3 {
-		versions, err := githubCommentsCheck(context.Background(), source, cursor)
+		versions, err := githubCommentsCheck(context.Background(), source, cursor, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1475,7 +1475,7 @@ func racingListings(t *testing.T) config.GitHubConnection {
 		return `{"id":` + strconv.Itoa(comment.id) + `,"body":"/go","updated_at":"` + comment.updated + `","user":{"login":"alice"},` + parent + `}`
 	}
 
-	return githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+	return githubServer(t, withPullHeads(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -1505,7 +1505,7 @@ func racingListings(t *testing.T) config.GitHubConnection {
 			listings[r.URL.Path] = append(listings[r.URL.Path], stored{id: reads + 1, updated: fmt.Sprintf("2026-09-27T00:00:0%dZ", reads)})
 			listings[other] = append(listings[other], stored{id: reads + 2, updated: fmt.Sprintf("2026-09-27T00:00:0%dZ", reads+1)})
 		}
-	})
+	}))
 }
 
 // TestGitHubCommentsCheckGivesUpOnListingsThatNeverSettle: rather than report
@@ -1520,7 +1520,7 @@ func TestGitHubCommentsCheckGivesUpOnListingsThatNeverSettle(t *testing.T) {
 
 	source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "body": "^/go", "kinds": []any{"review", "issue"}}
 
-	versions, err := githubCommentsCheck(context.Background(), source, map[string]any{"updated": "2026-09-26T00:00:00Z"})
+	versions, err := githubCommentsCheck(context.Background(), source, map[string]any{"updated": "2026-09-26T00:00:00Z"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "kept changing") || versions != nil {
 		t.Errorf("%v, %v; want the check refused", versions, err)
 	}
@@ -1553,7 +1553,7 @@ func TestGitHubCommentsCheckSeesACommentGitHubListsLate(t *testing.T) {
 	source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "body": "^/go", "kinds": []any{"issue"}}
 	cursor := map[string]any{"id": "2", "kind": "issue", "number": "9", "updated": "2026-09-27T00:10:00Z"}
 
-	versions, err := githubCommentsCheck(context.Background(), source, cursor)
+	versions, err := githubCommentsCheck(context.Background(), source, cursor, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1584,7 +1584,7 @@ func TestGitHubCommentsCheckKeepsTheCursorAhead(t *testing.T) {
 	source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "body": "^/go", "kinds": []any{"issue"}}
 	cursor := map[string]any{"id": "2", "kind": "issue", "number": "9", "updated": "2026-09-27T00:10:00Z"}
 
-	versions, err := githubCommentsCheck(context.Background(), source, cursor)
+	versions, err := githubCommentsCheck(context.Background(), source, cursor, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

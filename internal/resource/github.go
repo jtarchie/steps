@@ -39,7 +39,7 @@ const (
 // get after it reads back. A nil stage is one the type does not
 // have.
 type githubStages struct {
-	check func(ctx context.Context, source, cursor map[string]any) ([]map[string]any, error)
+	check func(ctx context.Context, c Call) ([]map[string]any, error)
 	in    func(ctx context.Context, source, version map[string]any, destDir string) error
 	out   func(ctx context.Context, source, params map[string]any, inputs PutInputs, srcDir string) (map[string]any, error)
 }
@@ -47,20 +47,32 @@ type githubStages struct {
 // githubTypes is the one dispatch over the github-* types.
 var githubTypes = map[string]githubStages{
 	config.GitHubPRsType: {
-		check: func(ctx context.Context, source, _ map[string]any) ([]map[string]any, error) {
-			return githubPRsCheck(ctx, source)
+		check: func(ctx context.Context, c Call) ([]map[string]any, error) {
+			return githubPRsCheck(ctx, c.Resource.Source)
 		},
 		in: githubPRsIn,
 	},
-	config.GitHubCommentsType:  {check: githubCommentsCheck, in: githubCommentsIn},
+	config.GitHubCommentsType: {
+		check: func(ctx context.Context, c Call) ([]map[string]any, error) {
+			return githubCommentsCheck(ctx, c.Resource.Source, c.Version, c.Recorded)
+		},
+		in: githubCommentsIn,
+	},
 	config.GitHubPRCommentType: {out: githubCommentOut},
 	config.GitHubPRReviewType:  {out: githubReviewOut},
 	config.GitHubReactionType:  {out: githubReactionOut},
 	config.GitHubLabelType:     {out: githubLabelOut},
 	config.GitHubIssueType:     {in: githubIssueIn, out: githubIssueOut},
 	config.GitHubPRType:        {in: githubPRIn, out: githubPROut},
-	config.GitHubIssuesType:    {check: githubIssuesCheck, in: githubIssuesIn},
-	config.GitHubReleaseType:   {check: githubReleaseCheck, in: githubReleaseIn},
+	config.GitHubIssuesType:    {check: cursorCheck(githubIssuesCheck), in: githubIssuesIn},
+	config.GitHubReleaseType:   {check: cursorCheck(githubReleaseCheck), in: githubReleaseIn},
+}
+
+// cursorCheck is a check that reads its source and cursor and nothing else of the call.
+func cursorCheck(check func(ctx context.Context, source, cursor map[string]any) ([]map[string]any, error)) func(context.Context, Call) ([]map[string]any, error) {
+	return func(ctx context.Context, c Call) ([]map[string]any, error) {
+		return check(ctx, c.Resource.Source, c.Version)
+	}
 }
 
 type githubBackend struct{}
@@ -75,7 +87,7 @@ func (githubBackend) check(ctx context.Context, c Call) ([]map[string]any, error
 		return nil, nil
 	}
 
-	versions, err := stage(ctx, c.Resource.Source, c.Version)
+	versions, err := stage(ctx, c)
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}

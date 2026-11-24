@@ -26,6 +26,8 @@ type Call struct {
 	Inputs PutInputs
 	// Dir is an in:'s destination or an out:'s source tree.
 	Dir string
+	// Recorded reads the versions already filed for the resource, for a check whose version holds what it saw when it first reported it (github-comments' sha); nil where no history is kept, and such a check then knows only its cursor.
+	Recorded func(ctx context.Context) ([]map[string]any, error)
 }
 
 // backend is one way a resource type implements its three stages.

@@ -527,7 +527,7 @@ func numberedTarget(number string) (pullRequestTarget, error) {
 }
 
 // targetOf reads a version as a pull request. A comment's version names the
-// pull request it sits on and no commit, which leaves a review on the head.
+// pull request it sits on; its commit is not read, which leaves a review on the head.
 func targetOf(version map[string]any) pullRequestTarget {
 	target := pullRequestTarget{number: versionNumber(version, "number")}
 

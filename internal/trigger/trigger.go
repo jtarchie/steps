@@ -846,7 +846,7 @@ func checkResource(ctx context.Context, cfg *config.Config, st PollStore, resour
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
-	versions, err := rsrc.CheckVersions(ctx, rsrc.Call{Config: cfg, Type: *resourceType, Resource: *resource, Version: cursor})
+	versions, err := rsrc.CheckVersions(ctx, rsrc.Call{Config: cfg, Type: *resourceType, Resource: *resource, Version: cursor, Recorded: filedVersions(st, resourceName)})
 	if err != nil {
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
@@ -884,6 +884,18 @@ func checkResource(ctx context.Context, cfg *config.Config, st PollStore, resour
 		versions:  versions,
 		coldStart: !found,
 	}, true, nil
+}
+
+// filedVersions reads a resource's version history for a check that reports what it filed before as it filed it (rsrc.Call.Recorded).
+func filedVersions(st PollStore, resourceName string) func(context.Context) ([]map[string]any, error) {
+	return func(ctx context.Context) ([]map[string]any, error) {
+		filed, err := st.ResourceVersionsJSON(ctx, resourceName)
+		if err != nil {
+			return nil, err //nolint:wrapcheck // the store names the resource
+		}
+
+		return store.DecodeVersions(filed)
+	}
 }
 
 // recordedVersion reads the version last recorded for a resource, decoded.

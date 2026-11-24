@@ -1,9 +1,14 @@
 package e2e
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // factoryPipeline builds alice's /factory fix commands, but only where the issue or pull request carries both filter labels; Factory is spelt in another case on #7 because GitHub compares label names without regard to case.
@@ -111,4 +116,144 @@ func TestWatchGitHubCommentsAuthorListTakesAnyOfThem(t *testing.T) {
 	fake.addComment(command(303, "alice", 3*time.Second))
 	fixture.watch(t)
 	fixture.assertDid(t, "301:7:conversation", "303:7:conversation")
+}
+
+// TestWatchGitHubCommentsBuildsTheHeadTheCommandWasSeenAt: a command is bound to the pull request's head when the check first reports it. A push made after that, while the build waits its turn, is not laid down under the command, and the look-back listing the comments again at the new head starts no second build of them.
+func TestWatchGitHubCommentsBuildsTheHeadTheCommandWasSeenAt(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeGitHub(t)
+
+	seen := reviewablePR()
+	fake.addPR(seen)
+
+	at := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	command := func(id int64, offset time.Duration) fakeComment {
+		return fakeComment{ID: id, Number: 7, Kind: "conversation", Author: "alice", Body: "/steps go", Updated: at.Add(offset)}
+	}
+
+	fake.addComment(command(501, 0))
+	fake.addComment(command(502, time.Second))
+
+	dir := t.TempDir()
+	hold, started := filepath.Join(dir, "hold"), filepath.Join(dir, "started")
+
+	fixture := newWatchFixture(t, strings.NewReplacer("ENDPOINT", fake.URL(), "HOLD", hold, "STARTED", started).Replace(`
+defaults:
+  preflight:
+    disabled: true
+resources:
+- name: command
+  type: github-comments
+  source:
+    repo: `+fakeRepo+`
+    endpoint: ENDPOINT
+    author: alice
+    body: '^/steps\s'
+jobs:
+- name: act
+  plan:
+  - task: wait
+    inputs: []
+    run: |
+      touch STARTED
+      while test -e HOLD; do sleep 0.05; done
+  - get: command
+    trigger: true
+    version: every
+  - task: record
+    inputs: [command]
+    run: echo "$(cat command/comment.id):$(cat command/pr.sha):$(cat command/README.md)" >> PROCESSED
+`))
+	fixture.resources = []string{"command"}
+	fixture.write(t, hold, "")
+
+	// The first check reports both commands at the head it finds and builds the newest, which waits.
+	fixture.served = startWeb(t, "--db", fixture.db, "--interval", pollInterval)
+	t.Cleanup(func() { fixture.served.stopIfRunning(t) })
+	fixture.served.set(t, fixture.name, fixture.pipeline)
+	waitForFile(t, started)
+
+	const pushed = "bbbb234def5678abc1234def5678abc1234def56"
+
+	fake.setPR(7, func(pr *fakePR) {
+		pr.SHA, pr.Files = pushed, []fakeFile{{Path: "README.md", Body: "pushed-after-the-command\n"}}
+	})
+	// The commit the command was seen at is still GitHub's to serve.
+	fake.addPR(seen)
+
+	err := os.Remove(hold)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.watch(t)
+	fixture.assertDid(t, "502:"+seen.SHA+":hello")
+
+	fake.addComment(command(503, 2*time.Second))
+	fixture.watch(t)
+	fixture.assertDid(t, "502:"+seen.SHA+":hello", "503:"+pushed+":pushed-after-the-command")
+}
+
+// TestEndToEndGitHubCommentRunAgainGetsTheSameTree: a second run of the same command, after the pull request moved, checks again and still lays down the commit the command was first seen at.
+func TestEndToEndGitHubCommentRunAgainGetsTheSameTree(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeGitHub(t)
+
+	seen := reviewablePR()
+	fake.addPR(seen)
+	// 500 is not the cursor, so only version history says where it was first seen.
+	fake.addComment(fakeComment{ID: 500, Number: 7, Kind: "conversation", Author: "alice", Body: "/steps go", Updated: time.Date(2026, 9, 27, 11, 59, 0, 0, time.UTC)})
+	fake.addComment(fakeComment{ID: 501, Number: 7, Kind: "conversation", Author: "alice", Body: "/steps go", Updated: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)})
+
+	dir := t.TempDir()
+	built := filepath.Join(dir, "built")
+
+	path := writePipeline(t, dir, `
+resources:
+- name: command
+  type: github-comments
+  source:
+    repo: `+fakeRepo+`
+    endpoint: `+fake.URL()+`
+    author: alice
+jobs:
+- name: act
+  plan:
+  - get: command
+  - task: record
+    inputs: [command]
+    run: echo "$(cat command/pr.sha):$(cat command/README.md)" >> `+built+`
+`)
+
+	mustRun(t, "run", path, "--job", "act")
+
+	fake.setPR(7, func(pr *fakePR) {
+		pr.SHA, pr.Files = "bbbb234def5678abc1234def5678abc1234def56", []fakeFile{{Path: "README.md", Body: "pushed-after-the-command\n"}}
+	})
+	fake.addPR(seen)
+
+	mustRun(t, "run", path, "--job", "act", "--force")
+
+	data, err := os.ReadFile(built) //nolint:gosec // a t.TempDir() path
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := strings.Repeat(seen.SHA+":hello\n", 2); string(data) != want {
+		t.Errorf("built %q, want %q: both runs at the commit the command was first seen at", data, want)
+	}
+
+	st, err := sqlite.OpenStore(string(cli.StatePath(path, "")), cli.PipelineName(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = st.Close() }()
+
+	filed, err := st.ResourceVersionsJSON(t.Context(), "command")
+	if err != nil || len(filed) != 2 {
+		t.Errorf("filed %v, %v; want the two commands once each, neither again at the pushed head", filed, err)
+	}
 }
