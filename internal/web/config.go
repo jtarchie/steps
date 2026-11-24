@@ -365,6 +365,21 @@ func (p *stepPlacer) place(step *runview.Step, scope string, base int, inPlan bo
 	}
 }
 
+// named reports whether a run would publish block's row under name: its own, or for a try: — which has none — that of the step it wraps.
+func (p *stepPlacer) named(block config.SourceBlock, name string) bool {
+	if block.StepKind != "try" {
+		return block.StepName == name
+	}
+
+	for _, wrapped := range p.steps {
+		if wrapped.Path == block.Path+".try" {
+			return wrapped.StepName == name
+		}
+	}
+
+	return false
+}
+
 // exact is path when the job has a step there.
 func (p *stepPlacer) exact(path string) string {
 	for _, block := range p.steps {
@@ -381,7 +396,7 @@ func (p *stepPlacer) within(step *runview.Step, scope string) string {
 	found, matches := scope, 0
 
 	for _, block := range p.steps {
-		if scope != "" && strings.HasPrefix(block.Path, scope+".") && block.StepKind == step.Kind && block.StepName == step.Name {
+		if scope != "" && strings.HasPrefix(block.Path, scope+".") && block.StepKind == step.Kind && p.named(block, step.Name) {
 			found = block.Path
 			matches++
 		}

@@ -1408,6 +1408,8 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
 .stephead .anchor:focus-visible { opacity: 1; }
 .stephead .anchor:hover { color: var(--fg); }
 .stephead .anchor + .anchor { margin-left: 0; }
+/* Nothing hovers on a touch screen, so there the links are simply drawn. */
+@media (hover: none) { .stephead .anchor { opacity: 1; } }
 .step { scroll-margin-top: 3.2rem; }
 .step:target > .stephead { background: var(--panel2); box-shadow: inset 0 0 0 1px var(--line); }
 /* The gutter is a <pre> of its own beside the file's: outside what a reader selects, and still while a long line scrolls sideways. */
@@ -1418,9 +1420,10 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
 /* One entry or one step of the config page. An inline-block, not a block: a block boundary puts a line break of its own into what a reader copies, and this page's text is the recorded file. As wide as the file's longest line so a tint does not stop at the viewport's edge on a file scrolled sideways, and reaching through the <pre>'s padding so the rule sits on its border. */
 .cfg { display: inline-block; min-width: 100%; }
 .cfgblock { display: inline-block; vertical-align: top; min-width: 100%; box-sizing: content-box; margin: 0 -12px; padding: 0 12px; scroll-margin-top: 3.2rem; }
-/* A name that leads somewhere reads as the source it is until pointed at; one that leaves the page says so at rest. */
-.cfgref { color: inherit; }
-.cfgref.out { text-decoration: underline dotted; text-underline-offset: 3px; }
+/* A name that leads somewhere keeps the source's own color and is underlined at rest, faintly: a phone has no hover to reveal it with, and the underline is what tells it from the text around it without a hue. Dotted stays on this page; solid leaves it. */
+.cfgref { color: inherit; text-decoration: underline dotted color-mix(in srgb, currentColor 55%, transparent); text-underline-offset: 3px; }
+.cfgref.out { text-decoration-style: solid; }
+.cfgref:hover, .cfgref:focus-visible { text-decoration-color: currentColor; }
 .include { scroll-margin-top: 3.2rem; }
 .cfgblock:target { background: color-mix(in srgb, var(--blue) 8%, var(--bg)); box-shadow: inset 3px 0 0 var(--blue); }
 

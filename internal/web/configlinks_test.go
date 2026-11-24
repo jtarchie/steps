@@ -551,8 +551,8 @@ func TestRunStepsJumpToTheirStep(t *testing.T) {
 		configBlockText(t, config, fragment)
 	}
 
-	// plan.2 twice: the in_parallel, and the try under it, whose row is named for the task it wraps and whose block is not. plan.4 twice: the do and the twin that could be either. Unlinked: a hook the job does not declare.
-	want := map[string]int{"job-build:plan.0": 1, "job-build:plan.1": 1, "job-build:plan.1.do.1": 1, "job-build:plan.1.on_failure": 1, "job-build:plan.2": 2, "job-build:plan.2.in_parallel.1.try": 1, "job-build:plan.4": 2, "job-build:ensure": 1, "": 1}
+	// A try: row is named for the task it wraps, and lands on the try: rather than on that task. plan.4 twice: the do and the twin that could be either. Unlinked: a hook the job does not declare.
+	want := map[string]int{"job-build:plan.0": 1, "job-build:plan.1": 1, "job-build:plan.1.do.1": 1, "job-build:plan.1.on_failure": 1, "job-build:plan.2": 1, "job-build:plan.2.in_parallel.1": 1, "job-build:plan.2.in_parallel.1.try": 1, "job-build:plan.4": 2, "job-build:ensure": 1, "": 1}
 	if !maps.Equal(landed, want) {
 		t.Errorf("rows land on %v, want %v", landed, want)
 	}
@@ -566,5 +566,25 @@ func TestTheLiveStreamCarriesStepConfigLinks(t *testing.T) {
 
 	if stream := sseHTML(streamOf(t, server, "/p/demo/runs/deep/events")); !strings.Contains(html.UnescapeString(stream), "/p/demo/config/"+sha+"#job-build:plan.1.do.1") {
 		t.Errorf("the live stream's rows do not carry their config links:\n%s", stream)
+	}
+}
+
+// TestConfigLinksShowWithoutAPointer: a phone has no hover, so a link that only appears under one is not there. A name that leads somewhere is underlined at rest (which is also what tells it from the source around it without color), one that leaves the page differently from one that stays, and a step's links to itself and to its config are drawn where nothing can hover.
+func TestConfigLinksShowWithoutAPointer(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{
+		`(?m)^\.cfgref \{ color: inherit; text-decoration: underline dotted `,
+		`(?m)^\.cfgref\.out \{ text-decoration-style: solid; \}`,
+		`(?m)^@media \(hover: none\) \{ \.stephead \.anchor \{ opacity: 1; \} \}`,
+	} {
+		if !regexp.MustCompile(want).Match(css) {
+			t.Errorf("app.css has no rule matching %s", want)
+		}
 	}
 }
