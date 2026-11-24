@@ -708,7 +708,7 @@ func (s *plusSession) fetchDeclared(ctx context.Context, names ...string) error 
 // fetchOne brings one declared output home: an input from this machine as the step's changes to it, anything else whole.
 func (s *plusSession) fetchOne(ctx context.Context, name string) error {
 	if overlay, ok := s.layered[name]; ok {
-		return s.fetchChanges(ctx, name, overlay, s.uppers[overlay])
+		return s.fetchChanges(ctx, name, s.uppers[overlay])
 	}
 
 	return s.fetchInto(ctx, path.Join(s.workdir(), name), s.spec.Cwd, name)

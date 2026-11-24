@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -24,12 +23,12 @@ import (
 	"github.com/jtarchie/steps/internal/wire"
 )
 
-// listingScript prints, for every directory in the upper layer, its path (D) and the names its merged view holds (E), NUL-separated. Any change in the overlay copies up its parent directory, so these listings name every deletion: a host entry under one of them that the merged view lacks is gone.
-const listingScript = `cd /u && find . -type d -exec sh -c 'for d; do [ -d "/m/$d" ] || continue; printf "D%s\0" "$d"; for e in "/m/$d"/* "/m/$d"/.[!.]* "/m/$d"/..?*; do if [ -e "$e" ] || [ -L "$e" ]; then printf "E%s\0" "${e##*/}"; fi; done; done' sh {} +`
+// opaqueScript prints, NUL-separated, each directory of the upper layer overlay marks opaque: one removed and made again, which hides what the lower held under it without a whiteout per name. getfattr prints names unescaped, so a batch's output is only a filter, and each directory of a batch that might hold one is asked alone, where the exit status says whether the marker is there at all.
+const opaqueScript = `cd /u && find . -type d -exec sh -c 'getfattr -n trusted.overlay.opaque "$@" 2>/dev/null | grep -q "=\"y\"\$" || exit 0; for d; do v=$(getfattr -n trusted.overlay.opaque "$d" 2>/dev/null) && case $v in *"=\"y\"") printf "%s\0" "$d";; esac; done; exit 0' sh {} +`
 
-// fetchChanges brings an input-as-output home as its overlay's upper layer: the files the step wrote, then the deletions its directory listings show, instead of the whole merged tree.
-func (s *plusSession) fetchChanges(ctx context.Context, name, overlay, upper string) error {
-	listing, err := s.mergedListings(ctx, overlay, upper)
+// fetchChanges brings an input-as-output home as its overlay's upper layer: the files the step wrote, and the deletions the overlay recorded, instead of the whole merged tree.
+func (s *plusSession) fetchChanges(ctx context.Context, name, upper string) error {
+	opaque, err := s.opaqueDirs(ctx, upper)
 	if err != nil {
 		return fmt.Errorf("fetching %s's changes: %w", name, err)
 	}
@@ -40,13 +39,13 @@ func (s *plusSession) fetchChanges(ctx context.Context, name, overlay, upper str
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 
-	err = s.fetchUpper(ctx, upper, staging)
+	deleted, err := s.fetchUpper(ctx, upper, staging)
 	if err != nil {
 		return fmt.Errorf("fetching %s's changes: %w", name, err)
 	}
 
 	// Everything has arrived before anything at home is touched, so a failed transfer leaves the last fetch's tree.
-	err = applyChanges(staging, filepath.Join(s.spec.Cwd, name), listing)
+	err = applyChanges(staging, filepath.Join(s.spec.Cwd, name), slices.Concat(deleted, opaque))
 	if err != nil {
 		return fmt.Errorf("fetching %s's changes: %w", name, err)
 	}
@@ -54,8 +53,8 @@ func (s *plusSession) fetchChanges(ctx context.Context, name, overlay, upper str
 	return nil
 }
 
-// applyChanges prunes home by the listings, then writes staging over it, both confined by os.Root.
-func applyChanges(staging, dst string, listing map[string]map[string]bool) error {
+// applyChanges removes each gone path at home, then writes staging over it, both confined by os.Root. An opaque directory counts as gone, since staging holds all of it that survived.
+func applyChanges(staging, dst string, gone []string) error {
 	stage, err := os.OpenRoot(staging)
 	if err != nil {
 		return fmt.Errorf("%w", err)
@@ -68,9 +67,11 @@ func applyChanges(staging, dst string, listing map[string]map[string]bool) error
 	}
 	defer func() { _ = home.Close() }()
 
-	err = prune(home, listing)
-	if err != nil {
-		return fmt.Errorf("%w", err)
+	for _, rel := range gone {
+		err = home.RemoveAll(rel)
+		if err != nil && !errors.Is(err, syscall.ENOTDIR) {
+			return fmt.Errorf("%w", err)
+		}
 	}
 
 	err = overlayOnto(stage, home)
@@ -103,16 +104,17 @@ func checkHomeLinks(home *os.Root) error {
 	return errors.Join(escaped, err)
 }
 
-// mergedListings runs listingScript over the merged view and the upper layer, both read-only.
-func (s *plusSession) mergedListings(ctx context.Context, overlay, upper string) (map[string]map[string]bool, error) {
+// opaqueDirs runs opaqueScript over the upper layer, read-only. Without CAP_SYS_ADMIN every trusted.* xattr reads as absent, and a recreated directory would keep at home what the step removed from it.
+func (s *plusSession) opaqueDirs(ctx context.Context, upper string) ([]string, error) {
 	code, stdout, stderr, err := s.docker.RunOnce(ctx, dockerapi.ContainerSpec{
 		Image:   treedigest.Image,
-		Cmd:     []string{"sh", "-c", listingScript},
+		Cmd:     []string{"sh", "-c", opaqueScript},
 		Labels:  shell.OwnershipLabels(),
-		Mounts:  []dockerapi.Bind{volumeMount(overlay, "/m", true), volumeMount(upper, "/u", true)},
+		Mounts:  []dockerapi.Bind{volumeMount(upper, "/u", true)},
 		Network: "none",
-		// Every name decides what survives at home, so a cut listing must fail rather than parse: under RunOnce's 1 MiB default, a step that ran yarn install (node_modules in the upper layer) had the tail of a sibling directory's listing dropped, and those files were deleted at home.
-		MaxOutput: listingMaxBytes,
+		CapAdd:  []string{"SYS_ADMIN"},
+		// Each name removes a directory at home, so a cut listing fails rather than parses.
+		MaxOutput: deletionsMaxBytes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
@@ -124,77 +126,55 @@ func (s *plusSession) mergedListings(ctx context.Context, overlay, upper string)
 
 	s.received.Add(int64(len(stdout)))
 
-	return parseListings(stdout)
+	return parseOpaque(stdout)
 }
 
-// listingMaxBytes bounds the listing held in memory: about two million names at a hundred bytes each.
-const listingMaxBytes = 256 << 20
+// deletionsMaxBytes bounds the deleted names held in memory, whiteouts and opaque directories each: about two million names at a hundred bytes each.
+const deletionsMaxBytes = 256 << 20
 
 // errListingFailed is the listing container saying no.
-var errListingFailed = errors.New("listing the changed directories failed")
+var errListingFailed = errors.New("listing the recreated directories failed")
 
-// errBadListing is a listing naming a path outside the tree.
-var errBadListing = errors.New("the changed-directory listing names a path outside the tree")
+// errBadDeletion is a deletion naming a path outside the tree.
+var errBadDeletion = errors.New("a deletion names a path outside the tree")
 
-// parseListings reads listingScript's records into directory -> the names it holds; every name is checked to stay inside the tree, since it decides what is removed at home.
-func parseListings(out string) (map[string]map[string]bool, error) {
-	dirs := map[string]map[string]bool{}
+// errTooManyDeletions is a step whose whiteouts outgrew deletionsMaxBytes: removing only some of them would leave home neither tree.
+var errTooManyDeletions = errors.New("too many deletions to hold")
 
-	var current map[string]bool
+func parseOpaque(out string) ([]string, error) {
+	var dirs []string
 
 	for record := range strings.SplitSeq(strings.TrimSuffix(out, "\x00"), "\x00") {
 		if record == "" {
 			continue
 		}
 
-		next, err := readRecord(dirs, current, record)
+		dir, err := deletedPath(record)
 		if err != nil {
 			return nil, err
 		}
 
-		current = next
+		dirs = append(dirs, dir)
 	}
 
 	return dirs, nil
 }
 
-// readRecord files one D or E record, returning the directory E records now belong to.
-func readRecord(dirs map[string]map[string]bool, current map[string]bool, record string) (map[string]bool, error) {
-	value := record[1:]
-
-	switch record[0] {
-	case 'D':
-		dir := path.Clean(value)
-		if !filepath.IsLocal(dir) && dir != "." {
-			return nil, fmt.Errorf("%w: %q", errBadListing, value)
-		}
-
-		dirs[dir] = map[string]bool{}
-
-		return dirs[dir], nil
-	case 'E':
-		if current == nil || !isEntryName(value) {
-			return nil, fmt.Errorf("%w: %q", errBadListing, value)
-		}
-
-		current[value] = true
-
-		return current, nil
-	default:
-		return nil, fmt.Errorf("%w: %q", errBadListing, record)
+// deletedPath holds a name the worker sent to staying inside the tree, since it decides what is removed at home.
+func deletedPath(name string) (string, error) {
+	rel := path.Clean(name)
+	if !filepath.IsLocal(rel) || rel == "." {
+		return "", fmt.Errorf("%w: %q", errBadDeletion, name)
 	}
+
+	return rel, nil
 }
 
-// isEntryName is one path element naming something in a directory.
-func isEntryName(name string) bool {
-	return name != "" && name != "." && name != ".." && !strings.Contains(name, "/")
-}
-
-// fetchUpper copies the upper layer into staging, minus overlay's whiteouts (character devices), which stand for deletions the listings already carry.
-func (s *plusSession) fetchUpper(ctx context.Context, upper, staging string) error {
+// fetchUpper copies the upper layer into staging, minus overlay's whiteouts, and returns the paths those whiteouts name.
+func (s *plusSession) fetchUpper(ctx context.Context, upper, staging string) ([]string, error) {
 	holder, err := s.docker.CreateHolder(ctx, "steps-upper-read-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), []dockerapi.Bind{volumeMount(upper, holderMount, true)})
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 
 	defer func() {
@@ -206,116 +186,101 @@ func (s *plusSession) fetchUpper(ctx context.Context, upper, staging string) err
 
 	content, err := s.docker.GetArchive(ctx, holder, holderMount+"/.")
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 	defer func() { _ = content.Close() }()
 
 	reader, writer := io.Pipe()
 
-	go func() { writer.CloseWithError(dropWhiteouts(&byteCounter{r: content, n: &s.received}, writer)) }()
+	var deleted []string
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		var err error
+
+		// A refusal reaches the unpack through the pipe, so it fails the fetch before anything at home is touched.
+		deleted, err = dropWhiteouts(&byteCounter{r: content, n: &s.received}, writer, deletionsMaxBytes)
+		writer.CloseWithError(err)
+	}()
 
 	err = wire.UnpackFetchedTree(reader, staging, fetchLimits())
 	_ = reader.CloseWithError(err)
 
+	<-done
+
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 
-	return nil
+	return deleted, nil
 }
 
-// dropWhiteouts copies a tar stream, leaving out character devices: an overlay records a deleted file as one, and no step output is ever one.
-// Since Linux 5.8 overlayfs makes every whiteout after the first a hard link to one shared inode, so the archive carries the first deletion as a device and each later one as a hard link to it; those go too, or a step that deleted two files failed to come home.
-func dropWhiteouts(from io.Reader, to io.Writer) error {
+// dropWhiteouts copies a tar stream, leaving out character devices (no step output is ever one), and returns the paths its 0:0 ones, overlay's whiteouts, say were deleted. Since Linux 5.8 overlayfs makes every whiteout after the first a hard link to one shared inode, so the archive carries the first deletion as a device and each later one as a hard link to it; those are deletions too, or a step that deleted two files failed to come home.
+func dropWhiteouts(from io.Reader, to io.Writer, maxBytes int) ([]string, error) {
 	in, out := tar.NewReader(from), tar.NewWriter(to)
-	whiteouts := map[string]bool{}
+	set := whiteoutSet{seen: map[string]bool{}, maxBytes: maxBytes}
 
 	for {
 		header, err := in.Next()
 		if errors.Is(err, io.EOF) {
-			return out.Close() //nolint:wrapcheck // the unpack names the tree
+			return set.deleted, out.Close() //nolint:wrapcheck // the unpack names the tree
 		}
 
 		if err != nil {
-			return err //nolint:wrapcheck // as above
+			return nil, err //nolint:wrapcheck // as above
 		}
 
-		if header.Typeflag == tar.TypeChar {
-			whiteouts[path.Clean(header.Name)] = true
-
-			continue
+		dropped, err := set.add(header)
+		if err != nil {
+			return nil, err
 		}
 
-		if header.Typeflag == tar.TypeLink && whiteouts[path.Clean(header.Linkname)] {
+		if dropped {
 			continue
 		}
 
 		err = out.WriteHeader(header)
 		if err != nil {
-			return err //nolint:wrapcheck // as above
+			return nil, err //nolint:wrapcheck // as above
 		}
 
 		_, err = io.Copy(out, in) //nolint:gosec // bounded by the unpack's own limits
 		if err != nil {
-			return err //nolint:wrapcheck // as above
+			return nil, err //nolint:wrapcheck // as above
 		}
 	}
 }
 
-// prune removes, under each listed directory of home, what the merged view no longer holds. Parents before children, through os.Root: a directory that is a symlink at home is removed rather than followed, so nothing outside the output is ever listed or removed.
-func prune(home *os.Root, listing map[string]map[string]bool) error {
-	for _, dir := range slices.Sorted(maps.Keys(listing)) {
-		info, err := home.Lstat(dir)
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-			continue
-		}
-
-		if err != nil {
-			return err //nolint:wrapcheck // the caller names the output
-		}
-
-		if !info.IsDir() {
-			err = home.RemoveAll(dir)
-			if err != nil {
-				return err //nolint:wrapcheck // as above
-			}
-
-			continue
-		}
-
-		err = pruneDir(home, dir, listing[dir])
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+type whiteoutSet struct {
+	seen     map[string]bool
+	deleted  []string
+	held     int
+	maxBytes int
 }
 
-func pruneDir(home *os.Root, dir string, keep map[string]bool) error {
-	opened, err := home.Open(dir)
+func (w *whiteoutSet) add(header *tar.Header) (bool, error) {
+	whiteout := header.Typeflag == tar.TypeChar && header.Devmajor == 0 && header.Devminor == 0
+	if !whiteout && (header.Typeflag != tar.TypeLink || !w.seen[path.Clean(header.Linkname)]) {
+		return header.Typeflag == tar.TypeChar, nil
+	}
+
+	rel, err := deletedPath(header.Name)
 	if err != nil {
-		return err //nolint:wrapcheck // the caller names the output
-	}
-	defer func() { _ = opened.Close() }()
-
-	entries, err := opened.ReadDir(-1)
-	if err != nil {
-		return err //nolint:wrapcheck // as above
+		return false, err
 	}
 
-	for _, entry := range entries {
-		if keep[entry.Name()] {
-			continue
-		}
-
-		err = home.RemoveAll(path.Join(dir, entry.Name()))
-		if err != nil {
-			return err //nolint:wrapcheck // as above
-		}
+	w.held += len(rel)
+	if w.held > w.maxBytes {
+		return false, errTooManyDeletions
 	}
 
-	return nil
+	w.seen[rel] = true
+	w.deleted = append(w.deleted, rel)
+
+	return true, nil
 }
 
 // overlayOnto writes staging's entries into home: a directory is merged into whatever is there, anything else replaces what is there. Directory modes are set last, deepest first, so a read-only one does not refuse its own children.

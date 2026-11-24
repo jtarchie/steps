@@ -30,13 +30,13 @@ func volumeOf(v volumetypes.Volume) Volume {
 	return Volume{Name: v.Name, Mountpoint: v.Mountpoint, Labels: v.Labels, CreatedAt: created}
 }
 
-// OverlayOptions are the local driver's options for a copy-on-write child of lower; all three are daemon-side paths, and upper and work must share a filesystem.
+// OverlayOptions are the local driver's options for a copy-on-write child of lower; all three are daemon-side paths, and upper and work must share a filesystem. redirect_dir and metacopy are pinned off whatever the kernel defaults, since either leaves a change's data in the lower, and an input-as-output comes home as its upper layer alone (a renamed directory came home empty, a chmod emptied the file).
 // ponytail: paths are joined unescaped, safe while they are daemon Mountpoints; validate ',' and ':' if a caller ever passes its own.
 func OverlayOptions(lower, upper, work string) map[string]string {
 	return map[string]string{
 		"type":   "overlay",
 		"device": "overlay",
-		"o":      "lowerdir=" + lower + ",upperdir=" + upper + ",workdir=" + work,
+		"o":      "lowerdir=" + lower + ",upperdir=" + upper + ",workdir=" + work + ",redirect_dir=off,metacopy=off",
 	}
 }
 

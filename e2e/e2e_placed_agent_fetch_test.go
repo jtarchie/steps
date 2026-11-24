@@ -159,14 +159,13 @@ jobs:
 	}
 }
 
-// TestAChangeInABigDirectoryKeepsItsSiblings: the listing that decides what a step deleted came back through RunOnce's 1 MiB cut, and the names past the cut read as deletions, so a one-file edit in a directory of thousands deleted its tail at home (a work/prs.yml bot run whose yarn install filled the upper layer lost five specs). A listing too big to hold whole fails the step; this one fits and must come home entire.
+// TestAChangeInABigDirectoryKeepsItsSiblings: the listing that decides what a step deleted came back through RunOnce's 1 MiB cut, and the names past the cut read as deletions, so a one-file edit in a directory of thousands deleted its tail at home (a work/prs.yml bot run whose yarn install filled the upper layer lost five specs). Deletions are read off the overlay now, so a one-file edit lists none.
 func TestAChangeInABigDirectoryKeepsItsSiblings(t *testing.T) {
 	t.Parallel()
 	dockerSlot(t)
 
 	requireDockerE2E(t)
 
-	// 12000 names of ~100 bytes: a listing of about 1.2 MB.
 	path := writePipeline(t, t.TempDir(), fmt.Sprintf(`
 defaults:
   preflight:
@@ -191,4 +190,108 @@ jobs:
 `, dockerE2EImage))
 
 	mustRun(t, path)
+}
+
+// TestARecreatedDirectoryComesHomeWithOnlyItsNewEntries: a directory removed and made again leaves no whiteout per name it lost, only an opaque marker on the new directory, so home must drop everything under it the step did not write back.
+func TestARecreatedDirectoryComesHomeWithOnlyItsNewEntries(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
+	requireDockerE2E(t)
+
+	path := writePipeline(t, t.TempDir(), fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+jobs:
+- name: edit
+  plan:
+  - task: prepare
+    outputs: [data]
+    run: mkdir -p data/dir/sub && echo a > data/dir/a && echo b > data/dir/b && echo x > data/dir/sub/x && echo kept > data/kept.txt
+
+  - task: change
+    image: %[1]s
+    inputs: [data]
+    outputs: [data]
+    run: rm -rf data/dir && mkdir data/dir && echo new > data/dir/a
+
+  - task: check
+    inputs: [data]
+    run: test "$(ls -A data/dir)" = a && test "$(cat data/dir/a)" = new && test -s data/kept.txt
+`, dockerE2EImage))
+
+	mustRun(t, path)
+}
+
+// TestARenamedDirectoryAndAChmodComeHomeWhole: only the upper layer travels, so a kernel whose overlay records a renamed directory as a redirect (redirect_dir) or a chmod as metadata over the lower's data (metacopy) would bring home an empty directory and an empty file; the mount pins both off.
+func TestARenamedDirectoryAndAChmodComeHomeWhole(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
+	requireDockerE2E(t)
+
+	path := writePipeline(t, t.TempDir(), fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+jobs:
+- name: edit
+  plan:
+  - task: prepare
+    outputs: [data]
+    run: mkdir -p data/dir && echo a > data/dir/a && echo run > data/script
+
+  - task: change
+    image: %[1]s
+    inputs: [data]
+    outputs: [data]
+    run: mv data/dir data/moved && chmod 755 data/script
+
+  - task: check
+    inputs: [data]
+    run: test "$(cat data/moved/a)" = a && test ! -e data/dir && test "$(cat data/script)" = run && test -x data/script
+`, dockerE2EImage))
+
+	mustRun(t, path)
+}
+
+// TestDeletionsInABigDirectoryCostWhatWasDeleted: deletions were once inferred from a listing of every name a touched directory still held, so three deletions among 12000 entries brought about 1.2 MB of names home. They are read off the overlay now, and cost what was deleted.
+func TestDeletionsInABigDirectoryCostWhatWasDeleted(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
+	requireDockerE2E(t)
+
+	path := writePipeline(t, t.TempDir(), fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+jobs:
+- name: edit
+  plan:
+  - task: prepare
+    outputs: [data]
+    run: mkdir -p data/big && cd data/big && for i in $(seq 1 12000); do printf '%%096d\n' $i; done | xargs touch
+
+  - task: change
+    image: %[1]s
+    inputs: [data]
+    outputs: [data]
+    run: cd data/big && rm $(printf '%%096d' 1) $(printf '%%096d' 6000) $(printf '%%096d' 12000)
+
+  - task: check
+    inputs: [data]
+    run: test "$(ls data/big | wc -l)" -eq 11997 && test ! -e data/big/$(printf '%%096d' 1) && test ! -e data/big/$(printf '%%096d' 6000) && test ! -e data/big/$(printf '%%096d' 12000) && test -e data/big/$(printf '%%096d' 2)
+`, dockerE2EImage))
+
+	mustRun(t, path)
+
+	row := placementNamed(t, runPlacements(t, path), "change")
+	if row.BytesReceived > 64<<10 {
+		t.Errorf("bytes_received = %d, want a few KiB for three deletions, not a listing of the directory", row.BytesReceived)
+	}
 }
