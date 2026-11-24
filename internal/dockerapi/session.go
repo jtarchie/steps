@@ -46,6 +46,7 @@ type ContainerSpec struct {
 	User        string
 	Network     string
 	Privileged  bool
+	CapAdd      []string
 	CPUShares   int64
 	MemoryBytes int64
 	// Init supplies a real PID 1. It matters for a session container more
@@ -102,6 +103,7 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 		Binds:       spec.binds(),
 		NetworkMode: container.NetworkMode(spec.Network),
 		Privileged:  spec.Privileged,
+		CapAdd:      spec.CapAdd,
 		AutoRemove:  spec.AutoRemove,
 		ExtraHosts:  spec.ExtraHosts,
 		Resources: container.Resources{

@@ -4,61 +4,96 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/wire"
 )
 
-// A listing decides what is removed at home, so one naming a path outside the tree is refused rather than followed.
-func TestParseListingsRefusesEscapes(t *testing.T) {
+// An opaque directory is removed whole at home, so a name outside the tree, or the tree itself, is refused rather than removed.
+func TestParseOpaqueRefusesEscapes(t *testing.T) {
 	t.Parallel()
 
-	got, err := parseListings("D.\x00Ea\x00E.hidden\x00D./sub\x00Eb\x00")
-	if err != nil || !got["."]["a"] || !got["."][".hidden"] || !got["sub"]["b"] {
-		t.Fatalf("parseListings = %v, %v; want . holding a and .hidden, sub holding b", got, err)
+	got, err := parseOpaque("./a\x00./sub/b c\x00")
+	if err != nil || !slices.Equal(got, []string{"a", "sub/b c"}) {
+		t.Fatalf("parseOpaque = %v, %v; want [a sub/b c]", got, err)
 	}
 
-	for _, bad := range []string{"D../up\x00", "D/etc\x00", "D.\x00E..\x00", "D.\x00Ea/b\x00", "Eorphan\x00", "Xjunk\x00"} {
-		_, err := parseListings(bad)
-		if !errors.Is(err, errBadListing) {
-			t.Errorf("parseListings(%q) = %v, want errBadListing", bad, err)
+	for _, bad := range []string{"../up\x00", "/etc\x00", ".\x00", "./a/../..\x00"} {
+		_, err := parseOpaque(bad)
+		if !errors.Is(err, errBadDeletion) {
+			t.Errorf("parseOpaque(%q) = %v, want errBadDeletion", bad, err)
 		}
 	}
 }
 
-// A directory that is a symlink at home is replaced, never followed: pruning through it would delete whatever it points at.
+// Deletions and a recreated directory are applied before staging lands: a whiteout's path goes, an opaque directory loses what staging does not hold, and nothing unnamed is touched.
+func TestApplyChangesRemovesOnlyWhatIsGone(t *testing.T) {
+	t.Parallel()
+
+	home, staging := t.TempDir(), t.TempDir()
+
+	for _, name := range []string{"gone.txt", "kept.txt", "dir/old", "dir/sub/deep", "gonedir/x"} {
+		mustWrite(t, filepath.Join(home, name), "home\n")
+	}
+
+	mustWrite(t, filepath.Join(staging, "dir", "new"), "new\n")
+
+	err := applyChanges(staging, home, []string{"gone.txt", "gonedir", "missing/parent", "kept.txt/under", "dir"})
+	if err != nil {
+		t.Fatalf("applyChanges: %v", err)
+	}
+
+	for _, gone := range []string{"gone.txt", "gonedir", "dir/old", "dir/sub"} {
+		_, err = os.Lstat(filepath.Join(home, gone))
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s = %v, want it removed", gone, err)
+		}
+	}
+
+	for _, kept := range []string{"kept.txt", "dir/new"} {
+		_, err = os.Lstat(filepath.Join(home, kept))
+		if err != nil {
+			t.Errorf("%s = %v, want it at home", kept, err)
+		}
+	}
+}
+
+// A directory that is a symlink at home is replaced, never followed: removing through it would delete whatever it points at.
 func TestApplyChangesNeverFollowsALinkOutOfTheOutput(t *testing.T) {
 	t.Parallel()
 
 	outside, home, staging := t.TempDir(), t.TempDir(), t.TempDir()
 
-	err := os.WriteFile(filepath.Join(outside, "precious"), []byte("keep\n"), 0o600)
-	if err == nil {
-		err = os.Symlink(outside, filepath.Join(home, "sub"))
-	}
+	mustWrite(t, filepath.Join(outside, "precious"), "keep\n")
+	mustWrite(t, filepath.Join(staging, "sub", "new.txt"), "new\n")
 
-	if err == nil {
-		err = os.MkdirAll(filepath.Join(staging, "sub"), 0o700)
-	}
-
-	if err == nil {
-		err = os.WriteFile(filepath.Join(staging, "sub", "new.txt"), []byte("new\n"), 0o600)
-	}
-
+	err := os.Symlink(outside, filepath.Join(home, "sub"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = applyChanges(staging, home, map[string]map[string]bool{".": {"sub": true}, "sub": {"new.txt": true}})
+	err = applyChanges(staging, home, []string{"sub/precious"})
+	if err == nil {
+		t.Errorf("applyChanges removed a deletion through a link out of the output, want it refused")
+	}
+
+	_, err = os.Stat(filepath.Join(outside, "precious"))
+	if err != nil {
+		t.Fatalf("a file outside the output was removed through a symlink: %v", err)
+	}
+
+	err = applyChanges(staging, home, []string{"sub"})
 	if err != nil {
 		t.Fatalf("applyChanges: %v", err)
 	}
 
 	_, err = os.Stat(filepath.Join(outside, "precious"))
 	if err != nil {
-		t.Errorf("a file outside the output was removed through a symlink: %v", err)
+		t.Errorf("a recreated directory that is a link at home was followed: %v", err)
 	}
 
 	info, err := os.Lstat(filepath.Join(home, "sub"))
@@ -86,7 +121,7 @@ func TestApplyChangesRefusesALinkEscapingThroughOneAlreadyHome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = applyChanges(staging, home, map[string]map[string]bool{".": {"a": true, "x": true}})
+	err = applyChanges(staging, home, nil)
 	if !errors.Is(err, wire.ErrUnsafeLink) {
 		t.Fatalf("applyChanges = %v, want ErrUnsafeLink", err)
 	}
@@ -120,7 +155,7 @@ func TestApplyChangesRefusesAnUntouchedLinkAChangeMadeEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = applyChanges(staging, home, map[string]map[string]bool{".": {"a": true, "x": true}, "a": {"up": true}})
+	err = applyChanges(staging, home, nil)
 	if !errors.Is(err, wire.ErrUnsafeLink) {
 		t.Fatalf("applyChanges = %v, want ErrUnsafeLink", err)
 	}
@@ -140,14 +175,19 @@ func TestDropWhiteoutsDropsLinksToAWhiteout(t *testing.T) {
 		{Typeflag: tar.TypeChar, Name: "./b"},
 		{Typeflag: tar.TypeLink, Name: "./a", Linkname: "./b"},
 		{Typeflag: tar.TypeLink, Name: "sub/c", Linkname: "b"},
+		{Typeflag: tar.TypeChar, Name: "./null", Devmajor: 1, Devminor: 3},
 		{Typeflag: tar.TypeReg, Name: "./kept.txt", Mode: 0o644, Size: 3},
 	})
 
 	var out bytes.Buffer
 
-	err := dropWhiteouts(in, &out)
+	deleted, err := dropWhiteouts(in, &out, deletionsMaxBytes)
 	if err != nil {
 		t.Fatalf("dropWhiteouts: %v", err)
+	}
+
+	if !slices.Equal(deleted, []string{"b", "a", "sub/c"}) {
+		t.Errorf("deleted = %v, want [b a sub/c]: a device that is not 0:0 is no whiteout", deleted)
 	}
 
 	staging := t.TempDir()
@@ -169,11 +209,28 @@ func TestDropWhiteoutsDropsLinksToAWhiteout(t *testing.T) {
 		t.Errorf("kept.txt = %q, %v; want the regular file through", got, err)
 	}
 
-	for _, gone := range []string{"a", "b", "sub/c"} {
+	for _, gone := range []string{"a", "b", "sub/c", "null"} {
 		_, err = root.Lstat(gone)
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s = %v, want no entry: it stands for a deletion", gone, err)
 		}
+	}
+}
+
+// A whiteout names what is removed at home, so one outside the tree is refused, and more than the bound fails the fetch rather than removing only some.
+func TestDropWhiteoutsRefusesEscapesAndTooMany(t *testing.T) {
+	t.Parallel()
+
+	_, err := dropWhiteouts(tarOf(t, []*tar.Header{{Typeflag: tar.TypeChar, Name: "../up"}}), io.Discard, deletionsMaxBytes)
+	if !errors.Is(err, errBadDeletion) {
+		t.Errorf("an escaping whiteout = %v, want errBadDeletion", err)
+	}
+
+	many := tarOf(t, []*tar.Header{{Typeflag: tar.TypeChar, Name: "aaaa"}, {Typeflag: tar.TypeLink, Name: "bbbb", Linkname: "aaaa"}})
+
+	_, err = dropWhiteouts(many, io.Discard, 7)
+	if !errors.Is(err, errTooManyDeletions) {
+		t.Errorf("deletions past the bound = %v, want errTooManyDeletions", err)
 	}
 }
 
