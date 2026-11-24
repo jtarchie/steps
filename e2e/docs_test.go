@@ -154,8 +154,8 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 		return
 	}
 
-	// local: is a docker+ worker on this machine's daemon, so a placed example runs only where one answers; it is validated everywhere above.
-	if len(scenario.workers) > 0 {
+	// local: is a docker+ worker on this machine's daemon, so a placed example runs only where one answers, as does an untagged image: one; it is validated everywhere above.
+	if scenario.needsDocker() {
 		testdocker.Require(t)
 	}
 

@@ -48,6 +48,9 @@ type docScenario struct {
 	// daemon, which needs no network but does need docker.
 	workers map[string]string
 
+	// docker runs the example only where a daemon answers, for an untagged image: step: it needs this machine's docker as a placed one does, with no worker to say so.
+	docker bool
+
 	// keepModel keeps each agent's model name as the doc wrote it rather than
 	// replacing it with a placeholder, for an example whose behavior depends
 	// on which model it is (whether it can be shown an image). The endpoint is
@@ -60,6 +63,10 @@ type docScenario struct {
 	// database is named after the pipeline and the corpus no longer names
 	// every block the same thing (see docPipelineName).
 	check func(t *testing.T, dir, path string)
+}
+
+func (s docScenario) needsDocker() bool {
+	return len(s.workers) > 0 || s.docker
 }
 
 // scripted is the common case: a positional script of provider turns.
@@ -93,6 +100,15 @@ var docScenarios = map[string]docScenario{
 	},
 	"infra-job-tags": {
 		workers: map[string]string{"gpu": "local:", "big-disk": "local:"},
+	},
+	// Two custom tools exec'd into one step container: the server the first leaves running answers the second on loopback.
+	"infra-background-dependency": {
+		fake: scripted(
+			callsTool("start_api", map[string]any{}),
+			callsTool("ping_api", map[string]any{}),
+			says("The API answered."),
+		),
+		docker: true,
 	},
 
 	// The full worked pipeline (complete.md): read, write the report, approve
