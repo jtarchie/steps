@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // memberVote is one ensemble member's answer.
@@ -75,7 +77,7 @@ func runEnsembleMembers(ctx context.Context, r stepRunner, i int, step config.St
 			member := members[index]
 			member.Verdicts = step.Ensemble.EnsembleVerdictsFor()
 
-			res, err := runNonGetStep(runCtx, r, i, member, nil, blockHash)
+			res, err := runNonGetStep(shell.WithCommandKey(runCtx, "member"+strconv.Itoa(index)), r, i, member, nil, blockHash)
 			votes[index].verdict, votes[index].note, votes[index].err = res.verdict, res.note, err
 		},
 		func(index int, err error) { votes[index].err = err },
@@ -214,7 +216,7 @@ func runEnsembleJudge(
 		Verdicts: step.Ensemble.EnsembleVerdictsFor(),
 	}
 
-	res, err := runNonGetStep(ctx, r, i, judgeStep, nil, blockHash)
+	res, err := runNonGetStep(shell.WithCommandKey(ctx, "judge"), r, i, judgeStep, nil, blockHash)
 	if err != nil {
 		return "", fmt.Errorf("ensemble judge %q: %w", judgeStep.Agent, err)
 	}

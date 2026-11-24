@@ -204,6 +204,49 @@ func (s *signalOn) String() string {
 	return s.buf.String()
 }
 
+// A restarted daemon's pid is new, so every container the old one left has a dead owner; one whose run the store still calls running is what that run's resume adopts, and the sweep must leave it.
+func TestSweepSparesWhatALiveRunLeft(t *testing.T) {
+	t.Parallel()
+
+	const deadPID = "4194303"
+
+	var (
+		mu      sync.Mutex
+		removed []string
+	)
+
+	client := fakeEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			labels := func(run string) map[string]string {
+				return map[string]string{dockerOwnerLabel: "steps", dockerHostLabel: ownerHostname(), dockerPIDLabel: deadPID, dockerRunLabel: run}
+			}
+
+			writeJSONResponse(t, w, http.StatusOK, []map[string]any{
+				{"Id": "resumed", "Labels": labels("live")},
+				{"Id": "finished", "Labels": labels("done")},
+			})
+		case http.MethodDelete:
+			mu.Lock()
+			removed = append(removed, r.URL.Path)
+			mu.Unlock()
+
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	ctx := WithResumption(t.Context(), Resumption{Live: func(_ context.Context, run string) bool { return run == "live" }})
+
+	SweepOrphanedContainersOn(ctx, client)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(removed) != 1 || !strings.Contains(removed[0], "finished") {
+		t.Errorf("removed %v, want only the finished run's container", removed)
+	}
+}
+
 // A command container runs its script as an exec would, past the image's ENTRYPOINT: moby/buildkit's takes a command as arguments to a daemon that never exits, and the step hung on it.
 func TestCommandContainerRunsPastTheImagesEntrypoint(t *testing.T) {
 	testdocker.Require(t)

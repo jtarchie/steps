@@ -11,6 +11,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -348,7 +349,7 @@ func runAcrossCell(ctx context.Context, r stepRunner, i int, cell config.Step, p
 	}
 
 	// Each cell's captures are its own, as in Concourse.
-	_, err := runNonGetStep(withCellVars(ctx), r, i, cell, nil, cellParent)
+	_, err := runNonGetStep(shell.WithCommandKey(withCellVars(ctx), "cell"+plan.hash), r, i, cell, nil, cellParent)
 
 	return false, err
 }

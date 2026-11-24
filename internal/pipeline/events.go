@@ -27,6 +27,14 @@ import (
 // works only for runs that were being watched at the time.
 func StoreSink(st store.Events) func(events.Event) {
 	return func(event events.Event) {
+		// Only the newest count is worth a row; one per line of output otherwise.
+		if event.Type == events.TypeCommandOffset && event.StepID != 0 {
+			err := st.DeleteStepEvents(context.Background(), event.RunID, event.StepID, events.TypeCommandOffset)
+			if err != nil {
+				slog.Warn("run.event_collapse", "run", event.RunID, "step", event.StepID, "error", err)
+			}
+		}
+
 		// Here, on the sink's one goroutine, so no chunk still queued behind this record can outlive it.
 		if event.Type == events.TypeStepOutput && event.StepID != 0 {
 			err := st.DeleteStepEvents(context.Background(), event.RunID, event.StepID, events.TypeStepOutputChunk)

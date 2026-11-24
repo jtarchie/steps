@@ -101,3 +101,17 @@ func (c *Client) ContainerStatus(ctx context.Context, id string) (string, int, e
 
 	return string(inspected.Container.State.Status), inspected.Container.State.ExitCode, nil
 }
+
+// ContainerLabels is a container's labels; a missing container satisfies IsNotFound.
+func (c *Client) ContainerLabels(ctx context.Context, id string) (map[string]string, error) {
+	inspected, err := c.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("inspecting container %s: %w", id, err)
+	}
+
+	if inspected.Container.Config == nil {
+		return map[string]string{}, nil
+	}
+
+	return inspected.Container.Config.Labels, nil
+}
