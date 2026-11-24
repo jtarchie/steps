@@ -23,7 +23,7 @@ require (
 	github.com/go-task/slim-sprig/v3 v3.0.0
 	github.com/google/go-containerregistry v0.22.1
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/jtarchie/terminal-to-html/v3 v3.0.0-20261115153356-f51bceb5a400
 	github.com/kevinburke/ssh_config v1.6.0
