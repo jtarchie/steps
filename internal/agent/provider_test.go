@@ -362,3 +362,47 @@ func TestContextPathHonoursAConfiguredLimit(t *testing.T) {
 		t.Error("a configured ceiling below the file size did not truncate")
 	}
 }
+
+// A fetched tree can carry a symlink with any target (a PR tarball's entry is
+// unpacked as written), and the host file tools confine to wherever dir:
+// resolves, so a dir: that leaves the space through one must fail the step.
+func TestResolveAgentDirRefusesSymlinkOutOfSpace(t *testing.T) {
+	t.Parallel()
+
+	space, outside := t.TempDir(), t.TempDir()
+	writeTree(t, space, "repo/real/file.txt")
+	writeTree(t, outside, "nested/file.txt")
+
+	for link, target := range map[string]string{
+		"repo/out":    outside,
+		"repo/up":     "..",
+		"repo/inside": "real",
+	} {
+		err := os.Symlink(target, filepath.Join(space, link))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		dir     string
+		refused bool
+	}{
+		{"", false},
+		{"repo", false},
+		{"repo/real", false},
+		{"repo/inside", false},
+		{"repo/up", false},
+		{"repo/out", true},
+		{"repo/out/nested", true},
+	} {
+		_, err := resolveAgentDir(space, tc.dir)
+
+		switch {
+		case tc.refused && (err == nil || !strings.Contains(err.Error(), "outside the step's workspace")):
+			t.Errorf("dir %q: expected a refusal, got %v", tc.dir, err)
+		case !tc.refused && err != nil:
+			t.Errorf("dir %q: %v", tc.dir, err)
+		}
+	}
+}

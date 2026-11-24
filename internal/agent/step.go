@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -92,9 +91,23 @@ func resolveAgentDir(workspaceDir, stepDir string) (string, error) {
 		dir = filepath.Join(workspaceDir, stepDir)
 	}
 
-	_, err := os.Stat(dir)
+	// The host file tools confine to wherever dir resolves, and a fetched tree
+	// can carry a symlink with any target, so one on dir:'s path would move
+	// that root out of the space. Both sides resolved: the space's own path
+	// may run through a link (macOS's /var).
+	realDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return "", fmt.Errorf("working directory %q: %w", dir, err)
+	}
+
+	realSpace, err := filepath.EvalSymlinks(workspaceDir)
+	if err != nil {
+		return "", fmt.Errorf("working directory %q: %w", dir, err)
+	}
+
+	_, inside := config.ConfinedPath(realSpace, realDir)
+	if !inside {
+		return "", fmt.Errorf("working directory %q resolves to %q, outside the step's workspace, through a symlink", dir, realDir)
 	}
 
 	return dir, nil
