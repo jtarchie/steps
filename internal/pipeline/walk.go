@@ -14,6 +14,7 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	rsrc "github.com/jtarchie/steps/internal/resource"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -176,7 +177,8 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 	var err error
 
 	if !resumed {
-		res, err = runNonGetStep(w.cellReuseContext(ctx), w.stepRunner, w.index, step, w.skippable, w.parentHash)
+		keyed := shell.WithCommandKey(w.cellReuseContext(ctx), fmt.Sprintf("%s.%d.%d", w.build, w.index, w.passes[w.index]))
+		res, err = runNonGetStep(keyed, w.stepRunner, w.index, step, w.skippable, w.parentHash)
 	}
 
 	if spendsVisit(res) {

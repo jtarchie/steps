@@ -9,9 +9,11 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"os"
@@ -97,6 +99,8 @@ type plusSession struct {
 	uppers map[string]string
 	// kept are volumes now named by a digest, which outlive the session.
 	kept map[string]bool
+	// leaving reports, at close, that the process is going down with this step's run left to resume.
+	leaving func() bool
 	// fetchMu serializes fetches: an agent's concurrent tool calls would otherwise swap the same local paths and write kept at once.
 	fetchMu sync.Mutex
 	// stale is a write whose fetch was deferred, owed by the next Sync.
@@ -322,37 +326,17 @@ func (s *plusSession) connect(ctx context.Context) error {
 	s.evict(ctx)
 	s.reapTaskCaches(ctx)
 
-	work, err := s.newVolume(ctx, "work")
+	s.leaving = func() bool { return shell.LeavingForRestart(ctx) }
+
+	holder, adoptable := s.holderName(ctx)
+
+	mounts, adopted, err := s.adopt(ctx, holder, adoptable)
 	if err != nil {
 		return err
 	}
 
-	s.work = work.Name
-
-	mounts, files, err := s.compose(ctx)
-	if err != nil {
-		return err
-	}
-
-	caches, err := s.cacheMounts(ctx)
-	if err != nil {
-		return err
-	}
-
-	mounts = append(mounts, caches...)
-
-	s.holder, err = s.docker.CreateHolder(ctx, "steps-holder-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), mounts)
-	if err != nil {
-		return fmt.Errorf("%w", err)
-	}
-
-	err = s.openRoots(ctx, mounts)
-	if err != nil {
-		return err
-	}
-
-	if len(files) > 0 {
-		err = s.pourFiles(ctx, files)
+	if !adopted {
+		mounts, err = s.lay(ctx, holder, adoptable)
 		if err != nil {
 			return err
 		}
@@ -362,6 +346,7 @@ func (s *plusSession) connect(ctx context.Context) error {
 	spec.WorkerTag = ""
 	spec.DockerHost = s.daemonName()
 	spec.DockerDial = dial
+	spec.Redial = s.redialUnder
 	spec.EnvValues = withWorkerTag(resolveEnv(spec.Env), s.spec.WorkerTag)
 	spec.Volumes = mounts
 	spec.MountPath = s.workdir()
@@ -372,6 +357,125 @@ func (s *plusSession) connect(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// lay makes the step's volumes and the holder that mounts them, and fills them with the step's tree.
+func (s *plusSession) lay(ctx context.Context, holder string, adoptable bool) ([]dockerapi.Bind, error) {
+	work, err := s.newVolume(ctx, "work")
+	if err != nil {
+		return nil, err
+	}
+
+	s.work = work.Name
+
+	mounts, files, err := s.compose(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	caches, err := s.cacheMounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	mounts = append(mounts, caches...)
+
+	labels := shell.OwnershipLabels()
+	if adoptable {
+		labels[shell.RunLabel] = s.runID
+
+		labels[sessionLabel], err = s.layout(mounts)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	s.holder, err = s.docker.CreateHolder(ctx, holder, treedigest.Image, labels, mounts)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	err = s.openRoots(ctx, mounts)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(files) > 0 {
+		err = s.pourFiles(ctx, files)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return mounts, nil
+}
+
+// sessionLabel carries a holder's layout, so a restarted steps resuming the same step adopts the volumes its command is still writing (steps#306).
+const sessionLabel = "steps.session"
+
+// sessionLayout is what a session made on the worker, as the holder's label records it.
+type sessionLayout struct {
+	Work      string            `json:"work"`
+	Volumes   []string          `json:"volumes"`
+	Outputs   map[string]string `json:"outputs"`
+	Layered   map[string]string `json:"layered"`
+	Uppers    map[string]string `json:"uppers"`
+	EmptyTree bool              `json:"empty_tree"`
+	Mounts    []dockerapi.Bind  `json:"mounts"`
+}
+
+func (s *plusSession) layout(mounts []dockerapi.Bind) (string, error) {
+	encoded, err := json.Marshal(sessionLayout{Work: s.work, Volumes: s.volumes, Outputs: s.outputs, Layered: s.layered, Uppers: s.uppers, EmptyTree: s.emptyTree, Mounts: mounts})
+	if err != nil {
+		return "", fmt.Errorf("recording the step's volumes: %w", err)
+	}
+
+	return string(encoded), nil
+}
+
+// holderName is derived from the run and the step's place in it when there is one, so a restarted steps resuming that step finds its holder; random otherwise.
+func (s *plusSession) holderName(ctx context.Context) (string, bool) {
+	key := shell.CommandKey(ctx)
+	if s.runID == "" || key == "" {
+		return "steps-holder-" + randomSuffix(), false
+	}
+
+	sum := sha256.Sum256([]byte(s.namespace + "\x00" + s.runID + "\x00" + key))
+
+	return "steps-holder-" + hex.EncodeToString(sum[:12]), true
+}
+
+// adopt takes over the holder a previous steps process left for this step, with the volumes it mounts, so a command it left running writes where this session reads.
+func (s *plusSession) adopt(ctx context.Context, holder string, adoptable bool) ([]dockerapi.Bind, bool, error) {
+	if !adoptable {
+		return nil, false, nil
+	}
+
+	labels, err := s.docker.ContainerLabels(ctx, holder)
+	if dockerapi.IsNotFound(err) {
+		return nil, false, nil
+	}
+
+	if err != nil {
+		return nil, false, fmt.Errorf("%w", err)
+	}
+
+	var layout sessionLayout
+
+	err = json.Unmarshal([]byte(labels[sessionLabel]), &layout)
+	if err != nil {
+		return nil, false, fmt.Errorf("reading the volumes holder %s records: %w", holder, err)
+	}
+
+	s.holder, s.work, s.volumes, s.emptyTree = holder, layout.Work, layout.Volumes, layout.EmptyTree
+	s.outputs, s.layered = layout.Outputs, layout.Layered
+	if layout.Uppers != nil {
+		s.uppers = layout.Uppers
+	}
+
+	slog.InfoContext(ctx, "venue.docker.adopted", "worker", s.worker.String(), "holder", holder)
+
+	return layout.Mounts, true, nil
 }
 
 // compose lays the step's tree out as volumes: each input directory a copy-on-write view of a cached tree, each empty output a plain volume of its own, and the work volume under them for whatever else the tree holds.
@@ -537,7 +641,7 @@ func (s *plusSession) daemonDialer(ctx context.Context) (func(context.Context) (
 
 // redial replaces a connection that ended (a dropped tunnel, a keepalive that gave up): the volumes, holder and container live on the daemon, so the step's tree is where it was.
 func (s *plusSession) redial(ctx context.Context) error {
-	// ponytail: the command a drop interrupted is killed before the next one runs (see the shell runner's orphans); taking its exit code by exec id instead of a rerun is steps#208's rung 1.
+	// A reattachable command (a task's run:, a resource's in:/out:) rides through a drop (steps#306); an exec a drop interrupted is still killed before the next one runs (see the shell runner's orphans).
 	redialed, err := s.conn.redial(ctx, s.dialSSH)
 	if err != nil {
 		return fmt.Errorf("%w %q: dialling again after the connection dropped: %w", ErrWorker, s.worker.URL, err)
@@ -548,6 +652,13 @@ func (s *plusSession) redial(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// redialUnder is redial for a command that lost its connection mid-read, which is suspect until a probe says otherwise.
+func (s *plusSession) redialUnder(ctx context.Context) error {
+	s.conn.suspect.Store(true)
+
+	return s.redial(ctx)
 }
 
 func (s *plusSession) dialSSH(ctx context.Context) (*ssh.Client, error) {
@@ -708,7 +819,7 @@ func (s *plusSession) fetchDeclared(ctx context.Context, names ...string) error 
 // fetchOne brings one declared output home: an input from this machine as the step's changes to it, anything else whole.
 func (s *plusSession) fetchOne(ctx context.Context, name string) error {
 	if overlay, ok := s.layered[name]; ok {
-		return s.fetchChanges(ctx, name, overlay, s.uppers[overlay])
+		return s.fetchChanges(ctx, name, s.uppers[overlay])
 	}
 
 	return s.fetchInto(ctx, path.Join(s.workdir(), name), s.spec.Cwd, name)
@@ -873,15 +984,7 @@ func (s *plusSession) close() error {
 	}
 
 	if s.docker != nil {
-		errs = append(errs, s.publishHeld(ctx)...)
-	}
-
-	if s.docker != nil && !s.spec.Keep {
-		errs = append(errs, s.removeOwned(ctx)...)
-	}
-
-	if s.docker != nil {
-		errs = append(errs, s.docker.Close())
+		errs = append(errs, s.release(ctx)...)
 	}
 
 	if client := s.conn.current(); client != nil {
@@ -894,6 +997,23 @@ func (s *plusSession) close() error {
 	}
 
 	return nil
+}
+
+// release publishes what the step held and removes what only it used, then lets the daemon go; going down with the run left to resume, the holder and its volumes stay for the restart to adopt.
+func (s *plusSession) release(ctx context.Context) []error {
+	var errs []error
+
+	leaving := s.leaving != nil && s.leaving()
+
+	if !leaving {
+		errs = append(errs, s.publishHeld(ctx)...)
+	}
+
+	if !s.spec.Keep && !leaving {
+		errs = append(errs, s.removeOwned(ctx)...)
+	}
+
+	return append(errs, s.docker.Close())
 }
 
 // publishHeld files each held output under the digest HeldOf reported. At close, after the step's container is gone: an alias published mid-step names a volume still being written, which a concurrent build could mount as an overlay's lower.

@@ -34,8 +34,10 @@ type ContainerSpec struct {
 	// image's own ENTRYPOINT exactly as `docker run` would be — deliberately,
 	// because an image that swallows the command is a real misconfiguration
 	// and overriding the entrypoint here would hide it.
-	Cmd  []string
-	Name string
+	Cmd []string
+	// Entrypoint replaces the image's ENTRYPOINT when set, for a container whose command must run as an exec would: never as arguments to the image's own program.
+	Entrypoint []string
+	Name       string
 	// WorkingDir is where commands start; empty takes the image's own. It mounts nothing: a tree reaches a container through Volumes.
 	WorkingDir string
 	// Env are already-resolved NAME=value pairs. A variable the caller could
@@ -46,6 +48,7 @@ type ContainerSpec struct {
 	User        string
 	Network     string
 	Privileged  bool
+	CapAdd      []string
 	CPUShares   int64
 	MemoryBytes int64
 	// Init supplies a real PID 1. It matters for a session container more
@@ -67,12 +70,12 @@ type ContainerSpec struct {
 	// OpenStdin keeps the container's stdin open for a caller that attaches
 	// to it, which a foreground run does and a session container does not.
 	OpenStdin bool
-	// RestartAlways has the daemon start the container again whenever it stops or the daemon comes back, for a service meant to outlive the run that made it.
-	RestartAlways bool
 	// Publish are container ports ("5432/tcp") bound to an ephemeral port on
 	// 127.0.0.1 only; PublishedPort says which. Loopback because nothing
 	// that asks for one wants it reachable from another host.
 	Publish []string
+	// LogDriver names the driver recording the main process's output; empty takes the daemon's default.
+	LogDriver string
 	// MaxOutput is RunOnce's bound on stdout for a caller that reads all of it: past it RunOnce fails with ErrOutputTruncated instead of answering with a cut. Zero keeps the first MiB and marks the cut, for an answer only the first line of matters.
 	MaxOutput int
 }
@@ -90,6 +93,7 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 	config := &container.Config{
 		Image:      spec.Image,
 		Cmd:        spec.Cmd,
+		Entrypoint: spec.Entrypoint,
 		Env:        spec.Env,
 		Labels:     spec.Labels,
 		User:       spec.User,
@@ -102,6 +106,7 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 		Binds:       spec.binds(),
 		NetworkMode: container.NetworkMode(spec.Network),
 		Privileged:  spec.Privileged,
+		CapAdd:      spec.CapAdd,
 		AutoRemove:  spec.AutoRemove,
 		ExtraHosts:  spec.ExtraHosts,
 		Resources: container.Resources{
@@ -113,13 +118,13 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 		},
 	}
 
+	if spec.LogDriver != "" {
+		hostConfig.LogConfig = container.LogConfig{Type: spec.LogDriver}
+	}
+
 	if spec.Init {
 		enabled := true
 		hostConfig.Init = &enabled
-	}
-
-	if spec.RestartAlways {
-		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyAlways}
 	}
 
 	err = spec.publish(config, hostConfig)
@@ -483,10 +488,11 @@ var removalBound = 30 * time.Second
 
 // Bind is one mount of a path or named volume into a container, in docker's `source:target[:options]` form.
 type Bind struct {
-	Source, Target string
-	ReadOnly       bool
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only"`
 	// NoCopy stops docker filling an empty named volume from the image's content at Target.
-	NoCopy bool
+	NoCopy bool `json:"no_copy"`
 }
 
 func (b Bind) String() string {

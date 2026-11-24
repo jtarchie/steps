@@ -4,9 +4,11 @@ package pipeline
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // runDoStep runs a do: block's steps in declaration order, stopping at the
@@ -60,7 +62,7 @@ func runDoChildren(ctx context.Context, r stepRunner, i int, step config.Step, c
 		// unrelated plan steps that really do sit at 0, 1, 2 — and the run
 		// transcript would attribute a do: child's output to whichever step
 		// happened to share its number.
-		childRes, childErr := runNonGetStep(ctx, r, i, child, nil, childParent)
+		childRes, childErr := runNonGetStep(shell.WithCommandKey(ctx, "do"+strconv.Itoa(childIndex)), r, i, child, nil, childParent)
 		ctx = foldCellReuse(ctx, r.cfg, child)
 
 		// A try: child tolerates its own failure here, for the reason a try:

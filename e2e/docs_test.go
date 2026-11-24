@@ -154,8 +154,8 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 		return
 	}
 
-	// local: is a docker+ worker on this machine's daemon, so a placed example runs only where one answers; it is validated everywhere above.
-	if len(scenario.workers) > 0 {
+	// local: is a docker+ worker on this machine's daemon, so a placed example runs only where one answers, as does an untagged image: one; it is validated everywhere above.
+	if scenario.needsDocker() {
 		testdocker.Require(t)
 	}
 
@@ -696,7 +696,6 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"WebhookSignature":    reflect.TypeOf(config.WebhookSignature{}),
 		"CronSource":          reflect.TypeOf(config.CronSource{}),
 		"RegistryImageSource": reflect.TypeOf(config.RegistryImageSource{}),
-		"DockerServiceSource": reflect.TypeOf(config.DockerServiceSource{}),
 		// A put's params: to a github-* type, which no other walk sees: the
 		// shape depends on the TYPE of the resource the put names.
 		"GitHubPRsSource":        reflect.TypeOf(config.GitHubPRsSource{}),
@@ -895,7 +894,6 @@ var sourceDefs = map[any]string{ //nolint:gochecknoglobals // read-only table
 	config.WebhookType:         "WebhookSource",
 	config.CronType:            "CronSource",
 	config.RegistryImageType:   "RegistryImageSource",
-	config.DockerServiceType:   "DockerServiceSource",
 	config.GitHubPRsType:       "GitHubPRsSource",
 	config.GitHubCommentsType:  "GitHubCommentsSource",
 	config.GitHubIssuesType:    "GitHubIssuesSource",

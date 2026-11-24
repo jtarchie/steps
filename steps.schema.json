@@ -67,10 +67,6 @@
   "$comment": "A built-in type's source: is closed only while the pipeline declares no type of the same name, which replaces the built-in. webhook is the exception: it cannot be replaced, so its shape is always closed.",
   "allOf": [
     {
-      "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "docker-service"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
-      "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "docker-service"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/dockerServiceSource"}}}}}}}
-    },
-    {
       "if": {"not": {"properties": {"resource_types": {"contains": {"properties": {"name": {"const": "cron"}}, "required": ["name"]}}}, "required": ["resource_types"]}},
       "then": {"properties": {"resources": {"items": {"if": {"properties": {"type": {"const": "cron"}}, "required": ["type"]}, "then": {"properties": {"source": {"$ref": "#/$defs/cronSource"}}}}}}}
     },
@@ -634,20 +630,6 @@
           "type": "boolean",
           "description": "The first-ever check mints a version at once, instead of only when a slot fell in the last hour."
         }
-      }
-    },
-    "dockerServiceSource": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["container", "image", "network"],
-      "properties": {
-        "container": {"type": "string", "minLength": 1, "description": "The container's name, which is also how a step on the network reaches it."},
-        "image": {"type": "string", "minLength": 1, "description": "The image, pinned by digest: the put replaces the container only when its source: changes, and a moving tag is not a change it can see."},
-        "network": {"type": "string", "minLength": 1, "description": "The bridge network the container joins, made if absent. A step reaches the service with network: <this>."},
-        "env": {"type": "object", "additionalProperties": {"type": "string"}, "description": "The container's environment. Hashed into the version, so never a credential."},
-        "volumes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Named docker volume to the absolute path it is mounted at: what keeps a database's data across a replaced container."},
-        "ready": {"type": "array", "items": {"type": "string"}, "description": "A command run in the container until it exits 0; the put returns only then."},
-        "ready_timeout": {"type": "string", "description": "How long the put waits for ready, a Go duration; 60s when unset."}
       }
     },
     "registryImageSource": {

@@ -47,6 +47,8 @@ type Command struct {
 	// ordinary exit code asks CanceledError afterwards: a killed process is
 	// data here, by design.
 	ExitAsData bool
+	// Reattach runs the command in a container as the main process of a container of its own rather than as an exec, so a dropped connection or a restarted steps finds it again with its output and exit code (steps#306). A runner with no container ignores it. It takes no terminal: a container command that outlives its caller cannot read one, so Stdin is ignored with it.
+	Reattach bool
 }
 
 // Streams names which of a command's output streams go out live.
@@ -75,6 +77,13 @@ func Run(ctx context.Context, r Runner, script string) error {
 	return err //nolint:wrapcheck // the runner's error is the command's
 }
 
+// RunReattachable is Run for a task's run:, which a container runner can find again after losing it; see Command.Reattach.
+func RunReattachable(ctx context.Context, r Runner, script string) error {
+	_, err := r.Exec(ctx, Command{Script: script, Stdin: !events.Headless(ctx), Stream: StreamBoth, Reattach: true})
+
+	return err //nolint:wrapcheck // the runner's error is the command's
+}
+
 // RunCapture returns stdout while streaming stderr live, stdin attached as Run attaches it; any nonzero exit is an error. The captured output is logged at debug on both outcomes, so a failing check/out command's output is not lost to the terse "exit status N".
 func RunCapture(ctx context.Context, r Runner, script string) ([]byte, error) {
 	res, err := r.Exec(ctx, Command{Script: script, Stdin: !events.Headless(ctx), Stream: StreamStderr, Capture: true})
@@ -85,9 +94,23 @@ func RunCapture(ctx context.Context, r Runner, script string) ([]byte, error) {
 	return []byte(res.Stdout), nil
 }
 
+// RunCaptureReattachable is RunCapture for a resource's out:; see Command.Reattach.
+func RunCaptureReattachable(ctx context.Context, r Runner, script string) ([]byte, error) {
+	return runCaptureInput(ctx, r, Command{Script: script, Stdin: !events.Headless(ctx), Stream: StreamStderr, Capture: true, Reattach: true})
+}
+
 // RunCaptureInput is RunCapture with input as the command's stdin.
 func RunCaptureInput(ctx context.Context, r Runner, script, input string) ([]byte, error) {
-	res, err := r.Exec(ctx, Command{Script: script, Input: input, Stream: StreamStderr, Capture: true})
+	return runCaptureInput(ctx, r, Command{Script: script, Input: input, Stream: StreamStderr, Capture: true})
+}
+
+// RunCaptureInputReattachable is RunCaptureInput for a resource's in: or out:; see Command.Reattach.
+func RunCaptureInputReattachable(ctx context.Context, r Runner, script, input string) ([]byte, error) {
+	return runCaptureInput(ctx, r, Command{Script: script, Input: input, Stream: StreamStderr, Capture: true, Reattach: true})
+}
+
+func runCaptureInput(ctx context.Context, r Runner, cmd Command) ([]byte, error) {
+	res, err := r.Exec(ctx, cmd)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the runner's error is the command's
 	}

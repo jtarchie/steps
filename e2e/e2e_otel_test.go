@@ -284,7 +284,7 @@ func spanAttr(span *tracepb.Span, key string) string {
 	return ""
 }
 
-// TestOTelPutsADockerCallUnderItsStep: the docker client traces itself against whatever span the context carries, so the exec a containerized step makes must land under that step, not as a trace of its own.
+// TestOTelPutsADockerCallUnderItsStep: the docker client traces itself against whatever span the context carries, so the call that reads a containerized step's command must land under that step, not as a trace of its own.
 func TestOTelPutsADockerCallUnderItsStep(t *testing.T) {
 	requireDockerE2E(t)
 
@@ -308,16 +308,16 @@ func TestOTelPutsADockerCallUnderItsStep(t *testing.T) {
 	boxed := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "task boxed")
 
 	for _, span := range spans {
-		if span.GetKind() == tracepb.Span_SPAN_KIND_CLIENT && strings.HasSuffix(span.GetName(), "/exec") {
+		if span.GetKind() == tracepb.Span_SPAN_KIND_CLIENT && strings.HasSuffix(span.GetName(), "/logs") {
 			if string(span.GetParentSpanId()) != string(boxed.GetSpanId()) {
-				t.Errorf("the step's exec (%s) is not under the step's span", span.GetName())
+				t.Errorf("the step's command (%s) is not under the step's span", span.GetName())
 			}
 
 			return
 		}
 	}
 
-	t.Fatal("no docker exec span was exported")
+	t.Fatal("no docker logs span was exported")
 }
 
 // TestOTelPutsADockerTeardownInItsStepsTrace: a session is closed with no context to carry a span, so the removal of its container and volumes was a root span apiece, a trace of one call that named nothing it belonged to.
