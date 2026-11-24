@@ -156,6 +156,11 @@ func listOrphanedContainers(ctx context.Context, client *dockerapi.Client) []str
 			continue
 		}
 
+		// A run its store still calls running is one a restart resumes: its command and holder are what that resume adopts (steps#306).
+		if run := container.Labels[dockerRunLabel]; run != "" && LiveRun(ctx, run) {
+			continue
+		}
+
 		orphans = append(orphans, container.ID)
 	}
 

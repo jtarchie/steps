@@ -78,6 +78,8 @@ type RunnerSpec struct {
 	// DockerHost is the daemon to run this step's containers on. Empty is
 	// this machine's; a venue sets it to a socket it forwards to a worker.
 	DockerHost string
+	// Redial reaches DockerHost again after its connection dropped, for a reattachable command that outlived it; nil when the dial itself is all there is to retry.
+	Redial func(ctx context.Context) error
 	// DockerDial reaches DockerHost through a connection the caller makes, for a socket with no address here (a docker+ worker's, over ssh); DockerHost then only names it in errors.
 	DockerDial func(ctx context.Context) (net.Conn, error)
 	// Volumes are daemon-side named volumes as `name:target`: the tree at MountPath, and whatever else the venue mounts.
@@ -248,6 +250,7 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 			subdir:      spec.Subdir,
 			dockerHost:  spec.DockerHost,
 			dockerDial:  spec.DockerDial,
+			redial:      spec.Redial,
 			volumes:     spec.Volumes,
 			envNames:    spec.Env,
 			envValues:   spec.EnvValues,

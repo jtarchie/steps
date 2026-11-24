@@ -46,6 +46,8 @@ const (
 	TypeStepOutput = "step_output"
 	// TypeStepOutputChunk is a piece of what a RUNNING step is printing, Status naming the stream (stdout/stderr). Temporary by design: the step's TypeStepOutput replaces every chunk recorded for it, so a finished build costs what it did before chunks existed, and a build that died mid-step keeps them as the only record.
 	TypeStepOutputChunk = "step_output_chunk"
+	// TypeCommandOffset is how many bytes of each stream of a reattachable command were shown, through the last whole line ("<stdout> <stderr>" in Text, the command's container in Detail): what a restarted steps resumes its output from (steps#306). Only the newest is kept per step; no view draws it.
+	TypeCommandOffset = "command_offset"
 	// TypeStepNote is what a step's machinery said about it, not its own output — an image pulled, a worker acquired; Status is the level, Text the message. These were fmt.Printf lines once, told to the terminal alone.
 	TypeStepNote = "step_note"
 	// Agent conversation traffic, mirroring the persisted transcript's own

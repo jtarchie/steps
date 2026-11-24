@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
@@ -96,7 +97,10 @@ type dockerSession struct {
 	// this machine's.
 	dockerHost string
 	dockerDial func(ctx context.Context) (net.Conn, error)
+	redial     func(ctx context.Context) error
 	volumes    []dockerapi.Bind
+	// commands counts the session's reattachable commands, the last part of each one's derived name.
+	commands atomic.Int64
 	// envNames are the variables the pipeline's env: opted this command into.
 	// They are passed at container start, so every exec in the session
 	// inherits them.
@@ -552,6 +556,8 @@ func (s *dockerSession) orphan(pidfile string) {
 }
 
 // reapOrphans kills what earlier failed execs may have left running, so a retry does not race the command it replaces in the same tree, and names this exec's pid file.
+//
+// `kill -KILL -<pgid>` with no `--`: dash reads `-- -<pgid>` as an illegal number and kills nothing, busybox takes either.
 func (s *dockerSession) reapOrphans(ctx context.Context, client *dockerapi.Client, id string) (string, error) {
 	pidfile, err := newContainerName()
 	if err != nil {
@@ -573,7 +579,7 @@ func (s *dockerSession) reapOrphans(ctx context.Context, client *dockerapi.Clien
 	}
 
 	_, err = client.Exec(ctx, id, dockerapi.ExecOptions{Cmd: []string{"sh", "-c",
-		`for f in ` + strings.Join(quoted, " ") + `; do p=$(cat "$f" 2>/dev/null) && kill -KILL -- -"$p" 2>/dev/null; rm -f "$f"; done; true`}})
+		`for f in ` + strings.Join(quoted, " ") + `; do p=$(cat "$f" 2>/dev/null) && kill -KILL -"$p" 2>/dev/null; rm -f "$f"; done; true`}})
 	if err != nil {
 		// Kept for the next exec: the connection that failed this one is likely the one that failed theirs.
 		s.mu.Lock()
@@ -634,6 +640,19 @@ func (d DockerRunner) dockerExec(ctx context.Context, cmd Command) (Result, erro
 		return Result{}, err
 	}
 
+	if cmd.Reattach {
+		code, runErr := d.runCommandContainer(ctx, client, cmd, out)
+
+		out.Flush()
+
+		return out.Result(code), runErr
+	}
+
+	return d.execIn(ctx, client, id, cmd, out, pidfile)
+}
+
+// execIn runs cmd as an exec in the session container, its pid in pidfile.
+func (d DockerRunner) execIn(ctx context.Context, client *dockerapi.Client, id string, cmd Command, out *Output, pidfile string) (Result, error) {
 	opts := dockerapi.ExecOptions{
 		// A shell string, so through `sh -c`. The exec's sh leads its own session, and exec keeps its pid, so the file names the command's whole group.
 		Cmd:    []string{"sh", "-c", `echo $$ > "$1" 2>/dev/null; exec sh -c "$0"`, cmd.Script, pidfile},

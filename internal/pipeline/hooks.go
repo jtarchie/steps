@@ -11,6 +11,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // hookGracePeriod bounds how long on_abort and ensure hooks may run after the
@@ -157,6 +158,8 @@ func runResolvedHookStep(ctx context.Context, scope hookScope, step config.Step)
 // enclosing step or job records the aggregate outcome. A leaf runs here; a
 // block, or a matrix, runs through runHookBlock.
 func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
+	ctx = shell.WithoutCommandKey(ctx)
+
 	shouldRun, err := evaluateStepGuard(ctx, scope.cfg, step, scope.bw)
 	if err != nil {
 		return fmt.Errorf("when: %w", err)

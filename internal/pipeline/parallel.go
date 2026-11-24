@@ -14,11 +14,13 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"sync"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // branchResult is one branch's outcome, kept with its index so the report
@@ -86,7 +88,7 @@ func runBranches(ctx context.Context, r stepRunner, i int, step config.Step, blo
 		func(runCtx context.Context, index int) {
 			branch := branches[index]
 
-			branchRes, err := runNonGetStep(runCtx, r, i, branch, nil, blockHash)
+			branchRes, err := runNonGetStep(shell.WithCommandKey(runCtx, "branch"+strconv.Itoa(index)), r, i, branch, nil, blockHash)
 
 			// A try: branch tolerates its own failure HERE, because the plan
 			// walk never sees a branch — planWalk.runStep is where every
@@ -230,7 +232,7 @@ func raceBranches(ctx context.Context, r stepRunner, i int, branches []config.St
 	logs := fanOutLogged(raceCtx, len(branches), 0,
 		func(int) bool { return true },
 		func(runCtx context.Context, index int) {
-			_, err := runNonGetStep(withRaceSeat(runCtx, gate, index), r, i, branches[index], nil, blockHash)
+			_, err := runNonGetStep(shell.WithCommandKey(withRaceSeat(runCtx, gate, index), "race"+strconv.Itoa(index)), r, i, branches[index], nil, blockHash)
 			results[index].err = err
 
 			gate.finish(runCtx, index, err == nil)

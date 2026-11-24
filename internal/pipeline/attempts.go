@@ -2,10 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/retry"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // retryWithTimeout runs fn up to attempts times (unset, or below 1, is one
@@ -32,7 +34,7 @@ func retryWithTimeout(ctx context.Context, attempts *int, timeoutStr string, mar
 			marker(attempt+1, total)
 		}
 
-		attemptCtx := ctx
+		attemptCtx := shell.WithCommandKey(ctx, "attempt"+strconv.Itoa(attempt))
 
 		if timeout > 0 {
 			var cancel context.CancelFunc

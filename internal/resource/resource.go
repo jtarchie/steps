@@ -363,7 +363,7 @@ func (shellBackend) in(ctx context.Context, c Call) error {
 	defer shell.CloseRunner(runner, rt.Name+" in")
 
 	// Captured as well as streamed, bounded, for an answer printed in Concourse's shape; anything longer is no answer.
-	res, err := runner.Exec(ctx, shell.Command{Script: command, Stdin: !events.Headless(ctx), Stream: shell.StreamBoth, Capture: true, Limit: maxInAnswerBytes})
+	res, err := runner.Exec(ctx, shell.Command{Script: command, Stdin: !events.Headless(ctx), Stream: shell.StreamBoth, Capture: true, Limit: maxInAnswerBytes, Reattach: true})
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
@@ -441,7 +441,7 @@ func (shellBackend) out(ctx context.Context, c Call) (map[string]any, error) {
 	// Unlabeled: the caller prefixes what it streams, so a recorder between them keeps the script's own bytes.
 	defer shell.CloseRunner(runner, rt.Name+" out")
 
-	out, err := shell.RunCapture(ctx, runner, command)
+	out, err := shell.RunCaptureReattachable(ctx, runner, command)
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
