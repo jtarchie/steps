@@ -4,6 +4,7 @@
     <h1 class="prompt"><b>steps job {{.Job.Name}}</b></h1>
     <p class="metaline" id="job-meta">
       {{t "job.runs" (len .Runs)}}
+      {{with .SHA}}<span class="sep">·</span>{{t "jobs.config"}} <a class="hash" href="{{configurl $.Nav.Current . "job" $.Job.Name}}">{{short .}}</a>{{end}}
       {{if .Job.Held}}<span class="sep">·</span><span class="st st-held">{{word "status" "held"}}</span> {{tn "job.afterfailures" .Job.Failures}}<span class="sep">·</span>{{t "job.notrigger"}}{{if .Nav.ReadOnly}}<span class="sep">·</span>{{th "job.releasewith" (code (printf "steps jobs release %v -p %v" .Job.Name .Nav.Current))}}{{end}}{{end}}
     </p>
   </div>

@@ -55,8 +55,9 @@ func TestRunPageNamesTheConfigItRan(t *testing.T) {
 		t.Errorf("the run page does not name the configuration it ran:\n%s", page)
 	}
 
-	if !strings.Contains(page, "/config/"+sha) {
-		t.Error("the run page does not link the configuration it ran")
+	// AT the job that ran: the link carries the fragment the config page names that job's block by.
+	if !strings.Contains(page, "/config/"+sha+"#job-build") {
+		t.Error("the run page does not link the configuration it ran, at its job")
 	}
 
 	// And the link resolves to the configuration ITSELF, which is the thing
@@ -66,8 +67,8 @@ func TestRunPageNamesTheConfigItRan(t *testing.T) {
 		t.Fatalf("config page = %d: %s", code, config)
 	}
 
-	if !strings.Contains(config, "echo one") {
-		t.Errorf("the config page does not show what the run was told to do:\n%s", config)
+	if !regexp.MustCompile(`(?s)id="job-build">.*echo one`).MatchString(config) {
+		t.Errorf("the config page does not show what the run was told to do, in a block the link lands on:\n%s", config)
 	}
 }
 

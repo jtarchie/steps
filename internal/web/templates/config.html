@@ -6,9 +6,9 @@
   </div>
 </div>
 
-<div class="codeblock"><pre class="json code">{{.Body}}</pre></div>
+<div class="codeblock numbered"><pre class="json code lineno" aria-hidden="true">{{.Lines}}</pre><pre class="json code"><span class="cfg">{{.Body}}</span></pre></div>
 {{range .Includes}}
 <h2 class="eyebrow">{{.Path}}</h2>
-<div class="codeblock"><pre class="json code">{{.Body}}</pre></div>
+<div class="codeblock numbered"><pre class="json code lineno" aria-hidden="true">{{.Lines}}</pre><pre class="json code">{{.Body}}</pre></div>
 {{end}}
 {{end}}

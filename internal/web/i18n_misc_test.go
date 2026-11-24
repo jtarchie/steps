@@ -23,7 +23,7 @@ var miscFixtureWords = []string{
 var mcpTargetTitle = regexp.MustCompile(`class="mcp-meta" title="[^"]*"`)
 
 func untranslatedMisc(page, fixture string) []string {
-	page = mcpTargetTitle.ReplaceAllString(page, `class="mcp-meta"`)
+	page = withoutHashes(mcpTargetTitle.ReplaceAllString(page, `class="mcp-meta"`))
 
 	for _, word := range miscFixtureWords {
 		page = strings.ReplaceAll(page, word, "")

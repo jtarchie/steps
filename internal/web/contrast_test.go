@@ -510,3 +510,39 @@ func TestTheFaviconDrawsInThePalette(t *testing.T) {
 		}
 	}
 }
+
+// TestALandedConfigBlockKeepsItsSourceReadable: the block a config link lands on is tinted, and YAML is drawn in every tone the highlighter has, so each must still clear 4.5:1 on the tint; the rule down its left edge is the cue that is not a hue, held to 3:1 against the tint and the ground beside it. The light palette sits so close to its limits that no tint darker than --code-bg passes, which is why the mix is over --bg.
+func TestALandedConfigBlockKeepsItsSourceReadable(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rule := regexp.MustCompile(`(?m)^\.cfgblock:target \{ background: color-mix\(in srgb, var\(--([a-z0-9-]+)\) (\d+)%, var\(--([a-z0-9-]+)\)\); box-shadow: inset (\d+)px 0 0 var\(--([a-z0-9-]+)\); \}`).FindSubmatch(css)
+	if rule == nil {
+		t.Fatal("no .cfgblock:target rule this test can read")
+	}
+
+	percent, _ := strconv.ParseFloat(string(rule[2]), 64)
+	if width, _ := strconv.Atoi(string(rule[4])); width < 2 || percent == 0 {
+		t.Errorf("a %dpx rule and a %v%% tint do not mark a block", width, percent)
+	}
+
+	for i, tokens := range themeTokens(t, css) {
+		tint := mixHex(t, tokens[string(rule[1])], tokens[string(rule[3])], percent/100)
+
+		for _, text := range []string{"fg", "dim", "green", "red", "yellow", "blue", "magenta", "cyan"} {
+			if ratio := contrast(t, tokens[text], tint); ratio < 4.5 {
+				t.Errorf("%s: --%s on the landed block is %.2f:1, under 4.5:1", themeNames[i], text, ratio)
+			}
+		}
+
+		for _, ground := range []string{tint, tokens["code-bg"]} {
+			if ratio := contrast(t, tokens[string(rule[5])], ground); ratio < 3 {
+				t.Errorf("%s: the block's rule --%s on %s is %.2f:1, under 3:1", themeNames[i], rule[5], ground, ratio)
+			}
+		}
+	}
+}

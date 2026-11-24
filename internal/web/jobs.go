@@ -224,6 +224,7 @@ func (s *Server) handleJobDetail(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "job", map[string]any{
 		"Nav":      s.nav(c),
+		"SHA":      cfg.Revision.SHA,
 		"Title":    job.Name,
 		"Crumbs":   []crumb{{Label: s.renderer.localeOf(c).text("tab.jobs"), URL: "/p/" + pipeline.Slug}, {Label: job.Name, URL: "/p/" + pipeline.Slug + "/jobs/" + job.Name}, {Label: s.renderer.localeOf(c).text("job.crumb.detail")}},
 		"Job":      view,

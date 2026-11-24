@@ -67,7 +67,7 @@ func TestConfigIsSafeUnderASet(t *testing.T) {
 func TestHighlightYAMLEscapesMarkup(t *testing.T) {
 	t.Parallel()
 
-	rendered := string(highlightYAML("jobs:\n- name: build\n  run: echo '<script>alert(1)</script>'\n"))
+	rendered := string(highlightConfig("jobs:\n- name: build\n  run: echo '<script>alert(1)</script>'\n"))
 	if strings.Contains(rendered, "<script>") {
 		t.Errorf("a configuration's contents reached the page as markup:\n%s", rendered)
 	}
@@ -90,7 +90,7 @@ func TestHighlightYAMLEscapesMarkup(t *testing.T) {
 func TestHighlightYAMLKeepsAFencedPromptInTheConfiguration(t *testing.T) {
 	t.Parallel()
 
-	rendered := string(highlightYAML("agents:\n- name: reviewer\n  system: |\n   ```\n   # not a heading\n   ```\njobs: []\n"))
+	rendered := string(highlightConfig("agents:\n- name: reviewer\n  system: |\n   ```\n   # not a heading\n   ```\njobs: []\n"))
 
 	if strings.Contains(rendered, "<h1") {
 		t.Errorf("a fence inside the configuration broke out into markdown:\n%s", rendered)
