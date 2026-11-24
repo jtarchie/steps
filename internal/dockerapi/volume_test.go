@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -224,6 +225,18 @@ func TestOverlayVolumeLeavesItsLowerAlone(t *testing.T) {
 	_, err = client.GetArchive(t.Context(), lowerHolder, "/l/new")
 	if err == nil {
 		t.Fatal("a file created in the child appeared in the lower")
+	}
+}
+
+// A worker kernel may default redirect_dir or metacopy on, and either leaves data in the lower that a fetch of the upper layer never sees, so the mount says off rather than inheriting the kernel's choice.
+func TestOverlayOptionsPinRedirectAndMetacopyOff(t *testing.T) {
+	t.Parallel()
+
+	options := strings.Split(OverlayOptions("/l", "/u", "/w")["o"], ",")
+	for _, want := range []string{"redirect_dir=off", "metacopy=off"} {
+		if !slices.Contains(options, want) {
+			t.Errorf("overlay options %v lack %s", options, want)
+		}
 	}
 }
 

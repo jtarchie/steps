@@ -225,6 +225,39 @@ jobs:
 	mustRun(t, path)
 }
 
+// TestARenamedDirectoryAndAChmodComeHomeWhole: only the upper layer travels, so a kernel whose overlay records a renamed directory as a redirect (redirect_dir) or a chmod as metadata over the lower's data (metacopy) would bring home an empty directory and an empty file; the mount pins both off.
+func TestARenamedDirectoryAndAChmodComeHomeWhole(t *testing.T) {
+	t.Parallel()
+	dockerSlot(t)
+
+	requireDockerE2E(t)
+
+	path := writePipeline(t, t.TempDir(), fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+jobs:
+- name: edit
+  plan:
+  - task: prepare
+    outputs: [data]
+    run: mkdir -p data/dir && echo a > data/dir/a && echo run > data/script
+
+  - task: change
+    image: %[1]s
+    inputs: [data]
+    outputs: [data]
+    run: mv data/dir data/moved && chmod 755 data/script
+
+  - task: check
+    inputs: [data]
+    run: test "$(cat data/moved/a)" = a && test ! -e data/dir && test "$(cat data/script)" = run && test -x data/script
+`, dockerE2EImage))
+
+	mustRun(t, path)
+}
+
 // TestDeletionsInABigDirectoryCostWhatWasDeleted: deletions were once inferred from a listing of every name a touched directory still held, so three deletions among 12000 entries brought about 1.2 MB of names home. They are read off the overlay now, and cost what was deleted.
 func TestDeletionsInABigDirectoryCostWhatWasDeleted(t *testing.T) {
 	t.Parallel()
