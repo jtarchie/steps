@@ -167,6 +167,7 @@ func (s *Server) assembleRun(c *echo.Context, run store.RunRow) (runView, error)
 	// needs no spend history, only the config a running step's deadline is
 	// resolved against.
 	attachStepDeadlines(&view, pipeline.Config(), run.JobName, run.ConfigSHA)
+	s.attachStepConfig(ctx, &view, pipeline)
 
 	// Best-effort: a run page that cannot show spend is worth more than one
 	// that 500s over it. A run predating this table simply has none.

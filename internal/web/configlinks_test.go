@@ -2,12 +2,14 @@ package web
 
 import (
 	"html"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -203,7 +205,7 @@ jobs:
     plan: []
 `
 
-	body := string(highlightConfig(source))
+	body := string(highlightConfig(source, configLinker{}))
 
 	if got := html.UnescapeString(anyTag.ReplaceAllString(body, "")); got != source {
 		t.Fatalf("the wrapped source is not the source:\n%q\nwant\n%q", got, source)
@@ -237,7 +239,7 @@ func TestAConfigThatWillNotParseIsStillShown(t *testing.T) {
 
 	const source = "jobs:\n  - name: [unclosed\n"
 
-	if got := html.UnescapeString(anyTag.ReplaceAllString(string(highlightConfig(source)), "")); got != source {
+	if got := html.UnescapeString(anyTag.ReplaceAllString(string(highlightConfig(source, configLinker{})), "")); got != source {
 		t.Errorf("got %q, want the source", got)
 	}
 }
@@ -264,5 +266,305 @@ func TestTheConfigPageNumbersItsLines(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Errorf("the config page lacks the gutter %q:\n%s", want, page)
 		}
+	}
+}
+
+// TestJobHistoryLinksEachRunsConfig: a run's row opens the configuration THAT run executed, at this job, and says so when it is not the one being served — two runs a row apart may have been told different things.
+func TestJobHistoryLinksEachRunsConfig(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	current := recordServed(t, pipeline)
+	older := strings.Repeat("a", 40)
+
+	err := pipeline.Store.RecordRevision(t.Context(), older, "jobs:\n  - name: build\n    plan: []\n", nil)
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	for id, sha := range map[string]string{"now": current, "then": older, "unpinned": ""} {
+		err = pipeline.Store.StartRun(t.Context(), store.NewRun{ID: id, JobName: "build", ConfigSHA: sha})
+		if err != nil {
+			t.Fatalf("StartRun %s: %v", id, err)
+		}
+	}
+
+	_, page := get(t, server, "/p/demo/jobs/build/detail")
+
+	rows := map[string]string{}
+	for _, row := range regexp.MustCompile(`(?s)<tr>\s*<td><a class="hash" href="/p/demo/runs/(\w+)".*?</tr>`).FindAllStringSubmatch(page, -1) {
+		rows[row[1]] = row[0]
+	}
+
+	for id, want := range map[string]struct {
+		link    string
+		differs bool
+	}{
+		"now":      {`href="/p/demo/config/` + current + `#job-build"`, false},
+		"then":     {`href="/p/demo/config/` + older + `#job-build"`, true},
+		"unpinned": {"", false},
+	} {
+		row := rows[id]
+
+		if got := regexp.MustCompile(`href="[^"]*/config/[^"]*"`).FindString(row); got != want.link {
+			t.Errorf("run %s: config link, want %q:\n%s", id, want.link, row)
+		}
+
+		if got := strings.Contains(row, "≠ current"); got != want.differs {
+			t.Errorf("run %s: marked as differing = %v, want %v:\n%s", id, got, want.differs, row)
+		}
+	}
+
+	_, config := get(t, server, "/p/demo/config/"+older)
+	if got := configBlockText(t, config, "job-build"); got != "  - name: build\n    plan: []" {
+		t.Errorf("the older revision's block is %q", got)
+	}
+}
+
+const nestedSource = `resource_types:
+  - name: mock
+resources:
+  - name: weekly
+    type: mock
+  - name: clock
+    type: time
+agents:
+  - name: reviewer
+    system_file: prompts/review.md
+mcp_servers:
+  - name: linear
+    command: linear-mcp
+    auth: { type: mock }
+jobs:
+  - name: build
+    ensure:
+      task: sweep
+      run: "true"
+    plan:
+      - get: weekly
+      - do:
+          - task: compile
+            run_file: ci/compile.sh
+          - task: lint
+            run_file: ci/absent.sh
+        on_failure:
+          task: report
+          run: "true"
+      - in_parallel:
+          limit: 2
+          steps:
+            - task: unit
+              run: "true"
+            - try:
+                task: flaky
+                run: "true"
+          # after the fan-out
+
+      - agent: reviewer
+        tools:
+          - mcp: linear
+          - mcp: nowhere
+      - do:
+          - task: twin
+            run: "true"
+          - task: twin
+            run: "true"
+  - name: ship
+    plan:
+      - get: weekly
+        passed: [build, "build"]
+`
+
+// TestStepsAreBlocksInsideTheirJob: every step is a landing place of its own, however deep, addressed by the keys that reach it, and ends where the next thing at its level begins.
+func TestStepsAreBlocksInsideTheirJob(t *testing.T) {
+	t.Parallel()
+
+	body := string(highlightConfig(nestedSource, configLinker{}))
+
+	if got := html.UnescapeString(anyTag.ReplaceAllString(body, "")); got != nestedSource {
+		t.Fatalf("the wrapped source is not the source:\n%s", got)
+	}
+
+	page := "<pre>" + body + "</pre>"
+
+	for id, want := range map[string]string{
+		"job-build:ensure":                   "    ensure:\n      task: sweep\n      run: \"true\"",
+		"job-build:plan.0":                   "      - get: weekly",
+		"job-build:plan.1":                   "      - do:\n          - task: compile\n            run_file: ci/compile.sh\n          - task: lint\n            run_file: ci/absent.sh\n        on_failure:\n          task: report\n          run: \"true\"",
+		"job-build:plan.1.do.1":              "          - task: lint\n            run_file: ci/absent.sh",
+		"job-build:plan.1.on_failure":        "        on_failure:\n          task: report\n          run: \"true\"",
+		"job-build:plan.2.in_parallel.0":     "            - task: unit\n              run: \"true\"",
+		"job-build:plan.2.in_parallel.1":     "            - try:\n                task: flaky\n                run: \"true\"",
+		"job-build:plan.2.in_parallel.1.try": "            - try:\n                task: flaky\n                run: \"true\"",
+		"job-ship:plan.0":                    "      - get: weekly\n        passed: [build, \"build\"]",
+	} {
+		if got := configBlockText(t, page, id); got != want {
+			t.Errorf("block %q is\n%q\nwant\n%q", id, got, want)
+		}
+	}
+}
+
+// TestNamesInTheConfigAreLinks: a name the file declares elsewhere jumps to its entry, an entry with a page links out to it, and an included file's path jumps to its contents below — while a name nothing declares stays text.
+func TestNamesInTheConfigAreLinks(t *testing.T) {
+	t.Parallel()
+
+	label := func(key string, _ ...any) string { return key }
+	links := configLinker{slug: "demo", includes: map[string]string{"ci/compile.sh": "", "prompts/review.md": ""}, label: label}
+	body := string(highlightConfig(nestedSource, links))
+
+	if got := html.UnescapeString(anyTag.ReplaceAllString(body, "")); got != nestedSource {
+		t.Fatalf("the linked source is not the source:\n%s", got)
+	}
+
+	for _, want := range []string{
+		`</span> <a class="cfgref" href="#resource-weekly" aria-label="config.ref.def">weekly</a>`,
+		`<a class="cfgref" href="#resourcetype-mock" aria-label="config.ref.def">mock</a>`,
+		`<a class="cfgref" href="#agent-reviewer" aria-label="config.ref.def">reviewer</a>`,
+		`<a class="cfgref" href="#mcp-server-linear" aria-label="config.ref.def">linear</a>`,
+		`[</span><a class="cfgref" href="#job-build" aria-label="config.ref.def">build</a>, `,
+		`<a class="cfgref" href="#include-ci%2Fcompile.sh" aria-label="config.ref.include">ci/compile.sh</a>`,
+		`<a class="cfgref" href="#include-prompts%2Freview.md" aria-label="config.ref.include">prompts/review.md</a>`,
+		`<a class="cfgref out" href="/p/demo/jobs/build" aria-label="config.ref.page">build</a>`,
+		`<a class="cfgref out" href="/p/demo/resources/weekly" aria-label="config.ref.page">weekly</a>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the config lacks the link %s:\n%s", want, body)
+		}
+	}
+
+	if got := strings.Count(body, `href="#resourcetype-mock"`); got != 1 {
+		t.Errorf("type: names a resource type under a resource alone; %d are linked", got)
+	}
+
+	if got := strings.Count(body, `href="#job-build"`); got != 2 {
+		t.Errorf("passed: [build, \"build\"] links %d of its 2 entries", got)
+	}
+
+	for _, plain := range []string{">time<", ">nowhere<", ">ci/absent.sh<", ">compile<", `/p/demo/mcp`} {
+		if strings.Contains(body, plain) {
+			t.Errorf("%s names nothing this file declares or this page shows, and is a link:\n%s", plain, body)
+		}
+	}
+
+	if strings.Contains(string(highlightConfig(nestedSource, configLinker{})), `class="cfgref out"`) {
+		t.Error("a linker with no pipeline cannot link a page")
+	}
+}
+
+// TestIncludesAreLandingPlaces: the path a step names is the id of the heading its contents sit under.
+func TestIncludesAreLandingPlaces(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	const sha = "eeee111122224444"
+
+	err := pipeline.Store.RecordRevision(t.Context(), sha, "jobs:\n  - name: a\n    plan:\n      - task: t\n        run_file: ci/t.sh\n", map[string]string{"ci/t.sh": "echo hi\n"})
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	_, page := get(t, server, "/p/demo/config/"+sha)
+
+	if !strings.Contains(page, `href="#include-ci%2Ft.sh"`) || !strings.Contains(page, `id="include-ci/t.sh"`) {
+		t.Errorf("the run_file path does not land on its include:\n%s", page)
+	}
+
+	if !strings.Contains(page, `<a class="cfgref out" href="/p/demo/jobs/a" aria-label="a, its page">a</a>`) {
+		t.Errorf("the job's name does not link its page, by a name that says so:\n%s", page)
+	}
+}
+
+// seedDeepRun records nestedSource as a revision and a run of its build job whose rows nest the way a do:, an in_parallel:, a try: and two hooks publish them.
+func seedDeepRun(t *testing.T) (*Server, string) {
+	t.Helper()
+
+	server, pipeline := testPipeline(t)
+
+	const sha = "eeee111122225555"
+
+	err := pipeline.Store.RecordRevision(t.Context(), sha, nestedSource, nil)
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	err = pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "deep", JobName: "build", ConfigSHA: sha})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	started := func(index int, id, parent int64, kind, name string) store.RunEventRow {
+		return store.RunEventRow{Type: events.TypeStepStarted, StepIndex: index, StepID: id, ParentStepID: parent, StepKind: kind, StepName: name}
+	}
+
+	// As a real run publishes them: the get parents the rest of the plan, whose indexes count from the step after it; a block's children carry the block's index; a hook's row carries -1, the kind "hook", and its key in its name.
+	appendEvents(t, pipeline.Store, "deep", []store.RunEventRow{
+		started(0, 1, 0, "get", "weekly"),
+		started(0, 2, 1, "do", ""),
+		started(0, 3, 2, "task", "lint"),
+		started(-1, 4, 2, "hook", "on_failure · task report"),
+		started(1, 5, 1, "in_parallel", ""),
+		started(1, 6, 5, "try", "flaky"),
+		started(1, 7, 6, "task", "flaky"),
+		started(3, 8, 1, "do", ""),
+		started(3, 9, 8, "task", "twin"),
+		started(-1, 10, 0, "hook", "ensure · task sweep"),
+		started(-1, 11, 0, "hook", "on_abort · task nothing-declares"),
+	})
+
+	err = pipeline.Store.FinishRun(t.Context(), "deep", store.RunSucceeded)
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	return server, sha
+}
+
+// TestRunStepsJumpToTheirStep: a step's row opens the configuration the run executed AT that step — by position at the top of the plan, by the one step of its kind and name under an already-placed parent below it, and at the parent itself when two could be meant.
+func TestRunStepsJumpToTheirStep(t *testing.T) {
+	t.Parallel()
+
+	server, sha := seedDeepRun(t)
+
+	_, page := get(t, server, "/p/demo/runs/deep")
+	_, config := get(t, server, "/p/demo/config/"+sha)
+
+	heads := regexp.MustCompile(`(?s)<div class="stephead" id="[^"]+_head".*?<span class="headmeta">`).FindAllString(page, -1)
+	if len(heads) != 11 {
+		t.Fatalf("found %d step heads, want 11:\n%s", len(heads), page)
+	}
+
+	stepJump := regexp.MustCompile(`href="/p/demo/config/` + sha + `#([^"]+)"`)
+	landed := map[string]int{}
+
+	for _, head := range heads {
+		link := stepJump.FindStringSubmatch(head)
+		if link == nil {
+			landed[""]++
+
+			continue
+		}
+
+		fragment, _ := url.PathUnescape(html.UnescapeString(link[1]))
+		landed[fragment]++
+
+		configBlockText(t, config, fragment)
+	}
+
+	// plan.2 twice: the in_parallel, and the try under it, whose row is named for the task it wraps and whose block is not. plan.4 twice: the do and the twin that could be either. Unlinked: a hook the job does not declare.
+	want := map[string]int{"job-build:plan.0": 1, "job-build:plan.1": 1, "job-build:plan.1.do.1": 1, "job-build:plan.1.on_failure": 1, "job-build:plan.2": 2, "job-build:plan.2.in_parallel.1.try": 1, "job-build:plan.4": 2, "job-build:ensure": 1, "": 1}
+	if !maps.Equal(landed, want) {
+		t.Errorf("rows land on %v, want %v", landed, want)
+	}
+}
+
+// TestTheLiveStreamCarriesStepConfigLinks: the stream redraws a row with the page's template and its own view of the run, which has to carry the same links or a row loses its link the moment it changes.
+func TestTheLiveStreamCarriesStepConfigLinks(t *testing.T) {
+	t.Parallel()
+
+	server, sha := seedDeepRun(t)
+
+	if stream := sseHTML(streamOf(t, server, "/p/demo/runs/deep/events")); !strings.Contains(html.UnescapeString(stream), "/p/demo/config/"+sha+"#job-build:plan.1.do.1") {
+		t.Errorf("the live stream's rows do not carry their config links:\n%s", stream)
 	}
 }
