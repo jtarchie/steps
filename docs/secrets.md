@@ -364,5 +364,13 @@ What steps cannot protect: anything the step itself does with the value, root
 or the same user reading a process's memory or environment while the step runs,
 swap on the daemon or a worker, and a plain `run:` step on the daemon's own
 machine, which runs as the daemon's user and could call `op` itself. Real
-isolation between teams needs steps that run in a container, on a worker, or
-under `sandbox: true`.
+isolation between teams needs steps that run in a container or on a worker.
+
+`sandbox: true` is less than that. It is a fence on files: the command cannot
+write outside its workspace or read the credential paths and the state
+database, but it still runs as the daemon's user. On macOS it can read the
+daemon's environment, `STEPS_ENCRYPTION_KEY` and any `.envrc` value included,
+and on either OS it may reach another program running as that user (on Linux,
+any unix socket: `docker.sock`, an ssh-agent). Use it for a command you mostly
+trust, and `image:` for one steered by untrusted input. The limits are listed
+under [Host sandbox](infra.md#host-sandbox-sandbox).

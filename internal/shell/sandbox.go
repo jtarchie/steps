@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
+	"sync/atomic"
 )
 
 // sandboxPolicy is what a fenced host command may touch. Paths are symlink-resolved, because an OS sandbox matches the real path: a rule naming /var never matches a write to /private/var.
@@ -49,6 +51,22 @@ func PrivateDir() (string, error) {
 	}
 
 	return dir, nil
+}
+
+// stateFile is the sqlite state database this process holds. A fence denies reading it because on macOS a fenced command can read this process's environment (sysctl kern.procargs2), STEPS_ENCRYPTION_KEY included, and the database is what that key unseals. One per process, as the vault over it is, so the last call wins.
+var stateFile atomic.Pointer[string] //nolint:gochecknoglobals // one state database per process
+
+// HideState puts a sqlite state database, and the -wal and -shm files beside it, on the deny-read list of every fence built after.
+func HideState(path string) error {
+	// Abs now: the fence is built later, and seatbelt matches absolute paths only.
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("sandbox: resolve the state database %q: %w", path, err)
+	}
+
+	stateFile.Store(&abs)
+
+	return nil
 }
 
 // hostFence is one sandboxed HostRunner: its policy and the private TMPDIR it owns, which Close removes.
@@ -121,6 +139,16 @@ func denyReadPaths(home string) []string {
 		if resolved != path {
 			out = append(out, resolved)
 		}
+	}
+
+	db := stateFile.Load()
+	if db == nil {
+		return out
+	}
+
+	// The sidecars are named off the resolved database too: sqlite keeps them beside the file a symlinked database points at.
+	for _, path := range slices.Compact([]string{*db, realPath(*db)}) {
+		out = append(out, path, path+"-wal", path+"-shm")
 	}
 
 	return out

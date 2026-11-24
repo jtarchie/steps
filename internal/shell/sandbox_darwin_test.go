@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -207,4 +208,109 @@ func TestSandboxTMPDIRIsPrivatePerRunnerAndGoneAfterClose(t *testing.T) {
 	if !os.IsNotExist(err) {
 		t.Errorf("TMPDIR %s survived Close: %v", dir, err)
 	}
+}
+
+func TestSeatbeltProfileDeniesLaunchServices(t *testing.T) {
+	t.Parallel()
+
+	argv, err := seatbelt{}.command(sandboxPolicy{network: true}, []string{"true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if profile := argv[slices.Index(argv, "-p")+1]; !strings.Contains(profile, "(deny lsopen)") {
+		t.Errorf("profile %s does not deny lsopen: `open` would start an app outside the fence", profile)
+	}
+}
+
+// LaunchServices starts an app outside the sandbox that asked, so an app a fenced command builds in its own workspace is its way out. The app here only touches a marker, and is never started while the rule holds.
+func TestSandboxCannotStartAnAppThroughLaunchServices(t *testing.T) {
+	cwd := mustResolve(t, t.TempDir())
+	marker := filepath.Join(cwd, "launched")
+	macos := filepath.Join(cwd, "Probe.app", "Contents", "MacOS")
+
+	err := os.MkdirAll(macos, 0o700)
+	if err == nil {
+		err = os.WriteFile(filepath.Join(macos, "probe"), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o700) //nolint:gosec // the bundle's executable
+	}
+
+	if err == nil {
+		err = os.WriteFile(filepath.Join(cwd, "Probe.app", "Contents", "Info.plist"), []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>probe</string>
+<key>CFBundleIdentifier</key><string>dev.stepsci.test.fence-probe</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSBackgroundOnly</key><true/>
+</dict></plist>`), 0o600)
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderr, code, err := RunCaptureFull(context.Background(), fencedRunner(t, cwd, ""), "open -g -W Probe.app")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code == 0 {
+		t.Errorf("open exited 0 (%s): LaunchServices took the request from inside the fence", stderr)
+	}
+
+	_, err = os.Stat(marker)
+	if !os.IsNotExist(err) {
+		t.Errorf("the app ran outside the fence and wrote %s: %v", marker, err)
+	}
+}
+
+// A fenced command can read this process's environment on macOS, the key that unseals the database's logins included, so the database is what the fence keeps from it: the file and sqlite's two sidecars, and nothing else beside them. The layout is a daemon's default, with the step's tree under workspace/ beside the database.
+func TestSandboxDeniesReadingTheStateDatabase(t *testing.T) {
+	root := mustResolve(t, t.TempDir())
+	build := filepath.Join(root, ".steps", "workspace", "build")
+
+	err := os.MkdirAll(build, 0o700)
+	for _, file := range []string{".steps/steps.db", ".steps/steps.db-wal", ".steps/steps.db-shm", ".steps/steps.db.bak", ".steps/workspace/cached", "pipeline.yml"} {
+		if err == nil {
+			err = os.WriteFile(filepath.Join(root, file), []byte("row"), 0o600)
+		}
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(root)
+	hideState(t, ".steps/steps.db")
+
+	runner := fencedRunner(t, build, "")
+
+	for path, allowed := range map[string]bool{
+		root + "/.steps/steps.db":         false,
+		root + "/.steps/steps.db-wal":     false,
+		root + "/.steps/steps.db-shm":     false,
+		"../../steps.db":                  false,
+		root + "/.steps/steps.db.bak":     true,
+		root + "/.steps/workspace/cached": true,
+		root + "/pipeline.yml":            true,
+	} {
+		checkRead(t, runner, path, allowed)
+	}
+
+	_, _, code, err := RunCaptureFull(context.Background(), runner, "echo row > kept && cat kept")
+	if err != nil || code != 0 {
+		t.Errorf("the step's own tree beside the database is not writable: exit %d, %v", code, err)
+	}
+}
+
+// A database not made yet, as on a first run, must not keep a fenced command from starting.
+func TestSandboxRunsWhenTheStateDatabaseIsMissing(t *testing.T) {
+	root := mustResolve(t, t.TempDir())
+	hideState(t, filepath.Join(root, "nowhere", "steps.db"))
+
+	err := os.WriteFile(filepath.Join(root, "notes"), []byte("fine"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checkRead(t, fencedRunner(t, t.TempDir(), ""), root+"/notes", true)
 }

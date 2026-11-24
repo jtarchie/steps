@@ -132,3 +132,52 @@ func TestDenyReadNamesTheAgentCLILoginFiles(t *testing.T) {
 		t.Error("denyReadPaths names all of ~/.claude: only its login file is a credential")
 	}
 }
+
+func hideState(t *testing.T, path string) {
+	t.Helper()
+
+	err := HideState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { stateFile.Store(nil) })
+}
+
+// The database is an operator's --db: relative as often as not, and sometimes a link, where sqlite keeps the -wal and -shm beside the file the link points at.
+func TestDenyReadNamesTheStateDatabaseAndItsSidecars(t *testing.T) {
+	root := mustResolve(t, t.TempDir())
+	target := filepath.Join(mustResolve(t, t.TempDir()), "real.db")
+
+	err := os.WriteFile(target, nil, 0o600)
+	if err == nil {
+		err = os.Symlink(target, filepath.Join(root, "linked.db"))
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(root)
+
+	for db, want := range map[string][]string{
+		".steps/steps.db": {root + "/.steps/steps.db", root + "/.steps/steps.db-wal", root + "/.steps/steps.db-shm"},
+		"linked.db":       {root + "/linked.db", target, target + "-wal", target + "-shm"},
+	} {
+		hideState(t, db)
+
+		paths := denyReadPaths("/home/op")
+
+		for _, path := range want {
+			if !slices.Contains(paths, path) {
+				t.Errorf("--db %s: deny-read list is missing %s", db, path)
+			}
+		}
+	}
+
+	stateFile.Store(nil)
+
+	if paths := denyReadPaths("/home/op"); slices.ContainsFunc(paths, func(path string) bool { return strings.HasPrefix(path, root) }) {
+		t.Errorf("a process holding no sqlite database denies %v", paths)
+	}
+}

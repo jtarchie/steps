@@ -28,6 +28,11 @@ jobs:
       cat /etc/os-release >/dev/null || exit 13
       touch "$TMPDIR/scratch" || exit 14
       ls /home/ubuntu >/dev/null || exit 15
+      case "$(ls /home/ubuntu/work/.steps)" in *fenced.yml.db-wal*) ;; *) exit 16;; esac
+      for db in fenced.yml.db fenced.yml.db-wal fenced.yml.db-shm; do
+        if cat "/home/ubuntu/work/.steps/$db" >/dev/null 2>&1; then exit 17; fi
+      done
+      cat /home/ubuntu/work/fenced.yml >/dev/null || exit 18
       echo fenced
 `
 
@@ -50,7 +55,7 @@ func TestLandlockSandboxFencesAHostTaskOnLinux(t *testing.T) {
 
 	out, err := box.steps(ctx, "run", "fenced.yml", "--job", "build")
 	if err != nil || !strings.Contains(out, "fenced") {
-		t.Fatalf("sandboxed task failed (exit 10: workspace not writable, 11: wrote outside, 12: read ~/.ssh, 13: /etc unreadable, 14: no TMPDIR, 15: ~ not listable): %v\n%s", err, out)
+		t.Fatalf("sandboxed task failed (exit 10: workspace not writable, 11: wrote outside, 12: read ~/.ssh, 13: /etc unreadable, 14: no TMPDIR, 15: ~ not listable, 16: no state database beside the workspace, 17: read the state database, 18: its sibling unreadable): %v\n%s", err, out)
 	}
 
 	if box.exec(ctx, "test", "-e", "/home/ubuntu/escaped") == nil {

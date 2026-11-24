@@ -85,6 +85,35 @@ jobs:
 	}
 }
 
+// The seam: the database `steps run` opened is the one its fence hides, with the build tree in workspace/ beside it. Serial, because the hidden database is the process's and a parallel run installs its own.
+func TestSandboxedTaskCannotReadItsStateDatabase(t *testing.T) {
+	requireSandbox(t)
+
+	dir := outsideDir(t)
+	path := pipelinePath(t, dir)
+	db := filepath.Join(dir, ".steps", filepath.Base(path)+".db")
+
+	writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: probe
+    sandbox: true
+    run: |
+      touch inside || exit 10
+      case "$(ls %[2]s)" in *.db-wal*) ;; *) exit 11;; esac
+      if cat %[1]s >/dev/null 2>&1; then exit 12; fi
+      if cat %[1]s-wal >/dev/null 2>&1; then exit 13; fi
+      if cat %[1]s-shm >/dev/null 2>&1; then exit 14; fi
+      cat %[3]s >/dev/null || exit 15
+`, db, filepath.Dir(db), path))
+
+	err := stepsRun(t, []string{"run", path, "--job", "build"})
+	if err != nil {
+		t.Fatalf("sandboxed task failed (exit 10: workspace not writable, 11: no database beside it, 12: read the database, 13: read its -wal, 14: read its -shm, 15: the pipeline file beside .steps unreadable): %v", err)
+	}
+}
+
 // run_shell is the hand a model directs, so it is the command the sandbox exists for: the denial must come back to the model as tool output, not end the step.
 func TestSandboxedAgentShellCannotWriteOutside(t *testing.T) {
 	t.Parallel()

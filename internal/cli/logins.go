@@ -13,6 +13,7 @@ import (
 
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/sealbox"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -34,6 +35,14 @@ func useLogins(state State, register bool) (*sealedLogins, error) {
 	box, err := sealbox.FromEnv(os.Getenv)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // it names the variable, which is the whole fix
+	}
+
+	// With the vault, since it is this database the key in this process's environment unseals. Postgres has no file to hide.
+	if !state.postgres() {
+		err = shell.HideState(string(state))
+		if err != nil {
+			return nil, err //nolint:wrapcheck // it names the database
+		}
 	}
 
 	logins := &sealedLogins{state: state, box: box, register: register}

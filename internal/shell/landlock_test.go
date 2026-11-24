@@ -124,3 +124,45 @@ func TestLandlockGrantsRefuseAWritableDirAboveAHiddenPath(t *testing.T) {
 		t.Errorf("the workspace and /dev/null are not writable: %v", grants)
 	}
 }
+
+// The default layout puts the build trees in workspace/ beside the database, so hiding the database must leave a step there writable and its siblings readable, never refuse it.
+func TestLandlockGrantsHideTheStateDatabaseBesideItsWorkspace(t *testing.T) {
+	t.Parallel()
+
+	root := mustResolve(t, t.TempDir())
+	state := filepath.Join(root, ".steps")
+	build := filepath.Join(state, "workspace", "build")
+
+	err := os.MkdirAll(build, 0o700)
+	for _, file := range []string{"steps.db", "steps.db-wal", "notes"} {
+		if err == nil {
+			err = os.WriteFile(filepath.Join(state, file), nil, 0o600)
+		}
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hidden := []string{state + "/steps.db", state + "/steps.db-wal", state + "/steps.db-shm"}
+	grants := grantsByPath(t, []string{build}, hidden)
+
+	for path, want := range map[string]landlockAccess{
+		root:                 listDir,
+		state:                listDir,
+		state + "/notes":     readFile,
+		state + "/workspace": readTree,
+		build:                writeTree,
+	} {
+		got, ok := grants[path]
+		if !ok || got != want {
+			t.Errorf("%s: granted %d (present %v), want %d", path, got, ok, want)
+		}
+	}
+
+	for _, path := range hidden {
+		if access, ok := grants[path]; ok {
+			t.Errorf("%s is granted %d", path, access)
+		}
+	}
+}

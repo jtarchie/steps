@@ -20,7 +20,8 @@ func (seatbelt) command(policy sandboxPolicy, argv []string) ([]string, error) {
 
 	var profile strings.Builder
 
-	profile.WriteString("(version 1)(allow default)(deny file-write*)(allow file-write* " + seatbeltDevices)
+	// lsopen: LaunchServices starts what `open` names outside this sandbox, so an app the command built in its own workspace would run unfenced.
+	profile.WriteString("(version 1)(allow default)(deny lsopen)(deny file-write*)(allow file-write* " + seatbeltDevices)
 
 	for i, dir := range policy.writable {
 		key := fmt.Sprintf("W%d", i)
