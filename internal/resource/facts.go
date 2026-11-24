@@ -112,7 +112,7 @@ func answersWrapped(backend config.ResourceBackend) bool {
 	switch backend {
 	case config.BackendShell, config.BackendMCP, config.BackendExpr:
 		return true
-	case config.BackendConcourse, config.BackendGitHub, config.BackendLinear, config.BackendWebhook, config.BackendCron, config.BackendRegistry, config.BackendService:
+	case config.BackendConcourse, config.BackendGitHub, config.BackendLinear, config.BackendWebhook, config.BackendCron, config.BackendRegistry:
 	}
 
 	return false

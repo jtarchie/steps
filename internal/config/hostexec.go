@@ -95,7 +95,7 @@ func (c *Config) hostResources() []HostCommand {
 					Entity: entity(EntityResourceType, resource.Type), Reason: reasonOf(resourceType.Unfenced),
 				})
 			}
-		case BackendMCP, BackendExpr, BackendWebhook, BackendCron, BackendConcourse, BackendRegistry, BackendService, BackendLinear:
+		case BackendMCP, BackendExpr, BackendWebhook, BackendCron, BackendConcourse, BackendRegistry, BackendLinear:
 		}
 	}
 

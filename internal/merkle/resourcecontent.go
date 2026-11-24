@@ -150,13 +150,9 @@ func withLinearKind(resourceType config.ResourceType, content map[string]any) {
 	}
 }
 
-// withRegistryKind marks a registry-image or docker-service node, neither of whose types has commands to hash: a shell type with none, a source: of the same keys and a matching version would otherwise share its entry. Value-gated, as above.
+// withRegistryKind marks a registry-image node, whose type has no commands to hash: a shell type with none, a source: of the same keys and a matching version would otherwise share its entry. Value-gated, as above.
 func withRegistryKind(resourceType config.ResourceType, content map[string]any) {
 	if resourceType.Config.Registry {
 		content["registry"] = true
-	}
-
-	if resourceType.Config.Service {
-		content["service"] = true
 	}
 }
