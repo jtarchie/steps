@@ -43,6 +43,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jtarchie/steps/internal/shell"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/genai"
 )
@@ -69,7 +70,7 @@ type cliBridge struct {
 	// every custom run: tool (arbitrary shell in the workspace), every mcp:
 	// grant, and the verdict tool that decides where the job goes next — not
 	// a side channel next to a smaller native one. The child learns the token
-	// from the mcp-config file, which is written 0600.
+	// from the mcp-config file, which is written 0600 where no host fence reads.
 	token string
 
 	// budgets bounds how many times a bridged tool may be called during this
@@ -349,9 +350,11 @@ func (b *cliBridge) observed() (verdict, note string, satisfied map[string]bool,
 }
 
 // writeConfig writes the --mcp-config document pointing the CLI at this
-// bridge, and returns its path. It goes to the OS temp dir, never the step's
+// bridge, and returns its path. It goes to shell.PrivateDir, never the step's
 // workspace: the workspace is captured as artifacts and readable by the
-// agent's own file tools, and a live callback URL belongs in neither.
+// agent's own file tools, and a live callback URL belongs in neither. Nor the
+// OS temp dir: a sandbox: true command of any step reads that, and the token
+// is all that stands between it and this step's tools.
 func (b *cliBridge) writeConfig() (string, error) {
 	document := map[string]any{
 		"mcpServers": map[string]any{
@@ -368,7 +371,12 @@ func (b *cliBridge) writeConfig() (string, error) {
 		return "", fmt.Errorf("cli bridge: encoding mcp config: %w", err)
 	}
 
-	file, err := os.CreateTemp("", "steps-cli-mcp-*.json")
+	dir, err := shell.PrivateDir()
+	if err != nil {
+		return "", fmt.Errorf("cli bridge: creating mcp config: %w", err)
+	}
+
+	file, err := os.CreateTemp(dir, "steps-cli-mcp-*.json")
 	if err != nil {
 		return "", fmt.Errorf("cli bridge: creating mcp config: %w", err)
 	}

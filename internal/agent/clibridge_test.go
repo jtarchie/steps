@@ -297,6 +297,8 @@ func TestCLIBridgeWriteConfig(t *testing.T) {
 		t.Fatalf("writeConfig: %v", err)
 	}
 
+	t.Cleanup(func() { _ = os.Remove(path) })
+
 	// Outside the workspace: the config carries a live callback URL, and the
 	// workspace is both captured as artifacts and readable by the agent's own
 	// file tools.

@@ -43,6 +43,8 @@ func TestSandboxDeniesCredentialReadsOnly(t *testing.T) {
 		home + "/.azure/msal_token_cache.json":       "secret",
 		home + "/.terraform.d/credentials.tfrc.json": "secret",
 		home + "/.config/op/config":                  "secret",
+		home + "/.config/steps/private/mcp.json":     "secret",
+		home + "/.config/steps/notes.txt":            "fine",
 	} {
 		err := os.MkdirAll(filepath.Dir(path), 0o700)
 		if err == nil {
@@ -78,6 +80,8 @@ func TestSandboxDeniesCredentialReadsOnly(t *testing.T) {
 		"$HOME/.azure/msal_token_cache.json":       false,
 		"$HOME/.terraform.d/credentials.tfrc.json": false,
 		"$HOME/.config/op/config":                  false,
+		"$HOME/.config/steps/private/mcp.json":     false,
+		"$HOME/.config/steps/notes.txt":            true,
 	} {
 		checkRead(t, runner, path, allowed)
 	}

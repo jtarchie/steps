@@ -26,7 +26,27 @@ type sandboxer interface {
 var credentialPaths = []string{ //nolint:gochecknoglobals // static, read-only list
 	".ssh", ".aws", ".config/gh", ".config/gcloud", ".kube", ".gnupg", ".netrc", ".docker", "Library/Keychains",
 	".git-credentials", ".config/git/credentials", ".npmrc", ".pypirc", ".cargo/credentials", ".cargo/credentials.toml",
-	".azure", ".terraform.d", ".config/op",
+	".azure", ".terraform.d", ".config/op", privateDir,
+}
+
+// privateDir is home-relative, not under the temp dir: home is already walked child by child for the paths above, where hiding one entry of the shared temp dir would make Landlock stop reading whatever appears there after the command starts.
+const privateDir = ".config/steps/private"
+
+// PrivateDir is where steps keeps a secret that a host child of its own must read from a file. Every host fence denies reading it, which mode 0600 does not: a fenced command runs as the same user.
+func PrivateDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("private dir: %w", err)
+	}
+
+	dir := filepath.Join(home, privateDir)
+
+	err = os.MkdirAll(dir, 0o700)
+	if err != nil {
+		return "", fmt.Errorf("private dir: %w", err)
+	}
+
+	return dir, nil
 }
 
 // hostFence is one sandboxed HostRunner: its policy and the private TMPDIR it owns, which Close removes.
@@ -94,8 +114,9 @@ func denyReadPaths(home string) []string {
 		path := filepath.Join(home, rel)
 		out = append(out, path)
 
-		resolved, err := filepath.EvalSymlinks(path)
-		if err == nil && resolved != path {
+		// realPath, not EvalSymlinks: the private dir may not exist until an agent step first needs it, and seatbelt still has to match it under a symlinked home then.
+		resolved := realPath(path)
+		if resolved != path {
 			out = append(out, resolved)
 		}
 	}

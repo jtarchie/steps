@@ -86,6 +86,25 @@ func TestDenyReadNamesASymlinkedCredentialDirByItsRealPathToo(t *testing.T) {
 	}
 }
 
+// The private dir is made by the first agent step to need it, which can be after a fence was built: the rule has to name its real path while it is still missing.
+func TestDenyReadNamesTheMissingPrivateDirByItsRealPath(t *testing.T) {
+	target := mustResolve(t, t.TempDir())
+	home := filepath.Join(t.TempDir(), "home")
+
+	err := os.Symlink(target, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	paths := denyReadPaths(home)
+
+	for _, want := range []string{filepath.Join(home, privateDir), filepath.Join(target, privateDir)} {
+		if !slices.Contains(paths, want) {
+			t.Errorf("deny-read list %v is missing %s", paths, want)
+		}
+	}
+}
+
 func mustResolve(t *testing.T, path string) string {
 	t.Helper()
 
