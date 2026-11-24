@@ -95,6 +95,8 @@ type cliBridge struct {
 	// same machinery — it is denominated in a person's attention, not in tool
 	// calls, so it is enforced here rather than by the turn loop either way.
 	counts map[string]int
+	// clock is read under mu, like counts: results are served concurrently.
+	clock cliClock
 }
 
 // newCLIBridge starts a bridge serving every tool in conv's registry. The
@@ -118,6 +120,11 @@ func newCLIBridge(ctx context.Context, conv agentConversation, prior []recordedT
 		token:     rand.Text(),
 		budgets:   conv.tools.maxCalls,
 		counts:    map[string]int{},
+	}
+
+	// Read here, off the attempt's own ctx: the handlers' ctx comes through WithoutCancel below, which drops the deadline.
+	if deadline, ok := ctx.Deadline(); ok {
+		bridge.clock = cliClock{start: time.Now(), deadline: deadline}
 	}
 
 	env := conv.env
@@ -247,6 +254,15 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 		// image, which is the one thing a text result cannot be.
 		if img, ok := result[imageKey].(toolImage); ok {
 			content = append(content, &sdkmcp.ImageContent{Data: img.data, MIMEType: img.mime})
+		}
+
+		// A block of its own, after the result: the JSON stays what the tool returned, for the model and for anything that parses it.
+		b.mu.Lock()
+		reading := b.clock.reading(time.Now())
+		b.mu.Unlock()
+
+		if reading != "" {
+			content = append(content, &sdkmcp.TextContent{Text: reading})
 		}
 
 		return &sdkmcp.CallToolResult{
