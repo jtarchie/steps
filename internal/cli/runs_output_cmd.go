@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -155,11 +156,21 @@ func printableStepName(name string) string {
 func printOutput(ctx context.Context, out io.Writer, st store.Events, output store.RunEventRow) error {
 	n, err := strconv.Atoi(output.Detail)
 	if err == nil {
+		// Stored pieces are cut at any byte; runview.Scrub's state never outlives a newline, so whole lines scrub as the whole would.
+		var held []byte
+
 		found, readErr := st.StepOutput(ctx, output.RunID, output.StepID, n, func(chunk []byte) error {
-			_, writeErr := out.Write(chunk)
+			held = append(held, chunk...)
+			cut := bytes.LastIndexByte(held, '\n') + 1
+			_, writeErr := io.WriteString(out, runview.Scrub(string(held[:cut])))
+			held = held[cut:]
 
 			return writeErr //nolint:wrapcheck // StepOutput names the output being read
 		})
+		if readErr == nil && len(held) > 0 {
+			_, readErr = io.WriteString(out, runview.Scrub(string(held)))
+		}
+
 		if readErr != nil || found {
 			return readErr //nolint:wrapcheck // StepOutput names the output being read
 		}
@@ -169,7 +180,7 @@ func printOutput(ctx context.Context, out io.Writer, st store.Events, output sto
 		return nil
 	}
 
-	_, err = fmt.Fprintln(out, output.Text)
+	_, err = fmt.Fprintln(out, runview.Scrub(output.Text))
 	if err != nil {
 		return fmt.Errorf("could not write the output of %q: %w", output.StepName, err)
 	}

@@ -246,3 +246,47 @@ func recordStepOutput(t *testing.T, state string, stepNames ...string) {
 
 	_ = st.Close()
 }
+
+// A step's output can be a PR's bytes, and this prints it onto an operator's terminal: no escape reaches it, on the record's path or the kept whole's. The kept pieces are cut at any byte, so the test cuts inside a sequence and inside a rune. Not parallel, it captures stdout.
+func TestRunsOutputScrubsEscapesFromTheBody(t *testing.T) {
+	for name, pieces := range map[string][]string{
+		"record": nil,
+		"kept":   {"a\x1b]52;c;cHduZWQ=", "\x07b\x1b", "[31mred\x1b[0m caf\xc3", "\xa9\r", "\nend"},
+	} {
+		state := filepath.Join(t.TempDir(), "steps.db")
+
+		st, err := sqlite.OpenStore(state, "app")
+		if err != nil {
+			t.Fatalf("open state store: %v", err)
+		}
+
+		err = st.StartRun(t.Context(), store.NewRun{ID: "RUN", JobName: "build", Workspace: t.TempDir()})
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+
+		row := store.RunEventRow{RunID: "RUN", Type: events.TypeStepOutput, StepName: "test", StepID: 1, Text: "a\x1b]52;c;cHduZWQ=\x07b\x1b[31mred\x1b[0m caf\u00e9\r\nend"}
+		if pieces != nil {
+			row.Text, row.Detail = "elided", "0"
+		}
+
+		err = st.AppendRunEvent(t.Context(), row)
+		if err != nil {
+			t.Fatalf("AppendRunEvent: %v", err)
+		}
+
+		for seq, piece := range pieces {
+			err = st.AppendStepOutput(t.Context(), "RUN", 1, 0, seq, []byte(piece))
+			if err != nil {
+				t.Fatalf("AppendStepOutput: %v", err)
+			}
+		}
+
+		_ = st.Close()
+
+		out := captureStdout(t, func() { err = Run([]string{"runs", "output", "RUN", "test", "-p", "app", "--db", state}) })
+		if err != nil || strings.TrimSuffix(out, "\n") != "abred caf\u00e9\nend" {
+			t.Errorf("runs output of the %s = %v, printing %q; want the text with every escape gone", name, err, out)
+		}
+	}
+}
