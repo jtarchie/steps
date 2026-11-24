@@ -139,7 +139,7 @@ func runConcourseScript(ctx context.Context, spec shell.RunnerSpec, label, scrip
 
 	defer shell.CloseRunner(runner, label)
 
-	out, err := shell.RunCaptureInput(ctx, runner, script, request)
+	out, err := shell.RunCaptureInputReattachable(ctx, runner, script, request)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the caller names the stage
 	}

@@ -78,6 +78,10 @@ Use `timeout:` to prevent hung commands — and don't set it aggressively; a leg
   timeout: 1h
 ```
 
+**`timeout:` is also what bounds waiting for a worker.** A task on a docker worker whose connection drops keeps running there, and steps waits for the worker to answer again rather than giving up on it (see [infra.md](infra.md#when-a-machine-goes-away-and-what-is-recorded)); a step with no `timeout:` waits as long as the worker stays unreachable. When the timeout fires, the command is stopped then, not at the end of the step.
+
+**An attempt starts from the image's filesystem.** A container task's `run:` runs in a container of its own each attempt, so a second attempt sees the step's tree, its `outputs:` and its `caches:` as the first left them, and nothing the first left in the image's filesystem (`apk add` results, `/tmp`). Install what a retry needs in the command itself, or into a `caches:` path.
+
 **Timeout is per-attempt**, not per-step total. With `attempts: 3` and `timeout: 30s`, each attempt gets 30 seconds and the total possible time is ~90 seconds plus backoff.
 
 ### A whole job can have one too

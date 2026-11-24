@@ -362,6 +362,7 @@ func (s *plusSession) connect(ctx context.Context) error {
 	spec.WorkerTag = ""
 	spec.DockerHost = s.daemonName()
 	spec.DockerDial = dial
+	spec.Redial = s.redialUnder
 	spec.EnvValues = withWorkerTag(resolveEnv(spec.Env), s.spec.WorkerTag)
 	spec.Volumes = mounts
 	spec.MountPath = s.workdir()
@@ -537,7 +538,7 @@ func (s *plusSession) daemonDialer(ctx context.Context) (func(context.Context) (
 
 // redial replaces a connection that ended (a dropped tunnel, a keepalive that gave up): the volumes, holder and container live on the daemon, so the step's tree is where it was.
 func (s *plusSession) redial(ctx context.Context) error {
-	// ponytail: the command a drop interrupted is killed before the next one runs (see the shell runner's orphans); taking its exit code by exec id instead of a rerun is steps#208's rung 1.
+	// A reattachable command (a task's run:, a resource's in:/out:) rides through a drop (steps#306); an exec a drop interrupted is still killed before the next one runs (see the shell runner's orphans).
 	redialed, err := s.conn.redial(ctx, s.dialSSH)
 	if err != nil {
 		return fmt.Errorf("%w %q: dialling again after the connection dropped: %w", ErrWorker, s.worker.URL, err)
@@ -548,6 +549,13 @@ func (s *plusSession) redial(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// redialUnder is redial for a command that lost its connection mid-read, which is suspect until a probe says otherwise.
+func (s *plusSession) redialUnder(ctx context.Context) error {
+	s.conn.suspect.Store(true)
+
+	return s.redial(ctx)
 }
 
 func (s *plusSession) dialSSH(ctx context.Context) (*ssh.Client, error) {

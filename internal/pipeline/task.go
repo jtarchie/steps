@@ -291,7 +291,7 @@ func runTaskCommand(
 
 	// Recorded whether or not the command succeeds: a failing step is the one whose output is wanted, and the error below is "command %q failed: exit status N" with no trace of what it said on its way out.
 	ctx, recorder := recordTaskOutput(ctx, rt.Name)
-	err := shell.Run(ctx, runner.WithLabel(""), rt.Run)
+	err := shell.RunReattachable(ctx, runner.WithLabel(""), rt.Run)
 	recorder.finish(ctx)
 
 	if err != nil {

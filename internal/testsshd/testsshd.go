@@ -38,6 +38,26 @@ type Server struct {
 
 	listener net.Listener
 	conns    sync.WaitGroup
+	liveMu   sync.Mutex
+	live     map[net.Conn]struct{}
+	// refuseUntil is when DropFor's outage ends, in unix nanoseconds.
+	refuseUntil atomic.Int64
+}
+
+// DropAll closes every connection the server holds, as a network that went away does; the listener stays, so a client can dial again.
+func (s *Server) DropAll() {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+
+	for conn := range s.live {
+		_ = conn.Close()
+	}
+}
+
+// DropFor is DropAll followed by an outage: every connection made in the next d is closed as it arrives.
+func (s *Server) DropFor(d time.Duration) {
+	s.refuseUntil.Store(time.Now().Add(d).UnixNano())
+	s.DropAll()
 }
 
 // New accepts only the generated client key, and its URL names that key and the known_hosts holding this server's.
@@ -156,12 +176,30 @@ func (s *Server) accept(config *ssh.ServerConfig) {
 			return
 		}
 
+		if time.Now().UnixNano() < s.refuseUntil.Load() {
+			_ = conn.Close()
+
+			continue
+		}
+
 		s.conns.Add(1)
+
+		s.liveMu.Lock()
+		if s.live == nil {
+			s.live = map[net.Conn]struct{}{}
+		}
+
+		s.live[conn] = struct{}{}
+		s.liveMu.Unlock()
 
 		go func() {
 			defer s.conns.Done()
 
 			s.serve(conn, config)
+
+			s.liveMu.Lock()
+			delete(s.live, conn)
+			s.liveMu.Unlock()
 		}()
 	}
 }
