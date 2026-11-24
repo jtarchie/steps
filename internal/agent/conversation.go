@@ -519,32 +519,26 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 
 	turn := 0
 
-	// timeoutDeadline/hasTimeout/budgetAtEntry anchor the proactive warning
-	// below to how much of THIS attempt's own deadline was left when it
-	// started. Recomputed fresh per call to runConversationLoop (i.e. per
+	// clock is anchored to how much of THIS attempt's own deadline was left
+	// when it started. Built fresh per call to runConversationLoop (i.e. per
 	// cascade attempt) rather than carried in resumeCheckpoint: a source that
 	// picks up a conversation close to the step's shared deadline (see
 	// failover.go) is judged against what it actually has left, not what the
-	// very first source started with. wrapUpWarned is likewise loop-local —
+	// very first source started with. Its warned latch is likewise loop-local —
 	// a swap re-arming it is a harmless, rare duplicate notice, not a
 	// correctness issue. clock.slowest is per attempt for the same reason: a
 	// fallback source is a different model, with its own request times.
-	timeoutDeadline, hasTimeout := ctx.Deadline()
-
-	var budgetAtEntry time.Duration
-	if hasTimeout {
-		budgetAtEntry = time.Until(timeoutDeadline)
+	var clock deadlineClock
+	if deadline, ok := ctx.Deadline(); ok {
+		clock = deadlineClock{start: time.Now(), deadline: deadline}
 	}
-
-	clock := wrapUpClock{has: hasTimeout, deadline: timeoutDeadline, atEntry: budgetAtEntry}
-	wrapUpWarned := false
 
 	// Not carried in resumeCheckpoint: a fallback source tokenizes differently, so it starts from the estimate until it reports for itself.
 	var size reportedSize
 
 	for ; budget == unlimitedTurns || turn < budget; turn++ {
 		resp, err := conv.nextResponse(ctx, llm, req, &size, &state, &clock.slowest, func() {
-			conv.maybeWarnWrapUp(req, clock, turn, budget, &wrapUpWarned)
+			conv.maybeWarnWrapUp(req, &clock, turn, budget)
 		})
 		if err != nil {
 			return result("", turn), err
@@ -763,14 +757,6 @@ func timeoutWarningDue(budgetAtEntry, remaining, slowest time.Duration) bool {
 	return remaining <= max(budgetAtEntry/timeoutWarningFraction, 2*slowest)
 }
 
-// wrapUpClock is what the timeout arm of the wrap-up nudge measures against.
-type wrapUpClock struct {
-	has      bool
-	deadline time.Time
-	atEntry  time.Duration
-	slowest  time.Duration
-}
-
 // turnsWarningDue reports whether the turn cap is close enough to nudge: a fifth of this attempt's turns left, but never fewer than two, since the model needs one turn to write what it owes and one to say it is done.
 func turnsWarningDue(budget, turn int) (left int, due bool) {
 	if budget == unlimitedTurns || turn == 0 {
@@ -782,12 +768,8 @@ func turnsWarningDue(budget, turn int) (left int, due bool) {
 	return left, left <= max(budget/timeoutWarningFraction, 2)
 }
 
-// wrapUpWarning is the nudge for whichever limit runs low first, or "" when none has. One nudge per attempt, whatever its cause: a second says nothing the first did not.
-func (conv agentConversation) wrapUpWarning(clock wrapUpClock, turn, budget int) string {
-	if clock.has && timeoutWarningDue(clock.atEntry, time.Until(clock.deadline), clock.slowest) {
-		return timeoutWarningText
-	}
-
+// wrapUpWarning is the nudge for a turn cap or token budget running low, or "" when neither has. The deadline's own is deadlineClock's.
+func (conv agentConversation) wrapUpWarning(turn, budget int) string {
 	if left, due := turnsWarningDue(budget, turn); due {
 		return fmt.Sprintf("Wrap up: %d turn(s) left, then your tools are taken away and only a plain answer is possible. Write any file you owe now, with what you have.", left)
 	}
@@ -799,20 +781,23 @@ func (conv agentConversation) wrapUpWarning(clock wrapUpClock, turn, budget int)
 	return ""
 }
 
-// maybeWarnWrapUp appends the wrap-up nudge once, with the tools still granted, and records it on the transcript so a reader sees what prompted the model to wrap up.
-func (conv agentConversation) maybeWarnWrapUp(req *model.LLMRequest, clock wrapUpClock, turn, budget int, warned *bool) {
-	if *warned {
-		return
+// maybeWarnWrapUp appends what the model is owed before its next request, with the tools still granted: the clock's reading, and once per attempt the wrap-up nudge for whichever limit runs low first, since a second says nothing the first did not. One message, appended and never rewritten, so the cached prefix holds. Recorded on the transcript so a reader sees what prompted the model to wrap up.
+func (conv agentConversation) maybeWarnWrapUp(req *model.LLMRequest, clock *deadlineClock, turn, budget int) {
+	text := clock.reading(time.Now())
+
+	if !clock.warned {
+		if warning := conv.wrapUpWarning(turn, budget); warning != "" {
+			text = strings.TrimSpace(text + " " + warning)
+			clock.warned = true
+		}
 	}
 
-	text := conv.wrapUpWarning(clock, turn, budget)
 	if text == "" {
 		return
 	}
 
 	req.Contents = append(req.Contents, &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{Text: text}}})
 	conv.env.transcript.user(text)
-	*warned = true
 }
 
 // answerWithoutTools makes the final request of a conversation whose budget is

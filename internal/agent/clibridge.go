@@ -96,7 +96,7 @@ type cliBridge struct {
 	// calls, so it is enforced here rather than by the turn loop either way.
 	counts map[string]int
 	// clock is read under mu, like counts: results are served concurrently.
-	clock cliClock
+	clock deadlineClock
 }
 
 // newCLIBridge starts a bridge serving every tool in conv's registry. The
@@ -124,7 +124,7 @@ func newCLIBridge(ctx context.Context, conv agentConversation, prior []recordedT
 
 	// Read here, off the attempt's own ctx: the handlers' ctx comes through WithoutCancel below, which drops the deadline.
 	if deadline, ok := ctx.Deadline(); ok {
-		bridge.clock = cliClock{start: time.Now(), deadline: deadline}
+		bridge.clock = deadlineClock{start: time.Now(), deadline: deadline}
 	}
 
 	env := conv.env

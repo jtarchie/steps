@@ -325,7 +325,7 @@ func warningTextIn(requests []*model.LLMRequest) bool {
 	for _, req := range requests {
 		for _, c := range req.Contents {
 			for _, p := range c.Parts {
-				if p.Text == timeoutWarningText {
+				if strings.HasSuffix(p.Text, timeoutWarningText) {
 					return true
 				}
 			}
@@ -413,7 +413,7 @@ func assertTimeoutWarningRecorded(t *testing.T, transcript []transcriptEvent) {
 		t.Fatalf("got %d user transcript events, want 2 (the opening message and the timeout warning): %+v", len(got), transcript)
 	}
 
-	if got[1].Text != timeoutWarningText {
+	if !strings.HasSuffix(got[1].Text, timeoutWarningText) {
 		t.Errorf("second user event text = %q, want the timeout warning %q", got[1].Text, timeoutWarningText)
 	}
 }
@@ -499,7 +499,7 @@ func warningCount(req *model.LLMRequest) int {
 
 	for _, c := range req.Contents {
 		for _, p := range c.Parts {
-			if p.Text == timeoutWarningText {
+			if strings.HasSuffix(p.Text, timeoutWarningText) {
 				n++
 			}
 		}
