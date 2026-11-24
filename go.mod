@@ -5,19 +5,19 @@ go 1.27
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/achetronic/adk-utils-go v1.4.0
-	github.com/alecthomas/chroma/v3 v3.0.0-alpha.5
+	github.com/alecthomas/chroma/v3 v3.0.0-alpha.7
 	github.com/alecthomas/kong v1.17.0
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.21
-	github.com/aws/aws-sdk-go-v2/service/ec2 v1.349.0
-	github.com/aws/aws-sdk-go-v2/service/ssm v1.83.0
+	github.com/aws/aws-sdk-go-v2/service/ec2 v1.350.0
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.84.0
 	github.com/aws/smithy-go v1.28.9
-	github.com/chromedp/cdproto v0.160.7
+	github.com/chromedp/cdproto v0.160.8
 	github.com/chromedp/chromedp v0.24.0
 	github.com/containerd/errdefs v1.0.0
-	github.com/digitalocean/godo v1.244.0
+	github.com/digitalocean/godo v1.245.0
 	github.com/distribution/reference v0.6.0
-	github.com/expr-lang/expr v1.17.8
+	github.com/expr-lang/expr v1.18.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/frioux/leatherman v0.0.0-20261119130408-232784b0d025
 	github.com/go-task/slim-sprig/v3 v3.0.0
@@ -59,7 +59,7 @@ require (
 	google.golang.org/api v0.316.0
 	google.golang.org/genai v1.79.1
 	google.golang.org/protobuf v1.36.12
-	modernc.org/sqlite v1.62.0
+	modernc.org/sqlite v1.63.0
 )
 
 require (
@@ -83,7 +83,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
-	github.com/dlclark/regexp2/v2 v2.13.1 // indirect
+	github.com/dlclark/regexp2/v2 v2.13.2 // indirect
 	github.com/docker/cli v29.10.0+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.13 // indirect
 	github.com/docker/go-connections v0.8.2 // indirect
@@ -124,11 +124,11 @@ require (
 	golang.org/x/net v0.63.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20261118221215-c8830f628b3f // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20261118221215-c8830f628b3f // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20261123191846-1e707ab9fbc2 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261123191846-1e707ab9fbc2 // indirect
 	google.golang.org/grpc v1.85.0 // indirect
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.78 // indirect
-	modernc.org/libc v1.82.6 // indirect
+	modernc.org/libc v1.82.13 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.13.0 // indirect
 )
