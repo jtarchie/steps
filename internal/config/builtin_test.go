@@ -60,7 +60,7 @@ resources:
 func TestABuiltinWithNoCommandIsRefusedAnImage(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{WebhookType, CronType, RegistryImageType, DockerServiceType, GitHubIssuesType, LinearTypes()[0]} {
+	for _, name := range []string{WebhookType, CronType, RegistryImageType, GitHubIssuesType, LinearTypes()[0]} {
 		_, err := Parse([]byte("resource_types:\n- {name: "+name+", image: alpine:3}\n"), "image", nil)
 		if err == nil || !strings.Contains(err.Error(), "image: cannot apply to "+name) {
 			t.Errorf("%s given an image = %v, want it refused as having nothing to run there", name, err)

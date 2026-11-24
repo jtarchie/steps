@@ -37,8 +37,6 @@ type backend interface {
 
 // backendFor is the one dispatch over config.ResourceBackend; `exhaustive`
 // fails the build here when a backend is added and not answered for.
-//
-//nolint:cyclop // one arm per backend, which `exhaustive` holds complete
 func backendFor(rt config.ResourceType) backend {
 	switch rt.Config.Backend() {
 	case config.BackendMCP:
@@ -57,8 +55,6 @@ func backendFor(rt config.ResourceType) backend {
 		return concourseBackend{}
 	case config.BackendRegistry:
 		return registryBackend{}
-	case config.BackendService:
-		return serviceBackend{}
 	case config.BackendShell:
 	}
 

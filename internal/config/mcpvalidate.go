@@ -489,7 +489,7 @@ func (c *Config) validateResourceTypeBackend(rt ResourceType) error {
 		if rt.Config.Check == "" && rt.Config.In == "" && rt.Config.Out == "" {
 			return fmt.Errorf("resource_type %q: sets none of check/in/out, so it can neither detect, fetch, nor publish anything", rt.Name)
 		}
-	case BackendWebhook, BackendCron, BackendGitHub, BackendLinear, BackendRegistry, BackendService:
+	case BackendWebhook, BackendCron, BackendGitHub, BackendLinear, BackendRegistry:
 		return validateBuiltinImage(rt)
 	case BackendConcourse:
 	}

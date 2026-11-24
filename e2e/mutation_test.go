@@ -102,7 +102,7 @@ func checkMutantIsCaught(t *testing.T, block docs.Block, mut mutant) {
 	}
 
 	// The doc harness skips a placed example without a daemon, and a mutant has to as well: with no worker the original fails on its own, so the mutated outcome: failed would "pass" and read as an assertion that cannot fail.
-	if len(scenario.workers) > 0 {
+	if scenario.needsDocker() {
 		testdocker.Require(t)
 	}
 

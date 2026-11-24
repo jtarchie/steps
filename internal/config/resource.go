@@ -86,8 +86,6 @@ type ResourceTypeConfig struct {
 	GitHub string `yaml:"-"`
 	// Linear names which built-in linear-* type this is (see linear.go), which no YAML can declare: steps calls Linear's GraphQL API itself. Keyed as GitHub is, because the types share a client and do different things with it.
 	Linear string `yaml:"-"`
-	// Service marks the built-in docker-service type, which no YAML can declare: steps drives the daemon itself (dockerservice.go).
-	Service bool `yaml:"-"`
 	// Registry marks the built-in registry-image type, which no YAML can declare: steps speaks the registry protocol itself (registryimage.go).
 	Registry bool `yaml:"-"`
 }
@@ -120,8 +118,6 @@ const (
 	BackendLinear ResourceBackend = "linear"
 	// BackendRegistry calls an OCI registry from this process: check finds a tag's digest, in names it, out pushes an image tarball.
 	BackendRegistry ResourceBackend = "registry"
-	// BackendService keeps a container up on this machine's daemon: out ensures it, check reports whether it runs.
-	BackendService ResourceBackend = "service"
 )
 
 // Backend reports how this resource type is implemented.
@@ -131,8 +127,6 @@ const (
 // neither detect nor fetch nor publish, and the errors for that are stage
 // rules (validateResourceGet, validateResourcePut) rather than a fourth
 // backend meaning "none".
-//
-//nolint:cyclop // one arm per backend
 func (c ResourceTypeConfig) Backend() ResourceBackend {
 	switch {
 	case c.Webhook:
@@ -145,8 +139,6 @@ func (c ResourceTypeConfig) Backend() ResourceBackend {
 		return BackendLinear
 	case c.Registry:
 		return BackendRegistry
-	case c.Service:
-		return BackendService
 	case c.Concourse:
 		return BackendConcourse
 	case c.MCP != nil:
@@ -244,7 +236,7 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 		return githubPutRefusal(label, put, resourceType.Config.GitHub)
 	case BackendLinear:
 		return linearPutRefusal(label, put, resourceType.Config.Linear)
-	case BackendRegistry, BackendService:
+	case BackendRegistry:
 	}
 
 	return nil
@@ -299,7 +291,7 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 			return fmt.Errorf("%s: get %q targets a %s resource, which only publishes; find the work with a %s resource instead",
 				label, get, resourceType.Config.Linear, LinearIssuesType)
 		}
-	case BackendWebhook, BackendCron, BackendRegistry, BackendService:
+	case BackendWebhook, BackendCron, BackendRegistry:
 	}
 
 	return nil

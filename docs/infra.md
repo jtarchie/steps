@@ -53,7 +53,7 @@ jobs:
 
 - **Step-level override**: a `task`/`agent` step's own `image:` overrides the referenced `tasks:`/`agents:` entry's image for that step only. It's inherit-only — a non-empty step `image:` always wins, and there's no way to force host execution from a step when the task/agent sets one. `image:` is invalid on `get`/`put` steps (a put's image comes from its resource type).
 - **Container shape**: the step creates one container over the Docker engine API (never by spawning `docker`), with a keepalive as its process, then runs each command in it as an exec. **An untagged step runs exactly as one tagged onto a [`local:` worker](#two-kinds-of-worker)**: its tree is poured into docker volumes and mounted at the step's [working directory](#the-working-directory-in-a-container), never bind-mounted from this machine, so a daemon in a VM, on another machine (`DOCKER_HOST=tcp://…`), or under podman sees the same thing, and what runs on your laptop runs the same way on a remote worker. The step's declared `outputs:` stay in this machine's docker, filed by digest, until something here reads them, exactly as a [placed step's do](#resources-on-workers): the next container step mounts a copy-on-write view of them and nothing moves, while a step with no `image:`, a `put` whose type has none, a `load_var:`, a resume or a replay pulls them home (the step cache files them where they are) the moment it needs them. `steps runs where` shows the difference in the step's bytes received. A step that reads its own outputs as part of the step — an `assert: files:`, a `fix:` — brings them home after each command, and an agent once when the step ends. A `get` whose resource type has an `image:` keeps its fetched tree the same way. An output that is also an input from this machine comes home as the step's changes to it — the files it wrote, and the ones it removed — rather than whole, so a one-line edit in a large repository moves about one file; anything written outside `outputs:`, and whatever a command that timed out or was cancelled wrote, stays in the volume and is gone with it. Its `caches:` are volumes on this machine's docker, emptied by `steps clear-task-cache`. `STEPS_WORKER` stays unset, and `steps runs where` lists the step with tag `-`. A step with no tree — a resource `check:` — still runs in a plain container. No host environment variables are passed in; the container starts from the image's own env plus steps' [build metadata](#build-metadata-steps_run_id-).
-- **State persists across a step's commands.** An agent that installs a package, exports a variable, or `cd`s in one `run_shell` call sees it in the next — the calls share one container. As a fresh container per command, the two-call pattern every model reaches for (`pip install x` then `python y`) simply did not work. State does *not* carry across steps.
+- **State persists across a step's commands.** An agent that installs a package, exports a variable, or `cd`s in one `run_shell` call sees it in the next — the calls share one container. As a fresh container per command, the two-call pattern every model reaches for (`pip install x` then `python y`) simply did not work. So does a process left running, which is how a step gets [a database or a fake API of its own](#a-dependency-for-one-step). State does *not* carry across steps.
 - **Nothing is left running.** Teardown force-removes the container it created — on the failure and cancellation paths too. It is not created to remove itself, since a self-removing container takes its own postmortem with it. If the steps process is killed outright, the container is labeled with that process's id and host, and the next run on that machine that uses images removes every container whose process is gone; failing that, the keepalive expires (24h) and the container sits stopped until then.
 - **Lazy**: a step whose command is skipped, or that fails before running anything, never starts a container.
 - **Exit codes pass through unchanged**, including docker-level failures (125 daemon-side, 126/127 unrunnable/missing command). A bad image surfaces to an agent as ordinary tool-result data, not a crash; the failure is reported once and remembered, so it isn't re-attempted on every command in a conversation.
@@ -61,6 +61,99 @@ jobs:
 - **Fail-fast validation**: if any `image:` is set anywhere in the config, the job pings the docker daemon before planning or executing anything. Only the daemon is checked: no `docker` binary is needed on `PATH`.
 - **Images are pulled up front**, right after that check, rather than implicitly on first use — an implicit pull's progress lands in the first command's output and its download counts against that step's `timeout:`. Images already on the daemon are skipped via a local inspect, so a warm run costs milliseconds; an image that can't be pulled fails the run before any step starts. The one exception is an [image a `get` fetched](#an-image-a-get-fetched), which has no reference until its get runs.
 - **Cache hashing**: `image` folds into the relevant node content whenever it's non-empty — an image change alters what a command actually executes against.
+
+### A dependency for one step
+
+A spec that needs a database, or an assessment that needs a server to assess, runs that dependency inside its own step's container. Every command a container step runs is an exec into the step's one container — a task's `run:`, its re-run after a failed attempt, each `run_shell` call and custom `run:` tool of an agent — so a process one command leaves running in the background is still up for the commands after it, and they reach it on `127.0.0.1`:
+
+```yaml test=infra-background-dependency
+agents:
+  - name: prober
+    source: {model: lmstudio/qwen2.5-coder}
+    image: alpine:3
+    tools:
+      - name: start_api
+        description: Start the fake API on loopback port 8080, in the background.
+        run: |
+          setsid sh -c 'while :; do echo pong | nc -l -p 8080; done' >/dev/null 2>&1 &
+      - name: ping_api
+        description: Ask the fake API for its answer and record it in reply/ping.txt.
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            nc 127.0.0.1 8080 </dev/null > reply/ping.txt && [ -s reply/ping.txt ] && exit 0
+            sleep 0.2
+          done
+          exit 1
+
+jobs:
+  - name: probe
+    plan:
+      - agent: prober
+        outputs: [reply]
+        messages:
+          - "Start the API, then ping it."
+        assert:
+          tool_calls:
+            - name: start_api
+            - name: ping_api
+          files: [reply/ping.txt]
+      - task: show
+        inputs: [reply]
+        run: cat reply/ping.txt
+        assert:
+          stdout: pong         # only the server start_api left running could have said so
+    assert:
+      execution: [prober, show]
+      outcome: succeeded
+```
+
+`start_api` returns at once and leaves the listener running; `ping_api`, a separate exec, finds it on loopback. The docs suite runs this block wherever a docker daemon answers.
+
+- **A task's `run:` is one command**: start the dependency and use it in the same script. The process outlives the script that started it, so a re-run under `attempts:` finds it already up — check before starting a second one.
+- **`setsid … &`, output redirected.** `setsid` puts the process in a session of its own, apart from the command that started it. Send its output to a file: a process still writing to the command's stdout holds that stream open after the command ends (about two seconds per command, measured on Docker Desktop) and mixes its lines into the step's.
+- **Wait for it to answer.** `&` returns before the process listens, so poll, as `ping_api` does, or use the dependency's own probe (`pg_isready`, `redis-cli ping`).
+- **It lives exactly as long as the step.** Teardown removes the container with everything running in it, so the next step, the next run and a retried job each start a fresh one. State is per step, never shared.
+- **Only with `image:`.** On the host nothing bounds it: steps does not reap what a command leaves running, so it outlives the step and the run. A host step stops it itself before its command ends (`trap 'kill $pid' EXIT`).
+
+Three rules follow from where the dependency lives:
+
+- **It is co-placed by construction.** It runs in the step's own container, so it is wherever the step is — this machine or any [worker](#remote-workers-tags). A dependency in a second container would need a network between the two, and a docker network belongs to one daemon: it could never follow a placed step.
+- **The step's image runs the command it is given.** The container's process is steps' keepalive, and an image whose `ENTRYPOINT` does not hand its arguments on (`exec "$@"`) swallows it: the container ends on start and the step fails as one that exited immediately. Build a server image you mean to start from a step with `ENTRYPOINT []`, as below.
+- **The build tree is an input, or scratch — never both an input and an output.** Building the dependency in a directory the step lists in both `inputs:` and `outputs:` makes steps work out what the build deleted there, which on a docker+ worker is the overlay's deletion inference ([#299](https://github.com/jtarchie/steps/issues/299)). Keep the source an input, or build in a directory the step does not declare (gone with the container), and return only the small artifacts it declares as outputs of their own.
+
+#### Warm infra: bake it, or run it outside the pipeline
+
+A dependency whose setup is the expensive part — a schema load, a seeded index — does not have to stay up between runs to start fast. Do the setup once, when the image is built, so the step only opens a data directory that is already full:
+
+```dockerfile
+FROM postgres:17-alpine
+# Not the image's declared VOLUME: a build writes nothing that survives into a volume path.
+ENV PGDATA=/var/lib/postgresql/seeded
+COPY schema.sql /tmp/schema.sql
+RUN mkdir -p "$PGDATA" && chown postgres "$PGDATA" \
+ && su postgres -c 'initdb && pg_ctl -w start && psql -f /tmp/schema.sql && pg_ctl -w stop'
+ENTRYPOINT []
+```
+
+```yaml noexec=docker
+jobs:
+  - name: specs
+    plan:
+      - task: count
+        image: ghcr.io/acme/seeded-postgres:2026-11
+        run: |
+          su postgres -c 'pg_ctl -w start -l /tmp/postgres.log' >/dev/null
+          psql -U postgres -tAc 'select count(*) from widgets'
+        assert:
+          stdout: "2"
+    assert:
+      execution: [count]
+      outcome: succeeded
+```
+
+`pg_ctl -w` backgrounds the server itself and returns once it accepts connections, so it needs neither `setsid` nor a poll. The warm state is versioned with the code that defines it: a schema change is a new image tag, which [moves the step's cache key](#container-execution-image) like any other `image:` change, rather than mutable state on a daemon.
+
+Infra that is genuinely shared — one server many jobs reach over time — belongs to the operator's process manager (systemd, launchd, a compose file), not to a pipeline: nothing in a pipeline stops what it starts, so a pipeline is the wrong owner for something meant to stay up. A step reaches it as it reaches any outside service, by address — from a container on this machine, through [`extra_hosts:`](#host-aliases-extra_hosts).
 
 ### The working directory in a container
 
