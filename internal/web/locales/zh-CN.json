@@ -444,6 +444,7 @@
  "resource.nojob": "没有作业使用此资源",
  "resource.runlabel": "运行 %[1]s，%[2]s",
  "resource.runs": "%[1]d 次运行",
+ "resource.runversion": "运行 %[1]s",
  "resource.runversion.title": "用此版本运行 %[1]s",
  "resource.search.hint": "版本内容：sha、标签、时间",
  "resource.search.label": "搜索版本",

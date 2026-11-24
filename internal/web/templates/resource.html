@@ -19,20 +19,20 @@
 {{$controls := not .Nav.ReadOnly}}
 <div class="tablewrap">
   <table class="versions">
-    <thead><tr><th scope="col">{{t "th.version"}}</th>{{range .Consumers}}<th scope="col"><a href="/p/{{$.Nav.Current}}/jobs/{{pathseg .Job}}">{{.Job}}</a></th>{{end}}</tr></thead>
+    <thead><tr><th scope="col">{{t "th.version"}}</th>{{range .Consumers}}<th scope="col"><a href="/p/{{$.Nav.Current}}/jobs/{{pathseg .Job}}">{{.Job}}</a></th>{{end}}{{if and $controls .Consumers}}<th scope="col" class="acts">{{t "th.action"}}</th>{{end}}</tr></thead>
     <tbody>
       {{range .Rows}}
       {{$pin := .Pin}}
       <tr><th scope="row">{{jsonLine .Version}}{{with .Facts}}{{template "facts" .}}{{end}}</th>{{range .Cells}}
         {{- $run := .Latest}}
-        <td{{if $run.ID}} title="{{cellTitle .}}"{{end}}>{{if $run.ID -}}
+        <td{{if $run.ID}} title="{{cellTitle .}}"{{end}}><span class="cellname" aria-hidden="true">{{.Job}}</span>{{if $run.ID -}}
           <span class="st st-{{statusWord $run.Status}}">{{statusText $run.Status}}</span>
           <a href="/p/{{$.Nav.Current}}/runs/{{pathseg $run.ID}}" aria-label="{{t "resource.runlabel" $run.ID (statusText $run.Status)}}">{{short $run.ID}}</a>
           <span class="when">{{agoTag $run.StartedAt}}{{if gt (len .Runs) 1}} · {{t "resource.runs" (len .Runs)}}{{end}}</span>
         {{- else -}}
           <span class="st st-{{.Class}}">{{word "cell" .State}}</span>
-        {{- end}}
-        {{- if and $controls $pin}}<form class="inline cellrun" method="post" action="/p/{{$.Nav.Current}}/jobs/{{pathseg .Job}}/trigger">{{range $k, $v := $pin}}<input type="hidden" name="pin.{{$k}}" value="{{$v}}">{{end}}<button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "resource.runversion.title" .Job}}"{{end}} aria-label="{{t "resource.runversion.title" .Job}}">▶</button></form>{{end}}</td>{{end}}</tr>
+        {{- end}}</td>{{end}}
+        {{- if and $controls $.Consumers}}<td class="acts">{{if $pin}}{{range $.Consumers}}<form class="inline" method="post" action="/p/{{$.Nav.Current}}/jobs/{{pathseg .Job}}/trigger">{{range $k, $v := $pin}}<input type="hidden" name="pin.{{$k}}" value="{{$v}}">{{end}}<button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "resource.runversion.title" .Job}}"{{end}}>▶ {{t "resource.runversion" .Job}}</button></form>{{end}}{{end}}</td>{{end}}</tr>
       {{else}}
       <tr><td class="faint" colspan="{{$.Span}}">{{if .List.Filters}}{{t "list.nomatch"}}{{else}}{{t "resource.neverchecked"}}{{end}}</td></tr>
       {{end}}

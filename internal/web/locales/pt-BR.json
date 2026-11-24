@@ -461,6 +461,7 @@
  "resource.nojob": "nenhum trabalho usa este recurso",
  "resource.runlabel": "execução %[1]s, %[2]s",
  "resource.runs": "%[1]d execuções",
+ "resource.runversion": "Executar %[1]s",
  "resource.runversion.title": "executar %[1]s com esta versão",
  "resource.search.hint": "o que uma versão contém: um sha, uma tag, um horário",
  "resource.search.label": "buscar versões",

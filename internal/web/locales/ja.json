@@ -444,6 +444,7 @@
  "resource.nojob": "このリソースを get するジョブはありません",
  "resource.runlabel": "実行 %[1]s、%[2]s",
  "resource.runs": "%[1]d 件の実行",
+ "resource.runversion": "%[1]s を実行",
  "resource.runversion.title": "このバージョンで %[1]s を実行",
  "resource.search.hint": "バージョンの内容: sha、タグ、時刻",
  "resource.search.label": "バージョンを検索",

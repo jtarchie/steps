@@ -39,6 +39,12 @@ func listServer(t *testing.T) string {
 		t.Fatal(err)
 	}
 
+	// What a PR resource says about a version: an unbreakable URL and a sentence of title are what squeezed the version column on a phone.
+	err = pipeline.Store.RecordVersionMetadata(ctx, "repo", key, `[{"name":"url","value":"https://github.com/example/app/pull/23431"},{"name":"title","value":"Use the crowdfunding flash toast app-wide and share it, the pager, icons and helpers"},{"name":"author","value":"someone-with-a-long-name"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	startFinishedRun(t, pipeline, "RUNONE", "build", "succeeded")
 
 	id, err := pipeline.Store.RequestApproval(ctx, "deploy", "Post the release notes for the whole quarter to Linear?")
@@ -143,5 +149,23 @@ func TestAPhoneDropsEmptyCellsAndADesktopKeepsThem(t *testing.T) {
 
 	if desktop == 0 {
 		t.Error("a desktop shows no empty cells; the dash that keeps a never-checked row's columns aligned is gone")
+	}
+}
+
+// On a phone a version row is a card: the version and what its resource said about it take the whole width, rather than a fifth of a four-column grid where a PR title wrapped a letter or two per line.
+func TestAPhoneReadsAVersionAsACard(t *testing.T) {
+	ctx := browser(t)
+
+	lists := listServer(t)
+
+	const measure = `(() => {
+		const th = document.querySelector('table.versions tbody th');
+		const table = document.querySelector('table.versions');
+		return [th.getBoundingClientRect().width, table.getBoundingClientRect().width];
+	})()`
+
+	widths := must(ctx, t, chromedp.Evaluate[[]float64](measure), onPhone(), media("dark", false), chromedp.Navigate(lists+"/p/demo/resources/repo"))
+	if len(widths) != 2 || widths[0] < widths[1]*0.9 {
+		t.Errorf("on a phone the version takes %v of the row's px, want nearly all of it", widths)
 	}
 }

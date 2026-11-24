@@ -1498,20 +1498,45 @@ table.versions tbody th {
   font-weight: 400;
   padding: 8px 14px;
   border-bottom: 1px solid var(--line-soft);
-  white-space: nowrap;
 }
 table.versions tbody tr:last-child th { border-bottom: 0; }
 table.versions thead th a { color: inherit; }
-table.versions td .when { color: var(--dim); font-family: var(--sans); font-size: 12px; }
-/* The per-version run button trails its cell, small, so the state word stays what the column reads as. */
-table.versions td .cellrun { margin-left: 6px; }
-table.versions td .cellrun .btn { min-width: 24px; min-height: 24px; padding: 0 6px; font-size: 11px; line-height: 22px; }
-@media (pointer: coarse) { table.versions td .cellrun .btn { min-width: 44px; min-height: 44px; } }
-/* On a phone the version wraps rather than pushing the job columns — the
-   reason anyone opened the page — off the right edge. */
+/* Its own line: inline beside the state and run id, a cell was five tokens wide and pushed the Action column off a laptop screen. */
+table.versions td .when { display: block; color: var(--dim); font-family: var(--sans); font-size: 12px; }
+/* The version is an id; its facts' title is what a reader scans for. Every row alike, or a dim line reads as a stale version. */
+table.versions tbody th :is(.j-key, .j-str, .j-num, .j-lit) { color: var(--dim); }
+table.versions .cellname { display: none; }
+/* Run buttons appear on the row a reader is on, as Retry does on a job's runs: on every row they outweighed the statuses the page is for. */
+table.versions .acts { width: 1%; text-align: right; white-space: nowrap; }
+table.versions td.acts { opacity: 0; }
+table.versions tr:hover td.acts, table.versions tr:focus-within td.acts { opacity: 1; }
+@media (hover: none) { table.versions td.acts { opacity: 1; } }
+/* One button per job, stacked: side by side, two jobs pushed the table past a tablet's width. */
+table.versions td.acts .inline { display: block; margin: 0; }
+table.versions td.acts .inline + .inline { margin-top: 4px; }
+table.versions td.acts .btn { width: 100%; text-align: left; }
+@media (pointer: coarse) { table.versions td.acts .btn { min-height: 44px; } }
+/* A 40-character sha does not break by itself, and beside two jobs and Action it pushed the table past a tablet. */
+@media (max-width: 1024px) {
+  table.versions tbody th { overflow-wrap: anywhere; }
+}
+/* On a phone a version row is a card — the version and its facts across the
+   whole width, each job's state named for its job, then the buttons — because
+   as a grid the version got a fifth of 341px and a PR title wrapped a letter
+   or two per line. */
 @media (max-width: 640px) {
-  table.versions td .when { display: none; }
-  table.versions tbody th { white-space: normal; overflow-wrap: anywhere; min-width: 10em; }
+  .tablewrap:has(> table.versions) { overflow-x: visible; }
+  table.versions, table.versions tbody { display: block; }
+  table.versions thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  table.versions tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; padding: 10px 12px; border-top: 1px solid var(--line-soft); }
+  table.versions tbody tr:first-child { border-top: 0; }
+  table.versions tbody th, table.versions td { padding: 0; border: 0; white-space: normal; min-width: 0; }
+  table.versions tbody th { flex-basis: 100%; }
+  table.versions .cellname { display: inline; color: var(--dim); font-family: var(--sans); font-size: 12px; margin-right: 6px; }
+  table.versions td .when { display: inline; margin-left: 6px; }
+  table.versions td.acts { flex-basis: 100%; width: auto; text-align: left; }
+  table.versions td.acts .inline { display: inline-block; margin: 0 6px 0 0; }
+  table.versions td.acts .btn { width: auto; }
 }
 
 /* ---- activity ---- */
@@ -1575,9 +1600,6 @@ table.activity td:first-child { white-space: nowrap; }
   table.stack td.empty { display: none; }
   table.stack .vline { max-width: 100%; }
   .tablewrap:has(> table.stack) { overflow-x: visible; }
-  /* The version grid keeps its table — a version against each job is a grid — but its cells may wrap. */
-  table.versions td { white-space: normal; }
-  table.versions tbody th { min-width: 8em; }
 }
 .signin-providers { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
 .signin-providers .btn { text-align: center; padding: 8px 12px; }

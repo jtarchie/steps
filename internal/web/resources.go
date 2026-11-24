@@ -161,12 +161,19 @@ func (s *Server) handleResource(c *echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	nav := s.nav(c)
+
+	span := len(consumers) + 1
+	if !nav.ReadOnly && len(consumers) > 0 {
+		span++ // the Action column
+	}
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "resource", map[string]any{
 		"Consumers": consumers,
 		"Rows":      rows,
-		"Span":      len(consumers) + 1,
-		"Nav":       s.nav(c),
+		"Span":      span,
+		"Nav":       nav,
 		"Title":     res.Name,
 		"Crumbs":    []crumb{{Label: s.renderer.localeOf(c).text("tab.resources"), URL: "/p/" + pipeline.Slug + "/resources"}, {Label: res.Name}},
 		"Resource":  res,

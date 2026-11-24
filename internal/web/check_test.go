@@ -117,3 +117,33 @@ func TestAVersionRunsAJobPinnedToIt(t *testing.T) {
 		t.Error("the box does not narrow the versions")
 	}
 }
+
+// TestAVersionsRunButtonIsAnActionNotAStatus: a bare ▶ beside a status read as part of that status, so the run is its own Action column and names the job it starts.
+func TestAVersionsRunButtonIsAnActionNotAStatus(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+
+	server, err := New([]*Pipeline{pipeline}, &pinRecorder{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = pipeline.Store.RecordVersions(context.Background(), "repo", []map[string]any{{"ref": "v1"}}, 0)
+	if err != nil {
+		t.Fatalf("RecordVersions: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/resources/repo")
+	if !strings.Contains(body, `<th scope="col" class="acts">Action</th>`) {
+		t.Error("the versions table has no visible Action column")
+	}
+
+	if !strings.Contains(body, `>▶ Run deploy</button>`) {
+		t.Error("the run button does not name the job it starts")
+	}
+
+	if strings.Contains(body, `class="inline cellrun"`) {
+		t.Error("a run button still sits inside a job's status cell")
+	}
+}
