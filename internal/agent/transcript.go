@@ -10,6 +10,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/redact"
 )
 
 // maxRecordedResultBytes caps how much of a single tool result is persisted in
@@ -87,6 +88,8 @@ type liveContext struct {
 	// the thing a watcher most wants to see progressing — and depth is how a
 	// reader tells them from the parent's own.
 	depth int
+	// secrets is the run's own set, not a copy: a value resolved after the conversation started is masked too.
+	secrets *redact.Secrets
 }
 
 // liveIdentity returns r's live context, or the zero value when r is nil —
@@ -106,6 +109,9 @@ func (r *transcriptRecorder) publish(eventType, text, name, detail string) {
 	if r == nil || r.live.bus == nil {
 		return
 	}
+
+	// Bus.Publish, unlike events.Publish, applies no scrub of its own.
+	text, detail = r.live.secrets.String(text), r.live.secrets.String(detail)
 
 	r.live.bus.Publish(events.Event{
 		Type:      eventType,
@@ -325,14 +331,31 @@ func (r *transcriptRecorder) recorded() []transcriptEvent {
 
 // record appends one event under the lock. Split out because the CLI path has two writers — see transcriptRecorder.mu.
 func (r *transcriptRecorder) record(event transcriptEvent) {
+	event = r.masked(event)
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.events = append(r.events, event)
 }
 
+// masked hides the run's secrets in what the store will keep: a message can carry a hidden load_var, and a call's arguments are whatever the model wrote. Nested events were masked by the child recorder that took them.
+func (r *transcriptRecorder) masked(event transcriptEvent) transcriptEvent {
+	scrub := r.live.secrets.String
+
+	event.Text, event.Content, event.Request = scrub(event.Text), scrub(event.Content), scrub(event.Request)
+
+	if event.Args != nil {
+		event.Args, _ = scrubValues(event.Args, scrub).(map[string]any)
+	}
+
+	return event
+}
+
 // insert places one event at at, clamped, under the same lock record takes.
 func (r *transcriptRecorder) insert(at int, event transcriptEvent) {
+	event = r.masked(event)
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

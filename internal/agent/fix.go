@@ -13,6 +13,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -171,7 +172,7 @@ func RunFix(
 		// tool calls are attributable the same way instead of publishing (and
 		// logging) nowhere.
 		recorder: &transcriptRecorder{live: liveContext{
-			bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), job: jobName, stepIndex: stepIndex, stepName: fix.Agent,
+			bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), secrets: redact.SecretsFrom(ctx), job: jobName, stepIndex: stepIndex, stepName: fix.Agent,
 		}},
 	}
 	// RunFix runs the conversation once and never fails over (see

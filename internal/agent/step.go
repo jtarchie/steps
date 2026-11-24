@@ -15,6 +15,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -499,7 +500,7 @@ func bindRun(ctx context.Context, p *preparedAgentStep, st StepStore, jobName st
 	p.conv.env.ask.jobName = jobName
 
 	p.conv.recorder = &transcriptRecorder{live: liveContext{
-		bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), job: jobName, stepIndex: stepIndex, stepName: stepName,
+		bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), secrets: redact.SecretsFrom(ctx), job: jobName, stepIndex: stepIndex, stepName: stepName,
 	}}
 }
 
