@@ -1,6 +1,7 @@
 {{define "page"}}
 {{$e := .Export}}
 <h1 class="prompt"><b>steps mcp {{$e.Name}}</b></h1>
+{{with .SHA}}<p class="metaline">{{t "jobs.config"}} <a class="hash" href="{{configurl $.Nav.Current . "mcp-export" $e.Name}}">{{short .}}</a></p>{{end}}
 <div id="export-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#export-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph, #export-activity:outerMorph">
 <dl class="consent-facts export-facts">
   <dt>{{t "export.address"}}</dt>

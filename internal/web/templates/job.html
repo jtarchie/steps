@@ -4,6 +4,7 @@
     <h1 class="prompt"><b>steps job {{.Job.Name}}</b></h1>
     <p class="metaline" id="job-meta">
       {{t "job.runs" (len .Runs)}}
+      {{with .SHA}}<span class="sep">·</span>{{t "jobs.config"}} <a class="hash" href="{{configurl $.Nav.Current . "job" $.Job.Name}}">{{short .}}</a>{{end}}
       {{if .Job.Held}}<span class="sep">·</span><span class="st st-held">{{word "status" "held"}}</span> {{tn "job.afterfailures" .Job.Failures}}<span class="sep">·</span>{{t "job.notrigger"}}{{if .Nav.ReadOnly}}<span class="sep">·</span>{{th "job.releasewith" (code (printf "steps jobs release %v -p %v" .Job.Name .Nav.Current))}}{{end}}{{end}}
     </p>
   </div>
@@ -39,7 +40,7 @@
 </h2>
 <div class="tablewrap">
   <table class="jobruns">
-    <thead><tr><th>{{t "th.run"}}</th><th>{{t "th.status"}}</th><th>{{t "th.started"}}</th><th class="num">{{t "th.duration"}}</th>{{if not $.Nav.ReadOnly}}<th class="rowextra"><span class="visually-hidden">{{t "th.action"}}</span></th>{{end}}</tr></thead>
+    <thead><tr><th>{{t "th.run"}}</th><th>{{t "th.status"}}</th><th>{{t "th.started"}}</th><th class="num">{{t "th.duration"}}</th><th>{{t "jobs.config"}}</th>{{if not $.Nav.ReadOnly}}<th class="rowextra"><span class="visually-hidden">{{t "th.action"}}</span></th>{{end}}</tr></thead>
     <tbody>
       {{range .Runs}}
       <tr>
@@ -47,10 +48,11 @@
         <td><span class="st st-{{statusWord .Status}}">{{statusText .Status}}</span></td>
         <td class="dim">{{agoTag .StartedAt}}</td>
         <td class="num dim">{{elapsedTag .}}</td>
+        <td>{{with .ConfigSHA}}<a class="hash" href="{{configurl $.Nav.Current . "job" $.Job.Name}}">{{short .}}</a>{{if ne . $.SHA}} <span class="dim">{{t "job.config.differs"}}</span>{{end}}{{end}}</td>
         {{if not $.Nav.ReadOnly}}<td class="rowextra">{{if ne .Status "running"}}<form class="inline" method="post" action="/p/{{$.Nav.Current}}/runs/{{.ID}}/rerun"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="{{t "bar.paused.title"}}"{{else}} title="{{t "bar.retry.title"}}"{{end}}>⟲ {{t "bar.retry"}}</button></form>{{end}}</td>{{end}}
       </tr>
       {{else}}
-      <tr><td colspan="5" class="faint">{{t "runs.none"}}</td></tr>
+      <tr><td colspan="6" class="faint">{{t "runs.none"}}</td></tr>
       {{end}}
     </tbody>
   </table>

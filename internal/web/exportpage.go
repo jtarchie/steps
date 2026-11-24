@@ -129,6 +129,7 @@ func (s *Server) handleExportPage(c *echo.Context) error {
 		"Title":   export.Name + " · " + loc.text("tab.mcp"),
 		"Crumbs":  []crumb{{Label: loc.text("tab.mcp"), URL: "/p/" + pipeline.Slug + "/mcp"}, {Label: export.Name}},
 		"Export":  row,
+		"SHA":     pipeline.Config().Revision.SHA,
 		"Address": address,
 		"Connect": connectGroupsIn(loc, export.Name, address),
 		"Serving": s.exporter != nil,

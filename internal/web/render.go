@@ -302,6 +302,7 @@ func templateFuncs(loc *locale) template.FuncMap {
 		// hx-get is a plain attribute to html/template: HTML-escaped, never
 		// URL-encoded, so a name's `#` or `?` would end the path early.
 		"pathseg":       url.PathEscape,
+		"configurl":     configURL,
 		"keptOutputURL": keptOutputURL,
 		"jsonPre":       jsonPre,
 		// Process output: colour codes are drawn, not shown as `[31m` garbage (termout.go). Applied at render, not record, so stored output stays raw for later steps and the kept full-output download.

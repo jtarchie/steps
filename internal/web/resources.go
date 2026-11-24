@@ -177,6 +177,7 @@ func (s *Server) handleResource(c *echo.Context) error {
 		"Title":     res.Name,
 		"Crumbs":    []crumb{{Label: s.renderer.localeOf(c).text("tab.resources"), URL: "/p/" + pipeline.Slug + "/resources"}, {Label: res.Name}},
 		"Resource":  res,
+		"SHA":       cfg.Revision.SHA,
 		"Checked":   checked,
 		"Failing":   failingByName(failing)[res.Name],
 		"List":      list,

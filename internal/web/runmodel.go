@@ -18,6 +18,8 @@ type runView struct {
 	// that run did not have — drawn on each step's own row. Empty when there
 	// is no prior success to compare against.
 	Changed map[string]string
+	// StepConfig is, by step id, where that step sits in the configuration the run executed: a config page URL with the step's anchor. A step attachStepConfig could not place has none.
+	StepConfig map[int64]string
 	// ComparedTo is the run Changed was computed against.
 	ComparedTo string
 	// Uncompared is a step that ran with no hash to compare on one side — a

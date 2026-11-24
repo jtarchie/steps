@@ -19,7 +19,7 @@
     {{/* Every entry is conditional, so each leads with its separator and CSS
          hides the one that lands first. */}}
     <p class="metaline provenance">
-      {{if $run.Run.ConfigSHA}}<span class="sep">·</span>{{th "run.config" (runhash (printf "/p/%s/config/%s" .Nav.Current $run.Run.ConfigSHA) (short $run.Run.ConfigSHA))}}{{end}}
+      {{if $run.Run.ConfigSHA}}<span class="sep">·</span>{{th "run.config" (runhash (configurl .Nav.Current $run.Run.ConfigSHA "job" $run.Run.JobName) (short $run.Run.ConfigSHA))}}{{end}}
       {{if $run.Run.Workspace}}<span class="sep">·</span>{{$run.Run.Workspace}}{{end}}
       {{if .Job.Upstream}}<span class="sep">·</span>{{th "run.after" (edgeLinks .Nav.Current .Job.Upstream)}}{{end}}
       {{if .Job.Downstream}}<span class="sep">·</span>{{th "run.feeds" (edgeLinks .Nav.Current .Job.Downstream)}}{{end}}
@@ -280,6 +280,7 @@ document.addEventListener('htmx:after:swap', function () {
     <span class="name">{{$step.Name}}</span>
     {{if $detail}}</button>{{else}}</span>{{end}}
     <a class="anchor" href="#{{$step.Anchor}}" title="{{t "step.link"}}" aria-label="{{t "step.link"}}">#</a>
+    {{with index $run.StepConfig $step.ID}}<a class="anchor" href="{{.}}" title="{{t "step.config"}}" aria-label="{{t "step.config"}}">{}</a>{{end}}
     {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
     {{if $step.Unreported}}<span class="note">{{t "step.noend"}}</span>{{end}}
     {{with index $run.Changed $step.Name}}<span class="note chg" title="{{if eq . "new"}}{{t "step.chg.new.title"}}{{else}}{{t "step.chg.changed.title"}}{{end}}">{{word "change" .}}</span>{{end}}

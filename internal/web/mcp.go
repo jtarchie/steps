@@ -217,6 +217,7 @@ func (s *Server) handleMCP(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "mcp", map[string]any{
 		"Nav":       s.nav(c),
+		"SHA":       pipeline.Config().Revision.SHA,
 		"Attention": attention,
 		"Rest":      rest,
 		"Total":     len(servers),

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -80,17 +81,20 @@ func a11yPages(t *testing.T) (base string, pages []string) {
 	server, pipelines := lanePipelines(t, nil, "demo", twoJobs, "other", oneManualJob)
 	demo := pipelines[0]
 
+	// The served configuration is recorded and the runs are pinned to it, so every page carries its config links and the config page has blocks to land on.
+	sha := recordServed(t, demo)
+
 	for _, run := range []struct{ id, status string }{{"run-ok", "succeeded"}, {"run-bad", "failed"}} {
-		err := demo.Store.StartRun(t.Context(), store.NewRun{ID: run.id, JobName: "build", Workspace: "/tmp/ws"})
+		err := demo.Store.StartRun(t.Context(), store.NewRun{ID: run.id, JobName: "build", Workspace: "/tmp/ws", ConfigSHA: sha})
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		appendEvents(t, demo.Store, run.id, []store.RunEventRow{
 			{Type: events.TypeJobStarted, StepIndex: -1},
-			{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task"},
-			{Type: events.TypeStepOutput, StepIndex: 0, StepName: "compile", StepKind: "task", Text: "building\nhttps://example.com/" + strings.Repeat("unbroken", 60) + "\n"},
-			{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", Status: run.status, Hash: "beef7654321", DurationMS: 42},
+			{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+			{Type: events.TypeStepOutput, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Text: "building\nhttps://example.com/" + strings.Repeat("unbroken", 60) + "\n"},
+			{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: run.status, Hash: "beef7654321", DurationMS: 42},
 		})
 
 		err = demo.Store.FinishRun(t.Context(), run.id, store.RunStatus(run.status))
@@ -120,6 +124,9 @@ func a11yPages(t *testing.T) (base string, pages []string) {
 		"/p/demo/runs/run-bad",
 		"/p/demo/jobs/build/detail",
 		"/p/demo/resources",
+		"/p/demo/resources/repo",
+		"/p/demo/config/" + sha,
+		"/p/demo/config/" + sha + "#job-build:plan.1",
 		"/p/demo/approvals",
 		"/p/demo/questions",
 		"/docs/resources.md",
@@ -248,8 +255,31 @@ func TestTheKeyboardReachesEverythingVisibly(t *testing.T) {
 	base, pages := a11yPages(t)
 
 	for _, path := range pages {
-		walkTabs(ctx, t, base, path)
+		// A page opened at a fragment starts its walk there, which TestTheKeyboardContinuesFromALandedBlock holds; the same page without one is in this list.
+		if !strings.Contains(path, "#") {
+			walkTabs(ctx, t, base, path)
+		}
 	}
+}
+
+// TestTheKeyboardContinuesFromALandedBlock: a reader who followed a link to one step of the config is AT that step, so their first Tab goes to the next link after it — not back to the top of the page — and it shows its ring clear of the sticky header.
+func TestTheKeyboardContinuesFromALandedBlock(t *testing.T) {
+	ctx := browser(t)
+	base, pages := a11yPages(t)
+
+	landed := pages[slices.IndexFunc(pages, func(path string) bool { return strings.Contains(path, "#") })]
+
+	after := must(ctx, t, chromedp.Evaluate[bool](`!!(document.querySelector(':target').compareDocumentPosition(document.activeElement) & Node.DOCUMENT_POSITION_FOLLOWING)`), media("light", false), chromedp.Navigate(base+landed), chromedp.KeyEvent(kb.Tab))
+	if !after {
+		t.Errorf("%s: the first Tab does not land after the block the link opened", landed)
+	}
+
+	stop := must(ctx, t, chromedp.Evaluate[*tabStop](readStop))
+	if stop == nil {
+		t.Fatalf("%s: the first Tab focused nothing", landed)
+	}
+
+	stop.check(t, landed)
 }
 
 func walkTabs(ctx context.Context, t *testing.T, base, path string) {

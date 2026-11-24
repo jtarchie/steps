@@ -120,7 +120,9 @@ func (p *Pipeline) Unfenced() []string {
 type Server struct {
 	mu        sync.RWMutex
 	pipelines []*Pipeline
-	bySlug    map[string]*Pipeline
+	// stepBlocks caches revisionBlocks, by pipeline slug and configuration hash.
+	stepBlocks sync.Map
+	bySlug     map[string]*Pipeline
 	// broken are pipelines the database holds and a restart could not serve, by name: shown rather than dropped, because a daemon that looks healthy while missing one is the failure refusing to start used to prevent.
 	broken map[string]BrokenPipeline
 	echo   *echo.Echo

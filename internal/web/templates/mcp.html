@@ -60,7 +60,7 @@
 {{/* One server, one row. Every server used to cost a second full-width row
      carrying only its buttons, so six servers read as twelve lines and the
      columns stopped lining up with the headings above them. */}}
-{{define "mcprow"}}{{$nav := .Page.Nav}}{{with .Row}}
+{{define "mcprow"}}{{$nav := .Page.Nav}}{{$sha := .Page.SHA}}{{with .Row}}
 <tr id="mcp-{{.Name}}">
   <td class="stat">
     {{if .Pending}}<span class="stamp st st-running">{{t "mcp.loginprogress"}}</span>
@@ -71,7 +71,7 @@
     {{/* What the server IS, on one dimmed line: transport, target and auth were
          three columns holding facts a reader checks once, and between them they
          took the width the status needed. */}}
-    <div class="mcp-meta" title="{{.Target}}">{{foreign .Meta}}</div>
+    <div class="mcp-meta" title="{{.Target}}">{{foreign .Meta}}{{$name := .Name}}{{with $sha}} · {{t "jobs.config"}} <a class="hash" href="{{configurl $nav.Current . "mcp-server" $name}}">{{short .}}</a>{{end}}</div>
     {{if .AuthorizeURL}}<div class="mcp-meta">{{th "mcp.continue" (extLink .AuthorizeURL (t "mcp.continue.link"))}}</div>{{end}}
     {{if .Failed}}<div class="mcp-meta err">{{th "mcp.loginfailed" (foreign .Failed)}}</div>{{end}}
     {{with .Probe}}
