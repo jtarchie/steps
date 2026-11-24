@@ -816,6 +816,10 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "description": "Labels that must all be on it. Set, the version also carries when the last of them went on, so taking one off and putting it back asks for the work again."
+        },
+        "comment_authors": {
+          "enum": ["collaborators"],
+          "description": "Whose comments a get keeps in issue.md and issue.comments.json: anyone's when unset; collaborators keeps only those GitHub marks as written by the repository's owner, a member of its organization or a collaborator. The issue's own body is kept either way."
         }
       }
     },

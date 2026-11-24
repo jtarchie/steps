@@ -177,7 +177,12 @@ type GitHubIssuesSource struct {
 	Assignee string `yaml:"assignee,omitempty"`
 	// Labels must all be on it. Set, they also put the moment the last of them went on into the version, so taking one off and putting it back asks for the work again.
 	Labels []string `yaml:"labels,omitempty"`
+	// CommentAuthors is whose comments a get keeps: unset, anyone's; collaborators, only those GitHub says the repository's owner, a member of its organization or a collaborator wrote. The issue's own body is kept either way.
+	CommentAuthors string `yaml:"comment_authors,omitempty"`
 }
+
+// GitHubCommentAuthorsCollaborators is the one value comment_authors takes.
+const GitHubCommentAuthorsCollaborators = "collaborators"
 
 // Connection is where this resource talks to.
 func (s GitHubIssuesSource) Connection() GitHubConnection {
@@ -394,6 +399,10 @@ func ParseGitHubIssuesSource(raw map[string]any) (GitHubIssuesSource, error) {
 		if err != nil {
 			return source, err
 		}
+	}
+
+	if source.CommentAuthors != "" && source.CommentAuthors != GitHubCommentAuthorsCollaborators {
+		return source, fmt.Errorf("source.comment_authors: %q is not %s; remove it to keep a comment by anyone", source.CommentAuthors, GitHubCommentAuthorsCollaborators)
 	}
 
 	return source, validateGitHubLabelFilter(source.Labels)

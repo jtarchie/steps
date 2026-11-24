@@ -93,6 +93,8 @@ type fakeComment struct {
 	Reactions []fakeReaction
 	// InReplyTo is the review thread's first comment, on a reply in one.
 	InReplyTo int64
+	// Association is GitHub's author_association, left off the comment when empty.
+	Association string
 }
 
 // fakeReaction is one person's emoji on a comment. GitHub keeps at most one
@@ -847,6 +849,10 @@ func (f *fakeGitHub) commentJSON(comment fakeComment) map[string]any {
 		// No test edits a comment's creation, so it is the moment the test declared.
 		"created_at": comment.Updated.UTC().Format(time.RFC3339),
 		"reactions":  f.rollup(comment),
+	}
+
+	if comment.Association != "" {
+		out["author_association"] = comment.Association
 	}
 
 	switch comment.Kind {

@@ -1,0 +1,14 @@
+# comment_authors takes one word, collaborators, which GitHub decides. A login here would read as a filter that is not applied, so it is refused at load.
+# expect: source.comment_authors: "alice" is not collaborators
+
+resources:
+  - name: issue
+    type: github-issues
+    source:
+      repo: acme/app
+      comment_authors: alice
+
+jobs:
+  - name: plan
+    plan:
+      - get: issue

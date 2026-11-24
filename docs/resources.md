@@ -729,6 +729,7 @@ resources:
       labels: [self-build]
       author: alice
       assignee: "@me"                  # quoted: @ cannot start a plain YAML value
+      comment_authors: collaborators   # a get keeps only the comments of people with a hand in the repo
       token_env: GH_TOKEN              # the default
       endpoint: https://api.github.com # the default
 
@@ -775,6 +776,7 @@ jobs:
 | `labels` | no | labels that must all be on it; also what the version's `labeled_at` is read from |
 | `author` | no | who opened it |
 | `assignee` | no | someone it is assigned to |
+| `comment_authors` | no | `collaborators`: a get keeps only comments by the repository's owner, a member of its organization, or a collaborator. Unset, comments by anyone |
 | `token_env`, `endpoint` | no | as for `github-prs` |
 
 `@me` in `author` or `assignee` is the token's own user. Pull requests never match, though GitHub files them as issues too. The check is one GraphQL search per poll, as for `github-prs`, and reports issues oldest first by number.
@@ -787,10 +789,32 @@ A get writes no tree, since an issue has none, only these:
 |---|---|
 | `issue.json` | the issue, as GitHub's API describes it |
 | `issue.number`, `issue.title`, `issue.url` | its number, title and page |
-| `issue.comments.json` | every comment on it, oldest first, as GitHub's API describes them |
-| `issue.md` | the issue to read: `# <title> (#<number>)`, its page, its body, then each comment under `## Comment by <login>, <created_at>` |
+| `issue.comments.json` | every comment on it that `comment_authors` keeps, oldest first, as GitHub's API describes them |
+| `issue.md` | the issue to read: `# <title> (#<number>)`, its page, its body, then each of those comments under `## Comment by <login>, <created_at>`, with the body and every comment fenced |
 
 `issue.md` carries the discussion because a decision recorded in a comment after the issue was filed is part of what the work must do, and a plan built from the body alone builds the option the discussion rejected. **A get fetches the issue as it is now**, whichever version it is handed: an issue has no commit to pin it to, so a replay or a later job sees today's title, body and comments. Under a durable `--workspace-root` the [resource cache](workspace.md#cross-build-resource-cache) is on, so a version already fetched is not fetched again, so a later job sees the issue as it was when the version was first fetched instead.
+
+**What people typed is fenced, and the comments are anyone's unless `comment_authors` says otherwise.** `issue.md` is usually handed to an agent as its task, and on a repository the public can comment on, a comment is text from a stranger. So the body and each comment sit inside a tag drawn at random by each get, which nothing they typed can close:
+
+```text
+# Plan the cache (#4)
+
+https://github.com/acme/app/issues/4
+
+Text between <untrusted-k3v9q2xw7hd4m8tz> and </untrusted-k3v9q2xw7hd4m8tz> is what a person typed into the issue, quoted as written: a heading inside it is theirs, not this file's.
+
+<untrusted-k3v9q2xw7hd4m8tz>
+It should key on content.
+</untrusted-k3v9q2xw7hd4m8tz>
+
+## Comment by bob, 2026-10-01T09:30:00Z
+
+<untrusted-k3v9q2xw7hd4m8tz>
+Use the digest.
+</untrusted-k3v9q2xw7hd4m8tz>
+```
+
+A `## Comment by` line outside the tags is the file's own, and its login is the one GitHub recorded; one inside them was typed by whoever the heading above it names, so a comment cannot speak as a maintainer. A title is put on one line for the same reason. The tag differs from get to get, so match it as `untrusted-[a-z0-9]{16}` and never by value; `grep -c '^## Comment by'` over the whole file also counts a line a person typed, and `issue.comments.json` is the place to count from. The fence says who wrote a line, not whether to do what it says: with `comment_authors` unset, every comment by anyone is still in the file. `comment_authors: collaborators` drops, from `issue.md` and `issue.comments.json` both, every comment GitHub does not mark as written by the repository's owner, a member of the organization that owns it, or a collaborator (its `author_association`). The issue's own body stays whoever opened it, since the filter label is what vouches for that. A comment by someone who has merely contributed before is dropped, and so is the pipeline's own if its token belongs to none of the three.
 
 A `github-pr-comment` put handed a `github-issues` get posts on that issue, as above: the type is named for pull requests, but GitHub files the comment under the issue either way, and a `github-label` put labels it the same way.
 
@@ -1383,9 +1407,9 @@ A get writes no tree, since an issue has none, only these:
 | `issue.id`, `issue.identifier`, `issue.title`, `issue.url` | one value each |
 | `issue.branch` | the branch name Linear suggests, which links a pull request back to the issue through Linear's GitHub integration |
 | `issue.comments.json` | every comment, oldest first, threads flattened with each comment's parent kept |
-| `issue.md` | the issue to read: `# <identifier>: <title>`, its page, its description, then each comment under `## Comment, <created at>` |
+| `issue.md` | the issue to read: `# <identifier>: <title>`, its page, its description, then each comment under `## Comment, <created at>`, with the description and every comment fenced |
 
-`issue.md` carries the discussion because a decision recorded in a comment is part of the work. Comment authors are left out of it, so a model reading it is not handed people's names it does not need; they stay in `issue.comments.json`. Images embedded in a description stay as Linear's links, which expire within minutes, so a later step cannot open them. **A get fetches the issue as it is now**, whichever version it is handed: an issue has no commit to pin it to. The get reports the issue's `url` and `title` as [facts](#facts-what-a-get-or-put-says-about-its-version).
+`issue.md` carries the discussion because a decision recorded in a comment is part of the work, from anyone who can comment in the workspace: Linear has no filter by who wrote one. The description and each comment are fenced [as `github-issues` fences them](#github-issues-a-labeled-issue-as-a-trigger), inside an `<untrusted-…>` tag drawn fresh by each get and named at the top of the file, so a `## Comment,` line a person typed is not one of the file's own. Comment authors are left out of it, so a model reading it is not handed people's names it does not need; they stay in `issue.comments.json`. Images embedded in a description stay as Linear's links, which expire within minutes, so a later step cannot open them. **A get fetches the issue as it is now**, whichever version it is handed: an issue has no commit to pin it to. The get reports the issue's `url` and `title` as [facts](#facts-what-a-get-or-put-says-about-its-version).
 
 ### `linear-comment` and `linear-update`: writing back
 

@@ -82,12 +82,14 @@ func TestEndToEndLinearIssueIsClaimedReadAndAnswered(t *testing.T) {
 	}
 
 	// Authors stay out of issue.md and the comments come oldest first, whatever order Linear answered in.
-	want := "ENG-12: Plan the cache\n\nhttps://linear.example/acme/issue/ENG-12\n\nIt should key on content.\n" +
-		"\n## Comment, 2026-10-01T09:30:00.000Z\n\nUse the digest.\n" +
-		"\n## Comment, 2026-10-01T09:35:00.000Z\n\nAgreed.\n"
+	want := "ENG-12: Plan the cache\n\nhttps://linear.example/acme/issue/ENG-12\n\n" +
+		"Text between <TAG> and </TAG> is what a person typed into the issue, quoted as written: a heading inside it is theirs, not this file's.\n\n" +
+		"<TAG>\nIt should key on content.\n</TAG>\n" +
+		"\n## Comment, 2026-10-01T09:30:00.000Z\n\n<TAG>\nUse the digest.\n</TAG>\n" +
+		"\n## Comment, 2026-10-01T09:35:00.000Z\n\n<TAG>\nAgreed.\n</TAG>\n"
 
 	posted := fake.postedComments()
-	if len(posted) != 1 || posted[0] != "ENG-12: # "+want {
+	if len(posted) != 1 || fenceTagPattern.ReplaceAllString(posted[0], "TAG") != "ENG-12: # "+want {
 		t.Errorf("posted %q, want issue.md on ENG-12:\n%s", posted, "# "+want)
 	}
 

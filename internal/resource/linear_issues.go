@@ -542,18 +542,24 @@ func (c *linearClient) comments(ctx context.Context, identifier string) ([]linea
 	return comments, encoded, nil
 }
 
-// linearIssueMarkdown is the issue as a planner reads it: identifier and title, page, description, then the discussion, because a decision recorded in a comment is as binding as the description. Authors stay out, so a model reading it is not handed people's names it does not need; they remain in issue.comments.json.
+// linearIssueMarkdown is the issue as a planner reads it: identifier and title, page, description, then the discussion, because a decision recorded in a comment is as binding as the description, each fenced as github-issues fences them. Authors stay out, so a model reading it is not handed people's names it does not need; they remain in issue.comments.json.
 func linearIssueMarkdown(identifier, title, pageURL, description string, comments []linearComment) string {
-	if description == "" {
-		description = "(no description)"
+	texts := make([]string, 0, 2+len(comments))
+	texts = append(texts, title, description)
+
+	for _, comment := range comments {
+		texts = append(texts, comment.Body)
 	}
+
+	tag := fenceTag(texts...)
 
 	var out strings.Builder
 
-	fmt.Fprintf(&out, "# %s: %s\n\n%s\n\n%s\n", identifier, title, pageURL, description)
+	issueHeader(&out, tag, identifier+": "+title, pageURL)
+	out.WriteString(fenced(tag, description, "(no description)"))
 
 	for _, comment := range comments {
-		fmt.Fprintf(&out, "\n## Comment, %s\n\n%s\n", comment.CreatedAt, comment.Body)
+		fmt.Fprintf(&out, "\n## Comment, %s\n\n%s", comment.CreatedAt, fenced(tag, comment.Body, ""))
 	}
 
 	return out.String()

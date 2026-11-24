@@ -96,6 +96,8 @@ resources:
     source:
       repo: ((repo))
       labels: [((label))]
+      # issue.md is the planner's task, and on a public repo anyone can comment: only people with a hand in the repo get to add to it.
+      comment_authors: collaborators
 
   - name: repo
     type: git
