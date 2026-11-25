@@ -1655,3 +1655,14 @@ func TestGitHubTokenComesFromTheResourcesSecretsFirst(t *testing.T) {
 		t.Errorf("token = %q, want the resolved secret", client.token)
 	}
 }
+
+func TestAReviewAnsweringACommentLandsOnTheHeadTheCommentWasSeenAt(t *testing.T) {
+	got := targetOf(map[string]any{"kind": "issue", "id": "9", "number": "7", "sha": "abc123"})
+	if got.number != "7" || got.sha != "abc123" {
+		t.Errorf("%+v; want #7 at abc123", got)
+	}
+
+	if old := targetOf(map[string]any{"kind": "issue", "id": "9", "number": "7"}); old.sha != "" {
+		t.Errorf("%+v; a version with no recorded head names no commit", old)
+	}
+}

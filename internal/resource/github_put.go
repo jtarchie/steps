@@ -526,16 +526,9 @@ func numberedTarget(number string) (pullRequestTarget, error) {
 	return pullRequestTarget{number: number}, nil
 }
 
-// targetOf reads a version as a pull request. A comment's version names the
-// pull request it sits on; its commit is not read, which leaves a review on the head.
+// targetOf reads a version as a pull request. A comment's version carries the head it was first seen at, which is the tree its build fetched, so a review answering a comment lands on that commit too. A version recorded before comments carried one has none, and its review goes on the head.
 func targetOf(version map[string]any) pullRequestTarget {
-	target := pullRequestTarget{number: versionNumber(version, "number")}
-
-	if _, isComment := version["kind"]; !isComment {
-		target.sha = versionField(version, "sha")
-	}
-
-	return target
+	return pullRequestTarget{number: versionNumber(version, "number"), sha: versionField(version, "sha")}
 }
 
 // readPostBody reads the text to post from inside the put's own tree. An
