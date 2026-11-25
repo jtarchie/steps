@@ -666,7 +666,8 @@ steps runs resume  -p app 46UMHVPYRA6YHB7M           # continue a failed run fro
 
 ```bash
 steps run ci.yml --job build --target http://127.0.0.1:8088
-steps run ci.yml --job build --target http://alex:$(cat .steps/web-password)@ci.example.com:8088
+export STEPS_TARGET="http://alex:$(cat .steps/web-password)@ci.example.com:8088"   # the password, out of the command line
+steps run ci.yml --job build --target http://ci.example.com:8088
 ```
 
 - The daemon validates the file as a set would, on its own machine, and serves it under a pipeline it names itself (`one-off.<random>`), so a one-off can never replace a pipeline you set. That pipeline is not polled: only the job you named runs, never what a `trigger: true` resource would start.
@@ -691,7 +692,7 @@ steps run ci.yml --job build --target http://127.0.0.1:8088 --input src=. --inpu
 - Empty directories are not sent, as git does not keep them either. Outputs do not come back (Concourse's `-o` is not offered).
 - The daemon reads every folder before the run is queued, and refuses the lot — starting nothing — once they unpack past **`--one-off-input-max-bytes`** (default 1 GiB, `0` is no limit). The folders are kept with the one-off and deleted when it is forgotten, so a restart that resumes an interrupted one-off resumes it on what it was sent.
 - `--input`, `--include-ignored` and `--exclude` apply only with `--target`; a local `steps run` already reads your folders.
-- `--target` is read from the flag only, never from `STEPS_TARGET`: exported for the control verbs, it would quietly send every local run away.
+- `--target` is read from the flag only, never from `STEPS_TARGET`: exported for the control verbs, it would quietly send every local run away. Its credentials are the exception: a `--target` without any takes `STEPS_TARGET`'s when both name the same scheme and host, which keeps the password out of the command line ([authentication.md](authentication.md#from-the-cli)). `steps runs follow --target` does the same.
 
 **`steps runs follow --target <daemon> -p <name> [run]`** follows a run through the daemon's API rather than the state file, which is how a daemon on another host is followed. It reads one page of events at a time, and each page asks the daemon's access rules again — a pipeline's `access:` hides those reads exactly as it hides its pages.
 

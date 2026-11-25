@@ -456,3 +456,32 @@ func assertOneOffKept(t *testing.T, served *webProcess, state, page string) {
 		t.Errorf("steps runs -p %s = %v, want its finished run listed:\n%s", pipelineName, err, out)
 	}
 }
+
+// Not t.Parallel(): STEPS_TARGET is process-wide. A password in --target sits in the process's arguments, which another user on the machine can read; the exported STEPS_TARGET is where it can live instead. Its credentials go only to the daemon it names, so a run pointed elsewhere is not handed them.
+func TestRunTargetTakesItsCredentialsFromTheExportedTarget(t *testing.T) {
+	dir := t.TempDir()
+	ran := filepath.Join(dir, "ran")
+
+	path := writePipeline(t, dir, "jobs:\n- name: build\n  plan:\n  - task: say\n    run: touch "+ran+"\n")
+
+	served := startWeb(t, "--db", filepath.Join(dir, "daemon.db"), "--role", `admin=UserID == "alex"`, "--local-user", "alex:"+hashed(t, "alex"))
+	defer served.stopIfRunning(t)
+
+	t.Setenv("STEPS_TARGET", "http://alex:alex@localhost:1")
+
+	err := stepsRun(t, []string{"run", path, "--target", "http://" + served.addr, "--progress", "plain"})
+	if err == nil || !strings.Contains(err.Error(), "credentials") {
+		t.Errorf("with STEPS_TARGET naming another daemon = %v, want asked for credentials", err)
+	}
+
+	t.Setenv("STEPS_TARGET", authTarget(served.addr, "alex", "alex"))
+
+	err = stepsRun(t, []string{"run", path, "--target", "http://" + served.addr, "--progress", "plain"})
+	if err != nil {
+		t.Fatalf("a one-off with its credentials in STEPS_TARGET: %v", err)
+	}
+
+	if !fileExists(ran) {
+		t.Error("the one-off did not run")
+	}
+}

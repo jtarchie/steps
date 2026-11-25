@@ -166,12 +166,19 @@ A password holding a `@`, a `:` or a `/` has to be percent-encoded, as in any UR
 
 They travel in an `Authorization` header, never in the request URL, and the userinfo is stripped from every message the CLI prints — a refusal, a timeout, an unreachable daemon — so a password that reached a terminal, a CI log or a pasted bug report would be a defect.
 
+**Prefer `STEPS_TARGET` for the password.** A `--target` flag is in the process's arguments, which any other user on the machine can read while the command runs; the environment is not. `steps run --target` and `steps runs follow --target` never read their target from `STEPS_TARGET` (it would send every local run away), but when theirs has no credentials and names the same scheme and host as `STEPS_TARGET`, they use `STEPS_TARGET`'s:
+
+```bash
+export STEPS_TARGET="https://ops:PASSWORD@steps.example.com"
+steps run pipeline.yml --target https://steps.example.com
+```
+
 A request with no credentials where credentials are required says what to do about it rather than repeating `Unauthorized`:
 
 ```
 $ steps pipeline list
 steps: error: https://steps.example.com asked for credentials it did not get —
-put them in the target URL: --target http://user:password@host (or STEPS_TARGET)
+export STEPS_TARGET=http://user:password@host (or put them in --target's URL)
 ```
 
 ## What it is not

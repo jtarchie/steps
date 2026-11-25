@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -36,6 +37,9 @@ func newDaemonClient(target string) (*daemonClient, error) {
 	}
 
 	base, username, password := splitTargetCredentials(target)
+	if username == "" && password == "" {
+		username, password = exportedCredentials(base)
+	}
 
 	return &daemonClient{
 		target:   base,
@@ -75,6 +79,26 @@ func splitTargetCredentials(target string) (string, string, string) {
 	parsed.User = nil
 
 	return strings.TrimSuffix(parsed.String(), "/"), username, password
+}
+
+// exportedCredentials is STEPS_TARGET's userinfo when it names the same daemon as base: a password in --target is in the process's arguments, readable by anybody on the machine, and run and follow cannot read their target from the environment (it would send every local run away), so the exported one is where their credentials can live instead. Only for the same scheme and host, or a --target elsewhere would be handed them.
+func exportedCredentials(base string) (string, string) {
+	exported, username, password := splitTargetCredentials(os.Getenv("STEPS_TARGET"))
+	if username == "" && password == "" {
+		return "", ""
+	}
+
+	want, err := url.Parse(base)
+	if err != nil {
+		return "", ""
+	}
+
+	got, err := url.Parse(exported)
+	if err != nil || got.Scheme != want.Scheme || got.Host != want.Host {
+		return "", ""
+	}
+
+	return username, password
 }
 
 // pipelineName is a name namedPipeline accepted, the only kind pipelinePath takes.
@@ -323,7 +347,7 @@ func (c *daemonClient) doContext(ctx context.Context, method, path string, paylo
 func daemonError(target string, status int, body []byte) error {
 	// The body of a 401 is echo's own "Unauthorized", which names neither what is missing nor where it goes.
 	if status == http.StatusUnauthorized {
-		return fmt.Errorf("%s asked for credentials it did not get — put them in the target URL: --target http://user:password@host (or STEPS_TARGET)", target)
+		return fmt.Errorf("%s asked for credentials it did not get — export STEPS_TARGET=http://user:password@host (or put them in --target's URL)", target)
 	}
 
 	message := strings.TrimSpace(string(body))

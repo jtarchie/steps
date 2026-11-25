@@ -169,7 +169,7 @@ func TestA401NamesTheFix(t *testing.T) {
 		t.Fatal("a 401 was read as an answer")
 	}
 
-	for _, want := range []string{"credentials", "--target http://user:password@host", "STEPS_TARGET"} {
+	for _, want := range []string{"credentials", "STEPS_TARGET=http://user:password@host", "--target"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the 401 message does not mention %q: %v", want, err)
 		}
