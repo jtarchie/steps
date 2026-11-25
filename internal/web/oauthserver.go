@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v5"
@@ -54,6 +55,9 @@ const (
 	consentWait = 10 * time.Minute
 	// maxClients bounds self-registration, which answers anybody.
 	maxClients = 1000
+	// registrationsPerSource bounds one source's share of maxClients within registrationWindow, so a loop from one address runs out long before the daemon does. An agent registers once per connection.
+	registrationsPerSource = 20
+	registrationWindow     = time.Hour
 )
 
 // WithExternalURL is the address people and agents reach the daemon on, which every OAuth URL it publishes is built from.
@@ -152,11 +156,11 @@ func (s *Server) handleAuthServerMetadata(c *echo.Context) error {
 	})
 }
 
+// handleResourceMetadata answers alike for every pipeline and export name, served or not: it is asked before anybody signs in, so a 404 for a name nobody set would confirm the names a pipeline's access: hides.
 func (s *Server) handleResourceMetadata(c *echo.Context) error {
 	//nolint:wrapcheck // echo writes the response
 	return c.JSON(http.StatusOK, map[string]any{
 		"resource":                 s.resourceURL(c.Param("pipeline"), c.Param("export")),
-// handleResourceMetadata answers alike for every pipeline and export name, served or not: it is asked before anybody signs in, so a 404 for a name nobody set would confirm the names a pipeline's access: hides.
 		"authorization_servers":    []string{s.external},
 		"bearer_methods_supported": []string{"header"},
 		"resource_name":            c.Param("pipeline") + " / " + c.Param("export"),
@@ -213,13 +217,10 @@ func (s *Server) handleRegister(c *echo.Context) error {
 		}
 	}
 
-	name := strings.TrimSpace(req.ClientName)
-	if runes := []rune(name); len(runes) > 100 {
-		name = string(runes[:100])
-	}
+	name := clientName(req.ClientName)
 
-	if name == "" {
-		name = "an unnamed client"
+	if !s.registrations.allow(registrationSource(c.Request().RemoteAddr), time.Now()) {
+		return oauthError(c, http.StatusTooManyRequests, "temporarily_unavailable", "this address has registered as many clients as it may for now; reuse one, or try again in an hour")
 	}
 
 	client := store.OAuthClient{ID: randomToken(), Name: name, RedirectURIs: req.RedirectURIs, CreatedAt: time.Now()}
@@ -556,4 +557,74 @@ func (s *Server) issuePair(c *echo.Context, grant store.Grant) error {
 		"expires_in":    int(accessTokenTTL.Seconds()),
 		"refresh_token": refresh,
 	})
+}
+
+// registrationLog is a sliding window of registrations per source.
+type registrationLog struct {
+	mu     sync.Mutex
+	recent map[string][]time.Time
+}
+
+func (l *registrationLog) allow(source string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.recent == nil {
+		l.recent = map[string][]time.Time{}
+	}
+
+	// Sources that went quiet are dropped as the map grows, so many addresses cost memory only for an hour.
+	if len(l.recent) > registrationsPerSource*maxClients {
+		for key, times := range l.recent {
+			if now.Sub(times[len(times)-1]) >= registrationWindow {
+				delete(l.recent, key)
+			}
+		}
+	}
+
+	kept := l.recent[source][:0]
+	for _, at := range l.recent[source] {
+		if now.Sub(at) < registrationWindow {
+			kept = append(kept, at)
+		}
+	}
+
+	if len(kept) >= registrationsPerSource {
+		l.recent[source] = kept
+
+		return false
+	}
+
+	l.recent[source] = append(kept, now)
+
+	return true
+}
+
+// registrationSource is the address a registration came from, as the connection says and never as a header does, which a client writes. An IPv6 address is counted by its /64, which one host is handed whole. ponytail: behind a reverse proxy every client is the proxy's one source; trust a forwarded header there only once the daemon is told which proxy to trust.
+func registrationSource(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil || ip.To4() != nil {
+		return host
+	}
+
+	return ip.Mask(net.CIDRMask(64, 128)).String()
+}
+
+// clientName is what a registration called itself, cut to a length a consent page can show, or a placeholder for nothing.
+func clientName(raw string) string {
+	name := strings.TrimSpace(raw)
+	if runes := []rune(name); len(runes) > 100 {
+		name = string(runes[:100])
+	}
+
+	if name == "" {
+		return "an unnamed client"
+	}
+
+	return name
 }

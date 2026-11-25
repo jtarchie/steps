@@ -320,3 +320,37 @@ func TestRevokingAConnectionEndsItAtOnce(t *testing.T) {
 		t.Error("the revoked agent is still listed")
 	}
 }
+
+// Registration answers anybody, and the daemon keeps a fixed number of clients, so one source registering in a loop must run out of its own share long before it fills everyone's.
+func TestOneSourceCannotRegisterEveryClientTheDaemonKeeps(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	served := startWeb(t, "--db", filepath.Join(dir, "daemon.db"), "--local-user", "alex:"+hashed(t, "a"))
+	defer served.stopIfRunning(t)
+
+	register := func() int {
+		resp, err := http.Post("http://"+served.addr+"/oauth/register", "application/json", strings.NewReader(`{"client_name":"loop","redirect_uris":["http://127.0.0.1:9/cb"]}`)) //nolint:noctx // a test's one-shot request
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_ = resp.Body.Close()
+
+		return resp.StatusCode
+	}
+
+	accepted := 0
+	for range 100 {
+		if code := register(); code == http.StatusCreated {
+			accepted++
+		} else if code != http.StatusTooManyRequests {
+			t.Fatalf("a registration answered %d, want 201 or 429", code)
+		}
+	}
+
+	if accepted == 0 || accepted >= 100 {
+		t.Errorf("one source registered %d of 100 clients, want a share well short of all of them", accepted)
+	}
+}

@@ -390,7 +390,7 @@ The daemon asks every time, on a page that says plainly what is being agreed to:
 - You must be allowed the export: its `access:` rule, the pipeline's own [`access:`](authentication.md#one-pipelines-own-rules-access), and a role on the daemon at all. Anybody else is told so, with nothing to press.
 - **PKCE (S256) is required**, and the agent must name the export it wants (the `resource` parameter); the daemon refuses anything else back to the agent.
 - **Tokens are short and checked again.** An access token lasts an hour. Refreshing it asks again whether you may use the export — leave the team that let you in and your agent loses it at its next refresh — and hands out a new refresh token, ending the old one. Tokens are kept on the daemon only as digests.
-- **Registration is open and bounded**: an agent may register return addresses that are `https`, `http` to the same machine, or an app's own scheme, never one that runs something in the browser; the daemon keeps at most 1,000 registered agents.
+- **Registration is open and bounded**: an agent may register return addresses that are `https`, `http` to the same machine, or an app's own scheme, never one that runs something in the browser; the daemon keeps at most 1,000 registered agents, and one address may register 20 an hour (an IPv6 address counts by its /64), so a loop from one place cannot use them all up. The address is the connection's, never a forwarded header, so behind a reverse proxy every agent shares the proxy's 20.
 - Agreeing is recorded in the [activity log](web.md#activity) as `mcp authorize`.
 
 ### What a connected agent can do

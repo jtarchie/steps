@@ -160,6 +160,8 @@ type Server struct {
 	// exporter builds exports and exports holds the built ones: see exports.go.
 	exporter Exporter
 	exports  exportCache
+	// registrations is each source's recent client registrations: see allowRegistration.
+	registrations registrationLog
 	// reader serves the read-only MCP tools at /mcp, and mcpAccess is --mcp-access, nil for anyone with the viewer role: see readmcp.go.
 	reader    http.Handler
 	mcpAccess *vm.Program
