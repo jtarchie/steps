@@ -153,13 +153,10 @@ func (s *Server) handleAuthServerMetadata(c *echo.Context) error {
 }
 
 func (s *Server) handleResourceMetadata(c *echo.Context) error {
-	if _, _, found := s.exportNamed(c.Param("pipeline"), c.Param("export")); !found {
-		return echo.NewHTTPError(http.StatusNotFound, "no such export")
-	}
-
 	//nolint:wrapcheck // echo writes the response
 	return c.JSON(http.StatusOK, map[string]any{
 		"resource":                 s.resourceURL(c.Param("pipeline"), c.Param("export")),
+// handleResourceMetadata answers alike for every pipeline and export name, served or not: it is asked before anybody signs in, so a 404 for a name nobody set would confirm the names a pipeline's access: hides.
 		"authorization_servers":    []string{s.external},
 		"bearer_methods_supported": []string{"header"},
 		"resource_name":            c.Param("pipeline") + " / " + c.Param("export"),

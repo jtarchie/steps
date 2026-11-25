@@ -549,7 +549,7 @@ func returnTo(c *echo.Context, fallback string) string {
 func (s *Server) handleHook(c *echo.Context) error {
 	target := pipelineOf(c)
 	if target.Hooks == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "no webhook resources in this pipeline")
+		return hookUnauthorized(c)
 	}
 
 	target.Hooks(c.Response(), c.Request(), c.Param("resource"))

@@ -11,9 +11,9 @@ import (
 func (s *Server) resolvePipeline(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		pipeline := s.Lookup(c.Param("pipeline"))
-		// A webhook sender never passed this server's credentials, so it is not told why.
+		// A webhook sender never passed this server's credentials, so a name nobody set answers as a resource that is not a webhook does, which is as a bad signature does.
 		if pipeline == nil && isHookRoute(c) {
-			return echo.NewHTTPError(http.StatusNotFound, ErrNoSuchPipeline.Error())
+			return hookUnauthorized(c)
 		}
 
 		if pipeline == nil {
@@ -92,4 +92,11 @@ func refuseBrowsers(next echo.HandlerFunc) echo.HandlerFunc {
 		// ponytail: on a non-loopback listen without --allowed-host a rebinding page's GET carries neither and is answered, showing it nothing the UI's own pages do not, and its UI POSTs pass sameOriginMutations; the allow-list closes both.
 		return next(c)
 	}
+}
+
+// hookUnauthorized is the one answer a delivery that is not accepted gets, byte for byte the trigger package's.
+func hookUnauthorized(c *echo.Context) error {
+	http.Error(c.Response(), "unauthorized", http.StatusUnauthorized)
+
+	return nil
 }

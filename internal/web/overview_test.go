@@ -1922,8 +1922,8 @@ func TestTheRootShowsABrokenPipeline(t *testing.T) {
 
 	// The webhook route skips this server's credentials, so the reason — paths, variable names — must not reach whoever can post to it.
 	code, body = call(t, server, http.MethodPost, "/p/gone/hooks/repo", "{}")
-	if code != http.StatusNotFound || strings.Contains(body, "second line") {
-		t.Errorf("a webhook delivery to the broken pipeline = %d %s, want a bare 404", code, body)
+	if code != http.StatusUnauthorized || body != "unauthorized\n" {
+		t.Errorf("a webhook delivery to the broken pipeline = %d %s, want the bare 401 any refused delivery gets", code, body)
 	}
 }
 
@@ -2053,5 +2053,17 @@ func TestTheOverviewTalliesEachRowThatWantsAPerson(t *testing.T) {
 
 	if want := (overviewTally{Paused: 1, Failing: 2, Broken: 1}); got != want {
 		t.Errorf("tally = %+v, want %+v", got, want)
+	}
+}
+
+// A pipeline with no webhook resources answers a delivery as one with them answers a resource that is not a webhook, so the hook route says nothing about what a pipeline declares.
+func TestADeliveryToAPipelineWithNoWebhooksIsTheBareRefusal(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "app")
+
+	code, body := call(t, server, http.MethodPost, "/p/app/hooks/repo", "{}")
+	if code != http.StatusUnauthorized || body != "unauthorized\n" {
+		t.Errorf("a delivery to a pipeline with no webhooks = %d %q, want the bare 401", code, body)
 	}
 }

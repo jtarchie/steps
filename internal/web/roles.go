@@ -186,13 +186,22 @@ func (s *Server) roleFor(ctx context.Context, who actor.Actor, p *Pipeline) (Rol
 	return role, id
 }
 
-// roleOf is what this request's person may do; everything on a server nobody signs in to.
+// roleOf is what this request's person may do; everything on a server nobody signs in to, and nothing on one where this request has not said who it is.
 func (s *Server) roleOf(c *echo.Context) Role {
 	if role, ok := c.Get(roleKey).(Role); ok {
 		return role
 	}
 
-	return RoleAdmin
+	return s.unidentifiedRole()
+}
+
+// unidentifiedRole is the role of a request nobody has named: a page before authorize ran (a 401, a host refusal, a route that carries its own credential) must not be drawn as an admin's.
+func (s *Server) unidentifiedRole() Role {
+	if s.auth == nil {
+		return RoleAdmin
+	}
+
+	return 0
 }
 
 // routeRoles is what each route outside activityRoutes asks beyond the default: GET and HEAD read, anything else operates. TestEveryMutatingRouteDeclaresItsRole holds every mutating route to one table or the other.
@@ -253,15 +262,20 @@ func (s *Server) authorize(next echo.HandlerFunc) echo.HandlerFunc {
 		role, id := s.roleFor(c.Request().Context(), who, target)
 		c.Set(identityKey, id)
 
-		// Somebody a pipeline's own rules hide is told it does not exist, as they would be for a name nobody set.
-		if target != nil && role == 0 {
-			return s.notServed(c, c.Param("pipeline"))
+		// Somebody a pipeline's own rules hide is answered as for a name nobody set, refusals included: a 404 where a missing name would be a 403 says the name exists.
+		hidden := target != nil && role == 0
+		if hidden {
+			role = s.roles.highest(id)
 		}
 
 		c.Set(roleKey, role)
 
 		needed := neededRole(c)
 		if role >= needed {
+			if hidden {
+				return s.notServed(c, c.Param("pipeline"))
+			}
+
 			return next(c)
 		}
 
@@ -371,11 +385,15 @@ func (p *Pipeline) narrow(role Role, id Identity) Role {
 
 const identityKey = "steps.identity"
 
-// visibleTo is the pipelines this request's person may see: every one on a server nobody signs in to.
+// visibleTo is the pipelines this request's person may see: every one on a server nobody signs in to, none to a request that has not said who it is.
 func (s *Server) visibleTo(c *echo.Context, pipelines []*Pipeline) []*Pipeline {
 	id, signedIn := c.Get(identityKey).(Identity)
-	if !signedIn {
+	if !signedIn && s.auth == nil {
 		return pipelines
+	}
+
+	if !signedIn {
+		return nil
 	}
 
 	role := s.roles.highest(id)
@@ -402,11 +420,11 @@ func (s *Server) brokenTo(c *echo.Context) []BrokenPipeline {
 	return s.Broken()
 }
 
-// roleOfPerson is the daemon-wide role, before any pipeline narrows it; everything on a server nobody signs in to.
+// roleOfPerson is the daemon-wide role, before any pipeline narrows it; everything on a server nobody signs in to, nothing to a request that has not said who it is.
 func (s *Server) roleOfPerson(c *echo.Context) Role {
 	id, signedIn := c.Get(identityKey).(Identity)
 	if !signedIn {
-		return RoleAdmin
+		return s.unidentifiedRole()
 	}
 
 	return s.roles.highest(id)

@@ -240,3 +240,23 @@ func TestTheCredentialCompareIsConstantTime(t *testing.T) {
 		t.Error("auth.go compares a credential with ==")
 	}
 }
+
+// A page drawn before anybody said who they are — the 401 itself, a broken pipeline's hook — is drawn for nobody: a broken pipeline's name and reason are an admin's to read, and nobody is not an admin.
+func TestARequestNobodyIdentifiedIsShownNoBrokenPipeline(t *testing.T) {
+	t.Parallel()
+
+	server := authServer(t)
+	server.MarkBroken(BrokenPipeline{Name: "zebrabroken", From: "/src/z.yml", Reason: "the-reason"})
+
+	for _, target := range []string{"/", "/p/zebrabroken"} {
+		_, _, body := authCall(t, server, http.MethodGet, target, "", "", http.Header{"Accept": {"text/html"}})
+		if strings.Contains(body, "the-reason") || strings.Contains(body, "/src/z.yml") || (target == "/" && strings.Contains(body, "zebrabroken")) {
+			t.Errorf("an unidentified GET %s was shown the broken pipeline:\n%s", target, body)
+		}
+	}
+
+	code, _, body := authCall(t, server, http.MethodGet, "/p/zebrabroken", authUser, authPass, nil)
+	if code != http.StatusNotFound || !strings.Contains(body, "the-reason") {
+		t.Errorf("the signed-in admin's GET /p/zebrabroken = %d, want the reason it is not served:\n%s", code, body)
+	}
+}
