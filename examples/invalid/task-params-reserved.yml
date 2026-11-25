@@ -1,0 +1,12 @@
+# steps sets the build metadata itself; a param of the same name would leave
+# a merge order to decide which value the command sees.
+# expect: params.STEPS_RUN_ID: set by steps for every step (build metadata)
+tasks:
+  - name: stamp
+    params: {STEPS_RUN_ID: fixed}
+    run: echo "$STEPS_RUN_ID"
+
+jobs:
+  - name: release
+    plan:
+      - task: stamp

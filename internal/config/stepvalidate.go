@@ -184,12 +184,12 @@ func checkStepFieldPlacement(label string, step *Step) error {
 // checkResourceOnlyFields places the fields that only a get or a put can act
 // on; why params: is valid on both is on validateStepFieldPlacement.
 func checkResourceOnlyFields(label string, step *Step) error {
-	isGet, isPut := step.Get != "", step.Put != ""
+	isGet, isPut, isTask := step.Get != "", step.Put != "", step.Task != ""
 
 	return firstMisplaced(label, []misplacedField{
 		{step.Trigger && !isGet, "trigger is only valid on get steps"},
 		{step.Version != nil && !isGet, "version is only valid on get steps"},
-		{step.Params != nil && !isGet && !isPut, "params is only valid on get and put steps"},
+		{step.Params != nil && !isGet && !isPut && !isTask, "params is only valid on get, put and task steps"},
 	})
 }
 

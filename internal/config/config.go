@@ -113,6 +113,7 @@ func parseQuietly(source []byte, name string, label string, fsys Files, logged b
 	}
 
 	cfg.registerBuiltinAgents()
+	cfg.registerBuiltinTasks()
 	cfg.registerBuiltinResourceTypes()
 
 	// After built-in registration, so a bare @builtin/<name> reference picks up the default model without an agents: entry.
@@ -164,6 +165,7 @@ func (c *Config) validate() error {
 		c.validateImageRules,
 		c.validateEnvRules,
 		c.validateSecrets,
+		c.validateTaskParams,
 		c.validateUserRules,
 		c.validateNetworkRules,
 		c.validateExtraHostsRules,

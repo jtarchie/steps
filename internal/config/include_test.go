@@ -399,8 +399,8 @@ func nonZeroValue(t *testing.T, typ reflect.Type) reflect.Value {
 	value := reflect.New(typ).Elem()
 
 	switch typ.Kind() { //nolint:exhaustive // default fails, naming a kind a new field introduced
-	case reflect.String:
-		value.SetString("x")
+	case reflect.String, reflect.Interface:
+		value.Set(reflect.ValueOf("x").Convert(typ))
 	case reflect.Int, reflect.Int64:
 		value.SetInt(1)
 	case reflect.Float64:

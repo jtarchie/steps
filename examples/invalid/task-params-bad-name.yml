@@ -1,0 +1,8 @@
+# A param is an environment variable, so its name has to be one a shell can read.
+# expect: params.my-flag: not a variable name
+jobs:
+  - name: release
+    plan:
+      - task: build
+        params: {my-flag: on}
+        run: env

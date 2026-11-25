@@ -184,7 +184,7 @@ func validateAcrossTemplates(label string, step Step) error {
 		}
 	}
 
-	if inner.Put == "" {
+	if inner.Put == "" && inner.Task == "" {
 		return nil
 	}
 

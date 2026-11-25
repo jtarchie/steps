@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 )
 
-//go:embed prompts/*.md agents/*.yml tools/*.md resource_types/*.yml
+//go:embed prompts/*.md agents/*.yml tools/*.md resource_types/*.yml tasks/*.yml
 var builtinFS embed.FS
 
 // ReadBuiltinPrompt returns the content of a named built-in system prompt.
@@ -122,6 +123,73 @@ func (c *Config) registerBuiltinAgents() {
 		c.Agents = append(c.Agents, agent)
 		slog.Debug("builtin.agents.register", "name", fullName)
 	}
+}
+
+// registerBuiltinTasks makes each embedded task the pipeline names available as @builtin/<name>, merging a pipeline's same-named entry on top as registerBuiltinAgents does, so an entry repinning one field keeps the rest. Only a named one: an unused built-in's image would otherwise be pre-pulled, and docker required, by every pipeline.
+func (c *Config) registerBuiltinTasks() {
+	named := c.namedTasks()
+
+	entries, err := builtinFS.ReadDir("tasks")
+	if err != nil {
+		slog.Warn("builtin.tasks.list", "error", err)
+
+		return
+	}
+
+	for _, entry := range entries {
+		name, ok := strings.CutSuffix(entry.Name(), ".yml")
+		if entry.IsDir() || !ok || !named["@builtin/"+name] {
+			continue
+		}
+
+		data, err := builtinFS.ReadFile("tasks/" + entry.Name())
+		if err != nil {
+			slog.Warn("builtin.tasks.load", "name", name, "error", err)
+
+			continue
+		}
+
+		var task Task
+
+		err = strictUnmarshal(data, &task)
+		if err != nil {
+			slog.Warn("builtin.tasks.load", "name", name, "error", err)
+
+			continue
+		}
+
+		task.Name = "@builtin/" + name
+
+		existing := slices.IndexFunc(c.Tasks, func(t Task) bool { return t.Name == task.Name })
+		if existing >= 0 {
+			mergeTaskDocument(&c.Tasks[existing], task)
+
+			continue
+		}
+
+		c.Tasks = append(c.Tasks, task)
+	}
+}
+
+// namedTasks are the task names a step runs or a tasks: entry declares.
+func (c *Config) namedTasks() map[string]bool {
+	named := map[string]bool{}
+
+	for i := range c.Tasks {
+		named[c.Tasks[i].Name] = true
+	}
+
+	for _, job := range c.Jobs {
+		_ = job.visitSteps(func(_ string, step *Step) error {
+			if step.Run == "" {
+				named[step.Task] = true
+			}
+
+			return nil
+		})
+	}
+
+	return named
 }
 
 // ListBuiltinResourceTypeNames returns the available built-in resource type

@@ -68,6 +68,7 @@ func BuildEnv(ctx context.Context) map[string]string {
 	}
 
 	// Per exec, never create-time: dockerd persists a container's create-time Env to config.v2.json and the container is kept for postmortem, while an exec's lives only in memory.
+	env = mergeEnv(env, paramEnvFrom(ctx))
 	env = mergeEnv(env, secretEnvFrom(ctx))
 	env = mergeEnv(env, pendingEnvFrom(ctx))
 
@@ -136,6 +137,19 @@ func SecretEnv(ctx context.Context) map[string]string { return secretEnvFrom(ctx
 
 func secretEnvFrom(ctx context.Context) map[string]string {
 	env, _ := ctx.Value(secretEnvKey{}).(map[string]string)
+
+	return env
+}
+
+type paramEnvKey struct{}
+
+// WithParamEnv carries a task's params: to every command made under the context; config refuses a name also in env:, secrets: or reserved, so no merge order decides a value.
+func WithParamEnv(ctx context.Context, env map[string]string) context.Context {
+	return context.WithValue(ctx, paramEnvKey{}, env)
+}
+
+func paramEnvFrom(ctx context.Context) map[string]string {
+	env, _ := ctx.Value(paramEnvKey{}).(map[string]string)
 
 	return env
 }

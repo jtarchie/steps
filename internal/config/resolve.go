@@ -59,6 +59,8 @@ type ResolvedTask struct {
 	Assert *Assert
 	// Caches are the directories this task keeps between runs. See TaskCache.
 	Caches []TaskCache
+	// Params are the task's params: as the environment its commands see, a declared default overridden by the step's own, null dropped (taskparams.go).
+	Params map[string]string
 }
 
 // ResolveTask resolves step into a ResolvedTask: a step carrying its own
@@ -74,7 +76,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 			Inputs: step.InputNames(), Outputs: step.Outputs, Image: step.Image, Env: step.Env, Secrets: step.Secrets, User: step.User, Network: step.Network,
 			Privileged: step.Privileged, Limits: step.Limits, Sandbox: step.Sandboxed(), Timeout: step.Timeout,
 			InputMapping: step.InputMapping, OutputMapping: step.OutputMapping,
-			Assert: step.Assert, Caches: step.Caches,
+			Assert: step.Assert, Caches: step.Caches, Params: paramEnv(step.Params),
 		}, nil
 	}
 
@@ -112,7 +114,7 @@ func (c *Config) ResolveTask(step Step) (ResolvedTask, error) {
 		Image: runtime.Image, Env: runtime.Env, Secrets: secrets, User: runtime.User, Network: runtime.Network, ExtraHosts: runtime.ExtraHosts,
 		Privileged: runtime.Privileged, Limits: runtime.Limits, Sandbox: runtime.Sandbox, Timeout: timeout,
 		InputMapping: step.InputMapping, OutputMapping: step.OutputMapping, Assert: step.Assert,
-		Caches: resolveCaches(task.Caches, step),
+		Caches: resolveCaches(task.Caches, step), Params: paramEnv(mergeParams(task.Params, step.Params)),
 	}, nil
 }
 

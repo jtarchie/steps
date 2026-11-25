@@ -1,0 +1,17 @@
+# A step may set only the params its tasks: entry declares: a misspelled name
+# would otherwise reach the command as a variable nobody reads, and the
+# default it meant to override would run instead.
+# expect: params.NAEM: task "greet" declares no such param (it declares GREETING, NAME)
+
+tasks:
+  - name: greet
+    params:
+      GREETING: hello
+      NAME: ~
+    run: echo "$GREETING, $NAME"
+
+jobs:
+  - name: release
+    plan:
+      - task: greet
+        params: {NAEM: world}

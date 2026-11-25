@@ -266,6 +266,8 @@ func placedTaskRunner(ctx context.Context, step config.Step, rt config.ResolvedT
 		return ctx, dialed, nil, err
 	}
 
+	ctx = shell.WithParamEnv(ctx, rt.Params)
+
 	ctx, err = withStepSecrets(ctx, rt.Secrets)
 	if err != nil {
 		shell.CloseRunner(runner, rt.Name)

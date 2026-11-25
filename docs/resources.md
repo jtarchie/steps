@@ -1773,23 +1773,9 @@ Concourse's get downloads the image as a root filesystem by default; here the st
 
 A put pushes an image a build left in the put's inputs, to `source.tag` and any additional tags, and records the pushed digest as the resource's version: the same shape the check finds, so the next build that gets this resource sees what was pushed.
 
-**Building is a task, not a resource**, as in Concourse (its oci-build-task, then a registry-image put). The task below runs BuildKit in a container of its own, so it needs no docker CLI on this machine and no daemon login, and its output is an OCI tarball the put pushes from steps itself:
+**Building is a task, not a resource**, as in Concourse (its oci-build-task, then a registry-image put). `@builtin/oci-build` is that task: it runs BuildKit in a container of its own, so it needs no docker CLI on this machine and no daemon login, and writes `image/image.tar`, an OCI tarball the put pushes from steps itself:
 
 ```yaml registry=publish
-tasks:
-  - name: oci-build                    # reusable: any step named oci-build runs this
-    image: moby/buildkit:v0.17.3
-    privileged: true                   # BuildKit mounts its own snapshots
-    caches:
-      - path: buildkit                 # its layer cache, warm on the next build of this step
-    run: |
-      buildctl-daemonless.sh build \
-        --frontend dockerfile.v0 --local context=src --local dockerfile=src \
-        --export-cache type=local,dest=buildkit,mode=max --import-cache type=local,src=buildkit \
-        --opt build-arg:SOURCE_DATE_EPOCH=0 \
-        --output type=oci,dest=image/image.tar,rewrite-timestamp=true
-      echo v1 > image/tags
-
 resources:
   - name: app-image
     type: registry-image
@@ -1804,25 +1790,37 @@ jobs:
       - task: source                   # stands in for a get of the repository holding the Dockerfile
         outputs: [src]
         run: |
-          printf 'FROM scratch\nCOPY hello /hello\n' > src/Dockerfile
-          echo hello > src/hello
-      - task: oci-build
+          mkdir src/app
+          printf 'FROM scratch\nCOPY hello /hello\n' > src/app/Dockerfile
+          echo hello > src/app/hello
+          echo v1 > src/tags
+      - task: "@builtin/oci-build"     # quotes required -- YAML reserves a leading @
         inputs: [src]
-        outputs: [image]
+        params:
+          CONTEXT: src/app             # the build context, and where its Dockerfile is
       - put: app-image
-        inputs: [image]
+        inputs: [image, src]
         params:
           image: image/image.tar       # what to push
-          additional_tags: image/tags  # optional; a file of whitespace-separated tags it also gets
+          additional_tags: src/tags    # optional; a file of whitespace-separated tags it also gets
     assert:
-      execution: [source, oci-build, app-image]
+      execution: [source, "@builtin/oci-build", app-image]
       outcome: succeeded
 ```
+
+| `@builtin/oci-build` param | default | meaning |
+|---|---|---|
+| `CONTEXT` | `.` | the build context, a path from the step's root (an input's name, and below it) |
+| `DOCKERFILE` | `$CONTEXT/Dockerfile` | the Dockerfile, when it is not the context's own |
+| `IMAGE_PLATFORM` | this machine's | platforms to build, comma-separated (`linux/arm64,linux/amd64`); more than one makes one multi-platform index |
+| `TARGET` | the last stage | the Dockerfile stage to build |
+
+The names are oci-build-task's. A step sets them in its [`params:`](infra.md#task-parameters-params), and a name the task does not declare is a load error. The BuildKit image, `privileged: true`, the layer cache and the reproducibility settings are the task's own; a `tasks:` entry named `@builtin/oci-build` overrides any field it sets and keeps the rest, the way an [`@builtin` agent profile](agents.md#built-in-agent-profiles-builtinname) does, so repinning BuildKit is `image:` and nothing else. A build the four params cannot say, like the one below, is a task of your own.
 
 The put's version is the pushed digest; the next build's get of `app-image` finds it, and a [get after the put](#a-get-after-a-put-fetches-what-the-put-recorded) in the same plan fetches exactly that digest.
 
 - **The same digest, from the cache.** An unchanged Dockerfile and context reuse every cached layer and push the digest they pushed last time: no new version, nothing downstream triggers. `SOURCE_DATE_EPOCH=0` and `rewrite-timestamp=true` pin timestamps, and BuildKit's own exporter writes no provenance or SBOM attestations, but a step whose output is not deterministic (an `apt-get install`) gives a new digest when it is rebuilt cold. The cache is exported to and imported from the `caches:` directory (`type=local`); pointing BuildKit's own `--root` there keeps no layers between builds.
-- **Multi-platform** is `--opt platform=linux/amd64,linux/arm64` on the build; the tarball then holds one index, pushed whole, and its digest is the version. A platform other than this machine's runs under emulation, slowly.
+- **Multi-platform** is `IMAGE_PLATFORM: linux/amd64,linux/arm64` (`--opt platform=...` on a build of your own); the tarball then holds one index, pushed whole, and its digest is the version. A platform other than this machine's runs under emulation, slowly.
 - **`privileged: true` is the price.** BuildKit mounts and unshares, which an unprivileged container may not; a worker that cannot give that (an `ssh://` one, which runs no containers) cannot run this task.
 
 | `params:` field | required | meaning |

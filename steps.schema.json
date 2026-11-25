@@ -1774,6 +1774,11 @@
         "caches": {
           "$ref": "#/$defs/caches"
         },
+        "params": {
+          "type": "object",
+          "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+          "description": "The variables this task's commands read, each with its default (null for none). A step running it may override any and set no other. A string is passed as written, anything else as JSON."
+        },
         "container_limits": {
           "$ref": "#/$defs/containerLimits"
         },
@@ -2020,7 +2025,7 @@
         },
         "params": {
           "type": "object",
-          "description": "get/put only: passed to the resource command this step runs, as {{ .params.* }} \u2014 a put's reach out:, a get's reach in: (how to fetch, e.g. git depth/submodules)."
+          "description": "get/put: passed to the resource command this step runs, as {{ .params.* }} \u2014 a put's reach out:, a get's reach in: (how to fetch, e.g. git depth/submodules). task: environment variables for its commands, overriding the tasks: entry's declared params (a string as written, anything else as JSON)."
         },
         "agent": {
           "type": "string"

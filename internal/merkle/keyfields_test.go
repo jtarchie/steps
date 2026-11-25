@@ -359,7 +359,7 @@ func keyProbes() []keyProbe {
 
 	for _, field := range []string{
 		"Messages", "MessageFiles", "Dir", "Tools", "MaxTurns", "MaxQuestions", "MaxContextBytes", "ContextPaths", "Memory",
-		"Trigger", "Version", "Params", "Passed", "Resource", "VarFile", "Format", "Reveal", "Budget", "MaxInFlight",
+		"Trigger", "Version", "Passed", "Resource", "VarFile", "Format", "Reveal", "Budget", "MaxInFlight",
 	} {
 		stepTaskSilent[field] = "source: validateStepFieldPlacement — a field of another step kind is a load error on a task step"
 	}

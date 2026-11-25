@@ -905,6 +905,48 @@ jobs:
 - **Step-level override**: a `task`/`agent` step's `env:` replaces the referenced entry's for that step only. Unlike `image:` this is *declared*-wins, not non-empty-wins — an explicit `env: []` means "nothing beyond the baseline", which is a real thing to want. Invalid on `get`/`put` steps (set it on the resource type).
 - **Caching**: the variable **names** fold into the node's hash. The values do not — a value changing is the operator's environment moving under the pipeline, which steps has never claimed to hash.
 
+## Task parameters (`params:`)
+
+`params:` hands a task values the pipeline writes, as environment variables, as Concourse's task `params:` do. A `tasks:` entry declares the names it reads, each with a default or `~` for none; a step that runs it may override any of them:
+
+```yaml
+tasks:
+  - name: greet
+    params:
+      GREETING: hello            # a default
+      NAME: ~                    # declared, no default: unset unless a step sets it
+    run: echo "$GREETING, ${NAME-nobody}"
+
+jobs:
+  - name: release
+    plan:
+      - task: greet
+        params: {NAME: world}    # overrides one; GREETING keeps its default
+        assert:
+          stdout: hello, world
+      - task: count
+        params: {COUNT: 3, FLAGS: [a, b]}
+        run: echo "$COUNT $FLAGS"
+        assert:
+          stdout: 3 ["a","b"]
+      - task: greet
+        across:
+          - var: who
+            values: [ada]
+        params: {NAME: "{{ .vars.who }}"}   # each cell sets its own
+        assert:
+          stdout: hello, ada
+    assert:
+      execution: [greet, count, "greet [who=ada]"]
+      outcome: succeeded
+```
+
+- **A step may only set what its task declares.** A name the `tasks:` entry does not list is a load error naming the ones it does, so a misspelled `NAEM:` fails `steps validate` instead of quietly doing nothing. A divergence from Concourse, which passes an undeclared param through: there the task's file is in another repository and may move on independently, here the entry and the step are read together. An inline `run:` has no declaration to check against and takes any name.
+- **Values, so not credentials.** A value is written to the state database as part of the step's cache key, exactly as a `put`'s `params:` are, and a changed value re-runs the step. A credential belongs in [`secrets:`](secrets.md) or [`env:`](#passing-environment-through-env), which hash a reference or a name.
+- **A string is passed as written; anything else as JSON**, as Concourse does: `3` is `3`, `[a, b]` is `["a","b"]`, `true` is `true`. `~` (null) leaves the variable unset.
+- **A name is a shell variable name** (`[A-Za-z_][A-Za-z0-9_]*`), and may not also be in the step's `env:` or `secrets:`, or be one steps sets itself ([build metadata](#build-metadata-steps_run_id-), `STEPS_PENDING_*`), so no merge order decides a value.
+- **`((.:name))`** in a step's `params:` is filled in when the step runs, and an [`across:`](control-flow.md#across--one-step-once-per-combination) cell's `{{ .vars.* }}` with its own values, as on a `put`.
+
 ## Build metadata (`STEPS_RUN_ID` …)
 
 Every command inside a run — tasks, `when:` guards, hooks, `in:`/`out:`, an agent's `run_shell` and custom tools, and a CLI agent's process — gets a few variables saying which build it is part of, as Concourse's `BUILD_*` variables do. A `put` can write "built by run X, pipeline revision Y" into a PR body.

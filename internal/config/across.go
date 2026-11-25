@@ -384,7 +384,7 @@ func renderCell(label string, cell *Step, combo acrossCombo, parsed templateCach
 		*field.value = rendered
 	}
 
-	if cell.Put != "" {
+	if cell.Put != "" || cell.Task != "" {
 		// Rebuilt rather than edited in place: every cell shares the one params map ExpandAcross copied by assignment.
 		rendered, err := mapStringLeaves("params", cell.Params, func(name, leaf string) (string, error) {
 			out, renderErr := renderVars(leaf, combo, parsed)

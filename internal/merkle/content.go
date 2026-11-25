@@ -281,6 +281,11 @@ func TaskNodeContent(cfg *config.Config, step config.Step, rt config.ResolvedTas
 
 	withEnv(content, rt.Env, rt.Secrets)
 
+	// Value-gated, so a task with no params hashes as it did before the field existed.
+	if len(rt.Params) > 0 {
+		content["params"] = rt.Params
+	}
+
 	if rt.User != "" {
 		content["user"] = rt.User
 	}

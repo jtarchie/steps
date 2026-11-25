@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -262,5 +264,45 @@ jobs:
 		if strings.HasPrefix(agent.SystemFile, "@builtin/") {
 			t.Errorf("built-in %q left system_file unresolved", name)
 		}
+	}
+}
+
+// A tasks: entry named for a built-in task overrides what it sets and keeps the rest, so repinning BuildKit keeps oci-build's privileges, cache and declared params.
+func TestBuiltinTaskPartialOverride(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]byte(`
+tasks:
+- name: "@builtin/oci-build"
+  image: moby/buildkit:newer
+  params: {IMAGE_PLATFORM: linux/arm64}
+jobs:
+- name: j
+  plan:
+  - task: "@builtin/oci-build"
+    params: {CONTEXT: src}
+`), "override", nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	task, err := cfg.FindTask("@builtin/oci-build")
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+
+	kept := fmt.Sprintf("%s %t %d %t", task.Image, task.Privileged, len(task.Caches), strings.Contains(task.Run, "buildctl-daemonless.sh"))
+	if kept != "moby/buildkit:newer true 1 true" {
+		t.Errorf("image, privileged, caches, run = %s; the override lost the built-in's fields", kept)
+	}
+
+	rt, err := cfg.ResolveTask(cfg.Jobs[0].Plan[0])
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	want := map[string]string{"CONTEXT": "src", "IMAGE_PLATFORM": "linux/arm64"}
+	if !maps.Equal(rt.Params, want) {
+		t.Errorf("params = %v, want %v (null defaults unset)", rt.Params, want)
 	}
 }

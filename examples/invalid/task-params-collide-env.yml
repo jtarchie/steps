@@ -1,0 +1,11 @@
+# A param is a value steps sets; env: names one the operator's environment
+# supplies. Both under one name would leave a merge order to decide which
+# the command sees, so the load refuses it.
+# expect: params.TOKEN: also named in env:
+jobs:
+  - name: release
+    plan:
+      - task: deploy
+        env: [TOKEN]
+        params: {TOKEN: abc}
+        run: echo "$TOKEN"

@@ -81,6 +81,8 @@ type Task struct {
 	Outputs []string   `yaml:"outputs,omitempty"`
 	// Caches are directories this task keeps between runs on the machine that ran it (see TaskCache). A referencing step's own Caches, if non-nil, override these for that step only.
 	Caches []TaskCache `yaml:"caches,omitempty"`
+	// Params declares the variables this task reads, each with its default (nil for none); a referencing step's own params: override per name and may name no other (taskparams.go).
+	Params map[string]any `yaml:"params,omitempty"`
 }
 
 // FixSpec is a task step's fix: — the agent to invoke when a run misses the

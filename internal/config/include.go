@@ -270,6 +270,9 @@ func mergeTaskDocument(t *Task, doc Task) {
 	if t.Caches == nil {
 		t.Caches = doc.Caches
 	}
+
+	// Per name, not whole-map: an entry overriding one default of a shared or built-in task keeps the rest declared.
+	t.Params = mergeParams(doc.Params, t.Params)
 }
 
 func mergeTaskContainer(t *Task, doc Task) {

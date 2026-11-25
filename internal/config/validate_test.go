@@ -279,7 +279,7 @@ jobs:
       - x
     params: { branch: main }
 `,
-			want: "params is only valid on get and put steps",
+			want: "params is only valid on get, put and task steps",
 		},
 	}
 

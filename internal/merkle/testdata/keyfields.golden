@@ -309,6 +309,9 @@
     "outputs": [
       "Outputs[0]"
     ],
+    "params": {
+      "Params.key": "Params.value"
+    },
     "privileged": true,
     "run": "make",
     "sandbox": true,
@@ -344,6 +347,9 @@
     "outputs": [
       "Outputs[0]"
     ],
+    "params": {
+      "Params.key": "Params.value"
+    },
     "privileged": true,
     "run": "make",
     "sandbox": true,

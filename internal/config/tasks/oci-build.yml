@@ -1,0 +1,25 @@
+# Reproducible with no switch to turn it off: an unchanged Dockerfile must push the same digest, or every consumer re-triggers.
+image: moby/buildkit:v0.17.3@sha256:b2498ea62630c147e98f96145c2988a74720700b250e4cf7a4328e14f5b99fc3
+privileged: true
+outputs: [image]
+caches:
+  - path: buildkit
+params:
+  CONTEXT: .
+  DOCKERFILE: ~
+  IMAGE_PLATFORM: ~
+  TARGET: ~
+run: |
+  set -eu
+  dockerfile=${DOCKERFILE:-$CONTEXT/Dockerfile}
+  set -- \
+    --frontend dockerfile.v0 \
+    --local "context=$CONTEXT" \
+    --local "dockerfile=$(dirname "$dockerfile")" \
+    --opt "filename=$(basename "$dockerfile")" \
+    --opt build-arg:SOURCE_DATE_EPOCH=0
+  if [ -n "${IMAGE_PLATFORM-}" ]; then set -- "$@" --opt "platform=$IMAGE_PLATFORM"; fi
+  if [ -n "${TARGET-}" ]; then set -- "$@" --opt "target=$TARGET"; fi
+  exec buildctl-daemonless.sh build "$@" \
+    --export-cache type=local,dest=buildkit,mode=max --import-cache type=local,src=buildkit \
+    --output type=oci,dest=image/image.tar,rewrite-timestamp=true
