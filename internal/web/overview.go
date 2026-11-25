@@ -83,7 +83,7 @@ type overviewPipeline struct {
 	InFlight  int
 	// Held is how many of its jobs the circuit breaker holds.
 	Held int
-	// Chips are the pipeline's jobs in its own order, each colored by its
+	// Chips are the pipeline's jobs upstream first, otherwise in its own order, each colored by its
 	// latest run — the answer to "which job is red" that a last-run column
 	// cannot give, and each the link to that job's transcript.
 	Chips []jobChip
@@ -143,7 +143,7 @@ func (p overviewPipeline) wanting() []jobChip {
 	return chips
 }
 
-// Named is what a map row names: the jobs that are red or running, the first mapNamed of them in config order.
+// Named is what a map row names: the jobs that are red or running, the first mapNamed of them in upstream-first order.
 func (p overviewPipeline) Named() []jobChip {
 	chips := p.wanting()
 
@@ -324,6 +324,8 @@ func jobChips(ctx context.Context, reads *pipelineReads) []jobChip {
 
 	withLastFinished(ctx, reads, views)
 
+	views = upstreamFirst(views)
+
 	chips := make([]jobChip, 0, len(views))
 
 	for i, view := range views {
@@ -374,6 +376,40 @@ func chipFor(view jobView) jobChip {
 	}
 
 	return chip
+}
+
+// upstreamFirst orders jobs so each comes after every job it gets a resource passed: by, config order otherwise, so the arrow does not depend on which job the author happened to write first.
+func upstreamFirst(views []jobView) []jobView {
+	remaining := slices.Clone(views)
+	ordered := make([]jobView, 0, len(views))
+
+	waiting := func(view jobView) bool {
+		for _, other := range remaining {
+			if other.Name != view.Name && fedBy(view, other.Name) {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	for len(remaining) > 0 {
+		// A cycle the load let through takes its first job in config order, so nothing is dropped.
+		next := 0
+
+		for i, view := range remaining {
+			if !waiting(view) {
+				next = i
+
+				break
+			}
+		}
+
+		ordered = append(ordered, remaining[next])
+		remaining = slices.Delete(remaining, next, next+1)
+	}
+
+	return ordered
 }
 
 func fedBy(view jobView, upstream string) bool {

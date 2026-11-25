@@ -190,6 +190,36 @@ func TestOnlyARedCellKeepsItsGlyph(t *testing.T) {
 	}
 }
 
+// TestAnUpstreamJobWrittenLastIsDrawnFirst: the arrow follows passed:, not which job the author wrote first.
+func TestAnUpstreamJobWrittenLastIsDrawnFirst(t *testing.T) {
+	t.Parallel()
+
+	reversed := `
+resources:
+  - name: repo
+    type: git
+    source: {uri: /tmp/nowhere}
+jobs:
+  - name: deploy
+    plan:
+      - get: repo
+        passed: [build]
+  - name: build
+    plan:
+      - get: repo
+        trigger: true
+`
+	server, _ := lanePipelines(t, nil, "app", reversed, "other", oneManualJob)
+
+	_, page := get(t, server, "/")
+	row := pipelineRow(t, page, "app")
+
+	build, deploy := strings.Index(row, "/jobs/build"), strings.Index(row, "/jobs/deploy")
+	if build < 0 || deploy < build || !strings.Contains(row[build:deploy], `<span class="jobsep" aria-hidden="true">→</span>`) {
+		t.Errorf("deploy gets repo passed: [build] but is not drawn after build behind an arrow:\n%s", row)
+	}
+}
+
 // TestAJobFedByAnotherIsDrawnAfterAnArrow: an arrow between unrelated jobs would claim a passed: edge the pipeline does not have.
 func TestAJobFedByAnotherIsDrawnAfterAnArrow(t *testing.T) {
 	t.Parallel()
