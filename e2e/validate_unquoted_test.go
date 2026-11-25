@@ -112,3 +112,34 @@ jobs:
 		t.Errorf("no warning:\n%s", got)
 	}
 }
+
+// An export's caller is not the pipeline's author, so its unquoted value is refused, not warned about — and refused however the template spells its way to the value.
+func TestValidateRefusesAnExportThatReachesACallersValueByAnotherSpelling(t *testing.T) {
+	t.Parallel()
+
+	for _, run := range []string{
+		`echo {{ index . "args" "note" }}`,
+		`{{ define "say" }}echo {{ . }}{{ end }}{{ template "say" .args.note }}`,
+	} {
+		path := writePipeline(t, t.TempDir(), `
+mcp_exports:
+- name: shell
+  access: "true"
+  tools:
+  - name: say
+    description: say it
+    run: '`+strings.ReplaceAll(run, "'", "''")+`'
+
+jobs:
+- name: build
+  plan:
+  - task: hi
+    run: echo hi
+`)
+
+		err := stepsRun(t, []string{"validate", path, "--syntax-only"})
+		if err == nil || !strings.Contains(err.Error(), "unquoted") {
+			t.Errorf("validate of %s = %v, want it refused as unquoted", run, err)
+		}
+	}
+}

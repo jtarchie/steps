@@ -34,6 +34,15 @@ func TestUnquotedRefs(t *testing.T) {
 		{"args root", "gh pr comment {{ .args.body }}", []string{"{{.args.body}}"}},
 		{"repeated once", "echo {{ .args.a }} {{ .args.a }}", []string{"{{.args.a}}"}},
 		{"unparsable", "echo {{ .args.a ", nil},
+		{"index of the whole data", `echo {{ index . "args" "a" }}`, []string{`{{index . "args" "a"}}`}},
+		{"index of dollar", `echo {{ index $ "args" "a" }}`, []string{`{{index $ "args" "a"}}`}},
+		{"the whole data printed", `echo {{ printf "%v" . }}`, []string{`{{printf "%v" .}}`}},
+		{"a variable holding the whole data", `{{ with $d := . }}echo {{ $d.args.a }}{{ end }}`, []string{`{{$d.args.a}}`}},
+		{"ranging over the whole data", `{{ range $k, $v := . }}echo {{ $v }}{{ end }}`, []string{`{{$v}}`}},
+		{"a define's dot", `{{ define "say" }}echo {{ . }}{{ end }}{{ template "say" .args.a }}`, []string{`{{.}}`}},
+		{"a define's field", `{{ define "say" }}echo {{ .a }}{{ end }}{{ template "say" .args }}`, []string{`{{.a}}`}},
+		{"a define's quoted dot", `{{ define "say" }}echo {{ . | shellquote }}{{ end }}{{ template "say" .args.a }}`, nil},
+		{"the whole data quoted", `echo {{ index . "args" "a" | shellquote }}`, nil},
 	}
 
 	for _, tc := range cases {

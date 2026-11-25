@@ -15,8 +15,12 @@ import (
 //
 // A value is derived from a root when it is reached through a field of it,
 // through a dot rebound by with/range over it, or through a variable assigned
-// from it. ponytail: variables are tracked by name across the whole template,
-// not by scope — a shadowing $x can be over- or under-reported.
+// from it. The whole data — a root-level "." or a bare "$" — holds every root,
+// so handing it anywhere (index . "args" "x", printf, a variable) counts as
+// derived, and a define's body is scanned as if its "." were derived, since
+// any {{ template }} call may pass it a root value. ponytail: variables are
+// tracked by name across the whole template, not by scope — a shadowing $x can
+// be over- or under-reported.
 func UnquotedRefs(tmpl string, roots ...string) []string {
 	parsed, err := template.New("scan").Funcs(funcMap).Parse(tmpl)
 	if err != nil {
@@ -25,11 +29,7 @@ func UnquotedRefs(tmpl string, roots ...string) []string {
 
 	scan := &refScan{roots: roots, tainted: map[string]bool{}}
 
-	for _, t := range parsed.Templates() {
-		if t.Tree != nil {
-			scan.walk(t.Root, false)
-		}
-	}
+	scan.walkAll(parsed)
 
 	return scan.found
 }
@@ -56,11 +56,38 @@ func QuotedRefs(tmpl string, roots ...string) []string {
 
 func (s *refScan) walkAll(parsed *template.Template) {
 	for _, t := range parsed.Templates() {
-		if t.Tree != nil {
-			s.quote = 0
-			s.walk(t.Root, false)
+		if t.Tree == nil {
+			continue
+		}
+
+		s.quote = 0
+
+		if t.Name() == parsed.Name() {
+			s.walk(t.Root, dotRoot)
+		} else {
+			s.walk(t.Root, dotDerived)
 		}
 	}
+}
+
+// dot is what "." holds where the scan stands.
+type dot int
+
+const (
+	// dotClean is a value no root reaches: with/range over a field outside the roots.
+	dotClean dot = iota
+	// dotDerived is a root-derived value.
+	dotDerived
+	// dotRoot is the whole data: its fields are roots only by name, but the dot itself carries all of them.
+	dotRoot
+)
+
+func rebind(tainted bool) dot {
+	if tainted {
+		return dotDerived
+	}
+
+	return dotClean
 }
 
 // expandsTwice matches command text in which sh reads a value again after shellquote has quoted it: a heredoc body (where $(…) runs inside '…'), a backtick or $'…' string, eval, and a nested sh -c.
@@ -106,9 +133,8 @@ func (s *refScan) feed(text string) {
 	}
 }
 
-// walk visits node; dotTainted says whether "." is currently a root-derived
-// value (inside with/range over one).
-func (s *refScan) walk(node parse.Node, dotTainted bool) {
+// walk visits node with "." holding d.
+func (s *refScan) walk(node parse.Node, d dot) {
 	switch n := node.(type) {
 	case *parse.ListNode:
 		if n == nil {
@@ -116,42 +142,42 @@ func (s *refScan) walk(node parse.Node, dotTainted bool) {
 		}
 
 		for _, child := range n.Nodes {
-			s.walk(child, dotTainted)
+			s.walk(child, d)
 		}
 	case *parse.TextNode:
 		if s.trackQuotes {
 			s.feed(string(n.Text))
 		}
 	case *parse.ActionNode:
-		s.action(n, dotTainted)
+		s.action(n, d)
 	case *parse.IfNode:
-		s.walk(n.List, dotTainted)
-		s.walk(n.ElseList, dotTainted)
+		s.walk(n.List, d)
+		s.walk(n.ElseList, d)
 	case *parse.WithNode:
-		s.declare(n.Pipe, dotTainted)
-		s.walk(n.List, s.pipeTainted(n.Pipe, dotTainted))
-		s.walk(n.ElseList, dotTainted)
+		s.declare(n.Pipe, d)
+		s.walk(n.List, rebind(s.pipeTainted(n.Pipe, d)))
+		s.walk(n.ElseList, d)
 	case *parse.RangeNode:
-		s.declare(n.Pipe, dotTainted)
-		s.walk(n.List, s.pipeTainted(n.Pipe, dotTainted))
-		s.walk(n.ElseList, dotTainted)
+		s.declare(n.Pipe, d)
+		s.walk(n.List, rebind(s.pipeTainted(n.Pipe, d)))
+		s.walk(n.ElseList, d)
 	}
 }
 
-func (s *refScan) action(n *parse.ActionNode, dotTainted bool) {
+func (s *refScan) action(n *parse.ActionNode, d dot) {
 	if len(n.Pipe.Decl) > 0 {
-		s.declare(n.Pipe, dotTainted)
+		s.declare(n.Pipe, d)
 
 		return
 	}
 
 	if s.trackQuotes {
-		s.quotedAction(n, dotTainted)
+		s.quotedAction(n, d)
 
 		return
 	}
 
-	if endsInShellquote(n.Pipe) || !s.pipeTainted(n.Pipe, dotTainted) {
+	if endsInShellquote(n.Pipe) || !s.pipeTainted(n.Pipe, d) {
 		return
 	}
 
@@ -162,8 +188,8 @@ func (s *refScan) action(n *parse.ActionNode, dotTainted bool) {
 }
 
 // quotedAction records a shellquote'd root-derived value the shell would read as more than one word, or expand a second time.
-func (s *refScan) quotedAction(n *parse.ActionNode, dotTainted bool) {
-	if !endsInShellquote(n.Pipe) || (s.quote == 0 && !s.hazard) || !s.pipeTainted(n.Pipe, dotTainted) {
+func (s *refScan) quotedAction(n *parse.ActionNode, d dot) {
+	if !endsInShellquote(n.Pipe) || (s.quote == 0 && !s.hazard) || !s.pipeTainted(n.Pipe, d) {
 		return
 	}
 
@@ -173,8 +199,8 @@ func (s *refScan) quotedAction(n *parse.ActionNode, dotTainted bool) {
 }
 
 // declare marks the variables a pipe assigns as tainted when its value is.
-func (s *refScan) declare(pipe *parse.PipeNode, dotTainted bool) {
-	if pipe == nil || !s.pipeTainted(pipe, dotTainted) {
+func (s *refScan) declare(pipe *parse.PipeNode, d dot) {
+	if pipe == nil || !s.pipeTainted(pipe, d) {
 		return
 	}
 
@@ -198,14 +224,14 @@ func endsInShellquote(pipe *parse.PipeNode) bool {
 	return ok && ident.Ident == "shellquote"
 }
 
-func (s *refScan) pipeTainted(pipe *parse.PipeNode, dotTainted bool) bool {
+func (s *refScan) pipeTainted(pipe *parse.PipeNode, d dot) bool {
 	if pipe == nil {
 		return false
 	}
 
 	for _, cmd := range pipe.Cmds {
 		for _, arg := range cmd.Args {
-			if s.argTainted(arg, dotTainted) {
+			if s.argTainted(arg, d) {
 				return true
 			}
 		}
@@ -214,22 +240,22 @@ func (s *refScan) pipeTainted(pipe *parse.PipeNode, dotTainted bool) bool {
 	return false
 }
 
-func (s *refScan) argTainted(arg parse.Node, dotTainted bool) bool {
+func (s *refScan) argTainted(arg parse.Node, d dot) bool {
 	switch a := arg.(type) {
 	case *parse.DotNode:
-		return dotTainted
+		return d != dotClean
 	case *parse.FieldNode:
-		return dotTainted || slices.Contains(s.roots, a.Ident[0])
+		return d == dotDerived || slices.Contains(s.roots, a.Ident[0])
 	case *parse.ChainNode:
-		return s.argTainted(a.Node, dotTainted)
+		return s.argTainted(a.Node, d)
 	case *parse.VariableNode:
 		if a.Ident[0] == "$" {
-			return len(a.Ident) > 1 && slices.Contains(s.roots, a.Ident[1])
+			return len(a.Ident) == 1 || slices.Contains(s.roots, a.Ident[1])
 		}
 
 		return s.tainted[a.Ident[0]]
 	case *parse.PipeNode:
-		return s.pipeTainted(a, dotTainted)
+		return s.pipeTainted(a, d)
 	}
 
 	return false
