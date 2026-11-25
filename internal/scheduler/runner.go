@@ -636,7 +636,10 @@ func (r *LocalRunner) runAndFinalize(
 func admits(ctx context.Context, target *Pipeline) bool {
 	stopped, err := target.Store.Paused(ctx)
 	if err != nil {
-		slog.ErrorContext(ctx, "web.paused", "pipeline", target.Slug, "error", err)
+		// A shutdown cancelling the drain mid-read is the daemon stopping, not a problem.
+		if !interrupted(ctx, err) {
+			slog.ErrorContext(ctx, "web.paused", "pipeline", target.Slug, "error", err)
+		}
 
 		return false
 	}
