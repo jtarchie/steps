@@ -369,3 +369,30 @@ func (w *webProcess) brokenReason(t *testing.T, name string) string {
 
 	return ""
 }
+
+// A container on the host's network reaches what the fence keeps a step from: the daemon's own API on loopback, a cloud's metadata address. So does one sharing another container's. Under enforce either is refused like privileged: true, and the step's own network is fenced.
+func TestFenceEnforceRefusesAContainerOnTheHostsNetwork(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	config := filepath.Join(dir, "steps.yml")
+	path := filepath.Join(dir, "app.yml")
+
+	writeConfigFile(t, config, "web:\n  fence: enforce\n")
+
+	for _, network := range []string{"host", "container:sidecar"} {
+		writePipelineFile(t, path, "jobs:\n- name: build\n  plan:\n  - task: boxed\n    image: alpine:3\n    network: \""+network+"\"\n    run: \"true\"\n")
+
+		err := stepsRun(t, []string{"validate", "--syntax-only", "--config", config, path})
+		if err == nil || !strings.Contains(err.Error(), `task "boxed"`) || !strings.Contains(err.Error(), "network: "+network) {
+			t.Errorf("validate under enforce of a task on network: %s = %v, want refused naming the task and its network", network, err)
+		}
+	}
+
+	writePipelineFile(t, path, "jobs:\n- name: build\n  plan:\n  - task: boxed\n    image: alpine:3\n    network: none\n    run: \"true\"\n")
+
+	err := stepsRun(t, []string{"validate", "--syntax-only", "--config", config, path})
+	if err != nil {
+		t.Errorf("validate under enforce of a task on network: none = %v, want accepted", err)
+	}
+}

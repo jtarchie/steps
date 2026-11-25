@@ -425,3 +425,28 @@ jobs:
 		}
 	}
 }
+
+// A container sharing the host's network, or another container's, is no more a fence than a privileged one, wherever an image: can be given.
+func TestUnfencedNamesEveryContainerOnTheHostsNetwork(t *testing.T) {
+	t.Parallel()
+
+	for _, network := range []string{`"host"`, `"container:sidecar"`} {
+		cfg, err := Parse([]byte(strings.ReplaceAll(fencePipeline, "privileged: true", "network: "+network)), "fence", nil)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		var got []string
+		for _, host := range cfg.Unfenced(true) {
+			got = append(got, host.Where+": "+host.Why)
+		}
+
+		for _, want := range []string{`mcp_exports "root"`, `resource "rooted-thing"`, `task "rooted"`, `agent "rooted-reader"`, `mcp_exports "helpers" agent "rooted-reader"`} {
+			if !slices.ContainsFunc(got, func(w string) bool {
+				return strings.HasPrefix(w, want) && strings.Contains(w, "network: "+strings.Trim(network, `"`))
+			}) {
+				t.Errorf("network: %s: %s is not listed for its network: %q", network, want, got)
+			}
+		}
+	}
+}

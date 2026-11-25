@@ -19,6 +19,7 @@ package config
 import (
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // Unfenced lists every command this pipeline would run unfenced on a machine where the OS sandbox exists (sandboxHere) or does not.
@@ -128,15 +129,31 @@ func (c *Config) hostPutGuard(where string, step Step) []HostCommand {
 
 const privilegedWhy = "image: with privileged: true gives the container the host's privileges; drop privileged:"
 
-// privilegedContainers is every container run with the host's privileges: a resource whose type asks, and a task or agent step that resolves to it.
+// hostReach is why a container is no fence, or "": privileged: true holds the host's privileges, and network: host or container:<name> its network — the daemon's own API on loopback, a cloud's metadata address — which is what an image: is meant to keep a step from.
+func hostReach(privileged bool, network string) string {
+	switch {
+	case privileged:
+		return privilegedWhy
+	case network == "host" || strings.HasPrefix(network, "container:"):
+		return "image: with network: " + network + " shares a network the container's own would keep it out of (the daemon's loopback, a cloud's metadata address); drop network: or give it a network of its own"
+	}
+
+	return ""
+}
+
+// privilegedContainers is every container run with the host's privileges or on its network (hostReach): a resource whose type asks, and a task or agent step that resolves to it.
 func (c *Config) privilegedContainers() []HostCommand {
 	var found []HostCommand
 
 	for _, resource := range c.Resources {
 		rt, err := c.FindResourceType(resource.Type)
-		if err == nil && rt.Image != "" && rt.Privileged {
+		if err != nil || rt.Image == "" {
+			continue
+		}
+
+		if why := hostReach(rt.Privileged, rt.Network); why != "" {
 			found = append(found, HostCommand{
-				Name: resource.Name, Where: fmt.Sprintf("resource %q", resource.Name), Why: fmt.Sprintf("type %q: %s", resource.Type, privilegedWhy),
+				Name: resource.Name, Where: fmt.Sprintf("resource %q", resource.Name), Why: fmt.Sprintf("type %q: %s", resource.Type, why),
 				Entity: entity(EntityResourceType, resource.Type), Reason: reasonOf(rt.Unfenced),
 			})
 		}
@@ -157,13 +174,13 @@ func (c *Config) privilegedStep(label string, step *Step) []HostCommand {
 	switch kind, _ := step.Kind(); kind {
 	case StepKindTask:
 		task, err := c.ResolveTask(*step)
-		if err == nil && task.Image != "" && task.Privileged {
-			return []HostCommand{{Name: step.Task, Where: fmt.Sprintf("task %q in %s", step.Task, label), Why: privilegedWhy, Entity: entity(EntityTask, step.Task), Reason: c.taskReason(*step)}}
+		if why := hostReach(task.Privileged, task.Network); err == nil && task.Image != "" && why != "" {
+			return []HostCommand{{Name: step.Task, Where: fmt.Sprintf("task %q in %s", step.Task, label), Why: why, Entity: entity(EntityTask, step.Task), Reason: c.taskReason(*step)}}
 		}
 	case StepKindAgent:
 		invocation, err := c.ResolveAgentInvocation(*step)
-		if err == nil && invocation.Image != "" && invocation.Privileged {
-			return []HostCommand{{Name: step.Agent, Where: fmt.Sprintf("agent %q in %s", step.Agent, label), Why: privilegedWhy, Entity: entity(EntityAgent, step.Agent), Reason: c.agentReason(*step, step.Agent)}}
+		if why := hostReach(invocation.Privileged, invocation.Network); err == nil && invocation.Image != "" && why != "" {
+			return []HostCommand{{Name: step.Agent, Where: fmt.Sprintf("agent %q in %s", step.Agent, label), Why: why, Entity: entity(EntityAgent, step.Agent), Reason: c.agentReason(*step, step.Agent)}}
 		}
 	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindAsk, StepKindDo:
 	}
@@ -185,8 +202,8 @@ func (c *Config) hostExports() []HostCommand {
 			case export.Image == "":
 				self.Why = "its custom run: tools run on the host; set image:"
 				found = append(found, self)
-			case export.Privileged:
-				self.Why = privilegedWhy
+			case hostReach(export.Privileged, export.Network) != "":
+				self.Why = hostReach(export.Privileged, export.Network)
 				found = append(found, self)
 			}
 		}
@@ -214,8 +231,8 @@ func (c *Config) exportedAgent(export string, spec ToolSpec) []HostCommand {
 	where := fmt.Sprintf("%s agent %q", export, spec.Agent)
 	reason := c.agentReason(Step{}, spec.Agent)
 
-	if invocation.Image != "" && invocation.Privileged {
-		return []HostCommand{{Name: spec.Agent, Where: where, Why: privilegedWhy, Entity: entity(EntityAgent, spec.Agent), Reason: reason}}
+	if why := hostReach(invocation.Privileged, invocation.Network); invocation.Image != "" && why != "" {
+		return []HostCommand{{Name: spec.Agent, Where: where, Why: why, Entity: entity(EntityAgent, spec.Agent), Reason: reason}}
 	}
 
 	return c.hostAgent(where, invocation, reason)

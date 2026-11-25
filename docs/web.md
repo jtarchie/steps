@@ -1144,8 +1144,9 @@ web:
   one-off is judged too, under the name the daemon mints for it, which no
   allowlist can name, so under `enforce` it runs only what is fenced.
 
-A command is **fenced** when it runs in an `image:` without `privileged: true`,
-or under [`sandbox: true`](infra.md#host-sandbox-sandbox) on a daemon whose
+A command is **fenced** when it runs in an `image:` without `privileged: true`
+and on a network of its own (not `network: host` or `network: container:<name>`,
+which reach the daemon's loopback and a cloud's metadata address), or under [`sandbox: true`](infra.md#host-sandbox-sandbox) on a daemon whose
 machine has the sandbox: darwin, or linux with Landlock (kernel 6.2+). Elsewhere,
 a linux kernel without Landlock included, a sandboxed command is listed.
 A step placed on a `docker+ssh://`, `aws://`, `gcp://`, `do://` or `local:`
@@ -1156,7 +1157,7 @@ tools touch no files and run no shell, until it carries a `when:` guard.
 
 Everything else is listed, each place named with what runs there: a task or
 agent step with no `image:` or `sandbox:` (job hooks included), a container
-with `privileged: true`, a resource whose type runs `check`/`in`/`out` on the
+with `privileged: true` or on `network: host`/`container:<name>`, a resource whose type runs `check`/`in`/`out` on the
 host (the built-in `git` type does, until a `resource_types:` entry of its
 name gives it an `image:`), a `github-prs`/`github-comments` resource with
 `checkout: git` and no such image, every stdio `mcp_servers:` entry without `image:` (one that runs `docker` itself included), an
