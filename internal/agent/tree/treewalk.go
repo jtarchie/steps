@@ -80,9 +80,11 @@ var searchSkipDirs = map[string]bool{
 
 // SearchOpts is one resolved search_files call.
 type SearchOpts struct {
-	Re        *regexp.Regexp // nil for a filename-only search
-	Glob      string         // "" matches every file
-	Mode      string
+	Re   *regexp.Regexp // nil for a filename-only search
+	Glob string         // "" matches every file
+	Mode string
+	// open is how searchWalk opens a file it scans; the host's goes through an os.Root, because a file the walk saw as regular can be swapped for a link before it is opened.
+	open      func(string) (*os.File, error)
 	HeadLimit int
 	// pattern and caseInsensitive are the model's own arguments, kept because a container tree cannot hand a compiled *regexp.Regexp to grep — it renders the pattern to POSIX ERE instead, and folding is a grep flag rather than part of the expression.
 	Pattern         string
@@ -115,8 +117,10 @@ type SearchResult struct {
 // searchWalk walks base, applying the glob and (when set) the content
 // pattern. It keeps walking after headLimit is reached so total reflects
 // every match, stopping early only when the file-scan budget is exhausted.
-func searchWalk(base string, opts SearchOpts) (SearchResult, error) {
+func searchWalk(base string, opts SearchOpts, open func(string) (*os.File, error)) (SearchResult, error) {
 	var result SearchResult
+
+	opts.open = open
 
 	walk := func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -257,7 +261,7 @@ func (r *SearchResult) addMatches(matches []Match, count, headLimit int) {
 // whole budget) plus the true number of matching lines in it. A file with a
 // NUL byte in its head is treated as binary and skipped.
 func scanFileMatches(path, rel string, opts SearchOpts) ([]Match, int) {
-	f, err := os.Open(path) //nolint:gosec // path comes from a WalkDir under a ResolvePath-confined base
+	f, err := opts.open(path)
 	if err != nil {
 		return nil, 0
 	}

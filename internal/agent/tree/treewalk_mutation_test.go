@@ -1,6 +1,7 @@
 package tree
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -9,7 +10,7 @@ import (
 func TestSearchOfAMissingRootFindsNothing(t *testing.T) {
 	t.Parallel()
 
-	result, err := searchWalk(filepath.Join(t.TempDir(), "does-not-exist"), SearchOpts{Mode: "files", HeadLimit: 10})
+	result, err := searchWalk(filepath.Join(t.TempDir(), "does-not-exist"), SearchOpts{Mode: "files", HeadLimit: 10}, os.Open)
 	if err != nil {
 		t.Fatalf("searchWalk over a missing root = %v, want no error", err)
 	}

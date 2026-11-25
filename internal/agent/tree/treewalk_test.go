@@ -129,7 +129,7 @@ func TestSearchSkipsSymlinks(t *testing.T) {
 	}
 
 	for _, mode := range []string{"content", "files_with_matches"} {
-		result, err := searchWalk(base, SearchOpts{Re: regexp.MustCompile("DUMMYSECRET"), Mode: mode, HeadLimit: 50})
+		result, err := searchWalk(base, SearchOpts{Re: regexp.MustCompile("DUMMYSECRET"), Mode: mode, HeadLimit: 50}, os.Open)
 		if err != nil {
 			t.Fatal(err)
 		}
