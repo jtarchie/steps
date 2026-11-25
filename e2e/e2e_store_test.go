@@ -131,8 +131,8 @@ func TestStoreTamperedTreeIsAMiss(t *testing.T) {
 	}
 }
 
-// TestStoreIndexIsSharedAcrossPipelines: the index lives in the state database and is machine-wide, as Concourse's resource caches are, so a second pipeline doing the same work over the same bytes is answered by the first one's tree.
-func TestStoreIndexIsSharedAcrossPipelines(t *testing.T) {
+// TestStoreIsSharedAcrossPipelinesButStepEntriesAreNot: the index lives in the state database, but a step's entry is filed under its pipeline, whose secrets and caches: its key does not hold, so a second pipeline's same step runs; the bytes it makes are the same tree in the store, kept once.
+func TestStoreIsSharedAcrossPipelinesButStepEntriesAreNot(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -146,8 +146,12 @@ func TestStoreIndexIsSharedAcrossPipelines(t *testing.T) {
 	mustRun(t, "run", first, "--job", "a", "--workspace-root", root, "--db", state)
 	mustRun(t, "run", second, "--job", "a", "--workspace-root", root, "--db", state)
 
-	if got := readFileString(t, ran); got != "a\n" {
-		t.Errorf("steps that ran = %q, want the second pipeline's make answered by the first's", got)
+	if got := readFileString(t, ran); got != "a\na\n" {
+		t.Errorf("steps that ran = %q, want the second pipeline's make run, not answered by the first's", got)
+	}
+
+	if trees := storeTrees(t, root); len(trees) != 1 {
+		t.Errorf("store holds %v, want the one tree both pipelines made", trees)
 	}
 
 	if got := readFileString(t, seen); got != "same bytes\nsame bytes\n" {

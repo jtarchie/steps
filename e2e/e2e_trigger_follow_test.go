@@ -231,7 +231,7 @@ jobs:
 	}
 }
 
-// #283: --force reaches the daemon. A one-off is a new pipeline, but the step cache is keyed by the work rather than the pipeline, so a second one-off of the same file is answered from the first's unless forced.
+// #283: --force reaches the daemon. A one-off is a new pipeline, but every one-off files its step cache under one shared scope rather than its minted name, so a second one-off of the same file is answered from the first's unless forced.
 func TestRunTargetCarriesForceToTheDaemon(t *testing.T) {
 	t.Parallel()
 

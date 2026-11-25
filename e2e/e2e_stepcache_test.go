@@ -352,3 +352,37 @@ func TestStepCacheRerunsWhenTheNudgeIsRemoved(t *testing.T) {
 		t.Errorf("provider requests after the nudge was removed = %d, want %d — the cached step was served as if it had run unaided", got, 2*len(script))
 	}
 }
+
+// The cache is filed per pipeline. Two pipelines on one machine are two authors' work, and an entry one wrote — over its own caches:, under its own secrets — is not the other's to reuse; the same step rerun in its own pipeline still is.
+func TestStepCacheIsNotSharedBetweenPipelines(t *testing.T) {
+	t.Parallel()
+
+	dir, root := t.TempDir(), t.TempDir()
+	ranLog := filepath.Join(dir, "ran.log")
+
+	pipeline := fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: compile
+    outputs: [out]
+    run: |
+      echo ran >> %s
+      echo built > out/bin
+`, ranLog)
+
+	first := filepath.Join(dir, "first.yml")
+	second := filepath.Join(dir, "second.yml")
+	writePipelineFile(t, first, pipeline)
+	writePipelineFile(t, second, pipeline)
+
+	// One state database, as a daemon's two pipelines share one.
+	db := filepath.Join(dir, "state.db")
+
+	mustRun(t, "run", "--db", db, "--workspace-root", root, first)
+	mustRun(t, "run", "--db", db, "--workspace-root", root, first)
+	assertLineCount(t, ranLog, 1)
+
+	mustRun(t, "run", "--db", db, "--workspace-root", root, second)
+	assertLineCount(t, ranLog, 2)
+}

@@ -13,7 +13,7 @@ func TestActionKeyIsPinned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const want = "81746560a4c010165e4f32c15c9f324c1b090dc53b98f544a0d1c98a56db96cc"
+	const want = "f205d374f9562e7e7b184d278f1d86a3cdb79a6dd7ecc168a02e9c692cd5b325"
 	if key != want {
 		t.Errorf("action key = %s, want %s", key, want)
 	}

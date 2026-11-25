@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -81,6 +82,9 @@ func lookupStepCache(
 	}
 
 	req.Refresh = !stepCacheLookups(ctx)
+	if r.st != nil {
+		req.Pipeline = stepCacheScope(r.st.Pipeline())
+	}
 
 	res := workspace.LookupStepCache(ctx, r.bw, req)
 	if !res.Hit {
@@ -125,4 +129,16 @@ func reuseStep(
 	}
 
 	return cached, nil
+}
+
+// OneOffPrefix starts every name a daemon mints for a `steps run --target` one-off, and no name somebody sets.
+const OneOffPrefix = "one-off."
+
+// stepCacheScope is the pipeline a step's cache entries are filed under. A one-off is a new pipeline each time, so every one-off shares one scope: otherwise a repeated one-off could never be answered from the last, which is what makes repeating one cheap. They are all an admin's work on one daemon.
+func stepCacheScope(pipeline string) string {
+	if strings.HasPrefix(pipeline, OneOffPrefix) {
+		return OneOffPrefix
+	}
+
+	return pipeline
 }

@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/web"
 )
 
 // oneOffPrefix is reserved so a name the daemon mints is never one somebody set; the pipelines.one_off column, not the name, is what a restart reads.
-const oneOffPrefix = "one-off."
+const oneOffPrefix = pipeline.OneOffPrefix
 
 // oneOffPoll is how often a one-off's queue is asked whether it has settled.
 const oneOffPoll = time.Second

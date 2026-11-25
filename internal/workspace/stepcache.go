@@ -27,7 +27,7 @@ const defaultStepCacheMaxEntries = 200
 // codebase, so a merkle node hash can never be mistaken for an action key even
 // if one were passed to the wrong function. v2: input digests became
 // treedigest's, so every v1 entry is keyed by a name no tree has any more.
-const stepCacheDomain = "steps/step-cache/v2"
+const stepCacheDomain = "steps/step-cache/v3"
 
 // StepCacheRequest is one step's identity for cache purposes: what the plan
 // says the step IS, and which artifacts it reads.
@@ -49,6 +49,8 @@ type StepCacheRequest struct {
 	OutputMapping map[string]string
 	// Refresh computes the key without restoring anything, so the step runs and its outputs replace the entry: --force.
 	Refresh bool
+	// Pipeline scopes the key: the index is machine-wide, and the same step in another pipeline resolves its secrets and fills its caches: as that pipeline's author set them, so reusing its outputs would hand one pipeline another's work.
+	Pipeline string
 }
 
 // StepCacheResult is what a lookup decided: the key this step's work is filed
@@ -127,6 +129,7 @@ func (c *stepCache) actionKey(digests func(string) (string, error), req StepCach
 	sum := sha256.New()
 
 	digestField(sum, []byte(stepCacheDomain))
+	digestField(sum, []byte(req.Pipeline))
 	digestField(sum, []byte(req.ContentHash))
 
 	// Sorted, so a step's declaration order cannot change its key.
