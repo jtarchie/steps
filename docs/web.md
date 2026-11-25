@@ -719,6 +719,13 @@ or **■ Abort** on the run's page. It means what it means in Concourse:
 - Its queue row is finalized **aborted**, so a restart does not run it again,
   the circuit breaker neither counts nor clears it, and its `serial:` /
   `max_in_flight` slot frees once the run has actually stopped.
+- A step that runs on the daemon's own machine (no `image:`) is stopped by
+  killing its process group. A process the step moved out of that group on
+  purpose — `setsid`, a daemonizing `nohup … &`, anything that starts a new
+  session — is not in it and outlives the abort, reparented to init, as it
+  would outlive a Ctrl-C of `steps run`. A container step has no such gap:
+  its container is stopped. Run a step that starts background services in
+  an `image:`.
 - An aborted queued run keeps its row, reads aborted, and never starts.
   `--queued` names a job rather than a run because a queued build has no run
   id yet, and a job has at most one queued at a time.
