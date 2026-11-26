@@ -82,7 +82,7 @@ func TestAStepCarriesWhatItSpentAndWhereItRan(t *testing.T) {
 		t.Fatalf("no transcript:\n%s", body)
 	}
 
-	for _, said := range []string{"opus", "412,000 tokens", "60% cached", FormatUSD(1.2), "end_turn", "ssh://jt@box", "linux/arm64"} {
+	for _, said := range []string{"opus", "250,000 cached (60%)", FormatUSD(1.2), "end_turn", "ssh://jt@box", "linux/arm64"} {
 		if !strings.Contains(transcript, said) {
 			t.Errorf("the step row does not say %q:\n%s", said, transcript)
 		}
@@ -94,8 +94,25 @@ func TestAStepCarriesWhatItSpentAndWhereItRan(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(body, `spend 412,000 tokens · 60% cached · $1.20`) {
+	if !strings.Contains(body, `spend 412k tokens · 60% cached · $1.20`) {
 		t.Errorf("the head does not total the run's spend:\n%s", body)
+	}
+}
+
+// One figure on the row itself: tokens, cache share and price on every row of a matrix was a wall of numbers, and the price is the one a reader scans for. The rest is the step's own spend line, one fold in.
+func TestAStepsRowCarriesOneSpendFigure(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	startAuditedRun(t, pipeline, "run-onefigure")
+
+	_, body := get(t, server, "/p/demo/runs/run-onefigure")
+
+	_, head, found := strings.Cut(body, `class="headmeta"`)
+	head, _, _ = strings.Cut(head, `class="dur"`)
+
+	if !found || !strings.Contains(head, FormatUSD(1.2)) || strings.Contains(head, "cached<") || strings.Contains(head, "tokens<") {
+		t.Errorf("the row's head should carry the price and nothing else of the spend:\n%s", head)
 	}
 }
 
@@ -177,7 +194,7 @@ func TestAContainerHoldingTheWholeSpendDoesNotRepeatTheHead(t *testing.T) {
 
 	_, body := get(t, server, "/p/demo/runs/run-whole")
 
-	if got := strings.Count(body, "777,000 tokens"); got != 2 {
-		t.Errorf("777,000 tokens is said %d times, want twice (the head and the agent's row):\n%s", got, body)
+	if got := strings.Count(body, "777k tokens"); got != 2 {
+		t.Errorf("777k tokens is said %d times, want twice (the head and the agent's row):\n%s", got, body)
 	}
 }

@@ -62,7 +62,7 @@
 <h2 class="eyebrow">{{t "job.dials"}} <span class="unbold">{{t "job.dials.note"}}</span></h2>
 <div class="tablewrap">
   <table class="kv">
-    <thead><tr><th>{{t "th.agent"}}</th><th>{{t "th.step"}}</th><th class="num"><abbr title="{{t "dials.turns.title"}}">{{t "th.turns"}}</abbr></th><th class="num">{{t "th.context"}}</th><th>{{t "th.deadline"}}</th><th class="num">{{t "th.budget"}}</th></tr></thead>
+    <thead><tr><th>{{t "th.agent"}}</th><th>{{t "th.step"}}</th><th class="num"><abbr title="{{t "dials.turns.title"}}">{{t "th.turns"}}</abbr></th><th class="num">{{t "th.context"}}</th><th>{{t "th.deadline"}}</th><th class="num">{{t "th.budget"}}</th>{{if $.Nav.HasMCP}}<th>{{t "tab.mcp"}}</th>{{end}}</tr></thead>
     <tbody>
       {{range .Dials}}
       <tr>
@@ -73,6 +73,7 @@
         <td class="num">{{if .UncappedContext}}<span class="faint">{{t "dials.uncapped"}}</span>{{else}}{{thousands .ContextBytes}}{{end}}</td>
         <td class="dim">{{if .UncappedTimeout}}<span class="faint">{{t "dials.uncapped"}}</span>{{else if .Timeout}}{{.Timeout}}{{else}}<span class="faint">{{t "dials.default"}}</span>{{end}}</td>
         <td class="num">{{if .UncappedBudget}}<span class="faint">{{if .BlockTokens}}{{t "dials.uncapped.cell"}}{{else}}{{t "dials.uncapped"}}{{end}}</span>{{else}}{{budget .}}{{end}}{{if .BlockTokens}} <span class="dim" title="{{t "dials.matrix.title"}}">· {{t "dials.matrix" (thousands .BlockTokens)}}</span>{{end}}</td>{{end}}
+        {{if $.Nav.HasMCP}}<td>{{/* One server a line: joined on one, a second grant ran off the table's right edge. */}}{{range .MCP}}<div class="grant"><a href="/p/{{$.Nav.Current}}/mcp#mcp-{{.Server}}">{{.Server}}</a> <span class="dim"{{if not .All}} title="{{join .Tools ", "}}"{{end}}>{{if .All}}{{t "mcp.grant.all"}}{{else}}{{tn "mcp.grant.tools" (len .Tools)}}{{end}}</span></div>{{else}}<span class="faint">—</span>{{end}}</td>{{end}}
       </tr>
       {{end}}
     </tbody>

@@ -14,6 +14,7 @@
       <rect class="dagbox" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"></rect>
       <text class="dagname" x="{{.TextX}}" y="{{.NameY}}">{{.Name}}</text>
       <text class="dagstatus" x="{{.TextX}}" y="{{.StatusY}}">{{.Line}}{{with .Queued}}<tspan class="dagqueued"> · ○ {{t "jobs.queued"}}</tspan>{{end}}</text>
+      {{if .MCP}}<text class="dagmcp" x="{{.TextX}}" y="{{.MCPY}}">{{.MCP}}</text>{{end}}
       {{with .Title}}<title>{{.}}</title>{{end}}
     </a>
     {{else if eq .Kind "resource"}}<a class="dagres{{if .CheckError}} check-failed{{end}}" href="/p/{{$.Nav.Current}}/resources/{{.Name}}" data-n="{{.ID}}" aria-label="{{.Label}}">

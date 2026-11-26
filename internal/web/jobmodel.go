@@ -30,6 +30,8 @@ type jobView struct {
 	Outputs []string
 	// Queued is the trigger that has not become a run yet; nil when there is none.
 	Queued *queuedJob
+	// MCP is the mcp servers this job's agent steps reach: the board's third line.
+	MCP []string
 }
 
 // queuedJob is a job's queued run: when it was enqueued, for the follow page's since=, and the first check holding it back (empty once a worker has claimed it).
@@ -58,7 +60,9 @@ func buildJobViews(cfg *config.Config, latest map[string]store.RunRow, paused []
 	views := make([]jobView, 0, len(cfg.Jobs))
 
 	for _, job := range cfg.Jobs {
-		views = append(views, buildJobView(job, latest, pausedBy))
+		view := buildJobView(job, latest, pausedBy)
+		view.MCP = jobMCPServers(agentDials(cfg, job))
+		views = append(views, view)
 	}
 
 	return linkDownstream(views)

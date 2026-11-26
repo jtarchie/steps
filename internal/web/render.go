@@ -321,6 +321,7 @@ func templateFuncs(loc *locale) template.FuncMap {
 		"message":   highlightMessage,
 		"note":      highlightNote,
 		"thousands": thousands,
+		"compact":   compactCount,
 		"lower":     strings.ToLower,
 		"trimMD":    func(name string) string { return strings.TrimSuffix(name, ".md") },
 		"sparkline": sparkline,
@@ -470,6 +471,28 @@ func templateStatusWord(status reflect.Value) string {
 // thousands groups a count the way the CLI's own usage summary does
 // ("34,500 tokens"), so the two front ends do not report the same number in
 // two spellings.
+// compactCount is a token count as a row can afford it: exact below ten thousand, then three figures and a unit. The exact number stays one fold away, on the step's own spend line.
+func compactCount(n int) string {
+	if n < 10_000 {
+		return thousands(n)
+	}
+
+	// The step up happens where the ROUNDED value would, as FormatBinaryBytes does: 999,500 prints "1.0M", never "1000k".
+	size, unit := float64(n)/1000, 0
+	for size >= 999.5 && unit < len(compactUnits)-1 {
+		size, unit = size/1000, unit+1
+	}
+
+	decimals := 1
+	if size >= 99.95 {
+		decimals = 0
+	}
+
+	return strconv.FormatFloat(size, 'f', decimals, 64) + compactUnits[unit]
+}
+
+var compactUnits = [...]string{"k", "M", "B"}
+
 func thousands(n int) string {
 	digits := strconv.Itoa(n)
 
