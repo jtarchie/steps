@@ -416,6 +416,7 @@ func (s *Server) flushBatch(
 	// re-sent for any other reason) while a connection is already open never
 	// shows one. See attachStepDeadlines' own doc comment.
 	attachStepDeadlines(&view, pipelineOf(c).Config(), run.JobName, run.ConfigSHA)
+	attachMCP(&view, pipelineOf(c).Config(), run.JobName, run.ConfigSHA)
 	s.attachStepConfig(c.Request().Context(), &view, pipelineOf(c))
 
 	// ONE message per flush, however many rows changed. The id a browser

@@ -48,7 +48,12 @@ func queuedWords(loc *locale, waitingOn string) string {
 // jobLabel is a job node's accessible name: "draft, passed 15 hours ago,
 // triggered by weekday, writes draft".
 func jobLabel(loc *locale, view jobView, now time.Time) string {
-	return strings.Join(append(append([]string{view.Name}, spokenStatus(loc, view, now)...), spokenEdges(loc, view)...), loc.text("graph.label.join"))
+	parts := append(append([]string{view.Name}, spokenStatus(loc, view, now)...), spokenEdges(loc, view)...)
+	if line := mcpLine(loc, view); line != "" {
+		parts = append(parts, line)
+	}
+
+	return strings.Join(parts, loc.text("graph.label.join"))
 }
 
 // spokenStatus is what a node's status line and ring say, in words.

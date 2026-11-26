@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,6 +53,73 @@ type agentDialView struct {
 	// ordinary case. A row with it carries no numbers, because there are
 	// none.
 	Broken string
+	// MCP is every mcp server this step's effective tool set reaches, in the order granted.
+	MCP []mcpGrantView
+}
+
+// mcpGrantView is one mcp server an agent step may call, and which of its tools.
+type mcpGrantView struct {
+	Server string
+	// Tools is the granted tools by name; ignored when All.
+	Tools []string
+	// All is a bare `mcp: <server>` grant: whatever the server exposes, which only the server can list.
+	All bool
+}
+
+// mcpGrants folds a resolved tool set down to one entry per server: an agent may grant one server across several entries, and a bare grant beside a named one is still every tool.
+func mcpGrants(specs []config.ToolSpec) []mcpGrantView {
+	byServer := map[string]*mcpGrantView{}
+
+	var order []string
+
+	for _, spec := range specs {
+		if spec.MCP == "" {
+			continue
+		}
+
+		grant := byServer[spec.MCP]
+		if grant == nil {
+			grant = &mcpGrantView{Server: spec.MCP}
+			byServer[spec.MCP] = grant
+			order = append(order, spec.MCP)
+		}
+
+		switch {
+		case spec.MCPTool != "":
+			grant.Tools = append(grant.Tools, spec.MCPTool)
+		case len(spec.MCPTools) > 0:
+			grant.Tools = append(grant.Tools, spec.MCPTools...)
+		default:
+			grant.All = true
+		}
+	}
+
+	grants := make([]mcpGrantView, 0, len(order))
+
+	for _, server := range order {
+		if grant := byServer[server]; grant != nil {
+			grants = append(grants, *grant)
+		}
+	}
+
+	return grants
+}
+
+// jobMCPServers is every mcp server a job's agent steps reach, each once, in plan order.
+//
+// ponytail: agent steps only, as agentDials walks. An mcp-backed resource type, a task's fix: agent and a sub-agent tool reach servers too and are not listed; the mcp tab's "used by" names them. Widen agentDials when one of those is the server a reader went looking for.
+func jobMCPServers(dials []agentDialView) []string {
+	var servers []string
+
+	for _, dial := range dials {
+		for _, grant := range dial.MCP {
+			if !slices.Contains(servers, grant.Server) {
+				servers = append(servers, grant.Server)
+			}
+		}
+	}
+
+	return servers
 }
 
 // Uncapped reports a dial an author explicitly removed, which the page shows
@@ -167,6 +235,7 @@ func dialFor(cfg *config.Config, where string, step config.Step) agentDialView {
 		Timeout:      ri.Timeout,
 		BudgetTokens: ri.BudgetTokens,
 		BudgetUSD:    ri.BudgetUSD,
+		MCP:          mcpGrants(ri.ToolSpecs),
 	}
 }
 
@@ -244,6 +313,21 @@ func agentTimeouts(cfg *config.Config, jobName, runSHA string) (map[string]time.
 	return agentDialValues(cfg, jobName, runSHA, func(dial agentDialView) time.Duration {
 		return config.ResolvedAgentTimeout(dial.Timeout)
 	})
+}
+
+// attachMCP names the servers this run's agent steps were granted, for a run that opened against the configuration now being served; see agentDialValues for the gate. Called on both rendering paths, as attachStepDeadlines is and for its reason: the grant line is drawn inside the step's row.
+func attachMCP(view *runView, cfg *config.Config, jobName, runSHA string) {
+	view.MCP, _ = agentDialValues(cfg, jobName, runSHA, func(dial agentDialView) []mcpGrantView { return dial.MCP })
+	view.MCPServers = nil
+
+	if view.MCP == nil {
+		return
+	}
+
+	job, err := cfg.FindJob(jobName)
+	if err == nil {
+		view.MCPServers = jobMCPServers(agentDials(cfg, *job))
+	}
 }
 
 // timeoutForStep resolves a step's agent/cell name against timeouts, sharing

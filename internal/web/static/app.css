@@ -469,7 +469,7 @@ th {
 td { padding: 8px 14px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
 tr:last-child td { border-bottom: 0; }
 td.num, th.num { text-align: right; }
-td.dim { color: var(--dim); }
+td.dim, td .dim { color: var(--dim); }
 td.faint, .faint { color: var(--faint); }
 .res { color: var(--cyan); }
 
@@ -750,6 +750,8 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 .dagnode:hover { text-decoration: none; }
 .dagnode text { font-family: var(--mono); font-size: 12px; fill: var(--fg); }
 .dagnode .dagstatus { font-size: 11px; fill: var(--dim); }
+/* Never the status color: which servers a job reaches is not how its last run went. */
+.dagnode .dagmcp { font-size: 11px; fill: var(--dim); }
 .dagnode.st-passed .dagbox { fill: color-mix(in srgb, var(--green) var(--dag-tint), var(--bg)); stroke: var(--green); }
 .dagnode.st-passed .dagstatus { fill: var(--green); }
 .dagnode.st-failed .dagbox, .dagnode.st-errored .dagbox { fill: color-mix(in srgb, var(--red) var(--dag-tint), var(--bg)); stroke: var(--red); }
@@ -1103,6 +1105,7 @@ pre.log { margin: 8px 0 0; font-family: var(--mono); }
    margin on the answers most likely to end in a code block. */
 .response > .codeblock:last-child, .prose > .codeblock:last-child { margin-bottom: 0; }
 .agentmeta { color: var(--faint); font-size: 12px; margin-top: 8px; }
+.grant { white-space: nowrap; }
 
 /* ---- rendered agent prose ----
  *
@@ -1725,6 +1728,6 @@ pre.hl { color: var(--fg); background: var(--panel); }
 /* Windows high contrast replaces the page's colors with the system's, but not an SVG's fills: the graph kept its tints over a forced background. */
 @media (forced-colors: active) {
   .dag .dagnode .dagbox, .dag .dagres rect { fill: Canvas; stroke: CanvasText; }
-  .dag .dagnode .dagname, .dag .dagnode .dagstatus, .dag .dagnode .dagqueued, .dag .dagres text { fill: CanvasText; }
+  .dag .dagnode .dagname, .dag .dagnode .dagstatus, .dag .dagnode .dagmcp, .dag .dagnode .dagqueued, .dag .dagres text { fill: CanvasText; }
   .dag .dagnode:focus-visible .dagbox, .dag .dagres:focus-visible rect { stroke: Highlight; }
 }

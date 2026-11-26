@@ -39,6 +39,7 @@ const (
 	dagMargin      = 8
 	dagNameY       = 18 // first text baseline, relative to the node's top
 	dagStatusY     = 34 // second text baseline
+	dagMCPLine     = 15 // the third line's height, on a job whose agents reach an mcp server
 	dagResTextY    = 17
 	dagMinWidth    = 80
 	dagResMinWidth = 40
@@ -71,13 +72,15 @@ type graphNode struct {
 	// when the breaker holds the job, what a queued run waits on.
 	Title string
 	// Queued is a run waiting behind the latest one; a job that never ran says so in Status instead.
-	Queued     *queuedJob
+	Queued *queuedJob
+	// MCP is the job's third line: the mcp servers its agents reach. Empty draws none.
+	MCP        string
 	Layer      int
 	X, Y, W, H int
 	// Ring is the running ring's box, a gap outside the node's own.
 	RingX, RingY, RingW, RingH int
 	// Text anchors, precomputed so the template stays arithmetic-free.
-	TextX, NameY, StatusY int
+	TextX, NameY, StatusY, MCPY int
 }
 
 // graphEdge is one drawn edge between two node IDs.
@@ -508,7 +511,7 @@ func (g *layout) size(views []jobView) {
 		node.left = g.ports(node.ins, true)
 		node.rght = g.ports(node.outs, false)
 		node.w = nodeWidth(g.loc, views[node.view])
-		node.h = max(dagNodeH, max(len(node.left), len(node.rght))*dagPortPitch+8)
+		node.h = max(dagNodeH+mcpLineHeight(views[node.view]), max(len(node.left), len(node.rght))*dagPortPitch+8)
 	}
 }
 
@@ -755,6 +758,8 @@ func (g *layout) placed(node *layoutNode, views []jobView) graphNode {
 		placed.RingW, placed.RingH = node.w+2*dagRingGap, node.h+2*dagRingGap
 		placed.NameY = node.y + dagNameY
 		placed.StatusY = node.y + dagStatusY
+		placed.MCP = mcpLine(g.loc, view)
+		placed.MCPY = placed.StatusY + dagMCPLine
 	case kindSpacer:
 		placed.Kind = "spacer"
 		placed.Text = node.name
@@ -774,11 +779,30 @@ func (g *layout) placed(node *layoutNode, views []jobView) graphNode {
 	return placed
 }
 
+// mcpLine is a job node's third line: the mcp servers its agents reach, or "" for a job that reaches none.
+func mcpLine(loc *locale, view jobView) string {
+	if len(view.MCP) == 0 {
+		return ""
+	}
+
+	return loc.text("tab.mcp") + " " + strings.Join(view.MCP, ", ")
+}
+
+func mcpLineHeight(view jobView) int {
+	if len(view.MCP) == 0 {
+		return 0
+	}
+
+	return dagMCPLine
+}
+
 func nodeWidth(loc *locale, view jobView) int {
 	chars := max(utf8.RuneCountInString(view.Name), utf8.RuneCountInString(statusLine(loc, view, time.Time{}))+dagAgeChars)
 	if queuedBehind(view) != nil {
 		chars += utf8.RuneCountInString(queuedSuffix(loc))
 	}
+
+	chars = max(chars, utf8.RuneCountInString(mcpLine(loc, view)))
 
 	return max(int(dagCharW*float64(chars))+2*dagPadX, dagMinWidth)
 }

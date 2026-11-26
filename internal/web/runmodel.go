@@ -56,6 +56,9 @@ type runView struct {
 	// ConfigDrifted is why Ceilings is empty: this run opened against a
 	// configuration that is no longer loaded.
 	ConfigDrifted bool
+	// MCP is the mcp servers each agent step was granted, by agent name, and MCPServers every one of them once; both empty under the same gate as Ceilings.
+	MCP        map[string][]mcpGrantView
+	MCPServers []string
 	// Usage is what this run's agent steps spent, in step order, each row drawn on the step it joins to (StepUsage).
 	Usage []store.AgentUsage
 	// Placements is what the machines this run's placed steps ran on said about themselves, each drawn on the step it joins to (StepPlacements).
@@ -239,6 +242,17 @@ func (r runView) StepUsage(step *stepView) []usageView {
 	}
 
 	return rows
+}
+
+// StepMCP is the mcp servers this agent step was granted, drawn in its row.
+func (r runView) StepMCP(step *stepView) []mcpGrantView {
+	if step.Kind != "agent" {
+		return nil
+	}
+
+	grants, _ := lookupByCellName(r.MCP, step.Name)
+
+	return grants
 }
 
 // ownsUsage is owns, except that a node-less row (a hook's, a fix's) joins by the step id it recorded: a hook's row is named apart from the agent that spent, and a fix has no row of its own but its task's.

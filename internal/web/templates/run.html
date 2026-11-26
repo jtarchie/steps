@@ -23,7 +23,8 @@
       {{if $run.Run.Workspace}}<span class="sep">·</span>{{$run.Run.Workspace}}{{end}}
       {{if .Job.Upstream}}<span class="sep">·</span>{{th "run.after" (edgeLinks .Nav.Current .Job.Upstream)}}{{end}}
       {{if .Job.Downstream}}<span class="sep">·</span>{{th "run.feeds" (edgeLinks .Nav.Current .Job.Downstream)}}{{end}}
-      {{if $run.HasSpend}}{{$spend := $run.Spend}}<span class="sep">·</span>{{th "run.spend" (thousands $spend.Tokens) $spend.CachePercent (costTag $spend.Priced $spend.Cost)}}{{if $spend.Truncated}} · <span class="spendwarn">{{t "run.spend.truncated" $spend.Truncated}}</span>{{end}}{{if $run.Running}} {{t "run.spend.sofar"}}{{end}}{{end}}
+      {{with $run.MCPServers}}<span class="sep">·</span>{{t "tab.mcp"}} {{range $i, $server := .}}{{if $i}}, {{end}}<a href="/p/{{$.Nav.Current}}/mcp#mcp-{{$server}}">{{$server}}</a>{{end}}{{end}}
+      {{if $run.HasSpend}}{{$spend := $run.Spend}}<span class="sep">·</span>{{th "run.spend" (compact $spend.Tokens) $spend.CachePercent (costTag $spend.Priced $spend.Cost)}}{{if $spend.Truncated}} · <span class="spendwarn">{{t "run.spend.truncated" $spend.Truncated}}</span>{{end}}{{if $run.Running}} {{t "run.spend.sofar"}}{{end}}{{end}}
     </p>
   </div>
 </div>
@@ -217,6 +218,7 @@ document.addEventListener('htmx:after:swap', function () {
   {{if $run.StepHasBody $step}}<div class="stepbody" id="{{$anchor}}_body">
     {{with $step.Error}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
     {{if eq $step.Kind "agent"}}{{template "placement" (stepctx $page $step)}}{{end}}
+    {{with $run.StepMCP $step}}<div class="agentmeta">{{t "tab.mcp"}} {{range $i, $grant := .}}{{if $i}} · {{end}}<span class="seg"><a href="/p/{{$page.Nav.Current}}/mcp#mcp-{{$grant.Server}}">{{$grant.Server}}</a></span> {{if $grant.All}}{{t "mcp.grant.all"}}{{else}}{{join $grant.Tools ", "}}{{end}}{{end}}</div>{{end}}
     {{if $run.MCPBlamedOn $step}}{{template "mcphint" $page}}{{end}}
     {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · {{t "step.contenthash" (short $step.Hash)}}{{end}}</div>{{end}}
     {{if and $step.ImageNote.Text (not ($run.StepPlacements $step))}}{{template "notice" $step.ImageNote}}{{end}}
@@ -247,7 +249,7 @@ document.addEventListener('htmx:after:swap', function () {
     </div>
     {{end}}
     {{if $step.Note}}<div class="agentmeta">{{t "step.note" $step.Note}}</div>{{end}}
-    {{range $run.StepUsage $step}}<div class="agentmeta">{{t "step.model" (or .ModelServed .ModelReq)}}{{if and .ModelServed (ne .ModelServed .ModelReq)}} {{t "step.askedfor" .ModelReq}}{{end}} · {{t "step.prompt" (thousands .Prompt)}} · {{t "step.completion" (thousands .Completion)}} · {{t "step.cached" (thousands .Cached)}}{{if .Reasoning}} · {{t "step.reasoning" (thousands .Reasoning)}}{{end}} · {{costOrUnpriced .Cost}}{{if .Ceiling}} {{t "step.of" .Ceiling}}{{else if $run.ConfigDrifted}} · {{th "step.ceiling" (runspan (t "step.ceiling.drift.title") (t "step.ceiling.drift"))}}{{else if .CeilingKnown}} · {{t "step.uncapped"}}{{else}} · {{th "step.ceiling" (runspan (t "step.ceiling.unknown.title") (t "step.ceiling.unknown"))}}{{end}}{{with .FinishReason}} · {{t "step.finish"}} {{end}}{{if .Truncated}}<span class="spendwarn">{{t "step.truncated" (lower .FinishReason)}}</span>{{else if .FailedAfter}}<span class="spendwarn" title="{{t "step.failedafter.title"}}">{{t "step.stepfailed" (lower .FinishReason)}}</span>{{else}}{{lower .FinishReason}}{{end}}</div>{{end}}
+    {{range $run.StepUsage $step}}<div class="agentmeta">{{t "step.model" (or .ModelServed .ModelReq)}}{{if and .ModelServed (ne .ModelServed .ModelReq)}} {{t "step.askedfor" .ModelReq}}{{end}} · {{t "step.prompt" (thousands .Prompt)}} · {{t "step.completion" (thousands .Completion)}} · {{t "step.cached" (thousands .Cached)}} ({{.CachePercent}}%){{if .Reasoning}} · {{t "step.reasoning" (thousands .Reasoning)}}{{end}} · {{costOrUnpriced .Cost}}{{if .Ceiling}} {{t "step.of" .Ceiling}}{{else if $run.ConfigDrifted}} · {{th "step.ceiling" (runspan (t "step.ceiling.drift.title") (t "step.ceiling.drift"))}}{{else if .CeilingKnown}} · {{t "step.uncapped"}}{{else}} · {{th "step.ceiling" (runspan (t "step.ceiling.unknown.title") (t "step.ceiling.unknown"))}}{{end}}{{with .FinishReason}} · {{t "step.finish"}} {{end}}{{if .Truncated}}<span class="spendwarn">{{t "step.truncated" (lower .FinishReason)}}</span>{{else if .FailedAfter}}<span class="spendwarn" title="{{t "step.failedafter.title"}}">{{t "step.stepfailed" (lower .FinishReason)}}</span>{{else}}{{lower .FinishReason}}{{end}}</div>{{end}}
     {{if ne $step.Kind "agent"}}{{template "placement" (stepctx $page $step)}}{{end}}
   </div>{{end}}
   {{if $step.Container}}<div class="substeps" id="{{$anchor}}_substeps">
@@ -290,8 +292,9 @@ document.addEventListener('htmx:after:swap', function () {
     {{if $step.CompactionStalled}}<span class="note spendwarn" title="{{t "step.stalled.title"}}">{{t "step.stalled"}}</span>{{end}}
     {{$usage := $run.StepUsage $step}}{{range $usage}}{{if .Truncated}}<span class="note spendwarn" title="{{t "step.cut.title"}}">{{t "step.cut"}}</span>{{end}}{{end}}
     <span class="headmeta">
-      {{range $usage}}<span class="note usage"><span class="seg">{{or .ModelServed .ModelReq}}</span> · <span class="seg">{{t "step.tokens" (thousands .Total)}}</span> · <span class="seg">{{t "step.cachedpct" .CachePercent}}</span>{{with .Cost}} · <span class="seg">{{.}}</span>{{end}}</span>{{end}}
-      {{if $step.Container}}{{with $run.ContainerSpend $step}}{{if and .Tokens (ne .Tokens $run.Spend.Tokens)}}<span class="note usage"><span class="seg">{{t "step.tokens" (thousands .Tokens)}}</span> · <span class="seg">{{t "step.cachedpct" .CachePercent}}</span>{{if .Priced}} · <span class="seg">{{.Cost}}</span>{{end}}</span>{{end}}{{end}}{{end}}
+      {{/* One figure a row: what it cost, or its tokens when nothing priced it. Three figures on every row of a matrix was a column of numbers nobody could compare; the breakdown is the step's own spend line, one fold in. */}}
+      {{range $usage}}<span class="note usage" title="{{t "step.tokens" (thousands .Total)}} · {{t "step.cachedpct" .CachePercent}}"><span class="seg">{{or .ModelServed .ModelReq}}</span> · <span class="seg">{{with .Cost}}{{.}}{{else}}{{t "step.tokens" (compact .Total)}}{{end}}</span></span>{{end}}
+      {{if $step.Container}}{{with $run.ContainerSpend $step}}{{if and .Tokens (ne .Tokens $run.Spend.Tokens)}}<span class="note usage" title="{{t "step.tokens" (thousands .Tokens)}} · {{t "step.cachedpct" .CachePercent}}"><span class="seg">{{if .Priced}}{{.Cost}}{{else}}{{t "step.tokens" (compact .Tokens)}}{{end}}</span></span>{{end}}{{end}}{{end}}
       {{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
         <span>{{tn "step.cells" .Cells}}</span>
         {{if .Passed}}<span class="r-sep">·</span><b class="r-pass">{{t "step.r.passed" .Passed}}</b>{{end}}
