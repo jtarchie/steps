@@ -273,6 +273,19 @@ var docScenarios = map[string]docScenario{
 		),
 	},
 
+	// The script is the model's only tool call, so the count the publish task prints was computed by JavaScript through list_dir and read_file and written by write_file: a run_js that ran nothing, or reached no tools, leaves no file.
+	"agents-run-js": {
+		fake: scripted(
+			callsTool("run_js", map[string]any{"code": `
+const names = list_dir({path: "notes"}).entries.map(e => "notes/" + e.name);
+const todos = names.flatMap(p => read_file({path: p}).content.split("\n").filter(l => l.includes("TODO")));
+write_file({path: "report/todo.txt", content: todos.length + " TODOs\n"});
+({count: todos.length})
+`}),
+			says("Three TODOs."),
+		),
+	},
+
 	// The allow: fence, proven by its refusal: the fetch targets a host
 	// outside the list, the refusal comes back as tool-result data (before
 	// any connection — the example needs no network), and the model records

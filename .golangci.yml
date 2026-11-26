@@ -849,6 +849,8 @@ linters:
             - "$gostd"
             - "github.com/jtarchie/steps/internal/agent/llmclient"
             - "github.com/jtarchie/steps/internal/agent/tree"
+            # goja interprets a run_js script: pure Go, and with no host bindings but the step's own tools.
+            - "github.com/dop251/goja"
             # The conversation is written in genai's types and runs against
             # adk's model.LLM; which SDK carries a request to a provider is
             # llmclient's alone.

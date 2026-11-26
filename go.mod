@@ -17,6 +17,7 @@ require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/digitalocean/godo v1.245.0
 	github.com/distribution/reference v0.6.0
+	github.com/dop251/goja v0.0.0-20261125210501-5e92a7e24d0c
 	github.com/expr-lang/expr v1.18.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/frioux/leatherman v0.0.0-20261119130408-232784b0d025
@@ -93,9 +94,11 @@ require (
 	github.com/go-json-experiment/json v1.27.2 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
+	github.com/google/pprof v0.0.0-20261016150608-1facf8f91b50 // indirect
 	github.com/google/s2a-go v0.1.11 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.25 // indirect
 	github.com/googleapis/gax-go/v2 v2.27.0 // indirect

@@ -124,6 +124,7 @@ func builtinAgentTools(image string) map[string]builtinTool {
 		// The catalogue entry is the unrestricted form; a grant carrying
 		// allow: is rebuilt with the list bound in (see resolveToolSpec).
 		config.WebFetchBuiltinName: {decl: webFetchDecl, impl: webFetchImpl},
+		config.RunJSBuiltinName:    runJSTool(),
 		config.ReadFileBuiltinName: {
 			decl: &genai.FunctionDeclaration{
 				Name:        config.ReadFileBuiltinName,

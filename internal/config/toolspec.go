@@ -228,6 +228,7 @@ const (
 	WriteFileBuiltinName   = "write_file"
 	EditFileBuiltinName    = "edit_file"
 	RunShellBuiltinName    = "run_shell"
+	RunJSBuiltinName       = "run_js"
 )
 
 // DefaultAgentToolSpecs is used when an agent grants no tools — the default

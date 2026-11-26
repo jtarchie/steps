@@ -135,6 +135,8 @@ func newCLIBridge(ctx context.Context, conv agentConversation, prior []recordedT
 		return append(append([]recordedToolCall(nil), prior...), calls...)
 	}
 
+	env.script = bridge.scriptTools(conv.tools.registry)
+
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: cliBridgeServerName, Version: "v1"}, nil)
 
 	for _, decl := range conv.tools.decls.FunctionDeclarations {
@@ -270,6 +272,29 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 			Content: content,
 			IsError: !requiredCallSucceeded(result),
 		}, nil
+	}
+}
+
+// scriptTools is what a bridged run_js script calls the step's other tools through, held to what handler holds a call the child made itself: the budget before the impl, the capture after. The child's stream never narrates these calls, so they are recorded here.
+func (b *cliBridge) scriptTools(registry map[string]toolImpl) scriptTools {
+	return scriptTools{
+		names: scriptableTools(registry),
+		call: func(ctx context.Context, env toolEnv, name string, args map[string]any) map[string]any {
+			env.transcript.call(name, args)
+
+			var result map[string]any
+
+			if exhausted, budget := b.overBudget(name); exhausted {
+				result = errorResult(fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", name, budget))
+			} else {
+				result = scrubSecrets(ctx, executeAgentTool(ctx, &genai.FunctionCall{Name: name, Args: args}, env, registry))
+				b.capture(name, args, result)
+			}
+
+			env.transcript.result(name, renderResultContent(result))
+
+			return result
+		},
 	}
 }
 

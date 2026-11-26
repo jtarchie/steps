@@ -44,7 +44,7 @@ func (c *Config) Unfenced(sandboxHere bool) []HostCommand {
 
 	found = append(found, c.privilegedContainers()...)
 
-	for _, agent := range c.projectSettingsAgents() {
+	for _, agent := range append(c.projectSettingsAgents(), c.scriptAgents()...) {
 		if !slices.ContainsFunc(found, func(h HostCommand) bool { return h.Where == agent.Where }) {
 			found = append(found, agent)
 		}
@@ -262,4 +262,62 @@ func (c *Config) projectSettingsAgents() []HostCommand {
 	}
 
 	return found
+}
+
+const scriptWhy = "its run_js tool runs model-written JavaScript in this process, with a timeout and no memory bound, whatever image: or sandbox: fences its other tools; drop run_js"
+
+// scriptAgents is every agent step, and every exported agent, that can run a run_js script: its own grant, or a sub-agent's.
+func (c *Config) scriptAgents() []HostCommand {
+	var found []HostCommand
+
+	listed := func(where string, step Step) {
+		invocation, err := c.ResolveAgentInvocation(step)
+		if err == nil && c.grantsScript(invocation.ToolSpecs, map[string]bool{step.Agent: true}) {
+			found = append(found, HostCommand{
+				Name: step.Agent, Where: where, Why: scriptWhy,
+				Entity: entity(EntityAgent, step.Agent), Reason: c.agentReason(step, step.Agent),
+			})
+		}
+	}
+
+	for _, job := range c.Jobs {
+		_ = job.visitSteps(func(label string, step *Step) error {
+			if step.Agent != "" {
+				listed(fmt.Sprintf("agent %q in %s", step.Agent, label), *step)
+			}
+
+			return nil
+		})
+	}
+
+	for _, export := range c.MCPExports {
+		for _, spec := range export.Tools {
+			if spec.Agent != "" {
+				listed(fmt.Sprintf("mcp_exports %q agent %q", export.Name, spec.Agent), Step{Agent: spec.Agent})
+			}
+		}
+	}
+
+	return found
+}
+
+func (c *Config) grantsScript(specs []ToolSpec, seen map[string]bool) bool {
+	for _, spec := range specs {
+		if spec.Builtin == RunJSBuiltinName {
+			return true
+		}
+
+		if spec.Agent == "" || seen[spec.Agent] {
+			continue
+		}
+
+		seen[spec.Agent] = true
+
+		sub, err := c.FindAgent(spec.Agent)
+		if err == nil && c.grantsScript(sub.Tools, seen) {
+			return true
+		}
+	}
+
+	return false
 }

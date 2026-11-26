@@ -67,6 +67,8 @@ type toolEnv struct {
 	// The verdict tool reads it to judge a nudge-enabled tool_calls:
 	// contract before it accepts a decision.
 	trajectory func() []recordedToolCall
+	// script is how run_js calls the step's other tools, set by whichever loop owns the budgets and the record (see scriptTools). Zero outside a conversation.
+	script scriptTools
 	// sight is whether read_file may answer with an image, decided by the
 	// source the conversation talks to (see sightFor). The zero value — every
 	// env a test builds by hand — describes an image instead.
@@ -424,7 +426,8 @@ func customToolDecl(spec config.ToolSpec) (*genai.FunctionDeclaration, toolImpl)
 // and a deadline the delegated path silently dropped would be a fence that
 // exists only on one of two backends.
 func (r resolvedSpec) bound(spec config.ToolSpec) error {
-	if spec.Timeout == "" {
+	declared := declaredTimeout(spec)
+	if declared == "" {
 		return nil
 	}
 
@@ -438,7 +441,7 @@ func (r resolvedSpec) bound(spec config.ToolSpec) error {
 		return nil
 	}
 
-	timeout, err := config.ParseTimeout(spec.Timeout)
+	timeout, err := config.ParseTimeout(declared)
 	if err != nil {
 		return fmt.Errorf("agent tool %q: %w", config.ToolSpecName(spec), err)
 	}
@@ -456,6 +459,15 @@ func (r resolvedSpec) bound(spec config.ToolSpec) error {
 	}
 
 	return nil
+}
+
+// declaredTimeout is the per-call deadline spec asks for, or "" for none. run_js always has one: a script can spin without calling anything, so no other deadline would ever reach it.
+func declaredTimeout(spec config.ToolSpec) string {
+	if spec.Timeout == "" && spec.Builtin == config.RunJSBuiltinName {
+		return runJSDefaultTimeout
+	}
+
+	return spec.Timeout
 }
 
 // withToolTimeout bounds one call of impl to d, telling the model why a call

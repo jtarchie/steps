@@ -10,7 +10,7 @@ An agent step runs a tool-calling conversation loop:
 2. Build a system message combining the agent's persona with working-directory context (any `context_paths:` files are delivered as synthetic `read_file` tool results — see below), plus a one-line disclosure of the step's resolved wall-clock deadline when one applies — see the timeout note under step 4.
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
-   - If the model requests tools, execute them (`read_file`, `list_dir`, `search_files`, `run_shell`, `write_file`, `edit_file`, `web_fetch`, or a custom/sub-agent tool).
+   - If the model requests tools, execute them (`read_file`, `list_dir`, `search_files`, `run_shell`, `write_file`, `edit_file`, `web_fetch`, `run_js`, or a custom/sub-agent tool).
    - When one turn carries several calls, a run of consecutive `read_file`/`list_dir`/`search_files` calls (up to four at a time) executes concurrently; any other call waits for everything before it and holds back everything after it. Results go back in the order the model made the calls, and `max_calls:` budgets are decided in that order.
    - Cap any tool output at 32,000 bytes before it goes back to the model — output over that is saved to a file under the step's working directory instead of being dropped, with a short pointer message taking its place (see [compaction](agents-internals.md#compacting-long-conversations)). Two tools carry their own bound instead, both at 100,000 bytes and neither spilling: `read_file` (a spilled file exists precisely so the model can pull it back), degrading to plain truncation with `start_line`/`end_line` paging, and `web_fetch`, which cuts the body off and says so — the page is still on the web, so a narrower URL is the way to the rest.
    - Append the tool results and continue.
@@ -107,6 +107,7 @@ The built-ins that mutate state or reach beyond the workspace are deliberately n
 | `edit_file` | Replace an exact string in an existing file — change part of a file without re-emitting it. |
 | `web_fetch` | HTTP GET a URL and return its body — optionally fenced to named hosts with `allow:`. |
 | `ask_user` | Ask the person running the pipeline a question and wait for the answer. |
+| `run_js` | Run a JavaScript script the model writes, which calls the agent's other tools as functions — many calls in one turn, with only the script's value returned. |
 
 ```yaml test=agents-writer
 agents:
@@ -256,6 +257,69 @@ Three rules keep a written fence honest:
 - **Caching**: the `allow:` list is part of the step's hash (sorted, since a host list is a set, and value-gated, so a bare grant hashes as it always did). Widening or narrowing the fence re-runs a cached step — a result produced while the agent could reach anywhere is not the result of a step that may only reach one host.
 - **`allow:` belongs on the `agents:` entry that grants the tool.** A step's `tools:` *selects* from the grant, and a selection is resolved by substituting the agent's own spec — so an `allow:` written on a step would read as a fence and bind nothing. Select by bare name (`tools: [web_fetch]`) and the agent's fence comes with it.
 - **Entries are bare hostnames** — no scheme, path, port, or wildcard. A host already covers its subdomains, and a pattern-shaped entry is refused rather than interpreted, because the two backends read the list differently enough that one written fence could otherwise mean two different things (see below).
+
+### `run_js`
+
+Every tool call is a round trip: the model asks, the result enters the conversation, the model reads it and asks again. A job that is really a loop — read forty files and count something, page through an API and keep three fields — pays for forty turns and carries forty results it only needed one number from. `run_js` lets the model write that loop instead:
+
+```js
+const names = list_dir({path: "notes"}).entries.map(e => "notes/" + e.name);
+const todos = names.flatMap(p => read_file({path: p}).content.split("\n").filter(l => l.includes("TODO")));
+write_file({path: "report/todo.txt", content: todos.length + " TODOs\n"});
+({count: todos.length})
+```
+
+That is one model turn. The model is sent back `{"result": {"count": 3}}` and nothing else — not the directory listing, not the files.
+
+```yaml test=agents-run-js
+agents:
+  - name: tallier
+    source: {model: openrouter/qwen/qwen3.7-flash}
+    tools:
+      - read_file
+      - list_dir
+      - write_file
+      - builtin: run_js
+        timeout: 2m              # the whole script, its tool calls included; 60s when unset
+
+jobs:
+  - name: tally
+    plan:
+      - task: seed
+        outputs: [notes]
+        run: |
+          printf 'TODO one\nfine\n' > notes/a.txt
+          printf 'TODO two\nTODO three\n' > notes/b.txt
+      - agent: tallier
+        inputs: [notes]
+        outputs: [report]
+        messages:
+          - "Count the TODO lines under notes/ and write the total to report/todo.txt."
+        assert:
+          tool_calls:               # the script's calls are the step's own
+            - name: run_js
+            - name: read_file
+              args: {path: notes/b.txt}
+            - name: write_file
+          files: [report/todo.txt]
+      - task: publish
+        inputs: [report]
+        run: cat report/todo.txt
+        assert:
+          stdout: 3 TODOs
+    assert:
+      execution: [seed, tallier, publish]
+      outcome: succeeded
+```
+
+- **Every other granted tool is a function of the same name**, taking one object of its arguments and returning the result object the model would have been sent: `read_file({path: "go.mod"}).content`, `run_shell({command: "make"}).exit_code`, an MCP grant as `server__tool({...})`. A name that is not a JavaScript identifier is a property of `tools` instead: `tools["its-name"]`. Three are never callable: `run_js` itself, `ask_user` (it parks the step for a person) and a `verdicts:` step's verdict tool (it is the step's decision, and a script must not make it in passing).
+- **A script's call is the step's call.** It runs through the same `params:`, `rules:`, pinned `args:` and `timeout:` as a direct one; it counts against that tool's `max_calls:` (a refused call comes back to the script as `{error: ...}`); a `required:` tool a script called successfully is satisfied; and it appears in the transcript and in the trajectory `assert.tool_calls:` reads, after the `run_js` call that made it. Granting `run_js` is therefore never a way around a guard on another tool.
+- **A tool failure is data, not an exception.** A failed call returns `{error: ...}` or a nonzero `exit_code` to the script, as it would to the model. A script error — a syntax error, a thrown exception, a result that is not JSON — comes back to the model as `{"error": "run_js: ..."}` with whatever `console.log` printed before it, so it can fix the script on its next turn.
+- **Calls are synchronous.** There is no `await` to write; a script that wraps itself in an `async` function anyway is read for the value it settled to. The language is ECMAScript as [goja](https://github.com/dop251/goja) implements it, with nothing added: no `require`/`import`, no timers, no filesystem and no network. The only way out of the script is a tool the agent was already granted.
+- **The result is the last expression's value**, as JSON under `result`; `console.log` output comes back under `logs`. Both are held to the same 32,000 bytes as any tool output, and a larger result is saved to a file under the step's directory with a pointer in its place.
+- **It always has a deadline: 60 seconds unless the grant's `timeout:` says otherwise.** Every other tool has none by default, but a script can spin without calling anything, so nothing else would ever stop it. The deadline covers the tool calls the script makes, and the step being aborted stops it the same way.
+- **It runs in the steps process, not in the agent's `image:`.** The tools it calls run where they always do (in the container, for a containerized agent); the script that calls them is interpreted here, and its memory is not bounded. That is why a daemon's [`fence: enforce`](web.md#opting-out-two-keys) lists every agent that can reach `run_js` — through its own grant, a sub-agent's, or an export — whatever `image:` or `sandbox:` it has.
+- On a CLI-backed agent (`@claude/...`) it is bridged like every other tool, and the calls a script makes are budgeted and recorded by steps, not by the CLI.
 
 ### `ask_user`
 

@@ -450,3 +450,61 @@ func TestUnfencedNamesEveryContainerOnTheHostsNetwork(t *testing.T) {
 		}
 	}
 }
+
+// A script runs in the daemon's process, so no image: fences it: the agent is listed wherever run_js is reachable, through its own grant, a sub-agent's or an export.
+func TestUnfencedNamesAnAgentThatCanRunAScript(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]byte(`
+agents:
+- name: scripter
+  source: {model: openai/gpt-4o-mini}
+  image: alpine:3
+  tools: [read_file, run_js]
+- name: lead
+  source: {model: openai/gpt-4o-mini}
+  image: alpine:3
+  tools:
+  - agent: scripter
+    description: Scripts.
+- name: plain
+  source: {model: openai/gpt-4o-mini}
+  image: alpine:3
+  tools: [read_file, run_shell]
+
+mcp_exports:
+- name: helpers
+  access: "true"
+  tools:
+  - agent: scripter
+    description: Scripts.
+  - agent: plain
+    description: Reads.
+
+jobs:
+- name: build
+  plan:
+  - agent: scripter
+  - agent: lead
+  - agent: plain
+`), "fence", nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	unfenced := cfg.Unfenced(true)
+	got := make([]string, 0, len(unfenced))
+
+	for _, host := range unfenced {
+		if !strings.Contains(host.Why, "run_js") {
+			t.Errorf("%s is listed for %q, and only run_js is unfenced here", host.Where, host.Why)
+		}
+
+		got = append(got, host.Where)
+	}
+
+	want := []string{`agent "scripter" in job "build" step 0 (line 30)`, `agent "lead" in job "build" step 1 (line 31)`, `mcp_exports "helpers" agent "scripter"`}
+	if !slices.Equal(got, want) {
+		t.Errorf("unfenced = %q, want %q", got, want)
+	}
+}

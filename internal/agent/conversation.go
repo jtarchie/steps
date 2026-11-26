@@ -484,6 +484,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// so far, which live in state; a closure rather than a copy because the
 	// record grows every turn.
 	conv.env.trajectory = func() []recordedToolCall { return state.trajectory }
+	conv.env.script = conv.scriptTools(&state)
 
 	// result snapshots the conversation's position for whichever exit path is
 	// taken next. turns counts the WHOLE step, across every source the
@@ -575,7 +576,8 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		}
 
 		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.readOnly, conv.tools.maxCalls, state.callCounts)
-		markTrajectoryResults(state.trajectory[turnStart:], parts)
+		// Bounded to the model's own calls: a run_js script appends the calls it made behind them.
+		markTrajectoryResults(state.trajectory[turnStart:turnStart+len(calls)], parts)
 		conv.env.transcript.results(parts)
 
 		// The lost-tree check goes first, because the next turn is the cost: a tool that could not reach the step's tree at all has nothing the model can do about it, and letting the conversation continue spends its budget arguing with a machine that is gone.
@@ -850,6 +852,31 @@ func (conv agentConversation) trackToolResults(parts []*genai.Part, satisfied ma
 	}
 
 	return verdict, note
+}
+
+// scriptTools is what a run_js script calls the step's other tools through: each call is admitted against its max_calls:, recorded in the trajectory and the transcript, and counted toward required:, exactly as one the model made itself. It is only ever called from the turn's own goroutine, since run_js is not a read-only tool and so never shares a turn's concurrent group.
+func (conv agentConversation) scriptTools(state *resumeCheckpoint) scriptTools {
+	return scriptTools{
+		names: scriptableTools(conv.tools.registry),
+		call: func(ctx context.Context, env toolEnv, name string, args map[string]any) map[string]any {
+			call := &genai.FunctionCall{Name: name, Args: args}
+			at := len(state.trajectory)
+
+			state.trajectory = append(state.trajectory, recordedToolCall{name: name, args: args})
+			env.transcript.call(name, args)
+
+			response := runBudgetedTool(ctx, call, env, conv.tools.registry, admitTool(call, conv.tools.maxCalls, state.callCounts))
+
+			state.trajectory[at].ok = requiredCallSucceeded(response)
+			if conv.tools.required[name] && state.trajectory[at].ok {
+				state.satisfied[name] = true
+			}
+
+			env.transcript.result(name, renderResultContent(response))
+
+			return response
+		},
+	}
 }
 
 // forceRequiredTool constrains req's next generateOnce call to a tool call,

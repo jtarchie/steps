@@ -1414,6 +1414,7 @@
             "search_files",
             "web_fetch",
             "ask_user",
+            "run_js",
             "remember",
             "forget"
           ]
