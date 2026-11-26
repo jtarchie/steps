@@ -39,6 +39,9 @@ import (
 //nolint:gosec // an environment variable NAME, not a credential
 const cliAPIKeyEnv = "ANTHROPIC_API_KEY"
 
+// cliNoAutoMemoryEnv keeps the operator's saved notes out of a step. The CLI files its auto-memory by the git repository its working directory is in and loads it whatever --setting-sources says, so a step workspace under the operator's own repo was handed that repo's notes (measured against claude 2.1.331: five index entries without this, none with it).
+const cliNoAutoMemoryEnv = "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"
+
 // execCLI spawns the CLI and reads its transcript off stdout as it runs.
 //
 // It wraps its own cancellable context around ctx so an attestation failure
@@ -299,6 +302,7 @@ func renderCLIPrompt(conv agentConversation) string {
 // plus an explicitly configured key when the pipeline named one.
 func cliEnv(ctx context.Context, ri config.ResolvedInvocation) []string {
 	env := append(shell.HostEnv(), cliToolTimeoutEnv(ri)...)
+	env = append(env, cliNoAutoMemoryEnv)
 
 	for name, value := range shell.BuildEnv(ctx) {
 		env = append(env, name+"="+value)

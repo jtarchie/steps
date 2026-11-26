@@ -24,3 +24,11 @@ func TestCLIEnvCarriesBuildMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestCLIEnvTurnsTheOperatorsAutoMemoryOff(t *testing.T) {
+	t.Parallel()
+
+	if !slices.Contains(cliEnv(context.Background(), config.ResolvedInvocation{}), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1") {
+		t.Error("cliEnv lets the CLI load the operator's auto-memory")
+	}
+}
