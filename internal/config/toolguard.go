@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"slices"
 )
 
 // validateToolCallGuards rejects max_calls:/args: set on anything but a
@@ -100,7 +101,12 @@ func (c *Config) validateStepToolCallGuards() error {
 // specs, stopping at the first error.
 func (c *Config) checkToolCallGuardSpecs(context string, pos toolPosition, specs []ToolSpec) error {
 	for _, spec := range specs {
-		err := validateToolCallGuardShape(context, spec)
+		err := validateBuiltinToolName(context, pos, spec)
+		if err != nil {
+			return err
+		}
+
+		err = validateToolCallGuardShape(context, spec)
 		if err != nil {
 			return err
 		}
@@ -310,4 +316,21 @@ func validateToolEnvShape(context string, spec ToolSpec) error {
 	}
 
 	return fmt.Errorf("%s: tool %q: env: on a tool is for an mcp_exports: command; name the variables in the agent's own env: list", context, ToolSpecName(spec))
+}
+
+// BuiltinToolNames is every builtin a tools: entry may name, in the order the docs list them. internal/agent implements them; the list lives here so a misspelled grant is a load error rather than a failure when its step starts.
+func BuiltinToolNames() []string {
+	return []string{
+		ReadFileBuiltinName, ListDirBuiltinName, RunShellBuiltinName, WriteFileBuiltinName, EditFileBuiltinName, SearchFilesBuiltinName,
+		WebFetchBuiltinName, AskUserBuiltinName, RunJSBuiltinName, RememberBuiltinName, ForgetBuiltinName,
+	}
+}
+
+// validateBuiltinToolName refuses a grant naming a builtin that does not exist. Only in the grant position: a step's or fix's bare entry selects one of the agent's tools by name, custom ones included.
+func validateBuiltinToolName(context string, pos toolPosition, spec ToolSpec) error {
+	if pos != grantPosition || spec.Builtin == "" || slices.Contains(BuiltinToolNames(), spec.Builtin) {
+		return nil
+	}
+
+	return fmt.Errorf("%s: %w", context, notFound("builtin tool", spec.Builtin, BuiltinToolNames()))
 }

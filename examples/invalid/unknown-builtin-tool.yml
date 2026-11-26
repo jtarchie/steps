@@ -1,0 +1,18 @@
+# A bare tools: entry names a builtin. One that names nothing used to load, and
+# failed only when its agent step started, after every step ahead of it had run.
+# expect: no builtin tool named "read_flie" (did you mean "read_file"?)
+
+agents:
+  - name: reader
+    source:
+      model: openai/gpt-4o
+    tools:
+      - read_flie
+
+jobs:
+  - name: build
+    plan:
+      - agent: reader
+        inputs: []
+        messages:
+          - Read it.
