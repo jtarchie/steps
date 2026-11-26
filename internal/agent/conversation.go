@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -40,6 +41,8 @@ type recordedToolCall struct {
 	// the model chose, success or not, while the computed
 	// files-touched summary must list only what genuinely happened.
 	ok bool
+	// scripted marks a call a run_js script made rather than the model: the turn has no result part for it, and a CLI child's stream never names it.
+	scripted bool
 }
 
 // conversationResult is one completed attempt's output: the model's final
@@ -484,7 +487,10 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// so far, which live in state; a closure rather than a copy because the
 	// record grows every turn.
 	conv.env.trajectory = func() []recordedToolCall { return state.trajectory }
-	conv.env.script = conv.scriptTools(&state)
+
+	var turnStart int
+
+	conv.env.script = conv.scriptTools(&state, &turnStart)
 
 	// result snapshots the conversation's position for whichever exit path is
 	// taken next. turns counts the WHOLE step, across every source the
@@ -568,7 +574,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 
 		req.Config.ToolConfig = nil // clear any forcing from the prior turn — the model chooses freely again next time it tries to stop
 
-		turnStart := len(state.trajectory)
+		turnStart = len(state.trajectory)
 
 		for _, call := range calls {
 			state.trajectory = append(state.trajectory, recordedToolCall{name: call.Name, args: call.Args})
@@ -576,8 +582,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		}
 
 		parts := toolResponseParts(ctx, calls, conv.env, conv.tools.registry, conv.tools.readOnly, conv.tools.maxCalls, state.callCounts)
-		// Bounded to the model's own calls: a run_js script appends the calls it made behind them.
-		markTrajectoryResults(state.trajectory[turnStart:turnStart+len(calls)], parts)
+		markTrajectoryResults(state.trajectory[turnStart:], parts)
 		conv.env.transcript.results(parts)
 
 		// The lost-tree check goes first, because the next turn is the cost: a tool that could not reach the step's tree at all has nothing the model can do about it, and letting the conversation continue spends its budget arguing with a machine that is gone.
@@ -855,17 +860,27 @@ func (conv agentConversation) trackToolResults(parts []*genai.Part, satisfied ma
 }
 
 // scriptTools is what a run_js script calls the step's other tools through: each call is admitted against its max_calls:, recorded in the trajectory and the transcript, and counted toward required:, exactly as one the model made itself. It is only ever called from the turn's own goroutine, since run_js is not a read-only tool and so never shares a turn's concurrent group.
-func (conv agentConversation) scriptTools(state *resumeCheckpoint) scriptTools {
+//
+// turnStart is where the running turn's calls begin in the trajectory. The loop records all of a turn's calls before it runs any, so a script's call is filed directly behind its own run_js rather than at the end: assert.tool_calls: reads the order, and a call the model made in the same turn after run_js ran after everything the script did.
+func (conv agentConversation) scriptTools(state *resumeCheckpoint, turnStart *int) scriptTools {
 	return scriptTools{
 		names: scriptableTools(conv.tools.registry),
 		call: func(ctx context.Context, env toolEnv, name string, args map[string]any) map[string]any {
 			call := &genai.FunctionCall{Name: name, Args: args}
-			at := len(state.trajectory)
 
-			state.trajectory = append(state.trajectory, recordedToolCall{name: name, args: args})
+			// Behind the run_js that is running, and behind every scripted call already filed in this turn: those all came first.
+			at := *turnStart + env.turnCall + 1
+			for _, earlier := range state.trajectory[min(*turnStart, len(state.trajectory)):] {
+				if earlier.scripted {
+					at++
+				}
+			}
+
+			at = min(at, len(state.trajectory))
+			state.trajectory = slices.Insert(state.trajectory, at, recordedToolCall{name: name, args: args, scripted: true})
 			env.transcript.call(name, args)
 
-			response := runBudgetedTool(ctx, call, env, conv.tools.registry, admitTool(call, conv.tools.maxCalls, state.callCounts))
+			response := env.shown(runBudgetedTool(ctx, call, env, conv.tools.registry, admitTool(call, conv.tools.maxCalls, state.callCounts)))
 
 			state.trajectory[at].ok = requiredCallSucceeded(response)
 			if conv.tools.required[name] && state.trajectory[at].ok {
@@ -1172,12 +1187,20 @@ func collectParts(content *genai.Content) (calls []*genai.FunctionCall, text str
 }
 
 // markTrajectoryResults backfills the ok flag on one turn's freshly-recorded
-// calls from that turn's results. turn and parts are index-aligned:
-// toolResponseParts appends exactly one part per call, in order. A length
+// calls from that turn's results. The model's own calls in turn and parts are index-aligned:
+// toolResponseParts appends exactly one part per call, in order, and a call a run_js script filed among them was marked when it ran. A length
 // mismatch would mean that contract changed, so it degrades to leaving every
 // call marked unsuccessful rather than pairing a call with the wrong result.
 func markTrajectoryResults(turn []recordedToolCall, parts []*genai.Part) {
-	if len(turn) != len(parts) {
+	own := make([]*recordedToolCall, 0, len(parts))
+
+	for i := range turn {
+		if !turn[i].scripted {
+			own = append(own, &turn[i])
+		}
+	}
+
+	if len(own) != len(parts) {
 		return
 	}
 
@@ -1186,7 +1209,7 @@ func markTrajectoryResults(turn []recordedToolCall, parts []*genai.Part) {
 			continue
 		}
 
-		turn[i].ok = requiredCallSucceeded(part.FunctionResponse.Response)
+		own[i].ok = requiredCallSucceeded(part.FunctionResponse.Response)
 	}
 }
 

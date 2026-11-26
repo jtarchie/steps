@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -78,6 +79,11 @@ func TestRunJSReportsAScriptErrorAsData(t *testing.T) {
 		"empty":   `  `,
 		"deep":    `function f() { return f() } f()`,
 		"args":    `echo("not an object")`,
+		"nan":     `echo(NaN)`,
+		// The three below run the script's code after the script has returned, where a throw has no frame to land in.
+		"getter":   `({get x() { throw new Error("boom") }})`,
+		"tostring": `throw {toString() { throw new Error("inner") }}`,
+		"rejected": `(async () => { throw {toString() { throw new Error("inner") }} })()`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -164,6 +170,16 @@ func TestRunJSBoundsWhatItReturns(t *testing.T) {
 
 	if logs, _ := got["logs"].(string); len(logs) > 2*maxToolOutputBytes {
 		t.Errorf("logs are %d bytes, over the %d limit", len(logs), maxToolOutputBytes)
+	}
+
+	for name, code := range map[string]string{
+		"thrown":   `throw "y".repeat(1e6)`,
+		"rejected": `(async () => { throw "y".repeat(1e6) })()`,
+	} {
+		failed := runScript(t, nil, code)
+		if message, _ := failed[resultErrorKey].(string); message == "" || len(message) > 2*maxToolOutputBytes {
+			t.Errorf("%s: the error is %d bytes, want it held to the %d limit", name, len(message), maxToolOutputBytes)
+		}
 	}
 }
 
@@ -303,7 +319,167 @@ func TestCLIBridgeHoldsAScriptsCallsToTheBudget(t *testing.T) {
 		names = append(names, call.name)
 	}
 
-	if got := strings.Join(names, ","); got != "post_review,run_js" {
-		t.Errorf("captured calls = %s, want the script's call and then the script", got)
+	if got := strings.Join(names, ","); got != "post_review,post_review,run_js" {
+		t.Errorf("captured calls = %s, want both of the script's calls, the refused one too, and then the script", got)
+	}
+}
+
+// The stream names the model's own calls and never a script's, so a script's read_file is not one of the stream's read_files under another count: it is kept, with its own arguments, behind the run_js that made it.
+func TestMergeCLITrajectoryFilesAScriptsCallsBehindItsRunJS(t *testing.T) {
+	t.Parallel()
+
+	streamed := []recordedToolCall{
+		{name: "run_js", ok: true},
+		{name: "read_file", args: map[string]any{"path": "direct"}, ok: true},
+		{name: "run_js", ok: true},
+	}
+
+	bridged := []recordedToolCall{
+		{name: "read_file", args: map[string]any{"path": "scripted"}, ok: true, scripted: true},
+		{name: "run_js", ok: true},
+		{name: "read_file", args: map[string]any{"path": "direct"}, ok: true},
+		{name: "post_review", ok: true, scripted: true},
+		{name: "run_js", ok: true},
+	}
+
+	got := make([]string, 0, len(bridged))
+
+	for _, call := range mergeCLITrajectory(streamed, bridged) {
+		entry := call.name
+		if path, _ := call.args["path"].(string); path != "" {
+			entry += ":" + path
+		}
+
+		got = append(got, entry)
+	}
+
+	if want := "run_js,read_file:scripted,read_file:direct,run_js,post_review"; strings.Join(got, ",") != want {
+		t.Errorf("merged = %s, want %s", strings.Join(got, ","), want)
+	}
+}
+
+// A script's call is filed behind the run_js that made it, ahead of a call the model made later in the same turn, and what it returns names the spill directory as the model knows it.
+func TestHostedScriptCallsAreFiledBehindTheirRunJS(t *testing.T) {
+	t.Parallel()
+
+	registry := map[string]toolImpl{
+		"spill": func(_ context.Context, _ map[string]any, env toolEnv) map[string]any {
+			return map[string]any{"stdout": "saved to " + env.spillDir + "/output-1.txt"}
+		},
+	}
+
+	conv := agentConversation{tools: agentTools{registry: registry, required: map[string]bool{}}}
+	state := resumeCheckpoint{
+		satisfied:  map[string]bool{},
+		callCounts: map[string]int{},
+		trajectory: []recordedToolCall{{name: "earlier"}, {name: "run_js"}, {name: "post_review"}, {name: "run_js"}},
+	}
+	turnStart := 1
+	script := conv.scriptTools(&state, &turnStart)
+
+	env := toolEnv{dir: ".", spillDir: "/host/step/.steps-spill", spillShown: "/work/.steps-spill"}
+
+	first := script.call(t.Context(), env, "spill", nil)
+	script.call(t.Context(), env, "spill", nil)
+
+	env.turnCall = 2
+	script.call(t.Context(), env, "spill", nil)
+
+	names := make([]string, 0, len(state.trajectory))
+	for _, call := range state.trajectory {
+		names = append(names, call.name)
+	}
+
+	if got := strings.Join(names, ","); got != "earlier,run_js,spill,spill,post_review,run_js,spill" {
+		t.Errorf("trajectory = %s, want each script's calls directly behind its own run_js", got)
+	}
+
+	if got, _ := first["stdout"].(string); got != "saved to /work/.steps-spill/output-1.txt" {
+		t.Errorf("the script was told %q, want the spill directory under the name the model knows", got)
+	}
+
+	parts := []*genai.Part{
+		{FunctionResponse: &genai.FunctionResponse{Name: "run_js", Response: map[string]any{}}},
+		{FunctionResponse: &genai.FunctionResponse{Name: "post_review", Response: map[string]any{"error": "no"}}},
+		{FunctionResponse: &genai.FunctionResponse{Name: "run_js", Response: map[string]any{}}},
+	}
+
+	markTrajectoryResults(state.trajectory[turnStart:], parts)
+
+	marks := make([]bool, 0, len(state.trajectory))
+	for _, call := range state.trajectory {
+		marks = append(marks, call.ok)
+	}
+
+	if want := []bool{false, true, true, true, false, true, true}; !slices.Equal(marks, want) {
+		t.Errorf("ok marks = %v, want %v: each of the turn's results on the model's own call, past the scripted ones", marks, want)
+	}
+}
+
+// TestRunJSDescriptionNamesWhatThisAgentsScriptCanCall holds the description to the grant: a CLI-backed model sees its tools under a prefix a script does not define, so the exact names, and the deadline the grant set, are told to it rather than left to "the same name".
+func TestRunJSDescriptionNamesWhatThisAgentsScriptCanCall(t *testing.T) {
+	t.Parallel()
+
+	describe := func(specs ...config.ToolSpec) string {
+		tools, closers, err := buildAgentTools(t.Context(), nil, specs, "")
+		if err != nil {
+			t.Fatalf("buildAgentTools: %v", err)
+		}
+
+		defer closeAll(closers)
+
+		for _, decl := range tools.decls.FunctionDeclarations {
+			if decl.Name == config.RunJSBuiltinName {
+				return decl.Description
+			}
+		}
+
+		t.Fatal("run_js was not declared")
+
+		return ""
+	}
+
+	granted := describe(
+		config.ToolSpec{Builtin: config.WriteFileBuiltinName},
+		config.ToolSpec{Builtin: config.RunJSBuiltinName, Timeout: "2m"},
+		config.ToolSpec{Builtin: config.AskUserBuiltinName},
+		config.ToolSpec{Builtin: config.ReadFileBuiltinName},
+	)
+
+	for _, want := range []string{"Callable from a script here: read_file, write_file.", "mcp__", "Time limit: 2m."} {
+		if !strings.Contains(granted, want) {
+			t.Errorf("description lacks %q:\n%s", want, granted)
+		}
+	}
+
+	alone := describe(config.ToolSpec{Builtin: config.RunJSBuiltinName})
+
+	for _, want := range []string{"No other tool is granted here, so a script can call nothing.", "Time limit: " + runJSDefaultTimeout + "."} {
+		if !strings.Contains(alone, want) {
+			t.Errorf("description lacks %q:\n%s", want, alone)
+		}
+	}
+}
+
+// TestEveryBuiltinTheLoaderAcceptsIsImplemented holds config's name list to this package's catalogue in both directions: a name only config knows fails when its step starts, and one only this package knows is refused at load.
+func TestEveryBuiltinTheLoaderAcceptsIsImplemented(t *testing.T) {
+	t.Parallel()
+
+	catalogue := builtinAgentTools("")
+
+	implemented := make([]string, 0, len(catalogue)+1)
+	implemented = append(implemented, config.AskUserBuiltinName)
+
+	for name := range catalogue {
+		implemented = append(implemented, name)
+	}
+
+	accepted := config.BuiltinToolNames()
+
+	slices.Sort(implemented)
+	slices.Sort(accepted)
+
+	if !slices.Equal(implemented, accepted) {
+		t.Errorf("builtins implemented = %v, but the loader accepts %v", implemented, accepted)
 	}
 }

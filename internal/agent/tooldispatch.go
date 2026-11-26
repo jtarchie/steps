@@ -41,6 +41,8 @@ func toolResponseParts(ctx context.Context, calls []*genai.FunctionCall, env too
 			rejections[i-start] = admitTool(calls[i], maxCalls, callCounts)
 		}
 
+		env.turnCall = start
+
 		runGroup(ctx, calls[start:end], env, registry, rejections, responses[start:end])
 
 		start = end

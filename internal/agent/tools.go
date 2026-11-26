@@ -69,6 +69,8 @@ type toolEnv struct {
 	trajectory func() []recordedToolCall
 	// script is how run_js calls the step's other tools, set by whichever loop owns the budgets and the record (see scriptTools). Zero outside a conversation.
 	script scriptTools
+	// turnCall is which of the model's calls in the running turn this env was handed to, so run_js can file what its script calls directly behind itself (see scriptTools). Zero outside the hosted turn loop.
+	turnCall int
 	// sight is whether read_file may answer with an image, decided by the
 	// source the conversation talks to (see sightFor). The zero value — every
 	// env a test builds by hand — describes an image instead.
@@ -143,6 +145,17 @@ func (env toolEnv) readTree(rel string) tree.Tree {
 	}
 
 	return env.files()
+}
+
+// shown is response as the model is told it: this machine's spill directory under the name the model knows it by.
+func (env toolEnv) shown(response map[string]any) map[string]any {
+	if env.spillShown == "" {
+		return response
+	}
+
+	shown, _ := scrubValues(response, env.showSpill).(map[string]any)
+
+	return shown
 }
 
 // calls is the recorded trajectory so far, or nothing outside a conversation.
@@ -277,6 +290,8 @@ func buildAgentTools(ctx context.Context, cfg *config.Config, specs []config.Too
 			return agentTools{}, nil, err
 		}
 	}
+
+	describeScriptTools(decls, tools.registry, specs)
 
 	tools.decls = &genai.Tool{FunctionDeclarations: decls}
 

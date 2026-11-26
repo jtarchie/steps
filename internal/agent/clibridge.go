@@ -242,7 +242,7 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 
 		span.end(ctx, result)
 
-		b.capture(name, args, result)
+		b.capture(name, args, result, false)
 		fork.result(name, renderResultContent(result))
 
 		payload, err := json.Marshal(result)
@@ -275,21 +275,21 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 	}
 }
 
-// scriptTools is what a bridged run_js script calls the step's other tools through, held to what handler holds a call the child made itself: the budget before the impl, the capture after. The child's stream never narrates these calls, so they are recorded here.
+// scriptTools is what a bridged run_js script calls the step's other tools through, held to what handler holds a call the child made itself: the budget before the impl, the capture after. The child's stream never narrates these calls, so they are recorded here, a refused one included: nothing else would say the script made it.
 func (b *cliBridge) scriptTools(registry map[string]toolImpl) scriptTools {
 	return scriptTools{
 		names: scriptableTools(registry),
 		call: func(ctx context.Context, env toolEnv, name string, args map[string]any) map[string]any {
 			env.transcript.call(name, args)
 
-			var result map[string]any
+			var rejection map[string]any
 
 			if exhausted, budget := b.overBudget(name); exhausted {
-				result = errorResult(fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", name, budget))
-			} else {
-				result = scrubSecrets(ctx, executeAgentTool(ctx, &genai.FunctionCall{Name: name, Args: args}, env, registry))
-				b.capture(name, args, result)
+				rejection = errorResult(fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", name, budget))
 			}
+
+			result := env.shown(runBudgetedTool(ctx, &genai.FunctionCall{Name: name, Args: args}, env, registry, rejection))
+			b.capture(name, args, result, true)
 
 			env.transcript.result(name, renderResultContent(result))
 
@@ -326,12 +326,12 @@ func (b *cliBridge) overBudget(name string) (bool, int) {
 // to the model. This is the half of the bridge that verdict routing depends
 // on: the choice is read out of the tool's own result the moment it is
 // produced, in this process.
-func (b *cliBridge) capture(name string, args, result map[string]any) {
+func (b *cliBridge) capture(name string, args, result map[string]any, scripted bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	ok := requiredCallSucceeded(result)
-	b.calls = append(b.calls, recordedToolCall{name: name, args: args, ok: ok})
+	b.calls = append(b.calls, recordedToolCall{name: name, args: args, ok: ok, scripted: scripted})
 
 	if !ok {
 		return

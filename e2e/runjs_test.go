@@ -84,3 +84,65 @@ jobs:
 		}
 	}
 }
+
+// TestRunJSScriptCallsAreRecordedWhereTheyRan puts run_js in the middle of a turn of three calls. The loop records the turn before running any of it, so the script's call has to be filed behind its own run_js and ahead of the call the model made after it: assert.tool_calls: reads the order, and the order it ran in is run_js, first, second.
+func TestRunJSScriptCallsAreRecordedWhereTheyRan(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	llm := newFakeLLM(t,
+		callsTools(
+			call("zero", map[string]any{}),
+			call("run_js", map[string]any{"code": `first({}).exit_code`}),
+			call("second", map[string]any{}),
+		),
+		says("Done."),
+	)
+
+	yaml := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: scripter
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools:
+  - run_js
+  - {name: zero, description: Zero., run: echo zero}
+  - {name: first, description: First., run: echo first}
+  - {name: second, description: Second., run: echo second}
+
+jobs:
+- name: build
+  plan:
+  - agent: scripter
+    messages:
+      - Run them in order.
+    assert:
+      stdout: Done.
+      tool_calls:
+      - name: run_js
+      - name: first
+      - name: second
+`, llm.URL)
+
+	path := writePipeline(t, dir, yaml)
+
+	mustRun(t, path)
+
+	result := storeNodeResult(t, path, "scripter")
+
+	at := func(name string) int { return strings.Index(result, `"name":"`+name+`"`) }
+	if at("zero") < 0 || at("zero") >= at("run_js") || at("run_js") >= at("first") || at("first") >= at("second") {
+		t.Errorf("recorded order is not zero, run_js, first, second; result: %s", result)
+	}
+
+	if strings.Count(result, `"ok":true`) != 4 {
+		t.Errorf("want all four calls marked succeeded, each by its own result; result: %s", result)
+	}
+}

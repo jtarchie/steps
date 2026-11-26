@@ -508,3 +508,90 @@ jobs:
 		t.Errorf("unfenced = %q, want %q", got, want)
 	}
 }
+
+// An agent runs for a pipeline in more roles than a step, a sub-agent and an export, and each of them builds the agent's whole grant: a fix: agent, an ensemble's judge, an ask_user responder, the judge of a rule. A script reachable only that way runs in the same process.
+func TestUnfencedNamesAScriptReachedThroughEveryAgentRole(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]byte(`
+rules:
+- name: sane
+  judged_by: scripter
+
+agents:
+- name: scripter
+  source: {model: openai/gpt-4o-mini}
+  tools: [run_js]
+- name: asker
+  source: {model: openai/gpt-4o-mini}
+  image: alpine:3
+  tools:
+  - builtin: ask_user
+    answered_by: scripter
+    default: go
+- name: ruled
+  source: {model: openai/gpt-4o-mini}
+  image: alpine:3
+  tools:
+  - name: deploy
+    description: Deploy.
+    rules: [sane]
+    run: echo deployed
+- name: voter
+  source: {model: openai/gpt-4o-mini}
+  image: alpine:3
+  tools: [read_file]
+
+mcp_exports:
+- name: helpers
+  access: "true"
+  image: alpine:3
+  rules: [sane]
+  tools:
+  - name: status
+    description: Status.
+    run: echo fine
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    image: alpine:3
+    run: make
+    fix:
+      agent: scripter
+  - agent: asker
+  - agent: ruled
+  - ensemble:
+      verdicts: [approve, reject]
+      decide: scripter
+      agents:
+      - {agent: voter, messages: ["Vote."]}
+      - {agent: voter, messages: ["Vote again."]}
+`), "fence", nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	unfenced := cfg.Unfenced(true)
+	got := make([]string, 0, len(unfenced))
+
+	for _, host := range unfenced {
+		if !strings.Contains(host.Why, "run_js") {
+			t.Errorf("%s is listed for %q, and only run_js is unfenced here", host.Where, host.Why)
+		}
+
+		got = append(got, host.Where)
+	}
+
+	want := []string{
+		`task "compile" in job "build" step 0 (line 43)`,
+		`agent "asker" in job "build" step 1 (line 48)`,
+		`agent "ruled" in job "build" step 2 (line 49)`,
+		`ensemble judge "scripter" in job "build" step 3 (line 50)`,
+		`mcp_exports "helpers"`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("unfenced = %q, want %q", got, want)
+	}
+}

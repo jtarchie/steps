@@ -1168,7 +1168,7 @@ with no host command of its own (a block, `approval:`, `load_var:`, an agent
 whose tools touch nothing, a `put:` of a built-in type), which runs on this
 machine unless a block around it, or the block itself, says
 [`sandbox: true`](infra.md#on-a-block), a CLI agent with `settings: project`, whose repository hooks run
-on this machine whatever fences its tools, and an agent that can reach [`run_js`](agents.md#run_js), whose script
+on this machine whatever fences its tools, and an agent, in whatever role it runs, that can reach [`run_js`](agents.md#run_js), whose script
 is interpreted in the daemon's own process with no memory bound.
 
 Because the policy lives in the daemon's config file, a pipeline cannot loosen

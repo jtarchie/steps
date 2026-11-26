@@ -976,27 +976,56 @@ func checkCLIObligations(prepared preparedAgentStep, run cliRunResult, satisfied
 // the bridge side because a bridged call is always captured under the tool's
 // own declared name (clibridge.go's handler) — so this dedupes on bare names
 // directly, with no bridgedToolName round trip.
+//
+// A call a run_js script made is the exception to all of it: the stream never names it, so it is never one of the stream's calls under another count, and it is captured ahead of the run_js that made it. Each run of them is filed behind the stream's matching run_js, which is where the hosted loop puts them.
 func mergeCLITrajectory(streamed, bridged []recordedToolCall) []recordedToolCall {
 	seen := map[string]int{}
 	for _, call := range streamed {
 		seen[call.name]++
 	}
 
-	// A fresh slice rather than an alias of streamed: appending to the
-	// caller's slice would write bridge-only calls into run.trajectory's
-	// spare capacity, so the two records would stop being independent.
-	merged := make([]recordedToolCall, len(streamed), len(streamed)+len(bridged))
-	copy(merged, streamed)
+	var (
+		scripts          [][]recordedToolCall
+		pending, unnamed []recordedToolCall
+	)
 
 	for _, call := range bridged {
+		if call.scripted {
+			pending = append(pending, call)
+
+			continue
+		}
+
+		if call.name == config.RunJSBuiltinName {
+			scripts, pending = append(scripts, pending), nil
+		}
+
 		if seen[call.name] > 0 {
 			seen[call.name]--
 
 			continue
 		}
 
-		merged = append(merged, recordedToolCall{name: call.name, args: call.args, ok: call.ok})
+		unnamed = append(unnamed, recordedToolCall{name: call.name, args: call.args, ok: call.ok})
 	}
 
-	return merged
+	// A fresh slice rather than an alias of streamed: appending to the
+	// caller's slice would write bridge-only calls into run.trajectory's
+	// spare capacity, so the two records would stop being independent.
+	merged := make([]recordedToolCall, 0, len(streamed)+len(bridged))
+
+	for _, call := range streamed {
+		merged = append(merged, call)
+
+		if call.name == config.RunJSBuiltinName && len(scripts) > 0 {
+			merged, scripts = append(merged, scripts[0]...), scripts[1:]
+		}
+	}
+
+	// What the stream gave no place to: a script whose run_js it was cut off before naming, or one stopped before its run_js was captured.
+	for _, script := range scripts {
+		merged = append(merged, script...)
+	}
+
+	return append(append(merged, pending...), unnamed...)
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -26,13 +27,38 @@ const runJSCodeArg = "code"
 
 const runJSDescription = "Run a JavaScript script that calls your other tools as functions, and get back only what the script returns." +
 	" Use it when a job takes many tool calls whose intermediate results you do not need to read yourself: loop, filter and combine them in one script instead of one call per turn." +
-	" Every other tool you have is a global function of the same name, taking ONE object of its arguments and returning its result object," +
+	" Each tool this description lists as callable is a global function of exactly that name, taking ONE object of its arguments and returning its result object," +
 	` e.g. const r = read_file({path: "go.mod"}); a tool whose name is not a JavaScript identifier is tools["its-name"]({...}).` +
 	" Calls are synchronous: do not await them. There is no require/import, no timers, and no filesystem or network except through those functions." +
 	" A tool that fails does not throw: its result carries an error field or a nonzero exit_code, exactly as you would see it, so check for it." +
 	" Each call counts against that tool's own call budget as if you had made it directly." +
 	" The value of the script's LAST expression comes back as result (it must be JSON-serializable), and anything passed to console.log as logs." +
 	" The script is stopped when its time limit runs out."
+
+// describeScriptTools finishes run_js's description with what this agent's script can call and how long it has. The names are spelled out because a CLI-backed model sees its tools under a prefix (mcp__steps__read_file) that no script global carries.
+func describeScriptTools(decls []*genai.FunctionDeclaration, registry map[string]toolImpl, specs []config.ToolSpec) {
+	for _, decl := range decls {
+		if decl.Name != config.RunJSBuiltinName {
+			continue
+		}
+
+		callable := "No other tool is granted here, so a script can call nothing."
+		if names := scriptableTools(registry); len(names) > 0 {
+			callable = "Callable from a script here: " + strings.Join(names, ", ") + "." +
+				" Use those names exactly, without any prefix such as mcp__steps__ your own tool list may show; nothing else is callable, not run_js itself, ask_user or verdict."
+		}
+
+		limit := runJSDefaultTimeout
+
+		for _, spec := range specs {
+			if spec.Builtin == config.RunJSBuiltinName {
+				limit = declaredTimeout(spec)
+			}
+		}
+
+		decl.Description += " " + callable + " Time limit: " + limit + "."
+	}
+}
 
 // scriptTools is how a script reaches the step's other tools. Whichever loop owns the step's budgets and its record sets it (the hosted conversation, or the CLI bridge), because a script's call must be admitted, counted and recorded where a direct call is. Zero outside a conversation, where a script can call nothing.
 type scriptTools struct {
@@ -167,7 +193,8 @@ func (s *jsScript) toolFunc(ctx context.Context, env toolEnv, name string) func(
 				panic(err)
 			}
 
-			if json.Unmarshal([]byte(text.String()), &args) != nil {
+			// A nil map is what "null" decodes to, which is how NaN and a toJSON returning null serialize.
+			if json.Unmarshal([]byte(text.String()), &args) != nil || args == nil {
 				panic(s.vm.NewTypeError(name + "(args): args must be one object naming the tool's arguments"))
 			}
 		}
@@ -225,23 +252,52 @@ func (s *jsScript) render(value goja.Value) string {
 }
 
 func (s *jsScript) failed(err error) map[string]any {
-	result := errorResult("run_js: " + err.Error())
+	result := errorResult("run_js: " + truncateToolOutputLimit(shown(err.Error), s.limit))
 	s.addLogs(result)
 
 	return result
 }
 
-// finished turns the script's last value into the tool result. An async function's promise is read for what it settled to: every tool call is synchronous, so a script written with await has already finished by the time it returns.
-func (s *jsScript) finished(ctx context.Context, env toolEnv, value goja.Value) map[string]any {
-	if promise, isPromise := value.Export().(*goja.Promise); isPromise {
-		switch promise.State() {
-		case goja.PromiseStateFulfilled:
-			value = promise.Result()
-		case goja.PromiseStateRejected:
-			return s.failed(fmt.Errorf("the script's promise was rejected: %s", promise.Result().String()))
-		case goja.PromiseStatePending:
-			return s.failed(errors.New("the script returned a promise that never settles; tool functions are synchronous, so return the value itself"))
+// shown is render's text. What a script threw is shown by calling its toString, which is the script's own code running again with no frame of the script's left to catch a throw: one that escapes, or runs into the deadline, is reported in the value's place rather than as this process's panic.
+func shown(render func() string) (text string) {
+	defer func() {
+		if recover() != nil {
+			text = "a value whose toString failed"
 		}
+	}()
+
+	return render()
+}
+
+// settled is the value a script ended on, with an async function's promise read for what it settled to: every tool call is synchronous, so a script written with await has already finished by the time it returns.
+func settled(value goja.Value) (goja.Value, error) {
+	// Asked by type first: exporting any other object reads every property, and a getter that throws out here is a panic.
+	object, isObject := value.(*goja.Object)
+	if !isObject || object.ExportType() != reflect.TypeFor[*goja.Promise]() {
+		return value, nil
+	}
+
+	promise, isPromise := object.Export().(*goja.Promise)
+	if !isPromise {
+		return value, nil
+	}
+
+	switch promise.State() {
+	case goja.PromiseStateRejected:
+		return nil, fmt.Errorf("the script's promise was rejected: %s", shown(promise.Result().String))
+	case goja.PromiseStatePending:
+		return nil, errors.New("the script returned a promise that never settles; tool functions are synchronous, so return the value itself")
+	case goja.PromiseStateFulfilled:
+	}
+
+	return promise.Result(), nil
+}
+
+// finished turns the script's last value into the tool result.
+func (s *jsScript) finished(ctx context.Context, env toolEnv, value goja.Value) map[string]any {
+	value, err := settled(value)
+	if err != nil {
+		return s.failed(err)
 	}
 
 	result := map[string]any{}

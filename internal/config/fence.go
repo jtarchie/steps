@@ -264,58 +264,109 @@ func (c *Config) projectSettingsAgents() []HostCommand {
 	return found
 }
 
-const scriptWhy = "its run_js tool runs model-written JavaScript in this process, with a timeout and no memory bound, whatever image: or sandbox: fences its other tools; drop run_js"
+// scriptWhy is why a run_js grant is listed; whose names the grant when it is not the listed thing's own.
+func scriptWhy(whose string) string {
+	return whose + " run_js tool runs model-written JavaScript in this process, with a timeout and no memory bound, whatever image: or sandbox: fences its other tools; drop run_js"
+}
 
-// scriptAgents is every agent step, and every exported agent, that can run a run_js script: its own grant, or a sub-agent's.
+// scriptAgents is every place that can run a run_js script: an agent step, a task's fix: agent, an ensemble's judge, an exported agent and an export whose rules are judged, through its own grant or any agent that grant leads to.
 func (c *Config) scriptAgents() []HostCommand {
 	var found []HostCommand
 
-	listed := func(where string, step Step) {
-		invocation, err := c.ResolveAgentInvocation(step)
-		if err == nil && c.grantsScript(invocation.ToolSpecs, map[string]bool{step.Agent: true}) {
-			found = append(found, HostCommand{
-				Name: step.Agent, Where: where, Why: scriptWhy,
-				Entity: entity(EntityAgent, step.Agent), Reason: c.agentReason(step, step.Agent),
-			})
-		}
-	}
-
 	for _, job := range c.Jobs {
 		_ = job.visitSteps(func(label string, step *Step) error {
-			if step.Agent != "" {
-				listed(fmt.Sprintf("agent %q in %s", step.Agent, label), *step)
-			}
+			found = append(found, c.scriptStep(label, step)...)
 
 			return nil
 		})
 	}
 
 	for _, export := range c.MCPExports {
+		where := fmt.Sprintf("mcp_exports %q", export.Name)
+		rules := slices.Clone(export.Rules)
+
 		for _, spec := range export.Tools {
+			rules = append(rules, spec.Rules...)
+
 			if spec.Agent != "" {
-				listed(fmt.Sprintf("mcp_exports %q agent %q", export.Name, spec.Agent), Step{Agent: spec.Agent})
+				found = append(found, c.scriptAgent(fmt.Sprintf("%s agent %q", where, spec.Agent), Step{Agent: spec.Agent})...)
 			}
+		}
+
+		if c.grantsScript([]ToolSpec{{Rules: rules}}, map[string]bool{}) {
+			found = append(found, HostCommand{
+				Name: export.Name, Where: where, Why: scriptWhy("a judge of its rules holds a grant whose"),
+				Entity: entity(EntityMCPExport, export.Name), Reason: reasonOf(export.Unfenced),
+			})
 		}
 	}
 
 	return found
 }
 
+// scriptStep is what one step can run a script through: the agent it names, the judge its ensemble names, or its task's fix: agent.
+func (c *Config) scriptStep(label string, step *Step) []HostCommand {
+	if step.Agent != "" {
+		return c.scriptAgent(fmt.Sprintf("agent %q in %s", step.Agent, label), *step)
+	}
+
+	if step.Ensemble != nil && step.Ensemble.JudgeAgent() != "" {
+		return c.scriptAgent(fmt.Sprintf("ensemble judge %q in %s", step.Ensemble.JudgeAgent(), label), Step{Agent: step.Ensemble.JudgeAgent()})
+	}
+
+	if step.Task == "" {
+		return nil
+	}
+
+	// As agent.RunFix resolves it: the fix: agent's grant under the fix's own selection.
+	task, err := c.ResolveTask(*step)
+	if err != nil || task.Fix == nil || !c.reachesScript(Step{Agent: task.Fix.Agent, Tools: task.Fix.Tools}) {
+		return nil
+	}
+
+	return []HostCommand{{
+		Name: step.Task, Where: fmt.Sprintf("task %q in %s", step.Task, label), Why: scriptWhy("its fix: agent's"),
+		Entity: entity(EntityTask, step.Task), Reason: c.taskReason(*step),
+	}}
+}
+
+// scriptAgent lists step's agent at where when it can run a script.
+func (c *Config) scriptAgent(where string, step Step) []HostCommand {
+	if !c.reachesScript(step) {
+		return nil
+	}
+
+	return []HostCommand{{
+		Name: step.Agent, Where: where, Why: scriptWhy("its"),
+		Entity: entity(EntityAgent, step.Agent), Reason: c.agentReason(step, step.Agent),
+	}}
+}
+
+// reachesScript resolves step's agent as a step does and asks whether its tools reach run_js.
+func (c *Config) reachesScript(step Step) bool {
+	invocation, err := c.ResolveAgentInvocation(step)
+
+	return err == nil && c.grantsScript(invocation.ToolSpecs, map[string]bool{step.Agent: true})
+}
+
+// grantsScript is whether specs grant run_js, or lead to an agent that does: a sub-agent, the judge of a rule, an ask_user responder.
 func (c *Config) grantsScript(specs []ToolSpec, seen map[string]bool) bool {
 	for _, spec := range specs {
 		if spec.Builtin == RunJSBuiltinName {
 			return true
 		}
 
-		if spec.Agent == "" || seen[spec.Agent] {
-			continue
-		}
+		for _, name := range append(c.reachedBy(spec), spec.AnsweredBy) {
+			if name == "" || seen[name] {
+				continue
+			}
 
-		seen[spec.Agent] = true
+			seen[name] = true
 
-		sub, err := c.FindAgent(spec.Agent)
-		if err == nil && c.grantsScript(sub.Tools, seen) {
-			return true
+			next, err := c.FindAgent(name)
+			if err == nil && c.grantsScript(next.Tools, seen) {
+				return true
+			}
 		}
 	}
 
