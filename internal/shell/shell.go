@@ -84,6 +84,8 @@ type RunnerSpec struct {
 	DockerDial func(ctx context.Context) (net.Conn, error)
 	// Volumes are daemon-side named volumes as `name:target`: the tree at MountPath, and whatever else the venue mounts.
 	Volumes []dockerapi.Bind
+	// ContainerImage is the image a worker that can only run containers uses when Image is empty; everywhere else an empty Image still means the machine itself.
+	ContainerImage string
 	// EnvValues are variables the CALLER supplies with their values rather
 	// than by name, for the ones that exist nowhere in this process's own
 	// environment. A venue's STEPS_WORKER is the case: it names the tag a

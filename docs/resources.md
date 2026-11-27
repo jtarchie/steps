@@ -21,7 +21,7 @@ jobs:
         run: cd repo && go build ./...
 ```
 
-`git` ships with steps, so that pipeline needs no `resource_types:` block; neither do [the GitHub types](#the-built-in-github-types), [the Linear types](#the-built-in-linear-types), Slack's, `cron`, [`registry-image`](#the-built-in-registry-image-type) and [`webhook`](webhooks.md). For anything else, you write the type yourself.
+`git` ships with steps, so that pipeline needs no `resource_types:` block; neither do [the GitHub types](#the-built-in-github-types), [the Linear types](#the-built-in-linear-types), Slack's, `cron`, [`registry-image`](#the-built-in-registry-image-type), [`s3`](#the-built-in-s3-type) and [`webhook`](webhooks.md). For anything else, you write the type yourself.
 
 **A built-in type's `source:` and `params:` are closed.** steps owns every built-in's code, so it knows each key the type reads, and `steps validate` refuses the rest: a misspelled `chanels:` or a Concourse habit like `params: {depth: 1}` on a get is a load error naming the key and the ones the type does read, not a setting nobody applies. No built-in's get takes `params:`; what it fetches is set on `source:`. Values are typed as well, so `limit: "200"` is refused where `limit: 200` loads. A type you write keeps Concourse's rule, where `source:` and `params:` are the type's own business and steps passes them through unread — and so does a pipeline that declares its own type under a built-in's name, which replaces the built-in: that is the pipeline's choice to make. `webhook` is the one name that cannot be taken, since deliveries are routed to a resource by it.
 
@@ -1894,6 +1894,141 @@ jobs:
 - **The digest file pins it.** A get's `params:` are part of its cache key, and its version is the digest, so an unchanged base is the same get, and the build that follows reuses its cache.
 
 `tags:` is refused, as for every type that runs inside this process: check, get and put are steps' own requests, made from this machine.
+
+## The built-in `s3` type
+
+`type: s3` is objects in an S3 bucket, on AWS or anything else that speaks S3 (MinIO, Cloudflare R2, Google Cloud Storage's S3 endpoint). Its check finds versions, its get downloads one object, its put uploads one. Modeled on Concourse's [s3 resource](https://github.com/concourse/s3-resource), with its source and params names.
+
+```yaml noexec=network
+resources:
+  - name: release
+    type: s3
+    source:
+      bucket: acme-releases
+      regexp: builds/app-(.*).tgz        # the capture group is the version
+      region_name: us-west-2              # optional; us-east-1 when unset
+      access_key_id_env: AWS_ACCESS_KEY_ID          # the NAMES of the variables holding the credential
+      secret_access_key_env: AWS_SECRET_ACCESS_KEY
+    secrets:
+      AWS_ACCESS_KEY_ID: ((ci:aws_key_id))
+      AWS_SECRET_ACCESS_KEY: ((ci:aws_secret))
+
+jobs:
+  - name: publish
+    plan:
+      - task: build
+        outputs: [out]
+        run: tar -czf out/app-1.4.0.tgz -T /dev/null
+      - put: release
+        inputs: [out]
+        params:
+          file: out/app-*.tgz             # a glob that must match exactly one file
+          content_type: application/gzip  # optional
+
+  - name: deploy
+    plan:
+      - get: release
+        trigger: true
+      - task: unpack
+        inputs: [release]
+        run: tar -tzf release/app-*.tgz && cat release/version
+```
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `bucket` | yes | the bucket's name |
+| `regexp` | one of the two | a `/`-separated pattern matched against whole keys, as if anchored at both ends. Its capture group (the one named `version`, else the first) is the version |
+| `versioned_file` | one of the two | one key in a bucket with [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) on; each upload of it is a version |
+| `region_name` | no | the bucket's region; `us-east-1` when unset |
+| `endpoint` | no | a server that is not AWS, scheme included: `https://minio.internal:9000` |
+| `use_path_style` | no | address the bucket in the path (`endpoint/bucket/key`) rather than as a host name; most servers that are not AWS need it |
+| `skip_download` | no | a get writes the files that name the object and downloads nothing |
+| `access_key_id_env`, `secret_access_key_env` | together | the **names** of the variables holding the credential, read from the resource's [`secrets:`](secrets.md) first and the daemon's environment otherwise |
+| `session_token_env` | no | the name of the variable holding a temporary credential's session token |
+
+**With no credential, requests are anonymous**, as Concourse's are: a public bucket needs none, and this machine's own AWS configuration (`~/.aws`, an instance profile) is never read, so what a pipeline can reach is what its `source:` says.
+
+**A version under `regexp` is `{path}`**, the object's key. Versions are ordered by the number the capture group holds, not by upload time or by name, so `app-1.10.0.tgz` is newer than `app-1.9.0.tgz`. A file the pattern matches whose capture is not a version (numbers and words separated by dots, with an optional `-pre` and `+post` part) fails the check, naming the file. Each `/`-separated piece of the pattern matches one piece of the key, so `builds/app-(.*).tgz` never matches `builds/app-1/x.tgz`.
+
+**A version under `versioned_file` is `{version_id}`**, the id the bucket gave that upload. A bucket without versioning fails the check and the put, saying so.
+
+```yaml noexec=network
+resources:
+  - name: config
+    type: s3
+    source:
+      bucket: acme-config
+      versioned_file: prod/settings.json
+      endpoint: https://minio.internal:9000
+      use_path_style: true
+      skip_download: true
+      access_key_id_env: MINIO_KEY
+      secret_access_key_env: MINIO_SECRET
+      session_token_env: MINIO_SESSION
+
+jobs:
+  - name: apply
+    plan:
+      - get: config
+        trigger: true
+        params: {skip_download: false}   # this get does download; a get's param overrides the source's
+      - task: show
+        inputs: [config]
+        run: cat config/settings.json
+```
+
+**A get writes Concourse's files**, under Concourse's names:
+
+| file | what it holds |
+|---|---|
+| the object | under the last piece of its key (`app-1.4.0.tgz`), unless `skip_download` |
+| `version` | the number the capture group held, or the version id |
+| `url` | the object's URL, unsigned |
+| `s3_uri` | `s3://bucket/key`, for a tool that takes one |
+
+**A put uploads the one file `params.file` matches.** Under `regexp` it lands in the pattern's directory under its own name (`out/app-1.4.0.tgz` becomes `builds/app-1.4.0.tgz`), and the version is that key. Under `versioned_file` it becomes a new version of that key. A glob matching no file, or more than one, fails the put and lists what matched. As in Concourse, nothing checks the uploaded name against `regexp`: a file it does not match is uploaded, and no check will ever report it.
+
+### Where the bytes go: `tags:` on an s3 resource
+
+The check lists the bucket from the steps process, which is the only part that needs the credential. A get or put then signs a link to the one object, good for an hour, and hands it to `curl`, which runs wherever the step is placed:
+
+- **With no `tags:`**, `curl` runs on this machine, which needs it installed.
+- **On an `ssh://` worker**, `curl` runs on the worker, which needs it installed.
+- **On a worker that runs containers** (`local:`, `docker+ssh://`, `aws://`, `gcp://`, `do://`), it runs in a `curlimages/curl` container there.
+
+So a placed get or put moves the object straight between the bucket and the worker; it never passes through the machine steps runs on, and on a docker worker what a get fetched stays there for the next step placed on it, as [any placed get's tree does](infra.md#remote-workers-tags). The credential never leaves the steps process: a worker holds a link to one object that stops working after an hour.
+
+```yaml noexec=docker
+resource_types:
+  - name: s3
+    image: curlimages/curl:8.11.1   # optional: the image every transfer runs in, this machine's included
+
+resources:
+  - name: dataset
+    type: s3
+    tags: [gpu]                     # transfers run on the worker --worker gpu=... names
+    source:
+      bucket: acme-datasets
+      regexp: corpora/corpus-(.*).tar
+
+jobs:
+  - name: train
+    plan:
+      - get: dataset
+      - task: count
+        tags: [gpu]
+        image: alpine:3
+        inputs: [dataset]
+        run: tar -tf dataset/corpus-*.tar | wc -l
+```
+
+What this costs:
+
+- **The endpoint has to be reachable from where the transfer runs.** A MinIO on this machine's `localhost` is not reachable from a worker.
+- **A put uploads at most 5 GB.** A larger object needs a multipart upload, which this type does not do yet; the put fails saying so before it sends anything.
+- **One connection per transfer**, where Concourse's resource downloads a large object in parallel pieces.
+- **Not yet here, and refused as unknown keys**: `private`, `acl`, `unpack`, `download_tags`, `initial_path` and its siblings, `server_side_encryption`, `aws_role_arn`, `enable_aws_creds_provider`, `ca_bundle`, `skip_ssl_verification`, `disable_ssl`, `cloudfront_url`.
+- **Credentials are named, not written**: Concourse's `access_key_id: AKIA…` in `source:` is `access_key_id_env:` here, because every `source:` value is stored with each version.
 
 ## Writing a resource type
 

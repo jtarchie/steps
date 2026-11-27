@@ -38,7 +38,7 @@ func ValidateWorkerPlacement(ctx context.Context, cfg *config.Config, job *confi
 
 			// Before any step runs, and before an acquisition rung launches a billed machine to discover it.
 			checkErr := worker.ImageCheck(cfg.PlacedImage(*step) != "")
-			if checkErr != nil {
+			if checkErr != nil && !cfg.FitsAnyWorker(*step) {
 				return fmt.Errorf("%s on --worker %s: %w", label, tag, checkErr)
 			}
 		}

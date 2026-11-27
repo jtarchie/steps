@@ -143,6 +143,10 @@ var swept sync.Map //nolint:gochecknoglobals // per-process memory of a once-per
 
 func newPlusRunner(worker Worker, spec shell.RunnerSpec) (shell.Runner, error) {
 	if spec.Image == "" {
+		spec.Image = spec.ContainerImage
+	}
+
+	if spec.Image == "" {
 		return nil, fmt.Errorf("%w %q: %w", ErrWorker, worker.URL, errNoImageOnDocker)
 	}
 

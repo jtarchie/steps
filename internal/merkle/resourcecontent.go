@@ -155,4 +155,8 @@ func withRegistryKind(resourceType config.ResourceType, content map[string]any) 
 	if resourceType.Config.Registry {
 		content["registry"] = true
 	}
+
+	if resourceType.Config.S3 {
+		content["s3"] = true
+	}
 }

@@ -67,6 +67,7 @@ func (c *Config) HostCommands() []HostCommand {
 	return found
 }
 
+//nolint:cyclop // one arm per backend
 func (c *Config) hostResources() []HostCommand {
 	var found []HostCommand
 
@@ -92,6 +93,13 @@ func (c *Config) hostResources() []HostCommand {
 			if resourceType.Image == "" && githubClonesWithGit(resourceType.Config.GitHub, resource.Source) {
 				found = append(found, HostCommand{
 					Name: resource.Name, Where: where, Why: fmt.Sprintf("checkout: git runs the git binary on the host; give type %q an image: (a resource_types: entry of its name with only image:)", resource.Type),
+					Entity: entity(EntityResourceType, resource.Type), Reason: reasonOf(resourceType.Unfenced),
+				})
+			}
+		case BackendS3:
+			if resourceType.Image == "" {
+				found = append(found, HostCommand{
+					Name: resource.Name, Where: where, Why: fmt.Sprintf("a get or put runs curl on the host; give type %q an image: (a resource_types: entry of its name with only image:)", resource.Type),
 					Entity: entity(EntityResourceType, resource.Type), Reason: reasonOf(resourceType.Unfenced),
 				})
 			}

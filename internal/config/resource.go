@@ -88,6 +88,8 @@ type ResourceTypeConfig struct {
 	Linear string `yaml:"-"`
 	// Registry marks the built-in registry-image type, which no YAML can declare: steps speaks the registry protocol itself (registryimage.go).
 	Registry bool `yaml:"-"`
+	// S3 marks the built-in s3 type, which no YAML can declare: steps signs each request itself and hands the transfer a link (s3.go).
+	S3 bool `yaml:"-"`
 }
 
 // ResourceBackend is which way a resource type implements its three lifecycle
@@ -118,6 +120,8 @@ const (
 	BackendLinear ResourceBackend = "linear"
 	// BackendRegistry calls an OCI registry from this process: check finds a tag's digest, in names it, out pushes an image tarball.
 	BackendRegistry ResourceBackend = "registry"
+	// BackendS3 lists a bucket from this process and runs each transfer as a curl of a presigned URL, wherever the step is placed.
+	BackendS3 ResourceBackend = "s3"
 )
 
 // Backend reports how this resource type is implemented.
@@ -127,6 +131,8 @@ const (
 // neither detect nor fetch nor publish, and the errors for that are stage
 // rules (validateResourceGet, validateResourcePut) rather than a fourth
 // backend meaning "none".
+//
+//nolint:cyclop // one arm per backend
 func (c ResourceTypeConfig) Backend() ResourceBackend {
 	switch {
 	case c.Webhook:
@@ -139,6 +145,8 @@ func (c ResourceTypeConfig) Backend() ResourceBackend {
 		return BackendLinear
 	case c.Registry:
 		return BackendRegistry
+	case c.S3:
+		return BackendS3
 	case c.Concourse:
 		return BackendConcourse
 	case c.MCP != nil:
@@ -236,7 +244,7 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 		return githubPutRefusal(label, put, resourceType.Config.GitHub)
 	case BackendLinear:
 		return linearPutRefusal(label, put, resourceType.Config.Linear)
-	case BackendRegistry:
+	case BackendRegistry, BackendS3:
 	}
 
 	return nil
@@ -291,7 +299,7 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 			return fmt.Errorf("%s: get %q targets a %s resource, which only publishes; find the work with a %s resource instead",
 				label, get, resourceType.Config.Linear, LinearIssuesType)
 		}
-	case BackendWebhook, BackendCron, BackendRegistry:
+	case BackendWebhook, BackendCron, BackendRegistry, BackendS3:
 	}
 
 	return nil

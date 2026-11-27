@@ -279,6 +279,8 @@ linters:
             - "github.com/santhosh-tekuri/jsonschema/v6"
             - "go.yaml.in/yaml/v4"
             - "go.uber.org/goleak"
+            # the SigV4 signer is fixture machinery here: e2e_s3_test.go creates the buckets its MinIO serves.
+            - "github.com/aws/aws-sdk-go-v2/aws"
             # bcrypt is test-only here: the local-user fixtures hash their passwords the way an operator's htpasswd does.
             - "golang.org/x/crypto/bcrypt"
             # a fake OTLP collector decodes what the CLI exports, to check the trace that crossed the wire.
@@ -615,6 +617,9 @@ linters:
             # The registry client behind the built-in registry-image type, the one Concourse's resource uses. Never its authn.DefaultKeychain: the login is the resource's.
             - "github.com/google/go-containerregistry"
             - "github.com/Masterminds/semver/v3"
+            # The SigV4 signer behind the built-in s3 type: signing only, never the S3 service client or the ambient credential chain.
+            - "github.com/aws/aws-sdk-go-v2/aws"
+            - "github.com/aws/smithy-go/encoding/httpbinding"
         # venue is the orchestrator half of remote execution, and the single
         # decision point one tier ABOVE shell: shell decides host vs container,
         # venue decides this machine vs a worker, and hands straight back to

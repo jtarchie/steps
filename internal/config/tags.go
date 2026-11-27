@@ -201,7 +201,7 @@ func (c *Config) rejectNonShellPlacement(label, typeName string) error {
 	}
 
 	backend := resourceType.Config.Backend()
-	if backend == BackendShell || backend == BackendConcourse {
+	if backend == BackendShell || backend == BackendConcourse || backend == BackendS3 {
 		return nil
 	}
 

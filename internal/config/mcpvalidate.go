@@ -491,7 +491,7 @@ func (c *Config) validateResourceTypeBackend(rt ResourceType) error {
 		}
 	case BackendWebhook, BackendCron, BackendGitHub, BackendLinear, BackendRegistry:
 		return validateBuiltinImage(rt)
-	case BackendConcourse:
+	case BackendConcourse, BackendS3:
 	}
 
 	return nil

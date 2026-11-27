@@ -200,7 +200,7 @@
       "Auth.Scopes[0]"
     ]
   },
-  "ResourceType/cache key": "c230e7ebbd28e22288ea3e2901984726a66fe91aa974849ef61f0978ced14475",
+  "ResourceType/cache key": "9efa431adabb36a3619387f00167c8ea4ac1ec722dad5d1c68983b3ca3ade2c6",
   "ResourceType/get": {
     "cpu_shares": 77,
     "env": [
@@ -227,6 +227,7 @@
     "network": "Network",
     "privileged": true,
     "registry": true,
+    "s3": true,
     "sandbox": true,
     "source": null,
     "user": "User",
@@ -260,6 +261,7 @@
     "params": null,
     "privileged": true,
     "registry": true,
+    "s3": true,
     "sandbox": true,
     "source": null,
     "user": "User"

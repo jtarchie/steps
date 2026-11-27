@@ -12,6 +12,7 @@ var goBackedTypes = map[ResourceBackend]string{ //nolint:gochecknoglobals // rea
 	BackendWebhook:  WebhookType,
 	BackendCron:     CronType,
 	BackendRegistry: RegistryImageType,
+	BackendS3:       S3Type,
 }
 
 // nativeType is the native type typeName resolves to, "" for a type the pipeline wrote. A pipeline that declares its own git or slack-* type replaces the built-in (registerBuiltinResourceTypes), so a YAML-backed type is native only while it is still the embedded one.
@@ -30,7 +31,7 @@ func (c *Config) nativeType(typeName string) string {
 		return resourceType.Config.GitHub
 	case BackendLinear:
 		return resourceType.Config.Linear
-	case BackendWebhook, BackendCron, BackendRegistry:
+	case BackendWebhook, BackendCron, BackendRegistry, BackendS3:
 		// goBackedTypes, above.
 	case BackendConcourse:
 		return ""
@@ -64,8 +65,8 @@ func (c *Config) validateNativeGets() error {
 			}
 
 			kind := c.nativeResourceType(step.GetResourceName())
-			// registry-image's get has params: of its own, checked by validateRegistryImageGets.
-			if kind == "" || kind == RegistryImageType {
+			// registry-image's and s3's gets have params: of their own, checked by their own rules.
+			if kind == "" || kind == RegistryImageType || kind == S3Type {
 				return nil
 			}
 

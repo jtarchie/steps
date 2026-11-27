@@ -171,7 +171,7 @@ func placedTaskSpace(ctx context.Context, bw workspace.BuildWorkspace, step conf
 // runnerImage is the image a resource type's stages run in, or empty for a backend that builds no runner: an mcp: out reads its files from this disk whatever image: says.
 func runnerImage(rt config.ResourceType) string {
 	switch rt.Config.Backend() {
-	case config.BackendShell, config.BackendConcourse:
+	case config.BackendShell, config.BackendConcourse, config.BackendS3:
 		return rt.Image
 	case config.BackendMCP, config.BackendExpr, config.BackendWebhook, config.BackendCron, config.BackendGitHub, config.BackendLinear, config.BackendRegistry:
 	}

@@ -344,7 +344,7 @@ func (rt ResourceType) Fetches() bool {
 		return GitHubFetches(rt.Config.GitHub)
 	case BackendLinear:
 		return LinearFetches(rt.Config.Linear)
-	case BackendWebhook, BackendCron, BackendRegistry:
+	case BackendWebhook, BackendCron, BackendRegistry, BackendS3:
 	}
 
 	return true

@@ -50,6 +50,9 @@ func TestMain(m *testing.M) {
 		"GH_TOKEN": fakeGitHubToken,
 		// The fake Linear answers to exactly this key, for the same reason.
 		"LINEAR_API_KEY": fakeLinearKey,
+		// The MinIO an s3 test starts answers to exactly this login.
+		"STEPS_TEST_S3_KEY":    minioKey,
+		"STEPS_TEST_S3_SECRET": minioSecret,
 	} {
 		err := os.Setenv(key, value)
 		if err != nil {

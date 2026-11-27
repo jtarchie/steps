@@ -249,11 +249,12 @@ func (c *Config) registerBuiltinResourceTypes() {
 
 // registerGoBackedTypes: a declared type of a Go-backed name replaces the built-in, as a declared git does: the pipeline's choice. A declared webhook stays too, but to be refused (validateWebhookResources): deliveries are routed to it by name, so replacing it would make the name mean two things.
 func (c *Config) registerGoBackedTypes() {
-	goBacked := make([]ResourceType, 0, 3+len(GitHubTypes())+len(LinearTypes()))
+	goBacked := make([]ResourceType, 0, 4+len(GitHubTypes())+len(LinearTypes()))
 	goBacked = append(goBacked,
 		ResourceType{Name: WebhookType, Config: ResourceTypeConfig{Webhook: true}},
 		ResourceType{Name: CronType, Config: ResourceTypeConfig{Cron: true}},
 		ResourceType{Name: RegistryImageType, Config: ResourceTypeConfig{Registry: true}},
+		ResourceType{Name: S3Type, Config: ResourceTypeConfig{S3: true}},
 	)
 
 	for _, name := range GitHubTypes() {

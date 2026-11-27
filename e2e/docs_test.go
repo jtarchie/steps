@@ -696,6 +696,9 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"WebhookSignature":    reflect.TypeOf(config.WebhookSignature{}),
 		"CronSource":          reflect.TypeOf(config.CronSource{}),
 		"RegistryImageSource": reflect.TypeOf(config.RegistryImageSource{}),
+		"S3Source":            reflect.TypeOf(config.S3Source{}),
+		"S3GetParams":         reflect.TypeOf(config.S3GetParams{}),
+		"S3PutParams":         reflect.TypeOf(config.S3PutParams{}),
 		// A put's params: to a github-* type, which no other walk sees: the
 		// shape depends on the TYPE of the resource the put names.
 		"GitHubPRsSource":        reflect.TypeOf(config.GitHubPRsSource{}),
@@ -894,6 +897,7 @@ var sourceDefs = map[any]string{ //nolint:gochecknoglobals // read-only table
 	config.WebhookType:         "WebhookSource",
 	config.CronType:            "CronSource",
 	config.RegistryImageType:   "RegistryImageSource",
+	config.S3Type:              "S3Source",
 	config.GitHubPRsType:       "GitHubPRsSource",
 	config.GitHubCommentsType:  "GitHubCommentsSource",
 	config.GitHubIssuesType:    "GitHubIssuesSource",
@@ -929,11 +933,13 @@ var githubParamDefs = map[any]string{ //nolint:gochecknoglobals // read-only tab
 	"slack-reply":              "SlackReplyParams",
 	"slack-reaction":           "SlackReactionParams",
 	config.RegistryImageType:   "RegistryImagePutParams",
+	config.S3Type:              "S3PutParams",
 }
 
 // getParamDefs is the params: shape of a get from each native type that takes any.
 var getParamDefs = map[any]string{ //nolint:gochecknoglobals // read-only table
 	config.RegistryImageType: "RegistryImageGetParams",
+	config.S3Type:            "S3GetParams",
 }
 
 // recordNativeParams records one step's params: under the shape its resource's type gives a put's, or a get's.

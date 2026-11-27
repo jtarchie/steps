@@ -239,6 +239,23 @@ func (c *Config) PlacedImage(step Step) string {
 	return resourceType.Image
 }
 
+// FitsAnyWorker is a get or put that names no image and brings a default of its own for a worker that only runs containers (the built-in s3's curl), so neither kind of worker has to refuse it.
+func (c *Config) FitsAnyWorker(step Step) bool {
+	name, ok := step.resourceName()
+	if !ok || c.PlacedImage(step) != "" {
+		return false
+	}
+
+	resource, err := c.FindResource(name)
+	if err != nil {
+		return false
+	}
+
+	resourceType, err := c.FindResourceType(resource.Type)
+
+	return err == nil && resourceType != nil && resourceType.Config.Backend() == BackendS3
+}
+
 // resolvedStepImage reports the image a task/agent step would actually run
 // under, merging the step's own image: over the entry it references. It
 // answers "" for anything it cannot resolve, leaving that error to whichever
