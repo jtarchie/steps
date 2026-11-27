@@ -3,6 +3,7 @@ package resource
 import (
 	"context"
 	"encoding/xml"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -203,5 +204,99 @@ func assertLinksNotKeys(t *testing.T, envs []map[string]string, keyID, secret st
 				t.Errorf("command %d was run with %s, which carries the resource's credential", i, name)
 			}
 		}
+	}
+}
+
+// TestS3FolderPutBatchesLinksAndNeverTheKeys: a folder's files go up a bounded batch of signed links per command, every file exactly once under the prefix, and no command is handed the keys.
+func TestS3FolderPutBatchesLinksAndNeverTheKeys(t *testing.T) {
+	t.Parallel()
+
+	const keyID, secret, files = "AKIDEXAMPLE", "the-secret-access-key", 200
+
+	var listing strings.Builder
+	for i := range files {
+		fmt.Fprintf(&listing, "3\t./sub dir/f%03d.txt\n", i)
+	}
+
+	var envs []map[string]string
+
+	ctx := shell.WithSecretEnv(t.Context(), map[string]string{"K": keyID, "S": secret})
+	ctx = WithHere(ctx, func(context.Context, shell.RunnerSpec) (shell.Runner, error) {
+		return recordingRunner{answers: append([]string{listing.String()}, make([]string, files)...), envs: &envs}, nil
+	})
+
+	resource := config.Resource{Name: "r", Source: map[string]any{"bucket": "b", "prefix": "drop/", "access_key_id_env": "K", "secret_access_key_env": "S"}}
+
+	version, err := s3Backend{}.out(ctx, Call{Resource: resource, Params: map[string]any{"dir": "deliver"}, Dir: t.TempDir()})
+	if err != nil || version["prefix"] != "drop/" || version["files"] != "200" {
+		t.Fatalf("out = %v, %v; want the prefix and the count", version, err)
+	}
+
+	if len(envs) < 3 {
+		t.Fatalf("ran %d commands, want the listing and several batches", len(envs))
+	}
+
+	assertNoKeys(t, envs, keyID, secret)
+	assertFolderBatches(t, envs[1:], files)
+}
+
+func assertNoKeys(t *testing.T, envs []map[string]string, keyID, secret string) {
+	t.Helper()
+
+	for i, env := range envs {
+		for name, value := range env {
+			if strings.Contains(value, secret) || value == keyID || name == "K" || name == "S" {
+				t.Errorf("command %d was handed the credential in $%s", i, name)
+			}
+		}
+	}
+}
+
+func assertFolderBatches(t *testing.T, envs []map[string]string, files int) {
+	t.Helper()
+
+	uploads := 0
+
+	for i, env := range envs {
+		batch := env[s3EnvConfig]
+		if len(batch) > s3BatchBytes+2048 {
+			t.Errorf("command %d was handed %d bytes of links, want about %d at most", i, len(batch), s3BatchBytes)
+		}
+
+		uploads += strings.Count(batch, "\nupload-file = \"./sub dir/f")
+
+		if strings.Count(batch, "url = \"https://b.s3.us-east-1.amazonaws.com/drop/sub%20dir/f") != strings.Count(batch, "upload-file = ") || !strings.Contains(batch, "X-Amz-Signature=") {
+			t.Errorf("command %d: every file wants a signed link under the prefix: %.300s", i, batch)
+		}
+	}
+
+	if uploads != files {
+		t.Errorf("%d files were handed to curl, want each of the %d once", uploads, files)
+	}
+}
+
+// TestS3ListedRefusesWhatItCannotCarry: a listing line that is not a size and a path, an oversized file, and an empty folder are each refused rather than half-published.
+func TestS3ListedRefusesWhatItCannotCarry(t *testing.T) {
+	t.Parallel()
+
+	for answer, want := range map[string]string{
+		"":                           "holds no files",
+		"3\t./a\nb.txt\n":            "line break",
+		"6000000000\t./big.bin\n":    "at most 5 GB",
+		"3\t./a\n3\t../escape.txt\n": "line break",
+	} {
+		_, err := s3Listed("deliver", answer)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("s3Listed(%q) = %v, want an error naming %q", answer, err, want)
+		}
+	}
+
+	files, err := s3Listed("deliver", "1\t./b\tc\n2\t./a\n")
+	if err != nil || !reflect.DeepEqual(files, []string{"a", "b\tc"}) {
+		t.Errorf("s3Listed = %v, %v; want both paths, sorted, the tab kept", files, err)
+	}
+
+	if got := curlQuote("a\"b\\c\td"); got != `"a\"b\\c\td"` {
+		t.Errorf("curlQuote = %s", got)
 	}
 }

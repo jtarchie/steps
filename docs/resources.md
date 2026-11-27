@@ -1897,7 +1897,7 @@ jobs:
 
 ## The built-in `s3` type
 
-`type: s3` is objects in an S3 bucket, on AWS or anything else that speaks S3 (MinIO, Cloudflare R2, Google Cloud Storage's S3 endpoint). Its check finds versions, its get downloads one object, its put uploads one. Modeled on Concourse's [s3 resource](https://github.com/concourse/s3-resource), with its source and params names.
+`type: s3` is objects in an S3 bucket, on AWS or anything else that speaks S3 (MinIO, Cloudflare R2, Google Cloud Storage's S3 endpoint). Its check finds versions, its get downloads one object, its put uploads one. Modeled on Concourse's [s3 resource](https://github.com/concourse/s3-resource), with its source and params names, plus one mode Concourse's does not have: [publishing a whole folder](#publishing-a-folder-sourceprefix).
 
 ```yaml noexec=network
 resources:
@@ -1937,8 +1937,9 @@ jobs:
 | `source:` field | required | meaning |
 |---|---|---|
 | `bucket` | yes | the bucket's name |
-| `regexp` | one of the two | a `/`-separated pattern matched against whole keys, as if anchored at both ends. Its capture group (the one named `version`, else the first) is the version |
-| `versioned_file` | one of the two | one key in a bucket with [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) on; each upload of it is a version |
+| `regexp` | one of the three | a `/`-separated pattern matched against whole keys, as if anchored at both ends. Its capture group (the one named `version`, else the first) is the version |
+| `versioned_file` | one of the three | one key in a bucket with [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) on; each upload of it is a version |
+| `prefix` | one of the three | a folder to [publish into](#publishing-a-folder-sourceprefix), ending in `/`; put only |
 | `region_name` | no | the bucket's region; `us-east-1` when unset |
 | `endpoint` | no | a server that is not AWS, scheme included: `https://minio.internal:9000` |
 | `use_path_style` | no | address the bucket in the path (`endpoint/bucket/key`) rather than as a host name; most servers that are not AWS need it |
@@ -1988,6 +1989,45 @@ jobs:
 
 **A put uploads the one file `params.file` matches.** Under `regexp` it lands in the pattern's directory under its own name (`out/app-1.4.0.tgz` becomes `builds/app-1.4.0.tgz`), and the version is that key. Under `versioned_file` it becomes a new version of that key. A glob matching no file, or more than one, fails the put and lists what matched. As in Concourse, nothing checks the uploaded name against `regexp`: a file it does not match is uploaded, and no check will ever report it.
 
+### Publishing a folder: `source.prefix`
+
+`regexp` and `versioned_file` are for one artifact that has versions. A job that ends by handing over a set of files (a report and its attachments, a build's logs, a rendered site) has neither one file nor a version, and under those two modes would have to tar the set first. `source.prefix` is for that: the resource names a folder in the bucket, and a put uploads every file under `params.dir` beneath it, relative paths kept.
+
+```yaml noexec=network
+resources:
+  - name: reports
+    type: s3
+    source:
+      bucket: acme-reports
+      prefix: nightly/                  # the folder the files land in; ends in /
+      access_key_id_env: AWS_ACCESS_KEY_ID
+      secret_access_key_env: AWS_SECRET_ACCESS_KEY
+
+jobs:
+  - name: report
+    plan:
+      - task: write
+        outputs: [deliver]
+        run: |
+          mkdir -p deliver/2026-11-27/charts
+          echo "all green" > deliver/2026-11-27/summary.md
+          echo "<svg/>" > deliver/2026-11-27/charts/latency.svg
+      - put: reports
+        inputs: [deliver]
+        params:
+          dir: deliver                  # every file under it is uploaded
+```
+
+That put leaves `nightly/2026-11-27/summary.md` and `nightly/2026-11-27/charts/latency.svg` in the bucket. The task decides the layout, so a per-run folder is a directory the task names; nothing in the resource has to be templated.
+
+- **Publish-only.** There are no versions to find, so a `get` of such a resource is refused at load, and it is never checked. The put's recorded version is `{prefix, files}`: the folder and how many files went up.
+- **It adds and overwrites; it never deletes.** A file already in the bucket under the same key is replaced, and one the folder no longer holds stays where it is. This is an upload, not a sync.
+- **Regular files only.** A symlink is skipped rather than followed, and an empty directory uploads nothing; a `dir` holding no files at all fails the put, since a delivery of nothing is a mistake more often than a wish.
+- **Any file name goes up as it is**, spaces, brackets and quotes included, except one with a line break in it, which fails the put before anything is sent.
+- **`params.content_type` is refused here**: it describes one file. A folder's files go up with no `Content-Type`.
+- **`prefix` cannot be the bucket's root.** It has to name a folder.
+- **A failure partway leaves what was already uploaded.** The files go up in order, and the put stops at the first one the bucket refuses.
+
 ### Where the bytes go: `tags:` on an s3 resource
 
 The check lists the bucket from the steps process, which is the only part that needs the credential. A get or put then signs a link to the one object, good for an hour, and hands it to `curl`, which runs wherever the step is placed:
@@ -2025,7 +2065,7 @@ jobs:
 What this costs:
 
 - **The endpoint has to be reachable from where the transfer runs.** A MinIO on this machine's `localhost` is not reachable from a worker.
-- **A put uploads at most 5 GB.** A larger object needs a multipart upload, which this type does not do yet; the put fails saying so before it sends anything.
+- **A put uploads at most 5 GB a file.** A larger object needs a multipart upload, which this type does not do yet; the put fails saying so before it sends anything.
 - **One connection per transfer**, where Concourse's resource downloads a large object in parallel pieces.
 - **Not yet here, and refused as unknown keys**: `private`, `acl`, `unpack`, `download_tags`, `initial_path` and its siblings, `server_side_encryption`, `aws_role_arn`, `enable_aws_creds_provider`, `ca_bundle`, `skip_ssl_verification`, `disable_ssl`, `cloudfront_url`.
 - **Credentials are named, not written**: Concourse's `access_key_id: AKIA…` in `source:` is `access_key_id_env:` here, because every `source:` value is stored with each version.

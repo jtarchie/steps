@@ -640,7 +640,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["bucket"],
-      "oneOf": [{"required": ["regexp"]}, {"required": ["versioned_file"]}],
+      "oneOf": [{"required": ["regexp"]}, {"required": ["versioned_file"]}, {"required": ["prefix"]}],
       "properties": {
         "bucket": {
           "type": "string",
@@ -654,6 +654,11 @@
         "versioned_file": {
           "type": "string",
           "description": "One key in a bucket with versioning on; each upload of it is a version."
+        },
+        "prefix": {
+          "type": "string",
+          "pattern": "^[^/].*/$",
+          "description": "A folder to publish into, ending in a slash, e.g. reports/. A put uploads every file under its params.dir beneath it, paths kept. Publish-only: there are no versions, so a get is refused."
         },
         "region_name": {
           "type": "string",

@@ -22,7 +22,9 @@ type S3Source struct {
 	Regexp string `yaml:"regexp,omitempty"`
 	// VersionedFile is one key in a bucket with versioning on; each upload of it is a version.
 	VersionedFile string `yaml:"versioned_file,omitempty"`
-	RegionName    string `yaml:"region_name,omitempty"`
+	// Prefix is a folder to publish into, ending in a slash: a put uploads a directory under it, and there are no versions to get. Not Concourse's; its resource uploads one file per put.
+	Prefix     string `yaml:"prefix,omitempty"`
+	RegionName string `yaml:"region_name,omitempty"`
 	// Endpoint is an S3-compatible server that is not AWS, scheme included.
 	Endpoint string `yaml:"endpoint,omitempty"`
 	// UsePathStyle addresses the bucket in the path (endpoint/bucket/key) rather than as a host name, which a server with no per-bucket DNS needs.
@@ -59,8 +61,24 @@ type S3GetParams struct {
 // S3PutParams is a put's params: to an s3 resource.
 type S3PutParams struct {
 	// File is a glob, inside the put's inputs, that must match exactly one file.
-	File        string `yaml:"file"`
+	File string `yaml:"file,omitempty"`
+	// Dir is a directory, inside the put's inputs, every file under which is uploaded; source.prefix's put.
+	Dir         string `yaml:"dir,omitempty"`
 	ContentType string `yaml:"content_type,omitempty"`
+}
+
+// CheckFor is whether these params fit source's mode: a folder takes dir, a versioned object takes file.
+func (p S3PutParams) CheckFor(source S3Source) error {
+	switch {
+	case source.Prefix != "" && p.Dir == "":
+		return errors.New("params.dir is required: source.prefix publishes a folder, so name the directory, inside the put's inputs, whose files to upload")
+	case source.Prefix == "" && p.Dir != "":
+		return errors.New("params.dir needs source.prefix; under source.regexp or source.versioned_file a put uploads the one file params.file matches")
+	case source.Prefix == "" && p.File == "":
+		return errors.New("params.file is required: a glob, inside the put's inputs, matching the one file to upload (out/app-*.tgz)")
+	}
+
+	return nil
 }
 
 // ParseS3Source decodes an s3 source: strictly.
@@ -72,11 +90,24 @@ func ParseS3Source(raw map[string]any) (S3Source, error) {
 		return source, err
 	}
 
+	modes := 0
+
+	for _, mode := range []string{source.Regexp, source.VersionedFile, source.Prefix} {
+		if mode != "" {
+			modes++
+		}
+	}
+
 	switch {
 	case strings.TrimSpace(source.Bucket) == "":
 		return source, errors.New("an s3 resource needs source.bucket")
-	case (source.Regexp == "") == (source.VersionedFile == ""):
-		return source, errors.New("an s3 resource needs exactly one of source.regexp (a version in the file name) or source.versioned_file (a bucket with versioning on)")
+	case modes != 1:
+		return source, errors.New("an s3 resource needs exactly one of source.regexp (a version in the file name), source.versioned_file (a bucket with versioning on) or source.prefix (a folder to publish into)")
+	}
+
+	err = checkS3Prefix(source)
+	if err != nil {
+		return source, err
 	}
 
 	err = checkS3Credential(source)
@@ -104,6 +135,24 @@ func checkS3Credential(source S3Source) error {
 		if name != "" && !envVarPattern.MatchString(name) {
 			return fmt.Errorf("source.%s must be the NAME of an environment variable, not %q — a literal would be hashed into state.db in cleartext", field, name)
 		}
+	}
+
+	return nil
+}
+
+func checkS3Prefix(source S3Source) error {
+	switch {
+	case source.Prefix == "":
+		return nil
+	case strings.HasPrefix(source.Prefix, "/"):
+		return fmt.Errorf("source.prefix %q must not start with /: a key has no leading slash", source.Prefix)
+	case !strings.HasSuffix(source.Prefix, "/"):
+		// ponytail: so the bucket's root cannot be published into; an explicit spelling for it when someone needs one.
+		return fmt.Errorf("source.prefix %q must end in /: it is the folder the files land in, e.g. %s/", source.Prefix, source.Prefix)
+	case strings.ContainsAny(source.Prefix, "\n\r"):
+		return errors.New("source.prefix is one line")
+	case source.SkipDownload:
+		return errors.New("source.skip_download has no effect with source.prefix, which only publishes; drop it")
 	}
 
 	return nil
@@ -155,16 +204,30 @@ func ParseS3PutParams(raw map[string]any) (S3PutParams, error) {
 		return params, err
 	}
 
+	local := params.Path()
+
 	switch {
-	case params.File == "":
-		return params, errors.New("params.file is required: a glob, inside the put's inputs, matching the one file to upload (out/app-*.tgz)")
-	case path.IsAbs(params.File) || strings.HasPrefix(path.Clean(params.File), ".."):
-		return params, fmt.Errorf("params.file %q must be a path inside the put's inputs", params.File)
-	case strings.ContainsAny(params.File, "\n\r"), strings.ContainsAny(params.ContentType, "\n\r"):
-		return params, errors.New("params.file and params.content_type are one line each")
+	case params.File != "" && params.Dir != "":
+		return params, errors.New("params.file (one file) or params.dir (a folder, under source.prefix), not both")
+	case path.IsAbs(local) || strings.HasPrefix(path.Clean(local), ".."):
+		return params, fmt.Errorf("params %q must be a path inside the put's inputs", local)
+	case strings.ContainsAny(local, "\n\r"), strings.ContainsAny(params.ContentType, "\n\r"):
+		return params, errors.New("params.file, params.dir and params.content_type are one line each")
+	case params.Dir != "" && params.ContentType != "":
+		// ponytail: a folder's files go up with no Content-Type; per-extension types when a served bucket needs them.
+		return params, errors.New("params.content_type applies to one file, not to params.dir's folder; drop it")
 	}
 
 	return params, nil
+}
+
+// Path is the file glob or the directory, whichever the put names.
+func (p S3PutParams) Path() string {
+	if p.Dir != "" {
+		return p.Dir
+	}
+
+	return p.File
 }
 
 func (c *Config) validateS3Resources() error {
@@ -193,26 +256,58 @@ func (c *Config) validateS3Resources() error {
 	return nil
 }
 
-func (c *Config) checkS3Step(label string, step *Step) error {
-	if step.Get != "" && c.nativeResourceType(step.GetResourceName()) == S3Type {
-		_, err := ParseS3GetParams(step.Params)
-		if err != nil {
-			return fmt.Errorf("%s: get %q: %w", label, step.Get, err)
-		}
+// s3SourceOf is the parsed source of the s3 resource name names, and false for any other; validateS3Resources has already refused one that does not parse.
+func (c *Config) s3SourceOf(name string) (S3Source, bool) {
+	resource, err := c.FindResource(name)
+	if err != nil || c.nativeType(resource.Type) != S3Type {
+		return S3Source{}, false
 	}
 
-	if step.Put == "" || c.nativeResourceType(step.PutResourceName()) != S3Type {
+	source, err := ParseS3Source(resource.Source)
+
+	return source, err == nil
+}
+
+func (c *Config) checkS3Get(label string, step *Step) error {
+	source, ok := c.s3SourceOf(step.GetResourceName())
+	if !ok {
+		return nil
+	}
+
+	if source.Prefix != "" {
+		return fmt.Errorf("%s: get %q targets an s3 resource with source.prefix, which only publishes; fetch from one with source.regexp or source.versioned_file instead", label, step.Get)
+	}
+
+	_, err := ParseS3GetParams(step.Params)
+	if err != nil {
+		return fmt.Errorf("%s: get %q: %w", label, step.Get, err)
+	}
+
+	return nil
+}
+
+func (c *Config) checkS3Step(label string, step *Step) error {
+	if step.Get != "" {
+		return c.checkS3Get(label, step)
+	}
+
+	source, ok := c.s3SourceOf(step.PutResourceName())
+	if step.Put == "" || !ok {
 		return nil
 	}
 
 	params, err := ParseS3PutParams(step.Params)
+	if err == nil {
+		err = params.CheckFor(source)
+	}
+
 	if err != nil {
 		return fmt.Errorf("%s: put %q: %w", label, step.Put, err)
 	}
 
-	root := firstPathComponent(params.File)
+	root := firstPathComponent(params.Path())
 	if !step.InputsAll() && !slices.Contains(step.InputNames(), root) {
-		return fmt.Errorf("%s: put %q: params.file %q names artifact %q, which the put does not list in its inputs", label, step.Put, params.File, root)
+		return fmt.Errorf("%s: put %q: params %q names artifact %q, which the put does not list in its inputs", label, step.Put, params.Path(), root)
 	}
 
 	return nil

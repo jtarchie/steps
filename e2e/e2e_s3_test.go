@@ -5,12 +5,16 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -65,7 +69,7 @@ func startMinio(t *testing.T, host string) string {
 	deadline := time.Now().Add(30 * time.Second)
 
 	for {
-		response, getErr := client.Get(endpoint + "/minio/health/live") //nolint:noctx // a local server this test started
+		response, getErr := client.Get(endpoint + "/minio/health/cluster") //nolint:noctx // a local server this test started
 		if getErr == nil {
 			_ = response.Body.Close()
 
@@ -93,7 +97,8 @@ func minioDo(t *testing.T, method, target string, body []byte) []byte {
 
 	request.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
 
-	err = v4.NewSigner().SignHTTP(t.Context(), aws.Credentials{AccessKeyID: minioKey, SecretAccessKey: minioSecret}, request, "UNSIGNED-PAYLOAD", "s3", "us-east-1", time.Now())
+	// S3 signs the path as sent; the default would escape a key's %20 a second time.
+	err = v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true }).SignHTTP(t.Context(), aws.Credentials{AccessKeyID: minioKey, SecretAccessKey: minioSecret}, request, "UNSIGNED-PAYLOAD", "s3", "us-east-1", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,8 +177,11 @@ jobs:
 		mustRun(t, "run", path, "--job", "publish", "--force")
 	}
 
+	// putVersions answers in no order.
 	versions := putVersions(t, path, "release")
-	if len(versions) != 2 || versions[1]["path"] != "builds/app-1.10.0.tgz" {
+	slices.SortFunc(versions, func(a, b map[string]any) int { return strings.Compare(fmt.Sprint(a["path"]), fmt.Sprint(b["path"])) })
+
+	if len(versions) != 2 || versions[0]["path"] != "builds/app-1.10.0.tgz" || versions[1]["path"] != "builds/app-1.9.0.tgz" {
 		t.Errorf("recorded versions %v, want the two uploads by path", versions)
 	}
 
@@ -226,6 +234,11 @@ resources:
   tags: [a]
   source:
     regexp: builds/app-(.*).bin`+s3Source(endpoint, "releases")+`
+- name: drop
+  type: s3
+  tags: [a]
+  source:
+    prefix: drops/`+s3Source(endpoint, "releases")+`
 
 jobs:
 - name: publish
@@ -238,6 +251,9 @@ jobs:
   - put: release
     inputs: [out]
     params: {file: out/app-*.bin}
+  - put: drop
+    inputs: [out]
+    params: {dir: out}
 - name: consume
   plan:
   - get: release
@@ -260,6 +276,14 @@ jobs:
 
 	if put := placementNamed(t, runPlacements(t, path), "release"); put.BytesSent >= payloadBytes {
 		t.Errorf("the put sent %d bytes to the worker; want under the payload — the file was already there", put.BytesSent)
+	}
+
+	if drop := placementNamed(t, runPlacements(t, path), "drop"); drop.BytesSent >= payloadBytes {
+		t.Errorf("the folder put sent %d bytes to the worker; want under the payload", drop.BytesSent)
+	}
+
+	if keys := minioKeys(t, endpoint, "releases", "drops/"); !slices.Equal(keys, []string{"drops/app-1.0.0.bin"}) {
+		t.Errorf("the folder put from the worker left %v, want the one file under drops/", keys)
 	}
 
 	mustRun(t, append([]string{"run", path, "--job", "consume"}, workers...)...)
@@ -387,9 +411,189 @@ jobs:
 	}
 }
 
+// minioKeys is every key in bucket under prefix, in the bucket's (sorted) order.
+func minioKeys(t *testing.T, endpoint, bucket, prefix string) []string {
+	t.Helper()
+
+	var keys []string
+
+	token := ""
+
+	for {
+		query := url.Values{"list-type": {"2"}, "prefix": {prefix}}
+		if token != "" {
+			query.Set("continuation-token", token)
+		}
+
+		var page struct {
+			NextContinuationToken string `xml:"NextContinuationToken"`
+			Contents              []struct {
+				Key string `xml:"Key"`
+			} `xml:"Contents"`
+		}
+
+		err := xml.Unmarshal(minioDo(t, http.MethodGet, endpoint+"/"+bucket+"?"+query.Encode(), nil), &page)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, object := range page.Contents {
+			keys = append(keys, object.Key)
+		}
+
+		if page.NextContinuationToken == "" {
+			return keys
+		}
+
+		token = page.NextContinuationToken
+	}
+}
+
+// sigV4Escape is key as S3 expects a signed path spelled: everything but letters, digits, -_.~ and the slashes percent-encoded, which is stricter than net/url.
+func sigV4Escape(key string) string {
+	var out strings.Builder
+
+	for _, b := range []byte(key) {
+		if strings.IndexByte("/-_.~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", b) >= 0 {
+			out.WriteByte(b)
+		} else {
+			fmt.Fprintf(&out, "%%%02X", b)
+		}
+	}
+
+	return out.String()
+}
+
+// TestEndToEndS3PutsAFolder: under source.prefix a put uploads every file under params.dir, relative paths kept, whatever the files are named, and more of them than one curl is handed at once.
+func TestEndToEndS3PutsAFolder(t *testing.T) {
+	t.Parallel()
+
+	endpoint := startMinio(t, "127.0.0.1")
+	minioDo(t, http.MethodPut, endpoint+"/memos", nil)
+
+	path := writePipeline(t, t.TempDir(), `
+resources:
+- name: cuts
+  type: s3
+  source:
+    prefix: memo-cut/`+s3Source(endpoint, "memos")+`
+- name: gone
+  type: s3
+  source:
+    prefix: memo-cut/`+s3Source(endpoint, "no-such-bucket")+`
+- name: gone-file
+  type: s3
+  source:
+    regexp: memo-cut/(.*).txt`+s3Source(endpoint, "no-such-bucket")+`
+
+jobs:
+- name: refused
+  plan:
+  - task: lay-out
+    outputs: [deliver]
+    run: touch deliver/a.txt
+  - put: gone
+    inputs: [deliver]
+    params: {dir: deliver}
+- name: refused-file
+  plan:
+  - task: lay-out
+    outputs: [deliver]
+    run: touch deliver/a.txt
+  - put: gone-file
+    inputs: [deliver]
+    params: {file: deliver/a.txt}
+- name: deliver
+  plan:
+  - task: lay-out
+    outputs: [deliver]
+    run: |
+      mkdir -p "deliver/New Recording 12/notes" deliver/many
+      printf cut > "deliver/New Recording 12/New Recording 12.cut.m4a"
+      printf why > "deliver/New Recording 12/notes/rationale [v1] {a,b} \"q\".md"
+      i=0; while [ $i -lt 300 ]; do printf '%s' $i > deliver/many/$i.txt; i=$((i+1)); done
+      ln -s many deliver/link
+  - put: cuts
+    inputs: [deliver]
+    params: {dir: deliver}
+- name: empty
+  plan:
+  - task: lay-out
+    outputs: [deliver]
+    run: mkdir deliver/nothing
+  - put: cuts
+    inputs: [deliver]
+    params: {dir: deliver}
+- name: missing
+  plan:
+  - task: lay-out
+    outputs: [deliver]
+    run: "true"
+  - put: cuts
+    inputs: [deliver]
+    params: {dir: deliver/absent}
+`)
+
+	mustRun(t, "run", path, "--job", "deliver")
+
+	keys := minioKeys(t, endpoint, "memos", "")
+	if len(keys) != 302 {
+		t.Fatalf("the bucket holds %d objects, want the 302 files and nothing for the symlink: %v", len(keys), keys)
+	}
+
+	for key, want := range map[string]string{
+		"memo-cut/New Recording 12/New Recording 12.cut.m4a":          "cut",
+		`memo-cut/New Recording 12/notes/rationale [v1] {a,b} "q".md`: "why",
+		"memo-cut/many/299.txt":                                       "299",
+	} {
+		if got := string(minioDo(t, http.MethodGet, endpoint+"/memos/"+sigV4Escape(key), nil)); got != want {
+			t.Errorf("%s holds %q, want %q", key, got, want)
+		}
+	}
+
+	versions := putVersions(t, path, "cuts")
+	if len(versions) != 1 || versions[0]["prefix"] != "memo-cut/" || versions[0]["files"] != "302" {
+		t.Errorf("recorded versions %v, want the prefix and the count", versions)
+	}
+
+	// The bucket's own refusal fails the put: curl is told to treat a 404 as a failure.
+	for job, want := range map[string]string{"empty": "holds no files", "missing": "is not a directory", "refused": "404", "refused-file": "404"} {
+		stderr := captureStderr(t)
+
+		err := stepsRun(t, []string{"run", path, "--job", job})
+		if err == nil {
+			t.Errorf("job %s succeeded; want the put refused", job)
+		}
+
+		if out := stderr(); !strings.Contains(out, want) {
+			t.Errorf("job %s said %q, want %q", job, out, want)
+		}
+	}
+}
+
 // TestValidateRefusesS3Mistakes: what a load can know is refused at load, naming the field.
 func TestValidateRefusesS3Mistakes(t *testing.T) {
 	t.Parallel()
+
+	t.Run("a get of a folder", func(t *testing.T) {
+		t.Parallel()
+
+		path := writePipeline(t, t.TempDir(), `
+resources:
+- name: r
+  type: s3
+  source: {bucket: b, prefix: a/}
+jobs:
+- name: j
+  plan:
+  - get: r
+`)
+
+		err := stepsRun(t, []string{"validate", path})
+		if err == nil || !strings.Contains(err.Error(), "only publishes") {
+			t.Errorf("validate = %v, want the get refused as publish-only", err)
+		}
+	})
 
 	for name, tc := range map[string]struct{ source, put, want string }{
 		"no mode":           {`{bucket: b}`, `{file: out/x}`, "exactly one of source.regexp"},
@@ -401,6 +605,16 @@ func TestValidateRefusesS3Mistakes(t *testing.T) {
 		"no file":           {`{bucket: b, regexp: "a-(.*)"}`, `{}`, "params.file is required"},
 		"file outside":      {`{bucket: b, regexp: "a-(.*)"}`, `{file: ../x}`, "inside the put's inputs"},
 		"file not an input": {`{bucket: b, regexp: "a-(.*)"}`, `{file: other/x}`, `names artifact "other"`},
+		"three modes":       {`{bucket: b, regexp: "a-(.*)", prefix: a/}`, `{file: out/x}`, "exactly one of source.regexp"},
+		"prefix, no slash":  {`{bucket: b, prefix: a}`, `{dir: out}`, "must end in /"},
+		"prefix, rooted":    {`{bucket: b, prefix: /a/}`, `{dir: out}`, "must not start with /"},
+		"prefix, no get":    {`{bucket: b, prefix: a/, skip_download: true}`, `{dir: out}`, "skip_download has no effect"},
+		"prefix wants dir":  {`{bucket: b, prefix: a/}`, `{file: out/x}`, "params.dir is required"},
+		"dir wants prefix":  {`{bucket: b, regexp: "a-(.*)"}`, `{dir: out}`, "params.dir needs source.prefix"},
+		"file and dir":      {`{bucket: b, prefix: a/}`, `{dir: out, file: out/x}`, "not both"},
+		"dir outside":       {`{bucket: b, prefix: a/}`, `{dir: ../out}`, "inside the put's inputs"},
+		"dir not an input":  {`{bucket: b, prefix: a/}`, `{dir: other}`, `names artifact "other"`},
+		"typed folder":      {`{bucket: b, prefix: a/}`, `{dir: out, content_type: text/plain}`, "content_type applies to one file"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

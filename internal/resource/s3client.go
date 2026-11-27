@@ -18,6 +18,7 @@ import (
 	"github.com/aws/smithy-go/encoding/httpbinding"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -138,6 +139,16 @@ func (c *s3Client) presign(ctx context.Context, method string, target *url.URL, 
 	}
 
 	return out, nil
+}
+
+// transferURL is a link a transfer on another machine is handed, good for s3TransferTTL and kept out of whatever that transfer prints.
+func (c *s3Client) transferURL(ctx context.Context, method string, target *url.URL) (string, error) {
+	signed, err := c.presign(ctx, method, target, s3TransferTTL)
+	if err == nil && c.creds != nil {
+		redact.SecretsFrom(ctx).Add(signed)
+	}
+
+	return signed, err
 }
 
 // s3MaxListBody bounds one page of a listing held in memory; a page is at most 1000 entries.
