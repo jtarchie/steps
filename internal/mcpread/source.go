@@ -101,13 +101,15 @@ type RunDetail struct {
 
 // Step is one step of a run.
 type Step struct {
-	ID         int64  `json:"id"`
-	ParentID   int64  `json:"parent_id,omitempty"`
-	Name       string `json:"name"`
-	Kind       string `json:"kind,omitempty"`
-	Status     string `json:"status"`
-	Error      string `json:"error,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	ID       int64  `json:"id"`
+	ParentID int64  `json:"parent_id,omitempty"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind,omitempty"`
+	Status   string `json:"status"`
+	Error    string `json:"error,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	// RoutedTo is where a to: route sent the plan after this step; a failed step with one did not fail the run.
+	RoutedTo   string `json:"routed_to,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	// Printed is whether the step printed anything get_step_output can read.
 	Printed bool `json:"printed"`

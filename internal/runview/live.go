@@ -124,6 +124,11 @@ func (l *Live) Event(event events.Event) {
 	}
 
 	if event.Type == events.TypeStepNote {
+		// A route is folded as well as said: it is what tells the summary a failure was a branch the run took, not one to explain.
+		if run := l.runs[event.RunID]; run != nil && event.Name == events.NoteRoute {
+			run.folder.Add([]store.RunEventRow{rowOf(event)}, nil)
+		}
+
 		l.scroll(l.noteLine(event))
 
 		return
@@ -432,7 +437,7 @@ func (l *Live) summary(run *liveRun, event events.Event) []string {
 	lines = append(lines, l.publishedLines(view.Published())...)
 
 	for _, step := range view.Steps {
-		explains := step.Failed() || (step.Hook() && event.Status != events.StatusSucceeded)
+		explains := step.Broke() || (step.Hook() && event.Status != events.StatusSucceeded)
 		if !explains || step.Block() || len(step.Outputs) == 0 {
 			continue
 		}

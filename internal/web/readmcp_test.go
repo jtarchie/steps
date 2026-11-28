@@ -269,3 +269,40 @@ func TestMCPAccessNeedsSomebodyToSignIn(t *testing.T) {
 		t.Errorf("New with --mcp-access and no sign-in = %v", err)
 	}
 }
+
+// A failure a to: route consumed is not what a passed run's reader is pointed at as its failure, and the step says where the route went instead.
+func TestReadingARunDoesNotCallARoutedFailureTheFailure(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-loop", JobName: "build", Workspace: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-loop", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "gate", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "gate", StepKind: "task", StepID: 1, Status: "failed", Text: "exit 1"},
+		{Type: events.TypeStepNote, StepIndex: -1, StepID: 1, Status: events.NoteInfo, Name: events.NoteRoute, Detail: "editor", Text: "route: gate --failure--> editor (visit 1/3)"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-loop", store.RunSucceeded)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := readSource{server: server}.Run(ctx, pipeline.Slug, "run-loop")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if detail.FailedStep != nil {
+		t.Errorf("FailedStep = %+v, want none: the route consumed the failure", detail.FailedStep)
+	}
+
+	if len(detail.Steps) != 1 || detail.Steps[0].RoutedTo != "editor" {
+		t.Errorf("steps = %+v, want gate routed to editor", detail.Steps)
+	}
+}

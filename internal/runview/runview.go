@@ -139,6 +139,10 @@ type Step struct {
 	Streaming []string
 	// Notes is what the step's machinery said about it, in order.
 	Notes []Note
+	// RoutedTo is where a to:/verdicts: route sent the plan after this step, from its route note; empty when it went on to the next step.
+	RoutedTo string
+	// Pass is which time this step ran at its place in the plan, from 2, when a route sent the plan back through it; 0 otherwise.
+	Pass int
 	// Facts is what a get's or put's resource said about the version it fetched or published, in order.
 	Facts []Fact
 	// ImageSource is the artifact the step's image: named, when it named one, and ImageNote the note that said so. Held apart from Notes because the page says it on the step's placement line, which already carries the reference the note would repeat; a step that failed before it was placed has no such line, and shows the note.
@@ -392,6 +396,12 @@ func (s Step) Failed() bool {
 	return s.Status == events.StatusFailed || s.Status == events.StatusErrored || s.Status == events.StatusAborted
 }
 
+// Routed reports a failure a to: route consumed: the step failed, and the plan went where the route said instead of failing the job.
+func (s Step) Routed() bool { return s.Status == events.StatusFailed && s.RoutedTo != "" }
+
+// Broke reports a failure that was not routed: the kind that turns a run red, opens a row, and is what f finds.
+func (s Step) Broke() bool { return s.Failed() && !s.Routed() }
+
 // Container reports a step that ran other steps inside it, hooks included:
 // it is what draws a subtree at all.
 func (s Step) Container() bool { return len(s.Children) > 0 }
@@ -430,7 +440,7 @@ func (s Step) Block() bool {
 // version it produced.
 func (s Step) OpenByDefault() bool {
 	switch {
-	case s.Failed() && !s.collateral,
+	case s.Broke() && !s.collateral,
 		s.Unreported(),
 		s.Kind == "put",
 		s.Running() && (len(s.Turns) > 0 || s.Block()):
@@ -485,7 +495,8 @@ func (r Transcript) InnermostFailure() *Step {
 
 	walk = func(steps []*Step, hooks bool) *Step {
 		for _, step := range steps {
-			if hooks && !step.Hook() {
+			// A routed failure's hooks only observed it, and the run went on: neither is a cause.
+			if hooks && !step.Hook() || step.Routed() {
 				continue
 			}
 
@@ -555,6 +566,7 @@ type Tally struct {
 	Cells      int
 	Passed     int
 	Failed     int
+	Routed     int
 	Running    int
 	Skipped    int
 	Unreported int
@@ -584,6 +596,8 @@ func (s Step) Rollup() Tally {
 		switch {
 		case child.Skipped():
 			out.Skipped++
+		case child.Routed():
+			out.Routed++
 		case child.Failed():
 			out.Failed++
 		case child.Unreported():
@@ -1017,8 +1031,41 @@ func (f *Folder) View(run store.RunRow) Transcript {
 	f.run.Run = run
 	linkTree(&f.run)
 	settle(&f.run)
+	countPasses(f.run.Steps)
 
 	return f.run
+}
+
+// countPasses numbers the steps a route sent the plan back through. Only among the siblings of a step that routed: an across:'s cells share their block's index and name, and are not passes.
+func countPasses(steps []*Step) {
+	type place struct {
+		parent int64
+		index  int
+		name   string
+	}
+
+	routed := map[int64]bool{}
+
+	for _, step := range steps {
+		if step.RoutedTo != "" {
+			routed[step.ParentID] = true
+		}
+	}
+
+	seen := map[place]int{}
+
+	for _, step := range steps {
+		if !routed[step.ParentID] || step.Hook() {
+			continue
+		}
+
+		at := place{step.ParentID, step.Index, step.Name}
+		seen[at]++
+
+		if seen[at] > 1 {
+			step.Pass = seen[at]
+		}
+	}
 }
 
 // attachOutput hangs one of a step's printed outputs on it. The event can
@@ -1058,6 +1105,14 @@ func attachNote(view *Transcript, index map[string]int, row store.RunEventRow) (
 			view.Steps[position].ImageSource, view.Steps[position].ImageNote = row.Detail, note
 
 			return position, Change{Other: true}
+		}
+
+		// Reported as a close: it moves the row's outcome from failed to routed, and with it the rollup of the block above, which only a close or an open re-sends.
+		if row.Name == events.NoteRoute {
+			view.Steps[position].RoutedTo = row.Detail
+			view.Steps[position].Notes = append(view.Steps[position].Notes, note)
+
+			return position, Change{Closed: true}
 		}
 
 		if events.IsFactName(row.Name) {
@@ -1330,7 +1385,7 @@ func markCollateral(siblings []*Step) {
 	failed := false
 
 	for _, step := range siblings {
-		if !step.Hook() && step.Failed() && step.Status != events.StatusAborted {
+		if !step.Hook() && step.Broke() && step.Status != events.StatusAborted {
 			failed = true
 		}
 	}

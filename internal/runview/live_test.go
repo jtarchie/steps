@@ -457,3 +457,31 @@ func TestClockTurnsToMinutesAtAMinute(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveDoesNotExplainARoutedFailure: a gate the route sent back is a branch the run took, so the summary does not print its output as the reason a passed run failed.
+func TestLiveDoesNotExplainARoutedFailure(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	var out strings.Builder
+
+	live := liveAt(&out, &now)
+
+	for _, e := range []events.Event{
+		{Type: events.TypeStepStarted, StepKind: "task", StepName: "gate", StepID: 1},
+		{Type: events.TypeStepOutput, StepKind: "task", StepName: "gate", StepID: 1, Text: "verdict: fail"},
+		{Type: events.TypeStepFinished, StepKind: "task", StepName: "gate", StepID: 1, Status: "failed", DurationMS: 300},
+		{Type: events.TypeStepNote, StepIndex: -1, StepID: 1, Status: events.NoteInfo, Name: events.NoteRoute, Detail: "editor", Text: "route: gate --failure--> editor (visit 1/3)"},
+		{Type: events.TypeJobFinished, StepIndex: -1, Status: "succeeded", DurationMS: 400},
+	} {
+		e.RunID, e.Job, e.At = "R", "build", now
+		live.Event(e)
+	}
+
+	got := strings.Join(screen(t, out.String()), "\n")
+
+	if strings.Contains(got, "── task gate ──") {
+		t.Errorf("the summary prints a routed gate's output as what explains the run:\n%s", got)
+	}
+}

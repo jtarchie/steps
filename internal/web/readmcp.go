@@ -336,7 +336,7 @@ func (r readSource) Run(ctx context.Context, pipeline, id string) (mcpread.RunDe
 		row := readStep(step)
 		detail.Steps = append(detail.Steps, row)
 
-		if detail.FailedStep == nil && step.Failed() && !slices.ContainsFunc(step.Children, func(child *runview.Step) bool { return child.Failed() }) {
+		if detail.FailedStep == nil && step.Broke() && !slices.ContainsFunc(step.Children, func(child *runview.Step) bool { return child.Broke() }) {
 			failed := row
 			detail.FailedStep = &failed
 		}
@@ -347,7 +347,7 @@ func (r readSource) Run(ctx context.Context, pipeline, id string) (mcpread.RunDe
 
 func readStep(step *runview.Step) mcpread.Step {
 	return mcpread.Step{
-		ID: step.ID, ParentID: step.ParentID, Name: step.Name, Kind: step.Kind, Status: step.Status, Error: step.Error, Reason: step.Reason,
+		ID: step.ID, ParentID: step.ParentID, Name: step.Name, Kind: step.Kind, Status: step.Status, Error: step.Error, Reason: step.Reason, RoutedTo: step.RoutedTo,
 		DurationMS: step.Duration.Milliseconds(), Printed: len(step.Outputs) > 0 || len(step.Streaming) > 0,
 	}
 }

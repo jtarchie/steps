@@ -801,6 +801,7 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 }
 .step.passed  > .stephead::before { background: var(--green); }
 .step.failed  > .stephead::before { background: var(--red); }
+.step.routed  > .stephead::before { background: var(--magenta); }
 .step.running > .stephead::before { background: var(--yellow); }
 .step.skipped > .stephead::before { background: var(--line); }
 .step.unreported > .stephead::before { background: var(--line); }
@@ -810,6 +811,9 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 .stmark { flex: none; width: 14px; text-align: center; }
 .step.passed  > .stephead .stmark { color: var(--green); }
 .step.failed  > .stephead .stmark { color: var(--red); }
+/* A failure a to: route consumed: the plan took a branch, it did not break. Magenta, ANSI's other status hue, and its own glyph, so the difference survives without color. */
+.step.routed  > .stephead .stmark { color: var(--magenta); }
+.stephead .note.route { color: var(--magenta); }
 .step.running > .stephead .stmark { color: var(--yellow); }
 .step.skipped > .stephead .stmark { color: var(--faint); }
 .step.unreported > .stephead .stmark { color: var(--dim); }
@@ -848,6 +852,7 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 .rollup b { font-weight: 600; }
 .rollup .r-pass { color: var(--green); }
 .rollup .r-fail { color: var(--red); }
+.rollup .r-route { color: var(--magenta); }
 .rollup .r-run  { color: var(--yellow); }
 .rollup .r-skip { color: var(--faint); }
 .rollup .r-sep  { color: var(--faint); }

@@ -187,7 +187,8 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 
 	outcome := recordableOutcome(ctx, res, err)
 
-	nextIndex, _, err, exhaustedErr := applyRouting(ctx, steps, w.index, step, res.disposition, res.verdict, err, w.visits)
+	// Under the step's own id, so the route note hangs on the row that made the decision rather than above the transcript.
+	nextIndex, _, err, exhaustedErr := applyRouting(events.WithStepID(ctx, res.stepID), steps, w.index, step, res.disposition, res.verdict, err, w.visits)
 	if exhaustedErr != nil {
 		return true, exhaustedErr
 	}
@@ -210,7 +211,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 		return true, nil
 	}
 
-	// The note says which step made the chain uncacheable, so it is that step's: said from this context, it named no step and sat above the transcript.
+	// The note says which step made the chain uncacheable, so it is that step's, as the route note is.
 	unskippable, err := foldStepUnskippable(events.WithStepID(ctx, res.stepID), w.cfg, step, w.chainUnskippable)
 	if err != nil {
 		return true, err

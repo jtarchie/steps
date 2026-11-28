@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 )
@@ -141,7 +142,7 @@ func reportRoute(ctx context.Context, steps []config.Step, i int, step config.St
 		progress += ", replayed"
 	}
 
-	notef(ctx, "route: %s --%s--> %s (%s)", from, key, to, progress)
+	events.RouteNote(ctx, fmt.Sprintf("route: %s --%s--> %s (%s)", from, key, to, progress), to)
 	slog.InfoContext(ctx, "job.route", "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits, "replayed", replayed)
 }
 

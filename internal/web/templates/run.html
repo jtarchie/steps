@@ -262,7 +262,7 @@ document.addEventListener('htmx:after:swap', function () {
      the row, and the shell the stream sends when only these moved — a
      container whose child finished changes class and rollup and nothing
      under it. Rendered INSIDE the opening tag, so it starts with a space. */}}
-{{define "stepattrs"}}{{$step := .Step}}{{$detail := .Page.Run.StepHasDetail $step}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Unreported}} unreported{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail $step.OpenByDefault}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
+{{define "stepattrs"}}{{$step := .Step}}{{$detail := .Page.Run.StepHasDetail $step}} class="step{{if $step.Skipped}} skipped{{else if $step.Routed}} routed{{else if $step.Failed}} failed{{else if $step.Unreported}} unreported{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail $step.OpenByDefault}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
 
 {{/* The shell: a row's attributes and head, and nothing it holds. The
      attribute-only morph is what hx-morph-skip-children buys — htmx syncs the
@@ -277,13 +277,15 @@ document.addEventListener('htmx:after:swap', function () {
     {{/* The toggle is a real button BESIDE the head's links, not the head itself: as role="button" around the permalink and node link it was a control inside a control (WCAG 4.1.2). app.js keeps aria-expanded in step with the reader's folds. */}}
     {{if $detail}}<button type="button" class="steptoggle" aria-expanded="{{if $step.OpenByDefault}}true{{else}}false{{end}}" aria-controls="{{if $body}}{{$step.Anchor}}_body{{if $step.Container}} {{end}}{{end}}{{if $step.Container}}{{$step.Anchor}}_substeps{{end}}">{{else}}<span class="steptoggle">{{end}}
     <span class="chev{{if $detail}} chev-icon{{end}}"></span>
-    {{if $step.Skipped}}<span class="stmark" role="img" aria-label="{{t "status.skipped"}}">–</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="{{t "status.failed"}}">✗</span>{{else if $step.Unreported}}<span class="stmark" role="img" aria-label="{{t "status.unreported"}}">?</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="{{t "status.running"}}">◐</span>{{else}}<span class="stmark" role="img" aria-label="{{t "status.passed"}}">✓</span>{{end}}
+    {{if $step.Skipped}}<span class="stmark" role="img" aria-label="{{t "status.skipped"}}">–</span>{{else if $step.Routed}}<span class="stmark" role="img" aria-label="{{t "status.routed"}}">↪</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="{{t "status.failed"}}">✗</span>{{else if $step.Unreported}}<span class="stmark" role="img" aria-label="{{t "status.unreported"}}">?</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="{{t "status.running"}}">◐</span>{{else}}<span class="stmark" role="img" aria-label="{{t "status.passed"}}">✓</span>{{end}}
     <span class="kind">{{$step.Kind}}</span>
     <span class="name">{{$step.Name}}</span>
     {{if $detail}}</button>{{else}}</span>{{end}}
     <a class="anchor" href="#{{$step.Anchor}}" title="{{t "step.link"}}" aria-label="{{t "step.link"}}">#</a>
     {{with index $run.StepConfig $step.ID}}<a class="anchor" href="{{.}}" title="{{t "step.config"}}" aria-label="{{t "step.config"}}">{}</a>{{end}}
     {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
+    {{with $step.RoutedTo}}<span class="note route" title="{{t "step.routedto.title" .}}">{{if not $step.Routed}}↪ {{end}}{{t "step.routedto" .}}</span>{{end}}
+    {{with $step.Pass}}<span class="note pass" title="{{t "step.pass.title" .}}">{{t "step.pass" .}}</span>{{end}}
     {{if $step.Unreported}}<span class="note">{{t "step.noend"}}</span>{{end}}
     {{with index $run.Changed $step.Name}}<span class="note chg" title="{{if eq . "new"}}{{t "step.chg.new.title"}}{{else}}{{t "step.chg.changed.title"}}{{end}}">{{word "change" .}}</span>{{end}}
     {{if $step.Verdict}}<span class="note">{{t "step.verdict" $step.Verdict}}</span>{{end}}
@@ -299,6 +301,7 @@ document.addEventListener('htmx:after:swap', function () {
         <span>{{tn "step.cells" .Cells}}</span>
         {{if .Passed}}<span class="r-sep">·</span><b class="r-pass">{{t "step.r.passed" .Passed}}</b>{{end}}
         {{if .Failed}}<span class="r-sep">·</span><b class="r-fail">{{t "step.r.failed" .Failed}}</b>{{end}}
+        {{if .Routed}}<span class="r-sep">·</span><b class="r-route">{{t "step.r.routed" .Routed}}</b>{{end}}
         {{if .Running}}<span class="r-sep">·</span><b class="r-run">{{t "step.r.running" .Running}}</b>{{end}}
         {{if .Skipped}}<span class="r-sep">·</span><b class="r-skip">{{t "step.r.skipped" .Skipped}}</b>{{end}}
         {{if .Unreported}}<span class="r-sep">·</span><b class="r-skip">{{t "step.r.unreported" .Unreported}}</b>{{end}}

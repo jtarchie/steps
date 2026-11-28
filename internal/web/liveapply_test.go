@@ -86,7 +86,7 @@ func TestStreamAppliedToThePageIsTheReloadedPage(t *testing.T) {
 
 			// The comparison is only worth anything if the stream sent
 			// something a plain reload would not have drawn already.
-			for _, want := range []string{"the sub-agent said this", "second attempt", "1eaf1eaf1eaf", "unchanged — replayed", `id="step-22-inner"`, "paged the on-call"} {
+			for _, want := range []string{"the sub-agent said this", "second attempt", "1eaf1eaf1eaf", "unchanged — replayed", `id="step-22-inner"`, "paged the on-call", "pass 2", `class="step routed`, "1 routed"} {
 				if !strings.Contains(watched, want) {
 					t.Errorf("the watched page never shows %q", want)
 				}
@@ -206,6 +206,18 @@ func eventsAfterThePage() []store.RunEventRow {
 		{Type: events.TypeStepSkipped, StepIndex: 8, StepName: "inner", StepKind: "task", StepID: 22, ParentStepID: 21, Status: "skipped", Text: "cached"},
 		{Type: events.TypeStepSkipped, StepIndex: 8, StepName: "wrap", StepKind: "try", StepID: 21, ParentStepID: 20, Status: "skipped", Text: "cached"},
 		{Type: events.TypeStepFinished, StepIndex: 7, StepName: "block", StepKind: "do", StepID: 20, Status: "succeeded"},
+		// A to: loop inside a block: the route note lands on a row already drawn failed and turns it routed, which moves the block's rollup with no child coming or going; the editor it sends the plan back to opens as pass 2.
+		{Type: events.TypeStepStarted, StepIndex: 11, StepName: "loop", StepKind: "do", StepID: 50},
+		{Type: events.TypeStepStarted, StepIndex: 12, StepName: "editor", StepKind: "task", StepID: 51, ParentStepID: 50},
+		{Type: events.TypeStepFinished, StepIndex: 12, StepName: "editor", StepKind: "task", StepID: 51, ParentStepID: 50, Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepIndex: 13, StepName: "gate", StepKind: "task", StepID: 52, ParentStepID: 50},
+		{Type: events.TypeStepFinished, StepIndex: 13, StepName: "gate", StepKind: "task", StepID: 52, ParentStepID: 50, Status: "failed", Text: "exit 1"},
+		{Type: events.TypeStepNote, StepIndex: -1, StepID: 52, Status: events.NoteInfo, Name: events.NoteRoute, Detail: "editor", Text: "route: gate --failure--> editor (visit 1/3)"},
+		{Type: events.TypeStepStarted, StepIndex: 12, StepName: "editor", StepKind: "task", StepID: 53, ParentStepID: 50},
+		{Type: events.TypeStepFinished, StepIndex: 12, StepName: "editor", StepKind: "task", StepID: 53, ParentStepID: 50, Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepIndex: 13, StepName: "gate", StepKind: "task", StepID: 54, ParentStepID: 50},
+		{Type: events.TypeStepFinished, StepIndex: 13, StepName: "gate", StepKind: "task", StepID: 54, ParentStepID: 50, Status: "succeeded"},
+		{Type: events.TypeStepFinished, StepIndex: 11, StepName: "loop", StepKind: "do", StepID: 50, Status: "succeeded"},
 		// Names no step and changes no row: cell-a keeps its own error line, and the head defers to it.
 		{Type: events.TypeJobFinished, Status: "failed", Text: "step 2 (task cell-a): exit 1"},
 	}
