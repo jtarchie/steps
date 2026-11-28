@@ -130,7 +130,7 @@ jobs:
 
 ## Tolerated failure (`try:`)
 
-A `try:` wraps a single inner step (any kind but `get`: a task, put, agent, block, `approval:`, or another try) so a **failure or infrastructure error** of that step doesn't stop the plan:
+A `try:` wraps a single inner step (any kind but `get`: a task, put, agent, block, `approval:`, or another try) so a **failure or infrastructure error** of that step doesn't stop the plan. The web UI draws a tolerated failure as `⊘ tolerated`, not as a failure of the run:
 
 ```yaml
 jobs:
@@ -257,6 +257,7 @@ jobs:
   - **`failure:` is reserved** for "the step errored or never emitted a verdict". It is excluded from the enum (the model cannot choose it; the runtime arrives at it) and it must name a target — bare `failure` would mean "tolerate the failure and carry on", which is `try:`'s job. `success` is not a verdict name: a verdict already *is* the step's success.
   - **`to:` and `verdicts:` are mutually exclusive.** A step carrying both is refused at load, with the new form in the message.
 - **A `--resume` replays the route the first attempt took.** Each pass through a step is recorded with the key it produced, so a resumed run routes on what the step did last time rather than walking the plan in written order: a step a `to:` jumped past stays unvisited, the step a consumed `failure:` route led to is skipped as done, and `max_visits:` continues from the count the first attempt reached instead of starting over. A replayed jump prints as `route: a --success--> c (visit 1, replayed)`. A run recorded before steps kept outcomes resumes as it always did: its finished steps are skipped in plan order and nothing is replayed.
+- **Reading a route back.** The step that routed says where it sent the plan, on its own row: `route: gate --failure--> editor (visit 1/3)` in the terminal, and in the web UI a target beside the step's name. A failure the route consumed is drawn as routed (`↪`), not failed, and is not counted as the run's failure. In the web UI, a loop's steps are gathered into one block with a numbered tab per pass, the way Concourse tabs a retried step. Each tab shows how its pass ended as a glyph and says it in words to a screen reader ("pass 1 of 2, routed to editor"), and the newest pass is shown until you pick another. `steps runs steps <run>` lists each pass with its number and the key it produced.
 - **`next`** is the one target that is not a step name: *continue in declaration order*. It exists because a verdict must name a target and a **container has none** — `in_parallel:`, `race:`, `across:`, `ensemble:` and `approval:` have no name to be jumped to, so without it an author whose next step is one of those has to route *past* it. That is not equivalent, and quietly so: routing past an `approval:` skips the human gate the pipeline exists to have. `next` is always forward, so it never requires `max_visits:`, and it is a real route rather than a fall-through — `failure: next` **consumes** the failure, which is how a step says "carry on anyway":
 
 ```yaml

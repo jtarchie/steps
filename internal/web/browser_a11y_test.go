@@ -103,6 +103,8 @@ func a11yPages(t *testing.T) (base string, pages []string) {
 		}
 	}
 
+	transitionsRun(t, demo, "run-loop", sha)
+
 	_, err := demo.Store.RequestApproval(t.Context(), "build", "ship it?")
 	if err != nil {
 		t.Fatal(err)
@@ -122,6 +124,7 @@ func a11yPages(t *testing.T) (base string, pages []string) {
 		"/p/demo/runs",
 		"/p/demo/runs/run-ok",
 		"/p/demo/runs/run-bad",
+		"/p/demo/runs/run-loop",
 		"/p/demo/jobs/build/detail",
 		"/p/demo/resources",
 		"/p/demo/resources/repo",
@@ -373,5 +376,100 @@ func TestThePaletteSaysWhichResultEnterOpens(t *testing.T) {
 
 	if !strings.HasPrefix(named, "true option true") || !strings.Contains(named, "build") {
 		t.Errorf("after typing build, the palette reads %q; want it expanded, naming a selected option for build", named)
+	}
+}
+
+// transitionsRun records a run that left straight-line order every way a page draws with tabs or a decision: a retried step, a to: loop, a tolerated try:.
+func transitionsRun(t *testing.T, pipeline *Pipeline, runID, sha string) {
+	t.Helper()
+
+	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws", ConfigSHA: sha})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	step := func(id int64, index int, name, status string) []store.RunEventRow {
+		return []store.RunEventRow{
+			{Type: events.TypeStepStarted, StepIndex: index, StepName: name, StepKind: "task", StepID: id},
+			{Type: events.TypeStepOutput, StepIndex: index, StepName: name, StepKind: "task", StepID: id, Text: name + " said this\n"},
+			{Type: events.TypeStepFinished, StepIndex: index, StepName: name, StepKind: "task", StepID: id, Status: status, Text: map[bool]string{true: "exit 1"}[status == "failed"]},
+		}
+	}
+
+	rows := make([]store.RunEventRow, 0, 24)
+	rows = append(rows, []store.RunEventRow{
+		{Type: events.TypeJobStarted, StepIndex: -1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "fetch", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepOutput, StepIndex: 0, StepName: "fetch", StepKind: "task", StepID: 1, Text: "timed out\n"},
+		{Type: events.TypeStepNote, StepIndex: -1, StepID: 1, Status: events.NoteInfo, Name: events.NoteAttempt, Detail: "2/2", Text: "task: fetch (attempt 2/2)"},
+		{Type: events.TypeStepOutput, StepIndex: 0, StepName: "fetch", StepKind: "task", StepID: 1, Text: "fetched\n"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "fetch", StepKind: "task", StepID: 1, Status: "succeeded"},
+	}...)
+	rows = append(rows, step(2, 1, "editor", "succeeded")...)
+	rows = append(rows, step(3, 2, "gate", "failed")...)
+	rows = append(rows, store.RunEventRow{Type: events.TypeStepNote, StepIndex: -1, StepID: 3, Status: events.NoteInfo, Name: events.NoteRoute, Detail: "editor", Text: "route: gate --failure--> editor (visit 1/3)"})
+	rows = append(rows, step(4, 1, "editor", "succeeded")...)
+	rows = append(rows, step(5, 2, "gate", "succeeded")...)
+	rows = append(rows,
+		store.RunEventRow{Type: events.TypeStepStarted, StepIndex: 3, StepName: "notify", StepKind: "try", StepID: 6},
+		store.RunEventRow{Type: events.TypeStepStarted, StepIndex: 3, StepName: "notify", StepKind: "task", StepID: 7, ParentStepID: 6},
+		store.RunEventRow{Type: events.TypeStepFinished, StepIndex: 3, StepName: "notify", StepKind: "task", StepID: 7, ParentStepID: 6, Status: "failed", Text: "exit 1"},
+		store.RunEventRow{Type: events.TypeStepFinished, StepIndex: 3, StepName: "notify", StepKind: "try", StepID: 6, Status: "failed", Text: "exit 1"},
+		store.RunEventRow{Type: events.TypeStepNote, StepIndex: -1, StepID: 6, Status: events.NoteInfo, Name: events.NoteTolerated, Text: "try: notify failed (tried, continuing)"},
+	)
+
+	appendEvents(t, pipeline.Store, runID, rows)
+
+	err = pipeline.Store.FinishRun(t.Context(), runID, store.RunSucceeded)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestTheTabsKeepTheirPromises: a strip shows its newest panel until the reader picks another; a pick is a click or an arrow, moves focus with it, opens a folded row rather than toggling it shut, and survives the reload a finished run makes.
+func TestTheTabsKeepTheirPromises(t *testing.T) {
+	ctx := browser(t)
+	base, _ := a11yPages(t)
+
+	str := chromedp.Evaluate[string]
+	shown := str(`[...document.querySelectorAll('#loop-3_substeps > [role="tabpanel"]')].map(p => p.offsetParent ? 'shown' : 'hidden').join(',')`)
+
+	aligned := must(ctx, t, chromedp.Evaluate[bool](`new Set([...document.querySelectorAll('.transcript > .step > .stephead > .steptabs')].map(s => Math.round(s.getBoundingClientRect().left))).size === 1`), media("light", false), chromedp.Navigate(base+"/p/demo/runs/run-loop"))
+	initial := must(ctx, t, shown, chromedp.Click(chromedp.CSS("#loop-3 > .stephead .steptoggle")))
+	picked := must(ctx, t, shown, chromedp.Click(chromedp.CSS("#pass-2_tab")))
+	open := must(ctx, t, str(`String(document.getElementById('loop-3').classList.contains('open'))`))
+	arrowed := must(ctx, t, str(`document.activeElement.id + ':' + document.activeElement.getAttribute('aria-selected')`), chromedp.KeyEvent(kb.ArrowRight))
+	afterArrow := must(ctx, t, shown)
+	reloaded := must(ctx, t, shown, chromedp.Click(chromedp.CSS("#pass-2_tab")), chromedp.Reload())
+	attempts := must(ctx, t, str(`[...document.querySelectorAll('#step-1-fetch_body [role="tabpanel"]')].map(p => p.offsetParent ? 'shown' : 'hidden').join(',') + ':' + document.getElementById('step-1-fetch').classList.contains('open')`), chromedp.Click(chromedp.CSS("#step-1-fetch_try1_tab")))
+	// A morph draws the server's selection again; the pick has to come back after it.
+	swapped := must(ctx, t, str(`[...document.querySelectorAll('#step-1-fetch_body [role="tabpanel"]')].map(p => p.offsetParent ? 'shown' : 'hidden').join(',')`), chromedp.Evaluate[chromedp.Void](`document.querySelectorAll('.picked, .picking').forEach(n => n.classList.remove('picked', 'picking')); document.dispatchEvent(new Event('htmx:after:swap'))`))
+
+	if !aligned {
+		t.Error("the tab strips of rows at one depth start at different places; a scan down the rows should read one column")
+	}
+
+	if initial != "hidden,shown" {
+		t.Errorf("before a pick the passes are %s, want the newest alone", initial)
+	}
+
+	if picked != "shown,hidden" || open != "true" {
+		t.Errorf("picking pass 1 showed %s with the loop open=%s, want pass 1 alone in an open loop", picked, open)
+	}
+
+	if arrowed != "pass-4_tab:true" || afterArrow != "hidden,shown" {
+		t.Errorf("ArrowRight left focus on %s showing %s, want pass 2 selected, focused and shown", arrowed, afterArrow)
+	}
+
+	if reloaded != "shown,hidden" {
+		t.Errorf("after a reload the passes are %s, want the reader's pick kept", reloaded)
+	}
+
+	if attempts != "shown,hidden:true" {
+		t.Errorf("picking attempt 1 on a folded row gave %s, want attempt 1 alone in an opened row", attempts)
+	}
+
+	if swapped != "shown,hidden" {
+		t.Errorf("after a swap the attempts are %s, want the reader's pick re-applied", swapped)
 	}
 }

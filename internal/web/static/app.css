@@ -801,6 +801,8 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 }
 .step.passed  > .stephead::before { background: var(--green); }
 .step.failed  > .stephead::before { background: var(--red); }
+.step.routed  > .stephead::before { background: var(--magenta); }
+.step.tolerated > .stephead::before { background: var(--line); }
 .step.running > .stephead::before { background: var(--yellow); }
 .step.skipped > .stephead::before { background: var(--line); }
 .step.unreported > .stephead::before { background: var(--line); }
@@ -810,6 +812,26 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 .stmark { flex: none; width: 14px; text-align: center; }
 .step.passed  > .stephead .stmark { color: var(--green); }
 .step.failed  > .stephead .stmark { color: var(--red); }
+/* A failure a to: route consumed: the plan took a branch, it did not break. Magenta, ANSI's other status hue, and its own glyph, so the difference survives without color. */
+.step.routed  > .stephead .stmark { color: var(--magenta); }
+.stephead .note.route { color: var(--magenta); }
+/* A failure a try: ate: the author asked for it to be carried past, so it is quiet, and its own glyph keeps it apart from a skip and a failure without color. */
+.step.tolerated > .stephead .stmark, .stephead .note.tolerated { color: var(--dim); }
+
+/* ---- tabs ----
+ * One strip for a step that ran more than once: a retried step's attempts and a to: loop's passes, as Concourse tabs a retry. The glyph carries each tab's outcome, so its hue only repeats it; the selected tab is underlined in that hue. */
+.steptabs { display: inline-flex; gap: 3px; flex: none; }
+.steptab { --tab-hue: var(--dim); font: inherit; font-size: 11px; line-height: 1.5; padding: 0 6px; border: 1px solid var(--line); border-radius: 2px; background: var(--bg); color: var(--tab-hue); cursor: pointer; }
+.steptab.passed { --tab-hue: var(--green); }
+.steptab.failed, .steptab.errored, .steptab.aborted { --tab-hue: var(--red); }
+.steptab.routed { --tab-hue: var(--magenta); }
+.steptab.running { --tab-hue: var(--yellow); }
+.steptab[aria-selected="true"] { background: var(--panel); font-weight: 600; box-shadow: inset 0 -2px 0 var(--tab-hue); }
+@media (hover: none) { .steptab { min-width: 44px; min-height: 44px; } }
+/* The newest is shown until the reader picks; then only theirs. Scoped to .js: without scripts every panel stays drawn. */
+.js .tabpanels:not(.picking) > [role="tabpanel"]:not(:last-child),
+.js .tabpanels.picking > [role="tabpanel"]:not(.picked) { display: none; }
+.pass > .substeps { margin-left: 0; border-left: 0; }
 .step.running > .stephead .stmark { color: var(--yellow); }
 .step.skipped > .stephead .stmark { color: var(--faint); }
 .step.unreported > .stephead .stmark { color: var(--dim); }
@@ -848,6 +870,7 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 .rollup b { font-weight: 600; }
 .rollup .r-pass { color: var(--green); }
 .rollup .r-fail { color: var(--red); }
+.rollup .r-route { color: var(--magenta); }
 .rollup .r-run  { color: var(--yellow); }
 .rollup .r-skip { color: var(--faint); }
 .rollup .r-sep  { color: var(--faint); }
@@ -904,7 +927,8 @@ html[data-keys="off"] .keystoggle .when-off { display: inline; }
   color: var(--dim);
 }
 .step.skipped .stephead .kind { color: var(--faint); }
-.stephead .name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+/* min-width: a tab strip or decision chip after the name starts where its neighbours' do, so a scan down the rows reads one column of decisions; a longer name pushes its own row only. Undone on a phone, below. */
+.stephead .name { font-weight: 600; min-width: 16ch; overflow-wrap: anywhere; }
 /* The toggle carries the head's leading cells, laid out as the head lays them out, so becoming a real <button> moved nothing. */
 /* Never shrunk: a shrunk toggle let the name spill out of it, under the image note beside it. The note is what gives way; a name too long for the row wraps (max-width) rather than widening it. */
 .steptoggle { display: flex; flex: none; max-width: 100%; align-items: baseline; gap: 12px; min-width: 0; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }

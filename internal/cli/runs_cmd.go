@@ -650,10 +650,11 @@ func (r *RunsStepsCmd) printRunSteps(ctx context.Context, out io.Writer, st inte
 	sayf(out, "run %s  %s  %s: steps a --resume skips\n", run.ID, run.JobName, run.Status)
 
 	writer := newTabWriter(out)
-	_, _ = fmt.Fprintln(writer, "STEP")
+	// PASS and OUTCOME are what make a to: loop read as one: the same step twice is its second pass, and the outcome is the key the route took.
+	_, _ = fmt.Fprintln(writer, "STEP\tPASS\tOUTCOME")
 
 	for _, step := range steps {
-		_, _ = fmt.Fprintln(writer, step.Name)
+		_, _ = fmt.Fprintf(writer, "%s\t%d\t%s\n", step.Name, step.Visit, step.Outcome)
 	}
 
 	return flush(writer)

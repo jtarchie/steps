@@ -133,7 +133,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 	// runPlacedStage.
 	retryErr := runPlacedStage(ctx, step, func(ctx context.Context) error {
 		return retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
-			notef(ctx, "put: %s (attempt %d/%d)", putLabel(step), attempt, total)
+			events.AttemptNote(ctx, fmt.Sprintf("put: %s (attempt %d/%d)", putLabel(step), attempt, total), attempt, total)
 			slog.InfoContext(ctx, "job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			runCtx, recorder := recordResourceOutput(attemptCtx, resourceType.Name+" out")

@@ -288,7 +288,7 @@ func assertRunStepsPerBuild(t *testing.T, path, runID string) {
 		}
 	})
 
-	for _, want := range []string{`(?m)^fragile\s*$`, `(?m)^publication\s*$`} {
+	for _, want := range []string{`(?m)^fragile\s+1\s+success\s*$`, `(?m)^publication\s+1\s+success\s*$`} {
 		if !regexp.MustCompile(want).MatchString(listing) {
 			t.Errorf("runs steps did not list %q:\n%s", want, listing)
 		}
@@ -301,7 +301,7 @@ func assertRunStepsPerBuild(t *testing.T, path, runID string) {
 		}
 	})
 
-	if !regexp.MustCompile(`(?m)^fragile\s*$`).MatchString(limited) || strings.Contains(limited, "publication") {
+	if !regexp.MustCompile(`(?m)^fragile\s+1\s+success\s*$`).MatchString(limited) || strings.Contains(limited, "publication") {
 		t.Errorf("runs steps --limit 1 did not stop after the first row:\n%s", limited)
 	}
 

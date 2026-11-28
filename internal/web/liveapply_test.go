@@ -86,7 +86,7 @@ func TestStreamAppliedToThePageIsTheReloadedPage(t *testing.T) {
 
 			// The comparison is only worth anything if the stream sent
 			// something a plain reload would not have drawn already.
-			for _, want := range []string{"the sub-agent said this", "second attempt", "1eaf1eaf1eaf", "unchanged — replayed", `id="step-22-inner"`, "paged the on-call"} {
+			for _, want := range []string{"the sub-agent said this", "second attempt", "1eaf1eaf1eaf", "unchanged — replayed", `id="step-22-inner"`, "paged the on-call", `class="step routed`, "pass 1 of 2, routed to editor", `aria-label="pass 2 of 2, passed"`, `aria-label="attempt 1 of 3, failed"`, "second try worked", `class="step tolerated`} {
 				if !strings.Contains(watched, want) {
 					t.Errorf("the watched page never shows %q", want)
 				}
@@ -206,6 +206,30 @@ func eventsAfterThePage() []store.RunEventRow {
 		{Type: events.TypeStepSkipped, StepIndex: 8, StepName: "inner", StepKind: "task", StepID: 22, ParentStepID: 21, Status: "skipped", Text: "cached"},
 		{Type: events.TypeStepSkipped, StepIndex: 8, StepName: "wrap", StepKind: "try", StepID: 21, ParentStepID: 20, Status: "skipped", Text: "cached"},
 		{Type: events.TypeStepFinished, StepIndex: 7, StepName: "block", StepKind: "do", StepID: 20, Status: "succeeded"},
+		// A to: loop inside a block: the route note lands on a row already drawn failed and turns it routed, which moves the block's rollup with no child coming or going; the editor it sends the plan back to opens as pass 2.
+		{Type: events.TypeStepStarted, StepIndex: 11, StepName: "loop", StepKind: "do", StepID: 50},
+		{Type: events.TypeStepStarted, StepIndex: 12, StepName: "editor", StepKind: "task", StepID: 51, ParentStepID: 50},
+		{Type: events.TypeStepFinished, StepIndex: 12, StepName: "editor", StepKind: "task", StepID: 51, ParentStepID: 50, Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepIndex: 13, StepName: "gate", StepKind: "task", StepID: 52, ParentStepID: 50},
+		{Type: events.TypeStepFinished, StepIndex: 13, StepName: "gate", StepKind: "task", StepID: 52, ParentStepID: 50, Status: "failed", Text: "exit 1"},
+		{Type: events.TypeStepNote, StepIndex: -1, StepID: 52, Status: events.NoteInfo, Name: events.NoteRoute, Detail: "editor", Text: "route: gate --failure--> editor (visit 1/3)"},
+		{Type: events.TypeStepStarted, StepIndex: 12, StepName: "editor", StepKind: "task", StepID: 53, ParentStepID: 50},
+		{Type: events.TypeStepFinished, StepIndex: 12, StepName: "editor", StepKind: "task", StepID: 53, ParentStepID: 50, Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepIndex: 13, StepName: "gate", StepKind: "task", StepID: 54, ParentStepID: 50},
+		{Type: events.TypeStepFinished, StepIndex: 13, StepName: "gate", StepKind: "task", StepID: 54, ParentStepID: 50, Status: "succeeded"},
+		{Type: events.TypeStepFinished, StepIndex: 11, StepName: "loop", StepKind: "do", StepID: 50, Status: "succeeded"},
+		// A retried step: each attempt's note arrives after the last one printed, and the tab strip in the row's head grows a tab with it.
+		{Type: events.TypeStepStarted, StepIndex: 14, StepName: "flaky", StepKind: "task", StepID: 60},
+		{Type: events.TypeStepOutput, StepIndex: 14, StepName: "flaky", StepKind: "task", StepID: 60, Text: "first try timed out"},
+		{Type: events.TypeStepNote, StepIndex: -1, StepID: 60, Status: events.NoteInfo, Name: events.NoteAttempt, Detail: "2/3", Text: "task: flaky (attempt 2/3)"},
+		{Type: events.TypeStepOutput, StepIndex: 14, StepName: "flaky", StepKind: "task", StepID: 60, Text: "second try worked"},
+		{Type: events.TypeStepFinished, StepIndex: 14, StepName: "flaky", StepKind: "task", StepID: 60, Status: "succeeded"},
+		// A try: whose note, arriving after its finish, turns a failed row tolerated.
+		{Type: events.TypeStepStarted, StepIndex: 15, StepName: "notify", StepKind: "try", StepID: 61},
+		{Type: events.TypeStepStarted, StepIndex: 15, StepName: "notify", StepKind: "task", StepID: 62, ParentStepID: 61},
+		{Type: events.TypeStepFinished, StepIndex: 15, StepName: "notify", StepKind: "task", StepID: 62, ParentStepID: 61, Status: "failed", Text: "exit 1"},
+		{Type: events.TypeStepFinished, StepIndex: 15, StepName: "notify", StepKind: "try", StepID: 61, Status: "failed", Text: "exit 1"},
+		{Type: events.TypeStepNote, StepIndex: -1, StepID: 61, Status: events.NoteInfo, Name: events.NoteTolerated, Text: "try: notify failed (tried, continuing)"},
 		// Names no step and changes no row: cell-a keeps its own error line, and the head defers to it.
 		{Type: events.TypeJobFinished, Status: "failed", Text: "step 2 (task cell-a): exit 1"},
 	}
@@ -442,4 +466,62 @@ func transcriptOf(t *testing.T, page string) string {
 	transcript = regexp.MustCompile(`\s+`).ReplaceAllString(transcript, " ")
 
 	return strings.ReplaceAll(transcript, "> <", "><")
+}
+
+// TestStreamRegroupsALoopTheReaderHadLoose: a reader who opened the page mid-pass holds the first pass's rows loose; the route that makes them a loop has to retract those and send the loop, and a decision that moves a block's rollup with no row coming or going (a forward route, a tolerated try:) has to re-send the block's head.
+func TestStreamRegroupsALoopTheReaderHadLoose(t *testing.T) {
+	for _, batch := range []int{1, 500} {
+		t.Run(fmt.Sprintf("batch=%d", batch), func(t *testing.T) {
+			shrinkRunEventLimit(t, 5000, batch)
+
+			server, pipeline := testPipeline(t)
+			runID := fmt.Sprintf("run-regroup-%d", batch)
+
+			err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
+			if err != nil {
+				t.Fatalf("StartRun: %v", err)
+			}
+
+			row := func(kind string, id int64, index int, name, status string) store.RunEventRow {
+				return store.RunEventRow{Type: kind, StepIndex: index, StepName: name, StepKind: "task", StepID: id, ParentStepID: 70, Status: status}
+			}
+			note := func(id int64, name, detail, text string) store.RunEventRow {
+				return store.RunEventRow{Type: events.TypeStepNote, StepIndex: -1, StepID: id, Status: events.NoteInfo, Name: name, Detail: detail, Text: text}
+			}
+
+			appendEvents(t, pipeline.Store, runID, []store.RunEventRow{
+				{Type: events.TypeStepStarted, StepIndex: 0, StepName: "outer", StepKind: "do", StepID: 70},
+				row(events.TypeStepStarted, 71, 1, "editor", ""), row(events.TypeStepFinished, 71, 1, "editor", "succeeded"),
+				row(events.TypeStepStarted, 72, 2, "gate", ""), row(events.TypeStepFinished, 72, 2, "gate", "failed"),
+			})
+
+			_, page := get(t, server, "/p/demo/runs/"+runID)
+			after := regexp.MustCompile(`/events\?after=(\d+)"`).FindStringSubmatch(page)
+			drawnUpTo, _ := strconv.ParseInt(after[1], 10, 64)
+
+			appendEvents(t, pipeline.Store, runID, []store.RunEventRow{
+				note(72, events.NoteRoute, "editor", "route: gate --failure--> editor (visit 1/3)"),
+				row(events.TypeStepStarted, 73, 1, "editor", ""), row(events.TypeStepFinished, 73, 1, "editor", "succeeded"),
+				row(events.TypeStepStarted, 74, 2, "gate", ""), row(events.TypeStepFinished, 74, 2, "gate", "succeeded"),
+				row(events.TypeStepStarted, 75, 3, "flaky", ""), row(events.TypeStepFinished, 75, 3, "flaky", "failed"),
+				note(75, events.NoteRoute, "report", "route: flaky --failure--> report (visit 1)"),
+				row(events.TypeStepStarted, 76, 4, "report", ""), row(events.TypeStepFinished, 76, 4, "report", "succeeded"),
+				{Type: events.TypeStepFinished, StepIndex: 0, StepName: "outer", StepKind: "do", StepID: 70, Status: "succeeded"},
+			})
+
+			err = pipeline.Store.FinishRun(t.Context(), runID, store.RunSucceeded)
+			if err != nil {
+				t.Fatalf("FinishRun: %v", err)
+			}
+
+			raw := streamOf(t, server, "/p/demo/runs/"+runID+"/events?after="+after[1])
+			watched := replayAtEveryFlush(t, server, pipeline, runID, page, raw, drawnUpTo, batch)
+
+			for _, want := range []string{`id="loop-72"`, `aria-label="pass 2 of 2, passed"`, "1 routed"} {
+				if !strings.Contains(watched, want) {
+					t.Errorf("the watched page never shows %q", want)
+				}
+			}
+		})
+	}
 }

@@ -390,6 +390,30 @@ func ImageNote(ctx context.Context, source, ref string) {
 	note(ctx, Event{Status: NoteInfo, Text: "image: " + source + " → " + ref, Name: NoteImage, Detail: source})
 }
 
+// NoteRoute names the note a to:/verdicts: route makes when it sends the plan somewhere other than the next step; its Detail is the step it went to ("end of plan" past the last). Said under the routing step's id, so a reader can draw the decision on that step's row.
+const NoteRoute = "route"
+
+// RouteNote is a route's note, said as Note would and named NoteRoute.
+func RouteNote(ctx context.Context, text, target string) {
+	note(ctx, Event{Status: NoteInfo, Text: text, Name: NoteRoute, Detail: target})
+}
+
+// NoteAttempt names the note a retried step says as an attempt after its first begins; its Detail is "n/m". Each one marks where that attempt's output starts, so a reader can show one attempt at a time.
+const NoteAttempt = "attempt"
+
+// AttemptNote is an attempt's note, said as Note would and named NoteAttempt.
+func AttemptNote(ctx context.Context, text string, attempt, total int) {
+	note(ctx, Event{Status: NoteInfo, Text: text, Name: NoteAttempt, Detail: fmt.Sprintf("%d/%d", attempt, total)})
+}
+
+// NoteTolerated names the note a try: says when it ate its step's failure, under the try's own id.
+const NoteTolerated = "tolerated"
+
+// ToleratedNote is a try:'s note, said as Note would and named NoteTolerated.
+func ToleratedNote(ctx context.Context, text string) {
+	note(ctx, Event{Status: NoteInfo, Text: text, Name: NoteTolerated})
+}
+
 // NoteUsage names the job's end-of-run usage report. A reader that already draws each step's spend on its row and the total in its head skips it, or it says every number a third time.
 const NoteUsage = "usage"
 

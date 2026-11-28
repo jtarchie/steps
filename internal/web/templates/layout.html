@@ -16,6 +16,8 @@
 <script>
 (function () {
   var key = 'steps-theme', root = document.documentElement;
+  // Before first paint, so a tab strip's panels are not all drawn and then hidden; without scripts every panel stays shown, and none is unreachable.
+  root.classList.add('js');
   window.stepsTheme = function (theme) {
     if (theme) root.dataset.theme = theme; else delete root.dataset.theme;
     try { if (theme) localStorage.setItem(key, theme); else localStorage.removeItem(key); } catch (e) {}
