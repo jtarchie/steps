@@ -1941,8 +1941,8 @@ jobs:
 | `versioned_file` | one of the three | one key in a bucket with [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) on; each upload of it is a version |
 | `prefix` | one of the three | a folder to [publish into](#publishing-a-folder-sourceprefix), ending in `/`; put only |
 | `region_name` | no | the bucket's region; `us-east-1` when unset |
-| `endpoint` | no | a server that is not AWS, scheme included: `https://minio.internal:9000` |
-| `use_path_style` | no | address the bucket in the path (`endpoint/bucket/key`) rather than as a host name; most servers that are not AWS need it |
+| `endpoint` | no | a server that is not AWS, as a scheme and a host only (no path): `https://minio.internal:9000` |
+| `use_path_style` | no | address the bucket in the path (`endpoint/bucket/key`) rather than as a host name; most servers that are not AWS need it. A bucket with a dot in its name is always addressed this way over `https`, as its name cannot be a host under S3's certificate |
 | `skip_download` | no | a get writes the files that name the object and downloads nothing |
 | `access_key_id_env`, `secret_access_key_env` | together | the **names** of the variables holding the credential, read from the resource's [`secrets:`](secrets.md) first and the daemon's environment otherwise |
 | `session_token_env` | no | the name of the variable holding a temporary credential's session token |

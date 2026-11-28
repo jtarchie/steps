@@ -3,6 +3,7 @@ package resource
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +12,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -298,5 +302,144 @@ func TestS3ListedRefusesWhatItCannotCarry(t *testing.T) {
 
 	if got := curlQuote("a\"b\\c\td"); got != `"a\"b\\c\td"` {
 		t.Errorf("curlQuote = %s", got)
+	}
+}
+
+// TestS3PutKeyIsOneTheCheckFinds crosses put to check: a regexp's leading ^ anchors the pattern and is no part of the key the put writes, or the version it records would never match again.
+func TestS3PutKeyIsOneTheCheckFinds(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"builds/app-(.*).tgz", "^builds/app-(.*).tgz", "^builds/app-(.*).tgz$"} {
+		key := s3PutKey(config.S3Source{Regexp: raw}, "out/app-1.2.0.tgz")
+		if key != "builds/app-1.2.0.tgz" {
+			t.Errorf("put under %q writes %q, want builds/app-1.2.0.tgz", raw, key)
+		}
+
+		pattern, err := newS3Pattern(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if _, matched := pattern.version(key); !matched {
+			t.Errorf("the check under %q does not find the key its put wrote, %q", raw, key)
+		}
+	}
+
+	if key := s3PutKey(config.S3Source{VersionedFile: "prod/app.tgz"}, "out/x.tgz"); key != "prod/app.tgz" {
+		t.Errorf("a versioned_file put writes %q, want the versioned file", key)
+	}
+}
+
+// TestS3DottedBucketGoesInThePath: a bucket with a dot in its name cannot be a host name under S3's wildcard certificate, so over https it is addressed in the path.
+func TestS3DottedBucketGoesInThePath(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ bucket, endpoint, want string }{
+		{"acme", "", "https://acme.s3.us-east-1.amazonaws.com/"},
+		{"acme.releases", "", "https://s3.us-east-1.amazonaws.com/acme.releases/"},
+		{"acme.releases", "http://minio.internal:9000", "http://acme.releases.minio.internal:9000/"},
+	} {
+		client := &s3Client{source: config.S3Source{Bucket: tc.bucket, Endpoint: tc.endpoint}}
+		if got := client.bucketURL().String(); got != tc.want {
+			t.Errorf("bucket %q at %q is addressed %s, want %s", tc.bucket, tc.endpoint, got, tc.want)
+		}
+	}
+}
+
+// versionsBucket answers ListObjectVersions with ids, newest first, for one key.
+func versionsBucket(key string, ids ...string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		type version struct {
+			Key       string `xml:"Key"`
+			VersionID string `xml:"VersionId"`
+		}
+
+		page := struct {
+			XMLName  xml.Name  `xml:"ListVersionsResult"`
+			Versions []version `xml:"Version"`
+		}{}
+
+		for _, id := range ids {
+			page.Versions = append(page.Versions, version{Key: key, VersionID: id})
+		}
+
+		_ = xml.NewEncoder(w).Encode(page)
+	}
+}
+
+// TestS3VersionsSkipPreVersioningHistory: an object written before versioning was turned on lists as "null" behind the real ids, which is history to skip; "null" as the newest is a bucket keeping no versions, which fails.
+func TestS3VersionsSkipPreVersioningHistory(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		ids     []string
+		want    []string
+		refused bool
+	}{
+		"versioned after the fact": {ids: []string{"v2", "v1", "null"}, want: []string{"v2", "v1"}},
+		"never versioned":          {ids: []string{"null"}, refused: true},
+		"versioning suspended":     {ids: []string{"null", "v1"}, refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(versionsBucket("app.tgz", tc.ids...))
+			t.Cleanup(server.Close)
+
+			client := &s3Client{source: config.S3Source{Bucket: "b", Endpoint: server.URL, UsePathStyle: true}, http: server.Client()}
+
+			got, err := client.versions(t.Context(), "app.tgz")
+			if tc.refused {
+				if !errors.Is(err, errS3Unversioned) {
+					t.Errorf("versions = %v, %v; want the bucket refused as unversioned", got, err)
+				}
+
+				return
+			}
+
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("versions = %v, %v; want %v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestS3SignedLinksAreSecretsPlainOnesAreNot: a signed link is a credential for an hour and is masked out of what a transfer prints; an anonymous source's link is the object's public address and is left readable.
+func TestS3SignedLinksAreSecretsPlainOnesAreNot(t *testing.T) {
+	t.Parallel()
+
+	target := (&s3Client{source: config.S3Source{Bucket: "b"}}).objectURL("builds/app-1.0.0.tgz")
+
+	secrets := &redact.Secrets{}
+	ctx := redact.WithSecrets(t.Context(), secrets)
+
+	plain, err := (&s3Client{source: config.S3Source{Bucket: "b"}}).transferURL(ctx, http.MethodGet, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !secrets.Empty() {
+		t.Errorf("an anonymous link %s was registered as a secret", plain)
+	}
+
+	signer := &s3Client{source: config.S3Source{Bucket: "b"}, creds: &aws.Credentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "s"}}
+
+	signed, err := signer.transferURL(ctx, http.MethodGet, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := secrets.String("curl " + signed); strings.Contains(got, "X-Amz-Signature") {
+		t.Errorf("a signed link survives masking: %s", got)
+	}
+}
+
+// TestS3MatchedKeepsTheNameAsPrinted: the matched file is read up to its line break, a name that starts with a space included.
+func TestS3MatchedKeepsTheNameAsPrinted(t *testing.T) {
+	t.Parallel()
+
+	file, err := s3Matched("*", " app.tgz\n      12\n")
+	if err != nil || file != " app.tgz" {
+		t.Errorf("s3Matched = %q, %v; want the name with its leading space", file, err)
 	}
 }

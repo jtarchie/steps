@@ -667,7 +667,7 @@
         "endpoint": {
           "type": "string",
           "pattern": "^https?://",
-          "description": "An S3-compatible server that is not AWS, scheme included. It must be reachable from wherever a get or put runs."
+          "description": "An S3-compatible server that is not AWS, as a scheme and a host only (no path). It must be reachable from wherever a get or put runs."
         },
         "use_path_style": {
           "type": "boolean",

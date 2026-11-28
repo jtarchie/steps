@@ -97,7 +97,8 @@ func (c *s3Client) bucketURL() *url.URL {
 
 	target.Path = "/"
 
-	if c.source.UsePathStyle {
+	// A dotted bucket as a host name fails TLS against S3's wildcard certificate, so over https it goes in the path, as the AWS SDK Concourse's resource uses does.
+	if c.source.UsePathStyle || (target.Scheme == "https" && strings.Contains(c.source.Bucket, ".")) {
 		target.Path = "/" + c.source.Bucket + "/"
 	} else {
 		target.Host = c.source.Bucket + "." + target.Host
@@ -245,6 +246,32 @@ func (c *s3Client) list(ctx context.Context, prefix string) ([]string, error) {
 // errS3Unversioned is a versioned_file in a bucket that keeps no versions.
 var errS3Unversioned = errors.New("the bucket is not versioned; turn versioning on, or use source.regexp")
 
+type s3ObjectVersion struct {
+	Key       string `xml:"Key"`
+	VersionID string `xml:"VersionId"`
+}
+
+// appendVersionIDs adds key's ids from one listing page to ids. A "null" behind real ids is an object written before versioning was turned on: history, not a reason to refuse. Newest, it is a bucket keeping no versions now.
+func appendVersionIDs(ids []string, key string, page []s3ObjectVersion) ([]string, error) {
+	for _, version := range page {
+		if version.Key != key {
+			continue
+		}
+
+		if version.VersionID == "" || version.VersionID == "null" {
+			if len(ids) == 0 {
+				return nil, errS3Unversioned
+			}
+
+			continue
+		}
+
+		ids = append(ids, version.VersionID)
+	}
+
+	return ids, nil
+}
+
 // versions is every version id of key, newest first.
 func (c *s3Client) versions(ctx context.Context, key string) ([]string, error) {
 	var ids []string
@@ -259,13 +286,10 @@ func (c *s3Client) versions(ctx context.Context, key string) ([]string, error) {
 		}
 
 		var page struct {
-			IsTruncated         bool   `xml:"IsTruncated"`
-			NextKeyMarker       string `xml:"NextKeyMarker"`
-			NextVersionIDMarker string `xml:"NextVersionIdMarker"`
-			Versions            []struct {
-				Key       string `xml:"Key"`
-				VersionID string `xml:"VersionId"`
-			} `xml:"Version"`
+			IsTruncated         bool              `xml:"IsTruncated"`
+			NextKeyMarker       string            `xml:"NextKeyMarker"`
+			NextVersionIDMarker string            `xml:"NextVersionIdMarker"`
+			Versions            []s3ObjectVersion `xml:"Version"`
 		}
 
 		err := c.getXML(ctx, query, &page)
@@ -273,16 +297,9 @@ func (c *s3Client) versions(ctx context.Context, key string) ([]string, error) {
 			return nil, err
 		}
 
-		for _, version := range page.Versions {
-			if version.Key != key {
-				continue
-			}
-
-			if version.VersionID == "" || version.VersionID == "null" {
-				return nil, errS3Unversioned
-			}
-
-			ids = append(ids, version.VersionID)
+		ids, err = appendVersionIDs(ids, key, page.Versions)
+		if err != nil {
+			return nil, err
 		}
 
 		if !page.IsTruncated || page.NextKeyMarker == "" {

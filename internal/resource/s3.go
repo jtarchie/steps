@@ -454,10 +454,7 @@ func s3PutFile(ctx context.Context, client *s3Client, source config.S3Source, pa
 		return nil, err
 	}
 
-	key := source.VersionedFile
-	if key == "" {
-		key = source.Regexp[:strings.LastIndex(source.Regexp, "/")+1] + path.Base(file)
-	}
+	key := s3PutKey(source, file)
 
 	signed, err := client.transferURL(ctx, http.MethodPut, client.objectURL(key))
 	if err != nil {
@@ -481,6 +478,17 @@ func s3PutFile(ctx context.Context, client *s3Client, source config.S3Source, pa
 	}
 
 	return map[string]any{s3VersionIDField: id}, nil
+}
+
+// s3PutKey is the key a put of file lands at: the versioned file, else the regexp's directory, read as the check reads it (a leading ^ is an anchor, not part of the key).
+func s3PutKey(source config.S3Source, file string) string {
+	if source.VersionedFile != "" {
+		return source.VersionedFile
+	}
+
+	pattern := strings.TrimPrefix(source.Regexp, "^")
+
+	return pattern[:strings.LastIndex(pattern, "/")+1] + path.Base(file)
 }
 
 // s3PutDir uploads every file under dir to source.prefix plus its path inside dir, a batch of signed links per curl.
@@ -557,7 +565,7 @@ func s3Listed(dir, answer string) ([]string, error) {
 
 // s3Matched reads the match script's answer: the one file the glob named, refused when it is too large to upload in one request.
 func s3Matched(pattern, answer string) (string, error) {
-	file, size, _ := strings.Cut(strings.TrimSpace(answer), "\n")
+	file, size, _ := strings.Cut(strings.TrimSuffix(answer, "\n"), "\n")
 
 	var bytes int64
 

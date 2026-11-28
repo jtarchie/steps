@@ -168,6 +168,11 @@ func checkS3Endpoint(endpoint string) error {
 		return fmt.Errorf("source.endpoint %q must be a URL with its scheme, e.g. https://s3.example.com", endpoint)
 	}
 
+	// The bucket is addressed from the host's root, so a path here would be silently dropped.
+	if strings.Trim(parsed.Path, "/") != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+		return fmt.Errorf("source.endpoint %q must be a scheme and a host only, e.g. https://s3.example.com:9000", endpoint)
+	}
+
 	return nil
 }
 
@@ -209,7 +214,7 @@ func ParseS3PutParams(raw map[string]any) (S3PutParams, error) {
 	switch {
 	case params.File != "" && params.Dir != "":
 		return params, errors.New("params.file (one file) or params.dir (a folder, under source.prefix), not both")
-	case path.IsAbs(local) || strings.HasPrefix(path.Clean(local), ".."):
+	case path.IsAbs(local) || path.Clean(local) == ".." || strings.HasPrefix(path.Clean(local), "../"):
 		return params, fmt.Errorf("params %q must be a path inside the put's inputs", local)
 	case strings.ContainsAny(local, "\n\r"), strings.ContainsAny(params.ContentType, "\n\r"):
 		return params, errors.New("params.file, params.dir and params.content_type are one line each")
