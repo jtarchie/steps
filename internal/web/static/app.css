@@ -927,7 +927,8 @@ html[data-keys="off"] .keystoggle .when-off { display: inline; }
   color: var(--dim);
 }
 .step.skipped .stephead .kind { color: var(--faint); }
-.stephead .name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+/* min-width: a tab strip or decision chip after the name starts where its neighbours' do, so a scan down the rows reads one column of decisions; a longer name pushes its own row only. Undone on a phone, below. */
+.stephead .name { font-weight: 600; min-width: 16ch; overflow-wrap: anywhere; }
 /* The toggle carries the head's leading cells, laid out as the head lays them out, so becoming a real <button> moved nothing. */
 /* Never shrunk: a shrunk toggle let the name spill out of it, under the image note beside it. The note is what gives way; a name too long for the row wraps (max-width) rather than widening it. */
 .steptoggle { display: flex; flex: none; max-width: 100%; align-items: baseline; gap: 12px; min-width: 0; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }

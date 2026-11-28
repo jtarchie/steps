@@ -235,8 +235,8 @@ func TestARunPageSaysATriedFailureWasTolerated(t *testing.T) {
 		t.Fatalf("the try: is not drawn as tolerated:\n%s", page)
 	}
 
-	if head := stepHead(t, tried[0], "notify"); !strings.Contains(head, "⊘") || !strings.Contains(head, "tolerated") {
-		t.Errorf("the tolerated try's row does not say so: %q", head)
+	if head := stepHead(t, tried[0], "notify"); !strings.Contains(head, "⊘") || !strings.Contains(head, "tolerated") || strings.Contains(head, "failed") {
+		t.Errorf("the tolerated try's row does not say so, or still counts the failure it tolerated: %q", head)
 	}
 
 	if said := strings.Count(page, `command &#34;false&#34; failed`); said != 1 {

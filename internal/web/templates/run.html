@@ -292,12 +292,13 @@ document.addEventListener('htmx:after:swap', function () {
     <span class="kind">{{$step.Kind}}</span>
     <span class="name">{{$step.Name}}</span>
     {{if $detail}}</button>{{else}}</span>{{end}}
-    <a class="anchor" href="#{{$step.Anchor}}" title="{{t "step.link"}}" aria-label="{{t "step.link"}}">#</a>
-    {{with index $run.StepConfig $step.ID}}<a class="anchor" href="{{.}}" title="{{t "step.config"}}" aria-label="{{t "step.config"}}">{}</a>{{end}}
-    {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
+    {{/* Right after the name, ahead of the links a synthetic row lacks, so the decisions of rows at one depth line up. */}}
     {{with tabsOf $step}}<span class="steptabs" role="tablist" aria-label="{{.Label}}">{{range .Tabs}}<button type="button" role="tab" id="{{.ID}}" class="steptab {{.Class}}" aria-controls="{{.Controls}}" aria-selected="{{.Selected}}" tabindex="{{if .Selected}}0{{else}}-1{{end}}" aria-label="{{.Label}}">{{.Glyph}}{{.N}}</button>{{end}}</span>{{end}}
     {{if ne $step.Kind "loop"}}{{with $step.RoutedTo}}<span class="note route" title="{{t "step.routedto.title" .}}">{{if not $step.Routed}}↪ {{end}}{{t "step.routedto" .}}</span>{{end}}{{end}}
     {{if $step.Tolerated}}<span class="note tolerated" title="{{t "step.tolerated.title"}}">{{t "step.tolerated"}}</span>{{end}}
+    <a class="anchor" href="#{{$step.Anchor}}" title="{{t "step.link"}}" aria-label="{{t "step.link"}}">#</a>
+    {{with index $run.StepConfig $step.ID}}<a class="anchor" href="{{.}}" title="{{t "step.config"}}" aria-label="{{t "step.config"}}">{}</a>{{end}}
+    {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
     {{if $step.Unreported}}<span class="note">{{t "step.noend"}}</span>{{end}}
     {{with index $run.Changed $step.Name}}<span class="note chg" title="{{if eq . "new"}}{{t "step.chg.new.title"}}{{else}}{{t "step.chg.changed.title"}}{{end}}">{{word "change" .}}</span>{{end}}
     {{if $step.Verdict}}<span class="note">{{t "step.verdict" $step.Verdict}}</span>{{end}}
@@ -309,7 +310,8 @@ document.addEventListener('htmx:after:swap', function () {
       {{/* One figure a row: what it cost, or its tokens when nothing priced it. Three figures on every row of a matrix was a column of numbers nobody could compare; the breakdown is the step's own spend line, one fold in. */}}
       {{range $usage}}<span class="note usage" title="{{t "step.tokens" (thousands .Total)}} · {{t "step.cachedpct" .CachePercent}}"><span class="seg">{{or .ModelServed .ModelReq}}</span> · <span class="seg">{{with .Cost}}{{.}}{{else}}{{t "step.tokens" (compact .Total)}}{{end}}</span></span>{{end}}
       {{if $step.Container}}{{with $run.ContainerSpend $step}}{{if and .Tokens (ne .Tokens $run.Spend.Tokens)}}<span class="note usage" title="{{t "step.tokens" (thousands .Tokens)}} · {{t "step.cachedpct" .CachePercent}}"><span class="seg">{{if .Priced}}{{.Cost}}{{else}}{{t "step.tokens" (compact .Tokens)}}{{end}}</span></span>{{end}}{{end}}{{end}}
-      {{if ne $step.Kind "loop"}}{{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
+      {{/* Not on a loop, whose tabs count its passes, nor a tolerated try:, whose chip already says what failed inside it. */}}
+      {{if not (or (eq $step.Kind "loop") $step.Tolerated)}}{{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
         <span>{{tn "step.cells" .Cells}}</span>
         {{if .Passed}}<span class="r-sep">·</span><b class="r-pass">{{t "step.r.passed" .Passed}}</b>{{end}}
         {{if .Failed}}<span class="r-sep">·</span><b class="r-fail">{{t "step.r.failed" .Failed}}</b>{{end}}

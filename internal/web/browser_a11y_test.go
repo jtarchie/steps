@@ -434,7 +434,8 @@ func TestTheTabsKeepTheirPromises(t *testing.T) {
 	str := chromedp.Evaluate[string]
 	shown := str(`[...document.querySelectorAll('#loop-3_substeps > [role="tabpanel"]')].map(p => p.offsetParent ? 'shown' : 'hidden').join(',')`)
 
-	initial := must(ctx, t, shown, media("light", false), chromedp.Navigate(base+"/p/demo/runs/run-loop"), chromedp.Click(chromedp.CSS("#loop-3 > .stephead .steptoggle")))
+	aligned := must(ctx, t, chromedp.Evaluate[bool](`new Set([...document.querySelectorAll('.transcript > .step > .stephead > .steptabs')].map(s => Math.round(s.getBoundingClientRect().left))).size === 1`), media("light", false), chromedp.Navigate(base+"/p/demo/runs/run-loop"))
+	initial := must(ctx, t, shown, chromedp.Click(chromedp.CSS("#loop-3 > .stephead .steptoggle")))
 	picked := must(ctx, t, shown, chromedp.Click(chromedp.CSS("#pass-2_tab")))
 	open := must(ctx, t, str(`String(document.getElementById('loop-3').classList.contains('open'))`))
 	arrowed := must(ctx, t, str(`document.activeElement.id + ':' + document.activeElement.getAttribute('aria-selected')`), chromedp.KeyEvent(kb.ArrowRight))
@@ -443,6 +444,10 @@ func TestTheTabsKeepTheirPromises(t *testing.T) {
 	attempts := must(ctx, t, str(`[...document.querySelectorAll('#step-1-fetch_body [role="tabpanel"]')].map(p => p.offsetParent ? 'shown' : 'hidden').join(',') + ':' + document.getElementById('step-1-fetch').classList.contains('open')`), chromedp.Click(chromedp.CSS("#step-1-fetch_try1_tab")))
 	// A morph draws the server's selection again; the pick has to come back after it.
 	swapped := must(ctx, t, str(`[...document.querySelectorAll('#step-1-fetch_body [role="tabpanel"]')].map(p => p.offsetParent ? 'shown' : 'hidden').join(',')`), chromedp.Evaluate[chromedp.Void](`document.querySelectorAll('.picked, .picking').forEach(n => n.classList.remove('picked', 'picking')); document.dispatchEvent(new Event('htmx:after:swap'))`))
+
+	if !aligned {
+		t.Error("the tab strips of rows at one depth start at different places; a scan down the rows should read one column")
+	}
 
 	if initial != "hidden,shown" {
 		t.Errorf("before a pick the passes are %s, want the newest alone", initial)
