@@ -213,19 +213,30 @@ document.addEventListener('htmx:after:swap', function () {
 {{define "step"}}
 {{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}
 {{$anchor := $step.Anchor}}
+{{/* A pass of a to: loop is a tab's panel and nothing else: its loop's head carries the tab, and the rows it holds carry their own. */}}
+{{if eq $step.Kind "pass"}}<div id="{{$anchor}}"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{template "stepattrs" .}}><div class="substeps" id="{{$anchor}}_substeps">{{range $step.Children}}{{template "step" (stepctx $page .)}}{{end}}</div></div>{{else}}
+{{$attempts := $step.Attempts}}
 <div id="{{$anchor}}"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{template "stepattrs" .}}>
   {{template "stephead" (stepctx $page $step)}}
   {{if $run.StepHasBody $step}}<div class="stepbody" id="{{$anchor}}_body">
-    {{with $step.Error}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
+    {{/* Said once: a retried step's error is its last attempt's, and a tolerated try's is the wrapped step's, on that step's row. */}}
+    {{if not (or $attempts $step.Tolerated)}}{{with $step.Error}}<div class="log"><span class="err">{{.}}</span></div>{{end}}{{end}}
     {{if eq $step.Kind "agent"}}{{template "placement" (stepctx $page $step)}}{{end}}
     {{with $run.StepMCP $step}}<div class="agentmeta">{{t "tab.mcp"}} {{range $i, $grant := .}}{{if $i}} · {{end}}<span class="seg"><a href="/p/{{$page.Nav.Current}}/mcp#mcp-{{$grant.Server}}">{{$grant.Server}}</a></span> {{if $grant.All}}{{t "mcp.grant.all"}}{{else}}{{join $grant.Tools ", "}}{{end}}{{end}}</div>{{end}}
     {{if $run.MCPBlamedOn $step}}{{template "mcphint" $page}}{{end}}
     {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · {{t "step.contenthash" (short $step.Hash)}}{{end}}</div>{{end}}
     {{if and $step.ImageNote.Text (not ($run.StepPlacements $step))}}{{template "notice" $step.ImageNote}}{{end}}
+    {{if $attempts}}<div class="tabpanels attempts">{{range $attempts}}<div class="attempt" role="tabpanel" id="{{attemptPanel $step .}}" aria-labelledby="{{attemptPanel $step .}}_tab">
+      {{if .Last}}{{with $step.Error}}<div class="log"><span class="err">{{.}}</span></div>{{end}}{{end}}
+      {{range .Notes}}{{template "notice" .}}{{end}}
+      {{range .Outputs}}<pre class="log output">{{outputPre .Text}}</pre>{{with keptOutputURL $page.Nav.Current $run.Run.ID $step .I}}<div class="log">{{th "step.fulloutput" (runlink . (t "step.fulloutput.link"))}}</div>{{end}}{{end}}
+      {{if and .Last $step.Streaming}}<pre class="log output" id="{{$anchor}}_live">{{range $step.Streaming}}{{template "chunk" .}}{{end}}</pre>{{end}}
+    </div>{{end}}</div>
+    {{with $step.Facts}}{{template "facts" .}}{{end}}{{else}}
     {{range $run.StepNotes $step}}{{template "notice" .}}{{end}}
     {{with $step.Facts}}{{template "facts" .}}{{end}}
     {{range $i, $out := $step.Outputs}}<pre class="log output">{{outputPre $out}}</pre>{{with keptOutputURL $page.Nav.Current $run.Run.ID $step $i}}<div class="log">{{th "step.fulloutput" (runlink . (t "step.fulloutput.link"))}}</div>{{end}}{{end}}
-    {{if $step.Streaming}}<pre class="log output" id="{{$anchor}}_live">{{range $step.Streaming}}{{template "chunk" .}}{{end}}</pre>{{end}}
+    {{if $step.Streaming}}<pre class="log output" id="{{$anchor}}_live">{{range $step.Streaming}}{{template "chunk" .}}{{end}}</pre>{{end}}{{end}}
 
     {{range $step.Conversation}}{{template "turn" (turnctx $page $step .)}}{{end}}
     {{with pendingctx $step}}{{if .Took}}<div class="turn pending{{if .Nested}} nested{{end}}">
@@ -252,17 +263,17 @@ document.addEventListener('htmx:after:swap', function () {
     {{range $run.StepUsage $step}}<div class="agentmeta">{{t "step.model" (or .ModelServed .ModelReq)}}{{if and .ModelServed (ne .ModelServed .ModelReq)}} {{t "step.askedfor" .ModelReq}}{{end}} · {{t "step.prompt" (thousands .Prompt)}} · {{t "step.completion" (thousands .Completion)}} · {{t "step.cached" (thousands .Cached)}} ({{.CachePercent}}%){{if .Reasoning}} · {{t "step.reasoning" (thousands .Reasoning)}}{{end}} · {{costOrUnpriced .Cost}}{{if .Ceiling}} {{t "step.of" .Ceiling}}{{else if $run.ConfigDrifted}} · {{th "step.ceiling" (runspan (t "step.ceiling.drift.title") (t "step.ceiling.drift"))}}{{else if .CeilingKnown}} · {{t "step.uncapped"}}{{else}} · {{th "step.ceiling" (runspan (t "step.ceiling.unknown.title") (t "step.ceiling.unknown"))}}{{end}}{{with .FinishReason}} · {{t "step.finish"}} {{end}}{{if .Truncated}}<span class="spendwarn">{{t "step.truncated" (lower .FinishReason)}}</span>{{else if .FailedAfter}}<span class="spendwarn" title="{{t "step.failedafter.title"}}">{{t "step.stepfailed" (lower .FinishReason)}}</span>{{else}}{{lower .FinishReason}}{{end}}</div>{{end}}
     {{if ne $step.Kind "agent"}}{{template "placement" (stepctx $page $step)}}{{end}}
   </div>{{end}}
-  {{if $step.Container}}<div class="substeps" id="{{$anchor}}_substeps">
+  {{if $step.Container}}<div class="substeps{{if eq $step.Kind "loop"}} tabpanels{{end}}" id="{{$anchor}}_substeps">
     {{range $step.Children}}{{template "step" (stepctx $page .)}}{{end}}
   </div>{{end}}
-</div>
+</div>{{end}}
 {{end}}
 
 {{/* The row's own attributes, in one place because two things draw them:
      the row, and the shell the stream sends when only these moved — a
      container whose child finished changes class and rollup and nothing
      under it. Rendered INSIDE the opening tag, so it starts with a space. */}}
-{{define "stepattrs"}}{{$step := .Step}}{{$detail := .Page.Run.StepHasDetail $step}} class="step{{if $step.Skipped}} skipped{{else if $step.Routed}} routed{{else if $step.Failed}} failed{{else if $step.Unreported}} unreported{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail $step.OpenByDefault}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
+{{define "stepattrs"}}{{$step := .Step}}{{if eq $step.Kind "pass"}} class="pass" role="tabpanel" aria-labelledby="{{$step.Anchor}}_tab" data-step="{{$step.Key}}"{{else}}{{$detail := .Page.Run.StepHasDetail $step}} class="step{{if $step.Skipped}} skipped{{else if $step.Routed}} routed{{else if $step.Tolerated}} tolerated{{else if $step.Failed}} failed{{else if $step.Unreported}} unreported{{else if $step.Running}} running{{else}} passed{{end}}{{if eq $step.Kind "loop"}} loop{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail $step.OpenByDefault}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}{{end}}
 
 {{/* The shell: a row's attributes and head, and nothing it holds. The
      attribute-only morph is what hx-morph-skip-children buys — htmx syncs the
@@ -271,21 +282,22 @@ document.addEventListener('htmx:after:swap', function () {
      body and substeps the reader already has. Verified against the vendored
      build; see TestVendoredHtmxStillSupportsWhatTheStreamSends. */}}
 {{define "stepshell"}}<div id="{{.Step.Anchor}}" hx-swap-oob="outerMorph" hx-morph-skip-children{{template "stepattrs" .}}></div>
-{{template "stephead" .}}{{end}}
+{{if ne .Step.Kind "pass"}}{{template "stephead" .}}{{end}}{{end}}
 
 {{define "stephead"}}{{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}{{$detail := $run.StepHasDetail $step}}{{$body := $run.StepHasBody $step}}<div class="stephead" id="{{$step.Anchor}}_head"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}>
     {{/* The toggle is a real button BESIDE the head's links, not the head itself: as role="button" around the permalink and node link it was a control inside a control (WCAG 4.1.2). app.js keeps aria-expanded in step with the reader's folds. */}}
     {{if $detail}}<button type="button" class="steptoggle" aria-expanded="{{if $step.OpenByDefault}}true{{else}}false{{end}}" aria-controls="{{if $body}}{{$step.Anchor}}_body{{if $step.Container}} {{end}}{{end}}{{if $step.Container}}{{$step.Anchor}}_substeps{{end}}">{{else}}<span class="steptoggle">{{end}}
     <span class="chev{{if $detail}} chev-icon{{end}}"></span>
-    {{if $step.Skipped}}<span class="stmark" role="img" aria-label="{{t "status.skipped"}}">–</span>{{else if $step.Routed}}<span class="stmark" role="img" aria-label="{{t "status.routed"}}">↪</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="{{t "status.failed"}}">✗</span>{{else if $step.Unreported}}<span class="stmark" role="img" aria-label="{{t "status.unreported"}}">?</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="{{t "status.running"}}">◐</span>{{else}}<span class="stmark" role="img" aria-label="{{t "status.passed"}}">✓</span>{{end}}
+    {{if $step.Skipped}}<span class="stmark" role="img" aria-label="{{t "status.skipped"}}">–</span>{{else if $step.Routed}}<span class="stmark" role="img" aria-label="{{t "status.routed"}}">↪</span>{{else if $step.Tolerated}}<span class="stmark" role="img" aria-label="{{t "status.tolerated"}}">⊘</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="{{t "status.failed"}}">✗</span>{{else if $step.Unreported}}<span class="stmark" role="img" aria-label="{{t "status.unreported"}}">?</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="{{t "status.running"}}">◐</span>{{else}}<span class="stmark" role="img" aria-label="{{t "status.passed"}}">✓</span>{{end}}
     <span class="kind">{{$step.Kind}}</span>
     <span class="name">{{$step.Name}}</span>
     {{if $detail}}</button>{{else}}</span>{{end}}
     <a class="anchor" href="#{{$step.Anchor}}" title="{{t "step.link"}}" aria-label="{{t "step.link"}}">#</a>
     {{with index $run.StepConfig $step.ID}}<a class="anchor" href="{{.}}" title="{{t "step.config"}}" aria-label="{{t "step.config"}}">{}</a>{{end}}
     {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
-    {{with $step.RoutedTo}}<span class="note route" title="{{t "step.routedto.title" .}}">{{if not $step.Routed}}↪ {{end}}{{t "step.routedto" .}}</span>{{end}}
-    {{with $step.Pass}}<span class="note pass" title="{{t "step.pass.title" .}}">{{t "step.pass" .}}</span>{{end}}
+    {{with tabsOf $step}}<span class="steptabs" role="tablist" aria-label="{{.Label}}">{{range .Tabs}}<button type="button" role="tab" id="{{.ID}}" class="steptab {{.Class}}" aria-controls="{{.Controls}}" aria-selected="{{.Selected}}" tabindex="{{if .Selected}}0{{else}}-1{{end}}" aria-label="{{.Label}}">{{.Glyph}}{{.N}}</button>{{end}}</span>{{end}}
+    {{if ne $step.Kind "loop"}}{{with $step.RoutedTo}}<span class="note route" title="{{t "step.routedto.title" .}}">{{if not $step.Routed}}↪ {{end}}{{t "step.routedto" .}}</span>{{end}}{{end}}
+    {{if $step.Tolerated}}<span class="note tolerated" title="{{t "step.tolerated.title"}}">{{t "step.tolerated"}}</span>{{end}}
     {{if $step.Unreported}}<span class="note">{{t "step.noend"}}</span>{{end}}
     {{with index $run.Changed $step.Name}}<span class="note chg" title="{{if eq . "new"}}{{t "step.chg.new.title"}}{{else}}{{t "step.chg.changed.title"}}{{end}}">{{word "change" .}}</span>{{end}}
     {{if $step.Verdict}}<span class="note">{{t "step.verdict" $step.Verdict}}</span>{{end}}
@@ -297,15 +309,16 @@ document.addEventListener('htmx:after:swap', function () {
       {{/* One figure a row: what it cost, or its tokens when nothing priced it. Three figures on every row of a matrix was a column of numbers nobody could compare; the breakdown is the step's own spend line, one fold in. */}}
       {{range $usage}}<span class="note usage" title="{{t "step.tokens" (thousands .Total)}} · {{t "step.cachedpct" .CachePercent}}"><span class="seg">{{or .ModelServed .ModelReq}}</span> · <span class="seg">{{with .Cost}}{{.}}{{else}}{{t "step.tokens" (compact .Total)}}{{end}}</span></span>{{end}}
       {{if $step.Container}}{{with $run.ContainerSpend $step}}{{if and .Tokens (ne .Tokens $run.Spend.Tokens)}}<span class="note usage" title="{{t "step.tokens" (thousands .Tokens)}} · {{t "step.cachedpct" .CachePercent}}"><span class="seg">{{if .Priced}}{{.Cost}}{{else}}{{t "step.tokens" (compact .Tokens)}}{{end}}</span></span>{{end}}{{end}}{{end}}
-      {{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
+      {{if ne $step.Kind "loop"}}{{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
         <span>{{tn "step.cells" .Cells}}</span>
         {{if .Passed}}<span class="r-sep">·</span><b class="r-pass">{{t "step.r.passed" .Passed}}</b>{{end}}
         {{if .Failed}}<span class="r-sep">·</span><b class="r-fail">{{t "step.r.failed" .Failed}}</b>{{end}}
         {{if .Routed}}<span class="r-sep">·</span><b class="r-route">{{t "step.r.routed" .Routed}}</b>{{end}}
+        {{if .Tolerated}}<span class="r-sep">·</span><b class="r-skip">{{t "step.r.tolerated" .Tolerated}}</b>{{end}}
         {{if .Running}}<span class="r-sep">·</span><b class="r-run">{{t "step.r.running" .Running}}</b>{{end}}
         {{if .Skipped}}<span class="r-sep">·</span><b class="r-skip">{{t "step.r.skipped" .Skipped}}</b>{{end}}
         {{if .Unreported}}<span class="r-sep">·</span><b class="r-skip">{{t "step.r.unreported" .Unreported}}</b>{{end}}
-      </span>{{end}}{{end}}
+      </span>{{end}}{{end}}{{end}}
       {{$image := ""}}{{$ref := ""}}{{range $run.StepPlacements $step}}{{if .Image}}{{$image = .ShortImage}}{{$ref = .ImageRef}}{{end}}{{end}}
       {{with $step.ImageSource}}{{if $ref}}{{$ref = printf "%s → %s" . $ref}}{{end}}{{end}}
       {{if or $step.Worker $image}}<span class="note worker"{{with $ref}} title="{{.}}"{{end}}>{{with $step.Worker}}<span class="on">{{t "step.on" .}}</span>{{end}}{{if and $step.Worker $image}} · {{end}}{{with $image}}<span class="img">{{.}}</span>{{end}}</span>{{end}}

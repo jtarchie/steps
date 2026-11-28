@@ -27,6 +27,38 @@ jobs:
 `)
 }
 
+// transitionsPipeline holds every way a plan leaves straight-line order without an LLM: a retried step, a to: loop, and a tolerated failure.
+func transitionsPipeline(t *testing.T, path, dir string) {
+	t.Helper()
+
+	tries, laps := filepath.Join(dir, "tries"), filepath.Join(dir, "laps")
+
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: transcribe
+    inputs: []
+    attempts: 3
+    run: |
+      echo try >> `+tries+`
+      echo "try $(wc -l < `+tries+` | tr -d ' ')"
+      test "$(wc -l < `+tries+`)" -ge 3
+  - task: editor
+    inputs: []
+    run: echo lap >> `+laps+`
+  - task: gate
+    inputs: []
+    to: {failure: editor}
+    max_visits: 3
+    run: test "$(wc -l < `+laps+`)" -ge 2
+  - try:
+      task: notify
+      inputs: []
+      run: "false"
+`)
+}
+
 // stepRows is every row on a run page drawn for a step named name, in page order, each from its opening div to the next row's.
 func stepRows(page, name string) []string {
 	starts := regexp.MustCompile(`<div id="step-\d+-`+regexp.QuoteMeta(name)+`"`).FindAllStringIndex(page, -1)
@@ -35,9 +67,9 @@ func stepRows(page, name string) []string {
 	for _, at := range starts {
 		rest := page[at[0]:]
 
-		end := strings.Index(rest[1:], `<div id="step-`)
-		if end < 0 {
-			end = len(rest) - 1
+		end := len(rest) - 1
+		if next := rowStart.FindStringIndex(rest[1:]); next != nil {
+			end = next[0]
 		}
 
 		rows = append(rows, rest[:end+1])
@@ -46,13 +78,44 @@ func stepRows(page, name string) []string {
 	return rows
 }
 
-// TestARunPageSaysWhereARouteSentThePlan: a failure a to: route consumed is drawn as a branch the plan took, on the row that took it, and the steps it sent the plan back through say which pass they are. It used to be a red ✗ on a run that passed, with the decision in a banner above the transcript, unplaced and untimed.
-func TestARunPageSaysWhereARouteSentThePlan(t *testing.T) {
-	t.Parallel()
+var rowStart = regexp.MustCompile(`<div id="(step|loop|pass)-`)
 
-	dir := t.TempDir()
-	path := pipelinePath(t, dir)
-	routePipeline(t, path, filepath.Join(dir, "laps"))
+var tabPattern = regexp.MustCompile(`<button[^>]*role="tab"[^>]*>[^<]*</button>`)
+
+// tab is one tab of a strip as a reader meets it: what a screen reader says, whether it is the one shown, and the glyph and number drawn.
+type tab struct {
+	label, shown string
+	selected     bool
+}
+
+// tabsIn reads the first tab strip in markup.
+func tabsIn(t *testing.T, markup string) []tab {
+	t.Helper()
+
+	start := strings.Index(markup, `role="tablist"`)
+	if start < 0 {
+		t.Fatalf("no tab strip in:\n%s", markup)
+	}
+
+	strip, _, _ := strings.Cut(markup[start:], `</span>`)
+	buttons := tabPattern.FindAllString(strip, -1)
+	tabs := make([]tab, 0, len(buttons))
+
+	for _, button := range buttons {
+		tabs = append(tabs, tab{
+			label:    regexp.MustCompile(`aria-label="([^"]*)"`).FindStringSubmatch(button)[1],
+			shown:    visibleText(button),
+			selected: strings.Contains(button, `aria-selected="true"`),
+		})
+	}
+
+	return tabs
+}
+
+// runPage runs the pipeline at path and returns its one run's page.
+func runPage(t *testing.T, path string) string {
+	t.Helper()
+
 	mustRun(t, "run", path, "--job", "build")
 
 	server, target := webServerFor(t, path)
@@ -67,23 +130,121 @@ func TestARunPageSaysWhereARouteSentThePlan(t *testing.T) {
 		t.Fatalf("run page = %d", code)
 	}
 
-	gates, editors := stepRows(page, "gate"), stepRows(page, "editor")
-	if len(gates) != 2 || len(editors) != 2 {
-		t.Fatalf("want two laps, got %d gate and %d editor rows", len(gates), len(editors))
+	return page
+}
+
+// TestARunPageDrawsALoopAsTabsOfItsPasses: a to: loop is one block over the steps it repeated, with a tab per pass the way Concourse tabs a retried step, each tab saying in words how its pass ended. It used to be the same rows again, with the decision in a banner above the transcript.
+func TestARunPageDrawsALoopAsTabsOfItsPasses(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	transitionsPipeline(t, path, dir)
+	page := runPage(t, path)
+
+	start := strings.Index(page, `<div id="loop-`)
+	if start < 0 || !regexp.MustCompile(`^<div id="loop-\d+" class="step passed loop container"`).MatchString(page[start:]) {
+		t.Fatalf("the loop is not drawn as one block:\n%s", page)
 	}
 
-	assertRoutedRow(t, page, gates[0])
+	loop := page[start:strings.Index(page, `-notify"`)]
 
-	if head := stepHead(t, editors[1], "editor"); !strings.Contains(head, "pass 2") {
-		t.Errorf("the editor the route sent the plan back to does not say which pass it is: %q", head)
+	tabs := tabsIn(t, loop)
+	want := []tab{
+		{label: "pass 1 of 2, routed to editor", shown: "↪1"},
+		{label: "pass 2 of 2, passed", shown: "✓2", selected: true},
 	}
 
-	if head := stepHead(t, editors[0], "editor"); strings.Contains(head, "pass") {
-		t.Errorf("the first editor claims a pass number: %q", head)
+	if len(tabs) != len(want) {
+		t.Fatalf("loop tabs = %+v, want %+v", tabs, want)
 	}
 
-	if !strings.Contains(gates[1], `class="step passed`) {
-		t.Errorf("the second gate is not drawn passed:\n%s", gates[1])
+	for i := range want {
+		if tabs[i] != want[i] {
+			t.Errorf("loop tab %d = %+v, want %+v", i+1, tabs[i], want[i])
+		}
+	}
+
+	if panels := strings.Count(loop, `role="tabpanel"`); panels != 2 {
+		t.Errorf("the loop holds %d pass panels, want 2", panels)
+	}
+
+	if gates := stepRows(loop, "gate"); len(gates) != 2 {
+		t.Errorf("the loop holds %d gate rows, want both passes'", len(gates))
+	} else {
+		assertRoutedRow(t, page, gates[0])
+	}
+
+	if strings.Contains(page, `class="note pass"`) {
+		t.Error("a pass is still labelled in text beside a repeated row")
+	}
+}
+
+// TestARunPageTabsAStepsAttempts: a step that retried says so on its folded row, with a tab per attempt, and each attempt's output sits under its own tab rather than stacked under loose "attempt n/m" lines.
+func TestARunPageTabsAStepsAttempts(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	transitionsPipeline(t, path, dir)
+	page := runPage(t, path)
+
+	rows := stepRows(page, "transcribe")
+	if len(rows) != 1 {
+		t.Fatalf("transcribe drew %d rows, want one row holding its attempts", len(rows))
+	}
+
+	tabs := tabsIn(t, rows[0])
+	want := []tab{
+		{label: "attempt 1 of 3, failed", shown: "✗1"},
+		{label: "attempt 2 of 3, failed", shown: "✗2"},
+		{label: "attempt 3 of 3, passed", shown: "✓3", selected: true},
+	}
+
+	if len(tabs) != len(want) {
+		t.Fatalf("attempt tabs = %+v, want %+v", tabs, want)
+	}
+
+	for i := range want {
+		if tabs[i] != want[i] {
+			t.Errorf("attempt tab %d = %+v, want %+v", i+1, tabs[i], want[i])
+		}
+	}
+
+	panels := regexp.MustCompile(`(?s)role="tabpanel".*?</pre>`).FindAllString(rows[0], -1)
+	if len(panels) != 3 || !strings.Contains(panels[0], "try 1") || strings.Contains(panels[0], "try 2") || !strings.Contains(panels[2], "try 3") {
+		t.Errorf("each attempt's output is not under its own tab:\n%s", rows[0])
+	}
+
+	if strings.Contains(visibleText(rows[0]), "(attempt 2/3)") {
+		t.Error("the attempt lines the tabs replace are still drawn")
+	}
+}
+
+// TestARunPageSaysATriedFailureWasTolerated: a try: that ate its step's failure is drawn as tolerated, not as the failure of a run that passed.
+func TestARunPageSaysATriedFailureWasTolerated(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	transitionsPipeline(t, path, dir)
+	page := runPage(t, path)
+
+	tried := stepRows(page, "notify")
+	if len(tried) == 0 || !strings.Contains(tried[0], `class="step tolerated`) {
+		t.Fatalf("the try: is not drawn as tolerated:\n%s", page)
+	}
+
+	if head := stepHead(t, tried[0], "notify"); !strings.Contains(head, "⊘") || !strings.Contains(head, "tolerated") {
+		t.Errorf("the tolerated try's row does not say so: %q", head)
+	}
+
+	if said := strings.Count(page, `command &#34;false&#34; failed`); said != 1 {
+		t.Errorf("the tolerated failure's error is said %d times, want once, on the step that failed", said)
+	}
+
+	if strings.Contains(page, "failed at") {
+		t.Error("the head of a passed run names a tolerated failure as where it failed")
 	}
 }
 

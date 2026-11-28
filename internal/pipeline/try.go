@@ -4,6 +4,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -85,7 +86,7 @@ func tolerateTryFailure(ctx context.Context, jobName string, step config.Step, s
 
 	name := executedStepName(step)
 
-	notef(ctx, "try: %s %s (tried, continuing)", name, outcome.Classify(ctx, err))
+	events.ToleratedNote(ctx, fmt.Sprintf("try: %s %s (tried, continuing)", name, outcome.Classify(ctx, err)))
 	slog.InfoContext(ctx, "job.try", "job", jobName, "step", name, "outcome", "tolerated", "error", err.Error())
 
 	return nil

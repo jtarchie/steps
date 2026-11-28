@@ -26,7 +26,7 @@ func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step,
 	)
 
 	err := retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
-		notef(ctx, "get: %s (attempt %d/%d)", step.Get, attempt, total)
+		events.AttemptNote(ctx, fmt.Sprintf("get: %s (attempt %d/%d)", step.Get, attempt, total), attempt, total)
 		slog.InfoContext(ctx, "job.get.attempt", "get", step.Get, "attempt", attempt, "total_attempts", total)
 	}, func(attemptCtx context.Context) error {
 		res, resType, vers, fetchErr := cache.ResolveVersionsCached(attemptCtx, cfg, step, pinned)
@@ -64,7 +64,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st fetchStore
 
 	err := runPlacedStage(ctx, step, func(ctx context.Context) error {
 		return retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
-			notef(ctx, "get: %s (version: %s, attempt %d/%d)", artifact, versionText(version), attempt, total)
+			events.AttemptNote(ctx, fmt.Sprintf("get: %s (version: %s, attempt %d/%d)", artifact, versionText(version), attempt, total), attempt, total)
 			slog.InfoContext(ctx, "job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			said, err := fetchGetStep(attemptCtx, cfg, st, artifact, resource, resourceType, version, step.Params, bw)

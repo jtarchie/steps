@@ -802,6 +802,7 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 .step.passed  > .stephead::before { background: var(--green); }
 .step.failed  > .stephead::before { background: var(--red); }
 .step.routed  > .stephead::before { background: var(--magenta); }
+.step.tolerated > .stephead::before { background: var(--line); }
 .step.running > .stephead::before { background: var(--yellow); }
 .step.skipped > .stephead::before { background: var(--line); }
 .step.unreported > .stephead::before { background: var(--line); }
@@ -814,6 +815,23 @@ svg.dag.tracing .dagedge.lit { stroke: var(--fg); }
 /* A failure a to: route consumed: the plan took a branch, it did not break. Magenta, ANSI's other status hue, and its own glyph, so the difference survives without color. */
 .step.routed  > .stephead .stmark { color: var(--magenta); }
 .stephead .note.route { color: var(--magenta); }
+/* A failure a try: ate: the author asked for it to be carried past, so it is quiet, and its own glyph keeps it apart from a skip and a failure without color. */
+.step.tolerated > .stephead .stmark, .stephead .note.tolerated { color: var(--dim); }
+
+/* ---- tabs ----
+ * One strip for a step that ran more than once: a retried step's attempts and a to: loop's passes, as Concourse tabs a retry. The glyph carries each tab's outcome, so its hue only repeats it; the selected tab is underlined in that hue. */
+.steptabs { display: inline-flex; gap: 3px; flex: none; }
+.steptab { --tab-hue: var(--dim); font: inherit; font-size: 11px; line-height: 1.5; padding: 0 6px; border: 1px solid var(--line); border-radius: 2px; background: var(--bg); color: var(--tab-hue); cursor: pointer; }
+.steptab.passed { --tab-hue: var(--green); }
+.steptab.failed, .steptab.errored, .steptab.aborted { --tab-hue: var(--red); }
+.steptab.routed { --tab-hue: var(--magenta); }
+.steptab.running { --tab-hue: var(--yellow); }
+.steptab[aria-selected="true"] { background: var(--panel); font-weight: 600; box-shadow: inset 0 -2px 0 var(--tab-hue); }
+@media (hover: none) { .steptab { min-width: 44px; min-height: 44px; } }
+/* The newest is shown until the reader picks; then only theirs. Scoped to .js: without scripts every panel stays drawn. */
+.js .tabpanels:not(.picking) > [role="tabpanel"]:not(:last-child),
+.js .tabpanels.picking > [role="tabpanel"]:not(.picked) { display: none; }
+.pass > .substeps { margin-left: 0; border-left: 0; }
 .step.running > .stephead .stmark { color: var(--yellow); }
 .step.skipped > .stephead .stmark { color: var(--faint); }
 .step.unreported > .stephead .stmark { color: var(--dim); }

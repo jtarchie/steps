@@ -512,7 +512,10 @@ func (r runView) MCPBlamedOn(step *stepView) bool {
 
 // buildRunView folds a run's ordered events into steps. See runview.Build.
 func buildRunView(run store.RunRow, rows []store.RunEventRow, results map[string]store.NodeRow) runView {
-	return runView{Transcript: runview.Build(run, rows, results)}
+	view := runView{Transcript: runview.Build(run, rows, results)}
+	runview.GroupLoops(&view.Transcript)
+
+	return view
 }
 
 // diffAgainst computes which steps differ, by content hash, between this run

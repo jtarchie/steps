@@ -12,6 +12,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/redact"
@@ -167,7 +168,7 @@ func executeTask(
 		defer notePlacement(ctx, runner)
 
 		runErr := retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
-			notef(ctx, "task: %s (attempt %d/%d)", executedStepName(step), attempt, total)
+			events.AttemptNote(ctx, fmt.Sprintf("task: %s (attempt %d/%d)", executedStepName(step), attempt, total), attempt, total)
 			slog.InfoContext(ctx, "job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			err := runTaskCommand(attemptCtx, cfg, runner, rt, space.Dir(), st)

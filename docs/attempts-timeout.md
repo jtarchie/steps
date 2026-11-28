@@ -32,6 +32,8 @@ jobs:
 
 Use `attempts:` for transient faults — flaky network calls, rate limits, temporary unavailability. Do **not** use it for internal bugs, permanent failures (wrong credentials, missing resources), or anything that needs investigation: if a step fails reliably, fix the underlying issue instead of adding retries.
 
+In the web UI, a step that retried carries a numbered tab per attempt in its row (`✗1 ✗2 ✓3`), each holding that attempt's own output, so a retry is visible without opening the row.
+
 `attempts:` and `timeout:` sit on any step kind:
 
 ```yaml

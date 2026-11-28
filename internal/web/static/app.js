@@ -208,6 +208,82 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
     syncExpanded();
   }
 
+  // Tabs over a step that ran more than once — a retried step's attempts, a to: loop's passes. The server selects the newest, by CSS, so a morph never has to hide a panel; a reader's pick is theirs, kept like a fold, and re-applied after every swap because a morph draws the server's selection again.
+  var picks = new Map();
+  var picksKey = 'steps.picks:' + window.location.pathname;
+
+  try {
+    var storedPicks = JSON.parse(window.sessionStorage.getItem(picksKey) || '[]');
+    if (Array.isArray(storedPicks)) {
+      storedPicks.forEach(function (pair) {
+        if (Array.isArray(pair) && typeof pair[0] === 'string' && typeof pair[1] === 'string') picks.set(pair[0], pair[1]);
+      });
+    }
+  } catch (err) {}
+
+  function stripRow(strip) { return strip.closest('.step'); }
+
+  function show(strip, panelId) {
+    strip.querySelectorAll('[role="tab"]').forEach(function (tab) {
+      var on = tab.getAttribute('aria-controls') === panelId;
+      tab.setAttribute('aria-selected', String(on));
+      tab.tabIndex = on ? 0 : -1;
+      var panel = document.getElementById(tab.getAttribute('aria-controls'));
+      if (!panel) return;
+      panel.classList.toggle('picked', on);
+      panel.parentElement.classList.add('picking');
+    });
+  }
+
+  function applyPicks() {
+    picks.forEach(function (panelId, key) {
+      var row = document.querySelector('[data-step="' + CSS.escape(key) + '"]');
+      var strip = row && row.querySelector(':scope > .stephead [role="tablist"]');
+      if (strip && strip.querySelector('[aria-controls="' + CSS.escape(panelId) + '"]')) show(strip, panelId);
+    });
+  }
+
+  function pick(tab) {
+    var strip = tab.closest('[role="tablist"]');
+    var row = stripRow(strip);
+    show(strip, tab.getAttribute('aria-controls'));
+    if (!row || !row.dataset.step) return;
+    picks.set(row.dataset.step, tab.getAttribute('aria-controls'));
+    try { window.sessionStorage.setItem(picksKey, JSON.stringify(Array.from(picks))); } catch (err) {}
+    // A tab names a panel inside the row; a folded row would hide what the reader just asked for.
+    if (!row.classList.contains('open')) {
+      row.classList.add('open');
+      remember(row.dataset.step, true);
+      syncExpanded();
+    }
+  }
+
+  document.addEventListener('click', function (e) {
+    var tab = e.target.closest && e.target.closest('[role="tab"]');
+    if (tab && tab.closest('[role="tablist"]')) pick(tab);
+  });
+
+  // The WAI-ARIA tabs pattern: one Tab stop per strip, arrows and Home/End move and select. Not j/k, which stay the rows'.
+  document.addEventListener('keydown', function (e) {
+    var tab = e.target.closest && e.target.closest('[role="tab"]');
+    if (!tab || e.metaKey || e.ctrlKey || e.altKey) return;
+    var tabs = Array.from(tab.closest('[role="tablist"]').querySelectorAll('[role="tab"]'));
+    var at = tabs.indexOf(tab);
+    var to;
+    switch (e.key) {
+      case 'ArrowRight': to = (at + 1) % tabs.length; break;
+      case 'ArrowLeft': to = (at - 1 + tabs.length) % tabs.length; break;
+      case 'Home': to = 0; break;
+      case 'End': to = tabs.length - 1; break;
+      default: return;
+    }
+    e.preventDefault();
+    pick(tabs[to]);
+    tabs[to].focus();
+  });
+
+  applyPicks();
+
   // <head> is never swapped, so the tab's title and icon follow the #mark
   // the server drew into the statusline, copied rather than recomputed.
   function applyMark() {
@@ -272,6 +348,7 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
     applyMark();
     paintSwitcher();
     applyFolds();
+    applyPicks();
 
     if (chosen) {
       var step = document.querySelector('[data-step="' + CSS.escape(chosen) + '"]');
@@ -280,7 +357,7 @@ function word(key) { return document.body.getAttribute('data-t-' + key) || ''; }
   });
 
   document.addEventListener('click', function (e) {
-    if (e.target.closest('a')) return;
+    if (e.target.closest('a') || e.target.closest('[role="tab"]')) return;
     var step = toggleFrom(e.target);
     if (step) fold(step);
   });

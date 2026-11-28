@@ -403,6 +403,7 @@ func (s *Server) flushBatch(
 	inFlight.Status = store.RunRunning
 
 	view := runView{Transcript: folder.View(inFlight)}
+	runview.GroupLoops(&view.Transcript)
 
 	// The row's head names its worker's image and decides its toggle off these, so a stream without them draws a head the reload contradicts. Best-effort, as in assembleRun.
 	placements, err := pipelineOf(c).Store.RunPlacements(c.Request().Context(), run.ID)
